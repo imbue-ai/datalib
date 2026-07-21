@@ -76,9 +76,10 @@ there is no codegen step.
     │   ├── app_schema/       app-state schema: feedback / sync_jobs structs
     │   ├── core/             query engine + deeplink grammar
     │   ├── etl/              shared render/load framework
-    │   ├── etl/providers/*/  per-provider Extract/render crates
+    │   ├── etl/providers/*/  per-provider download/render crates
     │   ├── qmd_indexer/      qmd search index binary
-    │   ├── sync/             incremental ETL orchestrator
+    │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
+    │   ├── datalib_step/     datalib-step built-in step commands
     │   ├── http/             axum binary
     │   └── tauri-backend/    Tauri command surface
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
@@ -157,16 +158,23 @@ being bound — useful behind a reverse proxy).
 
 ### Re-run ingestion
 
-Each provider crate under `frankweiler/backend/etl/providers/` exposes its
-own `*_render` (and where applicable `*_download`) binary; the shared Load
-step is `//frankweiler/backend/etl:grid_rows_load`. The ETL orchestrator at
-`//frankweiler/backend/sync` shows the end-to-end wiring: parse each
-provider's raw dir, render markdown + sidecars, then load them into
-`<root>/system/backend_index/db.doltlite_db`.
+Ingestion is a DAG of subprocess steps orchestrated by
+`//frankweiler/backend/dag:datalib_dag`, which reads the data root's
+`config.yaml` (the `steps:` format) and runs each step's `command:` as a
+subprocess. The built-in steps live in the `datalib-step` binary
+(`//frankweiler/backend/datalib_step:datalib_step`): `download
+<source_type>` fetches a provider's raw dir (each provider crate under
+`frankweiler/backend/etl/providers/` also exposes a standalone
+`*_download` binary), `render <source_type>` renders markdown + sidecars,
+and `grid_index` loads them into
+`<root>/system/backend_index/db.doltlite_db`. See
+[`step_protocol.md`](step_protocol.md) for the step contract and
+[`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the
+DAG design.
 
 ### QMD search index (default-on, incremental)
 
-`grid_rows_load --qmd-index` rebuilds the qmd search index over `<root>`
+`datalib-step qmd_index` rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
 (`frankweiler/backend/qmd_indexer/`) shells out to `npx -y @tobilu/qmd@<version>`
 with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/system/qmd/index.sqlite`
@@ -191,24 +199,31 @@ Design notes:
   own default, so a standalone `qmd` run shares the same cache). Override
   with `models_dir=` if you call the indexer directly.
 
-### Manual integration tests (live Slack)
+### Manual integration tests (live provider APIs)
 
-Two tests exercise the full Slack pipeline against the real Slack API
-(`#thad-testing-channel`). Both are excluded from `bazel test //...` and
-require `latchkey` on PATH with creds set for the `slack` service. The Rust
-downloader snapshot test
-(`frankweiler/backend/etl/providers/slack/tests/slack_live.rs`) downloads the
-test channel, then asserts each per-entity `events.jsonl` against committed
-[insta](https://insta.rs) snapshots. Tagged `manual` + `no-sandbox` because
-it shells out to host `latchkey`:
+Several provider crates ship a `*_live` snapshot test that hits the real
+service API through `latchkey`:
+`//frankweiler/backend/etl/providers/anthropic:anthropic_live`, plus the
+sibling `chatgpt_live`, `github_live`, `gitlab_live`, `notion_live`, and
+`email:jmap_live` targets. Each downloads a small known fixture (e.g. one
+conversation), then asserts a curated stable view against committed
+[insta](https://insta.rs) snapshots. All are tagged `manual` + `external`
++ `no-sandbox`, so they are excluded from `bazel test //...`; they need
+`latchkey` creds for the service and `LATCHKEY_CURL` pointing at the curl
+shim:
 
 ```sh
-bazelisk test //frankweiler/backend/etl/providers/slack:slack_live \
-    --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER
+bazel build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazelisk test //frankweiler/backend/etl/providers/anthropic:anthropic_live \
+    --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
+    --test_env=LATCHKEY_CURL
 ```
 
-After posting new messages in the channel, the test will fail with a diff;
-accept the change with `cargo insta review`.
+When upstream content changes, the test will fail with a diff; accept the
+change with the sibling `.update` target (e.g. `bazel run
+//frankweiler/backend/etl/providers/anthropic:anthropic_live.update` —
+see [`/AGENTS.md`](/AGENTS.md) § "Updating insta snapshots").
 
 ### Changing a row schema
 

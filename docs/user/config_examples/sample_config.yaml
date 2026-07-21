@@ -1,50 +1,83 @@
+# Sample config in the steps format `datalib-dag` runs: each source is a
+# `<name>.download` + `<name>.render` step pair, plus the two shared
+# index steps every source's rendered markdown feeds. Edges are derived
+# from the artifact paths — never written by hand. See
+# configs/dag_example.yaml for a walkthrough of the format and
+# all_sources.yaml (next to this file) for every supported source.
+
 data_root: ~/datalib  # Where the downloaded data gets written.
 
-# Optional global defaults, folded into every source at load. A source's own
-# `common:` overrides these field-by-field. Uncomment to set them.
-# defaults:
-#   # Bound how long a source keeps retrying upstream rate limits before the
-#   # orchestrator gives up on it. The shared HTTP layer always honors a 429
-#   # `Retry-After` (else backs off exponentially); these decide when to stop.
-#   # Defaults shown.
-#   download_params:
-#     maximum_time_without_progress_in_minutes: 30
-#     maximum_sequential_failed_requests: 50
+steps:
+  # Shared fan-in steps: the SQL index behind the grid UI and the qmd
+  # semantic-search index, each fed by every source's rendered markdown.
+  - id: grid_index
+    command: datalib-step grid_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/backend_index]
 
-sources:
-  # Google Takeout Gmail export. `sync:` is intentionally omitted —
-  # that puts the email provider in translate-only mbox mode, reading
-  # the file at `common.input_path` instead of talking to a JMAP server.
+  - id: qmd_index
+    command: datalib-step qmd_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/qmd]
+
+  # Google Takeout Gmail export. No JMAP `sync:` block in the params —
+  # that puts the email provider in file-backed mbox mode, reading the
+  # file at `common.input_path` instead of talking to a mail server.
   # Point this at the .mbox unpacked from your Takeout zip.
-  - name: gmail-takeout
-    source:
-      type: email
+  - id: gmail-takeout.download
+    command: datalib-step download email
+    outputs: [gmail-takeout/raw]
+    params:
       common:
         input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+
+  - id: gmail-takeout.render
+    command: datalib-step render email
+    inputs: [gmail-takeout/raw]
+    outputs: [gmail-takeout/rendered_md]
 
   # Slack workspace mirror. Credentials come from `latchkey` at runtime
   # (see the "Register Slack with latchkey" section in the first-time
   # user guide). `channels:` restricts the sync to the listed channels;
   # omit it (or set `all_channels: true`) to mirror every channel the
   # account can see. `media: true` pulls file attachments into blobs.
-  - name: slack
-    source:
-      type: slack_api
+  - id: slack.download
+    command: datalib-step download slack_api
+    outputs: [slack/raw]
+    params:
       common:
         blob_size_limit_bytes: 1000000  # 1 MB — skip larger file uploads
+        # Bound how long the download keeps retrying upstream rate limits
+        # before giving up. The shared HTTP layer always honors a 429
+        # `Retry-After` (else backs off exponentially); these decide when
+        # to stop. Defaults shown.
+        # download_params:
+        #   maximum_time_without_progress_in_minutes: 30
+        #   maximum_sequential_failed_requests: 50
       sync:
         media: true
         channels:
           - "project-data-liberation"
+
+  - id: slack.render
+    command: datalib-step render slack_api
+    inputs: [slack/raw]
+    outputs: [slack/rendered_md]
 
   # Anthropic / claude.ai conversation mirror. Credentials come from
   # `latchkey` at runtime (see the "Register Claude web with latchkey"
   # section in the first-time user guide). Bare `sync: {}` fetches
   # every conversation across every org the account can see; uncomment
   # the knobs below to bound the work on incremental re-runs.
-  - name: anthropic-api
-    source:
-      type: claude_api
+  - id: anthropic-api.download
+    command: datalib-step download claude_api
+    outputs: [anthropic-api/raw]
+    params:
       sync: {}
         # refresh_most_recent_n_chat_count: 3   # force-refetch top-N by updated_at
         # since: "2025-01-01"      # only sync conversations updated at/after this
+
+  - id: anthropic-api.render
+    command: datalib-step render claude_api
+    inputs: [anthropic-api/raw]
+    outputs: [anthropic-api/rendered_md]

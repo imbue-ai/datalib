@@ -1,26 +1,118 @@
 # datalib — agent runbook
 
-Quick references for AI/human contributors. See `docs/dev/grid_rows.md` for
-the union-table architecture behind the grid.
+Quick references for AI/human contributors working **on the datalib
+codebase**: where the docs are, how the repo is laid out, and the
+conventions that aren't obvious from the code. If you are an agent
+*using* datalib (running syncs, querying a user's mirror, writing a
+custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
+
+## Doc map
+
+Start here when a task touches an area you don't already know. All paths
+are relative to the repo root.
+
+**Pipeline / sync engine**
+
+- [`docs/dev/pipeline_dag_architecture.md`](docs/dev/pipeline_dag_architecture.md)
+  — how the sync pipeline works: the `datalib-dag` runner, step contract,
+  scheduler (edge derivation, skipping, retry, subtree poisoning), and
+  the implementation decisions.
+- [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
+  write a custom step command**: the config entry, the `--params` /
+  `--inputs` / `--outputs` flags, `FRANKWEILER_DAG_*` env vars, the
+  NDJSON progress/outcome protocol, failure classification, and
+  cancellation. Any executable can be a step; `datalib-step` is the
+  reference implementation.
+- [`configs/dag_example.yaml`](configs/dag_example.yaml) — a complete,
+  commented steps-format config, including the `--binary-dir` recipe for
+  running `datalib-dag` from a bazel build.
+
+**Data architecture**
+
+- [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md)
+  — the download (ingestion) architecture: raw stores, incrementality,
+  resumability, wire tape. Companion:
+  [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
+  (how to build a new provider).
+- [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
+  union table behind the grid UI.
+- [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
+  table.
+- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting
+  `.doltlite_db` files (CLI, `dolt_*` vtabs, rescue commits); tutorial in
+  [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
+- [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
+  — the live recipe for porting the remaining providers to CAS blobs +
+  incremental render.
+
+**UI**
+
+- [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
+  views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
+  — the dactal view bridge.
+
+**Dev workflow**
+
+- [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and
+  run from source.
+- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
+  [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
+- [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
+
+**User-facing**
+
+- [`docs/user/first_time_user.md`](docs/user/first_time_user.md),
+  [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md),
+  and [`docs/user/config_examples/`](docs/user/config_examples/) (one
+  commented `<name>.download` + `<name>.render` step pair per source,
+  in the steps format).
+
+**Historical** — [`docs/dev/archived/`](docs/dev/archived/) holds
+point-in-time plans and audits (each with an "Archived" banner). Don't
+treat them as current reference.
 
 ## Repo layout
 
 ```
 frankweiler/
-  backend/     Rust workspace. ETL (extract/translate/load), HTTP API,
-               qmd_indexer, Tauri backend. Row schemas are hand-written
-               Rust structs: schema/ (render schema — grid_rows/edges/
-               markdowns) and app_schema/ (feedback/sync_jobs), each
-               deriving its CREATE TABLE DDL via #[derive(PortableTable)].
-               Per-provider crates under etl/providers/<p>/ each emit
-               *.grid_rows.json sidecars that the shared Load step
-               upserts into Dolt.
-  ui/         Vue + AG Grid frontend.
+  backend/     Rust workspace.
+    dag/           `datalib-dag`: the DAG runner (scheduler, step
+                   contract, subprocess driver, NDJSON event stream).
+    datalib_step/  `datalib-step`: the built-in step commands —
+                   download/render <source_type>, grid_index, qmd_index.
+    etl/           shared ingest machinery (raw stores, blob CAS,
+                   render cursors) + etl/providers/<p>/ crates, each
+                   with src/download/ and src/render/ and a sibling
+                   <p>_config/ crate for its config schema.
+    ingest_config/ `SourceConfig`: the per-source config structs the
+                   download steps take as `params:`.
+    core/          data-root layout, doltlite repo access, qmd, search.
+    http/          `frankweiler-http`: API server + sync worker + UI host.
+    schema/        hand-written row structs (grid_rows/edges/markdowns)
+    app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
+                   via #[derive(PortableTable)].
+  ui/          Vue + AG Grid frontend.
 tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
-docs/          dev/ architecture notes (dev/grid_rows.md, ...); user/ user-facing guides + config_examples/.
+docs/          dev/ architecture notes; user/ guides + config_examples/;
+               dev/archived/ historical plans.
 third-party/   vendored upstream code (see below).
 ```
+
+## The sync pipeline in one paragraph
+
+`datalib-dag <config.yaml>` runs a DAG of subprocess steps declared in
+the config's `steps:` list; edges are derived from output/input path
+overlap, never written by hand. Each source is a `<name>.download` +
+`<name>.render` step pair (`datalib-step download|render <type>`), and
+two shared fan-in steps index every source's `rendered_md` tree:
+`grid_index` (SQL index at `system/backend_index/db.doltlite_db`) and
+`qmd_index` (semantic search at `system/qmd/`). Scheduler state lives at
+`system/state/dag_state.json`. The http server's sync worker shells out
+to `datalib-dag`; the UI's Setup tab scaffolds/edits the config and
+offers one-click migration of legacy `sources:` configs. Any executable
+speaking the step protocol can be a step — see
+`docs/dev/step_protocol.md`.
 
 ## Vendored upstream: `third-party/qmd`
 
@@ -75,11 +167,12 @@ subtree and document why.
 ## The grid_rows union table
 
 The Vue grid is backed by a single denormalized table, `grid_rows`,
-populated at the end of every ingest from the authoritative per-provider
-tables. The Rust backend (`frankweiler/backend/core/src/db.rs`) issues
-*one* SELECT against `grid_rows` to render the grid — no per-provider
-branches in the query path. The schema (column names, types, per-provider
-mappings) is the hand-written `GridRow` struct in
+populated by the `grid_index` step from every provider's
+`*.grid_rows.json` sidecars. The Rust backend
+(`frankweiler/backend/core/src/db.rs`) issues *one* SELECT against
+`grid_rows` to render the grid — no per-provider branches in the query
+path. The schema (column names, types, per-provider mappings) is the
+hand-written `GridRow` struct in
 `frankweiler/backend/schema/src/grid_rows.rs`; `#[derive(PortableTable)]`
 produces the `CREATE TABLE` DDL from it. See `docs/dev/grid_rows.md` for
 the full architecture.
@@ -89,8 +182,8 @@ When you add or change a `grid_rows` column:
 1. Add the field to the `GridRow` struct in
    `frankweiler/backend/schema/src/grid_rows.rs` with a `#[col(sql = "…")]`
    portable type (keep the per-provider mapping in the field's doc
-   comment). Load-time-derived columns use `#[derived(…)]`.
-2. Update each provider's `translate/grid_rows.rs` to populate the new
+   comment). Index-time-derived columns use `#[derived(…)]`.
+2. Update each provider's `render/grid_rows.rs` to populate the new
    column from that provider's parsed data.
 3. Update the row mapper in `frankweiler/backend/core/src/dolt_repo.rs`
    to read it back, plus `SearchRow` in `search.rs` if the column reaches
@@ -99,8 +192,8 @@ When you add or change a `grid_rows` column:
 
 ## QMDs are write-only
 
-Ingest renders QMD markdown files for human/Quarto consumption. The
-backend serves those files **verbatim** (frontmatter stripped) at
+The render step emits QMD markdown files for human/Quarto consumption.
+The backend serves those files **verbatim** (frontmatter stripped) at
 `/api/chat/{uuid}` — it never parses them back. Structured fields
 (name, account, project, channel, created_at, source_label) come from
 `grid_rows` in Dolt. Per-message anchors used by the UI
@@ -198,7 +291,8 @@ captures Rust-subprocess hit counts too — see
 
 ```bash
 tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
-  //frankweiler/backend/sync:frankweiler_sync_bin \
+  //frankweiler/backend/dag:datalib_dag \
+  //frankweiler/backend/datalib_step:datalib_step \
   //frankweiler/backend/signal-backup:signal_make_fixture
 ```
 
@@ -224,10 +318,10 @@ that hit third-party services you don't want CI talking to. Prefer
 **Beware running snapshot tests outside Bazel**: those tests load
 `bazel-bin/tests/fixtures/ingested/{dump.sql,qmd.tar}`, which is a Bazel
 genrule output. Tools outside Bazel don't know how to rebuild it, so if
-you change any ingest/render/schema code and re-run outside Bazel, you'll
-diff fresh snapshots against a stale artifact and chase phantom failures.
-Always run snapshot tests via `bazelisk test //tests:test_snapshots` (or
-`//...`); Bazel rebuilds `//tests/fixtures:ingested_tng` first. Same
+you change any download/render/schema code and re-run outside Bazel,
+you'll diff fresh snapshots against a stale artifact and chase phantom
+failures. Always run snapshot tests via `bazelisk test //tests:test_snapshots`
+(or `//...`); Bazel rebuilds `//tests/fixtures:ingested_tng` first. Same
 caveat applies to anything else that consumes a cached Bazel output.
 
 ### Updating insta snapshots (`.update` targets)
@@ -251,11 +345,6 @@ bazel build //frankweiler/backend/etl:latchkey_curl_shim
 export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
 bazel run //frankweiler/backend/etl/providers/anthropic:anthropic_live.update
 ```
-
-The `manual_e2e_live_sync_golden` test is special: its config, source data,
-and goldens live OUTSIDE this repo, found via `FRANKWEILER_MANUAL_E2E_DIR`.
-Run it via the `run.sh` in that dir (`run.sh` to check, `run.sh --update` to
-accept). See [`docs/dev/testing.md`](/docs/dev/testing.md).
 
 The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
 which only exists under `bazel run` and resolves to the source tree
@@ -300,24 +389,17 @@ bazelisk test //frankweiler/backend/...
 bazelisk build //tests/fixtures:ingested_tng
 ```
 
-## Provenance / "API wins"
+## Provenance: `claude_api` vs `claude_export`
 
-Each parsed source carries an `"export"` / `"api"` tag. The merge step
-in `frankweiler/backend/etl/providers/anthropic/src/translate/` applies
-api-wins precedence: api-tagged rows beat export-tagged rows on the same
-primary key, and api ingests own content blocks/attachments wholesale
-per message (replacing any earlier export blocks for that message) so
-trimmed blocks don't leave orphans. The union `grid_rows` table is the
-only SQL artifact this produces; per-provider Dolt tables no longer
-exist.
-
-Configure provenance in `config.yaml` per source:
-
-```yaml
-sources:
-  - { name: bulk-export, provider: anthropic, kind: export_dir, path: ~/backups/claude,     provenance: export }
-  - { name: web-api,     provider: anthropic, kind: export_dir, path: ~/backups/claude_api, provenance: api    }
-```
+Claude data can come from the live web API (`type: claude_api`) or an
+unpacked bulk export (`type: claude_export`) — two separate source
+types, each its own stanza/step pair. The API downloader normalizes
+every response into the bulk-export on-disk shape
+(`normalize_to_export_shape` in
+`frankweiler/backend/etl/providers/anthropic/src/download/normalize.rs`,
+stamping `_source: { via: "claude.ai/api", org_uuid }` provenance) so a
+single render path consumes either source indistinguishably. See
+`frankweiler/backend/etl/providers/anthropic/DOWNLOAD.md`.
 
 ## Timestamp convention
 
@@ -340,6 +422,8 @@ timezone offset present in the source**.
   offset, `datetime.now().astimezone().isoformat()`. The local offset is
   itself information — it tells future-you what wall-clock time the ingest
   happened in the zone where it actually ran. Don't normalize to UTC.
+  Steps should prefer the run-pinned `FRANKWEILER_DAG_NOW` over sampling
+  their own clock, so one run's outputs agree.
 
 If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
 use `isoformat()` instead. The columns are `VARCHAR(40)`, wide enough for
@@ -347,7 +431,7 @@ the longest offset-suffixed form including microseconds.
 
 ## Auth (web API)
 
-The Rust downloaders under `frankweiler/backend/etl/providers/*/src/extract/`
+The Rust downloaders under `frankweiler/backend/etl/providers/*/src/download/`
 read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
 issue the actual requests via the `latchkey-curl-shim` so Cloudflare's
 JA3 wall passes. If the cookie is missing or expired,

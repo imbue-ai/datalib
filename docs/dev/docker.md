@@ -1,7 +1,7 @@
 # Running frankweiler in Docker
 
-The `ghcr.io/imbue-ai/datalib` image bundles the three release
-binaries (`frankweiler-sync`, `frankweiler-http`,
+The `ghcr.io/imbue-ai/datalib` image bundles the four release
+binaries (`datalib-dag`, `datalib-step`, `frankweiler-http`,
 `frankweiler-latchkey-curl-shim`) and the `latchkey` CLI on top of an
 Ubuntu 24.04 base, so you can register service credentials and run syncs
 from a single self-contained container instead of dropping arbitrary
@@ -14,12 +14,12 @@ on every `v*` tag.
 
 ## 🛑 Why this exists — and why you should care 🛑
 
-`frankweiler-sync` exists to mirror conversations and personal data out of
+`datalib-dag` exists to mirror conversations and personal data out of
 services you are logged into (Slack, Anthropic, Notion, GitHub, GitLab,
 …). The credentials those mirrors require are **live session cookies and
 API tokens that confer the full power of your account on those
 services**. Any process running as your user that can spawn
-`frankweiler-sync` or read your `latchkey` store can therefore *act as
+`datalib-dag` or read your `latchkey` store can therefore *act as
 you* on those services with no further prompt, MFA, or confirmation gate.
 
 The Docker image is here so you don't have to install these scary
@@ -42,9 +42,10 @@ LATCHKEY_DIR="$HOME/.frankweiler-docker/latchkey"
 DATA_ROOT="$HOME/datalib"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
-# Drop a config.yaml into the data root (see docs/user/config_examples/sample_config.yaml
-# in the repo; copy + edit `sources:` to taste).
-cp docs/user/config_examples/sample_config.yaml "$DATA_ROOT/config.yaml"
+# Drop a config.yaml into the data root. config.yaml is the DAG `steps:`
+# format (see docs/dev/step_protocol.md); the frankweiler-http Setup tab
+# scaffolds/validates it and offers one-click migration of a legacy
+# `sources:` config (GET /api/config/migrate).
 
 # 1. Register a self-hosted service entry.
 docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
@@ -64,7 +65,7 @@ docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 docker run --rm \
     -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
     -v "$DATA_ROOT:/data" \
-    "$IMG" frankweiler-sync /data
+    "$IMG" datalib-dag /data/config.yaml
 
 # 5. Serve the HTTP backend (UI bundle not included in this image — point
 #    a local Vite dev server or another openhost UI container at
@@ -85,8 +86,8 @@ docker run --rm -p 8731:8731 \
 
 Default `ENV` inside the image already sets `FRANKWEILER_ROOT=/data` and
 `LATCHKEY_CURL=/usr/local/bin/frankweiler-latchkey-curl-shim`, so
-`frankweiler-sync` finds the data root and the Chrome-impersonating curl
-shim without further configuration.
+`frankweiler-http` finds the data root and `datalib-dag`'s download steps
+find the Chrome-impersonating curl shim without further configuration.
 
 ## Latchkey encryption key — auto-provisioned inside the bind mount
 
@@ -105,7 +106,7 @@ auto-provisions one on first run:
   inside the bind mount. If absent, it generates one (`openssl rand
   -base64 32`, mode `0600`) into that file. Either way, the file's
   contents are exported as `LATCHKEY_ENCRYPTION_KEY` before `latchkey` /
-  `frankweiler-sync` runs.
+  `datalib-dag` runs.
 - This means the key is bound to the host directory you bind-mount.
   Move the dir, take the key with you. Lose the dir, lose the
   credentials.
@@ -140,7 +141,7 @@ The fallback uses a file living alongside the encrypted blobs, so:
   keyring entry the host wrote isn't reachable from inside the
   container, so the `.enc` blobs can't be opened. Symptom: `latchkey
   auth list` shows the credential as present but
-  `latchkey curl …` (and therefore `frankweiler-sync`) fails to send the
+  `latchkey curl …` (and therefore `datalib-dag`) fails to send the
   expected headers.
 
 **Recommendation:** dedicate a fresh host directory (the docs above use
@@ -161,8 +162,8 @@ revisiting.
   Playwright-driven Chrome and needs a display. The container has no X
   server and no Playwright browsers baked in. Use the header-paste
   flows (`latchkey auth set <service> -H "…"`) instead. The header
-  values you need are documented in the `frankweiler-sync` error output
-  when a service is missing credentials, in each provider's `EXTRACT.md`
+  values you need are documented in the `datalib-dag` error output
+  when a service is missing credentials, in each provider's `DOWNLOAD.md`
   under `frankweiler/backend/etl/providers/<name>/`, and in
   [docs/user/first_time_user.md](/docs/user/first_time_user.md).
 - **Tauri desktop UI / Vite dev server.** This image is the backend
@@ -182,8 +183,8 @@ host user without `sudo`), pass `--user $(id -u):$(id -g)` on every
 internal state under the new uid the first time.
 
 PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
-delivers SIGTERM cleanly to `frankweiler-sync` (which in turn forwards
-to its `npx`/`node` qmd-indexer subprocesses).
+delivers SIGTERM cleanly to `datalib-dag` (which in turn forwards it
+to its running step subprocesses).
 
 ## Building locally
 

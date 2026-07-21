@@ -5,7 +5,7 @@ documents (or spans inside documents) discovered during ingest. The
 schema is the hand-written `EdgeRow` struct at
 `frankweiler/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`); the table is created by
-`init_schema` in `frankweiler/backend/etl/src/load.rs` and persists in
+`init_schema` in `frankweiler/backend/etl/src/grid_index.rs` and persists in
 `<root>/system/backend_index/db.doltlite_db` alongside `grid_rows` and
 `markdowns`.
 
@@ -17,7 +17,7 @@ The src and dst sides are symmetric: each can be either a whole
 document (anchor is NULL) or a span inside one (anchor is the value
 the renderer baked into the body as `data-section-uuid`). The PK
 (`edge_uuid`) is a UUIDv5 over the canonical tuple so re-ingest is
-idempotent — the Load step deletes-then-inserts every edge whose
+idempotent — the grid_index step deletes-then-inserts every edge whose
 `src_markdown_uuid` matches the doc being re-applied.
 
 ## Producers today
@@ -56,9 +56,9 @@ sidecars).
 - The backend includes `outgoing_edges` in every
   `GET /api/chat/{markdown_uuid}` response (joined with the
   destination markdown's title for direct rendering).
-- `DocColumn.vue` shows whole-doc outgoing edges as a list at the top
+- `DocCard.ce.vue` shows whole-doc outgoing edges as a list at the top
   of the preview.
-- `ChatBody.vue` decorates every `[data-section-uuid]` whose value
+- `ChatBody.ce.vue` decorates every `[data-section-uuid]` whose value
   matches an edge's `src_anchor_uuid` with `.edge-source` (subtle
   background, deeper on hover) and a click handler that opens the
   destination column with `dst_anchor_uuid` seeded as the

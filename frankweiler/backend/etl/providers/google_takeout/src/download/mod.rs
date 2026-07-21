@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 /// Opt-in switches matching the YAML `sync:` block in
-/// `docs/dev/google_takeout_ingestion.md`. Defaults are all `false` —
+/// `docs/dev/archived/google_takeout_ingestion.md`. Defaults are all `false` —
 /// a fresh user has to enable each feed consciously.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]

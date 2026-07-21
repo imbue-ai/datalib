@@ -2,10 +2,10 @@
 
 Companion to
 [`data_architecture_ingestion.md`](data_architecture_ingestion.md), which
-covers the load-bearing principles and at-rest shape of the extract stage.
+covers the load-bearing principles and at-rest shape of the download stage.
 This document collects the practitioner-facing material: how we test, how to
 add a provider, how the schema is allowed to evolve, the downstream contract
-extract has to honor, and the open questions we haven't resolved yet.
+download has to honor, and the open questions we haven't resolved yet.
 
 ## Testing with TNG fixtures
 
@@ -36,54 +36,25 @@ tests tagged `manual` are the per-provider `*_live` tests, which hit
 real upstream APIs and require latchkey credentials from the host
 machine.
 
-### The live-golden e2e test
+### The live-golden e2e test (retired)
 
-The TNG fixtures catch code-level regressions; the **live-golden
-e2e** catches what happens against the actual world. The target is
-[`//frankweiler/backend/sync:manual_e2e_live_sync_golden`](../../frankweiler/backend/sync/tests/manual_e2e_live_sync_golden.rs)
-(tagged `manual` + `external` + `no-sandbox`; runs the full sync
-pipeline, every source, against live upstreams using host-side
-latchkey credentials). Its config, file-based source data, and golden
-snapshots all live OUTSIDE this repo — in the private dir named by
-`$FRANKWEILER_MANUAL_E2E_DIR` (so the slightly sensitive source data
-isn't shared when the repo is open-sourced); the `run.sh` there sets
-the env var and invokes the test. It snapshots three things into
-`$FRANKWEILER_MANUAL_E2E_DIR/snapshots/`:
-
-  - `sync_summary.snap` — the per-source `FetchSummary` JSON the
-    orchestrator emits at end of run.
-  - `manifest.snap` — the file-tree manifest of `raw/` +
-    `rendered_md/`. Catches additions or removals of entire files
-    without having to diff every per-file snapshot.
-  - Per-file snapshots of every `.doltlite_db`, every rendered `.md`,
-    every `.grid_rows.json` sidecar, and every blob materialized
-    under `blobs/`. The doltlite-db snaps are byte-count summaries
-    (always change on re-fetch); the rest are content snapshots.
-
-Why this is uniquely useful:
-
-  - It's the only test that catches **render-side drift against real
-    payloads** — upstream shape changes, schema-projection bugs,
-    timestamp-fabrication bugs, attachment-handling gaps (e.g.
-    attachment slots that extract isn't walking), etc.
-  - The diff is human-readable. `git diff
-    frankweiler/backend/sync/tests/snapshots/` after an update is the
-    same shape as a code review.
-  - After any change to extract schema, translate render, or the
-    sidecar contract, refresh the goldens with:
-    ```sh
-    bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
-    ```
-    and review the diff before committing. Treat each cluster of
-    changes as a finding: deliberate (commit), accidental
-    (investigate), or noise (block on a fix).
-
-The trade-off is that the goldens necessarily capture **real user
-data** — they live inside private workspaces. Acceptable here
-because the data root is single-user / single-laptop and the
-snapshots stay in a private repo; see the
-[fixture-hygiene unresolved question](#fixture-hygiene) for the
-public-facing version of this problem.
+The TNG fixtures catch code-level regressions; a **live-golden e2e**
+used to catch what happens against the actual world. The
+`//frankweiler/backend/sync:manual_e2e_live_sync_golden` target ran
+the full pipeline, every source, against live upstreams using
+host-side latchkey credentials, snapshotting the run summary, a
+file-tree manifest of `raw/` + `rendered_md/`, and per-file content
+snapshots into a private dir named by `$FRANKWEILER_MANUAL_E2E_DIR`
+(kept outside the repo so the slightly sensitive source data isn't
+shared when the repo is open-sourced). It was the only test that
+caught **render-side drift against real payloads** — upstream shape
+changes, schema-projection bugs, timestamp-fabrication bugs,
+attachment-handling gaps — with a human-reviewable diff, triaged
+per cluster as deliberate / accidental / noise. The target was
+retired along with the `frankweiler-sync` crate; **no in-tree runner
+exists today** (the machine-readable run record is now the
+`run_summary` NDJSON event emitted by `datalib-dag`). The practice
+is still worth reviving against the DAG runner.
 
 ## Adding new sources is meant to be easy
 
@@ -100,10 +71,10 @@ Reach for the simplest existing provider that's shaped like yours,
      ingestion shape (no auth, no live API, no token refresh, no rate-limit
      dance), so the auth and resume machinery you'd need to understand
      for live providers stays out of the way while you learn the
-     extract / translate / sidecar shape.
+     download / render / sidecar shape.
   2. **`anthropic`** (Claude) — first choice if your provider *is* a
      live API. Single-account, simple bearer auth via latchkey, clean
-     forward-walk cursor. Most of the "what does extract / translate /
+     forward-walk cursor. Most of the "what does download / render /
      blob-CAS look like for an API-backed provider" is here without
      the multi-workspace / multi-channel complexity of chat.
   3. **`slack`** — The most elaborate provider: multiple
@@ -122,19 +93,20 @@ Reach for the simplest existing provider that's shaped like yours,
 3. Add `etl/providers/<name>` to the workspace `members =` list in
    `frankweiler/backend/Cargo.toml` and to the `crate.from_cargo`
    manifest list in `MODULE.bazel`.
-4. Implement `extract::fetch(...)` (the in-process entry point sync
-   calls) and `<name>::translate::...`. The translate side must emit
-   `*.grid_rows.json` sidecars matching
-   [`Sidecar`](../../frankweiler/backend/etl/src/sidecar.rs).
+4. Implement `download::fetch(...)` and `<name>::render::...`. The
+   render side must emit `*.grid_rows.json` sidecars matching
+   [`Sidecar`](../../frankweiler/backend/index_lib/src/lib.rs).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Add the new source's `type:` discriminator to the `SourceConfig`
-   variants in [`backend/core/src/config.rs`](../../frankweiler/backend/core/src/config.rs)
-   and wire `extract::fetch(...)` into `sync/src/main.rs`'s per-type
-   dispatch.
+   variants in [`backend/ingest_config/src/lib.rs`](../../frankweiler/backend/ingest_config/src/lib.rs)
+   and wire the provider's `processor.rs` (`plan_download` /
+   `plan_render`) into the per-type dispatch in
+   [`datalib_step/src/dispatch.rs`](../../frankweiler/backend/datalib_step/src/dispatch.rs).
 
-Load needs no per-provider changes — `grid_rows_load` (in-process)
-picks up the new sidecars on its next run.
+Grid index needs no per-provider changes — the `grid_index` step
+(`datalib-step grid_index`, `build_grid_index` in
+`etl/src/grid_index.rs`) picks up the new sidecars on its next run.
 
 ### Worked examples beyond the chat shape
 
@@ -147,7 +119,7 @@ references when your provider doesn't look like chat:
     *immutable upstream*, so perseus deliberately doesn't use the
     incremental-fetch / cursor / refresh-window machinery. It uses the
     framework for the typed `GridRow` schema coupling, the unified
-    `bazel run //...:sync` UX, the obs/progress contract, and the
+    `datalib-dag` pipeline UX, the obs/progress contract, and the
     bazel test rig. A useful reminder that the framework is valuable
     for more than just incremental delta-fetching.
 
@@ -163,7 +135,7 @@ asking them to refetch from upstream.
 Two halves to this:
 
   - **Our internal schema** — the typed columns on raw entity tables,
-    `grid_rows.yaml`, the sidecar `Sidecar` struct, the
+    the `GridRow` struct, the sidecar `Sidecar` struct, the
     `*_bookkeeping` sidecar tables, the per-provider CAS edge
     tables. Today's de facto answer to "I added a column" is
     `--reset-and-redownload`. That
@@ -176,7 +148,7 @@ Two halves to this:
       - changes to the projection layer (`grid_rows`) where the
         source-of-truth (raw) is fine but the projection is stale —
         these *shouldn't* require an upstream refetch, just a
-        re-translate.
+        re-render.
 
     The principle we want: **additive schema changes (new columns,
     new tables, new fields) are no-downtime, no-refetch.**
@@ -198,23 +170,23 @@ Two halves to this:
   - **Upstream schema drift** — Slack adds a field, Notion changes a
     block type, GitHub renames `merged_by`. Because we preserve raw
     payloads verbatim (see [Wire-fidelity of the raw store](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)), the new bytes are captured for free —
-    a translate-side bug is the worst case, never data loss. The
-    principle: **upstream change should fail loudly at translate
-    time, not silently at extract time.** No automated drift detector
+    a render-side bug is the worst case, never data loss. The
+    principle: **upstream change should fail loudly at render
+    time, not silently at download time.** No automated drift detector
     exists today; see [Detecting upstream shape drift](#detecting-upstream-shape-drift).
 
-## Translate and downstream stages
+## Render and downstream stages
 
-After extract, we run translations for display and indexing — render
-to markdown with YAML frontmatter, index the markdown with qmd, derive
-`grid_rows` for the UI.
+After download, we run transformations for display and indexing —
+render to markdown with YAML frontmatter, index the markdown with qmd,
+derive `grid_rows` for the UI.
 
 The cross-provider contract is the **sidecar**: for every rendered
-document, Translate emits two co-located files —
+document, Render emits two co-located files —
 
   - `<id>.md` — human-readable, with YAML frontmatter.
   - `<id>.grid_rows.json` — the
-    [`Sidecar`](../../frankweiler/backend/etl/src/sidecar.rs):
+    [`Sidecar`](../../frankweiler/backend/index_lib/src/lib.rs):
 
     ```jsonc
     {
@@ -227,17 +199,17 @@ document, Translate emits two co-located files —
     }
     ```
 
-Load reads the sidecar tree — **it never re-parses markdown**. The
-markdown is for humans; the JSON sidecar is the machine-readable
+Grid index reads the sidecar tree — **it never re-parses markdown**.
+The markdown is for humans; the JSON sidecar is the machine-readable
 projection.
 
-This part of the pipeline aspires to the same properties as extract:
+This part of the pipeline aspires to the same properties as download:
 
   - **Monitorable**: same `obs` flags, same progress-bar contract.
   - **Incremental**: the sidecar `source_fingerprint` short-circuits
-    re-render. Load reads `(qmd_path, source_fingerprint)` from
+    re-render. Grid index reads `(qmd_path, source_fingerprint)` from
     `markdowns_loaded` and skips unchanged sidecars.
-  - **Resumable in the steady state**: a translate pass that gets
+  - **Resumable in the steady state**: a render pass that gets
     re-run after producing N of M sidecars will skip those N via the
     fingerprint check and continue from where it stopped. We do not,
     however, guarantee crash-mid-write atomicity per file; a partial
@@ -246,9 +218,9 @@ This part of the pipeline aspires to the same properties as extract:
     That's good enough for our use case but is not a separately
     engineered property.
 
-Less attention has been paid to translate-side observability and to
+Less attention has been paid to render-side observability and to
 making partial-progress visible to the user than to the same on
-extract; this is an area where the implementation trails the
+download; this is an area where the implementation trails the
 principle.
 
 ## Shared schemas across similar sources
@@ -260,8 +232,10 @@ display, threading, attachments, exports) shares code paths and stays
 consistent.
 
 Where unification actually happens **today**: the `GridRow` projection
-([`schemas/grid_rows.yaml`](../../schemas/grid_rows.yaml), codegen'd into
-the Rust struct at `frankweiler/backend/schema/src/generated/grid_rows.rs`).
+(the hand-written struct at
+[`frankweiler/backend/schema/src/grid_rows.rs`](../../frankweiler/backend/schema/src/grid_rows.rs),
+whose DDL is derived via `#[derive(PortableTable)]` — see
+[`grid_rows.md`](grid_rows.md)).
 Every searchable entity from every provider collapses into rows of one
 schema with `provider` + `kind` discriminators. The grid backend
 reads it with a single query and renders it without knowing which
@@ -270,7 +244,7 @@ provider produced any given row.
 Unification should **never** happen in the raw store: Slack, Beeper,
 Signal, Anthropic, and ChatGPT each have their own raw tables, in their
 own doltlite DBs (`slack_messages`, `beeper_messages`, …). Once we
-*translate*, though, we aspire to share as much as possible — projecting
+*render*, though, we aspire to share as much as possible — projecting
 raw data into unified schemas where appropriate, then sending that
 unified data through common code paths for interpretation, rendering,
 and indexing.
@@ -390,17 +364,17 @@ convention for the Slack live golden but no project-wide pre-commit
 check for "looks like real data." A regex over names / emails /
 domains / known channel patterns is the obvious low-cost mitigation.
 
-### Translate-side partial-progress visibility
+### Render-side partial-progress visibility
 
-**Desired principle**: a long-running translate pass — first run after
-a big initial extract, or a `RENDER_VERSION` bump that invalidates
+**Desired principle**: a long-running render pass — first run after
+a big initial download, or a `RENDER_VERSION` bump that invalidates
 every sidecar — must be as monitorable and as stoppable-resumable as
-extract is. The user sees "rendered 12,347 / 89,201" with an ETA;
+download is. The user sees "rendered 12,347 / 89,201" with an ETA;
 ^C-then-rerun resumes from 12,347 not 0.
 
 **Open**: the fingerprint-skip *does* give resumability in the steady
-state (see [Translate and downstream stages](#translate-and-downstream-stages)), but translate-side progress reporting is less developed
-than extract-side. Worth measuring.
+state (see [Render and downstream stages](#render-and-downstream-stages)), but render-side progress reporting is less developed
+than download-side. Worth measuring.
 
 ### The fixtures → playback → doltlite chain
 
@@ -408,7 +382,7 @@ than extract-side. Worth measuring.
 is always JSON/JSONL — diffable, language-agnostic, no doltlite
 version skew. The doltlite db is always a *produced* artifact, never
 a checked-in input. The flow is: synth reads JSONL → emits HTTP
-playback responses → extract reads playback → writes the runtime
+playback responses → download reads playback → writes the runtime
 `.doltlite_db`.
 
 This is stated in [port guide §3](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
@@ -442,8 +416,8 @@ they're listed here so they don't get lost.
     its scope (operational tips and dolt-history reading) explicit
     against the new patterns doc above.
   - Both of the above require updating inbound links across the
-    repo: this file, signal's `extract/mod.rs`, each provider's
-    `EXTRACT.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
+    repo: this file, signal's `download/mod.rs`, each provider's
+    `DOWNLOAD.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
     and any AGENTS.md / README pointers.
 
   - **VIRTUAL column projection from JSONB payload.** Each
@@ -456,7 +430,7 @@ they're listed here so they don't get lost.
     drops to zero and drift-vs-payload becomes impossible by
     construction. The `WirePayloadRow` macro would need a per-field
     attribute like `#[wire_payload_row(virtual = "$.profile.real_name")]`.
-    Several FIXMEs in `slack/src/extract/schema_raw.rs` (UserRow,
+    Several FIXMEs in `slack/src/download/schema_raw.rs` (UserRow,
     ChannelRow, MessageRow) flag the specific columns that would
     convert cleanly.
 

@@ -28,9 +28,13 @@ This document answers both and specifies the node contract, scheduler, and migra
 
 The framing constraint from the ingestion doc still holds — single user, single laptop, "no cluster, no scheduler service, no DAG server." The DAG here is an *in-process (then local-subprocess) scheduler over disk artifacts*, not a Prefect/Airflow deployment.
 
-## Where things stand today
+## Where things stood at the time of writing (pre-DAG, 2026-06)
 
-The pipeline is three stages running in-process inside frankweiler-sync — one binary, statically dispatched over a closed enum of sources (SourceConfig, [core/src/config.rs](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/frankweiler/backend/core/src/config.rs)):
+> **Addendum.** This section describes the baseline the DAG replaced.
+> `frankweiler-sync` has since been retired; the pipeline now runs as
+> subprocess steps under `datalib-dag`/`datalib-step`.
+
+The pipeline was three stages running in-process inside frankweiler-sync — one binary, statically dispatched over a closed enum of sources (SourceConfig, [core/src/config.rs](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/frankweiler/backend/core/src/config.rs)):
 
 ```
 raw/<source>/*.doltlite_db  →  rendered_md/<source>/*.md + *.grid_rows.json  →  dolt_db/ (index)
@@ -154,6 +158,12 @@ The event schema is essentially what TracingSink already emits:
 {"event": "progress.message", "node": "\<id\>", "msg":   "conversations.list page 1"}  
 {"event": "progress.finish",  "node": "\<id\>", "msg":   "done"}
 
+> **Addendum — shipped schema.** The implemented events use underscore
+> names keyed by `step`: `progress_length` / `progress_inc` /
+> `progress_message` (no separate finish event — completion is a `log`
+> line plus the step's `outcome`). See `docs/dev/step_protocol.md` for
+> the authoritative wire format.
+
 Complementary channels, not either/or:
 
 * OTLP already works per-process for free — each subprocess can ship spans/events to a collector independently. Keep it for production/distributed observability.  
@@ -250,6 +260,12 @@ So inside data\_root (or wherever), “artifacts can
 
 Steps 1–2 deliver a real, generic DAG over the existing stages without touching atomicity. Step 3 is the hard, invasive one. Steps 5–6 are independent and can be reordered.
 
+> **Addendum — all six landed.** The migration completed in 2026-07, and
+> step 6 went further than "optional": subprocess execution is the *only*
+> path a config produces (`config::to_specs` always emits
+> `StepRun::Subprocess`; `InProcess` survives for tests). The in-process
+> framing above is historical.
+
 ## Implementation decisions (2026-07)
 
 Decisions made while building the prototype into the real thing, in
@@ -329,6 +345,10 @@ rough dependency order:
   and exits 130 with a `cancelled` outcome; `kill_on_drop` plus a
   child-pid registry guarantee no orphaned downloads. The http worker
   SIGTERMs on cancel and only SIGKILLs after a grace period.
+* **Ready steps run concurrently** up to `--parallelism` (default 4,
+  the runner's only throughput knob); the scheduler dispatches as many
+  ready steps as the bound allows, so independent source chains overlap
+  naturally.
 * **Subset sync** (`--sync <fringe-id>…`): selected download steps run,
   the rest are treated as up to date, downstream follows normal change
   propagation. The UI's per-source / multi-select "Sync now" maps onto

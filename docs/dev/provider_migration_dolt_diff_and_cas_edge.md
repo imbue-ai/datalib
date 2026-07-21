@@ -13,7 +13,7 @@ The recipe matured a lot as we ported providers. The shape is now:
     `BulkUpsertable` impl, and PK recipe are all derived.
   - One shared `flush_cas_edges` primitive that every per-provider
     attachment flush delegates to.
-  - One shared `CasEdgeAccumulator` that every per-provider extract
+  - One shared `CasEdgeAccumulator` that every per-provider download
     pushes (fetched, known, failed) outcomes into; flush at end of
     bucket is a closure call.
   - One shared `scan_buckets` for the dolt_diff incremental-render
@@ -26,7 +26,7 @@ The recipe matured a lot as we ported providers. The shape is now:
     JSONL wire-tape mirror (today: slack and beeper).
 
 After this consolidation, each new provider's port is roughly **300
-lines of provider-specific glue** (schema_raw + extract walk + render
+lines of provider-specific glue** (schema_raw + download walk + render
 md generation) plus standard shared-helper plumbing.
 
 The migration combines **two separate changes** that turned out to be
@@ -42,9 +42,9 @@ load-bearing and naturally land together:
    `blake3` directly. Bytes still live in the shared `cas_objects`.
 
 2. **Incremental render** — every provider used to compute a per-row
-   `payload_blake3` at extract time, hand-maintained on every entity
-   row, aggregated by a SQL CTE in translate into a per-bucket
-   fingerprint, compared against the load step's
+   `payload_blake3` at download time, hand-maintained on every entity
+   row, aggregated by a SQL CTE in render into a per-bucket
+   fingerprint, compared against the grid_index step's
    `prior_fingerprints` map to decide skip-or-render. That whole
    apparatus is replaced by **`dolt_diff_<table>` virtual tables +
    a per-source render cursor JSON**. Doltlite's prolly-tree diff is
@@ -64,8 +64,8 @@ whole migration.
   renamed → `WirePayload`, since it's a pair now, and field name on
   every row struct went `triad` → `id_and_payload`).
 - Every `let payload_blake3 = blake3_hex(payload.as_bytes())` site
-  in extract.
-- The `bucket_fingerprint_query` CTE in translate's parse.
+  in download.
+- The `bucket_fingerprint_query` CTE in render's parse.
 - Per-bucket `fingerprint: String` field on the parsed-bucket type.
 - The `prior_fingerprints: &HashMap<String, String>` arg threaded
   through parse + render + orchestrator.
@@ -87,7 +87,7 @@ whole migration.
 
 **Kept (and load-bearing):**
 - Per-doc `source_fingerprint` field on the sidecar / `RenderedMarkdown`
-  — the load step still reads it. It's now set to the markdown_uuid
+  — the grid_index step still reads it. It's now set to the markdown_uuid
   (or thread_uuid). Stable across re-renders of the same bucket,
   distinct across buckets; the skip decision happens elsewhere.
 - The bookkeeping sidecars (`<table>_bookkeeping`) and the rest of
@@ -332,7 +332,7 @@ commit map roughly to:
    `Row::all_ddl()`, any provider-specific index DDLs, and the
    shared bookkeeping DDLs via `dr::bookkeeping_ddl_for(table)`.
 
-### Phase 2: extract — `RawDb` + walk + flush
+### Phase 2: download — `RawDb` + walk + flush
 
 1. **No pre-seed.** Rows only appear after a successful detail
    fetch. The listing-pass skip-check works by bulk-reading
@@ -364,7 +364,7 @@ commit map roughly to:
    per-column equivalent for Shape A) so the next walk re-decodes
    and re-stores.
 
-### Phase 3: translate — `parse` + `scan_buckets`
+### Phase 3: render — `parse` + `scan_buckets`
 
 1. `parse.rs::parse(path, last_render_hash)` is the doltlite-aware
    entry. It opens a read-only pool, runs `scan_buckets`, filters
@@ -383,7 +383,7 @@ commit map roughly to:
    `ParsedX` shape with `BlobBundle::default()` on each bucket.
    No dolt_diff for that path.
 
-### Phase 4: translate — `render`
+### Phase 4: render — `render`
 
 1. `render_all(parsed, out_dir, source_name, progress,
    on_doc_complete)` is fully sync — `BlobBundle::materialize_to_dir`
@@ -405,10 +405,12 @@ commit map roughly to:
    }
    ```
 
-### Phase 5: orchestrator integration
+### Phase 5: step integration
 
-In `frankweiler/backend/sync/src/main.rs`'s match arm for the
-provider:
+There is no sync binary anymore; integration means the provider's
+`processor.rs` (`plan_download` / `plan_render`), dispatched per
+source `type:` by `datalib_step/src/dispatch.rs`. In the provider's
+render path:
 
 ```rust
 let cursor_path = frankweiler_etl::render_cursor::cursor_path(
@@ -422,9 +424,9 @@ let parsed = parse(
 render_all(&parsed, root, name, progress, on_doc_complete)?;
 ```
 
-The `prior_fingerprints` arg stays in `translate_source`'s signature
-for unported providers — just unused inside this arm. Don't refactor
-that signature mid-migration.
+The `prior_fingerprints` arg stays in the shared render entry's
+signature for unported providers — just unused inside this arm.
+Don't refactor that signature mid-migration.
 
 ---
 
@@ -463,7 +465,7 @@ that signature mid-migration.
 ### Slack
 
 - Schema: per-team / per-channel / per-thread layout (see
-  `frankweiler_etl_slack::extract`). Already has a cheap per-thread
+  `frankweiler_etl_slack::download`). Already has a cheap per-thread
   cursor (`block_on_probe_thread_cursors`) probed in the
   orchestrator's slack arm.
 - **Migration is partial.** Slack's cheap-probe already does
@@ -529,7 +531,7 @@ that signature mid-migration.
 
 ### Perseus
 
-- Special: file-tree backed, no doltlite raw db. Translate runs
+- Special: file-tree backed, no doltlite raw db. Render runs
   HF-Hub-backed BERT alignment. The migration **does not apply** —
   no per-row payload_blake3, no blob_refs, no dolt_diff vtab.
 
@@ -548,16 +550,16 @@ that signature mid-migration.
    - Wipe the cursor. Simpler — next run is a cold start.
    - **Recommend wipe the cursor.** Cleaner semantics, no reasoning
      about diff collapse. Add the wipe to the reset_and_redownload
-     branch in extract.
+     branch in download.
 
 3. **dolt_diff_<table> says "no such table".** Happens on a brand-
    new working set where the table exists but has no dolt history
-   yet (extract ran but no `dolt_commit` happened). In production
-   the orchestrator commits after every extract — this only bites
+   yet (download ran but no `dolt_commit` happened). In production
+   the orchestrator commits after every download — this only bites
    tests that bypass the orchestrator. **Don't paper over with a
    blanket try-catch around the query**; that turns "render
    nothing changed" into "render everything", which masks real
-   bugs. Have the test do a `commit_run` after extract.
+   bugs. Have the test do a `commit_run` after download.
 
 4. **Removed rows.** A row that existed in `from_ref` but not in
    `to_ref` has `to_<col> IS NULL` in dolt_diff. The
@@ -573,7 +575,7 @@ that signature mid-migration.
    ranges natively; no per-commit accumulation needed.
 
 6. **Concurrent renders.** Cursor write isn't locked. Two
-   `frankweiler-sync` processes racing on the same source: the
+   render-step processes racing on the same source: the
    later overwrites. Worst case: some buckets render twice, none
    get skipped wrongly. Don't add locking.
 
@@ -591,7 +593,7 @@ These came out of the signal + email + whatsapp ports and are
 non-negotiable for the upcoming ones:
 
 1. **One commit per provider port.** Each provider's port lands as
-   a single commit that turns its sync arm green end-to-end. Pre-
+   a single commit that turns its dispatch arm green end-to-end. Pre-
    commit hook runs `bazelisk build --config=clippy //...` so
    clippy must be green workspace-wide.
 
@@ -623,10 +625,10 @@ non-negotiable for the upcoming ones:
    migrations is asking for an awkward bisect later.
 
 7. **`source_fingerprint` on the sidecar is now the bucket UUID,
-   not a content hash.** The load step still consumes the field
+   not a content hash.** The grid_index step still consumes the field
    for its `(qmd_path, source_fingerprint)` skip key; we're
    trading "fingerprint changes when content changes" for
-   "fingerprint is stable per bucket". The load step's skip
+   "fingerprint is stable per bucket". The grid_index step's skip
    becomes "have we ever loaded this exact UUID before?" instead
    of "is the content the same?" — fine because the renderer no
    longer writes if the content hasn't changed.

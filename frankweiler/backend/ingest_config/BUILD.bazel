@@ -51,9 +51,11 @@ rust_test(
     ],
 )
 
-# Validates the checked-in `docs/user/config_examples/*.yaml` against the
-# loader, so the docs can't drift from `SourceConfig`. Moved here with the
-# config module.
+# Validates the checked-in `docs/user/config_examples/*.yaml` (DAG steps
+# format): each file must load + graph-build like the runner would, every
+# `datalib-step download <type>` step's params must round-trip into
+# `SourceConfig`, and render params must match the provider's
+# `<P>RenderConfig` — so the docs can't drift from the real schemas.
 rust_test(
     name = "config_examples_test",
     srcs = ["tests/config_examples.rs"],
@@ -65,6 +67,13 @@ rust_test(
     edition = "2021",
     deps = [
         ":frankweiler_ingest_config",
+        "//frankweiler/backend/dag:frankweiler_dag",
+        "//frankweiler/backend/etl/providers/anthropic_config:frankweiler_etl_anthropic_config",
+        "//frankweiler/backend/etl/providers/beeper_config:frankweiler_etl_beeper_config",
+        "//frankweiler/backend/etl/providers/email_config:frankweiler_etl_email_config",
+        "//frankweiler/backend/etl/providers/perseus_config:frankweiler_etl_perseus_config",
+        "//frankweiler/backend/etl/providers/signal_config:frankweiler_etl_signal_config",
         "@frankweiler_crates//:runfiles",
+        "@frankweiler_crates//:serde_yaml",
     ],
 )

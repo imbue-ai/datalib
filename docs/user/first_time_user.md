@@ -42,7 +42,7 @@ brew install node
 ```
 
 - `node` — the qmd indexer shells out to latchkey, and `npx -y @tobilu/qmd@<version>` 
-  during the index phase.
+  during the `qmd_index` step.
 
 ## 1. Install the CLI and make a data_root playground (here it's `~/datalib`)
 
@@ -54,10 +54,10 @@ curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/insta
 ```
 
 This downloads the latest release tarball, verifies its checksum, and drops
-`frankweiler-sync`, `frankweiler-http`, and the latchkey curl shim into
-`~/.local/bin`. If that directory isn't already on your `PATH`, the script
-prints the exact line to add to your `~/.zshrc` — add it and restart your
-shell so the `frankweiler-*` commands resolve.
+`datalib-dag`, `datalib-step`, `frankweiler-http`, and the latchkey curl
+shim into `~/.local/bin`. If that directory isn't already on your `PATH`,
+the script prints the exact line to add to your `~/.zshrc` — add it and
+restart your shell so the installed commands resolve.
 
 Three optional knobs:
 
@@ -86,7 +86,7 @@ mkdir -p ~/datalib && cd ~/datalib
 Verify the install:
 
 ```sh
-frankweiler-sync --version
+datalib-dag --version
 ```
 
 ## 2. Get access to some data
@@ -149,7 +149,7 @@ Steps:
    ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
    ```
 
-   The sample config in the next step has an `email` source stanza
+   The sample config in the next step has an `email` source
    that points at exactly that path.
 
 
@@ -200,46 +200,93 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
    command — `$(pbpaste)` will expand to the cookie you just copied.
 
 
-## 3. Sample configuration
+## 3. Configuration
 
-Download [**sample_config.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.yaml)
-into your working dir (the `~/datalib` data_root from step 1):
+The running config lives at `config.yaml` in your data_root, and it's a
+**steps** config: each source becomes a `<name>.download` +
+`<name>.render` step pair, plus two shared index steps that fan in over
+everything rendered. A one-source config looks like this:
 
-```sh
-curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/docs/user/config_examples/sample_config.yaml -o sample_config.yaml
+```yaml
+data_root: ~/datalib
+
+steps:
+  - id: claude.download
+    command: datalib-step download claude_api
+    outputs: [claude/raw]
+    params:
+      sync: {}
+
+  - id: claude.render
+    command: datalib-step render claude_api
+    inputs: [claude/raw]
+    outputs: [claude/rendered_md]
+
+  - id: grid_index
+    command: datalib-step grid_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/backend_index]
+
+  - id: qmd_index
+    command: datalib-step qmd_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/qmd]
 ```
 
-This config enables the Slack source, the Claude API source, and an
-email source that reads a Google Takeout `.mbox` from disk — enough to
-mirror your conversations and your Gmail archive.
+You normally don't write this by hand — the app's **Setup** tab
+scaffolds it for you (next step). If you'd rather hand-edit, copy
+[**configs/dag_example.yaml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.yaml),
+a complete commented example.
+
+For ready-made configs and each source's knobs, the files in
+[docs/user/config_examples/](https://github.com/imbue-ai/datalib/tree/main/docs/user/config_examples)
+are the reference — all in the steps format, so you can copy a file (or
+just one source's step pair) straight into `<data_root>/config.yaml`:
+
+- [**sample_config.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.yaml)
+  — the Slack source, the Claude API source, and an email source that
+  reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
+  up).
+- [**claude_only.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.yaml)
+  — just the Claude source, plus the two index steps.
+- [**all_sources.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.yaml)
+  — every supported source type with realistic defaults (including
+  both input modes for email and contacts).
+
+(If you have an old-style `sources:` config from an earlier datalib,
+drop it at `<data_root>/config.yaml` — the app detects the legacy
+format and offers one-click migration to steps.)
 
 Credentials are not in the config — downloaders that need them use `latchkey` at runtime.
 
-You'll want to at least eyeball the config to make sure it is writing to the directory you created.
-It's the `data_root` configuration parameter at the top. 
-
-You can also feel free to comment out some of the YAML stanzas that identify different synchronization sources.
-
-If you only want to mirror your Claude conversations, download
-[**claude_only.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.yaml)
-instead — it has just the `claude_api` stanza:
-
-```sh
-curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/docs/user/config_examples/claude_only.yaml -o claude_only.yaml
-```
-
-For a reference listing every supported source type with realistic
-defaults (including both input modes for email and contacts), see
-[**all_sources.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.yaml).
+Whichever route you take, eyeball the `data_root` parameter at the top
+to make sure it is writing to the directory you created.
 
 ## 4. Run the sync
 
+The easiest way is through the app. From your data_root:
+
 ```sh
-frankweiler-sync --config ./sample_config.yaml
+frankweiler-http ./
 ```
 
+It binds to `http://127.0.0.1:8731` by default and opens that URL in
+your default browser. The **Setup** tab scaffolds `config.yaml` if you
+don't have one yet and lets you add sources; **Sync now** then runs the
+pipeline (`datalib-dag` under the hood).
+
+Prefer the terminal? Run the pipeline directly on your steps config:
+
+```sh
+datalib-dag config.yaml
+```
+
+(`datalib-step` must be findable: on `PATH`, next to `datalib-dag` —
+which is how the installer lays them out — or via `--binary-dir`. Pass
+`--sync <step-id>` to sync just a subset of your sources.)
+
 The first time you run this, it is slow and takes a long time to download everything.
-All of the data will be going into the directory that sample config points at. 
+All of the data will be going into the data_root directory.
 
 This process is meant to be stoppable and resumable, so you can control-C it,
 Then run the same command again to resume downloading.
@@ -250,12 +297,12 @@ and should be faster.
 
 **During the run** you'll see, roughly in order:
 
-- An `extract` phase: per-org conversation enumeration, then a progress
-  bar as each new / updated / overlap conversation is fetched from
-  `claude.ai/api`. New conversations are fetched first.
-- A `translate` phase: each conversation rendered into intelligible Markdown (including image attachments).
-- A SQL `index` phase: rows written into the doltlite SQL store at `<data_root>/system/backend_index/db.doltlite_db`.
-- A `qmd index` phase: builds the search index. **First run is slow** —
+- A `download` step per source: per-org conversation enumeration, then
+  a progress bar as each new / updated / overlap conversation is
+  fetched from `claude.ai/api`. New conversations are fetched first.
+- A `render` step per source: each conversation rendered into intelligible Markdown (including image attachments).
+- The `grid_index` step: rows written into the doltlite SQL store at `<data_root>/system/backend_index/db.doltlite_db`.
+- The `qmd_index` step: builds the search index. **First run is slow** —
   embedding ~5–10 minutes per thousand chunks on CPU. It's resumable, so
   Ctrl-C and re-run is safe. Re-runs after the backlog drains take
   seconds.
@@ -278,13 +325,14 @@ and should be faster.
 ├── fastmail/                       # (mbox source lands here too)
 │   └── …
 ├── …
-├── system/                         # everything that isn't a source
-│   ├── backend_index/
-│   │   └── db.doltlite_db          # doltlite SQL store (grid rows + audit log)
-│   └── qmd/
-│       ├── index.sqlite            # search index hit by hybrid / vector queries
-│       └── models -> ~/.cache/qmd/models
-└── sync_summary_<timestamp>.json   # one per run
+└── system/                         # everything that isn't a source
+    ├── backend_index/
+    │   └── db.doltlite_db          # doltlite SQL store (grid rows + audit log)
+    ├── qmd/
+    │   ├── index.sqlite            # search index hit by hybrid / vector queries
+    │   └── models -> ~/.cache/qmd/models
+    └── state/
+        └── dag_state.json          # scheduler state (which steps are up to date)
 ```
 
 > **Backups:** the bulky **derived** artifacts — each `<name>/rendered_md/`
@@ -300,15 +348,20 @@ and should be faster.
 >
 > What's left in the backup is exactly what you want to keep: the per-stanza
 > `<name>/raw/` stores (your precious captured data), `config.yaml`, and
-> `system/state/` (sync job logs — operational history, not rebuildable).
+> `system/state/` (scheduler state + sync job logs — operational
+> history, not rebuildable).
 
-A final `Summary` line reports per-source counts (new / updated /
-skipped / errors). Exit code is non-zero if any source errored.
+A final per-step report prints when the run finishes, and a
+machine-readable `run_summary` event lands on `datalib-dag`'s stderr
+(NDJSON — tee stderr if you want to keep it). Exit code is non-zero if
+any step failed.
 
 ## 5. Browse the result
 
+If you synced from the app, you're already looking at the result —
 `frankweiler-http` is the single-binary search backend with the web UI
-embedded — point it at your data root and it serves everything:
+embedded. If you ran `datalib-dag` from the terminal instead, start it
+now from your data_root:
 
 ```sh
 frankweiler-http ./
@@ -321,7 +374,8 @@ listen address.
 
 ## 6. Re-syncing
 
-Re-run `frankweiler-sync` whenever you want to pull new conversations.
+Re-run the sync (**Sync now** in the app, or `datalib-dag config.yaml`)
+whenever you want to pull new conversations.
 The downloader is incremental and the qmd index is content-hashed, so
 re-runs against an unchanged corpus are relatively fast no-ops.
 
