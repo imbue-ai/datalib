@@ -172,9 +172,10 @@ A side goal here is to report enough information to get a sense of USE metrics: 
 > needs a wildcard input as long as it fits the design.
 >
 > *What the prototype chose:* the macro layer was dropped entirely — the
-> config declares steps directly (`<source_type>.download` /
-> `<source_type>.render` per source, plus shared `grid_index`/`qmd_index`
-> fan-ins).
+> config declares steps directly, each an arbitrary `command:` with
+> declared `params`/`inputs`/`outputs` appended as JSON flags (see
+> docs/dev/step_protocol.md; per source a `datalib-step download` /
+> `render` pair, plus shared `grid_index`/`qmd_index` fan-ins).
 > Wildcard inputs (`*`/`**`) exist and match against declared output
 > *roots* only — true tree-intersection semantics would make `**/x`
 > depend on every step. In practice render turned out to be as
@@ -261,16 +262,31 @@ rough dependency order:
   (a starter config declares the fan-in steps before any source
   exists); an input with no producer must be a concrete path (a
   user-staged "external" artifact, content-hashed by the scheduler).
+* **Steps are commands.** Each config entry is an arbitrary
+  `command:` string (split shell-style); the runner appends the
+  declared `params`/`inputs`/`outputs` as `--params`/`--inputs`/
+  `--outputs` JSON flags and resolves bare binary names through
+  `--binary-dir`-prepended PATH. Any executable speaking that flag
+  surface (and optionally the NDJSON protocol) is a step — see
+  docs/dev/step_protocol.md.
 * **Per-provider step types.** Download *and* render are provider-
-  specific (each render reads its own raw-store schema), so the config
-  writes them as `<source_type>.<phase>` (`slack_api.download`); the
-  genuinely shared step types are `grid_index` and `qmd_index`. Params carry
-  `{name, source}` with no `type:` tag — the step type names the
-  provider, and `source:` deserializes into that provider's own config
-  struct. Provider crates expose per-wave entry points
-  (`plan_download` / `plan_render`); a later per-phase split of the
-  config *structs* is where render-relevant knobs still living in
-  `sync:` (beeper/signal `period`, perseus `alignment_pairs`) move out.
+  specific (each render reads its own raw-store schema), so the
+  built-in commands are written `datalib-step download|render
+  <source_type>`; the genuinely shared step types are `grid_index` and
+  `qmd_index`. Params carry neither a `type:` tag (the command's
+  nested subcommand names the provider) nor a `name:` (the step
+  derives its `<name>/…` prefix from its first declared output).
+* **Params are per-phase.** Each step's params carry only what that
+  wave reads: the download step gets the provider's full config
+  struct (`common:` envelope + `sync:` + download knobs), the render
+  step gets a slim `<P>RenderConfig` — the `RenderCommon` envelope
+  (`raw_path`, and `input_path` for tree-backed perseus) plus the few
+  real render knobs (beeper/signal `period`, perseus
+  `alignment_pairs`, email `outlink_format`/`only_render_labels`).
+  Both sides are strict: render configs are `deny_unknown_fields`,
+  and the download planners reject the moved render knobs with a
+  pointer to their new home. Provider crates expose per-wave entry
+  points (`plan_download(cfg)` / `plan_render(render_cfg)`).
 * **Fringe steps always run.** A download step's real input is a remote
   service the scheduler can't version, so "run iff inputs changed"
   degenerates to "always invoke"; internal incrementality makes that
@@ -317,10 +333,11 @@ rough dependency order:
   the rest are treated as up to date, downstream follows normal change
   propagation. The UI's per-source / multi-select "Sync now" maps onto
   it (`<name>.download` id convention), the whole selection as one run.
-* **Run-wide `--now`** is threaded by the runner to every step (sampled
-  once when omitted) so all stamped outputs agree; reset controls
-  (`--reset-and-redownload`, `--refetch-blobs`) pass through to
-  download steps only.
+* **Run-wide `--now`** is exported by the runner to every step as
+  `FRANKWEILER_DAG_NOW` (sampled once when omitted) so all stamped
+  outputs agree; reset controls (`--reset-and-redownload`,
+  `--refetch-blobs`) are exported the same way and honored by steps
+  that fetch from an origin, ignored by everything else.
 * **UI progress is the task board, not stages.** The worker consumes
   the event stream into per-task states (todo/running/done/skipped/
   failed/blocked) rendered as one cell per task; `GET /api/dag` serves

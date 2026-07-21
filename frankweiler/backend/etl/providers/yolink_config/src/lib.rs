@@ -208,3 +208,7 @@ mod tests {
         assert!(cfg(vec![d2]).validate().is_err());
     }
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type YolinkRenderConfig = frankweiler_source_common::BareRenderConfig;

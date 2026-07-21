@@ -21,6 +21,9 @@
 //! `FRANKWEILER_DAG_INPUTS` (all resolved input artifacts,
 //! `\n`-separated, relative to the data root) and
 //! `FRANKWEILER_DAG_CHANGED_INPUTS` (the subset whose version moved).
+//! Run-wide settings arrive the same way (`FRANKWEILER_DAG_NOW`, the
+//! reset flags, a `PATH` with the binary dir prepended) — see
+//! [`crate::scheduler::Runner::child_env`].
 
 use std::collections::BTreeMap;
 use std::process::Stdio;
@@ -37,6 +40,16 @@ pub const ENV_STEP: &str = "FRANKWEILER_DAG_STEP";
 pub const ENV_DATA_ROOT: &str = "FRANKWEILER_DAG_DATA_ROOT";
 pub const ENV_INPUTS: &str = "FRANKWEILER_DAG_INPUTS";
 pub const ENV_CHANGED_INPUTS: &str = "FRANKWEILER_DAG_CHANGED_INPUTS";
+/// Run-wide pinned timestamp (RFC 3339), set by the runner on every
+/// step so all stamped outputs agree. Steps that record times should
+/// prefer it over sampling their own clock.
+pub const ENV_NOW: &str = "FRANKWEILER_DAG_NOW";
+/// Set to `1` when the user asked for a from-scratch re-download.
+/// Steps that fetch from an origin should wipe their bookkeeping and
+/// re-fetch; everything else ignores it.
+pub const ENV_RESET_AND_REDOWNLOAD: &str = "FRANKWEILER_DAG_RESET_AND_REDOWNLOAD";
+/// Set to `1` when the user asked for attachments/blobs to re-fetch.
+pub const ENV_REFETCH_BLOBS: &str = "FRANKWEILER_DAG_REFETCH_BLOBS";
 
 /// The final stdout line a subprocess step may emit.
 #[derive(Debug, Default, Deserialize)]
@@ -51,6 +64,7 @@ struct WireOutcome {
 pub(crate) async fn run_subprocess(
     argv: &[String],
     env: &BTreeMap<String, String>,
+    extra_env: &BTreeMap<String, String>,
     ctx: &StepCtx,
     sink: &Arc<dyn EventSink>,
 ) -> Result<StepOutcome, StepError> {
@@ -67,6 +81,10 @@ pub(crate) async fn run_subprocess(
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
         .env(ENV_CHANGED_INPUTS, changed.join("\n"))
+        // Run-wide env from the runner (PATH with binary_dir
+        // prepended, the pinned FRANKWEILER_DAG_NOW, …); the step's
+        // own `env:` entries win on key collision.
+        .envs(extra_env)
         .envs(env)
         .current_dir(&ctx.data_root)
         .stdin(Stdio::null())
@@ -339,6 +357,45 @@ mod tests {
             e,
             Event::Log { level: LogLevel::Error, msg, .. } if msg.contains("boom")
         )));
+    }
+
+    #[tokio::test]
+    async fn child_env_reaches_steps_and_step_env_wins() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "env.probe",
+            StepRun::Subprocess {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    r#"
+                        mkdir -p env/out
+                        echo "$FRANKWEILER_DAG_NOW/$OVERRIDE_ME" > env/out/probe.txt
+                    "#
+                    .into(),
+                ],
+                env: [("OVERRIDE_ME".to_string(), "step".to_string())].into(),
+            },
+        )
+        .output("env/out");
+        let g = Graph::build(vec![spec]).unwrap();
+        let r = Runner::new(root.path()).child_env(
+            [
+                (
+                    super::ENV_NOW.to_string(),
+                    "2026-07-21T00:00:00Z".to_string(),
+                ),
+                ("OVERRIDE_ME".to_string(), "run".to_string()),
+            ]
+            .into(),
+        );
+        let rep = r.run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("env/out/probe.txt")).unwrap(),
+            "2026-07-21T00:00:00Z/step\n",
+            "run-wide env is visible; the step's own env wins on collision"
+        );
     }
 
     #[tokio::test]

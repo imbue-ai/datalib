@@ -43,3 +43,7 @@ pub struct CarddavSync {
     #[serde(default)]
     pub addressbooks: Option<Vec<String>>,
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type CarddavRenderConfig = frankweiler_source_common::BareRenderConfig;

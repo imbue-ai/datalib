@@ -2,25 +2,32 @@
 //! `frankweiler_dag::config` for the schema).
 //!
 //! ```sh
-//! datalib-dag pipeline.yaml [--step-bin PATH] [--sync STEP_ID[,…]]…
+//! datalib-dag pipeline.yaml [--binary-dir DIR] [--sync STEP_ID[,…]]…
 //!     [--now RFC3339] [--parallelism N]
 //!     [--reset-and-redownload] [--refetch-blobs]
 //! ```
 //!
+//! * `--binary-dir` is prepended to every step's `PATH`, so commands
+//!   can name step binaries bare (`datalib-step …`). Defaults to the
+//!   config `binary_dir:`, then this executable's own directory.
 //! * `--sync` selects a subset of the download steps (the steps with
 //!   no inputs) to actually sync; the rest are treated as up to date,
 //!   so only the selected chains — plus any fan-in steps they dirty —
 //!   do work. This is the per-source "Sync now" mode.
-//! * `--now` pins the run timestamp threaded to every `step:`-typed
-//!   entry (downloads stamp it into raw bookkeeping, index into
-//!   `markdowns.rendered_at`); omitted, the local clock is sampled
-//!   once at startup so the whole run still agrees on one value.
-//! * `--reset-and-redownload` / `--refetch-blobs` are forwarded to
-//!   the download steps (see `datalib-step download --help`).
+//! * `--now` pins the run timestamp, exported to every step as
+//!   `FRANKWEILER_DAG_NOW` (downloads stamp it into raw bookkeeping,
+//!   index into `markdowns.rendered_at`); omitted, the local clock is
+//!   sampled once at startup so the whole run still agrees on one
+//!   value.
+//! * `--reset-and-redownload` / `--refetch-blobs` are exported as
+//!   `FRANKWEILER_DAG_RESET_AND_REDOWNLOAD` / `FRANKWEILER_DAG_REFETCH_BLOBS`;
+//!   steps that fetch from an origin honor them (see
+//!   `datalib-step download --help`), everything else ignores them.
 //!
-//! Every step runs as a subprocess: `step:`-typed entries invoke
-//! `datalib-step <type> …`; `run:` entries execute their argv
-//! verbatim. Events stream to stderr as NDJSON — including one final
+//! Every step runs as a subprocess executing its config `command:`
+//! (with the declared params/inputs/outputs appended as `--params` /
+//! `--inputs` / `--outputs` JSON flags — see docs/dev/step_protocol.md).
+//! Events stream to stderr as NDJSON — including one final
 //! `run_summary` event, the machine-readable run record (tee stderr
 //! to keep it). The per-step report prints to stdout.
 //!
@@ -56,11 +63,11 @@ use frankweiler_dag::{config, subprocess, Graph, NdjsonSink, Runner};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    const USAGE: &str = "usage: datalib-dag <pipeline.yaml> [--step-bin PATH] \
+    const USAGE: &str = "usage: datalib-dag <pipeline.yaml> [--binary-dir DIR] \
          [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--parallelism N] \
          [--reset-and-redownload] [--refetch-blobs]";
     let mut config_path: Option<PathBuf> = None;
-    let mut step_bin: Option<PathBuf> = None;
+    let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();
     let mut now: Option<String> = None;
     let mut parallelism: Option<usize> = None;
@@ -69,9 +76,9 @@ async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--step-bin" => {
-                step_bin = Some(PathBuf::from(
-                    args.next().context("--step-bin needs a value")?,
+            "--binary-dir" => {
+                binary_dir = Some(PathBuf::from(
+                    args.next().context("--binary-dir needs a value")?,
                 ))
             }
             "--sync" => {
@@ -114,18 +121,32 @@ async fn main() -> Result<()> {
     }
 
     let (cfg, data_root) = config::load(&config_path)?;
-    let step_bin = config::resolve_step_bin(&cfg, step_bin.as_deref());
-    // One timestamp for the whole run, whether given or sampled —
-    // every stamped output (raw bookkeeping, rendered_at) agrees.
-    let opts = config::StepTypeOpts {
-        now: Some(now.unwrap_or_else(|| {
-            frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs()
-        })),
-        reset_and_redownload,
-        refetch_blobs,
-    };
-    let specs = config::to_specs(&cfg, &step_bin, &opts)?;
+    let specs = config::to_specs(&cfg)?;
     let graph = Graph::build(specs)?;
+
+    // Run-wide environment for every step subprocess: PATH with the
+    // binary dir prepended (so commands can say `datalib-step` bare),
+    // one pinned timestamp for the whole run — whether given or
+    // sampled, every stamped output (raw bookkeeping, rendered_at)
+    // agrees — and the reset flags for steps that fetch from origin.
+    let mut child_env: std::collections::BTreeMap<String, String> = Default::default();
+    if let Some(dir) = config::resolve_binary_dir(&cfg, binary_dir.as_deref()) {
+        let mut paths = vec![dir];
+        if let Some(p) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&p));
+        }
+        let joined = std::env::join_paths(paths).context("prepend --binary-dir to PATH")?;
+        child_env.insert("PATH".into(), joined.to_string_lossy().into_owned());
+    }
+    let now =
+        now.unwrap_or_else(|| frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+    child_env.insert(subprocess::ENV_NOW.into(), now);
+    if reset_and_redownload {
+        child_env.insert(subprocess::ENV_RESET_AND_REDOWNLOAD.into(), "1".into());
+    }
+    if refetch_blobs {
+        child_env.insert(subprocess::ENV_REFETCH_BLOBS.into(), "1".into());
+    }
 
     if !sync_only.is_empty() {
         let fringe = graph.fringe_ids();
@@ -164,7 +185,9 @@ async fn main() -> Result<()> {
 
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
-    let mut runner = Runner::new(&data_root).sink(Arc::new(NdjsonSink::new(std::io::stderr())));
+    let mut runner = Runner::new(&data_root)
+        .sink(Arc::new(NdjsonSink::new(std::io::stderr())))
+        .child_env(child_env);
     if let Some(p) = parallelism {
         runner.parallelism = p;
     }

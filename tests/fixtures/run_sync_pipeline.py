@@ -194,10 +194,11 @@ def main() -> int:
             [
                 str(step_bin),
                 "synthesize",
-                "--type",
                 type_str,
-                "--params-json",
-                json.dumps({"name": name, "source": source}),
+                "--name",
+                name,
+                "--params",
+                json.dumps(source),
                 "--out",
                 str(playback),
             ],
@@ -210,38 +211,51 @@ def main() -> int:
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
+        # Per-phase params, verbatim JSON (valid YAML). The source name
+        # isn't in either — each step derives it from its first
+        # declared output. Download gets the provider config subtree;
+        # render gets only the render-side knobs (most sources: none).
         params = json.dumps(
-            {
-                "name": name,
-                "source": _source_config(
-                    type_str,
-                    extract_input,
-                    notion_seed=notion_seed,
-                    beeper_data_dir=beeper_data_dir,
-                    signal_snapshot_root=signal_snapshot_root,
-                    whatsapp_dir=whatsapp_dir,
-                ),
-            }
+            _source_config(
+                type_str,
+                extract_input,
+                notion_seed=notion_seed,
+                beeper_data_dir=beeper_data_dir,
+                signal_snapshot_root=signal_snapshot_root,
+                whatsapp_dir=whatsapp_dir,
+            )
+        )
+        render_params = _render_config(type_str)
+        render_params_line = (
+            f"\n    params: {json.dumps(render_params)}" if render_params else ""
         )
         steps.append(
             f"""  - id: {name}.download
-    step: {type_str}.download
+    command: datalib-step download {type_str}
     outputs: [{name}/raw]
     params: {params}
   - id: {name}.render
-    step: {type_str}.render
+    command: datalib-step render {type_str}
     inputs: [{name}/raw]
-    outputs: [{name}/rendered_md]
-    params: {params}"""
+    outputs: [{name}/rendered_md]{render_params_line}"""
         )
     steps.append(
         """  - id: grid_index
-    step: grid_index
+    command: datalib-step grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]"""
     )
     dag_yaml = workspace / "dag.yaml"
     dag_yaml.write_text(f"data_root: {workspace}\nsteps:\n" + "\n".join(steps) + "\n")
+
+    # Step commands resolve `datalib-step` via PATH; bazel names the
+    # binary `datalib_step`, so stage a dash-named symlink dir and hand
+    # it to the runner as --binary-dir.
+    bindir = workspace / "bindir"
+    bindir.mkdir(exist_ok=True)
+    step_link = bindir / "datalib-step"
+    if not step_link.exists():
+        step_link.symlink_to(step_bin)
 
     # Anthropic extract reads users.json from `export_dir` (== input_path
     # in our wiring) — that file is a bulk-export artifact, not an HTTP
@@ -266,8 +280,8 @@ def main() -> int:
     pipeline_argv = [
         str(dag_bin),
         str(dag_yaml),
-        "--step-bin",
-        str(step_bin),
+        "--binary-dir",
+        str(bindir),
         "--now",
         now,
     ]
@@ -289,10 +303,10 @@ def _source_config(
     signal_snapshot_root: Path | None = None,
     whatsapp_dir: Path | None = None,
 ) -> dict:
-    """The provider config subtree (`source:`) for one fixture source.
+    """The provider config subtree (step `params:`) for one fixture source.
 
     Mirrors the knobs the old sync YAML carried, minus the `type:` tag
-    (the step type names the provider now). Notion needs a non-empty
+    (the command's subcommand names the provider now). Notion needs a non-empty
     sync block to pass validation — `notion_seed` anchors a
     `subtrees.pages` entry (extract additionally derives BFS seeds
     from the playback responses, so the seed needn't be reachable on
@@ -334,15 +348,14 @@ def _source_config(
         # Mbox mode: no `sync:` block (would otherwise trigger the
         # JMAP path). Account metadata is supplied via the `mbox:`
         # block so the synthesized `accounts` row carries display name
-        # + canonical address — same shape JMAP would produce.
+        # + canonical address — same shape JMAP would produce. (The
+        # Gmail outlink format is a render knob — see _render_config.)
         source["mbox"] = {
             "account_id": "picard@enterprise.starfleet",
             "display_name": "Jean-Luc Picard",
             "email_address": "picard@enterprise.starfleet",
             "is_personal": True,
         }
-        # Google-Takeout-shaped .mbox → Gmail webmail outlinks.
-        source["outlink_format"] = "gmail"
     elif type_str == "whatsapp_backup":
         # WhatsApp extractor needs `backup_dir` (the dir containing
         # `Databases/msgstore.db.crypt15` + `Media/`). Root key comes
@@ -373,6 +386,16 @@ def _source_config(
     else:
         source["sync"] = {}
     return source
+
+
+def _render_config(type_str: str) -> dict | None:
+    """The render step's params for one fixture source — only the
+    render-side knobs (per-phase params split). Most sources need
+    none; email carries the webmail outlink format for its
+    Google-Takeout-shaped `.mbox`."""
+    if type_str == "email":
+        return {"outlink_format": "gmail"}
+    return None
 
 
 def _materialize_beeper_fixture(fx_dir: Path, target: Path) -> Path:

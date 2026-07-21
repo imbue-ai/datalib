@@ -1,13 +1,17 @@
 // Quick-add source templates for the Sources tab. Each body is a
 // pair of adjacent step entries (two-space indented, `- ` marker on
 // each) appended to the `steps:` list of the DAG config: the source's
-// `<type>.download` step plus its `<type>.render` step, sharing one
-// params block via a YAML anchor. The step type names the provider,
-// so params carry no `type:` tag — `source:` is the provider's own
-// config subtree (see `frankweiler_dag::config`). Credentials are
-// never here — they come from latchkey at runtime. Bodies are
-// functions so date-dependent parts (Slack's `since:`) and the
-// install-specific latchkey CLI hint are computed at click time.
+// download step plus its render step. Each step is a `command:`
+// invoking `datalib-step`; the subcommand names the provider, so
+// params carry no `type:` tag, and the source name comes from the
+// step's first output (`slack/raw` → `slack`; see
+// `frankweiler_dag::config`). Params are per-phase: the download step
+// carries the provider's download config; the render step needs none
+// for any of these providers (render-side knobs like beeper's
+// `period` would go on it). Credentials are never here — they come
+// from latchkey at runtime. Bodies are functions so date-dependent
+// parts (Slack's `since:`) and the install-specific latchkey CLI hint
+// are computed at click time.
 
 // YYYY-MM-DD for `n` days before today (UTC).
 function isoDaysAgo(days: number): string {
@@ -16,9 +20,9 @@ function isoDaysAgo(days: number): string {
 
 // The standard download+render step pair for one source, preceded by a
 // light divider so sources stay visually separated in the raw file.
-// `sourceYaml` is the `source:` subtree body, indented 8 spaces per
-// line already; `preamble` (optional) is comment lines placed between
-// the divider and the steps.
+// `sourceYaml` is the params subtree body, indented 6 spaces per line
+// already; `preamble` (optional) is comment lines placed between the
+// divider and the steps.
 function stepPair(
   name: string,
   type: string,
@@ -33,17 +37,14 @@ function stepPair(
     : "";
   return `${divider}
 ${preambleBlock}  - id: ${name}.download
-    step: ${type}.download
+    command: datalib-step download ${type}
     outputs: [${name}/raw]
-    params: &${name}
-      name: ${name}
-      source:
+    params:
 ${sourceYaml}
   - id: ${name}.render
-    step: ${type}.render
+    command: datalib-step render ${type}
     inputs: [${name}/raw]
-    outputs: [${name}/rendered_md]
-    params: *${name}`;
+    outputs: [${name}/rendered_md]`;
 }
 
 export type Snippet = { label: string; body: (latchkeyCli: string) => string };
@@ -55,7 +56,7 @@ export const SNIPPETS: Snippet[] = [
       stepPair(
         "claude",
         "claude_api",
-        "        sync: {}",
+        "      sync: {}",
         `  # Prerequisite (one-time): register claude.ai with latchkey and
   # supply your sessionKey cookie (DevTools → Application → Cookies):
   #   ${lk} services register claude-ai --base-api-url="https://claude.ai/"
@@ -66,7 +67,7 @@ export const SNIPPETS: Snippet[] = [
   },
   {
     label: "ChatGPT",
-    body: () => stepPair("chatgpt", "chatgpt_api", "        sync: {}"),
+    body: () => stepPair("chatgpt", "chatgpt_api", "      sync: {}"),
   },
   {
     // `since:` starts the backfill 30 days back so the first sync stays
@@ -76,19 +77,19 @@ export const SNIPPETS: Snippet[] = [
       stepPair(
         "slack",
         "slack_api",
-        `        sync:
-          media: true
-          channels: ["general"]
-          since: "${isoDaysAgo(30)}"`,
+        `      sync:
+        media: true
+        channels: ["general"]
+        since: "${isoDaysAgo(30)}"`,
       ),
   },
   {
     label: "GitHub",
-    body: () => stepPair("github", "github_api", "        sync: {}"),
+    body: () => stepPair("github", "github_api", "      sync: {}"),
   },
   {
     label: "GitLab",
-    body: () => stepPair("gitlab", "gitlab_api", "        sync: {}"),
+    body: () => stepPair("gitlab", "gitlab_api", "      sync: {}"),
   },
   {
     label: "Email (JMAP)",
@@ -96,26 +97,26 @@ export const SNIPPETS: Snippet[] = [
       stepPair(
         "fastmail",
         "email",
-        `        sync:
-          hostname: api.fastmail.com`,
+        `      sync:
+        hostname: api.fastmail.com`,
       ),
   },
   {
     // `input_path` is part of the shared per-source envelope, so it
-    // lives under `common:`, not at the top of `source:`.
+    // lives under `common:`, not at the top of the params.
     label: "Contacts (vCard)",
     body: () =>
       stepPair(
         "contacts",
         "carddav",
-        `        common:
-          input_path: ~/Downloads/contacts.vcf`,
+        `      common:
+        input_path: ~/Downloads/contacts.vcf`,
       ),
   },
   {
     // Sample public source — no latchkey needed. Bare `sync: {}` pulls
     // the default Thucydides Histories (Greek + English) from PerseusDL.
     label: "Perseus (sample)",
-    body: () => stepPair("perseus", "perseus", "        sync: {}"),
+    body: () => stepPair("perseus", "perseus", "      sync: {}"),
   },
 ];

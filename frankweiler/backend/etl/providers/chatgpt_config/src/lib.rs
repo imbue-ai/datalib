@@ -42,3 +42,7 @@ pub struct ChatgptApiSync {
     #[serde(default)]
     pub conv_uuids: Vec<String>,
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type ChatgptRenderConfig = frankweiler_source_common::BareRenderConfig;

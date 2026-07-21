@@ -30,7 +30,7 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // row appears immediately (derived from the text), but stays
   // unsyncable — checkbox disabled — until the config is saved.
   await page.getByRole("button", { name: "Perseus (sample)" }).click();
-  await expect(editor).toHaveValue(/step: perseus\.download/);
+  await expect(editor).toHaveValue(/command: datalib-step download perseus/);
   const row = page.locator(".sources-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
   await expect(page.getByText("unsaved changes")).toBeVisible();
@@ -74,7 +74,8 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
   await page.getByRole("button", { name: "ChatGPT" }).click();
 
   // Select the first source; the selection must cover exactly its
-  // download+render step pair.
+  // step entry (the input-less download step — the render step has
+  // inputs and is not a source row).
   await page
     .locator(".sources-table tbody tr", { hasText: "perseus" })
     .getByRole("button", { name: "Locate config" })
@@ -84,7 +85,7 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
     return t.value.slice(t.selectionStart, t.selectionEnd);
   });
   expect(selected).toContain("id: perseus.download");
-  expect(selected).toContain("id: perseus.render");
+  expect(selected).not.toContain("id: perseus.render");
   expect(selected).not.toContain("chatgpt");
 
   // Unsaved edits never reached the server; a reload restores the file.

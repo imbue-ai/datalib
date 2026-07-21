@@ -11,6 +11,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use frankweiler_etl_signal_config::SignalRenderConfig;
 use frankweiler_etl_signal_config::{SignalConfig, SignalSync};
 
 use crate::download;
@@ -27,6 +28,12 @@ pub fn plan_download(
     let sync = config
         .sync
         .ok_or_else(|| anyhow!("signal_backup source {name} missing sync.snapshot_dir"))?;
+    if sync.period.is_some() {
+        anyhow::bail!(
+            "signal `sync.period` is a render knob — put `period` in the \
+             render step's params instead"
+        );
+    }
     Ok(vec![Box::new(SignalDownload {
         id: format!("signal/{name}/download"),
         raw_path,
@@ -34,15 +41,15 @@ pub fn plan_download(
     })])
 }
 
-/// Render wave. NOTE: reads `sync.period` (default `month`) — a render
-/// knob that historically lives in the `sync:` block; it moves out in
-/// the config-format split. A `sync:`-less source renders with the
-/// default period.
-pub fn plan_render(ctx: PlanContext, config: SignalConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Render wave. The period comes from the render step's own params
+/// (default `month`).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: SignalRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let period = Period::from_config(config.sync.as_ref().and_then(|s| s.period.as_deref()))
-        .context("signal period")?;
+    let period = Period::from_config(config.period.as_deref()).context("signal period")?;
     Ok(vec![Box::new(SignalRender {
         id: format!("signal/{name}/render"),
         raw_path,

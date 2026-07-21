@@ -1300,6 +1300,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "shlex",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

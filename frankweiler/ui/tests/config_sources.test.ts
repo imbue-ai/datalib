@@ -4,56 +4,67 @@ import { listSources } from "../src/config/configSources";
 const FULL = `# Frankweiler config for this data root.
 data_root: /tmp/data
 
-defaults:
-  blob_size_limit_bytes: 5000000
+steps:
+  - id: grid_index
+    command: datalib-step grid_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/backend_index]
 
-sources:
   # my main claude account
-  - name: claude
-    source:
-      type: claude_api
+  - id: claude.download
+    command: datalib-step download claude_api
+    outputs: [claude/raw]
+    params:
       sync: {}
-  - name: slack
-    enabled: false
-    source:
-      type: slack_api
-      sync:
-        channels: ["general"]
+  - id: claude.render
+    command: datalib-step render claude_api
+    inputs: [claude/raw]
+    outputs: [claude/rendered_md]
+
+  - id: custom
+    command: my-exporter --flag
+    outputs: [custom/out]
 `;
 
 describe("listSources", () => {
-  it("summarizes name/type/enabled per entry", () => {
+  it("lists every step without inputs, by id", () => {
     const rows = listSources(FULL);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ name: "claude", type: "claude_api", enabled: true });
-    expect(rows[1]).toMatchObject({ name: "slack", type: "slack_api", enabled: false });
+    // grid_index and claude.render declare inputs → infrastructure;
+    // any input-less step is a source, whatever its command runs.
+    expect(rows.map((r) => r.id)).toEqual(["claude.download", "custom"]);
   });
 
-  it("returns ranges that select the whole stanza", () => {
+  it("returns ranges that select the step entry", () => {
     const rows = listSources(FULL);
     const claude = FULL.slice(rows[0].start, rows[0].end);
-    // Starts at the `- ` marker's line (indent included) and covers the
-    // nested block.
-    expect(claude.trimStart().startsWith("- name: claude")).toBe(true);
-    expect(claude).toContain("type: claude_api");
-    expect(claude).not.toContain("slack");
-    const slack = FULL.slice(rows[1].start, rows[1].end);
-    expect(slack.trimStart().startsWith("- name: slack")).toBe(true);
-    expect(slack).toContain("enabled: false");
-    expect(slack).toContain('channels: ["general"]');
+    // Starts at the `- ` marker's line (indent included) and covers
+    // the nested block.
+    expect(claude.trimStart().startsWith("- id: claude.download")).toBe(true);
+    expect(claude).toContain("sync: {}");
+    expect(claude).not.toContain("claude.render");
+    const custom = FULL.slice(rows[1].start, rows[1].end);
+    expect(custom.trimStart().startsWith("- id: custom")).toBe(true);
+    expect(custom).toContain("my-exporter --flag");
   });
 
-  it("handles empty, scaffold, and sourceless files", () => {
+  it("treats an empty inputs list as input-less", () => {
+    const rows = listSources(
+      "steps:\n  - id: x\n    command: fetch-x\n    inputs: []\n    outputs: [x/raw]\n",
+    );
+    expect(rows.map((r) => r.id)).toEqual(["x"]);
+  });
+
+  it("handles empty, scaffold, and stepless files", () => {
     expect(listSources("")).toEqual([]);
-    expect(listSources("sources: []\n")).toEqual([]);
+    expect(listSources("steps: []\n")).toEqual([]);
     expect(listSources("data_root: /x\n")).toEqual([]);
   });
 
   it("tolerates malformed entries without crashing", () => {
-    const rows = listSources("sources:\n  - just a string\n  - name: ok\n    source: {type: perseus}\n");
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ name: "", type: "", enabled: true });
-    expect(rows[1]).toMatchObject({ name: "ok", type: "perseus" });
+    const rows = listSources(
+      "steps:\n  - just a string\n  - id: ok\n    command: fetch-ok\n    outputs: [ok/raw]\n",
+    );
+    expect(rows.map((r) => r.id)).toEqual(["ok"]);
   });
 
   it("throws on unparseable YAML", () => {

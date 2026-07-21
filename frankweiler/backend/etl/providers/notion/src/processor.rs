@@ -13,6 +13,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::http::HttpResponse;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use frankweiler_etl_notion_config::NotionRenderConfig;
 use frankweiler_etl_notion_config::{NotionApiSync, NotionConfig};
 
 use crate::download;
@@ -39,7 +40,10 @@ pub fn plan_download(
 }
 
 /// Render wave: always present (renders whatever is in the raw store).
-pub fn plan_render(ctx: PlanContext, config: NotionConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_render(
+    ctx: PlanContext,
+    config: NotionRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(NotionRender {

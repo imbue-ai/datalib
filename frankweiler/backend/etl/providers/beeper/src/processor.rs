@@ -16,6 +16,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use frankweiler_etl_beeper_config::BeeperRenderConfig;
 use frankweiler_etl_beeper_config::{BeeperConfig, BeeperSync};
 
 use crate::download;
@@ -29,6 +30,12 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
+        if sync.period.is_some() {
+            anyhow::bail!(
+                "beeper `sync.period` is a render knob — put `period` in the \
+                 render step's params instead"
+            );
+        }
         procs.push(Box::new(BeeperDownload {
             id: format!("beeper/{name}/download"),
             raw_path,
@@ -38,16 +45,16 @@ pub fn plan_download(
     Ok(procs)
 }
 
-/// Render wave. NOTE: reads `sync.period` — the render period is parsed
-/// from config once, at plan time, and baked into the render
-/// processor (defaults to month when absent). `period` is a render
-/// knob that historically lives in the `sync:` block; it moves out in
-/// the config-format split.
-pub fn plan_render(ctx: PlanContext, config: BeeperConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Render wave. The period is parsed from the render step's params
+/// once, at plan time, and baked into the render processor (defaults
+/// to month when absent).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: BeeperRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let period = Period::from_config(config.sync.as_ref().and_then(|s| s.period.as_deref()))
-        .context("parse beeper period")?;
+    let period = Period::from_config(config.period.as_deref()).context("parse beeper period")?;
     Ok(vec![Box::new(BeeperRender {
         id: format!("beeper/{name}/render"),
         raw_path,

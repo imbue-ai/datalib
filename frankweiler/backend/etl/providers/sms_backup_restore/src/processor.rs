@@ -15,6 +15,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
+use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig;
 
 use crate::download;
 
@@ -36,7 +37,7 @@ pub fn plan_download(
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
-    config: SmsBackupRestoreConfig,
+    config: SmsBackupRestoreRenderConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();

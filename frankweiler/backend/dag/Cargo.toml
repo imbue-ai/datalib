@@ -15,6 +15,9 @@ path = "src/bin/datalib_dag.rs"
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
+# Shell-style splitting of config `command:` strings; already pinned
+# transitively.
+shlex = "1"
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }

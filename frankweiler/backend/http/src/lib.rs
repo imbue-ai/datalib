@@ -868,18 +868,12 @@ fn col(field: &str, header: &str, default_visible: bool) -> ColumnSpec {
 }
 
 /// One entry in `GET /api/sync/sources`. Derived from the config file
-/// at the data root — the backend never persists this list to SQL.
+/// at the data root — the backend never persists this list to SQL. A
+/// source is any step with no declared inputs (a fringe step — the
+/// thing `--sync` can target), identified by its step id.
 #[derive(Debug, Serialize)]
 pub struct SourceInfo {
-    pub name: String,
-    /// Discriminator from the config (e.g. `claude_api`, `notion_api`,
-    /// `claude_export`). Carries both the provider and the
-    /// provenance — the UI splits it on `_` when it needs either piece.
-    #[serde(rename = "type")]
-    pub type_: String,
-    /// True when the source has a `sync:` block — i.e. the worker can
-    /// drive a downloader for it. Derived; not stored in YAML.
-    pub managed: bool,
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -903,65 +897,30 @@ pub struct JobsAllParams {
 // with no config; the UI's Setup tab scaffolds one, lets the user edit
 // it, and saves it back here, after which `/api/sync/*` lights up.
 
-/// One source derived from the DAG config's steps: the step-level view
-/// grouped back into per-source rows for the UI table. A source is any
-/// `<name>` appearing in a `<type>.download` / `<type>.render` step's
-/// params; `managed` iff it has a download step.
-struct DagSource {
-    name: String,
-    type_str: String,
-    managed: bool,
-}
-
 /// Parse + validate the DAG config at `path` the same way the runner
 /// does (`config::load` → `to_specs` → `Graph::build`, so cycle /
-/// ownership / unknown-phase errors are caught, not just YAML syntax),
-/// and derive the per-source rows.
+/// ownership / bad-command errors are caught, not just YAML syntax),
+/// and derive the source step ids.
+///
+/// A source is any step with no declared `inputs:` — a fringe step,
+/// which is exactly what the runner's `--sync` can target (its real
+/// input is outside the DAG: a remote service, a user-staged tree).
+/// Nothing about the step's command matters here; the derivation is
+/// fully generic.
 fn load_dag_config(
     path: &std::path::Path,
-) -> anyhow::Result<(frankweiler_dag::config::DagConfig, Vec<DagSource>)> {
-    use frankweiler_dag::config::{self, StepTypeOpts};
+) -> anyhow::Result<(frankweiler_dag::config::DagConfig, Vec<String>)> {
+    use frankweiler_dag::config;
     let (cfg, _root) = config::load(path)?;
-    // Validation only — the placeholder step-bin path never runs.
-    let specs = config::to_specs(
-        &cfg,
-        std::path::Path::new(config::STEP_BIN_NAME),
-        &StepTypeOpts::default(),
-    )?;
+    // Validation only — nothing is executed here.
+    let specs = config::to_specs(&cfg)?;
     frankweiler_dag::Graph::build(specs)?;
 
-    let mut order: Vec<String> = Vec::new();
-    let mut by_name: std::collections::HashMap<String, DagSource> = Default::default();
-    for e in &cfg.steps {
-        let Some(step) = &e.step else { continue };
-        let Some((source_type, phase)) = step.rsplit_once('.') else {
-            continue;
-        };
-        let name = e
-            .params
-            .as_ref()
-            .and_then(|p| p.get("name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("")
-            .to_string();
-        if name.is_empty() {
-            continue;
-        }
-        let entry = by_name.entry(name.clone()).or_insert_with(|| {
-            order.push(name.clone());
-            DagSource {
-                name,
-                type_str: source_type.to_string(),
-                managed: false,
-            }
-        });
-        if phase == "download" {
-            entry.managed = true;
-        }
-    }
-    let sources = order
-        .into_iter()
-        .filter_map(|n| by_name.remove(&n))
+    let sources = cfg
+        .steps
+        .iter()
+        .filter(|e| e.inputs.is_empty())
+        .map(|e| e.id.clone())
         .collect();
     Ok((cfg, sources))
 }
@@ -1110,9 +1069,8 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 #[derive(Debug, Serialize)]
 pub struct DagStepInfo {
     pub id: String,
-    /// The `step:` type (`slack_api.download`, `index`, …); `None` for
-    /// raw `run:` argv entries.
-    pub step: Option<String>,
+    /// The step's `command:` as written in the config.
+    pub command: String,
     /// Declared input artifact patterns (may contain wildcards).
     pub inputs: Vec<String>,
     /// Declared output artifact paths.
@@ -1134,19 +1092,15 @@ pub struct DagResponse {
 /// Graph::build chain), so the visualization can never drift from
 /// execution. Steps come back in topological order.
 async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
-    use frankweiler_dag::config::{self, StepTypeOpts};
+    use frankweiler_dag::config;
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path)?;
-        let step_types: std::collections::HashMap<String, String> = cfg
+        let commands: std::collections::HashMap<String, String> = cfg
             .steps
             .iter()
-            .filter_map(|e| e.step.clone().map(|st| (e.id.clone(), st)))
+            .map(|e| (e.id.clone(), e.command.clone()))
             .collect();
-        let specs = config::to_specs(
-            &cfg,
-            std::path::Path::new(config::STEP_BIN_NAME),
-            &StepTypeOpts::default(),
-        )?;
+        let specs = config::to_specs(&cfg)?;
         let graph = frankweiler_dag::Graph::build(specs)?;
         Ok(graph
             .topo
@@ -1155,7 +1109,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                 let sp = &graph.steps[i];
                 DagStepInfo {
                     id: sp.id.clone(),
-                    step: step_types.get(&sp.id).cloned(),
+                    command: commands.get(&sp.id).cloned().unwrap_or_default(),
                     inputs: sp.inputs.iter().map(|a| a.as_str().to_string()).collect(),
                     outputs: sp.outputs.iter().map(|a| a.as_str().to_string()).collect(),
                     deps: graph.deps[i]
@@ -1239,11 +1193,11 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         let _ = writeln!(out, "data_root: {}\n", cfg.data_root.display());
     }
     out.push_str(
-        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: grid_index\n    step: grid_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
+        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: grid_index\n    command: datalib-step grid_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
     );
     if !cfg.qmd.skip {
         out.push_str(
-            "\n  - id: qmd_index\n    step: qmd_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
+            "\n  - id: qmd_index\n    command: datalib-step qmd_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
         );
     }
 
@@ -1253,38 +1207,35 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         let ty = entry.source.type_str();
         let managed = entry.source.is_managed();
 
-        // The provider subtree, minus the `type:` tag (the step type
-        // carries it now) and any nulls serde emitted for unset fields.
+        // The provider subtree, minus the `type:` tag (the command's
+        // nested subcommand carries it now) and any nulls serde emitted for
+        // unset fields. The old top-level `name:` is gone too — the
+        // step derives it from its first declared output.
         let mut val = serde_yaml::to_value(&entry.source)
             .map_err(|e| anyhow::anyhow!("serialize source {name:?}: {e}"))?;
         if let Some(m) = val.as_mapping_mut() {
             m.remove("type");
         }
         strip_nulls(&mut val);
-        let source_block = if val.as_mapping().is_none_or(|m| m.is_empty()) {
-            "      source: {}\n".to_string()
-        } else {
-            let dumped =
-                serde_yaml::to_string(&val).map_err(|e| anyhow::anyhow!("dump {name:?}: {e}"))?;
-            let mut b = String::from("      source:\n");
-            for line in dumped.lines() {
-                let _ = writeln!(b, "        {line}");
-            }
-            b
-        };
+        // Per-phase params split: pull the render-wave knobs out of
+        // the legacy subtree into the render step's params; the rest
+        // is the download step's. An empty side just omits `params:`.
+        let render_val = split_render_params(&mut val, ty);
+        let dl_params = params_block(&val, &name)?;
+        let rn_params = params_block(&render_val, &name)?;
 
         let divider_pad = "\u{2500}".repeat(66usize.saturating_sub(name.chars().count()));
         let mut block = format!("\n  # \u{2500}\u{2500} {name} {divider_pad}\n");
         if managed {
             let _ = write!(
                 block,
-                "  - id: {name}.download\n    step: {ty}.download\n    outputs: [{name}/raw]\n    params: &{name}\n      name: {name}\n{source_block}\
-                 \n  - id: {name}.render\n    step: {ty}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    params: *{name}\n",
+                "  - id: {name}.download\n    command: datalib-step download {ty}\n    outputs: [{name}/raw]\n{dl_params}\
+                 \n  - id: {name}.render\n    command: datalib-step render {ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
             );
         } else {
             let _ = write!(
                 block,
-                "  - id: {name}.render\n    step: {ty}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    params:\n      name: {name}\n{source_block}",
+                "  - id: {name}.render\n    command: datalib-step render {ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
             );
         }
         if entry.enabled {
@@ -1305,6 +1256,74 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         }
     }
     Ok(out)
+}
+
+/// Pull the render-wave knobs out of a legacy source subtree (post
+/// [`strip_nulls`]), returning the render step's params. These fields
+/// moved off the shared stanza in the per-phase params split:
+/// `sync.period` (beeper/signal) and `sync.alignment_pairs` (perseus)
+/// hop out of `sync:` to the render params' top level;
+/// `outlink_format` / `only_render_labels` (email) move over
+/// verbatim. An explicit `common.raw_path` is *copied* (both phases
+/// read the raw-store location), and perseus also copies
+/// `common.input_path` (it renders straight from the staged tree).
+fn split_render_params(val: &mut serde_yaml::Value, ty: &str) -> serde_yaml::Value {
+    use serde_yaml::{Mapping, Value};
+    let mut render = Mapping::new();
+    let Some(m) = val.as_mapping_mut() else {
+        return Value::Mapping(render);
+    };
+    let worth_moving = |v: &Value| !v.as_sequence().is_some_and(|s| s.is_empty());
+    if let Some(sync) = m
+        .get_mut(Value::from("sync"))
+        .and_then(|s| s.as_mapping_mut())
+    {
+        for key in ["period", "alignment_pairs"] {
+            if let Some(v) = sync.remove(Value::from(key)) {
+                if worth_moving(&v) {
+                    render.insert(key.into(), v);
+                }
+            }
+        }
+    }
+    for key in ["outlink_format", "only_render_labels"] {
+        if let Some(v) = m.remove(Value::from(key)) {
+            if worth_moving(&v) {
+                render.insert(key.into(), v);
+            }
+        }
+    }
+    let mut rcommon = Mapping::new();
+    if let Some(common) = m.get(Value::from("common")).and_then(|c| c.as_mapping()) {
+        if let Some(v) = common.get(Value::from("raw_path")) {
+            rcommon.insert("raw_path".into(), v.clone());
+        }
+        if ty == "perseus" {
+            if let Some(v) = common.get(Value::from("input_path")) {
+                rcommon.insert("input_path".into(), v.clone());
+            }
+        }
+    }
+    if !rcommon.is_empty() {
+        render.insert("common".into(), Value::Mapping(rcommon));
+    }
+    Value::Mapping(render)
+}
+
+/// Render a params subtree as an indented `    params:` block for a
+/// migrated step entry; an empty subtree yields no block at all.
+fn params_block(val: &serde_yaml::Value, name: &str) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+    if val.as_mapping().is_none_or(|m| m.is_empty()) {
+        return Ok(String::new());
+    }
+    let dumped =
+        serde_yaml::to_string(val).map_err(|e| anyhow::anyhow!("dump params for {name:?}: {e}"))?;
+    let mut block = String::from("    params:\n");
+    for line in dumped.lines() {
+        let _ = writeln!(block, "      {line}");
+    }
+    Ok(block)
 }
 
 /// Drop `key: null` entries and (bottom-up) mappings that emptied out —
@@ -1345,12 +1364,12 @@ steps:
   # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
   # Every source's rendered markdown feeds these.
   - id: grid_index
-    step: grid_index
+    command: datalib-step grid_index
     inputs: [\"**/rendered_md\"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    step: qmd_index
+    command: datalib-step qmd_index
     inputs: [\"**/rendered_md\"]
     outputs: [system/qmd]
   # \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
@@ -1358,9 +1377,8 @@ steps:
     .to_string()
 }
 
-/// Surface the DAG config's per-source view to the UI as
-/// `{name, type, managed}` entries — sources are derived by grouping
-/// `<type>.download` / `<type>.render` steps by their params `name`.
+/// Surface the DAG config's source steps to the UI as `{id}` entries —
+/// the steps with no declared inputs, i.e. what a sync can target.
 /// Re-loaded on every call so a config edit in the Setup tab shows up
 /// without a backend restart. Returns an empty list (rather than 500)
 /// when the file is missing or fails to parse, mirroring the previous
@@ -1370,15 +1388,7 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
         Ok((_cfg, sources)) => sources,
         Err(_) => return Json(Vec::new()),
     };
-    let out: Vec<SourceInfo> = sources
-        .into_iter()
-        .map(|src| SourceInfo {
-            name: src.name,
-            type_: src.type_str,
-            managed: src.managed,
-        })
-        .collect();
-    Json(out)
+    Json(sources.into_iter().map(|id| SourceInfo { id }).collect())
 }
 
 async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {

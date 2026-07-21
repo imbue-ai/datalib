@@ -12,18 +12,28 @@
 #         sync: {conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]}
 #
 # The user declares steps directly; edges are derived from the artifact
-# paths (never written by hand). `step:` entries invoke the sibling
-# `datalib-step` binary. Download and render are per-provider step
-# types written `<source_type>.<phase>` — the step type names the
-# provider, so params carry no `type:` tag; `params.source` is the
-# provider's own config subtree, shared between a source's two steps
-# via a YAML anchor. The `index` and `qmd` steps are
-# source-independent fan-ins over every rendered_md tree.
+# paths (never written by hand). Each step is an arbitrary `command:`
+# (see docs/dev/step_protocol.md); the runner appends the declared
+# `params`/`inputs`/`outputs` as `--params`/`--inputs`/`--outputs`
+# JSON flags. For the built-in `datalib-step` commands, download and
+# render take the provider as a nested subcommand; `params:` is
+# per-phase — the download step carries the provider's download
+# config (no `type:` tag — the command carries it; no `name:` — the
+# step derives the `<name>/…` prefix from its first output), and the
+# render step carries only render knobs (none for most providers;
+# e.g. beeper's `period`, perseus's `alignment_pairs`). The
+# `grid_index` and `qmd_index` steps are source-independent fan-ins
+# over every rendered_md tree.
 #
 #   bazelisk build //frankweiler/backend/dag:datalib_dag \
 #                  //frankweiler/backend/datalib_step:datalib_step
+#   bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/frankweiler/backend/datalib_step/datalib_step "$bindir"/datalib-step
 #   bazel-bin/frankweiler/backend/dag/datalib_dag configs/dag_example.yaml \
-#       --step-bin bazel-bin/frankweiler/backend/datalib_step/datalib_step
+#       --binary-dir "$bindir"
+#
+# (`--binary-dir` is prepended to every step's PATH so `command:` can
+# say `datalib-step` bare; a packaged install lays `datalib-step` next
+# to `datalib-dag` and needs no flag at all.)
 #
 # data_root defaults to the directory this file lives in; set it
 # explicitly for a real run.
@@ -32,21 +42,18 @@ data_root: ~/tmp/dr-dag
 steps:
   # ── slack ──────────────────────────────────────────────────────────
   - id: slack.download
-    step: slack_api.download
+    command: datalib-step download slack_api
     outputs: [slack/raw]
-    params: &slack
-      name: slack
-      source:
-        sync:
-          media: true
-          channels: ["chat-qi"]
-          since: "2026-06-15"
+    params:
+      sync:
+        media: true
+        channels: ["chat-qi"]
+        since: "2026-06-15"
 
   - id: slack.render
-    step: slack_api.render
+    command: datalib-step render slack_api
     inputs: [slack/raw]
     outputs: [slack/rendered_md]
-    params: *slack
 
   # ── claude ─────────────────────────────────────────────────────────
   # Prerequisite (one-time): register claude.ai with latchkey and
@@ -55,29 +62,26 @@ steps:
   #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
   # See docs/user/getting_your_data.md for the full walkthrough.
   - id: claude.download
-    step: claude_api.download
+    command: datalib-step download claude_api
     outputs: [claude/raw]
-    params: &claude
-      name: claude
-      source:
-        sync:
-          conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
+    params:
+      sync:
+        conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
   - id: claude.render
-    step: claude_api.render
+    command: datalib-step render claude_api
     inputs: [claude/raw]
     outputs: [claude/rendered_md]
-    params: *claude
 
   # ── shared fan-in steps ────────────────────────────────────────────
   # `**/rendered_md` matches every render step's output; adding a new
   # source above automatically feeds these.
   - id: grid_index
-    step: grid_index
+    command: datalib-step grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    step: qmd_index
+    command: datalib-step qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]

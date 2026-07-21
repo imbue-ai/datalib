@@ -21,6 +21,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
+use frankweiler_etl_email_config::EmailRenderConfig;
 use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
 
 use crate::download;
@@ -30,6 +31,12 @@ use crate::render::render::OutlinkFormat;
 /// `.mbox` under input_path → mbox mode.
 pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
+    if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
+        anyhow::bail!(
+            "email `outlink_format` / `only_render_labels` are render knobs — \
+             put them in the render step's params instead"
+        );
+    }
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
@@ -71,7 +78,10 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
 }
 
 /// Render wave: always present (renders whatever is in the raw store).
-pub fn plan_render(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_render(
+    ctx: PlanContext,
+    config: EmailRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let outlink = config.outlink_format.map(outlink_format);
