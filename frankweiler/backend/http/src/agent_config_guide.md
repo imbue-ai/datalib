@@ -3,7 +3,7 @@
 You were pointed here by a "wayfinder" snippet copied out of the
 frankweiler UI's Manage tab. It asked you to modify the data-source
 config. This doc tells you how. (If your wayfinder named a component
-alias instead, read `<origin>/agent.md`.)
+alias instead, read `<origin>/agent/cards.md`.)
 
 ## The model
 

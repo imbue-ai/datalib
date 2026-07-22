@@ -45,11 +45,11 @@ rust_library(
     # entry makes those files visible to the rustc invocation.
     # `$(execpath)` expands to the execroot-relative path of the
     # directory output — usable directly from rustc's CWD (execroot).
-    # The guide .md files are `include_str!`'d by the `/agent.md` and
-    # `/agent-config.md` handlers.
+    # The guide .md files are `include_str!`'d by the `/agent/cards.md`
+    # and `/agent/config.md` handlers.
     compile_data = [
         ":ui_dist_host",
-        "src/agent_guide.md",
+        "src/agent_cards_guide.md",
         "src/agent_config_guide.md",
     ],
     rustc_env = {

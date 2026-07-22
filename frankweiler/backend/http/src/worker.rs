@@ -330,7 +330,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
 /// `~/.datalib/bin` — the blessed drop spot for user (and agent)
 /// provided step programs: a config `command:` can name anything
 /// placed (or symlinked) here, because [`run_job`] prepends this dir
-/// to the runner's PATH. Advertised in /agent-config.md as THE
+/// to the runner's PATH. Advertised in /agent/config.md as THE
 /// predictable install location, so keep the two in sync. None when
 /// no home directory is discoverable.
 fn user_bin_dir() -> Option<PathBuf> {

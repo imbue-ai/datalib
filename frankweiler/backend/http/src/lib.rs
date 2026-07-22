@@ -195,8 +195,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/lib", get(list_lib))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
-        .route("/agent.md", get(agent_guide))
-        .route("/agent-config.md", get(agent_config_guide))
+        .route("/agent/cards.md", get(agent_cards_guide))
+        .route("/agent/config.md", get(agent_config_guide))
+        // The pre-split guide URL; wayfinders copied before the split
+        // may still reference it.
+        .route(
+            "/agent.md",
+            get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
+        )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
@@ -974,9 +980,9 @@ async fn rename_lib(
 
 /// Onboarding docs for a coding agent pointed at this instance. Served
 /// as markdown at stable, app-relative URLs so a wayfinder snippet can
-/// reference `<origin>/agent.md` (cards) or `<origin>/agent-config.md`
-/// (the data-source config) without baking the content into the
-/// wayfinder itself.
+/// reference `<origin>/agent/cards.md` (cards) or
+/// `<origin>/agent/config.md` (the data-source config) without baking
+/// the content into the wayfinder itself.
 fn markdown_doc(
     body: &'static str,
 ) -> (
@@ -994,12 +1000,12 @@ fn markdown_doc(
     )
 }
 
-async fn agent_guide() -> (
+async fn agent_cards_guide() -> (
     StatusCode,
     [(axum::http::HeaderName, &'static str); 1],
     &'static str,
 ) {
-    markdown_doc(include_str!("agent_guide.md"))
+    markdown_doc(include_str!("agent_cards_guide.md"))
 }
 
 async fn agent_config_guide() -> (
