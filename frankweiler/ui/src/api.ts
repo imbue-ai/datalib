@@ -462,18 +462,28 @@ export async function fetchCard(hash: string, signal?: AbortSignal): Promise<str
 
 // --- Component library (named, mutable card aliases) -----------------------
 //
-// GET  /api/lib            → [{name, hash}] manifest of every component
-// GET  /api/lib/{name}     → the component's JS source
-// PUT  /api/lib/{name}     → create/overwrite, body {source}, returns {name,hash}
+// GET  /api/lib                 → [{name, hash, …}] manifest of every component
+// GET  /api/lib/{name}          → the component's JS source
+// PUT  /api/lib/{name}          → create/overwrite, body {source}, returns the entry
+// POST /api/lib/{name}/rename   → move to {new_name}, leaving a tombstone
 //
 // `hash` is the sha256 of the source; the UI polls the manifest and
 // re-renders a card when an alias it depends on changes hash.
 
-// `description` is the component's gallery blurb: when present, the
-// component appears in the new-card gallery (galleryView), so it must
-// work when invoked with no arguments. Omitted for components that
-// don't advertise themselves there.
-export type LibEntry = { name: string; hash: string; description?: string };
+// `title` is the component's human-readable display name (listings show
+// it instead of the bare name). `description` is the gallery blurb:
+// when present, the component appears in the new-card gallery
+// (galleryView), so it must work when invoked with no arguments.
+// `renamed_to` marks a tombstone: the name no longer holds a component
+// (hash is "") — it was renamed, and cards still referencing it should
+// follow (see aliasRegistry / ShadowCard).
+export type LibEntry = {
+  name: string;
+  hash: string;
+  title?: string;
+  description?: string;
+  renamed_to?: string;
+};
 
 export async function listLib(signal?: AbortSignal): Promise<LibEntry[]> {
   const r = await fetch("/api/lib", { signal });

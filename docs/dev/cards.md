@@ -84,25 +84,40 @@ localStorage):
 - **Dev mode off** (the default): the bar shows the card's
   human-readable **title** — read-only, no code visible.
 - **Dev mode on**: the bar shows the card's source in the editable box
-  described below (Enter re-runs the card), plus the 🤖 agent hand-off
-  button (which rewrites the source, so it's hidden with it).
+  described below (Enter re-runs the card).
+
+The 🤖 agent hand-off button shows in **both** modes, but only on cards
+backed by a user-defined component (the source's callee is an alias in
+the `/api/lib` manifest — builtins live in the app bundle, so there's
+nothing an agent could modify). Pressing it walks the user through
+handing the component to a coding agent (`frankweiler/ui/src/handoff.ts`
+and `components/AgentHandoffModal.vue`): a step list whose first step
+copies a "wayfinder" prompt, plus a persisted "skip these steps next
+time" opt-out that turns the button into a straight copy.
 
 Card creation is the same gesture in both modes: every layout has an
 "add card" affordance (the miller layout's "+" strip after the last
 column, the tree layout's "+ card" button, the tiling layout's ＋ add
-areas). The **only** difference is what the new card's source is. In
-dev mode it's a *blank* card, to type source into. Outside dev mode
-it's a `galleryView()` card — the **new-card gallery**
-(`frankweiler/ui/src/cards/libs/galleryView.ts`): a list of every
-parameter-less component with a short description, builtins first
-(gridView leading), then any user-defined alias whose `/api/lib` entry
-carries a `description`. Picking an entry replaces the gallery card
-with the chosen component via `host.setSource`. Components that need
-arguments register a parameter-less picker instead — `documentView`'s
-gallery stand-in is `documentPickerView()`, which lists every rendered
-document (`/api/docs`) and replaces itself with
-`documentView("<uuid>")` on pick. Cards opened by other cards
-(`host.openCards`) work the same in both modes.
+areas), and it always creates a `galleryView()` card — the **new-card
+gallery** (`frankweiler/ui/src/cards/libs/galleryView.ts`): a list of
+every parameter-less component with a short description, builtins
+first (gridView leading), then any user-defined alias whose `/api/lib`
+entry carries a `description` (listed under its stored `title` when it
+has one), then a "new component, built by an agent" entry that mints a
+fresh alias seeded with `agentSeedView` (the in-card hand-off
+instructions) and repoints the card at it. Agents can later rename the
+placeholder alias (`POST /api/lib/{name}/rename`); the store leaves a
+tombstone and `ShadowCard` rewrites any card still referencing the old
+name. In dev
+mode the gallery additionally shows each entry's source and a footer
+note that source can be typed straight into the chrome bar. Picking an
+entry replaces the gallery card with the chosen component via
+`host.setSource`. Components that need arguments register a
+parameter-less picker instead — `documentView`'s gallery stand-in is
+`documentPickerView()`, which lists every rendered document
+(`/api/docs`) and replaces itself with `documentView("<uuid>")` on
+pick. Cards opened by other cards (`host.openCards`) work the same in
+both modes.
 
 A card sets its title with `ctx.setTitle`, usually first thing in its
 render — and again whenever a better title emerges, so titles are
@@ -246,6 +261,10 @@ programs against:
   replaces itself with `documentView("<uuid>")` on pick.
 - `galleryView()` — the new-card gallery (see "Titles and dev mode"
   above); replaces itself with whatever the user picks.
+- `agentSeedView(name)` — the in-card hand-off instructions a freshly
+  minted, agent-bound component is seeded with (the gallery's agent
+  entry stores `() => agentSeedView("<name>")` as the alias source);
+  the agent's first save replaces it.
 
 Adding a view = adding a factory to `ViewLibs` in
 `frankweiler/ui/src/cards/libs/index.ts` (and its name to the

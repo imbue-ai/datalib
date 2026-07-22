@@ -113,10 +113,14 @@ export type ViewLibs = {
   // with `documentView("<uuid>")` via host.setSource.
   documentPickerView: () => CardRender;
   // The new-card gallery: parameter-less components with short
-  // descriptions (builtins first, then described aliases); picking one
-  // replaces this card via host.setSource. This is what non-dev card
-  // creation opens (see the layout hosts).
+  // descriptions (builtins first, then described aliases, then the
+  // create-with-an-agent entry); picking one replaces this card via
+  // host.setSource. This is what every layout's "add card" opens.
   galleryView: () => CardRender;
+  // The in-card hand-off instructions a freshly minted, agent-bound
+  // component is seeded with: `() => agentSeedView("<name>")` (see
+  // handoff.ts). The agent's first save of the alias replaces it.
+  agentSeedView: (name: string) => CardRender;
   // Live listing of the user-defined component library (/api/lib).
   aliasView: () => CardRender;
   // DACTAL explorer (https://dactal.org): query grid_rows with DACTAL's

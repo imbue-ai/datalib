@@ -36,7 +36,6 @@ import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
 import { displayTitle } from "@/cards/title";
-import { devMode } from "@/devMode";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -136,11 +135,9 @@ function openCardsFrom(fromId: string, sources: string[]): string[] {
 
 function closeNode(id: string) {
   // A replacement tile keeps the tree non-empty when the last card
-  // goes — same source rule as addCard (blank in dev mode, gallery
-  // otherwise), so non-dev users aren't stranded on an uneditable
-  // blank card.
+  // goes — a gallery card, same as addCard.
   root.value = deleteNode(root.value, id, () =>
-    makeTile(freshId(), devMode.value ? "" : "galleryView()"),
+    makeTile(freshId(), "galleryView()"),
   );
 }
 
@@ -188,7 +185,7 @@ function commitSource(leaf: TileLeaf, e: Event) {
 }
 
 // host.setSource: replace this tile's own source (clearing state) —
-// drives the agent hand-off (see cards/handoff.ts).
+// drives the agent hand-off (see handoff.ts).
 function setTileSource(id: string, source: string) {
   const tile = findTile(root.value, id);
   if (!tile) return;
@@ -262,12 +259,10 @@ function isRoot(id: string): boolean {
   return root.value.id === id;
 }
 
-// ＋ add area: in dev mode a blank card (type source into it); outside
-// dev mode a gallery card, which the user resolves by picking a
-// component (it replaces itself via host.setSource).
+// ＋ add area: a gallery card (both modes), which the user resolves by
+// picking a component (it replaces itself via host.setSource).
 function addCard(containerId: string) {
-  const source = devMode.value ? "" : "galleryView()";
-  root.value = appendChild(root.value, containerId, makeTile(freshId(), source));
+  root.value = appendChild(root.value, containerId, makeTile(freshId(), "galleryView()"));
 }
 
 // What's being dragged, and where the pointer currently hovers — a

@@ -11,8 +11,11 @@ import { compileCardSource } from "@/cards/cardSource";
 import { devMode } from "@/devMode";
 import {
   aliasManifest,
+  aliasRenames,
   ensureManifest,
+  followRenames,
   referencedIdentifiers,
+  replaceIdentifier,
 } from "@/cards/aliasRegistry";
 import type { CardCtx, Teardown } from "@/cards/types";
 
@@ -44,6 +47,25 @@ function snapshotWatched(source: string) {
   for (const name of watchedNames) {
     watchedHashes.set(name, aliasManifest.value.get(name));
   }
+}
+
+// An alias this card references may have been renamed (an agent giving
+// its placeholder `card_xxxxx` a formal name — see the backend's
+// rename tombstones). Rewrite the source to the new name and repoint
+// the card through the host; returns whether a rewrite happened (the
+// setSource comes back as a source-prop change, which re-runs the
+// card). Renames are terminal in the store (the old name has no
+// source), so following them is the only way the card keeps working.
+function applyRenames(): boolean {
+  if (aliasRenames.value.size === 0) return false;
+  let src = props.source;
+  for (const id of referencedIdentifiers(props.source)) {
+    const target = followRenames(id);
+    if (target && target !== id) src = replaceIdentifier(src, id, target);
+  }
+  if (src === props.source) return false;
+  props.ctx.host.setSource(src);
+  return true;
 }
 
 function tearDownCard() {
@@ -112,6 +134,11 @@ async function runCard() {
   }
   try {
     await ensureManifest();
+    // A referenced alias may have been renamed while this card wasn't
+    // mounted (an old URL, a layout toggle): rewrite before compiling
+    // so the stale name never error-flashes. The setSource re-enters
+    // runCard with the new source.
+    if (applyRenames()) return;
     const { render, deps } = await compileCardSource(props.source);
     // A newer run started while we were awaiting — drop this one.
     if (token !== runToken || shadow.value !== root) return;
@@ -158,6 +185,12 @@ watch(aliasManifest, (m) => {
     }
   }
 });
+
+// Repoint the card the moment a rename tombstone for a referenced
+// alias lands in the manifest poll (the registry updates renames
+// before the manifest, so this fires before the compile-against-a-
+// vanished-name path can).
+watch(aliasRenames, () => void applyRenames());
 
 onBeforeUnmount(tearDownCard);
 </script>
