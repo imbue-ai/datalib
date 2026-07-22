@@ -22,10 +22,10 @@ which is the standard insta-with-bazel idiom: insta resolves snapshot
 paths against the user's actual workspace, not the bazel sandbox.
 
 When the underlying `rust_test` uses additional `data` deps + `env` vars
-(e.g. //frankweiler/backend/sync:manual_e2e_live_sync_golden, which
-reaches the sync binary through `FRANKWEILER_SYNC_BIN`), pass them via
-`extra_data` + `extra_env` so the `.update` target picks them up too —
-`rust_test`'s env doesn't propagate to a sibling sh_binary.
+(e.g. //frankweiler/backend/etl/providers/anthropic:anthropic_render,
+which reaches its fixture tree through `ANTHROPIC_FIXTURE_DIR`), pass
+them via `extra_data` + `extra_env` so the `.update` target picks them
+up too — `rust_test`'s env doesn't propagate to a sibling sh_binary.
 """
 
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")

@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Schema-only config crate for the beeper source (Program A goal #1).
 # Bazel-only by design (no Cargo.toml). See
-# docs/dev/data_processor_and_config_refactor.md §4.3.
+# docs/dev/archived/data_processor_and_config_refactor.md §4.3.
 rust_library(
     name = "frankweiler_etl_beeper_config",
     srcs = glob(["src/**/*.rs"]),

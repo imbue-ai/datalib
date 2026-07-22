@@ -1,5 +1,14 @@
 # Program B (aspirational): the processing DAG
 
+> **Archived (2026-07): implemented.** The DAG runner shipped as
+> `datalib-dag` + `datalib-step` (`frankweiler/backend/dag`,
+> `frankweiler/backend/datalib_step`) under different names than this plan
+> uses: `NodeSpec`/`NodeOutcome`/`frankweiler_pipeline` became
+> `StepSpec`/`StepOutcome`/`frankweiler_dag`, and the extract/translate
+> vocabulary became download/render/grid_index. For the current design see
+> [`pipeline_dag_architecture.md`](../pipeline_dag_architecture.md); for
+> the step contract see [`step_protocol.md`](../step_protocol.md).
+
 > **Aspirational — do not start until Program A is complete and its
 > `DataProcessor` trait has proven stable across all providers.** The canonical
 > *vision* is `Prompt to Claude for conversion to DAG runner.md`. This document is

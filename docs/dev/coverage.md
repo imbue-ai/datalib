@@ -11,7 +11,8 @@ how to use it.
 tools/run_coverage.sh \
   //tests/fixtures:ingested_tng_test \
   -- \
-  //frankweiler/backend/sync:frankweiler_sync_bin \
+  //frankweiler/backend/dag:datalib_dag \
+  //frankweiler/backend/datalib_step:datalib_step \
   //frankweiler/backend/signal-backup:signal_make_fixture
 ```
 
@@ -32,36 +33,38 @@ open /tmp/cov-html/index.html
 ## What it measures
 
 The most useful single coverage target right now is
-`//tests/fixtures:ingested_tng_test`. It's a `sh_test` wrapper around
+`//tests/fixtures:ingested_tng_test`. It's a `py_test` wrapper around
 the same `run_sync_pipeline.py` invocation as the `:ingested_tng`
 genrule, exercising the **entire ETL pipeline** end-to-end across every
 provider's TNG fixtures. With the wrapper above you get ~150 source
 files covered including:
 
-  - the per-provider extract + translate (`anthropic`, `chatgpt`,
+  - the per-provider download + render (`anthropic`, `chatgpt`,
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
     `contacts`, `perseus`, `email`, `yolink`)
   - shared infra (`doltlite_raw`, `blob_cas`, `load`, `latchkey`,
     `obs`, `qmd_indexer`, `signal-backup` crypto + writer)
-  - the `frankweiler_sync` orchestrator itself
+  - the `datalib-dag` orchestrator and `datalib-step` step binary
+    themselves
 
-That last point is the trick: `frankweiler_sync_bin` is a `rust_binary`
-the python script spawns as a subprocess. Naively, `bazelisk coverage`
-can't see into a subprocess. The setup below makes it work.
+That last point is the trick: `datalib_dag` and `datalib_step` are
+`rust_binary` targets the python script spawns as subprocesses.
+Naively, `bazelisk coverage` can't see into a subprocess. The setup
+below makes it work.
 
 ## How it works
 
 ```
-┌──────────────────┐   bazelisk coverage runs the sh_test.
+┌──────────────────┐   bazelisk coverage runs the py_test.
 │  ingested_tng_   │   rules_rust's coverage transition propagates
 │      test        │   through `data` deps (yes, even data!) so
-│   (sh_test)      │   frankweiler_sync_bin gets built with
+│   (py_test)      │   datalib_dag / datalib_step get built with
 └────────┬─────────┘   -Cinstrument-coverage.
          │ data
          ▼
-┌──────────────────┐   At test time, the sh_test spawns the
-│ frankweiler_     │   instrumented binary. LLVM's static runtime
-│   sync_bin       │   writes a .profraw on clean exit, paths
+┌──────────────────┐   At test time, the py_test spawns the
+│  datalib_dag +   │   instrumented binaries. LLVM's static runtime
+│  datalib_step    │   writes a .profraw on clean exit, paths
 │  (rust_binary,   │   chosen by LLVM_PROFILE_FILE in COVERAGE_DIR.
 │  -Cinstrument-   │
 │  coverage on)    │
@@ -87,11 +90,12 @@ can't see into a subprocess. The setup below makes it work.
 
 ### Three things had to be true
 
-1. **`-Cinstrument-coverage` reaches the binary that runs.** The
-   `data` dep from the sh_test to `frankweiler_sync_bin` carries
-   rules_rust's coverage transition through, so the binary at
-   `bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin` after a
-   `bazelisk coverage` invocation is the instrumented one. This Just
+1. **`-Cinstrument-coverage` reaches the binaries that run.** The
+   `data` deps from the py_test to `datalib_dag` / `datalib_step`
+   carry rules_rust's coverage transition through, so the binaries at
+   `bazel-bin/frankweiler/backend/dag/datalib_dag` and
+   `bazel-bin/frankweiler/backend/datalib_step/datalib_step` after a
+   `bazelisk coverage` invocation are the instrumented ones. This Just
    Works in rules_rust 0.70 — no custom transition, no
    `rustc_flags = select(...)`, no second binary target. The audit
    trail of how we found this out is in `docs/dev/data_architecture_ingestion.md`'s
@@ -110,17 +114,18 @@ can't see into a subprocess. The setup below makes it work.
 
 3. **The lcov export step uses the right binary.** Bazel's auto-export
    pass produces an empty lcov for our case because it can't tell
-   which `rust_binary` the sh_test invoked. `tools/run_coverage.sh`
+   which `rust_binary` the py_test invoked. `tools/run_coverage.sh`
    does the explicit `llvm-cov export --format=lcov
    --instr-profile=<dat> <primary-bin> --object <extra-bin>...` call
    itself.
 
 ### Why `data` and not `deps`?
 
-`sh_test` only has `data`, not `deps`. The fact that the rules_rust
-coverage transition flows through `data` is what makes this
-arrangement viable at all — we don't need to re-architect the sh_test
-to be a `rust_test`, and we don't need a custom Starlark transition.
+A `py_test`'s `deps` are Python libraries — the Rust binaries can
+only be `data`. The fact that the rules_rust coverage transition
+flows through `data` is what makes this arrangement viable at all —
+we don't need to re-architect the py_test to be a `rust_test`, and we
+don't need a custom Starlark transition.
 
 For `rust_test` targets the coverage transition flows through `deps`
 the same way it does through `data`; there's no functional difference

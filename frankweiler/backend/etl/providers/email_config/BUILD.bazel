@@ -6,7 +6,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 #
 # Bazel-only by design (no Cargo.toml): a first-party crate that uses only
 # already-vendored third-party deps needs just this BUILD file. See
-# docs/dev/data_processor_and_config_refactor.md §4.3.
+# docs/dev/archived/data_processor_and_config_refactor.md §4.3.
 rust_library(
     name = "frankweiler_etl_email_config",
     srcs = glob(["src/**/*.rs"]),

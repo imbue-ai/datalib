@@ -1,4 +1,6 @@
-# Example sync configs, surfaced as Bazel targets so a parse test can
-# assert they stay in sync with the `frankweiler_core::config` schema
-# (which is `deny_unknown_fields`, so any drift breaks the load).
+# Example sync configs (DAG steps format), surfaced as Bazel targets so
+# //frankweiler/backend/ingest_config:config_examples_test can assert
+# they stay in sync: each file must load + graph-build like the runner
+# would, and every step's `params:` must match the provider schemas
+# (`deny_unknown_fields`, so any drift breaks the test).
 exports_files(glob(["*.yaml"]))

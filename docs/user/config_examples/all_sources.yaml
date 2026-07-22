@@ -1,21 +1,34 @@
 # Boilerplate config enumerating EVERY supported data source.
 #
-# This is a reference, not a turn-key config. It lists one stanza per
-# source `type` with realistic-looking defaults for paths, hostnames,
-# and identifiers so you can copy the stanza you need and fill in your
-# own values. Running it as-is would try to sync everything at once —
-# most stanzas need credentials (via latchkey), a backup pulled off a
-# phone, or an export on disk. Delete the sources you don't want, or set
-# `enabled: false` on them.
+# This is a reference, not a turn-key config. It declares one step pair
+# per source `type` with realistic-looking defaults for paths,
+# hostnames, and identifiers so you can copy the steps you need and fill
+# in your own values. Running it as-is would try to sync everything at
+# once — most sources need credentials (via latchkey), a backup pulled
+# off a phone, or an export on disk. Delete (or comment out) the steps
+# you don't want; there is no per-source `enabled:` flag in this format.
 #
-# Shape: each entry has the orchestrator-owned `name:`/`enabled:` at the top,
-# then everything the provider needs nested under `source:` — the `type:`
-# discriminator, the shared `common:` envelope (paths + cross-source knobs),
-# and the provider-specific keys (`sync:`, etc.).
+# Shape: this is the steps format `datalib-dag` runs (see
+# configs/dag_example.yaml for a walkthrough and
+# docs/dev/step_protocol.md for the step contract). Each source is a
+# `<name>.download` step — fetches into `<name>/raw`; its `params:`
+# carry the provider's knobs (the shared `common:` envelope, the
+# `sync:` block, …) — plus a `<name>.render` step turning the raw store
+# into markdown under `<name>/rendered_md` (its `params:` carry only
+# render-phase knobs; most providers have none). Two shared fan-in
+# steps, `grid_index` and `qmd_index`, index every source's rendered
+# markdown. Edges are derived from the artifact paths; the
+# `<name>.download` / `<name>.render` ids are the convention the UI's
+# per-source "Sync now" targets.
 #
-# Sources that support more than one input mode include a stanza for
+# Sources that support more than one input mode include a step pair for
 # each: `email` (JMAP server vs. Google Takeout .mbox) and `carddav`
-# contacts (CalDAV server vs. local .vcf files).
+# contacts (CardDAV server vs. local .vcf files).
+#
+# There is no global `defaults:` block in the steps format —
+# cross-source knobs (`blob_size_limit_bytes`, `download_params`, …)
+# are set per source under the download step's `params.common:` (see
+# the slack steps below for an example).
 #
 # REDACT: several stanzas below carry device-history secrets (yolink) or
 # would, if filled in, hold tokens/keys. Never commit a real one.
@@ -24,36 +37,37 @@ data_root: ~/datalib  # Base dir; everything is written under here. `~` is expan
 
 # Where each source's raw store lives. By default a source's raw data
 # (entities.doltlite_db + blobs.doltlite_db + the events/ tape) lands in
-# `<data_root>/raw/<name>/`. ANY source may override that directory with a
-# per-source `common.raw_path:` (see the commented example on claude-api
-# below) — it can point anywhere, e.g. a bigger disk. This is purely about
-# where WE store our copy; it's independent of `common.input_path:`, which
-# says where a file-backed source's data is read FROM.
+# `<data_root>/<name>/raw/`. ANY source may override that directory with a
+# `params.common.raw_path:` on its download step (see the commented example
+# on claude-api below) — it can point anywhere, e.g. a bigger disk. This is
+# purely about where WE store our copy; it's independent of
+# `common.input_path:`, which says where a file-backed source's data is
+# read FROM.
 
-# Global defaults, folded into every source's `common` at load. A source's own
-# `common:` overrides these field-by-field; an unset field takes the built-in
-# default.
-defaults:
-  blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
-  # How hard a source's download retries upstream rate limits before the
-  # orchestrator gives up on it. The shared HTTP layer always respects a
-  # `Retry-After` on a 429 (and otherwise backs off exponentially); these two
-  # knobs only decide *when to stop*. Both are optional — omit (or any field)
-  # to take the built-in defaults shown here. Overridable per source (see the
-  # slack stanza below).
-  download_params:
-    maximum_time_without_progress_in_minutes: 30  # give up after this long with no successful request
-    maximum_sequential_failed_requests: 50         # ...or this many failures in a row
+steps:
+  # --- Shared index steps ---------------------------------------------------
 
-sources:
+  # Every source's rendered markdown feeds these two fan-ins: the SQL
+  # index behind the grid UI, and the qmd semantic-search index.
+  - id: grid_index
+    command: datalib-step grid_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/backend_index]
+
+  - id: qmd_index
+    command: datalib-step qmd_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/qmd]
+
   # --- Claude / Anthropic ---------------------------------------------------
 
   # Claude.ai conversation mirror over the web API. Credentials come from
   # latchkey at runtime (see first_time_user.md). Bare `sync: {}` fetches
   # every conversation across every org; the knobs bound the work.
-  - name: claude-api
-    source:
-      type: claude_api
+  - id: claude-api.download
+    command: datalib-step download claude_api
+    outputs: [claude-api/raw]
+    params:
       # common:
       #   raw_path: /mnt/big/datalib-raw/claude-api  # optional: store our raw copy elsewhere
       sync:
@@ -63,20 +77,31 @@ sources:
         # conv_uuids:                       # or: fetch only these (UUIDs or paste-able URLs)
         #   - https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000
 
-  # Translate-only mode for a Claude data export already on disk. No
-  # network, no credentials — just points at the unpacked export.
-  - name: claude-export
-    source:
-      type: claude_export
+  - id: claude-api.render
+    command: datalib-step render claude_api
+    inputs: [claude-api/raw]
+    outputs: [claude-api/rendered_md]
+
+  # Render-only view of a Claude data export already on disk. No
+  # network, no credentials, and no download step — the unpacked export
+  # is already in the "export shape" the renderer reads, so the render
+  # step's `common.raw_path` points straight at it. With no `inputs:`
+  # this is a fringe step (its real input lives outside the data root),
+  # so it runs every sync; per-document fingerprints keep re-runs cheap.
+  - id: claude-export.render
+    command: datalib-step render claude_export
+    outputs: [claude-export/rendered_md]
+    params:
       common:
-        input_path: ~/backups/claude-export
+        raw_path: ~/backups/claude-export
 
   # --- ChatGPT --------------------------------------------------------------
 
   # ChatGPT conversation mirror. Credentials via latchkey.
-  - name: chatgpt
-    source:
-      type: chatgpt_api
+  - id: chatgpt.download
+    command: datalib-step download chatgpt_api
+    outputs: [chatgpt/raw]
+    params:
       sync:
         since: "2025-01-01"  # only sync conversations updated at/after this
                              # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
@@ -86,18 +111,27 @@ sources:
         # conv_uuids:
         #   - https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789
 
+  - id: chatgpt.render
+    command: datalib-step render chatgpt_api
+    inputs: [chatgpt/raw]
+    outputs: [chatgpt/rendered_md]
+
   # --- Slack ----------------------------------------------------------------
 
   # Slack workspace mirror. Credentials via latchkey. Omit `channels`
   # (or set `all_channels: true`) to mirror every channel the account sees.
-  - name: slack
-    source:
-      type: slack_api
+  - id: slack.download
+    command: datalib-step download slack_api
+    outputs: [slack/raw]
+    params:
       common:
-        blob_size_limit_bytes: 1000000  # per-source override: 1 MB for Slack files
-        # Per-source override of the global download_params: Slack rate-limits
-        # aggressively, so tolerate more failures in a row before giving up.
-        # Unset fields (here, the time budget) fall through to the global.
+        blob_size_limit_bytes: 1000000  # skip file/media uploads larger than 1 MB
+        # Bound how hard the download retries upstream rate limits before
+        # giving up. The shared HTTP layer always respects a `Retry-After`
+        # on a 429 (and otherwise backs off exponentially); these two knobs
+        # only decide *when to stop*. Slack rate-limits aggressively, so
+        # tolerate more failures in a row; the unset time budget takes the
+        # built-in default (30 minutes without progress, 50 failures).
         download_params:
           maximum_sequential_failed_requests: 100
       sync:
@@ -108,14 +142,20 @@ sources:
           - general
         # refresh_window_days: 30
 
+  - id: slack.render
+    command: datalib-step render slack_api
+    inputs: [slack/raw]
+    outputs: [slack/rendered_md]
+
   # --- GitHub ---------------------------------------------------------------
 
   # GitHub PR mirror. Credentials via latchkey. With `pull_requests` set,
   # discovery is skipped and only those PRs are fetched; entries are
   # paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
-  - name: github
-    source:
-      type: github_api
+  - id: github.download
+    command: datalib-step download github_api
+    outputs: [github/raw]
+    params:
       sync:
         refresh_window_days: 30
         max_prs: 50
@@ -123,13 +163,19 @@ sources:
           - imbue-ai/datalib#40
           - https://github.com/imbue-ai/datalib/pull/41
 
+  - id: github.render
+    command: datalib-step render github_api
+    inputs: [github/raw]
+    outputs: [github/rendered_md]
+
   # --- GitLab ---------------------------------------------------------------
 
   # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
   # are `namespace/project!IID` or a gitlab.com MR URL.
-  - name: gitlab
-    source:
-      type: gitlab_api
+  - id: gitlab.download
+    command: datalib-step download gitlab_api
+    outputs: [gitlab/raw]
+    params:
       sync:
         refresh_window_days: 30
         max_mrs: 50
@@ -137,13 +183,19 @@ sources:
           - mygroup/myproject!100
           - https://gitlab.com/mygroup/myproject/-/merge_requests/101
 
+  - id: gitlab.render
+    command: datalib-step render gitlab_api
+    inputs: [gitlab/raw]
+    outputs: [gitlab/rendered_md]
+
   # --- Notion ---------------------------------------------------------------
 
   # Notion mirror. Credentials via latchkey. At least one of `inbox`
   # (enabled) or `subtrees.pages` must be present.
-  - name: notion
-    source:
-      type: notion_api
+  - id: notion.download
+    command: datalib-step download notion_api
+    outputs: [notion/raw]
+    params:
       sync:
         refresh_window_days: 7
         inbox:
@@ -154,99 +206,153 @@ sources:
           pages:
             - https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef
 
+  - id: notion.render
+    command: datalib-step render notion_api
+    inputs: [notion/raw]
+    outputs: [notion/rendered_md]
+
   # --- Email: two input modes -----------------------------------------------
 
   # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
   # presence of `sync:` selects JMAP mode; `hostname` is required.
   # Credentials via latchkey.
-  - name: fastmail
-    source:
-      type: email
-      # Webmail each message's `↗` outlink points at: `fastmail` for a
-      # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
-      # any other server (no outlink rendered).
-      outlink_format: fastmail
+  - id: fastmail.download
+    command: datalib-step download email
+    outputs: [fastmail/raw]
+    params:
       sync:
         hostname: api.fastmail.com
         # account_id: u12345678        # defaults to the session's primary mail account
         full_resync: false
-      # Mailbox label filters. Labels are POSIX-like paths into the folder
+      # Mailbox label filter. Labels are POSIX-like paths into the folder
       # tree (Fastmail forbids `/` in a label, so a `/` is always a
       # parent/child separator); matching is EXACT — `Work` does NOT pull
-      # in `Work/Projects`, list nested labels explicitly. Both lists are
-      # independent; omit or leave empty for "everything".
+      # in `Work/Projects`, list nested labels explicitly. Omit or leave
+      # empty for "everything". The render-side counterpart
+      # (`only_render_labels`) lives on the render step below.
       only_extract_labels: []          # extract only these mailboxes; empty = all
-      only_render_labels: []           # render only threads touching these; empty = all
-      # e.g. extract the whole account but only render two branches:
-      #   only_render_labels: [Inbox, "Work/Projects"]
 
-  # Mode B — Google Takeout .mbox on disk. No `sync:` block → translate-only
+  - id: fastmail.render
+    command: datalib-step render email
+    inputs: [fastmail/raw]
+    outputs: [fastmail/rendered_md]
+    params:
+      # Webmail each message's `↗` outlink points at: `fastmail` for a
+      # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
+      # any other server (no outlink rendered).
+      outlink_format: fastmail
+      # Render only threads touching these labels (same exact-match label
+      # paths as `only_extract_labels`); empty = all. E.g. extract the
+      # whole account but only render two branches:
+      #   only_render_labels: [Inbox, "Work/Projects"]
+      only_render_labels: []
+
+  # Mode B — Google Takeout .mbox on disk. No `sync:` block → file-backed
   # mbox mode, reading the file at `common.input_path`. The `mbox:` block
   # just labels the synthesized account row.
-  - name: gmail-takeout
-    source:
-      type: email
+  - id: gmail-takeout.download
+    command: datalib-step download email
+    outputs: [gmail-takeout/raw]
+    params:
       common:
         input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
-      outlink_format: gmail   # render each message's `↗` outlink to Gmail
       mbox:
         account_id: gmail_alice
         display_name: Alice's Gmail
         email_address: alice@gmail.com
         is_personal: true
-      # Same label filters as JMAP mode — here they match the Gmail labels
+      # Same label filter as JMAP mode — here it matches the Gmail labels
       # in each message's `X-Gmail-Labels` header (already `Parent/Child`
       # paths for nested labels). Exact match; empty = everything.
       only_extract_labels: []          # ingest only messages carrying these labels
-      only_render_labels: []           # render only threads touching these labels
+
+  - id: gmail-takeout.render
+    command: datalib-step render email
+    inputs: [gmail-takeout/raw]
+    outputs: [gmail-takeout/rendered_md]
+    params:
+      outlink_format: gmail   # render each message's `↗` outlink to Gmail
+      only_render_labels: []  # render only threads touching these labels; empty = all
 
   # --- Contacts (CardDAV): two input modes ----------------------------------
 
   # Mode A — CalDAV/CardDAV server. The presence of `sync:` selects server
   # mode; `server_url` is required. Credentials via latchkey. Omit
   # `addressbooks` to sync every addressbook under the principal.
-  - name: icloud-contacts
-    source:
-      type: carddav
+  - id: icloud-contacts.download
+    command: datalib-step download carddav
+    outputs: [icloud-contacts/raw]
+    params:
       sync:
         server_url: https://contacts.icloud.com/
         addressbooks:
           - Contacts
 
+  - id: icloud-contacts.render
+    command: datalib-step render carddav
+    inputs: [icloud-contacts/raw]
+    outputs: [icloud-contacts/rendered_md]
+
   # Mode B — local vCard files. No `sync:` block → reads `.vcf` files from
   # the directory at `common.input_path`.
-  - name: vcard-contacts
-    source:
-      type: carddav
+  - id: vcard-contacts.download
+    command: datalib-step download carddav
+    outputs: [vcard-contacts/raw]
+    params:
       common:
         input_path: ~/backups/contacts_vcf
+
+  - id: vcard-contacts.render
+    command: datalib-step render carddav
+    inputs: [vcard-contacts/raw]
+    outputs: [vcard-contacts/rendered_md]
 
   # --- Beeper ---------------------------------------------------------------
 
   # Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
   # chat networks to ingest (at least one required).
-  - name: beeper
-    source:
-      type: beeper
+  - id: beeper.download
+    command: datalib-step download beeper
+    outputs: [beeper/raw]
+    params:
       sync:
         sources:
           - signal
           - googlechat
         media: true
-        period: month   # month (default) | day | year | all
         # beeper_data_dir: ~/Library/Application Support/BeeperTexts  # macOS default
+
+  - id: beeper.render
+    command: datalib-step render beeper
+    inputs: [beeper/raw]
+    outputs: [beeper/rendered_md]
+    params:
+      period: month   # month (default) | day | year | all — span of each rendered doc
 
   # --- Perseus Digital Library ----------------------------------------------
 
   # TEI editions from PerseusDL/canonical-greekLit. Bare `sync: {}` pulls
   # the default Thucydides Histories pair; list `files` to pick others.
-  - name: perseus
-    source:
-      type: perseus
+  # Perseus renders straight from the staged tree, so the render step
+  # carries `common.input_path` too.
+  - id: perseus.download
+    command: datalib-step download perseus
+    outputs: [perseus/raw]
+    params:
       common:
         input_path: ~/backups/perseus
       sync:
         files: []
+
+  - id: perseus.render
+    command: datalib-step render perseus
+    inputs: [perseus/raw]
+    outputs: [perseus/rendered_md]
+    params:
+      common:
+        input_path: ~/backups/perseus
+      # alignment_pairs:   # edition pairs to sentence-align, e.g.
+      #   - [perseus-grc2, perseus-eng2]
 
   # --- YoLink sensors -------------------------------------------------------
 
@@ -254,9 +360,10 @@ sources:
   # must be `temperature_humidity` or `watermeter`, `start` is YYYY-MM-DD,
   # and both IDs are exactly 32 lowercase-hex chars.
   # REDACT: family_device_id + device_udid are non-rotatable read secrets.
-  - name: yolink
-    source:
-      type: yolink
+  - id: yolink.download
+    command: datalib-step download yolink
+    outputs: [yolink/raw]
+    params:
       sync:
         window_days: 7
         overlap_minutes: 5
@@ -267,50 +374,74 @@ sources:
             family_device_id: 0123456789abcdef0123456789abcdef
             device_udid: fedcba9876543210fedcba9876543210
 
+  - id: yolink.render
+    command: datalib-step render yolink
+    inputs: [yolink/raw]
+    outputs: [yolink/rendered_md]
+
   # --- Signal (Android backup) ----------------------------------------------
 
   # Decrypts the newest `signal-backup-*` snapshot under `snapshot_dir`
-  # using the AEP read from the named env var at extract time. See
+  # using the AEP read from the named env var at download time. See
   # docs/user/getting_your_data.md for pulling the backup off the phone.
-  - name: signal
-    source:
-      type: signal_backup
+  - id: signal.download
+    command: datalib-step download signal_backup
+    outputs: [signal/raw]
+    params:
       sync:
         snapshot_dir: ~/backups/SignalBackups
         aep_env_var: SIGNAL_BACKUP_PASSPHRASE   # default if omitted
-        period: month
+
+  - id: signal.render
+    command: datalib-step render signal_backup
+    inputs: [signal/raw]
+    outputs: [signal/rendered_md]
+    params:
+      period: month   # month (default) | day | year | all — span of each rendered doc
 
   # --- WhatsApp (Android crypt15 backup) ------------------------------------
 
   # Points at the `WhatsApp/` dir pulled off the phone (containing
   # `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
   # key is hex-encoded in the named env var.
-  - name: whatsapp
-    source:
-      type: whatsapp_backup
+  - id: whatsapp.download
+    command: datalib-step download whatsapp_backup
+    outputs: [whatsapp/raw]
+    params:
       sync:
         backup_dir: ~/backups/WhatsApp
         key_env_var: WHATSAPP_BACKUP_DECRYPTION_KEY   # default if omitted
 
+  - id: whatsapp.render
+    command: datalib-step render whatsapp_backup
+    inputs: [whatsapp/raw]
+    outputs: [whatsapp/rendered_md]
+
   # --- LinkedIn (data export) -----------------------------------------------
 
   # File-backed: point `common.input_path` at an unzipped LinkedIn "Get a copy
-  # of your data" export. Extract ingests every CSV; translate renders the
+  # of your data" export. Download ingests every CSV; render emits the
   # message feeds and your connections (as first-class contacts).
   #
   # `fetch_photos` (default false) scrapes each connection's public profile
   # `og:image` into the per-source CAS, once per connection — transient
-  # bot-blocks aren't recorded, so they retry on later runs. The per-source
+  # bot-blocks aren't recorded, so they retry on later runs. The
   # `download_params` override below bounds that: stop the photo sweep after
   # 20 consecutive failures (LinkedIn rate-limits bursts).
-  - name: linkedin
-    source:
-      type: linkedin
+  - id: linkedin.download
+    command: datalib-step download linkedin
+    outputs: [linkedin/raw]
+    params:
       common:
         input_path: ~/backups/LinkedInDataExport
         download_params:
           maximum_sequential_failed_requests: 20
       fetch_photos: true
+
+  - id: linkedin.render
+    command: datalib-step render linkedin
+    inputs: [linkedin/raw]
+    outputs: [linkedin/rendered_md]
 
   # --- Google Takeout (data export) -----------------------------------------
 
@@ -321,14 +452,15 @@ sources:
   # One provider, many feeds: every feed is OFF by default, so opt into the
   # slices you want under `sync:`. Today only `google_chat` and
   # `google_voice` render into browsable Markdown conversations; the rest
-  # (maps, youtube, gemini) are extracted into the per-source raw store and
+  # (maps, youtube, gemini) are downloaded into the per-source raw store and
   # queryable there, but don't render to Markdown yet.
   #
   # NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
   # it is NOT one of the feeds here.
-  - name: google-takeout
-    source:
-      type: google_takeout
+  - id: google-takeout.download
+    command: datalib-step download google_takeout
+    outputs: [google-takeout/raw]
+    params:
       common:
         input_path: ~/backups/Takeout
       sync:
@@ -342,34 +474,46 @@ sources:
         youtube_subscriptions: false   # raw store only
         gemini_apps: false             # raw store only
 
+  - id: google-takeout.render
+    command: datalib-step render google_takeout
+    inputs: [google-takeout/raw]
+    outputs: [google-takeout/rendered_md]
+
   # --- SMS Backup & Restore (Android export) --------------------------------
 
   # File-backed: point `common.input_path` at the directory holding the Android
   # "SMS Backup & Restore" app's `sms-*.xml` / `calls-*.xml` files. No API,
-  # no credentials. Extract ingests each SMS / MMS / call as its own raw row
-  # (MMS attachment bytes go to the CAS); translate renders one chat per
+  # no credentials. Download ingests each SMS / MMS / call as its own raw row
+  # (MMS attachment bytes go to the CAS); render emits one chat per
   # phone number.
-  - name: sms-backup-restore
-    source:
-      type: sms_backup_restore
+  - id: sms-backup-restore.download
+    command: datalib-step download sms_backup_restore
+    outputs: [sms-backup-restore/raw]
+    params:
       common:
         input_path: ~/backups/SMSBackupRestore
+
+  - id: sms-backup-restore.render
+    command: datalib-step render sms_backup_restore
+    inputs: [sms-backup-restore/raw]
+    outputs: [sms-backup-restore/rendered_md]
 
   # --- fsindex (directory-tree scanner) -------------------------------------
 
   # File-backed: point `common.input_path` at any local directory tree. fsindex
   # walks it Unison-style (fast incremental rescans keyed on mtime/size/inode)
   # and records `(path, kind, size, blake3, optional identity uuid)` for every
-  # entry in a raw store. EXTRACT-ONLY: it renders nothing (filesystem entries
-  # aren't chat-shaped), so there are no Markdown conversations — the index is
-  # queryable in the per-source raw store.
+  # entry in a raw store. DOWNLOAD-ONLY: it renders nothing (filesystem entries
+  # aren't chat-shaped), so there is no render step — the index is queryable
+  # in the per-source raw store.
   #
   # `stamp` is off by default so the scan stays read-only against its input.
   # Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
   # into directories that opt in via `stamp_me_with_uuid`.
-  - name: fsindex-home
-    source:
-      type: fsindex
+  - id: fsindex-home.download
+    command: datalib-step download fsindex
+    outputs: [fsindex-home/raw]
+    params:
       common:
         input_path: ~/Documents
       # stamp: false   # default; true → write UUID breadcrumbs into the tree

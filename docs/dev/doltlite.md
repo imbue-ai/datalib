@@ -31,7 +31,7 @@ binary's argv is identical to `sqlite3`: `doltlite [OPTIONS] DBFILE [SQL...]`.
 ### `git log` for the current branch
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db \
+doltlite -readonly slack/raw/entities.doltlite_db \
   "SELECT commit_hash, committer, date, message
      FROM dolt_log()
     ORDER BY date DESC
@@ -39,22 +39,22 @@ doltlite -readonly raw/slack/entities.doltlite_db \
 ```
 
 Each row is one `dolt_commit()` call from the ETL — e.g.
-`extract slack: msgs=29 replies=51 media[...]` for a successful Slack
-sync, or `extract slack.doltlite_db: interrupted (Ctrl-C)` for a
+`download slack: msgs=29 replies=51 media[...]` for a successful Slack
+sync, or `download slack: interrupted (Ctrl-C)` for a
 ctrl-c'd run. `dolt_log()` walks back from `HEAD` on the active branch
 (use `active_branch()` to check which one that is).
 
 ### Which branch is checked out / what branches exist
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db "SELECT active_branch();"
-doltlite -readonly raw/slack/entities.doltlite_db "SELECT * FROM dolt_branches;"
+doltlite -readonly slack/raw/entities.doltlite_db "SELECT active_branch();"
+doltlite -readonly slack/raw/entities.doltlite_db "SELECT * FROM dolt_branches;"
 ```
 
 ### Uncommitted changes (`git status`)
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db "SELECT * FROM dolt_status;"
+doltlite -readonly slack/raw/entities.doltlite_db "SELECT * FROM dolt_status;"
 ```
 
 Columns are `(table_name, staged, status)`. A non-empty result used to
@@ -73,7 +73,7 @@ sync.
 **Per-table summary** — which tables differ, and is it a data or schema change:
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db \
+doltlite -readonly slack/raw/entities.doltlite_db \
   "SELECT from_table_name, to_table_name, diff_type, data_change, schema_change
      FROM dolt_diff_summary
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD';"
@@ -87,7 +87,7 @@ table-valued function (the `dolt_diff_stat` vtab form errors out — use
 this 3-arg call):
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db \
+doltlite -readonly slack/raw/entities.doltlite_db \
   "SELECT * FROM dolt_diff_stat('HEAD^1', 'HEAD', 'messages');"
 ```
 
@@ -100,7 +100,7 @@ old_cell_count, new_cell_count)`.
 `added` / `removed` / `modified`:
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db \
+doltlite -readonly slack/raw/entities.doltlite_db \
   "SELECT to_id, to_ts, diff_type
      FROM dolt_diff_messages
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
@@ -114,7 +114,7 @@ has `to_commit` / `from_commit` data columns).
 ### History of a single table
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db \
+doltlite -readonly slack/raw/entities.doltlite_db \
   "SELECT commit_hash, commit_date, id, ts
      FROM dolt_history_messages
     ORDER BY commit_date DESC
@@ -127,7 +127,7 @@ specific row first appeared or last changed.
 ### `git blame` for a single row
 
 ```sh
-doltlite -readonly raw/slack/entities.doltlite_db \
+doltlite -readonly slack/raw/entities.doltlite_db \
   "SELECT commit, committer, commit_date, message
      FROM dolt_blame_messages
     WHERE id = '<uuid>';"
@@ -142,7 +142,7 @@ created for each.)
 behavior. Handy for one-off queries on the terminal:
 
 ```sh
-doltlite -readonly -box raw/slack/entities.doltlite_db "SELECT * FROM dolt_log() LIMIT 5;"
+doltlite -readonly -box slack/raw/entities.doltlite_db "SELECT * FROM dolt_log() LIMIT 5;"
 ```
 
 ## Inventory: what `dolt_*` symbols exist
@@ -181,8 +181,8 @@ The common-use subset:
 doltlite's open path walks the prolly chunk store's root pages and
 blake3-hashes each one before any query can run. On a multi-GB raw
 store that's a *lot* of tight inner-loop C code. We learned this the
-hard way: a 3.5GB `raw/slack/entities.doltlite_db` took **~60 seconds** to open
-from Rust (sqlx blew its 30s `acquire_timeout`, the translate phase
+hard way: a 3.5GB `slack/raw/entities.doltlite_db` took **~60 seconds** to open
+from Rust (sqlx blew its 30s `acquire_timeout`, the render phase
 died, the UI grid silently went empty), while the upstream CLI on the
 same file opened it in 2.4 seconds.
 

@@ -1,5 +1,11 @@
 # Porting a provider to the Signal/email pattern
 
+> **Archived (2026-07).** All three targets (anthropic, chatgpt,
+> whatsapp) have been ported. Superseded by
+> [`provider_migration_dolt_diff_and_cas_edge.md`](../provider_migration_dolt_diff_and_cas_edge.md),
+> which consolidates what was learned across the six ported providers and
+> is the live recipe for the remaining ones.
+
 This doc is a per-provider migration recipe for converting an ETL
 provider to the same architecture Signal (commits `8e90289`…`d392075`)
 and email (commits `72ec85c`…`6d1fbba`) now use:

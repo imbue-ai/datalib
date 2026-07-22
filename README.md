@@ -28,13 +28,16 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | WhatsApp | `whatsapp_backup` | Android `crypt15` backup | Messages + media |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
+| Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3) — download-only, no rendered markdown |
 
 See [`docs/user/config_examples/all_sources.yaml`](docs/user/config_examples/all_sources.yaml)
-for one fully-commented stanza per source.
+for one fully-commented step pair per source.
 
 ## Getting started
 
 - [**First-time user guide**](docs/user/first_time_user.md) — download the
   CLI and mirror your own data.
+- [**Agent user guide**](docs/agent_user.md) — for AI agents operating datalib
+  on a user's behalf: config, sync, querying, custom steps.
 - [**First-time dev guide**](docs/dev/first_time_dev.md) — build and hack on
   datalib from source.

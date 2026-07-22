@@ -5,7 +5,7 @@
 //! DMs + bots + attachments, and Gemini Apps activity — into a
 //! provider-owned doltlite raw store.
 //!
-//! See `docs/dev/google_takeout_ingestion.md` for the design.
+//! See `docs/dev/archived/google_takeout_ingestion.md` for the design.
 //!
 //! One provider, many feeds: each top-level Takeout slice gets its
 //! own walker module; the YAML `sync:` block lets users opt feeds in
@@ -18,7 +18,7 @@
 //! ## Scope (first pass)
 //!
 //! - Raw-download only. No render, no `GridRow`s yet — see
-//!   `docs/dev/google_takeout_ingestion.md` § "Out of scope (first
+//!   `docs/dev/archived/google_takeout_ingestion.md` § "Out of scope (first
 //!   pass)".
 //! - Wire-tape JSONL is not emitted (the data didn't come off a
 //!   wire).

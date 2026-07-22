@@ -15,7 +15,8 @@
 #   tools/run_coverage.sh \
 #     //tests/fixtures:ingested_tng_test \
 #     -- \
-#     //frankweiler/backend/sync:frankweiler_sync_bin \
+#     //frankweiler/backend/dag:datalib_dag \
+#     //frankweiler/backend/datalib_step:datalib_step \
 #     //frankweiler/backend/signal-backup:signal_make_fixture
 #
 # Output: /tmp/frankweiler_coverage.lcov (override with $LCOV_OUT).

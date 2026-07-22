@@ -1,5 +1,13 @@
 # Program A: provider-owned config + a `DataProcessor` trait + a registry
 
+> **Archived (2026-07): landed in full.** Every provider owns its config
+> (`etl/providers/<p>_config/` crates), implements `DataProcessor` in its
+> `processor.rs` with `plan_download`/`plan_render` entry points, and is
+> dispatched by `datalib_step/src/dispatch.rs`. `ExtractKind`, `DbHandle`,
+> and `core/src/config.rs` are gone; `SourceConfig` lives in
+> `ingest_config`. Program B (the DAG) was subsequently built on top —
+> see [`pipeline_dag_architecture.md`](../pipeline_dag_architecture.md).
+
 > **This is the do-this-first refactor.** It is bounded, it satisfies the three
 > concrete goals below, and it is finishable in one committed push. It does
 > **not** turn the pipeline into a DAG — that is Program B, kept separately and

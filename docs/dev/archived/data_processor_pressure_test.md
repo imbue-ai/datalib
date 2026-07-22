@@ -1,5 +1,9 @@
 # Program A — §5 pressure-test (on paper, before code)
 
+> **Archived (2026-07).** Point-in-time analysis for Program A, which has
+> since landed in full (see
+> [`data_processor_and_config_refactor.md`](./data_processor_and_config_refactor.md)).
+
 Verified against the actual code, June 2026. This is the §5 step of
 [`data_processor_and_config_refactor.md`](./data_processor_and_config_refactor.md):
 pressure-test the `DataProcessor` / `SourcePlan` / provider-owned-config shape

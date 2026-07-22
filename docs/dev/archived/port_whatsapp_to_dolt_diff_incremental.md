@@ -1,5 +1,10 @@
 # Porting WhatsApp to per-provider CAS + `dolt_diff_<table>`-driven incremental render
 
+> **Archived (2026-07): landed.** WhatsApp's port is complete — via the
+> shared `render_cursor` JSON-file cursor (the approach that won in
+> [`provider_migration_dolt_diff_and_cas_edge.md`](../provider_migration_dolt_diff_and_cas_edge.md)),
+> not the `source_render_cursors` index-table variant proposed below.
+
 This is a focused, self-contained recipe for the WhatsApp provider's
 port. Unlike the other targets in `port_provider_to_signal_pattern.md`,
 WhatsApp uses a fundamentally different incremental-render primitive:
