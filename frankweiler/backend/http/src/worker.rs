@@ -327,6 +327,20 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
         .then(|| dir.to_path_buf())
 }
 
+/// `~/.datalib/bin` — the blessed drop spot for user (and agent)
+/// provided step programs: a config `command:` can name anything
+/// placed (or symlinked) here, because [`run_job`] prepends this dir
+/// to the runner's PATH. Advertised in /agent-config.md as THE
+/// predictable install location, so keep the two in sync. None when
+/// no home directory is discoverable.
+fn user_bin_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE")?;
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".datalib").join("bin"))
+}
+
 /// The worker's main loop. Runs until the process exits.
 pub async fn run(repo: DynRepo, cfg: WorkerConfig) {
     match repo.recover_running_jobs().await {
@@ -436,6 +450,17 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     if let Some(srcs) = job.source_name.as_deref().filter(|s| !s.is_empty()) {
         for src in srcs.split(',').filter(|s| !s.is_empty()) {
             command.arg("--sync").arg(src);
+        }
+    }
+    // Make ~/.datalib/bin resolvable from the config's `command:` lines
+    // (step processes inherit the runner's env). Prepended even when
+    // the dir doesn't exist yet — an agent may create it between runs,
+    // and a missing PATH entry is harmless.
+    if let Some(bin) = user_bin_dir() {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let parts = std::iter::once(bin).chain(std::env::split_paths(&path));
+        if let Ok(joined) = std::env::join_paths(parts) {
+            command.env("PATH", joined);
         }
     }
     // Pipe stdout+stderr so reader threads can both tee them to the log

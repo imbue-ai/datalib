@@ -2,7 +2,9 @@
 
 You were pointed here by a "wayfinder" snippet copied out of the
 frankweiler UI. It named a **component alias** (e.g. `card_a1b2c3`) and
-asked you to define it. This doc tells you how.
+asked you either to define it (a new component) or to modify an
+existing one. This doc tells you how. (If your wayfinder is about the
+data-source config instead, read `<origin>/agent-config.md`.)
 
 ## The model
 
@@ -42,6 +44,10 @@ you overwrite the alias, that card re-renders automatically.
    exactly **one expression**: no statements, no module
    `import`/`export`, and **no trailing semicolon** — end with `… }`,
    never `… };`.
+
+   When the wayfinder asks you to **modify** an existing component,
+   start from its current source: `GET <origin>/api/lib/<aliasName>`
+   returns it.
 
 2. **Save it** under the alias the wayfinder gave you:
 
@@ -96,15 +102,35 @@ you overwrite the alias, that card re-renders automatically.
 
 The UI's "new card" gallery lists parameter-less components with a
 short description. To make your component appear there, include a
-`description` in the PUT body:
+`description` — and a human-readable `title`, which listings show
+instead of the bare alias name — in the PUT body:
 
 ```sh
 curl -X PUT "<origin>/api/lib/<aliasName>" \
   -H 'content-type: application/json' \
-  -d "$(jq -Rs '{source: ., description: "One line on what this shows."}' < factory.js)"
+  -d "$(jq -Rs '{source: ., title: "Nice name", description: "One line on what this shows."}' < factory.js)"
 ```
 
 A described component **must work when invoked with no arguments** —
-the gallery creates it as `<aliasName>()`. Omitting `description` on a
-later PUT keeps the stored one; sending `""` clears it (and removes
-the component from the gallery).
+the gallery creates it as `<aliasName>()`. Omitting `title` /
+`description` on a later PUT keeps the stored values; sending `""`
+clears one (clearing the description removes the component from the
+gallery).
+
+## Giving your component a real name
+
+The wayfinder hands you a placeholder name like `card_a1b2c3`. Once
+the component works, rename it to something meaningful:
+
+```sh
+curl -X POST "<origin>/api/lib/card_a1b2c3/rename" \
+  -H 'content-type: application/json' \
+  -d '{"new_name": "myNiceName"}'
+```
+
+The new name must be a valid JS identifier (≤64 ASCII chars), must not
+already be taken (409), and must not be one of the builtin view names
+(`gridView`, `documentView`, …). Cards that still reference the old
+name repoint themselves automatically — the store leaves a redirect
+behind, and the UI rewrites card source when it sees it. Rename last,
+after your final PUT: further saves must target the new name.

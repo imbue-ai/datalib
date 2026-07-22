@@ -45,10 +45,12 @@ rust_library(
     # entry makes those files visible to the rustc invocation.
     # `$(execpath)` expands to the execroot-relative path of the
     # directory output — usable directly from rustc's CWD (execroot).
-    # `agent_guide.md` is `include_str!`'d by the `/agent.md` handler.
+    # The guide .md files are `include_str!`'d by the `/agent.md` and
+    # `/agent-config.md` handlers.
     compile_data = [
         ":ui_dist_host",
         "src/agent_guide.md",
+        "src/agent_config_guide.md",
     ],
     rustc_env = {
         "FRANKWEILER_UI_DIST": "$(execpath :ui_dist_host)",
@@ -102,6 +104,23 @@ rust_test(
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tower",
+    ],
+)
+
+rust_test(
+    name = "lib_endpoint_test",
+    srcs = ["tests/lib_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":frankweiler_http",
+        "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/dag:frankweiler_dag",
+        "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
+        "@frankweiler_crates//:axum",
+        "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tower",
