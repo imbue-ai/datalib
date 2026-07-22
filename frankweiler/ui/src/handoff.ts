@@ -159,7 +159,9 @@ function persistedFlag(key: string) {
   });
   return flag;
 }
-export const skipModifyInstructions = persistedFlag("fw-agent-skip-instructions");
+export const skipModifyInstructions = persistedFlag(
+  "fw-agent-skip-card-instructions",
+);
 export const skipConfigInstructions = persistedFlag(
   "fw-agent-skip-config-instructions",
 );
