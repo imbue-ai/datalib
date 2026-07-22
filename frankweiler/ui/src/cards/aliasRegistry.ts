@@ -116,6 +116,25 @@ export function ensureManifest(): Promise<void> {
   return firstLoad;
 }
 
+// Fold a just-PUT alias into the local state immediately, without
+// waiting for the next poll tick: the caller (handoff.ts's create
+// flow) has the authoritative name/hash/source straight from the PUT
+// response. Without this, a card repointed at the new alias compiles
+// against a manifest that doesn't know it yet (blank/error flash until
+// the poll lands), then re-fetches the source it just wrote.
+// Pre-warming the source cache removes both gaps; the next poll sees
+// the same hash and fires nothing.
+export function noteAlias(name: string, hash: string, source: string): void {
+  sourceCache.set(name, { hash, source });
+  if (aliasManifest.value.get(name) === hash) return;
+  const next = new Map(aliasManifest.value);
+  next.set(name, hash);
+  // Same discipline as refreshManifest: a cached value may have been
+  // built when this name didn't resolve; rebuild on next compile.
+  valueCache.clear();
+  aliasManifest.value = next;
+}
+
 // Pick a fresh alias name not currently in the manifest. The name is a
 // valid JS identifier (it's injected as a bare name and invoked as
 // `name()`), prefixed so it can't collide with a builtin.

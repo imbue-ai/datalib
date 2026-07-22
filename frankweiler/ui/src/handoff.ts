@@ -23,7 +23,7 @@
 // ShadowCard's manifest watcher); the config editor polls the backend
 // and reloads the same way (SourcesView).
 import { ref, watch } from "vue";
-import { freshAliasName } from "@/cards/aliasRegistry";
+import { freshAliasName, noteAlias } from "@/cards/aliasRegistry";
 import { encodeColumns } from "@/router/columns";
 import { putLib } from "@/api";
 import { pushToast } from "@/toasts";
@@ -69,7 +69,7 @@ export function createWayfinder(name: string): string {
   return [
     `Build a frankweiler card by defining the component \`${name}\`.`,
     ``,
-    `Read the guide first: ${origin}/agent.md`,
+    `Read the guide first: ${origin}/agent/cards.md`,
     ``,
     `Save your factory with:`,
     `  PUT ${origin}/api/lib/${name}   (JSON body {"source": "<factory source>"})`,
@@ -87,7 +87,7 @@ function modifyWayfinder(name: string, cardSource: string, state: string): strin
     `Modify the frankweiler component \`${name}\` — it renders a card the`,
     `user is looking at right now.`,
     ``,
-    `Read the guide first: ${origin}/agent.md`,
+    `Read the guide first: ${origin}/agent/cards.md`,
     ``,
     `Fetch the current source:`,
     `  GET ${origin}/api/lib/${name}`,
@@ -104,7 +104,7 @@ function configWayfinder(configPath: string): string {
     `Modify the frankweiler data-source config — the user has its editor`,
     `open in the Manage tab right now.`,
     ``,
-    `Read the guide first: ${origin}/agent-config.md`,
+    `Read the guide first: ${origin}/agent/config.md`,
     ``,
     `Fetch the current config:`,
     `  GET ${origin}/api/config   → {"yaml": "<current text>", …}`,
@@ -186,12 +186,17 @@ export async function copyWayfinder(wayfinder: string): Promise<boolean> {
 // it — the card body walks the user through the hand-off from there.
 export async function createComponentWithAgent(host: HostCommands): Promise<void> {
   const name = freshAliasName();
+  const source = seedSource(name);
+  let hash: string;
   try {
-    await putLib(name, seedSource(name));
+    hash = (await putLib(name, source)).hash;
   } catch (e) {
     pushToast(`could not create component: ${(e as Error).message}`);
     return;
   }
+  // Register the new alias locally before repointing the card, so the
+  // first compile doesn't blank-flash waiting for the manifest poll.
+  noteAlias(name, hash, source);
   host.setSource(`${name}()`);
 }
 
