@@ -16,7 +16,7 @@ published from a local machine — the tag is the trigger.
 - Single source of truth: `[workspace.package].version` in
   `frankweiler/backend/Cargo.toml`.
 - Must match the `version = "..."` fields in
-  `frankweiler/backend/sync/BUILD.bazel` and
+  `frankweiler/backend/dag/BUILD.bazel` and
   `frankweiler/backend/http/BUILD.bazel` — asserted by
   `//frankweiler/backend:version_consistency_test`, which names both
   files on failure. If that test's `data` list has grown, bump every
