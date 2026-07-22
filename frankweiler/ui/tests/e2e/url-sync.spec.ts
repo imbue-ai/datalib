@@ -88,11 +88,12 @@ test.describe("URL reflects app state", () => {
     await page.addInitScript(() => localStorage.setItem("fw-dev-mode", "1"));
     await page.goto("/");
     await pinFirstRowId(page);
-    // "+" appends a blank column in dev mode; its source box accepts
-    // new card source, and committing it materializes the card.
+    // "+" appends a gallery column (both modes); in dev mode its
+    // source box is editable — overwrite it with new card source and
+    // commit to materialize the card.
     await page.locator(".miller-add").click();
     const boxes = page.locator(".miller-col-source");
-    await expect(boxes).toHaveCount(2); // grid + new blank
+    await expect(boxes).toHaveCount(2); // grid + new gallery
     const blank = boxes.last();
     await blank.fill("documentView()");
     await blank.press("Enter");

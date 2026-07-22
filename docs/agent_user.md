@@ -143,8 +143,9 @@ Pick the surface that fits the question:
   [`docs/dev/pipeline_dag_architecture.md`](dev/pipeline_dag_architecture.md).
 - **Custom UI cards** — the web UI can host agent-authored views
   ("cards", small JS view factories, `PUT /api/lib/{name}`). The
-  server serves its own guide for this at **`GET /agent.md`**; source
-  reference: [`docs/dev/cards.md`](dev/cards.md).
+  server serves its own guide for this at **`GET /agent/cards.md`**
+  (and one for config-editing agents at **`GET /agent/config.md`**);
+  source reference: [`docs/dev/cards.md`](dev/cards.md).
 
 ## Troubleshooting quick hits
 

@@ -17,11 +17,10 @@
 // `openCards(a, b, …)` to open a run of columns at once. The bus
 // carries ambient cross-card events only (e.g. edge hover).
 //
-// New cards come from the "+" strip after the last column (both
-// modes): in dev mode it appends a blank column whose source box the
-// user types into; outside dev mode it appends a `galleryView()`
-// column the user resolves by picking a component. Blank columns are
-// not part of the URL, so they don't survive a reload.
+// New cards come from the "+" strip after the last column: it appends
+// a `galleryView()` column the user resolves by picking a component
+// (in dev mode the gallery also shows each entry's source, and the
+// source box above stays directly editable).
 import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
@@ -226,7 +225,7 @@ function commitSource(slot: Slot, e: Event) {
 }
 
 // host.setSource: replace this column's own source (clearing state) —
-// drives the agent hand-off (see cards/handoff.ts).
+// drives the agent hand-off (see handoff.ts).
 function setColumnSource(id: string, source: string) {
   const slot = slots.value.find((s) => s.id === id);
   if (!slot) return;
@@ -235,11 +234,11 @@ function setColumnSource(id: string, source: string) {
   syncUrl();
 }
 
-// The "+" strip after the last column appends a new card. Dev mode:
-// a blank column, to type source into. Non-dev: a gallery column, to
-// pick a component from (it replaces itself via host.setSource).
+// The "+" strip after the last column appends a gallery column (both
+// modes), which the user resolves by picking a component (it replaces
+// itself via host.setSource).
 function addCard() {
-  setSlots([...slots.value, newSlot(devMode.value ? "" : "galleryView()")]);
+  setSlots([...slots.value, newSlot("galleryView()")]);
   syncUrl();
 }
 

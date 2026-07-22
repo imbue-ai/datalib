@@ -8,8 +8,7 @@
 // component as long as we dispose it in the teardown.
 import { watch } from "vue";
 import type { CardRender } from "../types";
-import { aliasManifest, ensureManifest } from "../aliasRegistry";
-import { devMode } from "@/devMode";
+import { aliasManifest, aliasTitles, ensureManifest } from "../aliasRegistry";
 
 export function aliasView(): CardRender {
   return (root, ctx) => {
@@ -20,8 +19,9 @@ export function aliasView(): CardRender {
       .av-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--fw-border, #8884); }
       .av-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--fw-border, #8882); }
       .av-row:hover { background: var(--fw-hover, rgba(127,127,127,.12)); }
-      .av-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-      .av-hash { flex: 0 0 auto; opacity: .45; }
+      .av-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .av-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: system-ui, sans-serif; opacity: .65; }
+      .av-hash { flex: 0 0 auto; opacity: .45; margin-left: auto; }
       .av-empty { padding: 16px 12px; opacity: .5; }
     `;
     root.appendChild(style);
@@ -30,7 +30,7 @@ export function aliasView(): CardRender {
     wrap.className = "av";
     root.appendChild(wrap);
 
-    function paint([m, dev]: [Map<string, string>, boolean]) {
+    function paint([m, titles]: [Map<string, string>, Map<string, string>]) {
       wrap.replaceChildren();
       const head = document.createElement("div");
       head.className = "av-head";
@@ -40,11 +40,8 @@ export function aliasView(): CardRender {
       if (m.size === 0) {
         const empty = document.createElement("div");
         empty.className = "av-empty";
-        // The 🤖 hand-off button only exists in dev mode; point
-        // non-dev users at the toggle first.
-        empty.textContent = dev
-          ? "no components yet — use the 🤖 button on a card to create one"
-          : "no components yet — turn on dev mode, then use the 🤖 button on a card to create one";
+        empty.textContent =
+          "no components yet — add a card and pick “New component, built by an agent”";
         wrap.appendChild(empty);
         return;
       }
@@ -60,16 +57,25 @@ export function aliasView(): CardRender {
         const nm = document.createElement("span");
         nm.className = "av-name";
         nm.textContent = name;
+        row.appendChild(nm);
+        // Stored display title, when the component carries one.
+        const title = titles.get(name);
+        if (title) {
+          const tl = document.createElement("span");
+          tl.className = "av-title";
+          tl.textContent = title;
+          row.appendChild(tl);
+        }
         const hs = document.createElement("span");
         hs.className = "av-hash";
         hs.textContent = hash.slice(0, 8);
-        row.append(nm, hs);
+        row.appendChild(hs);
         wrap.appendChild(row);
       }
     }
 
     void ensureManifest();
-    const stop = watch([aliasManifest, devMode], paint, { immediate: true });
+    const stop = watch([aliasManifest, aliasTitles], paint, { immediate: true });
     return () => stop();
   };
 }

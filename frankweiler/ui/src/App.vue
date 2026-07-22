@@ -2,6 +2,7 @@
 import { RouterView, RouterLink } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
+import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 </script>
 
 <template>
@@ -10,7 +11,7 @@ import ToastStack from "@/components/ToastStack.vue";
       <h1>datalib</h1>
       <nav class="fw-tabs" aria-label="Navigation">
         <RouterLink class="fw-tab" to="/">Explore</RouterLink>
-        <RouterLink class="fw-tab" to="/sources">Sources</RouterLink>
+        <RouterLink class="fw-tab" to="/sources">Manage</RouterLink>
       </nav>
       <div class="fw-spacer" />
       <!-- Lightweight sync indicator in the header's flexible space —
@@ -20,6 +21,9 @@ import ToastStack from "@/components/ToastStack.vue";
 
     <RouterView />
     <ToastStack />
+    <!-- Agent hand-off instructions dialog; opened via handoff.ts from
+         the card surface and the Manage tab's config editor. -->
+    <AgentHandoffModal />
   </main>
 </template>
 

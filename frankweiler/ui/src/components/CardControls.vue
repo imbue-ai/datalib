@@ -1,22 +1,42 @@
 <script setup lang="ts">
 // The common controls every card carries in its chrome bar, regardless
-// of layout: the agent hand-off button (🤖, dev mode only), back /
-// forward over the card's own source history (← →), a link to open the
-// card alone (↗), and the close button (✕). All are pure functions of
-// the card's source and its CardCtx, so the layouts (miller, tiling,
-// tree) all render this same component instead of duplicating the
-// markup and CSS. Close goes through ctx.host.close() — the host
-// command built for exactly this — so nothing here knows the layout.
+// of layout: the agent hand-off button (🤖, only on cards backed by a
+// user component), back / forward over the card's own source history
+// (← →), a link to open the card alone (↗), and the close button (✕).
+// All are pure functions of the card's source and its CardCtx, so the
+// layouts (miller, tiling, tree) all render this same component instead
+// of duplicating the markup and CSS. Close goes through
+// ctx.host.close() — the host command built for exactly this — so
+// nothing here knows the layout.
 import { computed, ref, watch } from "vue";
 import { encodeColumns } from "@/router/columns";
-import { handOffToAgent } from "@/cards/handoff";
-import { devMode } from "@/devMode";
+import { modifyComponentWithAgent } from "@/handoff";
+import { aliasManifest, ensureManifest } from "@/cards/aliasRegistry";
 import type { CardCtx } from "@/cards/types";
 
 const props = defineProps<{
   source: string;
   ctx: CardCtx;
 }>();
+
+// ---- agent hand-off (🤖) ----
+//
+// Shown only when the card is a call to a user-defined component —
+// that's the thing an agent can modify (builtins live in the app
+// bundle, not behind /api/lib). Detected from the source's leading
+// callee against the reactive alias manifest, so the button appears
+// the moment the manifest loads (idempotent kick below) and follows
+// renames/deletes. Builtins never match: they aren't in the manifest.
+void ensureManifest();
+const aliasName = computed(() => {
+  const m = props.source.match(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
+  return m && aliasManifest.value.has(m[1]) ? m[1] : null;
+});
+
+function handOff() {
+  if (!aliasName.value) return;
+  modifyComponentWithAgent(aliasName.value, props.source, props.ctx.initialState);
+}
 
 // Standalone view: a miller URL containing just this card, at its
 // current state (initialState is a live getter in every layout).
@@ -65,15 +85,14 @@ function goForward() {
 </script>
 
 <template>
-  <!-- The agent hand-off rewrites the card's source — a dev-mode
-       affordance, hidden alongside the source box. First of the
-       controls so its coming and going doesn't move the rest, which
-       stay pinned to the bar's right edge. -->
+  <!-- The agent hand-off, for cards backed by a user component. First
+       of the controls so its coming and going doesn't move the rest,
+       which stay pinned to the bar's right edge. -->
   <button
-    v-if="devMode"
+    v-if="aliasName"
     class="card-control card-control--agent"
-    title="let a coding agent work on this card"
-    @click="handOffToAgent(ctx.host)"
+    title="let a coding agent modify this card's component"
+    @click="handOff"
   >
     🤖
   </button>

@@ -194,7 +194,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/dag", get(get_dag))
         .route("/api/lib", get(list_lib))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
-        .route("/agent.md", get(agent_guide))
+        .route("/api/lib/{name}/rename", post(rename_lib))
+        .route("/agent/cards.md", get(agent_cards_guide))
+        .route("/agent/config.md", get(agent_config_guide))
+        // The pre-split guide URL; wayfinders copied before the split
+        // may still reference it.
+        .route(
+            "/agent.md",
+            get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
+        )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
@@ -630,18 +638,33 @@ pub struct PutLibRequest {
     /// source re-PUT doesn't wipe it); empty string = clear it.
     #[serde(default)]
     pub description: Option<String>,
+    /// Optional human-readable display name, shown instead of the bare
+    /// component name wherever the component is listed (the new-card
+    /// gallery, the component-library view). Same keep/clear semantics
+    /// as `description`.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct LibEntry {
     pub name: String,
     /// sha256 of the source — the UI watches this to decide when a card
-    /// that depends on this alias needs re-rendering.
+    /// that depends on this alias needs re-rendering. Empty for rename
+    /// tombstones (entries that only carry `renamed_to`).
     pub hash: String,
+    /// Human-readable display name (see [`PutLibRequest::title`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Gallery description (see [`PutLibRequest::description`]); `None`
     /// for components that don't advertise themselves in the gallery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Set on rename tombstones: this name no longer holds a component;
+    /// it was renamed to the given name. The UI follows these to
+    /// repoint cards that still reference the old name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renamed_to: Option<String>,
 }
 
 /// Sidecar shape stored at `<root>/.frankweiler/lib/<name>.meta.json`,
@@ -652,7 +675,15 @@ pub struct LibEntry {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct LibMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+}
+
+impl LibMeta {
+    fn is_empty(&self) -> bool {
+        self.title.is_none() && self.description.is_none()
+    }
 }
 
 fn lib_meta_path(dir: &std::path::Path, name: &str) -> PathBuf {
@@ -665,6 +696,43 @@ fn read_lib_meta(dir: &std::path::Path, name: &str) -> LibMeta {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
+
+/// Rename tombstone stored at `<root>/.frankweiler/lib/<name>.renamed.json`
+/// after `<name>` is renamed away, so clients (and stale card URLs) can
+/// follow the move. Removed if the old name is ever re-created by a PUT.
+#[derive(Debug, Serialize, Deserialize)]
+struct LibRename {
+    renamed_to: String,
+}
+
+fn lib_rename_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.renamed.json"))
+}
+
+/// Remove `name`'s rename tombstone if one exists ("already absent" is
+/// fine; only real I/O errors surface).
+fn clear_lib_rename(dir: &std::path::Path, name: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(lib_rename_path(dir, name)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        r => r,
+    }
+}
+
+/// Names of the builtin view factories injected into card scope
+/// (`frankweiler/ui/src/cards/types.ts` — keep in sync). A stored
+/// component may not take one of these names: an alias with a builtin's
+/// name would shadow the builtin when cards are compiled.
+const BUILTIN_VIEW_NAMES: &[&str] = &[
+    "gridView",
+    "documentView",
+    "documentPickerView",
+    "galleryView",
+    "agentSeedView",
+    "aliasView",
+    "dactalView",
+    "perseusView",
+    "sourceDagView",
+];
 
 /// A lib name is injected into card scope as a bare identifier and
 /// invoked as `name()`, so it must be a valid ASCII JS identifier. That
@@ -692,7 +760,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hash
 }
 
-/// List every named component with its content hash.
+/// List every named component with its content hash, plus a tombstone
+/// entry (`renamed_to`, empty hash) for every renamed-away name.
 async fn list_lib(State(s): State<AppState>) -> Result<Json<Vec<LibEntry>>, StatusCode> {
     let dir = s.root.join(".frankweiler/lib");
     let mut out = Vec::new();
@@ -700,20 +769,39 @@ async fn list_lib(State(s): State<AppState>) -> Result<Json<Vec<LibEntry>>, Stat
         Ok(rd) => {
             for ent in rd.flatten() {
                 let path = ent.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("js") {
-                    continue;
-                }
-                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                let Some(fname) = path.file_name().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if !valid_lib_name(stem) {
-                    continue;
-                }
-                if let Ok(src) = std::fs::read_to_string(&path) {
+                if let Some(stem) = fname.strip_suffix(".js") {
+                    if !valid_lib_name(stem) {
+                        continue;
+                    }
+                    if let Ok(src) = std::fs::read_to_string(&path) {
+                        let meta = read_lib_meta(&dir, stem);
+                        out.push(LibEntry {
+                            name: stem.to_string(),
+                            hash: sha256_hex(src.as_bytes()),
+                            title: meta.title,
+                            description: meta.description,
+                            renamed_to: None,
+                        });
+                    }
+                } else if let Some(stem) = fname.strip_suffix(".renamed.json") {
+                    if !valid_lib_name(stem) {
+                        continue;
+                    }
+                    let Some(ren) = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<LibRename>(&s).ok())
+                    else {
+                        continue;
+                    };
                     out.push(LibEntry {
                         name: stem.to_string(),
-                        hash: sha256_hex(src.as_bytes()),
-                        description: read_lib_meta(&dir, stem).description,
+                        hash: String::new(),
+                        title: None,
+                        description: None,
+                        renamed_to: Some(ren.renamed_to),
                     });
                 }
             }
@@ -766,7 +854,7 @@ async fn put_lib(
     Path(name): Path<String>,
     Json(req): Json<PutLibRequest>,
 ) -> Result<Json<LibEntry>, StatusCode> {
-    if !valid_lib_name(&name) {
+    if !valid_lib_name(&name) || BUILTIN_VIEW_NAMES.contains(&name.as_str()) {
         return Err(StatusCode::BAD_REQUEST);
     }
     let dir = s.root.join(".frankweiler/lib");
@@ -779,25 +867,33 @@ async fn put_lib(
         eprintln!("put_lib: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    // Description semantics: absent = keep what's stored, "" = clear.
-    let description = match req.description {
-        None => read_lib_meta(&dir, &name).description,
-        Some(d) if d.trim().is_empty() => None,
-        Some(d) => Some(d),
+    // The name holds a real component again — retire any tombstone left
+    // by an earlier rename away from it.
+    if let Err(e) = clear_lib_rename(&dir, &name) {
+        eprintln!("put_lib: clear rename {name}: {e}");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    // Title/description semantics: absent = keep what's stored,
+    // "" = clear.
+    let stored = read_lib_meta(&dir, &name);
+    let merge = |req_field: Option<String>, stored_field: Option<String>| match req_field {
+        None => stored_field,
+        Some(v) if v.trim().is_empty() => None,
+        Some(v) => Some(v),
+    };
+    let meta = LibMeta {
+        title: merge(req.title, stored.title),
+        description: merge(req.description, stored.description),
     };
     let meta_path = lib_meta_path(&dir, &name);
-    let write_res = match &description {
-        Some(_) => {
-            let meta = LibMeta {
-                description: description.clone(),
-            };
-            std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap())
-        }
-        // No description → no sidecar; ignore "already absent".
-        None => match std::fs::remove_file(&meta_path) {
+    let write_res = if meta.is_empty() {
+        // No metadata → no sidecar; ignore "already absent".
+        match std::fs::remove_file(&meta_path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             r => r,
-        },
+        }
+    } else {
+        std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap())
     };
     if let Err(e) = write_res {
         eprintln!("put_lib: meta {}: {e}", meta_path.display());
@@ -806,15 +902,90 @@ async fn put_lib(
     Ok(Json(LibEntry {
         name,
         hash: sha256_hex(req.source.as_bytes()),
-        description,
+        title: meta.title,
+        description: meta.description,
+        renamed_to: None,
     }))
 }
 
-/// Onboarding doc for a coding agent pointed at this instance. Served as
-/// markdown at a stable, app-relative URL so a wayfinder snippet can
-/// reference `<origin>/agent.md` without baking the content into the
-/// wayfinder itself.
-async fn agent_guide() -> (
+#[derive(Debug, Deserialize)]
+pub struct RenameLibRequest {
+    pub new_name: String,
+}
+
+/// `POST /api/lib/{name}/rename` — move a component to a new name,
+/// leaving a tombstone behind so cards that still say `{name}()` can
+/// follow (the UI rewrites their source when it sees the tombstone in
+/// the manifest). This is how an agent gives the placeholder
+/// `card_xxxxx` alias its "formal" name once the component works.
+///
+/// 404 when `name` doesn't exist, 409 when `new_name` is taken, 400
+/// when either name is invalid (including builtin view names).
+async fn rename_lib(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<RenameLibRequest>,
+) -> Result<Json<LibEntry>, StatusCode> {
+    let new_name = req.new_name;
+    if !valid_lib_name(&name)
+        || !valid_lib_name(&new_name)
+        || BUILTIN_VIEW_NAMES.contains(&new_name.as_str())
+        || new_name == name
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let dir = s.root.join(".frankweiler/lib");
+    let old_path = dir.join(format!("{name}.js"));
+    let new_path = dir.join(format!("{new_name}.js"));
+    if !old_path.is_file() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if new_path.exists() {
+        return Err(StatusCode::CONFLICT);
+    }
+    let source = std::fs::read_to_string(&old_path).map_err(|e| {
+        eprintln!("rename_lib: read {}: {e}", old_path.display());
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let io = |what: &str, e: std::io::Error| {
+        eprintln!("rename_lib: {what}: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    std::fs::rename(&old_path, &new_path).map_err(|e| io("rename .js", e))?;
+    // Carry the sidecar metadata along ("already absent" is fine).
+    match std::fs::rename(lib_meta_path(&dir, &name), lib_meta_path(&dir, &new_name)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        r => r.map_err(|e| io("rename meta", e))?,
+    }
+    // The new name is live again — drop any tombstone parked on it —
+    // and the old name becomes a tombstone pointing at the new one.
+    clear_lib_rename(&dir, &new_name).map_err(|e| io("clear rename", e))?;
+    let tomb = LibRename {
+        renamed_to: new_name.clone(),
+    };
+    std::fs::write(
+        lib_rename_path(&dir, &name),
+        serde_json::to_string(&tomb).unwrap(),
+    )
+    .map_err(|e| io("write tombstone", e))?;
+    let meta = read_lib_meta(&dir, &new_name);
+    Ok(Json(LibEntry {
+        name: new_name,
+        hash: sha256_hex(source.as_bytes()),
+        title: meta.title,
+        description: meta.description,
+        renamed_to: None,
+    }))
+}
+
+/// Onboarding docs for a coding agent pointed at this instance. Served
+/// as markdown at stable, app-relative URLs so a wayfinder snippet can
+/// reference `<origin>/agent/cards.md` (cards) or
+/// `<origin>/agent/config.md` (the data-source config) without baking
+/// the content into the wayfinder itself.
+fn markdown_doc(
+    body: &'static str,
+) -> (
     StatusCode,
     [(axum::http::HeaderName, &'static str); 1],
     &'static str,
@@ -825,8 +996,24 @@ async fn agent_guide() -> (
             axum::http::header::CONTENT_TYPE,
             "text/markdown; charset=utf-8",
         )],
-        include_str!("agent_guide.md"),
+        body,
     )
+}
+
+async fn agent_cards_guide() -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    &'static str,
+) {
+    markdown_doc(include_str!("agent_cards_guide.md"))
+}
+
+async fn agent_config_guide() -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    &'static str,
+) {
+    markdown_doc(include_str!("agent_config_guide.md"))
 }
 
 /// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text

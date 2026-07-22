@@ -354,11 +354,10 @@ function openCardsFrom(parentId: string, sources: string[]): string[] {
   return ids;
 }
 
-// "+ card": in dev mode a blank card (type source into it); outside
-// dev mode a gallery card, which the user resolves by picking a
-// component (it replaces itself via host.setSource).
+// "+ card": a gallery card (both modes), which the user resolves by
+// picking a component (it replaces itself via host.setSource).
 function addRootCard() {
-  const node = newNode(devMode.value ? "" : "galleryView()", null);
+  const node = newNode("galleryView()", null);
   nodes.value = [...nodes.value, node];
   void nextTick(() => revealNode(node.id));
 }
@@ -385,7 +384,7 @@ function setNodeState(id: string, state: string) {
 }
 
 // host.setSource: replace this node's own source (clearing state) —
-// drives the agent hand-off (see cards/handoff.ts).
+// drives the agent hand-off (see handoff.ts).
 function setNodeSource(id: string, source: string) {
   const node = nodes.value.find((n) => n.id === id);
   if (!node) return;

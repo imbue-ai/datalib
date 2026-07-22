@@ -27,6 +27,7 @@ import StepProgress from "@/components/StepProgress.vue";
 import DagPanel from "@/components/DagPanel.vue";
 import { listSources, type SourceRow } from "@/config/configSources";
 import { SNIPPETS } from "@/config/snippets";
+import { modifyConfigWithAgent } from "@/handoff";
 
 // --- Config state ----------------------------------------------------------
 
@@ -80,10 +81,19 @@ function onEdit() {
 const serverSources = ref<SyncSource[]>([]);
 const serverIds = computed(() => new Set(serverSources.value.map((s) => s.id)));
 
+// What's on disk server-side, as of the last fetch — the baseline the
+// auto-refresh poll compares against ("" while the file doesn't exist,
+// so the scaffold draft never reads as an on-disk change).
+const serverYaml = ref("");
+// The file changed on disk while the editor held unsaved edits; we
+// won't clobber those, so surface a banner instead.
+const diskChanged = ref(false);
+
 async function loadConfig() {
   loadError.value = null;
   try {
     let cfg = await fetchConfig();
+    serverYaml.value = cfg.exists ? cfg.yaml : "";
     if (!cfg.exists) {
       // Fresh root — start from the server's scaffold so the user has a
       // valid base to add sources to.
@@ -99,6 +109,39 @@ async function loadConfig() {
   } catch (e) {
     loadError.value = (e as Error).message;
   }
+}
+
+// The config can change under us — that's the point of the agent
+// hand-off (the agent PUTs /api/config, or edits the file directly).
+// Poll the backend for external changes: with no unsaved edits the
+// editor reloads silently; with unsaved edits we keep the user's text
+// and raise the diskChanged banner instead of clobbering.
+const CONFIG_POLL_MS = 2000;
+async function pollConfig() {
+  // Our own PUT is in flight — whatever the poll sees is stale.
+  if (saving.value) return;
+  try {
+    const cfg = await fetchConfig();
+    if ((cfg.exists ? cfg.yaml : "") === serverYaml.value) return;
+    if (dirty.value) {
+      serverYaml.value = cfg.exists ? cfg.yaml : "";
+      diskChanged.value = true;
+      return;
+    }
+    await reloadFromDisk();
+  } catch {
+    // Backend blip — try again next tick.
+  }
+}
+
+// Adopt the on-disk config, discarding any local edits, and refresh
+// the saved-source list that gates the Sync buttons.
+async function reloadFromDisk() {
+  diskChanged.value = false;
+  dirty.value = false;
+  saveStatus.value = null;
+  await loadConfig();
+  await loadSources();
 }
 
 // Select [start, end) in the editor and scroll it into view. Textareas
@@ -151,6 +194,10 @@ async function onSave() {
     if (res.ok) {
       dirty.value = false;
       existed.value = true;
+      // Saving is an explicit choice over whatever landed on disk
+      // meanwhile — retire the banner and rebase the poll on our text.
+      serverYaml.value = yamlText.value;
+      diskChanged.value = false;
       await loadSources();
     }
   } catch (e) {
@@ -236,6 +283,7 @@ const logLines = computed(() =>
 );
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let configPollTimer: ReturnType<typeof setInterval> | null = null;
 let stream: EventSource | null = null;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -383,10 +431,13 @@ onMounted(async () => {
   // Reconnect/safety fallback: a slow full reload covers a silently
   // stalled stream (backgrounded tab, proxy timeout) without hammering.
   pollTimer = setInterval(slowReload, 15000);
+  // Fast poll for external config edits (agents saving via PUT).
+  configPollTimer = setInterval(() => void pollConfig(), CONFIG_POLL_MS);
 });
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
+  if (configPollTimer) clearInterval(configPollTimer);
   if (reloadTimer) clearTimeout(reloadTimer);
   if (stream) stream.close();
 });
@@ -403,6 +454,16 @@ onUnmounted(() => {
       <span class="label">File:</span> <code>{{ configPath }}</code>
       <span v-if="!existed" class="pill new">not created yet</span>
     </p>
+
+    <div v-if="diskChanged" class="migrate-banner">
+      <span>
+        The config file changed on disk (an agent saving?), but you have
+        unsaved edits here. Saving keeps your version.
+      </span>
+      <button class="btn" @click="reloadFromDisk">
+        Load the disk version (discard my edits)
+      </button>
+    </div>
 
     <div v-if="legacy" class="migrate-banner">
       <span>
@@ -451,6 +512,13 @@ onUnmounted(() => {
               <span v-else-if="dirty" class="status muted">unsaved changes</span>
             </template>
           </div>
+          <button
+            class="btn"
+            title="let a coding agent edit this config"
+            @click="modifyConfigWithAgent(configPath)"
+          >
+            🤖
+          </button>
           <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
             {{ saving ? "Saving…" : "Save" }}
           </button>

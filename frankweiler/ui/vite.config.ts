@@ -34,6 +34,14 @@ export default defineConfig({
         target: BACKEND,
         changeOrigin: false,
       },
+      // The agent onboarding docs the wayfinder snippets reference —
+      // served by the backend, so they resolve on the dev origin too.
+      // Prefix match covers /agent/cards.md, /agent/config.md, and the
+      // legacy /agent.md redirect.
+      "/agent": {
+        target: BACKEND,
+        changeOrigin: false,
+      },
     },
   },
   test: {

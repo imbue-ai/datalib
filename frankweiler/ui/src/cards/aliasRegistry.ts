@@ -32,6 +32,16 @@ export const aliasManifest: Ref<Map<string, string>> = ref(new Map());
 // a source change (no recompiles), and vice versa.
 export const aliasDescriptions: Ref<Map<string, string>> = ref(new Map());
 
+// name → human-readable display title, for the aliases that carry one.
+// Listings (gallery, component library) show it instead of the bare
+// name. Same separation rationale as aliasDescriptions.
+export const aliasTitles: Ref<Map<string, string>> = ref(new Map());
+
+// old name → new name, from the store's rename tombstones. ShadowCard
+// watches this and rewrites a card's source when an alias it references
+// has been renamed (see followRenames / replaceIdentifier below).
+export const aliasRenames: Ref<Map<string, string>> = ref(new Map());
+
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let firstLoad: Promise<void> | null = null;
 const POLL_MS = 1500;
@@ -44,17 +54,39 @@ function sameMap(a: Map<string, string>, b: Map<string, string>): boolean {
 
 async function refreshManifest(): Promise<void> {
   try {
-    const entries = await listLib();
+    const all = await listLib();
+    // Tombstones (renamed-away names) carry no source; split them out
+    // of the live manifest. Renames are applied BEFORE the manifest so
+    // a card watching a just-renamed alias rewrites its source first,
+    // instead of recompiling against the vanished name and error-
+    // flashing.
+    const entries = all.filter((e) => e.renamed_to === undefined);
+    const nextRen = new Map(
+      all
+        .filter((e) => e.renamed_to !== undefined)
+        .map((e) => [e.name, e.renamed_to!] as const),
+    );
+    if (!sameMap(nextRen, aliasRenames.value)) {
+      aliasRenames.value = nextRen;
+    }
     const next = new Map(entries.map((e) => [e.name, e.hash] as const));
     const nextDesc = new Map(
       entries
         .filter((e) => (e.description ?? "").trim() !== "")
         .map((e) => [e.name, e.description!] as const),
     );
+    const nextTitle = new Map(
+      entries
+        .filter((e) => (e.title ?? "").trim() !== "")
+        .map((e) => [e.name, e.title!] as const),
+    );
     // Same replace-only-on-change discipline as the manifest, so the
     // gallery's watcher doesn't repaint every poll tick.
     if (!sameMap(nextDesc, aliasDescriptions.value)) {
       aliasDescriptions.value = nextDesc;
+    }
+    if (!sameMap(nextTitle, aliasTitles.value)) {
+      aliasTitles.value = nextTitle;
     }
     // Replace only on change so we don't wake every card's watcher each
     // poll tick.
@@ -82,6 +114,25 @@ export function ensureManifest(): Promise<void> {
     pollTimer = setInterval(() => void refreshManifest(), POLL_MS);
   }
   return firstLoad;
+}
+
+// Fold a just-PUT alias into the local state immediately, without
+// waiting for the next poll tick: the caller (handoff.ts's create
+// flow) has the authoritative name/hash/source straight from the PUT
+// response. Without this, a card repointed at the new alias compiles
+// against a manifest that doesn't know it yet (blank/error flash until
+// the poll lands), then re-fetches the source it just wrote.
+// Pre-warming the source cache removes both gaps; the next poll sees
+// the same hash and fires nothing.
+export function noteAlias(name: string, hash: string, source: string): void {
+  sourceCache.set(name, { hash, source });
+  if (aliasManifest.value.get(name) === hash) return;
+  const next = new Map(aliasManifest.value);
+  next.set(name, hash);
+  // Same discipline as refreshManifest: a cached value may have been
+  // built when this name didn't resolve; rebuild on next compile.
+  valueCache.clear();
+  aliasManifest.value = next;
 }
 
 // Pick a fresh alias name not currently in the manifest. The name is a
@@ -136,6 +187,51 @@ export function referencedIdentifiers(source: string): Set<string> {
     }
   }
   return ids;
+}
+
+// Follow a rename chain (a→b→c) to its terminus; null when `name` was
+// never renamed. Guards against cycles — shouldn't happen, but the
+// tombstones live on disk and are hand-editable.
+export function followRenames(name: string): string | null {
+  const m = aliasRenames.value;
+  if (!m.has(name)) return null;
+  const seen = new Set<string>();
+  let cur = name;
+  while (m.has(cur) && !seen.has(cur)) {
+    seen.add(cur);
+    cur = m.get(cur)!;
+  }
+  return cur;
+}
+
+// Replace whole-identifier occurrences of `from` with `to`, using the
+// same token scan as referencedIdentifiers — so `obj.from` member
+// accesses survive, but `from(`, `from ,` etc. are rewritten. Like the
+// scanner it is deliberately over-approximate about strings/comments;
+// for the rename use case that's the right bias (better to rewrite a
+// mention in a comment than to leave a live reference stale).
+export function replaceIdentifier(source: string, from: string, to: string): string {
+  const isStart = (c: string) => /[A-Za-z_$]/.test(c);
+  const isPart = (c: string) => /[A-Za-z0-9_$]/.test(c);
+  const n = source.length;
+  let out = "";
+  let i = 0;
+  while (i < n) {
+    if (isStart(source[i])) {
+      let j = i + 1;
+      while (j < n && isPart(source[j])) j++;
+      const token = source.slice(i, j);
+      let k = i - 1;
+      while (k >= 0 && /\s/.test(source[k])) k--;
+      const isMember = k >= 0 && source[k] === ".";
+      out += !isMember && token === from ? to : token;
+      i = j;
+    } else {
+      out += source[i];
+      i++;
+    }
+  }
+  return out;
 }
 
 // Direct alias dependencies of `source`: referenced identifiers that
