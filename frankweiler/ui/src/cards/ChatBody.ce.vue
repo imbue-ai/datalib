@@ -485,6 +485,17 @@ onMounted(() => {
   outline: 2px solid var(--fw-accent, #6366f1);
   border-radius: 3px;
 }
+/* Attachment images arrive at their original resolution; without a
+   cap a phone photo renders thousands of pixels wide inside the pane.
+   Fit the column width and keep tall images from swallowing the whole
+   scrollport; `width/height: auto` preserves the aspect ratio under
+   whichever constraint bites. */
+.chat-body img {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
 .chat-body .msg-meta {
   color: var(--fw-muted, #94a3b8);
   font-size: 0.85rem;
