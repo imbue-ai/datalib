@@ -20,6 +20,16 @@ path = "src/bin/grid_rows_load.rs"
 name = "latchkey-curl-shim"
 path = "src/bin/latchkey_curl_shim.rs"
 
+# Drop-in `curl` that dispatches on a private marker header: requests
+# carrying `-H "X-Imbue-Impersonate:"` go to the impersonating shim
+# above (resolved via `$FRANKWEILER_IMPERSONATE_CURL`), everything else
+# passes through to the system curl (`$FRANKWEILER_REAL_CURL`). Lets a
+# single `LATCHKEY_CURL` binary serve both kinds of caller. std-only,
+# so it links none of this crate's HTTP stack.
+[[bin]]
+name = "latchkey-curl-dispatch"
+path = "src/bin/latchkey_curl_dispatch.rs"
+
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-obs = { path = "../obs" }

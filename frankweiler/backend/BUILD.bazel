@@ -71,3 +71,19 @@ filegroup(
     ],
     visibility = ["//visibility:public"],
 )
+
+# The curl-only distribution: just the dispatch curl and the
+# impersonating shim it fronts. Published as a separate, smaller tarball
+# (`frankweiler-curl-<triple>.tar.gz`) for consumers — e.g. the minds
+# latchkey gateway — that only need a `curl` that impersonates Chrome on
+# demand and don't want the rest of the datalib toolchain. Keep the
+# public-name mapping in release.yml's "Stage curl tarball" step in sync
+# with this list.
+filegroup(
+    name = "curl_dist",
+    srcs = [
+        "//frankweiler/backend/etl:latchkey_curl_dispatch",
+        "//frankweiler/backend/etl:latchkey_curl_shim",
+    ],
+    visibility = ["//visibility:public"],
+)

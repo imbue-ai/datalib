@@ -68,6 +68,19 @@ rust_binary(
     ],
 )
 
+# Drop-in `curl` that routes on the `X-Imbue-Impersonate` marker header:
+# marked requests go to the impersonating shim above (resolved via
+# `$FRANKWEILER_IMPERSONATE_CURL` or a sibling-of-self lookup), all
+# others pass through to the system curl (`$FRANKWEILER_REAL_CURL`, else
+# `curl` on PATH). std-only — no deps — so it builds without the
+# boring-sys2 / wreq toolchain the shim needs.
+rust_binary(
+    name = "latchkey_curl_dispatch",
+    srcs = ["src/bin/latchkey_curl_dispatch.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+)
+
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and
 # upsert into Dolt; tracks markdowns_loaded(qmd_path, fingerprint) for
 # idempotent skips.
