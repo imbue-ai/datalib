@@ -253,7 +253,11 @@ async fn main() -> ExitCode {
                 let _ = f.write_all(buf.as_bytes());
             }
         }
-        eprintln!("latchkey-curl-impersonate: HTTP {} for {}", status.as_u16(), url,);
+        eprintln!(
+            "latchkey-curl-impersonate: HTTP {} for {}",
+            status.as_u16(),
+            url,
+        );
         return ExitCode::from(22);
     }
 
