@@ -54,7 +54,7 @@ rust_binary(
     edition = "2021",
     # Must match [workspace.package].version in frankweiler/backend/Cargo.toml;
     # //frankweiler/backend:version_consistency_test asserts that.
-    version = "0.21.0",
+    version = "0.22.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
