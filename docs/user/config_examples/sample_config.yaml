@@ -40,7 +40,8 @@ steps:
   # (see the "Register Slack with latchkey" section in the first-time
   # user guide). `channels:` restricts the sync to the listed channels;
   # omit it (or set `all_channels: true`) to mirror every channel the
-  # account can see. `media: true` pulls file attachments into blobs.
+  # account can see. Set `direct_messages: true` only when you also want
+  # private DMs and group DMs. `media: true` pulls file attachments into blobs.
   - id: slack.download
     command: datalib-step download slack_api
     outputs: [slack/raw]
@@ -56,6 +57,7 @@ steps:
         #   maximum_sequential_failed_requests: 50
       sync:
         media: true
+        direct_messages: false
         channels:
           - "project-data-liberation"
 

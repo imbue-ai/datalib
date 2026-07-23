@@ -28,6 +28,13 @@ Credentials are captured at runtime via `latchkey` — no manual export:
 npx -y latchkey auth browser slack
 ```
 
+The Slack provider mirrors channels by default. Add
+`direct_messages: true` under the download step's `sync:` block to also
+mirror DMs and group DMs visible to the authenticated user; this requires the
+`im:read`, `mpim:read`, `im:history`, and `mpim:history` scopes documented in
+the provider's
+[download reference](/frankweiler/backend/etl/providers/slack/DOWNLOAD.md).
+
 ## Claude web (Anthropic)
 
 `claude.ai` is not a built-in latchkey service, so it needs a one-time

@@ -1,6 +1,7 @@
 # Slack Extract
 
-`slack-download` mirrors a Slack workspace into a single doltlite db
+`slack-download` mirrors Slack channels and, when explicitly enabled,
+one-to-one and multi-person direct messages into a single doltlite db
 at `<out>/raw/<name>/entities.doltlite_db`. Per-entity tables (channels, users,
 messages, replies, files) are each keyed by their upstream Slack
 identifier; payloads are stored as JSONB blobs in a `payload` column
@@ -21,6 +22,11 @@ Required Slack OAuth scopes (user token):
   * `channels:read`, `groups:read`, `im:read`, `mpim:read`
   * `users:read`, `auth:test`
 
+Direct messages are opt-in because they materially broaden the private-data
+scope of a mirror. Set `direct_messages: true` in the `slack_api` download
+step only when the authenticated user intends to copy the DMs and MPIMs visible
+to that token. The default remains channel-only.
+
 ### File downloads
 
 File bytes live on `https://files.slack.com/`, which the `slack`
@@ -33,7 +39,7 @@ registration is needed — the same `slack` credential signs both
 | Method                      | Purpose                                  |
 |-----------------------------|------------------------------------------|
 | `auth.test`                 | Identify the workspace + the calling user |
-| `conversations.list`        | Enumerate channels                       |
+| `conversations.list`        | Enumerate channels and opted-in DMs       |
 | `users.list`                | Enumerate workspace users                |
 | `conversations.history`     | Per-channel forward pass + refresh window |
 | `conversations.replies`     | Threaded replies for every parent message |

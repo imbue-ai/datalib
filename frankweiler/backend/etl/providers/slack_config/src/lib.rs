@@ -31,6 +31,12 @@ pub struct SlackApiSync {
     pub refresh_window_days: Option<i64>,
     #[serde(default)]
     pub channels: Option<Vec<String>>,
+    /// Also mirror one-to-one and multi-person direct messages.
+    ///
+    /// Opt-in because enabling it broadens the sync from shared channel
+    /// history to private conversations.
+    #[serde(default)]
+    pub direct_messages: bool,
     #[serde(default)]
     pub since: Option<String>,
     #[serde(default)]
@@ -44,6 +50,7 @@ impl Default for SlackApiSync {
         Self {
             refresh_window_days: None,
             channels: None,
+            direct_messages: false,
             since: None,
             all_channels: false,
             media: true,

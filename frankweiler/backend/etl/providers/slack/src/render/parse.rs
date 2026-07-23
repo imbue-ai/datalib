@@ -304,7 +304,7 @@ async fn load_users(pool: &SqlitePool) -> Result<BTreeMap<String, User>> {
 }
 
 async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
-    let rows = sqlx::query("SELECT id, name FROM channels")
+    let rows = sqlx::query("SELECT id, name, json(payload) AS payload FROM channels")
         .fetch_all(pool)
         .await
         .context("select channels")?;
@@ -315,13 +315,12 @@ async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
             continue;
         }
         let name: Option<String> = r.try_get("name").ok().flatten();
-        out.insert(
-            id.clone(),
-            Channel {
-                channel_id: id,
-                name,
-            },
-        );
+        let payload = r
+            .try_get::<String, _>("payload")
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(Value::Null);
+        out.insert(id.clone(), Channel::from_raw(id, name, &payload));
     }
     Ok(out)
 }
@@ -626,13 +625,7 @@ fn ingest_channel(c: &Value, out: &mut BTreeMap<String, Channel>) {
     if id.is_empty() {
         return;
     }
-    out.insert(
-        id.clone(),
-        Channel {
-            channel_id: id,
-            name: opt_str(c, "name"),
-        },
-    );
+    out.insert(id.clone(), Channel::from_raw(id, opt_str(c, "name"), c));
 }
 
 #[allow(clippy::too_many_arguments)]

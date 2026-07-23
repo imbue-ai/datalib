@@ -47,6 +47,7 @@ steps:
     params:
       sync:
         media: true
+        direct_messages: false  # opt in to DMs and group DMs
         channels: ["chat-qi"]
         since: "2026-06-15"
 
