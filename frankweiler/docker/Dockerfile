@@ -88,7 +88,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
 # Service running, so latchkey exits non-zero with "No encryption key
 # available." The entrypoint script (frankweiler-entrypoint.sh) handles
 # this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
-ARG LATCHKEY_VERSION=2.16.0
+ARG LATCHKEY_VERSION=3.1.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
 # Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
