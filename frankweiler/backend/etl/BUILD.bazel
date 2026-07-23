@@ -13,10 +13,15 @@ rust_library(
     crate_name = "frankweiler_etl",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
-    # The shim travels with the library so any binary that links
-    # `frankweiler_etl` gets it in runfiles; `latchkey::ensure_curl_shim`
-    # then resolves it via the bazel runfiles lookup in `resolve()`.
-    data = [":latchkey_curl_shim"],
+    # The dispatch curl + the impersonator it fronts travel with the
+    # library so any binary that links `frankweiler_etl` gets both in
+    # runfiles (co-located, so the dispatch curl finds the impersonator as
+    # a sibling); `latchkey::ensure_curl_dispatch` resolves the dispatch curl
+    # via the bazel runfiles lookup in `resolve()`.
+    data = [
+        ":latchkey_curl_dispatch",
+        ":latchkey_curl_impersonate",
+    ],
     proc_macro_deps = [
         "@frankweiler_crates//:async-trait",
     ],
@@ -50,11 +55,11 @@ rust_library(
 # deterministic value via `--action_env=PATH=…` in `.bazelrc`) rather
 # than going through rules_foreign_cc.
 rust_binary(
-    name = "latchkey_curl_shim",
-    srcs = ["src/bin/latchkey_curl_shim.rs"],
+    name = "latchkey_curl_impersonate",
+    srcs = ["src/bin/latchkey_curl_impersonate.rs"],
     edition = "2021",
     # Intentionally NOT stamped. The shim ships in the runfiles of
-    # `frankweiler_etl` (see `data = [":latchkey_curl_shim"]` above), so
+    # `frankweiler_etl` (see `data = [":latchkey_curl_impersonate"]` above), so
     # any consumer of that library — every etl/providers/* test — picks
     # it up as a runfile. Stamping it makes every git commit invalidate
     # those test actions via the stable-status.txt input. Its `--version`
@@ -66,6 +71,18 @@ rust_binary(
         "@frankweiler_crates//:wreq",
         "@frankweiler_crates//:wreq-util",
     ],
+)
+
+# Drop-in `curl` that routes on the `X-Imbue-Impersonate` marker header:
+# marked requests go to the impersonating binary above (found as a
+# sibling of this one), all others pass through to `curl` on PATH.
+# std-only — no deps — so it builds without the boring-sys2 / wreq
+# toolchain the impersonator needs.
+rust_binary(
+    name = "latchkey_curl_dispatch",
+    srcs = ["src/bin/latchkey_curl_dispatch.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
 )
 
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and

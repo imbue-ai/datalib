@@ -53,8 +53,8 @@ snapshot test.
 ## Run it
 
 ```sh
-bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL=$PWD/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim   # for parity with other providers
+bazelisk build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL=$PWD/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate   # for parity with other providers
 bazelisk run //frankweiler/backend/etl/providers/github:github_download -- \
     --out /tmp/github-mirror \
     --pull-request imbue-ai/mngr#1650

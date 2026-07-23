@@ -15,7 +15,7 @@ use frankweiler_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use frankweiler_etl::events;
 use frankweiler_etl::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
-    HttpResponse, Retryability,
+    HttpResponse, Retryability, IMPERSONATE_MARKER_HEADER,
 };
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 
@@ -291,8 +291,12 @@ async fn download_one_file(
 
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
     let mut cmd = latchkey_tokio_command();
+    // Slack file hosts (files.slack.com) are CF-fronted; mark the request so
+    // the dispatch curl routes it to the impersonating curl.
     cmd.arg("curl")
         .arg("-fSL")
+        .arg("-H")
+        .arg(IMPERSONATE_MARKER_HEADER)
         .arg("-o")
         .arg(tmp.path())
         .arg(url);

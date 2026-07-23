@@ -15,7 +15,7 @@
 //! Tagged `manual` in Bazel and `#[ignore]` in cargo. Run with:
 //!
 //! ```sh
-//! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim
+//! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-impersonate
 //! cargo test -p frankweiler-etl-gitlab --test gitlab_live -- --ignored
 //! ```
 

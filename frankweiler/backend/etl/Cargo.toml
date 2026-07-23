@@ -13,12 +13,21 @@ name = "grid-rows-load"
 path = "src/bin/grid_rows_load.rs"
 
 # Curl-compatible CLI shim wrapping rquest's Chrome TLS impersonation.
-# Mirror of `src/download/latchkey_curl_shim.py` — point latchkey at it
+# Mirror of `src/download/latchkey_curl_impersonate.py` — point latchkey at it
 # via `LATCHKEY_CURL=<path-to-this-binary>` to clear Cloudflare without
 # a separate curl-impersonate install.
 [[bin]]
-name = "latchkey-curl-shim"
-path = "src/bin/latchkey_curl_shim.rs"
+name = "latchkey-curl-impersonate"
+path = "src/bin/latchkey_curl_impersonate.rs"
+
+# Drop-in `curl` that dispatches on a private marker header: requests
+# carrying `-H "X-Imbue-Impersonate:"` go to the impersonating binary
+# above (found as a sibling of this one), everything else passes through
+# to `curl` on PATH. Lets a single `LATCHKEY_CURL` binary serve both
+# kinds of caller. std-only, so it links none of this crate's HTTP stack.
+[[bin]]
+name = "latchkey-curl-dispatch"
+path = "src/bin/latchkey_curl_dispatch.rs"
 
 [dependencies]
 frankweiler-core = { path = "../core" }
@@ -38,7 +47,7 @@ sqlx = { workspace = true }
 sha2 = "0.10"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 tempfile = "3"
-# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_shim`
+# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_dispatch`
 # resolver can find our Chrome-impersonating curl shim under
 # `bazel run` / `bazel test`. Falls through cleanly outside Bazel.
 runfiles = "0.2"
@@ -56,7 +65,7 @@ tracing = "0.1"
 indicatif = "0.18"
 
 # Curl-compatible TLS-impersonating HTTP client. Used by
-# `latchkey-curl-shim`; gated by a feature in case downstream
+# `latchkey-curl-impersonate`; gated by a feature in case downstream
 # consumers don't want the boring-ssl build cost.
 wreq = { version = "=6.0.0-rc.28", default-features = false, features = ["webpki-roots"] }
 wreq-util = "=3.0.0-rc.11"

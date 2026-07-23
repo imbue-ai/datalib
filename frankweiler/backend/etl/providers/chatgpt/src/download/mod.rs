@@ -25,6 +25,7 @@ use chrono::DateTime;
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::download_run::DownloadRun;
+use frankweiler_etl::http::IMPERSONATE_MARKER_HEADER;
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -101,7 +102,7 @@ pub struct FetchSummary {
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
-    let _ = frankweiler_etl::latchkey::ensure_curl_shim();
+    let _ = frankweiler_etl::latchkey::ensure_curl_dispatch();
     let db = match opts.db.clone() {
         Some(db) => db,
         None => RawDb::open(&db_path)
@@ -660,8 +661,12 @@ async fn download_one_file(
     // weirdness. The tempfile is deleted automatically.
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
     let mut cmd = latchkey_tokio_command();
+    // The signed CDN URL is CF-fronted; mark the request so the dispatch
+    // curl routes it to the impersonating curl.
     cmd.arg("curl")
         .arg("-fSL")
+        .arg("-H")
+        .arg(IMPERSONATE_MARKER_HEADER)
         .arg("-o")
         .arg(tmp.path())
         .arg(&signed);

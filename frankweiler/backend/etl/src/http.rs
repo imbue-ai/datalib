@@ -292,6 +292,33 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 /// (`latchkey curl`) and playback (disk-fixture) implementations based on
 /// `FRANKWEILER_HTTP_PLAYBACK`. This is the entry point for every provider
 /// whose rate-limit signal is expressible by status code.
+/// Providers whose `latchkey curl` requests must carry the Chrome-
+/// impersonation marker so the dispatch curl (`LATCHKEY_CURL`) routes them
+/// to the impersonating curl -- their hosts (claude.ai, chatgpt.com,
+/// files.slack.com, and the API hosts these providers hit) reject a
+/// vanilla curl TLS fingerprint. Providers NOT listed here still go
+/// through the dispatch curl, but unmarked, so they use the system curl.
+///
+/// This is the single source of truth for "which providers impersonate";
+/// it replaces the old blanket behavior where any `ensure_curl_dispatch` call
+/// pointed `LATCHKEY_CURL` at the impersonator for the whole process.
+/// `notion_unofficial` is the provider tag the unofficial Notion client
+/// stamps on its requests (see providers/notion/src/download/unofficial.rs).
+const IMPERSONATE_PROVIDERS: &[&str] = &[
+    "anthropic",
+    "chatgpt",
+    "slack",
+    "github",
+    "gitlab",
+    "notion",
+    "notion_unofficial",
+];
+
+/// The exact value-less marker header the dispatch curl matches (see
+/// `src/bin/latchkey_curl_dispatch.rs`). Value-less so it is a no-op
+/// header removal if it ever reaches a real curl.
+pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate:";
+
 pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
     latchkey_curl_classified(req, default_retryability).await
 }
@@ -410,6 +437,13 @@ mod live {
         }
         for (k, v) in &req.headers {
             cmd.arg("-H").arg(format!("{}: {}", k, v));
+        }
+        // Route CF-fronted providers to the impersonating curl via the
+        // dispatch curl's marker header. Only on the latchkey path -- a
+        // bypass_latchkey request uses plain curl, where the marker would
+        // be a pointless no-op header removal.
+        if !req.bypass_latchkey && IMPERSONATE_PROVIDERS.contains(&req.provider) {
+            cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
         }
         let writes_body_to_stdin = req.body.is_some();
         if writes_body_to_stdin {

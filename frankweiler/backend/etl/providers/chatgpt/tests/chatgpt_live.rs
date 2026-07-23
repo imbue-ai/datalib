@@ -6,7 +6,7 @@
 //! Live ChatGPT single-conversation download test.
 //!
 //! Hits real `chatgpt.com/backend-api` via `latchkey curl` (and the
-//! `latchkey-curl-shim` Rust shim that injects a Chrome TLS
+//! `latchkey-curl-impersonate` Rust shim that injects a Chrome TLS
 //! fingerprint), downloads ONE known conversation into a hermetic
 //! tempdir, and insta-snapshots a curated stable view. Documents the
 //! end-to-end live shape.
@@ -14,7 +14,7 @@
 //! Tagged `manual` in Bazel and `#[ignore]` in cargo; run with:
 //!
 //! ```sh
-//! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim
+//! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-impersonate
 //! cargo test -p frankweiler-etl-chatgpt --test chatgpt_live -- --ignored
 //! ```
 //!

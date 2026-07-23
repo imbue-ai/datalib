@@ -32,13 +32,13 @@ injects the cookies registered under the `claude-ai` service.
 
 `claude.ai` is fronted by Cloudflare's managed-challenge system. To
 clear the challenge, point `LATCHKEY_CURL` at a Chrome-impersonating
-curl. The simplest option is the in-tree `latchkey-curl-shim` bin
+curl. The simplest option is the in-tree `latchkey-curl-impersonate` bin
 (a `wreq`-backed shim, mirror of
-`src/download/latchkey_curl_shim.py`):
+`src/download/latchkey_curl_impersonate.py`):
 
 ```sh
-bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazelisk build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
 anthropic-download --out ~/backups/claude_api
 ```
 

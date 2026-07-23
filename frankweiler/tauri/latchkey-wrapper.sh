@@ -4,8 +4,9 @@
 # stage-runtime.sh installs this as `binaries/latchkey`, next to the
 # sidecar binaries, so it ships under the .app's `Resources/binaries/`.
 # It runs the bundled Node + latchkey tree from `../runtime` and points
-# `LATCHKEY_CURL` at the bundled Chrome-impersonating curl shim sitting
-# next to this script — so `latchkey curl` (and `services register` /
+# `LATCHKEY_CURL` at the bundled dispatch curl sitting next to this script
+# (which in turn routes marked requests to the impersonator sibling) — so
+# `latchkey curl` (and `services register` /
 # `auth set` during setup) work against Cloudflare-protected hosts with
 # no Node, npm, or env setup on the host. An externally-set
 # `LATCHKEY_CURL` wins; `FRANKWEILER_RUNTIME_DIR` relocates the runtime
@@ -41,8 +42,8 @@ if [ -z "$entry" ]; then
     exit 1
 fi
 
-if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-shim" ]; then
-    LATCHKEY_CURL="$here/latchkey-curl-shim"
+if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-dispatch" ]; then
+    LATCHKEY_CURL="$here/latchkey-curl-dispatch"
     export LATCHKEY_CURL
 fi
 

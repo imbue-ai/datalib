@@ -563,8 +563,8 @@ bazelisk test //frankweiler/backend/etl/providers/<name>/...
 bazelisk test //frankweiler/backend/etl/providers/<name>:<name>_playback_roundtrip
 
 # 3. Live golden (needs LATCHKEY_CURL set):
-bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazelisk build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
 bazelisk run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
 
 # 4. Full bazel verify — CANONICAL invocation, matches AGENTS.md:

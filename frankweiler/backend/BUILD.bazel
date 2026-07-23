@@ -50,15 +50,18 @@ sh_test(
 filegroup(
     name = "dist",
     srcs = [
-        # The curl shim is bundled because every CF-fronted provider
-        # (claude.ai, chatgpt.com, files.slack.com) 403s on vanilla
-        # curl's TLS fingerprint. `datalib-step` resolves it from
-        # `LATCHKEY_CURL`, `FRANKWEILER_CURL_SHIM`, or a sibling-of-self
-        # lookup against `frankweiler-latchkey-curl-shim` — see
-        # `frankweiler_etl::latchkey::ensure_curl_shim`. Keep the public
-        # name mapping in release.yml's stage step in sync with the
-        # sibling-name list in latchkey.rs.
-        "//frankweiler/backend/etl:latchkey_curl_shim",
+        # The dispatch curl + the impersonator it fronts are both bundled
+        # because every CF-fronted provider (claude.ai, chatgpt.com,
+        # files.slack.com) 403s on vanilla curl's TLS fingerprint.
+        # `datalib-step` resolves the dispatch curl from `LATCHKEY_CURL`,
+        # `FRANKWEILER_CURL_DISPATCH`, or a sibling-of-self lookup against
+        # `latchkey-curl-dispatch` — see
+        # `frankweiler_etl::latchkey::ensure_curl_dispatch` — and the dispatch
+        # curl finds the impersonator as a sibling. Keep the public name
+        # mapping in release.yml's stage step in sync with the sibling-name
+        # list in latchkey.rs.
+        "//frankweiler/backend/etl:latchkey_curl_dispatch",
+        "//frankweiler/backend/etl:latchkey_curl_impersonate",
         # HTTP backend with the Vite-built UI embedded via rust-embed
         # (see frankweiler/backend/http/src/embed.rs). Single binary
         # serves the full search experience given a data root path —
@@ -68,6 +71,22 @@ filegroup(
         # invocable standalone against a data root's config.yaml).
         "//frankweiler/backend/dag:datalib_dag",
         "//frankweiler/backend/datalib_step:datalib_step",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# The curl-only distribution: just the dispatch curl and the
+# impersonating curl it fronts. Published as a separate, smaller tarball
+# (`curl-<triple>.tar.gz`) for consumers — e.g. the minds
+# latchkey gateway — that only need a `curl` that impersonates Chrome on
+# demand and don't want the rest of the datalib toolchain. Keep the
+# public-name mapping in release.yml's "Stage curl tarball" step in sync
+# with this list.
+filegroup(
+    name = "curl_dist",
+    srcs = [
+        "//frankweiler/backend/etl:latchkey_curl_dispatch",
+        "//frankweiler/backend/etl:latchkey_curl_impersonate",
     ],
     visibility = ["//visibility:public"],
 )

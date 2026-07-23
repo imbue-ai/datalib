@@ -48,8 +48,8 @@ discovery and pulls one MR + all its discussions.
 ## Run it
 
 ```sh
-bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL=$PWD/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim
+bazelisk build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL=$PWD/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate
 bazelisk run //frankweiler/backend/etl/providers/gitlab:gitlab_download -- \
     --out /tmp/gitlab-mirror \
     --merge-request generally-intelligent/generally_intelligent!7643

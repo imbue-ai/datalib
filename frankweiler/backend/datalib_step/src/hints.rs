@@ -66,8 +66,8 @@ pub fn emit_auth_hint_on_failure(
 const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
 This usually means latchkey credentials are missing or expired. \
 See <provider>/DOWNLOAD.md for setup. Confirm the in-tree curl shim is \
-built (`cargo build -p frankweiler-etl --bin latchkey-curl-shim`), or \
-set $FRANKWEILER_CURL_SHIM / $LATCHKEY_CURL explicitly, and that \
+built (`cargo build -p frankweiler-etl --bin latchkey-curl-impersonate`), or \
+set $FRANKWEILER_CURL_DISPATCH / $LATCHKEY_CURL explicitly, and that \
 `{LK} auth list` shows entries.";
 
 /// Per-provider fix-it text for auth failures. Every runnable latchkey

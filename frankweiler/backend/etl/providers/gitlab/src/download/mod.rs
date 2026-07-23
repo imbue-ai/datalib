@@ -241,7 +241,7 @@ async fn fetch_one_mr(
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
-    let _ = frankweiler_etl::latchkey::ensure_curl_shim();
+    let _ = frankweiler_etl::latchkey::ensure_curl_dispatch();
     let db = match opts.db.clone() {
         Some(db) => db,
         None => RawDb::open(&db_path)
