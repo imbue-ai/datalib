@@ -30,7 +30,7 @@ raw data) and a `<name>.render` step (raw → markdown +
 
 Four binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `frankweiler-http` (API
-server + web UI), and `frankweiler-latchkey-curl-impersonate` (Cloudflare-safe
+server + web UI), and `latchkey-curl-impersonate` (Cloudflare-safe
 HTTP for downloaders). End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 

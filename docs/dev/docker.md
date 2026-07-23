@@ -2,7 +2,7 @@
 
 The `ghcr.io/imbue-ai/datalib` image bundles the four release
 binaries (`datalib-dag`, `datalib-step`, `frankweiler-http`,
-`frankweiler-latchkey-curl-impersonate`) and the `latchkey` CLI on top of an
+`latchkey-curl-impersonate`) and the `latchkey` CLI on top of an
 Ubuntu 24.04 base, so you can register service credentials and run syncs
 from a single self-contained container instead of dropping arbitrary
 binaries onto your host PATH.
@@ -85,7 +85,7 @@ docker run --rm -p 8731:8731 \
 | `~/.cache/qmd/models`          | `/root/.cache/qmd/models`  | RW (optional)     | qmd's embedding/reranker/expansion model cache (~2.25 GB). The image already ships the three default models pre-baked at `/root/.cache/qmd/models/`, so this mount is only needed if you've set `QMD_EMBED_MODEL=…` to override the default to an unbaked model, or you want to share a cache with a host `qmd` install. |
 
 Default `ENV` inside the image already sets `FRANKWEILER_ROOT=/data` and
-`LATCHKEY_CURL=/usr/local/bin/frankweiler-latchkey-curl-impersonate`, so
+`LATCHKEY_CURL=/usr/local/bin/latchkey-curl-impersonate`, so
 `frankweiler-http` finds the data root and `datalib-dag`'s download steps
 find the Chrome-impersonating curl shim without further configuration.
 

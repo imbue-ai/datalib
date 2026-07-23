@@ -1,5 +1,5 @@
-// Standalone curl-dispatch binary. Like the shim it writes directly to
-// stderr and is exempt from the workspace-wide macro ban.
+// Standalone curl-dispatch binary. Like the impersonator it writes
+// directly to stderr and is exempt from the workspace-wide macro ban.
 #![allow(clippy::disallowed_macros)]
 
 //! `latchkey-curl-dispatch` — a drop-in `curl` that routes each
@@ -7,15 +7,15 @@
 //! signature in the arguments. It exists so a single `LATCHKEY_CURL`
 //! binary can serve both impersonating and non-impersonating callers
 //! without breaking the latter: only callers that opt in get the
-//! Chrome-impersonating shim; everyone else keeps getting the system
+//! Chrome-impersonating curl; everyone else keeps getting the system
 //! curl they expect.
 //!
 //! Routing:
 //!   * If the request carries the value-less marker header
 //!     `-H "X-Imbue-Impersonate:"`, the marker is stripped and the
-//!     remaining args are handed to the Chrome-impersonating shim
-//!     (`latchkey-curl-impersonate`), found next to this binary (installers ship
-//!     the two side by side).
+//!     remaining args are handed to the Chrome-impersonating curl
+//!     (`latchkey-curl-impersonate`), found next to this binary
+//!     (installers ship the two side by side).
 //!   * Otherwise the args are passed through verbatim to the system
 //!     curl: `curl` on `$PATH` (skipping this binary, so a
 //!     `LATCHKEY_CURL`-on-PATH setup can't recurse).
@@ -52,7 +52,6 @@ const MARKER_HEADER_ARG: &str = "X-Imbue-Impersonate:";
 /// this dispatcher side by side in the same dir, so a sibling lookup
 /// resolves it without any configuration.
 const IMPERSONATE_SIBLING_NAMES: &[&str] = &[
-    "frankweiler-latchkey-curl-impersonate",
     "latchkey-curl-impersonate",
     "latchkey_curl_impersonate",
 ];

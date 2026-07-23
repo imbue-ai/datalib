@@ -13,10 +13,15 @@ rust_library(
     crate_name = "frankweiler_etl",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
-    # The shim travels with the library so any binary that links
-    # `frankweiler_etl` gets it in runfiles; `latchkey::ensure_curl_shim`
-    # then resolves it via the bazel runfiles lookup in `resolve()`.
-    data = [":latchkey_curl_impersonate"],
+    # The dispatch curl + the impersonator it fronts travel with the
+    # library so any binary that links `frankweiler_etl` gets both in
+    # runfiles (co-located, so the dispatch curl finds the impersonator as
+    # a sibling); `latchkey::ensure_curl_shim` resolves the dispatch curl
+    # via the bazel runfiles lookup in `resolve()`.
+    data = [
+        ":latchkey_curl_dispatch",
+        ":latchkey_curl_impersonate",
+    ],
     proc_macro_deps = [
         "@frankweiler_crates//:async-trait",
     ],

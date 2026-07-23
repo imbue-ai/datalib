@@ -2,28 +2,36 @@
 //!
 //! Every binary or test that runs `latchkey curl …` must construct its
 //! `Command` via [`latchkey_command`] / [`latchkey_tokio_command`] so
-//! that `LATCHKEY_CURL` is set exactly once, to the in-tree
-//! Chrome-impersonating shim. Cloudflare-protected hosts (claude.ai,
-//! chatgpt.com, files.slack.com) reject vanilla curl's TLS fingerprint;
-//! the shim (`src/bin/latchkey_curl_impersonate.rs`) replays a Chrome 131
-//! handshake via `wreq`.
+//! that `LATCHKEY_CURL` is set exactly once, to the in-tree dispatch
+//! curl (`src/bin/latchkey_curl_dispatch.rs`). The dispatch curl routes
+//! requests carrying the `X-Imbue-Impersonate:` marker header to the
+//! Chrome-impersonating curl (`src/bin/latchkey_curl_impersonate.rs`,
+//! found as a sibling), and everything else to the system curl.
+//! Cloudflare-protected hosts (claude.ai, chatgpt.com, files.slack.com)
+//! reject vanilla curl's TLS fingerprint, so the providers that hit them
+//! add the marker to their requests (see `http::latchkey_curl`).
 //!
-//! Resolution order for the shim path (first hit wins):
+//! NB: the resolved binary is now the *dispatch* curl, but the resolver
+//! function and its `$FRANKWEILER_CURL_SHIM` override keep their historic
+//! names to avoid churning every provider callsite and breaking the
+//! documented override.
+//!
+//! Resolution order for the dispatch-curl path (first hit wins):
 //!   1. `$LATCHKEY_CURL` — caller's explicit override; trusted as-is.
 //!   2. `$FRANKWEILER_CURL_SHIM` — our own override (parallel to
-//!      `LATCHKEY_CURL` but specifically the shim binary, so Bazel can
+//!      `LATCHKEY_CURL` but specifically the in-tree binary, so Bazel can
 //!      inject the runfiles path without stomping a user-set
 //!      `LATCHKEY_CURL`).
-//!   3. Bazel runfiles lookup for `_main/frankweiler/backend/etl/latchkey-curl-impersonate`.
+//!   3. Bazel runfiles lookup for `_main/frankweiler/backend/etl/latchkey-curl-dispatch`.
 //!   4. Cargo dev fallback: walk up from CWD and the etl crate dir
-//!      looking for `frankweiler/backend/target/{debug,release}/latchkey-curl-impersonate`
-//!      or `target/{debug,release}/latchkey-curl-impersonate`.
-//!   5. Sibling of `current_exe()` — installed releases drop the shim
-//!      next to `datalib-step` (see scripts/install.sh +
-//!      .github/workflows/release.yml), so a user who only has
-//!      `~/.local/bin/{datalib-step,frankweiler-latchkey-curl-impersonate}`
+//!      looking for `frankweiler/backend/target/{debug,release}/latchkey-curl-dispatch`
+//!      or `target/{debug,release}/latchkey-curl-dispatch`.
+//!   5. Sibling of `current_exe()` — installed releases drop the dispatch
+//!      curl (and the impersonator next to it) beside `datalib-step` (see
+//!      scripts/install.sh + .github/workflows/release.yml), so a user who
+//!      only has `~/.local/bin/{datalib-step,latchkey-curl-dispatch,latchkey-curl-impersonate}`
 //!      and never sets `LATCHKEY_CURL` still gets CF impersonation.
-//!   6. `which latchkey-curl-impersonate` on `$PATH`.
+//!   6. `which latchkey-curl-dispatch` on `$PATH`.
 //!
 //! On miss, the `Command` is still returned but a `warn!` is logged so
 //! the caller can see why CF-fronted endpoints are 403-ing.
@@ -31,39 +39,35 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const SHIM_BIN: &str = "latchkey-curl-impersonate";
-// Cargo emits the binary as `latchkey-curl-impersonate` (dashes — from
-// `[[bin]] name = "latchkey-curl-impersonate"` in Cargo.toml). Bazel emits it
-// as `latchkey_curl_impersonate` (underscores — the `rust_binary` target
+const SHIM_BIN: &str = "latchkey-curl-dispatch";
+// Cargo emits the binary as `latchkey-curl-dispatch` (dashes — from
+// `[[bin]] name = "latchkey-curl-dispatch"` in Cargo.toml). Bazel emits it
+// as `latchkey_curl_dispatch` (underscores — the `rust_binary` target
 // name). Try both under `_main/` (bzlmod's main-repo canonical name).
 const RUNFILES_PATHS: &[&str] = &[
-    "_main/frankweiler/backend/etl/latchkey_curl_impersonate",
-    "_main/frankweiler/backend/etl/latchkey-curl-impersonate",
+    "_main/frankweiler/backend/etl/latchkey_curl_dispatch",
+    "_main/frankweiler/backend/etl/latchkey-curl-dispatch",
 ];
 
-// Filenames to look for next to `current_exe()`. `frankweiler-…` is the
-// public release name (see .github/workflows/release.yml's stage step
-// and //frankweiler/backend:dist); the un-prefixed forms cover hand-
-// built / locally-symlinked layouts.
-const SIBLING_NAMES: &[&str] = &[
-    "frankweiler-latchkey-curl-impersonate",
-    "latchkey-curl-impersonate",
-    "latchkey_curl_impersonate",
-];
+// Filenames to look for next to `current_exe()`: the cargo/release dash
+// form and the bazel underscore form. (The release tarball drops the
+// `frankweiler-` prefix; see .github/workflows/release.yml's stage step
+// and //frankweiler/backend:dist.)
+const SIBLING_NAMES: &[&str] = &["latchkey-curl-dispatch", "latchkey_curl_dispatch"];
 
 static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 #[error(
     "could not locate {SHIM_BIN}; set $FRANKWEILER_CURL_SHIM or $LATCHKEY_CURL, \
-     or build it (`cargo build -p frankweiler-etl --bin latchkey-curl-impersonate` \
-     or `bazel build //frankweiler/backend/etl:latchkey_curl_impersonate`)"
+     or build it (`cargo build -p frankweiler-etl --bin latchkey-curl-dispatch` \
+     or `bazel build //frankweiler/backend/etl:latchkey_curl_dispatch`)"
 )]
 pub struct ShimNotFound;
 
-/// Ensure `LATCHKEY_CURL` points at the in-tree shim and return its
-/// resolved path. Idempotent — the first call resolves and caches; later
-/// calls are a `OnceLock` read.
+/// Ensure `LATCHKEY_CURL` points at the in-tree dispatch curl and return
+/// its resolved path. Idempotent — the first call resolves and caches;
+/// later calls are a `OnceLock` read.
 pub fn ensure_curl_shim() -> Result<PathBuf, ShimNotFound> {
     match RESOLVED.get_or_init(resolve) {
         Some(path) => {
@@ -97,7 +101,7 @@ fn resolve() -> Option<PathBuf> {
 
 /// Look for the shim next to `current_exe()`. This is how an installed
 /// release (e.g. `~/.local/bin/datalib-step`)
-/// finds its bundled `frankweiler-latchkey-curl-impersonate` sibling without
+/// finds its bundled `latchkey-curl-impersonate` sibling without
 /// needing `~/.local/bin` on `PATH` or any env override. Follow the
 /// symlink that scripts/install.sh resolved to so we look in the real
 /// install dir, not a shim dir.

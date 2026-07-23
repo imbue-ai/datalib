@@ -4,7 +4,7 @@
   "version": "0.10.0",
   "identifier": "com.imbue.frankweiler",
   "build": {
-    "beforeBuildCommand": "bazelisk build //frankweiler/backend/http:frankweiler_http_bin //frankweiler/backend/dag:datalib_dag //frankweiler/backend/datalib_step:datalib_step //frankweiler/backend/etl:latchkey_curl_impersonate && d=\"$(bazelisk info workspace)/frankweiler/tauri/binaries\" && b=\"$(bazelisk info bazel-bin)\" && mkdir -p \"$d\" && cp -f \"$b/frankweiler/backend/http/frankweiler_http_bin\" \"$d/frankweiler-http\" && cp -f \"$b/frankweiler/backend/dag/datalib_dag\" \"$d/datalib-dag\" && cp -f \"$b/frankweiler/backend/datalib_step/datalib_step\" \"$d/datalib-step\" && cp -f \"$b/frankweiler/backend/etl/latchkey_curl_impersonate\" \"$d/latchkey-curl-impersonate\" && chmod u+w \"$d/frankweiler-http\" \"$d/datalib-dag\" \"$d/datalib-step\" \"$d/latchkey-curl-impersonate\" && { [ -z \"${APPLE_SIGNING_IDENTITY:-}\" ] || codesign --force --options runtime --timestamp --sign \"$APPLE_SIGNING_IDENTITY\" \"$d/frankweiler-http\" \"$d/datalib-dag\" \"$d/datalib-step\" \"$d/latchkey-curl-impersonate\"; } && bash \"$(bazelisk info workspace)/frankweiler/tauri/stage-runtime.sh\"",
+    "beforeBuildCommand": "bazelisk build //frankweiler/backend/http:frankweiler_http_bin //frankweiler/backend/dag:datalib_dag //frankweiler/backend/datalib_step:datalib_step //frankweiler/backend/etl:latchkey_curl_dispatch //frankweiler/backend/etl:latchkey_curl_impersonate && d=\"$(bazelisk info workspace)/frankweiler/tauri/binaries\" && b=\"$(bazelisk info bazel-bin)\" && mkdir -p \"$d\" && cp -f \"$b/frankweiler/backend/http/frankweiler_http_bin\" \"$d/frankweiler-http\" && cp -f \"$b/frankweiler/backend/dag/datalib_dag\" \"$d/datalib-dag\" && cp -f \"$b/frankweiler/backend/datalib_step/datalib_step\" \"$d/datalib-step\" && cp -f \"$b/frankweiler/backend/etl/latchkey_curl_dispatch\" \"$d/latchkey-curl-dispatch\" && cp -f \"$b/frankweiler/backend/etl/latchkey_curl_impersonate\" \"$d/latchkey-curl-impersonate\" && chmod u+w \"$d/frankweiler-http\" \"$d/datalib-dag\" \"$d/datalib-step\" \"$d/latchkey-curl-dispatch\" \"$d/latchkey-curl-impersonate\" && { [ -z \"${APPLE_SIGNING_IDENTITY:-}\" ] || codesign --force --options runtime --timestamp --sign \"$APPLE_SIGNING_IDENTITY\" \"$d/frankweiler-http\" \"$d/datalib-dag\" \"$d/datalib-step\" \"$d/latchkey-curl-dispatch\" \"$d/latchkey-curl-impersonate\"; } && bash \"$(bazelisk info workspace)/frankweiler/tauri/stage-runtime.sh\"",
     "frontendDist": "./dummy-dist"
   },
   "app": {
@@ -20,6 +20,7 @@
       "binaries/frankweiler-http",
       "binaries/datalib-dag",
       "binaries/datalib-step",
+      "binaries/latchkey-curl-dispatch",
       "binaries/latchkey-curl-impersonate",
       "binaries/latchkey",
       "runtime"

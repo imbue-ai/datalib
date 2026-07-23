@@ -351,7 +351,8 @@ jobs:
           cp bazel-bin/frankweiler/backend/dag/datalib_dag "${stage}/datalib-dag"
           cp bazel-bin/frankweiler/backend/datalib_step/datalib_step "${stage}/datalib-step"
           cp bazel-bin/frankweiler/backend/http/frankweiler_http_bin "${stage}/frankweiler-http"
-          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${stage}/frankweiler-latchkey-curl-impersonate"
+          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
+          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
           chmod +x "${stage}"/*
 
           tarball="frankweiler-${TRIPLE}.tar.gz"
@@ -362,13 +363,13 @@ jobs:
           # dir + stable, un-versioned filename, parallel to the main
           # tarball above. Consumers like the minds latchkey gateway pull
           # this instead of the full toolchain. The two public names here
-          # (`frankweiler-latchkey-curl-{dispatch,shim}`) are what those
+          # (`latchkey-curl-{dispatch,shim}`) are what those
           # consumers resolve by; keep the shim name in sync with
           # `SIBLING_NAMES` in frankweiler/backend/etl/src/latchkey.rs.
           curl_stage="frankweiler-curl-${version}-${TRIPLE}"
           mkdir -p "${curl_stage}"
-          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch "${curl_stage}/frankweiler-latchkey-curl-dispatch"
-          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${curl_stage}/frankweiler-latchkey-curl-impersonate"
+          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
+          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${curl_stage}/latchkey-curl-impersonate"
           chmod +x "${curl_stage}"/*
           curl_tarball="frankweiler-curl-${TRIPLE}.tar.gz"
           tar -czf "${curl_tarball}" "${curl_stage}"
