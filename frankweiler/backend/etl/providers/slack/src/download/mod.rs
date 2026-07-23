@@ -85,9 +85,11 @@ async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
     include_archived: bool,
+    direct_messages: bool,
     progress: &frankweiler_etl::progress::Progress,
-) -> Result<Vec<(String, Option<String>)>> {
-    let sweep_key = format!("channels:archived={include_archived}");
+) -> Result<Vec<(String, Option<String>, bool)>> {
+    let sweep_key =
+        format!("channels:archived={include_archived}:direct_messages={direct_messages}");
     if let Some(age) = db.manifest_sweep_age(&sweep_key).await? {
         if age < MANIFEST_TTL {
             let age_s = age.num_seconds().max(0);
@@ -101,7 +103,9 @@ async fn fetch_channels(
                 "conversations.list cached ({age_s}s old, TTL {}s)",
                 MANIFEST_TTL.num_seconds()
             ));
-            return db.channels_for_fetch(members_only, include_archived).await;
+            return db
+                .channels_for_fetch(members_only, include_archived, direct_messages)
+                .await;
         }
     }
 
@@ -111,10 +115,12 @@ async fn fetch_channels(
         if include_archived { "false" } else { "true" }.to_string(),
     );
     params.insert("limit".to_string(), "200".to_string());
-    params.insert(
-        "types".to_string(),
-        "public_channel,private_channel".to_string(),
-    );
+    let conversation_types = if direct_messages {
+        "public_channel,private_channel,im,mpim"
+    } else {
+        "public_channel,private_channel"
+    };
+    params.insert("types".to_string(), conversation_types.to_string());
 
     let t0 = std::time::Instant::now();
     progress.set_message("conversations.list page 1");
@@ -147,7 +153,8 @@ async fn fetch_channels(
         elapsed_ms = t0.elapsed().as_millis() as u64,
     );
     db.record_manifest_sweep(&sweep_key).await?;
-    db.channels_for_fetch(members_only, include_archived).await
+    db.channels_for_fetch(members_only, include_archived, direct_messages)
+        .await
 }
 
 #[instrument(skip_all)]
@@ -588,6 +595,7 @@ pub struct FetchOptions {
     pub db_path: PathBuf,
     pub db: Option<RawDb>,
     pub channels: Option<Vec<String>>,
+    pub direct_messages: bool,
     pub since: String,
     pub refresh_window_days: i64,
     pub members_only: bool,
@@ -603,6 +611,7 @@ impl Default for FetchOptions {
             db_path: PathBuf::new(),
             db: None,
             channels: None,
+            direct_messages: false,
             since: DEFAULT_SINCE.to_string(),
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             members_only: true,
@@ -650,6 +659,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let run_config = json!({
         "channels": opts.channels,
+        "direct_messages": opts.direct_messages,
         "since": opts.since,
         "refresh_window_days": opts.refresh_window_days,
         "members_only": opts.members_only,
@@ -687,8 +697,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
         let team_id = fetch_self(&db, &setup).await?;
-        let visible_channels =
-            fetch_channels(&db, opts.members_only, opts.channels.is_some(), &setup).await?;
+        let visible_channels = fetch_channels(
+            &db,
+            opts.members_only,
+            opts.channels.is_some(),
+            opts.direct_messages,
+            &setup,
+        )
+        .await?;
         fetch_users(&db, &setup).await?;
         setup.finish(&format!(
             "setup done in {}ms",
@@ -699,24 +715,39 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Some(names) => {
                 let by_name: BTreeMap<String, String> = visible_channels
                     .iter()
-                    .filter_map(|(id, name)| name.as_ref().map(|n| (n.clone(), id.clone())))
+                    .filter_map(|(id, name, is_direct)| {
+                        if *is_direct {
+                            None
+                        } else {
+                            name.as_ref().map(|n| (n.clone(), id.clone()))
+                        }
+                    })
                     .collect();
-                names
+                let mut selected: BTreeMap<String, String> = names
                     .iter()
                     .filter_map(|spec| {
                         let name = spec.trim_start_matches('#').to_string();
                         by_name.get(&name).map(|id| (id.clone(), name))
                     })
-                    .collect()
+                    .collect();
+                if opts.direct_messages {
+                    for (id, name, is_direct) in &visible_channels {
+                        if *is_direct {
+                            selected.insert(id.clone(), name.clone().unwrap_or_else(|| id.clone()));
+                        }
+                    }
+                }
+                selected.into_iter().collect()
             }
             None => visible_channels
                 .iter()
-                .map(|(id, name)| (id.clone(), name.clone().unwrap_or_else(|| id.clone())))
+                .map(|(id, name, _)| (id.clone(), name.clone().unwrap_or_else(|| id.clone())))
                 .collect(),
         };
         info!(
             event = "slack_export_planned",
             channels = targets.len(),
+            direct_messages = opts.direct_messages,
             media = opts.media,
         );
 

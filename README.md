@@ -14,7 +14,7 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | Claude.ai | `claude_api` | Web API (latchkey) | Conversations across every org |
 | Claude export | `claude_export` | File on disk | An unpacked Claude data export |
 | ChatGPT | `chatgpt_api` | Web API (latchkey) | Conversations |
-| Slack | `slack_api` | Web API (latchkey) | Channels + file attachments |
+| Slack | `slack_api` | Web API (latchkey) | Channels, opt-in DMs + file attachments |
 | GitHub | `github_api` | Web API (latchkey) | Pull requests |
 | GitLab | `gitlab_api` | Web API (latchkey) | Merge requests |
 | Notion | `notion_api` | Web API (latchkey) | Pages (inbox + page subtrees) |

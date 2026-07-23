@@ -48,6 +48,10 @@ struct Args {
     #[arg(long = "channel", value_name = "NAME")]
     channels: Vec<String>,
 
+    /// Also mirror one-to-one and multi-person direct messages.
+    #[arg(long)]
+    direct_messages: bool,
+
     /// ISO date or RFC3339 timestamp. Earliest message to fetch on the
     /// first pass; later runs pick up where the prior run left off.
     #[arg(long, default_value = DEFAULT_SINCE)]
@@ -87,6 +91,7 @@ async fn main() -> Result<()> {
     let opts = FetchOptions {
         db_path: args.out.clone(),
         channels,
+        direct_messages: args.direct_messages,
         since: args.since.clone(),
         refresh_window_days: args.refresh_window_days,
         members_only: args.members_only,
@@ -100,6 +105,7 @@ async fn main() -> Result<()> {
         "slack_download",
         out = %args.out.display(),
         channels = ?opts.channels,
+        direct_messages = opts.direct_messages,
         media = opts.media,
     );
     let summary = slack::fetch(opts).instrument(span).await?;

@@ -144,11 +144,19 @@ fn build_chats(
             .iter()
             .find(|m| m.is_thread_root)
             .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
-        let cname = parsed
+        let display = parsed
             .channels
             .get(&root.channel_id)
-            .and_then(|c| c.name.clone())
-            .unwrap_or_else(|| root.channel_id.clone());
+            .map(|channel| {
+                channel.display(
+                    &parsed.users,
+                    parsed
+                        .workspace
+                        .as_ref()
+                        .and_then(|workspace| workspace.self_user_id.as_deref()),
+                )
+            })
+            .unwrap_or_else(|| format!("#{}", root.channel_id));
         let thread_uuid = bucket.thread_uuid.clone();
 
         let items: Vec<NormalizedChatItem> = bucket
@@ -157,14 +165,14 @@ fn build_chats(
             .map(|m| build_item(m, root, user_labels))
             .collect();
 
-        // "#channel: <root snippet>" preserves the old scannable H1; the
-        // bare "#channel" remains the conversation_name (via `display`).
-        let title = format!("#{cname}: {}", thread_title(&root.text, user_labels));
+        // "<conversation>: <root snippet>" preserves the old scannable H1;
+        // the bare conversation label remains conversation_name via `display`.
+        let title = format!("{display}: {}", thread_title(&root.text, user_labels));
 
         chats.push(NormalizedChat {
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),
-            display: format!("#{cname}"),
+            display,
             title: Some(title),
             account: Some(root.team_id.clone()),
             project: None,

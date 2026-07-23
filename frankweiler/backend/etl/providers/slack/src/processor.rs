@@ -87,6 +87,7 @@ impl DataProcessor for SlackDownload {
             db_path: self.raw_path.clone(),
             db: Some(db),
             channels: self.sync.channels.clone(),
+            direct_messages: self.sync.direct_messages,
             since: self
                 .sync
                 .since

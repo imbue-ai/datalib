@@ -120,6 +120,7 @@ steps:
 
   # Slack workspace mirror. Credentials via latchkey. Omit `channels`
   # (or set `all_channels: true`) to mirror every channel the account sees.
+  # Direct messages stay off unless explicitly enabled.
   - id: slack.download
     command: datalib-step download slack_api
     outputs: [slack/raw]
@@ -136,6 +137,7 @@ steps:
           maximum_sequential_failed_requests: 100
       sync:
         media: true            # pull file attachments into blobs
+        direct_messages: false # set true to also mirror DMs and group DMs
         all_channels: false
         channels:
           - project-data-liberation

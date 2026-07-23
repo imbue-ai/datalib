@@ -340,11 +340,10 @@ impl RawDb {
         &self,
         members_only: bool,
         include_archived: bool,
-    ) -> Result<Vec<(String, Option<String>)>> {
-        let mut sql = String::from("SELECT id, name FROM channels WHERE payload IS NOT NULL");
-        if members_only {
-            sql.push_str(" AND is_member = 1");
-        }
+        include_direct_messages: bool,
+    ) -> Result<Vec<(String, Option<String>, bool)>> {
+        let mut sql =
+            String::from("SELECT id, name, is_member, json(payload) AS payload FROM channels WHERE payload IS NOT NULL");
         if !include_archived {
             sql.push_str(" AND (is_archived IS NULL OR is_archived = 0)");
         }
@@ -358,7 +357,23 @@ impl RawDb {
             .filter_map(|r| {
                 let id: String = r.try_get("id").ok()?;
                 let name: Option<String> = r.try_get("name").ok();
-                Some((id, name))
+                let is_member = r.try_get::<Option<i64>, _>("is_member").ok().flatten() == Some(1);
+                let payload = r
+                    .try_get::<String, _>("payload")
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .unwrap_or(Value::Null);
+                let is_direct = payload.get("is_im").and_then(Value::as_bool) == Some(true)
+                    || payload.get("is_mpim").and_then(Value::as_bool) == Some(true);
+                if !include_direct_messages && is_direct {
+                    return None;
+                }
+                // Slack IM objects commonly omit `is_member`; access to the
+                // object itself means the authenticated user can read it.
+                if members_only && !is_member && !is_direct {
+                    return None;
+                }
+                Some((id, name, is_direct))
             })
             .collect())
     }
@@ -710,16 +725,30 @@ mod tests {
         )
         .await
         .unwrap();
-        let mem_only = db.channels_for_fetch(true, false).await.unwrap();
+        db.upsert_channel(&json!({"id": "D1", "is_im": true, "user": "U2"}))
+            .await
+            .unwrap();
+        let mem_only = db.channels_for_fetch(true, false, false).await.unwrap();
         assert_eq!(
-            mem_only.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(),
+            mem_only
+                .iter()
+                .map(|(i, _, _)| i.as_str())
+                .collect::<Vec<_>>(),
             vec!["C1"]
         );
-        let with_archived = db.channels_for_fetch(true, true).await.unwrap();
+        let with_direct = db.channels_for_fetch(true, false, true).await.unwrap();
+        assert_eq!(
+            with_direct
+                .iter()
+                .map(|(i, _, _)| i.as_str())
+                .collect::<Vec<_>>(),
+            vec!["C1", "D1"]
+        );
+        let with_archived = db.channels_for_fetch(true, true, false).await.unwrap();
         assert_eq!(
             with_archived
                 .iter()
-                .map(|(i, _)| i.as_str())
+                .map(|(i, _, _)| i.as_str())
                 .collect::<Vec<_>>(),
             vec!["C1", "C3"]
         );
