@@ -147,7 +147,7 @@ build:buildbuddy --remote_upload_local_results=true
 # Silicon hosts, so much of the release path can be debugged locally
 # (e.g. `frankweiler_http_bin` cross-builds to a fully-static ELF from
 # a mac). The known exception: anything that pulls boring-sys2 (wreq —
-# so `latchkey_curl_shim` and `frankweiler_sync_bin`) only musl-builds
+# so `latchkey_curl_impersonate` and `frankweiler_sync_bin`) only musl-builds
 # with a Linux exec platform (the CI runners, the devcontainer),
 # because boring-sys2's build script runs bindgen against the musl
 # target triple, which needs linux libc headers on the include path;

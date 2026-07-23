@@ -2,7 +2,7 @@
 // here, exempt from the workspace-wide ban defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Stamps `frankweiler-etl`'s binaries (notably `latchkey-curl-shim`)
+//! Stamps `frankweiler-etl`'s binaries (notably `latchkey-curl-impersonate`)
 //! with build metadata via `cargo:rustc-env` for `cargo build` users.
 //! Bazel builds get the same values from `rustc_env.txt` +
 //! `--workspace_status_command=tools/workspace_status.sh`, so this

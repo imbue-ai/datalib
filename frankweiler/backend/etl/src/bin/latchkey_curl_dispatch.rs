@@ -14,11 +14,11 @@
 //!   * If the request carries the value-less marker header
 //!     `-H "X-Imbue-Impersonate:"`, the marker is stripped and the
 //!     remaining args are handed to the Chrome-impersonating shim
-//!     (`latchkey-curl-shim`), resolved from
-//!     `$FRANKWEILER_IMPERSONATE_CURL`, else a sibling-of-self lookup.
+//!     (`latchkey-curl-impersonate`), found next to this binary (installers ship
+//!     the two side by side).
 //!   * Otherwise the args are passed through verbatim to the system
-//!     curl, resolved from `$FRANKWEILER_REAL_CURL`, else `curl` on
-//!     `$PATH` (skipping this binary), else `/usr/bin/curl`.
+//!     curl: `curl` on `$PATH` (skipping this binary, so a
+//!     `LATCHKEY_CURL`-on-PATH setup can't recurse).
 //!
 //! Why a header-*removal* marker: `-H "Name:"` with an empty right-hand
 //! side is curl's syntax for removing an internal header named `Name`.
@@ -36,19 +36,25 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The private routing marker. Matched case-insensitively on the header
-/// *name*; the value is ignored (we emit it value-less). Namespaced so
-/// it can't collide with a header a caller legitimately wants to strip.
-const MARKER_HEADER: &str = "x-imbue-impersonate";
+/// The private routing marker, matched as the exact value of a `-H`
+/// header argument. Value-less so on a real curl it's a no-op header
+/// removal (curl never emits `X-Imbue-Impersonate`); namespaced so it
+/// can't collide with a header a caller legitimately wants to strip.
+///
+/// Every caller — datalib's `latchkey curl` invocations and the minds
+/// latchkey gateway — emits it in exactly this two-token form
+/// (`-H` `X-Imbue-Impersonate:`), so the parser matches that spelling
+/// literally rather than reimplementing curl's header-argument grammar.
+const MARKER_HEADER_ARG: &str = "X-Imbue-Impersonate:";
 
-/// Filenames to look for next to `current_exe()` when
-/// `$FRANKWEILER_IMPERSONATE_CURL` is unset — mirrors `SIBLING_NAMES` in
-/// `latchkey.rs` so an installed release (both binaries side by side in
-/// the same dir) resolves the shim without any env var.
-const SHIM_SIBLING_NAMES: &[&str] = &[
-    "frankweiler-latchkey-curl-shim",
-    "latchkey-curl-shim",
-    "latchkey_curl_shim",
+/// Filenames to look for next to `current_exe()` — mirrors
+/// `SIBLING_NAMES` in `latchkey.rs`. Installers ship the impersonator and
+/// this dispatcher side by side in the same dir, so a sibling lookup
+/// resolves it without any configuration.
+const IMPERSONATE_SIBLING_NAMES: &[&str] = &[
+    "frankweiler-latchkey-curl-impersonate",
+    "latchkey-curl-impersonate",
+    "latchkey_curl_impersonate",
 ];
 
 fn die(msg: impl AsRef<str>) -> ! {
@@ -56,25 +62,12 @@ fn die(msg: impl AsRef<str>) -> ! {
     std::process::exit(2);
 }
 
-/// Extract the header name from an `-H` value: everything before the
-/// first `:` or `;` (curl's two header-value separators), trimmed.
-fn header_name(value: &str) -> &str {
-    let end = value
-        .find(|c| c == ':' || c == ';')
-        .unwrap_or(value.len());
-    value[..end].trim()
-}
-
-fn is_marker(value: &str) -> bool {
-    header_name(value).eq_ignore_ascii_case(MARKER_HEADER)
-}
-
-/// Scan argv (already sans program name) for the marker header. Returns
-/// the argv with every marker occurrence removed and whether at least
-/// one was found. Recognizes the marker only as a standalone header
-/// argument: `-H VALUE`, `--header VALUE`, `-HVALUE`, `--header=VALUE`.
-/// (Callers always emit it that way; a marker buried inside a combined
-/// short bundle like `-sSHVALUE` is intentionally not special-cased.)
+/// Scan argv (already sans program name) for the marker, recognized only
+/// as the exact two-token header argument `-H X-Imbue-Impersonate:` (or
+/// the `--header` long form). Returns argv with every marker occurrence
+/// removed and whether at least one was found. This is deliberately
+/// strict: callers emit exactly this spelling, so we don't reimplement
+/// curl's `-HVALUE` / `--header=VALUE` / combined-bundle grammar.
 fn strip_marker(argv: Vec<String>) -> (Vec<String>, bool) {
     let mut out: Vec<String> = Vec::with_capacity(argv.len());
     let mut found = false;
@@ -82,7 +75,7 @@ fn strip_marker(argv: Vec<String>) -> (Vec<String>, bool) {
     while let Some(tok) = it.next() {
         if tok == "-H" || tok == "--header" {
             match it.next() {
-                Some(val) if is_marker(&val) => found = true,
+                Some(val) if val == MARKER_HEADER_ARG => found = true,
                 Some(val) => {
                     out.push(tok);
                     out.push(val);
@@ -91,29 +84,11 @@ fn strip_marker(argv: Vec<String>) -> (Vec<String>, bool) {
                 // binary to reject rather than silently swallowing it.
                 None => out.push(tok),
             }
-        } else if let Some(val) = tok.strip_prefix("--header=") {
-            if is_marker(val) {
-                found = true;
-            } else {
-                out.push(tok);
-            }
-        } else if tok.len() > 2 && tok.starts_with("-H") && !tok.starts_with("--") {
-            if is_marker(&tok[2..]) {
-                found = true;
-            } else {
-                out.push(tok);
-            }
         } else {
             out.push(tok);
         }
     }
     (out, found)
-}
-
-fn env_existing(name: &str) -> Option<PathBuf> {
-    let v = std::env::var_os(name)?;
-    let p = PathBuf::from(v);
-    p.exists().then_some(p)
 }
 
 /// Look for one of `names` next to `current_exe()`, following the exe
@@ -129,16 +104,12 @@ fn sibling_of_exe(names: &[&str]) -> Option<PathBuf> {
 }
 
 fn resolve_impersonator() -> PathBuf {
-    if let Some(p) = env_existing("FRANKWEILER_IMPERSONATE_CURL") {
-        return p;
-    }
-    if let Some(p) = sibling_of_exe(SHIM_SIBLING_NAMES) {
-        return p;
-    }
-    die(
-        "impersonation requested but no impersonator curl found; set \
-         $FRANKWEILER_IMPERSONATE_CURL to the latchkey-curl-shim path",
-    );
+    sibling_of_exe(IMPERSONATE_SIBLING_NAMES).unwrap_or_else(|| {
+        die(
+            "impersonation requested but no impersonator curl found next to \
+             this binary (expected a latchkey-curl-impersonate sibling)",
+        )
+    })
 }
 
 /// Find `curl` on `$PATH`, skipping any candidate that resolves to this
@@ -160,13 +131,7 @@ fn curl_on_path(self_exe: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn resolve_real_curl(self_exe: Option<&Path>) -> PathBuf {
-    if let Some(p) = env_existing("FRANKWEILER_REAL_CURL") {
-        return p;
-    }
-    if let Some(p) = curl_on_path(self_exe) {
-        return p;
-    }
-    PathBuf::from("/usr/bin/curl")
+    curl_on_path(self_exe).unwrap_or_else(|| die("no system curl found on $PATH"))
 }
 
 fn main() {

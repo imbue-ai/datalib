@@ -9,7 +9,7 @@ const STAGED_BINARIES: &[&str] = &[
     "binaries/frankweiler-http",
     "binaries/datalib-dag",
     "binaries/datalib-step",
-    "binaries/latchkey-curl-shim",
+    "binaries/latchkey-curl-impersonate",
     "binaries/latchkey",
 ];
 

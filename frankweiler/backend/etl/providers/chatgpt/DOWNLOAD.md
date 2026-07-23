@@ -67,12 +67,12 @@ info chatgpt` reports `invalid` or requests come back with
 `chatgpt.com` is fronted by Cloudflare's managed-challenge system,
 which fingerprints TLS handshakes. To clear the challenge, point
 `LATCHKEY_CURL` at a Chrome-impersonating curl. The simplest option
-is the in-tree `latchkey-curl-shim` bin (a `wreq`-backed shim, mirror
-of `src/download/latchkey_curl_shim.py`):
+is the in-tree `latchkey-curl-impersonate` bin (a `wreq`-backed shim, mirror
+of `src/download/latchkey_curl_impersonate.py`):
 
 ```sh
-bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazelisk build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
 chatgpt-download --out ~/backups/chatgpt_api
 ```
 

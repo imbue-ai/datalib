@@ -257,7 +257,7 @@ use_repo(toolchains_musl, "musl_toolchains_hub")
 # (registered by an earlier module in the graph, and constraint-wise a
 # match for any `linux + <cpu>` platform — it carries no linker
 # constraint) win the musl platforms on Linux hosts. Symptom: the
-# release leg linked `latchkey_curl_shim` with `/usr/bin/gcc` against
+# release leg linked `latchkey_curl_impersonate` with `/usr/bin/gcc` against
 # glibc-compiled BoringSSL objects and died on `__memcpy_chk` /
 # `fopen64`. Harmless for every other build: these toolchains require
 # `//platforms:musl`, which only the musl platforms carry. (macOS

@@ -40,12 +40,12 @@ See `src/download/NOTION_AUTH.md` for the keyring / cookie setup.
 Cloudflare and rejects anything without a browser TLS fingerprint.
 `notion-download` shells out via `latchkey curl` and expects
 `LATCHKEY_CURL` to point at a Chrome-impersonating curl. The in-tree
-`latchkey-curl-shim` binary (Chrome 131 fingerprint via `wreq`) is the
+`latchkey-curl-impersonate` binary (Chrome 131 fingerprint via `wreq`) is the
 canonical choice:
 
 ```sh
-bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL=$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim
+bazelisk build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL=$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate
 ```
 
 If `LATCHKEY_CURL` is unset, the downloader looks for the shim in the

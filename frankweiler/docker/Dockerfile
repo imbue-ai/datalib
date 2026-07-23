@@ -1,7 +1,7 @@
 # Frankweiler — production runtime image.
 #
 # Ships the release binaries (`datalib-dag`, `datalib-step`, `frankweiler-http`,
-# `frankweiler-latchkey-curl-shim`) plus Node + `latchkey` so users can
+# `frankweiler-latchkey-curl-impersonate`) plus Node + `latchkey` so users can
 # register services and run syncs from a single container.
 #
 # Not built from source: this image consumes the per-triple Linux tarballs
@@ -43,7 +43,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Runtime deps only:
 #   ca-certificates  TLS roots for HTTPS calls the binaries make
 #   curl             debugging + healthchecks; the `latchkey curl` codepath
-#                    invokes our bundled `frankweiler-latchkey-curl-shim`
+#                    invokes our bundled `frankweiler-latchkey-curl-impersonate`
 #                    rather than this, but having curl present is useful
 #                    for `docker exec` poking
 #   tini             PID 1 that reaps zombies and forwards signals; the
@@ -188,7 +188,7 @@ RUN set -eux; \
     install -m 0755 "$staged/datalib-dag"                       /usr/local/bin/datalib-dag; \
     install -m 0755 "$staged/datalib-step"                      /usr/local/bin/datalib-step; \
     install -m 0755 "$staged/frankweiler-http"                  /usr/local/bin/frankweiler-http; \
-    install -m 0755 "$staged/frankweiler-latchkey-curl-shim"    /usr/local/bin/frankweiler-latchkey-curl-shim; \
+    install -m 0755 "$staged/frankweiler-latchkey-curl-impersonate"    /usr/local/bin/frankweiler-latchkey-curl-impersonate; \
     rm -rf /tmp/release; \
     # Smoke: --version on the one binary that supports it. frankweiler-http
     # takes a positional DATA_ROOT and clap rejects --version before parsing
@@ -196,7 +196,7 @@ RUN set -eux; \
     datalib-dag --version; \
     test -x /usr/local/bin/datalib-step; \
     test -x /usr/local/bin/frankweiler-http; \
-    test -x /usr/local/bin/frankweiler-latchkey-curl-shim
+    test -x /usr/local/bin/frankweiler-latchkey-curl-impersonate
 
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a
@@ -213,7 +213,7 @@ RUN chmod 0755 /usr/local/bin/frankweiler-entrypoint.sh
 #                        user running `latchkey curl ...` directly inside
 #                        the container gets CF impersonation too)
 ENV FRANKWEILER_ROOT=/data \
-    LATCHKEY_CURL=/usr/local/bin/frankweiler-latchkey-curl-shim
+    LATCHKEY_CURL=/usr/local/bin/frankweiler-latchkey-curl-impersonate
 
 WORKDIR /data
 

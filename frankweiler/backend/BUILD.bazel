@@ -54,11 +54,11 @@ filegroup(
         # (claude.ai, chatgpt.com, files.slack.com) 403s on vanilla
         # curl's TLS fingerprint. `datalib-step` resolves it from
         # `LATCHKEY_CURL`, `FRANKWEILER_CURL_SHIM`, or a sibling-of-self
-        # lookup against `frankweiler-latchkey-curl-shim` — see
+        # lookup against `frankweiler-latchkey-curl-impersonate` — see
         # `frankweiler_etl::latchkey::ensure_curl_shim`. Keep the public
         # name mapping in release.yml's stage step in sync with the
         # sibling-name list in latchkey.rs.
-        "//frankweiler/backend/etl:latchkey_curl_shim",
+        "//frankweiler/backend/etl:latchkey_curl_impersonate",
         # HTTP backend with the Vite-built UI embedded via rust-embed
         # (see frankweiler/backend/http/src/embed.rs). Single binary
         # serves the full search experience given a data root path —
@@ -83,7 +83,7 @@ filegroup(
     name = "curl_dist",
     srcs = [
         "//frankweiler/backend/etl:latchkey_curl_dispatch",
-        "//frankweiler/backend/etl:latchkey_curl_shim",
+        "//frankweiler/backend/etl:latchkey_curl_impersonate",
     ],
     visibility = ["//visibility:public"],
 )

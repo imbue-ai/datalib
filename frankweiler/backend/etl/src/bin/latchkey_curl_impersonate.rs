@@ -4,9 +4,9 @@
 // process. Exempt from the workspace-wide ban defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! `latchkey-curl-shim` — minimal curl-CLI-compatible front-end backed
+//! `latchkey-curl-impersonate` — minimal curl-CLI-compatible front-end backed
 //! by `wreq`'s Chrome TLS impersonation. Mirror of
-//! `src/download/latchkey_curl_shim.py`.
+//! `src/download/latchkey_curl_impersonate.py`.
 //!
 //! Latchkey's `LATCHKEY_CURL` env var lets us substitute our own curl.
 //! Point it at this binary and Cloudflare-protected hosts (claude.ai,
@@ -55,7 +55,7 @@ struct Args {
 }
 
 fn die(msg: impl AsRef<str>) -> ! {
-    eprintln!("latchkey-curl-shim: {}", msg.as_ref());
+    eprintln!("latchkey-curl-impersonate: {}", msg.as_ref());
     std::process::exit(2);
 }
 
@@ -98,12 +98,12 @@ fn parse(argv: Vec<String>) -> Args {
     // printing `<bin-name> <FRANKWEILER_VERSION>` where the version is
     // the `git describe --tags --always --dirty` slug stamped at build
     // time by cargo's build.rs. Bazel intentionally does NOT stamp this
-    // binary (see //frankweiler/backend/etl:latchkey_curl_shim in
+    // binary (see //frankweiler/backend/etl:latchkey_curl_impersonate in
     // BUILD.bazel for why) so under bazel we fall back to "unknown".
     for tok in &argv {
         if tok == "--version" || tok == "-V" {
             println!(
-                "latchkey-curl-shim {}",
+                "latchkey-curl-impersonate {}",
                 option_env!("FRANKWEILER_VERSION").unwrap_or("unknown")
             );
             std::process::exit(0);
@@ -226,7 +226,7 @@ async fn main() -> ExitCode {
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("latchkey-curl-shim: transport error: {e}");
+            eprintln!("latchkey-curl-impersonate: transport error: {e}");
             return ExitCode::from(7);
         }
     };
@@ -253,7 +253,7 @@ async fn main() -> ExitCode {
                 let _ = f.write_all(buf.as_bytes());
             }
         }
-        eprintln!("latchkey-curl-shim: HTTP {} for {}", status.as_u16(), url,);
+        eprintln!("latchkey-curl-impersonate: HTTP {} for {}", status.as_u16(), url,);
         return ExitCode::from(22);
     }
 
@@ -282,7 +282,7 @@ async fn main() -> ExitCode {
     let body = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("latchkey-curl-shim: body read: {e}");
+            eprintln!("latchkey-curl-impersonate: body read: {e}");
             return ExitCode::from(8);
         }
     };

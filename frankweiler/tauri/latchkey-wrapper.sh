@@ -41,8 +41,8 @@ if [ -z "$entry" ]; then
     exit 1
 fi
 
-if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-shim" ]; then
-    LATCHKEY_CURL="$here/latchkey-curl-shim"
+if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-impersonate" ]; then
+    LATCHKEY_CURL="$here/latchkey-curl-impersonate"
     export LATCHKEY_CURL
 fi
 

@@ -341,8 +341,8 @@ bazel run //frankweiler/backend/etl/providers/slack:slack_translate.update
 
 # Live tests — need LATCHKEY_CURL on the host (same as cargo). Builds
 # the shim once:
-bazel build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazel build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
 bazel run //frankweiler/backend/etl/providers/anthropic:anthropic_live.update
 ```
 
@@ -433,7 +433,7 @@ the longest offset-suffixed form including microseconds.
 
 The Rust downloaders under `frankweiler/backend/etl/providers/*/src/download/`
 read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
-issue the actual requests via the `latchkey-curl-shim` so Cloudflare's
+issue the actual requests via the `latchkey-curl-impersonate` so Cloudflare's
 JA3 wall passes. If the cookie is missing or expired,
 `latchkey auth set claude-ai` fixes it; if Cloudflare still 403s, the
 IP/UA may be flagged — wait it out or swap networks.

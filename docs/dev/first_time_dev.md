@@ -213,8 +213,8 @@ conversation), then asserts a curated stable view against committed
 shim:
 
 ```sh
-bazel build //frankweiler/backend/etl:latchkey_curl_shim
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazel build //frankweiler/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
 bazelisk test //frankweiler/backend/etl/providers/anthropic:anthropic_live \
     --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
     --test_env=LATCHKEY_CURL

@@ -245,7 +245,7 @@ jobs:
               bazel-bin/frankweiler/backend/dag/datalib_dag \
               bazel-bin/frankweiler/backend/datalib_step/datalib_step \
               bazel-bin/frankweiler/backend/http/frankweiler_http_bin \
-              bazel-bin/frankweiler/backend/etl/latchkey_curl_shim; do
+              bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate; do
               echo "--- ${bin}"
               if readelf -l "${bin}" | grep -q 'INTERP'; then
                   echo "ERROR: ${bin} requests a dynamic loader (PT_INTERP) — not fully static." >&2
