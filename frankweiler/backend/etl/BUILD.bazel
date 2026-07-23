@@ -16,7 +16,7 @@ rust_library(
     # The dispatch curl + the impersonator it fronts travel with the
     # library so any binary that links `frankweiler_etl` gets both in
     # runfiles (co-located, so the dispatch curl finds the impersonator as
-    # a sibling); `latchkey::ensure_curl_shim` resolves the dispatch curl
+    # a sibling); `latchkey::ensure_curl_dispatch` resolves the dispatch curl
     # via the bazel runfiles lookup in `resolve()`.
     data = [
         ":latchkey_curl_dispatch",

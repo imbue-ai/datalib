@@ -47,7 +47,7 @@ sqlx = { workspace = true }
 sha2 = "0.10"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 tempfile = "3"
-# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_shim`
+# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_dispatch`
 # resolver can find our Chrome-impersonating curl shim under
 # `bazel run` / `bazel test`. Falls through cleanly outside Bazel.
 runfiles = "0.2"

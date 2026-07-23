@@ -54,9 +54,9 @@ filegroup(
         # because every CF-fronted provider (claude.ai, chatgpt.com,
         # files.slack.com) 403s on vanilla curl's TLS fingerprint.
         # `datalib-step` resolves the dispatch curl from `LATCHKEY_CURL`,
-        # `FRANKWEILER_CURL_SHIM`, or a sibling-of-self lookup against
+        # `FRANKWEILER_CURL_DISPATCH`, or a sibling-of-self lookup against
         # `latchkey-curl-dispatch` — see
-        # `frankweiler_etl::latchkey::ensure_curl_shim` — and the dispatch
+        # `frankweiler_etl::latchkey::ensure_curl_dispatch` — and the dispatch
         # curl finds the impersonator as a sibling. Keep the public name
         # mapping in release.yml's stage step in sync with the sibling-name
         # list in latchkey.rs.
@@ -76,8 +76,8 @@ filegroup(
 )
 
 # The curl-only distribution: just the dispatch curl and the
-# impersonating shim it fronts. Published as a separate, smaller tarball
-# (`frankweiler-curl-<triple>.tar.gz`) for consumers — e.g. the minds
+# impersonating curl it fronts. Published as a separate, smaller tarball
+# (`curl-<triple>.tar.gz`) for consumers — e.g. the minds
 # latchkey gateway — that only need a `curl` that impersonates Chrome on
 # demand and don't want the rest of the datalib toolchain. Keep the
 # public-name mapping in release.yml's "Stage curl tarball" step in sync

@@ -300,7 +300,7 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 /// through the dispatch curl, but unmarked, so they use the system curl.
 ///
 /// This is the single source of truth for "which providers impersonate";
-/// it replaces the old blanket behavior where any `ensure_curl_shim` call
+/// it replaces the old blanket behavior where any `ensure_curl_dispatch` call
 /// pointed `LATCHKEY_CURL` at the impersonator for the whole process.
 /// `notion_unofficial` is the provider tag the unofficial Notion client
 /// stamps on its requests (see providers/notion/src/download/unofficial.rs).

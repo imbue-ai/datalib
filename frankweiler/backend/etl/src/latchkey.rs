@@ -11,14 +11,9 @@
 //! reject vanilla curl's TLS fingerprint, so the providers that hit them
 //! add the marker to their requests (see `http::latchkey_curl`).
 //!
-//! NB: the resolved binary is now the *dispatch* curl, but the resolver
-//! function and its `$FRANKWEILER_CURL_SHIM` override keep their historic
-//! names to avoid churning every provider callsite and breaking the
-//! documented override.
-//!
 //! Resolution order for the dispatch-curl path (first hit wins):
 //!   1. `$LATCHKEY_CURL` — caller's explicit override; trusted as-is.
-//!   2. `$FRANKWEILER_CURL_SHIM` — our own override (parallel to
+//!   2. `$FRANKWEILER_CURL_DISPATCH` — our own override (parallel to
 //!      `LATCHKEY_CURL` but specifically the in-tree binary, so Bazel can
 //!      inject the runfiles path without stomping a user-set
 //!      `LATCHKEY_CURL`).
@@ -39,7 +34,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const SHIM_BIN: &str = "latchkey-curl-dispatch";
+const DISPATCH_BIN: &str = "latchkey-curl-dispatch";
 // Cargo emits the binary as `latchkey-curl-dispatch` (dashes — from
 // `[[bin]] name = "latchkey-curl-dispatch"` in Cargo.toml). Bazel emits it
 // as `latchkey_curl_dispatch` (underscores — the `rust_binary` target
@@ -59,16 +54,16 @@ static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "could not locate {SHIM_BIN}; set $FRANKWEILER_CURL_SHIM or $LATCHKEY_CURL, \
+    "could not locate {DISPATCH_BIN}; set $FRANKWEILER_CURL_DISPATCH or $LATCHKEY_CURL, \
      or build it (`cargo build -p frankweiler-etl --bin latchkey-curl-dispatch` \
      or `bazel build //frankweiler/backend/etl:latchkey_curl_dispatch`)"
 )]
-pub struct ShimNotFound;
+pub struct CurlDispatchNotFound;
 
 /// Ensure `LATCHKEY_CURL` points at the in-tree dispatch curl and return
 /// its resolved path. Idempotent — the first call resolves and caches;
 /// later calls are a `OnceLock` read.
-pub fn ensure_curl_shim() -> Result<PathBuf, ShimNotFound> {
+pub fn ensure_curl_dispatch() -> Result<PathBuf, CurlDispatchNotFound> {
     match RESOLVED.get_or_init(resolve) {
         Some(path) => {
             if std::env::var_os("LATCHKEY_CURL").is_none() {
@@ -76,7 +71,7 @@ pub fn ensure_curl_shim() -> Result<PathBuf, ShimNotFound> {
             }
             Ok(path.clone())
         }
-        None => Err(ShimNotFound),
+        None => Err(CurlDispatchNotFound),
     }
 }
 
@@ -84,7 +79,7 @@ fn resolve() -> Option<PathBuf> {
     if let Some(p) = env_path("LATCHKEY_CURL") {
         return Some(p);
     }
-    if let Some(p) = env_path("FRANKWEILER_CURL_SHIM") {
+    if let Some(p) = env_path("FRANKWEILER_CURL_DISPATCH") {
         return Some(p);
     }
     if let Some(p) = from_runfiles() {
@@ -96,7 +91,7 @@ fn resolve() -> Option<PathBuf> {
     if let Some(p) = from_exe_dir() {
         return Some(p);
     }
-    which_on_path(SHIM_BIN)
+    which_on_path(DISPATCH_BIN)
 }
 
 /// Look for the shim next to `current_exe()`. This is how an installed
@@ -168,7 +163,7 @@ fn from_workspace_walk() -> Option<PathBuf> {
                 "target/debug",
                 "target/release",
             ] {
-                let candidate = dir.join(rel).join(SHIM_BIN);
+                let candidate = dir.join(rel).join(DISPATCH_BIN);
                 if candidate.is_file() {
                     return Some(candidate);
                 }
@@ -234,7 +229,7 @@ pub fn latchkey_tokio_command() -> tokio::process::Command {
 }
 
 fn warn_if_missing() {
-    if let Err(e) = ensure_curl_shim() {
+    if let Err(e) = ensure_curl_dispatch() {
         tracing::warn!(error = %e, "running latchkey without the in-tree curl shim; Cloudflare-protected endpoints will likely 403");
     }
 }

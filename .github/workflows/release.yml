@@ -344,8 +344,7 @@ jobs:
           # here when you add a binary to //frankweiler/backend:dist.
           # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
           # frankweiler-http resolves them via sibling lookup (see
-          # http/src/worker.rs resolve_bin) — and the shim's installed
-          # name must stay in sync with `SIBLING_NAMES` in
+          # http/src/worker.rs resolve_bin) — and the impersonator's installed          # name must stay in sync with `SIBLING_NAMES` in
           # frankweiler/backend/etl/src/latchkey.rs (datalib-step
           # resolves it via a sibling lookup at runtime).
           cp bazel-bin/frankweiler/backend/dag/datalib_dag "${stage}/datalib-dag"
@@ -358,20 +357,20 @@ jobs:
           tarball="frankweiler-${TRIPLE}.tar.gz"
           tar -czf "${tarball}" "${stage}"
 
-          # The curl-only tarball: just the dispatch curl + the shim it
+          # The curl-only tarball: just the dispatch curl + the impersonator it
           # fronts (see //frankweiler/backend:curl_dist). Its own inner
           # dir + stable, un-versioned filename, parallel to the main
           # tarball above. Consumers like the minds latchkey gateway pull
           # this instead of the full toolchain. The two public names here
-          # (`latchkey-curl-{dispatch,shim}`) are what those
-          # consumers resolve by; keep the shim name in sync with
+          # (`latchkey-curl-{dispatch,impersonate}`) are what those
+          # consumers resolve by; keep the impersonator name in sync with
           # `SIBLING_NAMES` in frankweiler/backend/etl/src/latchkey.rs.
-          curl_stage="frankweiler-curl-${version}-${TRIPLE}"
+          curl_stage="curl-${version}-${TRIPLE}"
           mkdir -p "${curl_stage}"
           cp bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
           cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${curl_stage}/latchkey-curl-impersonate"
           chmod +x "${curl_stage}"/*
-          curl_tarball="frankweiler-curl-${TRIPLE}.tar.gz"
+          curl_tarball="curl-${TRIPLE}.tar.gz"
           tar -czf "${curl_tarball}" "${curl_stage}"
 
           # Linux runners have `sha256sum`; macOS has `shasum`. Use
