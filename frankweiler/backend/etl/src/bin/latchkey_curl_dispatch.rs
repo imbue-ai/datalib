@@ -51,10 +51,8 @@ const MARKER_HEADER_ARG: &str = "X-Imbue-Impersonate:";
 /// `SIBLING_NAMES` in `latchkey.rs`. Installers ship the impersonator and
 /// this dispatcher side by side in the same dir, so a sibling lookup
 /// resolves it without any configuration.
-const IMPERSONATE_SIBLING_NAMES: &[&str] = &[
-    "latchkey-curl-impersonate",
-    "latchkey_curl_impersonate",
-];
+const IMPERSONATE_SIBLING_NAMES: &[&str] =
+    &["latchkey-curl-impersonate", "latchkey_curl_impersonate"];
 
 fn die(msg: impl AsRef<str>) -> ! {
     eprintln!("latchkey-curl-dispatch: {}", msg.as_ref());
