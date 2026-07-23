@@ -30,7 +30,7 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // row appears immediately (derived from the text), but stays
   // unsyncable — checkbox disabled — until the config is saved.
   await page.getByRole("button", { name: "Perseus (sample)" }).click();
-  await expect(editor).toHaveValue(/command: datalib-step download perseus/);
+  await expect(editor).toHaveValue(/command: datalib-step-download-perseus/);
   const row = page.locator(".sources-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
   await expect(page.getByText("unsaved changes")).toBeVisible();

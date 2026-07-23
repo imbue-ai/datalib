@@ -8,12 +8,12 @@
 //! binary_dir: /opt/frankweiler/bin  # optional: prepended to PATH
 //! steps:
 //!   - id: slack.download
-//!     command: datalib-step download slack_api
+//!     command: datalib-step-download-slack_api
 //!     outputs: [slack/raw]
 //!     params:                       # the provider's own config subtree
 //!       sync: {channels: [chat-qi]}
 //!   - id: grid_index
-//!     command: datalib-step grid_index
+//!     command: datalib-step-grid_index
 //!     inputs: ["**/rendered_md"]
 //!     outputs: [system/backend_index]
 //!   - id: custom
@@ -31,7 +31,10 @@
 //! (and optionally the NDJSON stdout protocol) can be a step — see
 //! docs/dev/step_protocol.md. YAML anchors (`&slack` / `*slack`)
 //! remain handy for sharing one params subtree between a download and
-//! render step pair.
+//! render step pair. The `datalib-step-<phase>-<type>` names above are
+//! the staged wrapper scripts over the `datalib-step` monolith (see
+//! stage_wrappers.sh); the spelled-out `datalib-step download
+//! slack_api` form runs the same code.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -219,7 +222,7 @@ mod tests {
               - id: grid_index
                 inputs: ["**/rendered_md"]
                 outputs: [system/backend_index]
-                command: datalib-step grid_index
+                command: datalib-step-grid_index
             "#,
         )
         .unwrap();
@@ -252,12 +255,12 @@ mod tests {
             ]
         );
 
-        // Param-less step: just inputs + outputs.
+        // Param-less step, single-token wrapper-script command: just
+        // inputs + outputs appended.
         assert_eq!(
             argv(2),
             vec![
-                "datalib-step",
-                "grid_index",
+                "datalib-step-grid_index",
                 "--inputs",
                 r#"["**/rendered_md"]"#,
                 "--outputs",

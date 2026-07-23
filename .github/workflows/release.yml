@@ -351,6 +351,10 @@ jobs:
           cp bazel-bin/frankweiler/backend/datalib_step/datalib_step "${stage}/datalib-step"
           cp bazel-bin/frankweiler/backend/http/frankweiler_http_bin "${stage}/frankweiler-http"
           cp bazel-bin/frankweiler/backend/etl/latchkey_curl_shim "${stage}/frankweiler-latchkey-curl-shim"
+          # The datalib-step-* wrapper scripts (virtual split of the
+          # step monolith) — generated configs name these as their
+          # step `command:`s.
+          sh frankweiler/backend/datalib_step/stage_wrappers.sh "${stage}"
           chmod +x "${stage}"/*
 
           tarball="frankweiler-${TRIPLE}.tar.gz"

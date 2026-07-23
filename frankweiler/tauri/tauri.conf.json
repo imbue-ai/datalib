@@ -20,6 +20,7 @@
       "binaries/frankweiler-http",
       "binaries/datalib-dag",
       "binaries/datalib-step",
+      "binaries/datalib-step-*",
       "binaries/latchkey-curl-shim",
       "binaries/latchkey",
       "runtime"

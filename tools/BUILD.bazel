@@ -4,6 +4,7 @@ exports_files([
     "check_cargo_lock_versions.sh",
     "check_qmd_model_cache_path.sh",
     "check_qmd_version_pins.sh",
+    "check_step_wrappers.sh",
     "check_version_consistency.sh",
     "insta_update.sh",
     "repin_cargo.sh",

@@ -11,12 +11,12 @@ steps:
   # Shared fan-in steps: the SQL index behind the grid UI and the qmd
   # semantic-search index, each fed by every source's rendered markdown.
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 
@@ -25,14 +25,14 @@ steps:
   # file at `common.input_path` instead of talking to a mail server.
   # Point this at the .mbox unpacked from your Takeout zip.
   - id: gmail-takeout.download
-    command: datalib-step download email
+    command: datalib-step-download-email
     outputs: [gmail-takeout/raw]
     params:
       common:
         input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
 
   - id: gmail-takeout.render
-    command: datalib-step render email
+    command: datalib-step-render-email
     inputs: [gmail-takeout/raw]
     outputs: [gmail-takeout/rendered_md]
 
@@ -42,7 +42,7 @@ steps:
   # omit it (or set `all_channels: true`) to mirror every channel the
   # account can see. `media: true` pulls file attachments into blobs.
   - id: slack.download
-    command: datalib-step download slack_api
+    command: datalib-step-download-slack_api
     outputs: [slack/raw]
     params:
       common:
@@ -60,7 +60,7 @@ steps:
           - "project-data-liberation"
 
   - id: slack.render
-    command: datalib-step render slack_api
+    command: datalib-step-render-slack_api
     inputs: [slack/raw]
     outputs: [slack/rendered_md]
 
@@ -70,7 +70,7 @@ steps:
   # every conversation across every org the account can see; uncomment
   # the knobs below to bound the work on incremental re-runs.
   - id: anthropic-api.download
-    command: datalib-step download claude_api
+    command: datalib-step-download-claude_api
     outputs: [anthropic-api/raw]
     params:
       sync: {}
@@ -78,6 +78,6 @@ steps:
         # since: "2025-01-01"      # only sync conversations updated at/after this
 
   - id: anthropic-api.render
-    command: datalib-step render claude_api
+    command: datalib-step-render-claude_api
     inputs: [anthropic-api/raw]
     outputs: [anthropic-api/rendered_md]

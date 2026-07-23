@@ -35,17 +35,28 @@ fn example_config(name: &str) -> std::path::PathBuf {
     path
 }
 
-/// `"datalib-step download slack_api"` → `Some(("download", "slack_api"))`.
-/// Non-`datalib-step` commands and the source-independent subcommands
-/// (`grid_index`, `qmd_index`) return `None`.
+/// `"datalib-step-download-slack_api"` (the staged wrapper form the
+/// examples use) or `"datalib-step download slack_api"` (the
+/// spelled-out monolith form, still supported) →
+/// `Some(("download", "slack_api"))`. Other commands and the
+/// source-independent step types (`grid_index`, `qmd_index`) return
+/// `None`.
 fn step_phase_and_type(command: &str) -> Option<(&str, &str)> {
     let mut words = command.split_whitespace();
-    if words.next()? != "datalib-step" {
-        return None;
-    }
     match words.next()? {
-        phase @ ("download" | "render") => Some((phase, words.next()?)),
-        _ => None,
+        "datalib-step" => match words.next()? {
+            phase @ ("download" | "render") => Some((phase, words.next()?)),
+            _ => None,
+        },
+        first => {
+            let rest = first.strip_prefix("datalib-step-")?;
+            for phase in ["download", "render"] {
+                if let Some(ty) = rest.strip_prefix(phase).and_then(|r| r.strip_prefix('-')) {
+                    return Some((phase, ty));
+                }
+            }
+            None
+        }
     }
 }
 

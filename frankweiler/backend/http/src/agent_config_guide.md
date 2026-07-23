@@ -23,22 +23,22 @@ steps:
   # per-provider config; credentials never live here (latchkey
   # provides them at runtime).
   - id: slack.download
-    command: datalib-step download slack_api
+    command: datalib-step-download-slack_api
     outputs: [slack/raw]
     params:
       sync: {}
   - id: slack.render
-    command: datalib-step render slack_api
+    command: datalib-step-render-slack_api
     inputs: [slack/raw]
     outputs: [slack/rendered_md]
 
   # shared fan-in steps every source's rendered markdown feeds
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 ```
@@ -64,7 +64,7 @@ disk untouched — fix and re-PUT. Only a valid config ever lands.
 ## Adding your own step commands
 
 A step's `command:` is an ordinary command line — it is not limited to
-the built-in `datalib-step` subcommands. If the user's request needs a
+the built-in `datalib-step-*` step commands. If the user's request needs a
 new program (a custom fetcher, a converter, …), write it and install
 it into **`~/.datalib/bin`** — either the binary itself or a symlink
 to wherever it lives:

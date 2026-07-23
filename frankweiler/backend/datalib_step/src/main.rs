@@ -5,9 +5,12 @@
 //! artifacts under the data root, writes its declared outputs,
 //! streams NDJSON progress events on stdout, and finishes with one
 //! `{"event":"outcome",…}` line reporting per-output change status.
-//! The DAG config invokes it as an ordinary step `command:`
-//! (`command: datalib-step download slack_api`); the runner appends
-//! the entry's declared `params`/`inputs`/`outputs` as
+//! The DAG config invokes it as an ordinary step `command:` — normally
+//! through the staged `datalib-step-<phase>-<type>` wrapper scripts
+//! (`command: datalib-step-download-slack_api`; see stage_wrappers.sh
+//! for the virtual-split rationale), though the spelled-out
+//! `datalib-step download slack_api` form runs the same code. The
+//! runner appends the entry's declared `params`/`inputs`/`outputs` as
 //! `--params`/`--inputs`/`--outputs` JSON flags.
 //!
 //! Step types:

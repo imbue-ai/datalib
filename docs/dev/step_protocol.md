@@ -218,3 +218,12 @@ beeper/signal `period`, perseus `alignment_pairs`, email
 and the reset env vars, checkpoints on SIGINT, and emits versions
 where it has them (the grid index claims its dolt commit hash). Use
 it as the reference implementation.
+
+Configs normally don't spell the subcommands out: staging ships one
+`datalib-step-<words>` wrapper script per built-in step
+(`datalib-step-download-slack_api`, `datalib-step-grid_index`, …), each
+exec'ing the sibling monolith with the subcommand baked in — a virtual
+split that keeps the shared runtime on disk once (see
+frankweiler/backend/datalib_step/stage_wrappers.sh). Both spellings
+run the same code; `command: datalib-step download slack_api` still
+works.

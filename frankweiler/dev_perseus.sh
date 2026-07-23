@@ -49,28 +49,30 @@ cat > "$ROOT/config.yaml" <<EOF
 data_root: $ROOT
 steps:
   - id: perseus.render
-    command: datalib-step render perseus
+    command: datalib-step-render-perseus
     outputs: [perseus/rendered_md]
     params:
       common:
         input_path: $PERSEUS_FIXTURE_DIR
 
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 EOF
 
-# Step commands find `datalib-step` via PATH; bazel names the binary
-# `datalib_step`, so stage a dash-named symlink dir for --binary-dir.
+# Step commands find the `datalib-step-*` wrappers (and the monolith
+# they exec) via PATH; bazel names the binary `datalib_step`, so stage
+# a dash-named symlink dir plus the wrappers for --binary-dir.
 BINDIR="$ROOT/.bindir"
 mkdir -p "$BINDIR"
 ln -s "$STEP_BIN" "$BINDIR/datalib-step"
+sh "$(rlocation _main/frankweiler/backend/datalib_step/stage_wrappers.sh)" "$BINDIR"
 
 # Mirror the model-cache symlink that materialize_tng_root.sh sets up,
 # so qmd-indexer can find the GGUF weights without re-downloading them

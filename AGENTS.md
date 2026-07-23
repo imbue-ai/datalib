@@ -79,7 +79,9 @@ frankweiler/
     dag/           `datalib-dag`: the DAG runner (scheduler, step
                    contract, subprocess driver, NDJSON event stream).
     datalib_step/  `datalib-step`: the built-in step commands —
-                   download/render <source_type>, grid_index, qmd_index.
+                   download/render <source_type>, grid_index, qmd_index —
+                   invoked via staged `datalib-step-*` wrapper scripts
+                   (stage_wrappers.sh).
     etl/           shared ingest machinery (raw stores, blob CAS,
                    render cursors) + etl/providers/<p>/ crates, each
                    with src/download/ and src/render/ and a sibling
@@ -104,7 +106,10 @@ third-party/   vendored upstream code (see below).
 `datalib-dag <config.yaml>` runs a DAG of subprocess steps declared in
 the config's `steps:` list; edges are derived from output/input path
 overlap, never written by hand. Each source is a `<name>.download` +
-`<name>.render` step pair (`datalib-step download|render <type>`), and
+`<name>.render` step pair (`command: datalib-step-download-<type>` /
+`-render-<type>` — staged wrapper scripts over the one `datalib-step`
+monolith; the spelled-out `datalib-step download <type>` form works
+too), and
 two shared fan-in steps index every source's `rendered_md` tree:
 `grid_index` (SQL index at `system/backend_index/db.doltlite_db`) and
 `qmd_index` (semantic search at `system/qmd/`). Scheduler state lives at

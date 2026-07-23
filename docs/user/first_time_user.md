@@ -212,23 +212,23 @@ data_root: ~/datalib
 
 steps:
   - id: claude.download
-    command: datalib-step download claude_api
+    command: datalib-step-download-claude_api
     outputs: [claude/raw]
     params:
       sync: {}
 
   - id: claude.render
-    command: datalib-step render claude_api
+    command: datalib-step-render-claude_api
     inputs: [claude/raw]
     outputs: [claude/rendered_md]
 
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 ```

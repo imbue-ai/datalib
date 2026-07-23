@@ -88,9 +88,14 @@ genrule(
         "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "run_sync_pipeline.py",
         "tar_qmd.py",
+        # Staged into the pipeline's bindir so the generated config's
+        # `datalib-step-*` wrapper commands resolve — and so CI
+        # exercises the same wrapper scripts releases ship.
+        "//frankweiler/backend/datalib_step:stage_wrappers.sh",
     ],
     cmd = " && ".join([
         " ".join([
+            "STAGE_WRAPPERS_SH=$(execpath //frankweiler/backend/datalib_step:stage_wrappers.sh)",
             "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //frankweiler/backend/dag:datalib_dag)",
             "$(execpath //frankweiler/backend/datalib_step:datalib_step)",
@@ -195,9 +200,13 @@ py_test(
         ":source_json",
         "//frankweiler/backend/dag:datalib_dag",
         "//frankweiler/backend/datalib_step:datalib_step",
+        "//frankweiler/backend/datalib_step:stage_wrappers.sh",
         "//frankweiler/backend/signal-backup:signal_make_fixture",
         "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
     ],
+    env = {
+        "STAGE_WRAPPERS_SH": "$(rootpath //frankweiler/backend/datalib_step:stage_wrappers.sh)",
+    },
 )
 
 # Build a QMD (BM25 + embeddings) index over the rendered TNG markdown tree

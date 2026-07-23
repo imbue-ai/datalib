@@ -2,8 +2,9 @@
 // pair of adjacent step entries (two-space indented, `- ` marker on
 // each) appended to the `steps:` list of the DAG config: the source's
 // download step plus its render step. Each step is a `command:`
-// invoking `datalib-step`; the subcommand names the provider, so
-// params carry no `type:` tag, and the source name comes from the
+// naming a `datalib-step-<phase>-<type>` wrapper (a thin alias over
+// the datalib-step monolith); the wrapper name carries the provider,
+// so params carry no `type:` tag, and the source name comes from the
 // step's first output (`slack/raw` → `slack`; see
 // `frankweiler_dag::config`). Params are per-phase: the download step
 // carries the provider's download config; the render step needs none
@@ -37,12 +38,12 @@ function stepPair(
     : "";
   return `${divider}
 ${preambleBlock}  - id: ${name}.download
-    command: datalib-step download ${type}
+    command: datalib-step-download-${type}
     outputs: [${name}/raw]
     params:
 ${sourceYaml}
   - id: ${name}.render
-    command: datalib-step render ${type}
+    command: datalib-step-render-${type}
     inputs: [${name}/raw]
     outputs: [${name}/rendered_md]`;
 }

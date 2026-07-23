@@ -21,8 +21,10 @@ BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 # spawns datalib-step via PATH). Hand it the runfiles paths so
 # UI-triggered "Sync" runs the real pipeline. Honor caller-supplied
 # overrides. Bazel names the step binary `datalib_step`, but step
-# commands look up `datalib-step` on PATH — so stage a dir with a
-# dash-named symlink and hand that over as the binary dir.
+# commands look up `datalib-step` (and the `datalib-step-*` wrappers —
+# the virtual split; see stage_wrappers.sh) on PATH — so stage a dir
+# with a dash-named symlink plus the wrappers and hand that over as
+# the binary dir.
 if [[ -z "${FRANKWEILER_DAG_BIN:-}" ]]; then
   DAG_BIN="$(rlocation _main/frankweiler/backend/dag/datalib_dag || true)"
   [[ -x "$DAG_BIN" ]] && export FRANKWEILER_DAG_BIN="$DAG_BIN"
@@ -33,6 +35,7 @@ if [[ -z "${FRANKWEILER_BINARY_DIR:-}" ]]; then
   if [[ -x "$STEP_BIN" ]]; then
     BINDIR="$(mktemp -d -t frankweiler-bindir.XXXXXX)"
     ln -s "$STEP_BIN" "$BINDIR/datalib-step"
+    sh "$(rlocation _main/frankweiler/backend/datalib_step/stage_wrappers.sh)" "$BINDIR"
     export FRANKWEILER_BINARY_DIR="$BINDIR"
   fi
 fi

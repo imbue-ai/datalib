@@ -231,31 +231,38 @@ def main() -> int:
         )
         steps.append(
             f"""  - id: {name}.download
-    command: datalib-step download {type_str}
+    command: datalib-step-download-{type_str}
     outputs: [{name}/raw]
     params: {params}
   - id: {name}.render
-    command: datalib-step render {type_str}
+    command: datalib-step-render-{type_str}
     inputs: [{name}/raw]
     outputs: [{name}/rendered_md]{render_params_line}"""
         )
     steps.append(
         """  - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]"""
     )
     dag_yaml = workspace / "dag.yaml"
     dag_yaml.write_text(f"data_root: {workspace}\nsteps:\n" + "\n".join(steps) + "\n")
 
-    # Step commands resolve `datalib-step` via PATH; bazel names the
-    # binary `datalib_step`, so stage a dash-named symlink dir and hand
-    # it to the runner as --binary-dir.
+    # Step commands resolve the `datalib-step-*` wrapper scripts (and
+    # the monolith they exec) via PATH; bazel names the binary
+    # `datalib_step`, so stage a dash-named symlink dir, stage the
+    # wrappers next to it (via the real stage_wrappers.sh, plumbed in
+    # by $STAGE_WRAPPERS_SH so this pipeline exercises the shipped
+    # scripts), and hand the dir to the runner as --binary-dir.
     bindir = workspace / "bindir"
     bindir.mkdir(exist_ok=True)
     step_link = bindir / "datalib-step"
     if not step_link.exists():
         step_link.symlink_to(step_bin)
+    stage_sh = os.environ.get("STAGE_WRAPPERS_SH")
+    if not stage_sh:
+        sys.exit("run_sync_pipeline: $STAGE_WRAPPERS_SH not set (path to stage_wrappers.sh)")
+    _run(["sh", stage_sh, str(bindir)])
 
     # Anthropic extract reads users.json from `export_dir` (== input_path
     # in our wiring) — that file is a bulk-export artifact, not an HTTP

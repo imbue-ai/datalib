@@ -289,9 +289,12 @@ rough dependency order:
   specific (each render reads its own raw-store schema), so the
   built-in commands are written `datalib-step download|render
   <source_type>`; the genuinely shared step types are `grid_index` and
-  `qmd_index`. Params carry neither a `type:` tag (the command's
-  nested subcommand names the provider) nor a `name:` (the step
-  derives its `<name>/…` prefix from its first declared output).
+  `qmd_index`. Configs name them through the staged
+  `datalib-step-<phase>-<type>` wrapper scripts (thin aliases over the
+  one monolith — see stage_wrappers.sh; the spelled-out subcommand
+  form works too). Params carry neither a `type:` tag (the command
+  names the provider) nor a `name:` (the step derives its `<name>/…`
+  prefix from its first declared output).
 * **Params are per-phase.** Each step's params carry only what that
   wave reads: the download step gets the provider's full config
   struct (`common:` envelope + `sync:` + download knobs), the render

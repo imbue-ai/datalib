@@ -15,8 +15,12 @@
 # paths (never written by hand). Each step is an arbitrary `command:`
 # (see docs/dev/step_protocol.md); the runner appends the declared
 # `params`/`inputs`/`outputs` as `--params`/`--inputs`/`--outputs`
-# JSON flags. For the built-in `datalib-step` commands, download and
-# render take the provider as a nested subcommand; `params:` is
+# JSON flags. The built-in step commands are the staged
+# `datalib-step-<phase>-<type>` wrapper scripts — thin aliases that
+# exec the one `datalib-step` monolith with the subcommand baked in
+# (see frankweiler/backend/datalib_step/stage_wrappers.sh; the
+# spelled-out `datalib-step download slack_api` form works too).
+# `params:` is
 # per-phase — the download step carries the provider's download
 # config (no `type:` tag — the command carries it; no `name:` — the
 # step derives the `<name>/…` prefix from its first output), and the
@@ -28,11 +32,12 @@
 #   bazelisk build //frankweiler/backend/dag:datalib_dag \
 #                  //frankweiler/backend/datalib_step:datalib_step
 #   bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/frankweiler/backend/datalib_step/datalib_step "$bindir"/datalib-step
+#   sh frankweiler/backend/datalib_step/stage_wrappers.sh "$bindir"
 #   bazel-bin/frankweiler/backend/dag/datalib_dag configs/dag_example.yaml \
 #       --binary-dir "$bindir"
 #
 # (`--binary-dir` is prepended to every step's PATH so `command:` can
-# say `datalib-step` bare; a packaged install lays `datalib-step` next
+# name the step binaries bare; a packaged install lays them next
 # to `datalib-dag` and needs no flag at all.)
 #
 # data_root defaults to the directory this file lives in; set it
@@ -42,7 +47,7 @@ data_root: ~/tmp/dr-dag
 steps:
   # ── slack ──────────────────────────────────────────────────────────
   - id: slack.download
-    command: datalib-step download slack_api
+    command: datalib-step-download-slack_api
     outputs: [slack/raw]
     params:
       sync:
@@ -51,7 +56,7 @@ steps:
         since: "2026-06-15"
 
   - id: slack.render
-    command: datalib-step render slack_api
+    command: datalib-step-render-slack_api
     inputs: [slack/raw]
     outputs: [slack/rendered_md]
 
@@ -62,14 +67,14 @@ steps:
   #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
   # See docs/user/getting_your_data.md for the full walkthrough.
   - id: claude.download
-    command: datalib-step download claude_api
+    command: datalib-step-download-claude_api
     outputs: [claude/raw]
     params:
       sync:
         conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
   - id: claude.render
-    command: datalib-step render claude_api
+    command: datalib-step-render-claude_api
     inputs: [claude/raw]
     outputs: [claude/rendered_md]
 
@@ -77,11 +82,11 @@ steps:
   # `**/rendered_md` matches every render step's output; adding a new
   # source above automatically feeds these.
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]

@@ -1,4 +1,13 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Stages the `datalib-step-*` wrapper scripts (the virtual split of
+# this monolith — see the script's header) into a directory that
+# already holds `datalib-step`. Exported so the dev launcher scripts
+# under //frankweiler and the //tests/fixtures pipeline can carry it
+# in their runfiles/tools; release.yml and frankweiler/tauri/build.rs
+# run it straight from the checkout.
+exports_files(["stage_wrappers.sh"])
 
 # `datalib-step` — the step-type host binary for the DAG runner
 # (//frankweiler/backend/dag:datalib_dag). One subcommand per step
@@ -66,6 +75,19 @@ rust_binary(
         "@frankweiler_crates//:tracing",
         "@frankweiler_crates//:walkdir",
     ],
+)
+
+# stage_wrappers.sh carries its own copy of the source-type list
+# (plain sh can't read dispatch.rs); this keeps the copy honest.
+sh_test(
+    name = "step_wrappers_consistency_test",
+    size = "small",
+    srcs = ["//tools:check_step_wrappers.sh"],
+    data = [
+        "stage_wrappers.sh",
+        "src/dispatch.rs",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
 rust_test(

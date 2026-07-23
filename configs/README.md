@@ -7,12 +7,14 @@ comment of `dag_example.yaml` and `docs/dev/step_protocol.md`.
 ## Running a config
 
 Build the DAG runner and the step binary, symlink the step binary
-under its `datalib-step` name, and point the runner at a config:
+under its `datalib-step` name, stage the `datalib-step-*` wrapper
+scripts next to it, and point the runner at a config:
 
 ```sh
 bazelisk build //frankweiler/backend/dag:datalib_dag \
                //frankweiler/backend/datalib_step:datalib_step
 bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/frankweiler/backend/datalib_step/datalib_step "$bindir"/datalib-step
+sh frankweiler/backend/datalib_step/stage_wrappers.sh "$bindir"
 bazel-bin/frankweiler/backend/dag/datalib_dag configs/dag_example.yaml \
     --binary-dir "$bindir"
 ```

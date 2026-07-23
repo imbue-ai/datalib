@@ -50,12 +50,12 @@ steps:
   # Every source's rendered markdown feeds these two fan-ins: the SQL
   # index behind the grid UI, and the qmd semantic-search index.
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 
@@ -65,7 +65,7 @@ steps:
   # latchkey at runtime (see first_time_user.md). Bare `sync: {}` fetches
   # every conversation across every org; the knobs bound the work.
   - id: claude-api.download
-    command: datalib-step download claude_api
+    command: datalib-step-download-claude_api
     outputs: [claude-api/raw]
     params:
       # common:
@@ -78,7 +78,7 @@ steps:
         #   - https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000
 
   - id: claude-api.render
-    command: datalib-step render claude_api
+    command: datalib-step-render-claude_api
     inputs: [claude-api/raw]
     outputs: [claude-api/rendered_md]
 
@@ -89,7 +89,7 @@ steps:
   # this is a fringe step (its real input lives outside the data root),
   # so it runs every sync; per-document fingerprints keep re-runs cheap.
   - id: claude-export.render
-    command: datalib-step render claude_export
+    command: datalib-step-render-claude_export
     outputs: [claude-export/rendered_md]
     params:
       common:
@@ -99,7 +99,7 @@ steps:
 
   # ChatGPT conversation mirror. Credentials via latchkey.
   - id: chatgpt.download
-    command: datalib-step download chatgpt_api
+    command: datalib-step-download-chatgpt_api
     outputs: [chatgpt/raw]
     params:
       sync:
@@ -112,7 +112,7 @@ steps:
         #   - https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789
 
   - id: chatgpt.render
-    command: datalib-step render chatgpt_api
+    command: datalib-step-render-chatgpt_api
     inputs: [chatgpt/raw]
     outputs: [chatgpt/rendered_md]
 
@@ -121,7 +121,7 @@ steps:
   # Slack workspace mirror. Credentials via latchkey. Omit `channels`
   # (or set `all_channels: true`) to mirror every channel the account sees.
   - id: slack.download
-    command: datalib-step download slack_api
+    command: datalib-step-download-slack_api
     outputs: [slack/raw]
     params:
       common:
@@ -143,7 +143,7 @@ steps:
         # refresh_window_days: 30
 
   - id: slack.render
-    command: datalib-step render slack_api
+    command: datalib-step-render-slack_api
     inputs: [slack/raw]
     outputs: [slack/rendered_md]
 
@@ -153,7 +153,7 @@ steps:
   # discovery is skipped and only those PRs are fetched; entries are
   # paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
   - id: github.download
-    command: datalib-step download github_api
+    command: datalib-step-download-github_api
     outputs: [github/raw]
     params:
       sync:
@@ -164,7 +164,7 @@ steps:
           - https://github.com/imbue-ai/datalib/pull/41
 
   - id: github.render
-    command: datalib-step render github_api
+    command: datalib-step-render-github_api
     inputs: [github/raw]
     outputs: [github/rendered_md]
 
@@ -173,7 +173,7 @@ steps:
   # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
   # are `namespace/project!IID` or a gitlab.com MR URL.
   - id: gitlab.download
-    command: datalib-step download gitlab_api
+    command: datalib-step-download-gitlab_api
     outputs: [gitlab/raw]
     params:
       sync:
@@ -184,7 +184,7 @@ steps:
           - https://gitlab.com/mygroup/myproject/-/merge_requests/101
 
   - id: gitlab.render
-    command: datalib-step render gitlab_api
+    command: datalib-step-render-gitlab_api
     inputs: [gitlab/raw]
     outputs: [gitlab/rendered_md]
 
@@ -193,7 +193,7 @@ steps:
   # Notion mirror. Credentials via latchkey. At least one of `inbox`
   # (enabled) or `subtrees.pages` must be present.
   - id: notion.download
-    command: datalib-step download notion_api
+    command: datalib-step-download-notion_api
     outputs: [notion/raw]
     params:
       sync:
@@ -207,7 +207,7 @@ steps:
             - https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef
 
   - id: notion.render
-    command: datalib-step render notion_api
+    command: datalib-step-render-notion_api
     inputs: [notion/raw]
     outputs: [notion/rendered_md]
 
@@ -217,7 +217,7 @@ steps:
   # presence of `sync:` selects JMAP mode; `hostname` is required.
   # Credentials via latchkey.
   - id: fastmail.download
-    command: datalib-step download email
+    command: datalib-step-download-email
     outputs: [fastmail/raw]
     params:
       sync:
@@ -233,7 +233,7 @@ steps:
       only_extract_labels: []          # extract only these mailboxes; empty = all
 
   - id: fastmail.render
-    command: datalib-step render email
+    command: datalib-step-render-email
     inputs: [fastmail/raw]
     outputs: [fastmail/rendered_md]
     params:
@@ -251,7 +251,7 @@ steps:
   # mbox mode, reading the file at `common.input_path`. The `mbox:` block
   # just labels the synthesized account row.
   - id: gmail-takeout.download
-    command: datalib-step download email
+    command: datalib-step-download-email
     outputs: [gmail-takeout/raw]
     params:
       common:
@@ -267,7 +267,7 @@ steps:
       only_extract_labels: []          # ingest only messages carrying these labels
 
   - id: gmail-takeout.render
-    command: datalib-step render email
+    command: datalib-step-render-email
     inputs: [gmail-takeout/raw]
     outputs: [gmail-takeout/rendered_md]
     params:
@@ -280,7 +280,7 @@ steps:
   # mode; `server_url` is required. Credentials via latchkey. Omit
   # `addressbooks` to sync every addressbook under the principal.
   - id: icloud-contacts.download
-    command: datalib-step download carddav
+    command: datalib-step-download-carddav
     outputs: [icloud-contacts/raw]
     params:
       sync:
@@ -289,21 +289,21 @@ steps:
           - Contacts
 
   - id: icloud-contacts.render
-    command: datalib-step render carddav
+    command: datalib-step-render-carddav
     inputs: [icloud-contacts/raw]
     outputs: [icloud-contacts/rendered_md]
 
   # Mode B — local vCard files. No `sync:` block → reads `.vcf` files from
   # the directory at `common.input_path`.
   - id: vcard-contacts.download
-    command: datalib-step download carddav
+    command: datalib-step-download-carddav
     outputs: [vcard-contacts/raw]
     params:
       common:
         input_path: ~/backups/contacts_vcf
 
   - id: vcard-contacts.render
-    command: datalib-step render carddav
+    command: datalib-step-render-carddav
     inputs: [vcard-contacts/raw]
     outputs: [vcard-contacts/rendered_md]
 
@@ -312,7 +312,7 @@ steps:
   # Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
   # chat networks to ingest (at least one required).
   - id: beeper.download
-    command: datalib-step download beeper
+    command: datalib-step-download-beeper
     outputs: [beeper/raw]
     params:
       sync:
@@ -323,7 +323,7 @@ steps:
         # beeper_data_dir: ~/Library/Application Support/BeeperTexts  # macOS default
 
   - id: beeper.render
-    command: datalib-step render beeper
+    command: datalib-step-render-beeper
     inputs: [beeper/raw]
     outputs: [beeper/rendered_md]
     params:
@@ -336,7 +336,7 @@ steps:
   # Perseus renders straight from the staged tree, so the render step
   # carries `common.input_path` too.
   - id: perseus.download
-    command: datalib-step download perseus
+    command: datalib-step-download-perseus
     outputs: [perseus/raw]
     params:
       common:
@@ -345,7 +345,7 @@ steps:
         files: []
 
   - id: perseus.render
-    command: datalib-step render perseus
+    command: datalib-step-render-perseus
     inputs: [perseus/raw]
     outputs: [perseus/rendered_md]
     params:
@@ -361,7 +361,7 @@ steps:
   # and both IDs are exactly 32 lowercase-hex chars.
   # REDACT: family_device_id + device_udid are non-rotatable read secrets.
   - id: yolink.download
-    command: datalib-step download yolink
+    command: datalib-step-download-yolink
     outputs: [yolink/raw]
     params:
       sync:
@@ -375,7 +375,7 @@ steps:
             device_udid: fedcba9876543210fedcba9876543210
 
   - id: yolink.render
-    command: datalib-step render yolink
+    command: datalib-step-render-yolink
     inputs: [yolink/raw]
     outputs: [yolink/rendered_md]
 
@@ -385,7 +385,7 @@ steps:
   # using the AEP read from the named env var at download time. See
   # docs/user/getting_your_data.md for pulling the backup off the phone.
   - id: signal.download
-    command: datalib-step download signal_backup
+    command: datalib-step-download-signal_backup
     outputs: [signal/raw]
     params:
       sync:
@@ -393,7 +393,7 @@ steps:
         aep_env_var: SIGNAL_BACKUP_PASSPHRASE   # default if omitted
 
   - id: signal.render
-    command: datalib-step render signal_backup
+    command: datalib-step-render-signal_backup
     inputs: [signal/raw]
     outputs: [signal/rendered_md]
     params:
@@ -405,7 +405,7 @@ steps:
   # `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
   # key is hex-encoded in the named env var.
   - id: whatsapp.download
-    command: datalib-step download whatsapp_backup
+    command: datalib-step-download-whatsapp_backup
     outputs: [whatsapp/raw]
     params:
       sync:
@@ -413,7 +413,7 @@ steps:
         key_env_var: WHATSAPP_BACKUP_DECRYPTION_KEY   # default if omitted
 
   - id: whatsapp.render
-    command: datalib-step render whatsapp_backup
+    command: datalib-step-render-whatsapp_backup
     inputs: [whatsapp/raw]
     outputs: [whatsapp/rendered_md]
 
@@ -429,7 +429,7 @@ steps:
   # `download_params` override below bounds that: stop the photo sweep after
   # 20 consecutive failures (LinkedIn rate-limits bursts).
   - id: linkedin.download
-    command: datalib-step download linkedin
+    command: datalib-step-download-linkedin
     outputs: [linkedin/raw]
     params:
       common:
@@ -439,7 +439,7 @@ steps:
       fetch_photos: true
 
   - id: linkedin.render
-    command: datalib-step render linkedin
+    command: datalib-step-render-linkedin
     inputs: [linkedin/raw]
     outputs: [linkedin/rendered_md]
 
@@ -458,7 +458,7 @@ steps:
   # NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
   # it is NOT one of the feeds here.
   - id: google-takeout.download
-    command: datalib-step download google_takeout
+    command: datalib-step-download-google_takeout
     outputs: [google-takeout/raw]
     params:
       common:
@@ -475,7 +475,7 @@ steps:
         gemini_apps: false             # raw store only
 
   - id: google-takeout.render
-    command: datalib-step render google_takeout
+    command: datalib-step-render-google_takeout
     inputs: [google-takeout/raw]
     outputs: [google-takeout/rendered_md]
 
@@ -487,14 +487,14 @@ steps:
   # (MMS attachment bytes go to the CAS); render emits one chat per
   # phone number.
   - id: sms-backup-restore.download
-    command: datalib-step download sms_backup_restore
+    command: datalib-step-download-sms_backup_restore
     outputs: [sms-backup-restore/raw]
     params:
       common:
         input_path: ~/backups/SMSBackupRestore
 
   - id: sms-backup-restore.render
-    command: datalib-step render sms_backup_restore
+    command: datalib-step-render-sms_backup_restore
     inputs: [sms-backup-restore/raw]
     outputs: [sms-backup-restore/rendered_md]
 
@@ -511,7 +511,7 @@ steps:
   # Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
   # into directories that opt in via `stamp_me_with_uuid`.
   - id: fsindex-home.download
-    command: datalib-step download fsindex
+    command: datalib-step-download-fsindex
     outputs: [fsindex-home/raw]
     params:
       common:

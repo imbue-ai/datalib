@@ -1380,11 +1380,11 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         let _ = writeln!(out, "data_root: {}\n", cfg.data_root.display());
     }
     out.push_str(
-        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: grid_index\n    command: datalib-step grid_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
+        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: grid_index\n    command: datalib-step-grid_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
     );
     if !cfg.qmd.skip {
         out.push_str(
-            "\n  - id: qmd_index\n    command: datalib-step qmd_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
+            "\n  - id: qmd_index\n    command: datalib-step-qmd_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
         );
     }
 
@@ -1416,13 +1416,13 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         if managed {
             let _ = write!(
                 block,
-                "  - id: {name}.download\n    command: datalib-step download {ty}\n    outputs: [{name}/raw]\n{dl_params}\
-                 \n  - id: {name}.render\n    command: datalib-step render {ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
+                "  - id: {name}.download\n    command: datalib-step-download-{ty}\n    outputs: [{name}/raw]\n{dl_params}\
+                 \n  - id: {name}.render\n    command: datalib-step-render-{ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
             );
         } else {
             let _ = write!(
                 block,
-                "  - id: {name}.render\n    command: datalib-step render {ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
+                "  - id: {name}.render\n    command: datalib-step-render-{ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
             );
         }
         if entry.enabled {
@@ -1551,12 +1551,12 @@ steps:
   # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
   # Every source's rendered markdown feeds these.
   - id: grid_index
-    command: datalib-step grid_index
+    command: datalib-step-grid_index
     inputs: [\"**/rendered_md\"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    command: datalib-step qmd_index
+    command: datalib-step-qmd_index
     inputs: [\"**/rendered_md\"]
     outputs: [system/qmd]
   # \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}

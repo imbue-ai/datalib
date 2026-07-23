@@ -53,6 +53,22 @@ fn main() {
         }
     }
 
+    // `bundle.resources` also lists the `binaries/datalib-step-*`
+    // wrapper scripts (the virtual split of the step monolith —
+    // configs name them as step `command:`s). Unlike the Bazel-built
+    // binaries above they're generated, not copied, so just run the
+    // generator: it's idempotent, instant, and keeps the wrapper set
+    // in sync with dispatch.rs on every build (real `tauri build` and
+    // bare `cargo check` alike).
+    let status = std::process::Command::new("sh")
+        .arg("../backend/datalib_step/stage_wrappers.sh")
+        .arg("binaries")
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        other => println!("cargo:warning=stage_wrappers.sh failed: {other:?}"),
+    }
+
     // `bundle.resources` also lists `runtime/` — the Node runtime +
     // latchkey/qmd package trees staged by stage-runtime.sh, which (like
     // the binaries above) only runs under `tauri build`. Tauri validates
