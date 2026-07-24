@@ -382,5 +382,24 @@ crate.from_cargo(
     # list. Adding a new provider crate now means a single edit to
     # `frankweiler/backend/Cargo.toml`; no MODULE.bazel change.
     manifests = ["//frankweiler/backend:Cargo.toml"],
+    # rules_rust's default SUPPORTED_PLATFORM_TRIPLES is a "reduced
+    # subset" that omits x86_64-apple-darwin, so generated crate
+    # targets resolve to @platforms//:incompatible on Intel macs —
+    # which broke the release workflow's curl-only
+    # x86_64-apple-darwin leg at analysis time (tokio was the first
+    # casualty). This list is the default set plus
+    # x86_64-apple-darwin. The musl triples don't need to be here:
+    # crate_universe conditions select on cpu+os only (no libc
+    # constraint), so musl platforms match the gnu branches.
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "wasm32-unknown-unknown",
+        "wasm32-wasip1",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-nixos-gnu",
+    ],
 )
 use_repo(crate, "frankweiler_crates")
