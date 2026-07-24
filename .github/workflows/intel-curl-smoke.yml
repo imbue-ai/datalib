@@ -1,0 +1,80 @@
+# Manually-triggered smoke test for the release workflow's curl-only
+# x86_64-apple-darwin leg. Exists because that leg only otherwise runs
+# on `v*` tags — v0.23.0 and v0.23.1 each burned a release on an
+# Intel-leg failure that a branch run would have caught (a missing
+# crate_universe triple, then a missing cmake). Run it against a branch
+# before tagging whenever release.yml's Intel leg or its toolchain
+# assumptions change:
+#
+#   gh workflow run intel-curl-smoke.yml --ref <branch>
+#
+# (workflow_dispatch only works once this file exists on the default
+# branch; until then, push the branch under `intel-smoke/**` to
+# trigger the push variant.)
+#
+# Mirrors the release job's steps for that leg (same -c opt +
+# --config=release flags so BuildBuddy cache is shared with real
+# release runs), minus the tag assertions and publishing.
+name: intel-curl-smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "intel-smoke/**"
+
+jobs:
+  build:
+    name: build (x86_64-apple-darwin, curl-only)
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Match release.yml: workspace_status runs `git describe --tags`.
+          fetch-depth: 0
+
+      # Same cache layering rationale as release.yml's build job.
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: true
+          external-cache: false
+
+      # See release.yml's identically-named step.
+      - name: Install macOS build dependencies
+        run: |
+          set -euo pipefail
+          if ! command -v cmake >/dev/null 2>&1; then
+              brew install cmake
+          fi
+          cmake --version | head -1
+
+      # See release.yml's identically-named step.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy
+          EOF
+              echo "BuildBuddy remote cache enabled for this job."
+          else
+              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+          fi
+
+      # See release.yml's identically-named step.
+      - name: Ensure ~/.cache/qmd/models exists
+        run: mkdir -p "$HOME/.cache/qmd/models"
+
+      - name: Build curl dist bins
+        run: bazel build //frankweiler/backend:curl_dist -c opt --config=release --build_metadata=ROLE=CI
+
+      - name: Smoke-run the built binaries
+        run: |
+          set -euo pipefail
+          file bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch
+          file bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate

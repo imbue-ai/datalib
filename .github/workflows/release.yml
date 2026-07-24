@@ -175,6 +175,22 @@ jobs:
           echo "Resolved LIBCLANG_PATH=$lib_dir"
           echo "LIBCLANG_PATH=$lib_dir" >> "$GITHUB_ENV"
 
+      # The macos-15-intel image (unlike macos-14) doesn't ship cmake,
+      # which boring-sys2's build script needs to build BoringSSL —
+      # v0.23.1's Intel leg died with "is `cmake` not installed?".
+      # Homebrew on Intel macs installs to /usr/local/bin, which is on
+      # bazel's default strict action PATH, so a plain brew install is
+      # all the wiring needed. Guarded so an image that gains cmake
+      # later doesn't fail on "already installed".
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          if ! command -v cmake >/dev/null 2>&1; then
+              brew install cmake
+          fi
+          cmake --version | head -1
+
       - name: Show toolchain versions
         run: |
           bazel version

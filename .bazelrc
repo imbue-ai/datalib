@@ -5,9 +5,14 @@ test --test_output=errors
 # Every bazel action inherits a fixed PATH, not the developer's host
 # PATH. Build and test actions resolve `npx`, `cmake`, etc. against
 # this PATH, so those tools must be installed somewhere here
-# (`/opt/homebrew/bin` covers the brew defaults; `/usr/bin:/bin` covers
-# system `make`/`perl`/`cc` etc.). boring-sys2's build script in
-# particular shells out to cmake + a C toolchain to build boringssl.
+# (`/opt/homebrew/bin` covers the brew defaults on arm macs;
+# `/usr/local/bin` covers Intel macs — brew's prefix there — plus
+# Linux tools installed outside the system dirs; `/usr/bin:/bin`
+# covers system `make`/`perl`/`cc` etc.). boring-sys2's build script
+# in particular shells out to cmake + a C toolchain to build
+# boringssl — the release workflow's x86_64-apple-darwin leg failed
+# until /usr/local/bin was added here, because that's where the
+# macos-15-intel runner's cmake lives.
 #
 # We deliberately do NOT `--action_env=NPX_BIN`. Forwarded host env
 # vars contribute to every action's cache key, so any caller-side
@@ -20,9 +25,9 @@ test --test_output=errors
 # Resolver:
 #   * NPX_BIN  — frankweiler_qmd_indexer::run_qmd
 #                and frankweiler_etl::latchkey::latchkey_command
-build --action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
-build --host_action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
-test --test_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
+build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
 # Mount the host's shared qmd embedding-model cache (`~/.cache/qmd/models`,
 # ~2GB of GGUF files) into the sandbox at the same path. Without this,
