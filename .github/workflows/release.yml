@@ -1,7 +1,9 @@
 # Builds the `//frankweiler/backend:dist` bins on every supported
 # host platform — plus fully-static `*-unknown-linux-musl` variants
 # cross-libc-compiled on the same gnu runners — and attaches a
-# per-triple tarball to a GitHub Release.
+# per-triple tarball to a GitHub Release. The `x86_64-apple-darwin`
+# leg is curl-only: it publishes just the `curl-<triple>.tar.gz`
+# tarball (see the matrix `curl-only` flag below).
 # The `macos-app` job additionally builds, signs, and notarizes the
 # Frankweiler desktop app and attaches its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
@@ -56,10 +58,24 @@ jobs:
         # cross-compiling it) — on musl legs that costs one extra
         # ~30s analysis pass versus the gnu legs' shared-config
         # optimization described above the build steps.
+        #
+        # `curl-only`: build and publish only the curl tarball
+        # (`//frankweiler/backend:curl_dist` -> `curl-<triple>.tar.gz`),
+        # skipping the full frankweiler tarball. Used for
+        # x86_64-apple-darwin, where curl-tarball consumers (e.g. the
+        # minds latchkey gateway on Intel macs) need a native binary
+        # but nothing installs the full toolchain (scripts/install.sh
+        # only maps Darwin/arm64).
         include:
           - triple: aarch64-apple-darwin
             runs-on: macos-14  # Apple Silicon
             bazel-config: ""
+          - triple: x86_64-apple-darwin
+            # GitHub's Intel macOS runner (macos-13 retired 2025-12;
+            # macos-15-intel is supported through Aug 2027).
+            runs-on: macos-15-intel
+            bazel-config: ""
+            curl-only: true
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
             bazel-config: ""
@@ -265,7 +281,15 @@ jobs:
       # below catches any future regression where stamping gets
       # silently disabled.
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist //frankweiler/backend:curl_dist -c opt --config=release --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }} ${{ matrix.bazel-config }}
+        env:
+          CURL_ONLY: ${{ matrix.curl-only }}
+        run: |
+          set -euo pipefail
+          targets="//frankweiler/backend:dist //frankweiler/backend:curl_dist"
+          if [[ "${CURL_ONLY}" == "true" ]]; then
+              targets="//frankweiler/backend:curl_dist"
+          fi
+          bazel build ${targets} -c opt --config=release --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }} ${{ matrix.bazel-config }}
 
       # musl legs only: refuse to publish anything that isn't fully
       # static. A regression here (say, a new crate sneaking in a
@@ -307,7 +331,11 @@ jobs:
       # the tag name. Anything else — `dev`, `unknown`, a `-dirty`
       # suffix, or a mismatched tag — fails the release before any
       # tarball is staged.
+      #
+      # Skipped on curl-only legs: datalib_dag isn't built there, and
+      # the curl bins' `--version` speaks curl, not the tag.
       - name: Assert release binary reports tag version
+        if: matrix.curl-only != true
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -334,28 +362,52 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
+          CURL_ONLY: ${{ matrix.curl-only }}
         run: |
           set -euo pipefail
           version="${REF_NAME#v}"
-          stage="frankweiler-${version}-${TRIPLE}"
-          mkdir -p "${stage}"
 
-          # Map bazel output paths -> public installed names. Add a line
-          # here when you add a binary to //frankweiler/backend:dist.
-          # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
-          # frankweiler-http resolves them via sibling lookup (see
-          # http/src/worker.rs resolve_bin) — and the impersonator's installed          # name must stay in sync with `SIBLING_NAMES` in
-          # frankweiler/backend/etl/src/latchkey.rs (datalib-step
-          # resolves it via a sibling lookup at runtime).
-          cp bazel-bin/frankweiler/backend/dag/datalib_dag "${stage}/datalib-dag"
-          cp bazel-bin/frankweiler/backend/datalib_step/datalib_step "${stage}/datalib-step"
-          cp bazel-bin/frankweiler/backend/http/frankweiler_http_bin "${stage}/frankweiler-http"
-          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
-          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
-          chmod +x "${stage}"/*
+          # sha256 helper: Linux runners have `sha256sum`; macOS has
+          # `shasum`. Use whichever is available so the same step works
+          # on both.
+          checksum() {
+              if command -v sha256sum >/dev/null; then
+                  sha256sum "$1" > "$1.sha256"
+              else
+                  shasum -a 256 "$1" > "$1.sha256"
+              fi
+          }
 
-          tarball="frankweiler-${TRIPLE}.tar.gz"
-          tar -czf "${tarball}" "${stage}"
+          # The full tarball is skipped on curl-only legs — nothing
+          # installs the full toolchain there (scripts/install.sh has no
+          # mapping for those hosts), and //frankweiler/backend:dist
+          # wasn't built.
+          if [[ "${CURL_ONLY}" != "true" ]]; then
+              stage="frankweiler-${version}-${TRIPLE}"
+              mkdir -p "${stage}"
+
+              # Map bazel output paths -> public installed names. Add a line
+              # here when you add a binary to //frankweiler/backend:dist.
+              # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
+              # frankweiler-http resolves them via sibling lookup (see
+              # http/src/worker.rs resolve_bin) — and the impersonator's
+              # installed name must stay in sync with `SIBLING_NAMES` in
+              # frankweiler/backend/etl/src/latchkey.rs (datalib-step
+              # resolves it via a sibling lookup at runtime).
+              cp bazel-bin/frankweiler/backend/dag/datalib_dag "${stage}/datalib-dag"
+              cp bazel-bin/frankweiler/backend/datalib_step/datalib_step "${stage}/datalib-step"
+              cp bazel-bin/frankweiler/backend/http/frankweiler_http_bin "${stage}/frankweiler-http"
+              cp bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
+              cp bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
+              chmod +x "${stage}"/*
+
+              tarball="frankweiler-${TRIPLE}.tar.gz"
+              tar -czf "${tarball}" "${stage}"
+              checksum "${tarball}"
+
+              echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+              echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
+          fi
 
           # The curl-only tarball: just the dispatch curl + the impersonator it
           # fronts (see //frankweiler/backend:curl_dist). Its own inner
@@ -372,19 +424,8 @@ jobs:
           chmod +x "${curl_stage}"/*
           curl_tarball="curl-${TRIPLE}.tar.gz"
           tar -czf "${curl_tarball}" "${curl_stage}"
+          checksum "${curl_tarball}"
 
-          # Linux runners have `sha256sum`; macOS has `shasum`. Use
-          # whichever is available so the same step works on both.
-          if command -v sha256sum >/dev/null; then
-              sha256sum "${tarball}" > "${tarball}.sha256"
-              sha256sum "${curl_tarball}" > "${curl_tarball}.sha256"
-          else
-              shasum -a 256 "${tarball}" > "${tarball}.sha256"
-              shasum -a 256 "${curl_tarball}" > "${curl_tarball}.sha256"
-          fi
-
-          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
           echo "curl_tarball=${curl_tarball}" >> "$GITHUB_OUTPUT"
           echo "curl_sha256=${curl_tarball}.sha256" >> "$GITHUB_OUTPUT"
 
@@ -408,8 +449,13 @@ jobs:
           if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
               gh release create "$REF_NAME" --verify-tag --notes "" || true
           fi
-          gh release upload "$REF_NAME" --clobber \
-              "$TARBALL" "$SHA256" "$CURL_TARBALL" "$CURL_SHA256"
+          # Curl-only legs stage no full tarball, so TARBALL/SHA256 are
+          # empty there; upload whatever the stage step produced.
+          files=("$CURL_TARBALL" "$CURL_SHA256")
+          if [[ -n "${TARBALL:-}" ]]; then
+              files=("$TARBALL" "$SHA256" "${files[@]}")
+          fi
+          gh release upload "$REF_NAME" --clobber "${files[@]}"
 
   # Build, sign, and notarize the Frankweiler desktop app (Tauri) and
   # attach the dmg to the GitHub Release. Deliberately NOT gated on the
