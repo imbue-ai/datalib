@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Asserts that every qmd version pin in the workspace agrees with the
-# canonical pin in `frankweiler/backend/core/src/qmd/mod.rs`'s
+# canonical pin in `datalib/backend/core/src/qmd/mod.rs`'s
 # `DEFAULT_QMD_VERSION` constant.
 #
 # Why this exists: qmd is installed/invoked from several places that all
@@ -18,9 +18,9 @@
 # for six weeks. Don't reintroduce a second constant.)
 #
 # Pins checked:
-#   * frankweiler/backend/core/src/qmd/mod.rs      DEFAULT_QMD_VERSION  (canonical)
+#   * datalib/backend/core/src/qmd/mod.rs      DEFAULT_QMD_VERSION  (canonical)
 #   * tests/fixtures/BUILD.bazel                   QMD_VERSION
-#   * frankweiler/docker/Dockerfile                ARG QMD_VERSION
+#   * datalib/docker/Dockerfile                ARG QMD_VERSION
 #
 # `.devcontainer/Dockerfile` is intentionally NOT checked: it inherits
 # qmd (and its pinned version) from the prod image via
@@ -42,9 +42,9 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
   { echo>&2 "ERROR: cannot find $f"; exit 1; }; f=; set -e
 # --- end runfiles.bash initialization v3 ---
 
-core_qmd_mod="$(rlocation _main/frankweiler/backend/core/src/qmd/mod.rs)"
+core_qmd_mod="$(rlocation _main/datalib/backend/core/src/qmd/mod.rs)"
 fixtures_build="$(rlocation _main/tests/fixtures/BUILD.bazel)"
-prod_dockerfile="$(rlocation _main/frankweiler/docker/Dockerfile)"
+prod_dockerfile="$(rlocation _main/datalib/docker/Dockerfile)"
 
 for f in "$core_qmd_mod" "$fixtures_build" "$prod_dockerfile"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
@@ -93,16 +93,16 @@ report() {
 }
 
 echo "qmd version pins (canonical: ${canonical}):"
-report "frankweiler/backend/core/src/qmd/mod.rs"     "$canonical"
+report "datalib/backend/core/src/qmd/mod.rs"     "$canonical"
 report "tests/fixtures/BUILD.bazel"                  "$fixtures_v"
-report "frankweiler/docker/Dockerfile"               "$prod_v"
+report "datalib/docker/Dockerfile"               "$prod_v"
 
 if [[ "$fails" != "0" ]]; then
     cat >&2 <<EOF
 
 ${fails} qmd version pin(s) disagree with the canonical
 DEFAULT_QMD_VERSION (${canonical}) declared in
-frankweiler/backend/core/src/qmd/mod.rs.
+datalib/backend/core/src/qmd/mod.rs.
 
 Update the diverging files above to match, or — if upstream qmd has
 a new release worth tracking — bump DEFAULT_QMD_VERSION (and the

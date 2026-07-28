@@ -1,0 +1,107 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_github",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_github",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:once_cell",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:urlencoding",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_binary(
+    name = "github_download",
+    srcs = ["src/bin/github_download.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_github",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "github_unittests",
+    size = "small",
+    crate = ":datalib_etl_github",
+    edition = "2021",
+)
+
+rust_test(
+    name = "github_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_github",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "github_live",
+    srcs = ["tests/github_live.rs"],
+    crate_root = "tests/github_live.rs",
+    data = glob(["tests/snapshots/github_live__*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to api.github.com
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        ":datalib_etl_github",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "github_live.update",
+    test = ":github_live",
+    test_args = ["--ignored"],
+)

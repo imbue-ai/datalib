@@ -1,0 +1,136 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed synthetic directory tree used as a scan root by the fsindex
+# e2e test and dropped into the dev/e2e data root (as `fsindex_scan/`) by
+# `//tests/fixtures:materialize_tng_root`. The leading-dot `.fsindex.yaml`
+# breadcrumb is matched explicitly — the default glob skips dotfiles.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(
+        [
+            "tests/fixtures/fsindex_tng/**/*",
+            "tests/fixtures/fsindex_tng/**/.fsindex.yaml",
+        ],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_fsindex",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_fsindex",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:hex",
+        "@datalib_crates//:ignore",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_yaml",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+        "@datalib_crates//:walkdir",
+    ],
+)
+
+rust_binary(
+    name = "fsindex",
+    srcs = ["src/bin/fsindex.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_fsindex",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# Inline `#[cfg(test)]` unit tests living in the library sources
+# (stamp.rs, hash.rs, walker.rs). This `crate = ":..."` target is what
+# actually compiles and runs them under `bazel test` — without it the
+# inline tests are silently never executed. Every other library in the
+# repo has the equivalent target; fsindex was missing it.
+rust_test(
+    name = "fsindex_unittests",
+    size = "small",
+    crate = ":datalib_etl_fsindex",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# Hermetic smoke test: build a small tree in a tempdir, scan it, snapshot
+# `files`, edit the tree, re-scan, snapshot again. Catches drift in the
+# canonical tree-hash, the symlink shape, and the cascaded ignore filter.
+# Update goldens with `bazel run :extract_smoke_test.update`.
+rust_test(
+    name = "extract_smoke_test",
+    srcs = ["tests/extract_smoke.rs"],
+    crate_name = "extract_smoke",
+    data = glob(
+        ["tests/snapshots/extract_smoke__*.snap"],
+        allow_empty = True,
+    ),
+    edition = "2021",
+    env = {
+        # See //datalib/backend/core/BUILD.bazel for the rationale.
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        ":datalib_etl_fsindex",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "extract_smoke_test.update",
+    test = ":extract_smoke_test",
+)
+
+# End-to-end scan of the checked-in TNG-themed tree: points download at the
+# fixture, asserts the landed `files` rows (entry set + `'*.tmp'` ignore +
+# `.fsindex.yaml` exclusion). The fixture is staged via `data = [":tng_fixture"]`.
+rust_test(
+    name = "fsindex_tng_e2e",
+    srcs = ["tests/fsindex_tng_e2e.rs"],
+    crate_root = "tests/fsindex_tng_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "FSINDEX_TNG_DIR": "datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng",
+    },
+    deps = [
+        ":datalib_etl_fsindex",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

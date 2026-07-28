@@ -6,7 +6,7 @@ authors = [
     { name = "Thad Hughes", email = "thad@imbue.com" }
 ]
 requires-python = ">=3.13"
-# Runtime is now Rust under frankweiler/backend/. Python is kept only
+# Runtime is now Rust under datalib/backend/. Python is kept only
 # for schema codegen and host-side lint/typecheck.
 dependencies = []
 
@@ -33,7 +33,7 @@ exclude = [
     "**/node_modules",
     "**/dist",
     "**/target",
-    "frankweiler",
+    "datalib",
 ]
 venvPath = "."
 venv = ".venv"

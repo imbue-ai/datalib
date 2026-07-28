@@ -1,6 +1,6 @@
 # `grid_rows` — the union table behind the grid
 
-The AG Grid in `frankweiler/ui` shows one row per "displayable thing" in
+The AG Grid in `datalib/ui` shows one row per "displayable thing" in
 the mirror: chat conversations, individual messages, content blocks
 (tool_use / tool_result / thinking), Slack threads, Slack messages.
 Rather than have the Rust backend dispatch per-provider — five queries
@@ -17,7 +17,7 @@ Three forces pushed us this direction:
    move. Codegen propagates the change to Rust (both writer and reader
    sides) and TypeScript (consumer side). Drift has historically been
    a recurring bug source.
-2. **One query path on the backend.** `frankweiler/backend/core/src/db.rs`
+2. **One query path on the backend.** `datalib/backend/core/src/db.rs`
    is now a single `SELECT … FROM grid_rows WHERE …` plus a row mapper.
    Adding a provider doesn't add a `push_*` function; it adds rows to the
    table at ingest time. The query/filter/sort logic stays put.
@@ -28,7 +28,7 @@ Three forces pushed us this direction:
 ## Source of truth
 
 The hand-written `GridRow` struct in
-`frankweiler/backend/schema/src/grid_rows.rs` defines the row shape — it
+`datalib/backend/schema/src/grid_rows.rs` defines the row shape — it
 is the single source of truth, with no codegen step. Each field carries:
 
 - `#[col(sql = "…")]` — portable DDL type (the SQL subset shared by Dolt
@@ -39,22 +39,22 @@ is the single source of truth, with no codegen step. Each field carries:
 - doc comment — the per-provider mapping documenting how the column is
   derived, kept next to the field so it can't drift.
 
-`#[derive(PortableTable)]` (in `frankweiler/backend/etl/macros`) produces
+`#[derive(PortableTable)]` (in `datalib/backend/etl/macros`) produces
 from the struct the `DDL`, `COLUMNS`, and `TABLES` module consts. The
 `DDL` constant is used at grid-index time (`init_schema` in
 `etl/src/grid_index.rs`) and from the `dump.sql` portable-DDL emitter.
 
 ## Producer side: per-provider `render/grid_rows.rs`
 
-Each provider crate under `frankweiler/backend/etl/providers/<p>/`
+Each provider crate under `datalib/backend/etl/providers/<p>/`
 emits `*.grid_rows.json` sidecars next to its rendered markdown. The
 grid_index step (`datalib-step grid_index`; `build_grid_index` in
-`frankweiler/backend/etl/src/grid_index.rs`) walks every sidecar under
+`datalib/backend/etl/src/grid_index.rs`) walks every sidecar under
 `<root>/<stanza>/rendered_md/`, upserts each conversation's row set
 into Dolt, and stamps the corresponding `documents` row with the
 `row_set_hash` used to skip unchanged re-renders next time.
 
-## Consumer side: `frankweiler/backend/core/src/dolt_repo.rs`
+## Consumer side: `datalib/backend/core/src/dolt_repo.rs`
 
 `DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`
 (account/project/before/after/free-text) plus a kind clause from
@@ -66,26 +66,26 @@ ahead of their messages. The row mapper translates each row into a
 ## Adding a column
 
 1. Add the field to the `GridRow` struct in
-   `frankweiler/backend/schema/src/grid_rows.rs`, with a `#[col(sql = "…")]`
+   `datalib/backend/schema/src/grid_rows.rs`, with a `#[col(sql = "…")]`
    portable type and a doc comment carrying the per-provider mapping so
    future-you knows where the value comes from.
 2. Add the column to each per-provider `render/grid_rows.rs`
    `GridRow` builder.
 3. Update `dolt_repo.rs`'s `SELECT`, the destructured row, and
    `SearchRow` in `search.rs` if the column should reach the API.
-4. Add it to the column manifest in `frankweiler/backend/http/src/lib.rs`
+4. Add it to the column manifest in `datalib/backend/http/src/lib.rs`
    if the grid should display it.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider
 
-1. Land a new crate under `frankweiler/backend/etl/providers/<p>/`
+1. Land a new crate under `datalib/backend/etl/providers/<p>/`
    with a `render/grid_rows.rs` emitting `GridRow`s with the right
    `provider` / `kind` / `source_label` strings, and a renderer that
    writes the `*.grid_rows.json` sidecars alongside its markdown.
 2. Wire the new crate into `datalib-step`: add it to the deps of
-   `frankweiler/backend/datalib_step` and to the dispatch table in
-   `frankweiler/backend/datalib_step/src/dispatch.rs`, then declare its
+   `datalib/backend/datalib_step` and to the dispatch table in
+   `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    download/render step pair in the config. The grid_index step picks
    up its sidecars with no further wiring.
 3. Add the source label to the consuming bits as needed (icon

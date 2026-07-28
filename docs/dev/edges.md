@@ -3,9 +3,9 @@
 `edges` is an optional Dolt table that stores directed links between
 documents (or spans inside documents) discovered during ingest. The
 schema is the hand-written `EdgeRow` struct at
-`frankweiler/backend/schema/src/edges.rs` (DDL via
+`datalib/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`); the table is created by
-`init_schema` in `frankweiler/backend/etl/src/grid_index.rs` and persists in
+`init_schema` in `datalib/backend/etl/src/grid_index.rs` and persists in
 `<root>/system/backend_index/db.doltlite_db` alongside `grid_rows` and
 `markdowns`.
 
@@ -22,7 +22,7 @@ idempotent — the grid_index step deletes-then-inserts every edge whose
 
 ## Producers today
 
-- **Perseus** (`frankweiler/backend/etl/providers/perseus/`) emits two
+- **Perseus** (`datalib/backend/etl/providers/perseus/`) emits two
   edge flavors per chapter doc:
   - one doc-level edge to the matching chapter in the other language
     (replacing the old inline `*Other:* […]` markdown link). The

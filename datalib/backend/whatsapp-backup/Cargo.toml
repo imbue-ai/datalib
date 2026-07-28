@@ -1,0 +1,30 @@
+[package]
+name = "datalib-whatsapp-backup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_whatsapp_backup"
+path = "src/lib.rs"
+
+[dependencies]
+aes = { workspace = true }
+ctr = { workspace = true }
+cipher = { workspace = true }
+ghash = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+flate2 = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+# MD5 is the trailing file-integrity checksum (not cryptographic);
+# used only when assembling fixture / test crypt15 files via the
+# encrypt path. Decrypt doesn't need it because the GCM auth tag
+# covers what matters.
+md-5 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+hex = "0.4"

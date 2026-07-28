@@ -11,21 +11,21 @@ how to use it.
 tools/run_coverage.sh \
   //tests/fixtures:ingested_tng_test \
   -- \
-  //frankweiler/backend/dag:datalib_dag \
-  //frankweiler/backend/datalib_step:datalib_step \
-  //frankweiler/backend/signal-backup:signal_make_fixture
+  //datalib/backend/dag:datalib_dag_bin \
+  //datalib/backend/datalib_step:datalib_step \
+  //datalib/backend/signal-backup:signal_make_fixture
 ```
 
 Anything before `--` is a test target. Anything after `--` is a
 `rust_binary` that those tests invoke as a subprocess (LLVM needs the
 binary on disk to translate the runtime hit counts back into source
-locations). Output lands at `/tmp/frankweiler_coverage.lcov` by
+locations). Output lands at `/tmp/datalib_coverage.lcov` by
 default; override with `$LCOV_OUT`.
 
 HTML report:
 
 ```bash
-genhtml -o /tmp/cov-html /tmp/frankweiler_coverage.lcov \
+genhtml -o /tmp/cov-html /tmp/datalib_coverage.lcov \
   --ignore-errors source,inconsistent,corrupt
 open /tmp/cov-html/index.html
 ```
@@ -85,7 +85,7 @@ below makes it work.
 └────────┬─────────┘   tools/run_coverage.sh does this step.
          │
          ▼
-   /tmp/frankweiler_coverage.lcov
+   /tmp/datalib_coverage.lcov
 ```
 
 ### Three things had to be true
@@ -93,8 +93,8 @@ below makes it work.
 1. **`-Cinstrument-coverage` reaches the binaries that run.** The
    `data` deps from the py_test to `datalib_dag` / `datalib_step`
    carry rules_rust's coverage transition through, so the binaries at
-   `bazel-bin/frankweiler/backend/dag/datalib_dag` and
-   `bazel-bin/frankweiler/backend/datalib_step/datalib_step` after a
+   `bazel-bin/datalib/backend/dag/datalib_dag_bin` and
+   `bazel-bin/datalib/backend/datalib_step/datalib_step` after a
    `bazelisk coverage` invocation are the instrumented ones. This Just
    Works in rules_rust 0.70 — no custom transition, no
    `rustc_flags = select(...)`, no second binary target. The audit
@@ -148,7 +148,7 @@ subprocess, the steps are:
 
 ## Future: Playwright / UI e2e coverage
 
-The Playwright e2e suite at `//frankweiler/ui:e2e_test` drives the
+The Playwright e2e suite at `//datalib/ui:e2e_test` drives the
 backend through the HTTP server, which is a `rust_binary`. The same
 mechanism should in principle work: add the backend binary to the
 e2e test's `data`, run `tools/run_coverage.sh` with the e2e test

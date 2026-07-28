@@ -1,0 +1,179 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+# Checked-in JSON fixtures used by render + playback tests.
+filegroup(
+    name = "fixtures",
+    srcs = glob(
+        ["tests/fixtures/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# Subset of `fixtures` consumed by //tests/fixtures:ingested_tng — the
+# Star Trek themed Google Takeout mbox that drives the email extract
+# path end-to-end (mbox → raw → translate → render).
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/mbox/*.mbox"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_email",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_email",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:htmd",
+        "@datalib_crates//:mail-parser",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+# Extract step — JMAP session, state-token-incremental sync of mailboxes,
+# emails, threads, attachments + .eml bytes into one .doltlite_db.
+rust_binary(
+    name = "jmap_download",
+    srcs = ["src/bin/jmap_download.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "jmap_unittests",
+    size = "small",
+    crate = ":datalib_etl_email",
+    edition = "2021",
+)
+
+rust_test(
+    name = "jmap_render",
+    srcs = ["tests/jmap_render.rs"],
+    crate_root = "tests/jmap_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":fixtures"],
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "jmap_mbox",
+    srcs = ["tests/jmap_mbox.rs"],
+    crate_root = "tests/jmap_mbox.rs",
+    data = [":fixtures"],
+    edition = "2021",
+    env = {
+        "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "jmap_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    data = [":fixtures"],
+    edition = "2021",
+    env = {
+        "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Live test — talks to api.fastmail.com via latchkey. Manual.
+rust_test(
+    name = "jmap_live",
+    srcs = ["tests/jmap_live.rs"],
+    crate_root = "tests/jmap_live.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",
+        "manual",
+        "no-sandbox",
+    ],
+    deps = [
+        ":datalib_etl_email",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "jmap_render.update",
+    test = ":jmap_render",
+)
+
+insta_update(
+    name = "jmap_live.update",
+    test = ":jmap_live",
+    test_args = ["--ignored"],
+)

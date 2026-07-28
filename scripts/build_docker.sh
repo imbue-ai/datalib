@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build (and optionally push) the multi-arch frankweiler runtime image.
+# Build (and optionally push) the multi-arch datalib runtime image.
 #
 # Usage:
 #   scripts/build_docker.sh [VERSION] [--push] [--load] [--tarball-dir DIR]
 #
 # VERSION
 #     Release tag to bake into the image, without the leading `v`. Defaults
-#     to the workspace version from frankweiler/backend/Cargo.toml. The
+#     to the workspace version from datalib/backend/Cargo.toml. The
 #     script downloads the matching per-arch tarballs from the GitHub
 #     Release `v$VERSION` of $REPO (default imbue-ai/datalib).
 #
@@ -22,10 +22,10 @@
 #
 # --tarball-dir DIR
 #     Skip the GitHub download step and use locally-built tarballs from
-#     DIR (expected layout: $DIR/frankweiler-x86_64-unknown-linux-gnu.tar.gz
-#     + $DIR/frankweiler-aarch64-unknown-linux-gnu.tar.gz). Useful when
+#     DIR (expected layout: $DIR/datalib-x86_64-unknown-linux-gnu.tar.gz
+#     + $DIR/datalib-aarch64-unknown-linux-gnu.tar.gz). Useful when
 #     iterating against a tarball you just produced via `bazel build
-#     //frankweiler/backend:dist`.
+#     //datalib/backend:dist`.
 #
 # Environment:
 #   REPO          owner/name on GitHub (default imbue-ai/datalib)
@@ -65,23 +65,23 @@ if [[ ${PUSH} -eq 1 && ${LOAD} -eq 1 ]]; then
 fi
 
 if [[ -z "${VERSION}" ]]; then
-    VERSION="$(grep -E '^version = "[^"]+"$' frankweiler/backend/Cargo.toml \
+    VERSION="$(grep -E '^version = "[^"]+"$' datalib/backend/Cargo.toml \
                | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
     echo "build_docker: VERSION not given, defaulting to Cargo.toml workspace version ${VERSION}"
 fi
 
-ctx="$(mktemp -d -t frankweiler-docker-XXXXXX)"
+ctx="$(mktemp -d -t datalib-docker-XXXXXX)"
 trap 'rm -rf "${ctx}"' EXIT INT TERM
 
 # Stage the build context: Dockerfile + per-arch tarballs at the layout
 # the Dockerfile expects (`dist/<arch>/...tar.gz`).
-cp frankweiler/docker/Dockerfile "${ctx}/Dockerfile"
-cp frankweiler/docker/entrypoint.sh "${ctx}/entrypoint.sh"
+cp datalib/docker/Dockerfile "${ctx}/Dockerfile"
+cp datalib/docker/entrypoint.sh "${ctx}/entrypoint.sh"
 mkdir -p "${ctx}/dist/amd64" "${ctx}/dist/arm64"
 
 fetch_tarball() {
     local triple="$1" arch_dir="$2"
-    local name="frankweiler-${triple}.tar.gz"
+    local name="datalib-${triple}.tar.gz"
     local dest_dir="${ctx}/dist/${arch_dir}"
     if [[ -n "${TARBALL_DIR}" ]]; then
         if [[ ! -f "${TARBALL_DIR}/${name}" ]]; then
@@ -114,11 +114,11 @@ fetch_tarball aarch64-unknown-linux-gnu arm64
 # Pick a builder that supports multi-platform. `docker buildx create
 # --use` is idempotent enough for our purposes (errors if the name
 # already exists; we just check and skip).
-if ! docker buildx inspect frankweiler-builder >/dev/null 2>&1; then
-    echo "build_docker: creating buildx builder 'frankweiler-builder'"
-    docker buildx create --name frankweiler-builder --use >/dev/null
+if ! docker buildx inspect datalib-builder >/dev/null 2>&1; then
+    echo "build_docker: creating buildx builder 'datalib-builder'"
+    docker buildx create --name datalib-builder --use >/dev/null
 else
-    docker buildx use frankweiler-builder >/dev/null
+    docker buildx use datalib-builder >/dev/null
 fi
 
 tags=(--tag "${IMAGE_NAME}:${VERSION}" --tag "${IMAGE_NAME}:latest")

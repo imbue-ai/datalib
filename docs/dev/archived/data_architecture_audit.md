@@ -39,7 +39,7 @@ those together.
 
 - P1: Standardizing this would be very valuable because it would help us eliminate inconsistencies and reduce code. **`<table>_bookkeeping` helpers exported but responsibility is split**: The shared layer provides `bookkeeping_ddl_for(table)` in `doltlite_raw.rs` (line 161), `record_object_attempt`, `record_object_error`, and `failed_ids`, but **each provider's `extract/db.rs` must manually instantiate** the bookkeeping table in its own DDL block and call the record-* helpers. No macro or centralized builder collapses this boilerplate — a new provider's author must copy the pattern from a template. **Port guide** (§6) mitigates this with the template reference, but it's not as tight as shared code would be.
 
-- P1: Standardizing this config would be valuable. **No per-source retry policy config in `config.yaml`**: Document §"Retry and fetch durability" states "retry policy is config, not code" with "per-source `sync:` blocks in `config.yaml` should support the same retry knobs as the global default." Inspection of `frankweiler_core::config` (not in audit scope but referenced) reveals no per-source retry-policy fields. Global `--retry-failed` exists in CLI only; no config-file equivalent, no per-source override.
+- P1: Standardizing this config would be valuable. **No per-source retry policy config in `config.yaml`**: Document §"Retry and fetch durability" states "retry policy is config, not code" with "per-source `sync:` blocks in `config.yaml` should support the same retry knobs as the global default." Inspection of `datalib_core::config` (not in audit scope but referenced) reveals no per-source retry-policy fields. Global `--retry-failed` exists in CLI only; no config-file equivalent, no per-source override.
 
 - P2: If we can come up with a better mechanism to ensure compliance, that would be great, but not urgent. **No `ObsArgs` flattening enforcement**: The document mandates "every binary flattens [`obs::ObsArgs`]" via clap's `#[command(flatten)]`. The sync binary does this (`sync/src/main.rs` line 179), but the shared layer doesn't guard against binaries that forget. A provider's standalone `*_download` binary (e.g., `anthropic_download.rs`) may or may not include it; no compile-time check forces compliance.
 
@@ -194,14 +194,14 @@ NOTE: Again, we want to keep this flag, It's useful for testing.
 1. **Shared raw table schema** — Users, Orgs, Conversations, Messages, ContentBlocks, Attachments.
    - Anthropic has no Messages or ContentBlocks tables (they're exploded at translate time from `chat_messages` payload).
    - ChatGPT (`providers/chatgpt/src/extract/db.rs`) may differ.
-   - Recommend: define a shared `frankweiler_etl::chat_llm` schema crate (users, orgs, conversations) and let each provider extend it with provider-specific columns (e.g. `conversations.model`, `anthropic_project_id`).
+   - Recommend: define a shared `datalib_etl::chat_llm` schema crate (users, orgs, conversations) and let each provider extend it with provider-specific columns (e.g. `conversations.model`, `anthropic_project_id`).
 P2 & NOTE: Again, the raw data should be very specific to each provider. It is only once we start translating data that we need a shared schema. And I'm not sure that even needs to be a SQL schema. It might be a native Rust schema for now. Let's wait on this. 
 
 2. **Shared translate shape** — Messages, blocks (thinking, tool_use, tool_result) projected to uniform `GridRow` kinds.
    - Anthropic `grid_rows.rs` produces: Chat, User Input, LLM Response, LLM Thinking, Tool Call.
    - ChatGPT likely produces Message → role (user/assistant) mapping.
    - `section_uuid_for_block()` (`render.rs:68-70`) suggests there's already a shared naming scheme for block anchors.
-   - Recommend: extract the GridRow emission loop into `frankweiler_etl::chat_llm::translate` so both providers reuse it, parameterized by provider name and model lookup.
+   - Recommend: extract the GridRow emission loop into `datalib_etl::chat_llm::translate` so both providers reuse it, parameterized by provider name and model lookup.
 P2: This sounds like a really good idea. 
 
 3. **Shared sidecar structure** — Identical: markdown with message divs, grid_rows JSON sidecar.
@@ -410,7 +410,7 @@ I think this is okay for now.
 
 **Audit date**: 2025-06-09
 **Auditor**: Claude Code
-**Provider crate**: `frankweiler_etl_beeper` at `frankweiler/backend/etl/providers/beeper/`
+**Provider crate**: `datalib_etl_beeper` at `datalib/backend/etl/providers/beeper/`
 
 ---
 
@@ -419,45 +419,45 @@ I think this is okay for now.
 ### Principle violations
 
 - **No pre-seeded bookkeeping on conversations.** Architecture demands pre-seed-before-fetch + paired `<table>_bookkeeping` (attempt_count/last_attempt_at/last_error). ChatGPT creates `conversations_bookkeeping` rows in `pre_seed_conversations()` (db.rs:196–200) but only on the *listing* pass, not before the detail fetch. If a detail fetch crashes, a pre-seeded row with `payload IS NULL` won't surface next run to trigger a retry walk. Only subsequent explicit re-fetch via listing will catch it. *Violation*: pre-seed should happen before *any* fetch, including detail.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/db.rs:166–203` (pre_seed only stamped at listing time)
+  - File: `/datalib/backend/etl/providers/chatgpt/src/extract/db.rs:166–203` (pre_seed only stamped at listing time)
   - Workaround exists but suboptimal: `--retry-failed` will re-walk failed conversations if they're re-listed, but won't catch conversations dropped mid-fetch in a run that got OOM'd.
 P1: This seems worth fixing soon. 
 
 - **404 handling absent.** Architecture specifies 404 → `deleted_upstream_at` marker. No code path records 404s or distinguishes them from transient errors; all failures go to `record_object_error()` identically. A conversation deleted upstream will be retried forever.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:268–272` (Permanent error returns from API but no 404 check)
+  - File: `/datalib/backend/etl/providers/chatgpt/src/extract/mod.rs:268–272` (Permanent error returns from API but no 404 check)
 P1: We should at least be recording that we are getting 404s so that we don't try to fetch forever. 
 
 - **No explicit retry-on-by-default orchestrator binding.** Architecture says "the orchestrator takes a flag `--retry-failed` (default `true`)." ChatGPT extract has no `--retry-failed` knob wired; the retry logic exists in `db::failed_conversation_ids()` but nothing calls it or exposes the user-facing flag. A second run starts fresh from listing regardless of prior failures.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs` (no attempt to load and re-walk failed conversations)
+  - File: `/datalib/backend/etl/providers/chatgpt/src/extract/mod.rs` (no attempt to load and re-walk failed conversations)
   - Workaround: `--reset-and-redownload` forces a full re-fetch, but that's all-or-nothing, not incremental retry.
 P2: The most important thing to do is to ensure that we have the right data written to support this feature, which doesn't exist yet. 
 
 ### Dead patterns / cargo-culted code
 
 - **Legacy synthetic keys (`_fetched_at`, `_listing_update_time`) documented but already migrated.** EXTRACT.md (lines 13–16) describes old JSON-tree layout with synthetic keys in payloads. These *were* promoted to real columns (`fetched_at` in bookkeeping, `last_listing_update_time` as a real column), but the doc reads as if the migration is still in flight. The synthesizer (synthesize.rs:48–54) explicitly *strips* these keys on serve, so payloads are wire-faithful. No bug here, but the docs are stale.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/EXTRACT.md:13–16` (outdated description of pre-migration state)
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/synthesize.rs:48–54` (correctly strips keys)
+  - File: `/datalib/backend/etl/providers/chatgpt/EXTRACT.md:13–16` (outdated description of pre-migration state)
+  - File: `/datalib/backend/etl/providers/chatgpt/src/synthesize.rs:48–54` (correctly strips keys)
 P2: Yes, let's update the docs. 
 
 - **Unused `record_object_error` on fetch failures is asymmetric.** Permanent errors call `db.record_conversation_error(cid, &msg)` (mod.rs:270), but rate-limit give-up (mod.rs:259–266) silently exits without recording anything durable. Next run will re-list and may hit the same rate limit again if it hasn't reset. Should either record the error or auto-pause the run gracefully.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:259–266` (no durable marker on rate-limit giveup)
+  - File: `/datalib/backend/etl/providers/chatgpt/src/extract/mod.rs:259–266` (no durable marker on rate-limit giveup)
 P2: I think we should auto pause gracefully. 
 
 ### Simplification opportunities
 
 - **Duplicate timestamp normalization logic across grid_rows and render.** `bump_micros()` (grid_rows.rs:41–55) and `bump_iso()` (render.rs:34–50) are near-identical, both converting bare `Z` to explicit `+00:00` offset and then bumping microseconds. They diverge slightly in output format — one uses `%.6f%:z`, the other uses `chrono::SecondsFormat::AutoSi`. A single shared `TimestampBumper` helper in the translate module would eliminate the divergence.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:41–55`
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:34–50`
+  - File: `/datalib/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:41–55`
+  - File: `/datalib/backend/etl/providers/chatgpt/src/translate/render.rs:34–50`
 P1: I think we should extract out a timestamp utils crate and use it everywhere we handle timestamps, which I think is in both extract (to populate the DB column) and translate (to render them).
 
 - **Message ordering re-implemented in two places.** `rows_for_conversation()` (grid_rows.rs:74–84) sorts messages by `(create_time, message_id)` for the sidecar. `render_one()` (render.rs:202–227) re-sorts them differently via `current_node` parent-chain walk with a fallback to create_time. Same data, different sort keys, separate code paths. Render's parent-chain walk is intentional (to respect conversation branching), but this should be documented as a deliberate difference, not silently duplicated.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:74–84`
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:202–227`
+  - File: `/datalib/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:74–84`
+  - File: `/datalib/backend/etl/providers/chatgpt/src/translate/render.rs:202–227`
   - Opportunity: factor the sorting logic into a reusable helper, or document why render's ordering must differ from grid_rows.
 P1: I do think this should probably be unified.  Is message ID a auto increment index? That doesn't seem good. Hopefully we are enumerating the messages as we store them into a database so that we can sort by that enumeration. Maybe that's what message ID is. If so, I think that's what we should always sort them by. 
 
 - **Fingerprint hash recomputes canonical JSON every render.** `fingerprint_for_conversation()` (grid_rows.rs:179–184) calls `canonical_json()` which canonicalizes the entire upstream payload. This happens on every render pass, even if the conversation is marked for skipping. Move the canonicalization to extract time and cache it as a column, so translate can fingerprint-skip in O(1) hash comparison instead of O(payload bytes).
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:179–204`
+  - File: `/datalib/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:179–204`
   - Optimization: add a `fingerprint` TEXT column to `conversations` table, populate at upsert time, skip render entirely if cached fingerprint matches prior.
 P0: This sounds like a generic bookkeeping thing that we might want to investigate having literally everywhere (all the bookkeeping tables) so that we can quickly recognize whether we have already translated a particular version of some entity or not.
 
@@ -466,14 +466,14 @@ P0: This sounds like a generic bookkeeping thing that we might want to investiga
 - **LLM chat row types unify with Anthropic but diverge at render layout.** Both ChatGPT and Anthropic emit `GridRow` with `kind = 'User Input' | 'LLM Response' | 'LLM Thinking'` (grid_rows.rs:30–38 mirrors Anthropic's pattern). Both pull from LLM conversations. Both strip sentinel characters and render to markdown with inline code blocks. But ChatGPT uses `rendered_md/openai/<account>/llm_chats/<conv_id>/index.md` while Anthropic likely uses `rendered_md/anthropic/...`. And Anthropic's render path (synthesize, dedup, blob materialization) likely differs slightly.
   - Opportunity: extract a shared `LlmChatRenderer` trait or module that both Anthropic and ChatGPT (and future Gemini, Claude Web) can plug into. Table DDL, bookkeeping schema, message-row fingerprinting, timestamp bumping, attachment handling, markdown formatting — all should be unified.
   - Files: 
-    - `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:30–38`
-    - `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:1–87` (render layout)
+    - `/datalib/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:30–38`
+    - `/datalib/backend/etl/providers/chatgpt/src/translate/render.rs:1–87` (render layout)
     - (Anthropic equivalent would be in `/providers/anthropic/src/translate/`)
 P1: At translate time, I actually think we should extract a shared Rust data type to encapsulate everything we want to render about any kind of LLM chat (Claude, ChatGPT, Gemini, etc.) and then translate all of the chats into that object and then pass that to a render function that knows how to render it to markdown and turn it into rows for the index.
 
-- **Sidecar schema + grid_rows JSON are re-produced per provider.** ChatGPT emits `Sidecar { header: { markdown_uuid, source_fingerprint, render_version }, rows: Vec<GridRow>, edges: Vec<> }` (render.rs:148–156). Every provider that follows the translate pattern reinvents the same struct. This should be in `frankweiler_etl::sidecar` as the cross-provider contract, not re-declared.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:148–156`
-  - Current: already uses `frankweiler_etl::sidecar::Sidecar` (import at line 13), so no violation — this is already unified. Good.
+- **Sidecar schema + grid_rows JSON are re-produced per provider.** ChatGPT emits `Sidecar { header: { markdown_uuid, source_fingerprint, render_version }, rows: Vec<GridRow>, edges: Vec<> }` (render.rs:148–156). Every provider that follows the translate pattern reinvents the same struct. This should be in `datalib_etl::sidecar` as the cross-provider contract, not re-declared.
+  - File: `/datalib/backend/etl/providers/chatgpt/src/translate/render.rs:148–156`
+  - Current: already uses `datalib_etl::sidecar::Sidecar` (import at line 13), so no violation — this is already unified. Good.
 P1: The comment above I think would help fix this.
 
 - **Attachment handling (file_id → signed URL → bytes) mirrors Anthropic.** Both providers:
@@ -483,12 +483,12 @@ P1: The comment above I think would help fix this.
   4. Download signed URL via latchkey curl
   5. Store in blob CAS
   6. Record attempt/error in blob_refs_bookkeeping
-  - This dance is provably correct but verbose. Extract to a shared `BlobFetcher` helper in `frankweiler_etl::blob_cas` or a new `frankweiler-etl-llm-common` crate.
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:298–391` (fetch_attachments_for + download_one_file)
+  - This dance is provably correct but verbose. Extract to a shared `BlobFetcher` helper in `datalib_etl::blob_cas` or a new `datalib-etl-llm-common` crate.
+  - File: `/datalib/backend/etl/providers/chatgpt/src/extract/mod.rs:298–391` (fetch_attachments_for + download_one_file)
 P4: I'm not sure different API sources will be able to share the same blob fetching mechanism in general, but we should make sure that they store their blobs in consistent ways. 
 
 - **Account/identity stamping: `me` endpoint → per-row account_id.** ChatGPT upserts `/me` once per run (extract/mod.rs:124–133), then stamps `account_id` on every conversation row. Anthropic does the same. This pattern should be a shared template: "call the identity endpoint, store account metadata, use its id as the shard key for per-account rows."
-  - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:124–133`
+  - File: `/datalib/backend/etl/providers/chatgpt/src/extract/mod.rs:124–133`
   - Opportunity: factor into a `IdentityFetcher` helper that both providers can reuse.
 P4: I'm not sure it matters so much that these are identical because they will have slightly different semantics. 
 
@@ -507,7 +507,7 @@ P0: Can we not introduce a shared struct that everyone has to populate for these
 
 ### Dead patterns
 
-- **Unused blob_refs truncate (CARGO CULT)**: extract/mod.rs:78-83 calls `frankweiler_etl::doltlite_raw::truncate_blob_refs` when `refetch_blobs` is set, with a comment explicitly acknowledging "Contacts doesn't populate `blob_refs` (photos travel inline in the vCard payload)" — this is harmless but unnecessary code that could be gated behind a provider check or removed entirely.
+- **Unused blob_refs truncate (CARGO CULT)**: extract/mod.rs:78-83 calls `datalib_etl::doltlite_raw::truncate_blob_refs` when `refetch_blobs` is set, with a comment explicitly acknowledging "Contacts doesn't populate `blob_refs` (photos travel inline in the vCard payload)" — this is harmless but unnecessary code that could be gated behind a provider check or removed entirely.
 P2: Yes, I think it is fine that context keeps its blobs in line because they are so small and we can just not invoke these code paths that don't matter. 
 
 - **Unused `payload` fields in accounts/addressbooks tables (MINOR OVERHEAD)**: Both tables (db.rs:64-78) carry a `payload TEXT NULL` column that are populated but never read back by extract or translate. The payload is written (db.rs:164, 213-214) but the sync/reset paths don't query them; keeping them costs storage and serialization for zero reader value.
@@ -971,14 +971,14 @@ P2: Yes, this is correct. Let's just note it in the documentation.
 ### Simplification
 
 **Scope state cursor**
-- Both GitLab and GitHub share `since_for_scope` helper in `frankweiler_etl::scope_state` (extract/mod.rs:94)
+- Both GitLab and GitHub share `since_for_scope` helper in `datalib_etl::scope_state` (extract/mod.rs:94)
 - Extract/mod.rs just re-exports it unchanged; good reuse
 - **Simplify**: document this as the shared pattern for both; remove duplication comments
 
 **Fingerprint + RENDER_VERSION**
 - Both gitlab and github use identical fingerprint strategy: canonicalize JSON, hash RENDER_VERSION + payload + sorted items
 - grid_rows.rs:62-76 mirrors github/src/translate/grid_rows.rs:72-87 exactly
-- **Simplify**: extract to shared `frankweiler_etl::fingerprint` module or macro; both providers are identical
+- **Simplify**: extract to shared `datalib_etl::fingerprint` module or macro; both providers are identical
 - Pattern is load-bearing (sidecar `source_fingerprint` field) but code duplication is unnecessary
 
 **No blobs for GitLab**
@@ -1322,10 +1322,10 @@ P1: When you say it like this, it sounds more interesting. Maybe we should inves
 ### Cross-source sharing opportunities
 
 - **`ts_to_iso`** (`src/translate/mod.rs:57-80`) — the F64-precision-safe Unix→ISO-8601-with-`+00:00` conversion is a reference implementation worth lifting into the shared ETL crate. Multiple providers reimplement variants inline.
-- **UUIDv5 recipes**. `slack_message_uuid(team, channel, ts)` (`src/translate/mod.rs:41-55`) plus Anthropic/GitHub/GitLab/Notion equivalents should live in one `frankweiler_schema::uuid_recipes` module so the GridRow doc-comments and runtime code can't drift.
+- **UUIDv5 recipes**. `slack_message_uuid(team, channel, ts)` (`src/translate/mod.rs:41-55`) plus Anthropic/GitHub/GitLab/Notion equivalents should live in one `datalib_schema::uuid_recipes` module so the GridRow doc-comments and runtime code can't drift.
 - **Thread grouping / threaded-render shape** (`src/translate/render.rs:86-91`). Slack groups messages into one doc per thread; Beeper/Signal/Notion threads want the same. A shared `render_threaded_docs` would unify this.
 P2: They are slightly different though, because beeper and signal need to group by timestamp or by time period. Actually, I think once we go to Slack direct messages, we will want something similar in Slack as well. So yes, I agree. I think we should probably try to introduce a generic intermediate chat message type that all chats can be turned in to (at translate time) and then render that. 
-- **Blob materialization next to rendered `.md`** (`src/translate/render.rs:154-155`). ChatGPT, Anthropic, Notion all reimplement the same `BlobReader` → `blobs/` byte-stream step; belongs in a shared `frankweiler_etl::render` helper.
+- **Blob materialization next to rendered `.md`** (`src/translate/render.rs:154-155`). ChatGPT, Anthropic, Notion all reimplement the same `BlobReader` → `blobs/` byte-stream step; belongs in a shared `datalib_etl::render` helper.
 
 ### Net
 
@@ -1337,7 +1337,7 @@ P2: They are slightly different though, because beeper and signal need to group 
 
 ### Principle violations
 
-* **Bookkeeping sidecar missing (port guide §6)** — `yolink_readings` has no `_bookkeeping` sidecar. Should carry `attempt_count`, `last_attempt_at`, `last_error` per-row to enable `--retry-failed` on-by-default (doc: "Retry and fetch durability"). See `/Users/thad/Imbue Dropbox/Thad Hughes/src/datalib/frankweiler/backend/etl/providers/yolink/src/extract.rs:125-142` (DDL) — missing boilerplate like `dr::bookkeeping_ddl_for()`.
+* **Bookkeeping sidecar missing (port guide §6)** — `yolink_readings` has no `_bookkeeping` sidecar. Should carry `attempt_count`, `last_attempt_at`, `last_error` per-row to enable `--retry-failed` on-by-default (doc: "Retry and fetch durability"). See `/Users/thad/Imbue Dropbox/Thad Hughes/src/datalib/datalib/backend/etl/providers/yolink/src/extract.rs:125-142` (DDL) — missing boilerplate like `dr::bookkeeping_ddl_for()`.
 
 * **Pre-seed pattern not implemented** — Per doc principle "Pre-seed before fetch" (port guide §6, doc §446-461), rows should exist with `payload=NULL` before fetch attempts. YoLink only writes on success; a mid-fetch crash on a partially-loaded device leaves no evidence of which windows were attempted. See `extract.rs:256-353` (`fetch_device`) — no pre-seed call before `curl`.
 
@@ -1371,13 +1371,13 @@ P2: They are slightly different though, because beeper and signal need to group 
 
 * **`curl` command shelling out instead of using HTTP library** — Lines 407-425 spawn `/usr/bin/curl` as a subprocess. The framework uses `latchkey curl` for auth (doc §408-422) and direct tokio HTTP clients elsewhere. YoLink's signed-URL auth doesn't fit latchkey (doc says this is "the special case"), but `std::process::Command` / `tokio::process` is less resilient than a proper HTTP client. No timeout guard visible (curl's `-m` flag would help), no retry logic inside the HTTP layer. Consider `reqwest` or similar. This isn't a violation per se (signed URLs do sidestep latchkey), but it's an outlier in the codebase.
 
-* **Test snapshot names don't match kind names** — Snapshots use `parse_thsensor` (line 441) but the kind is `"temperature_humidity"` (line 59). The snapshot artifact at `src/snapshots/frankweiler_etl_yolink__extract__tests__parse_thsensor.snap` uses a shorter alias. Rename test or kind to be consistent: either `"th_sensor"` or `"temperature_humidity"` everywhere.
+* **Test snapshot names don't match kind names** — Snapshots use `parse_thsensor` (line 441) but the kind is `"temperature_humidity"` (line 59). The snapshot artifact at `src/snapshots/datalib_etl_yolink__extract__tests__parse_thsensor.snap` uses a shorter alias. Rename test or kind to be consistent: either `"th_sensor"` or `"temperature_humidity"` everywhere.
 
 ### Cross-source sharing (time-series family)
 
 The doc (§627-674, especially §669) lists "time-series sensor data — yolink today; Garmin fitness and IQ Air air quality planned" as a shared family, but YoLink's schema and extract patterns aren't set up for reuse.
 
-* **Borrow YoLink's window-stride cursor pattern for Garmin / IQAir** — The time-window walk (lines 33-39, 233-235, 301-341) is sound: fixed strides, overlap to catch late-arriving edits, per-device tracking. Extract the window logic into `frankweiler_etl::time_window` or similar, reusable by Garmin (device fitness samples) and IQAir (air-quality readings). YoLink's implementation is tightly coupled to CSV parsing; abstract the cursor walk from the fetch body.
+* **Borrow YoLink's window-stride cursor pattern for Garmin / IQAir** — The time-window walk (lines 33-39, 233-235, 301-341) is sound: fixed strides, overlap to catch late-arriving edits, per-device tracking. Extract the window logic into `datalib_etl::time_window` or similar, reusable by Garmin (device fitness samples) and IQAir (air-quality readings). YoLink's implementation is tightly coupled to CSV parsing; abstract the cursor walk from the fetch body.
 
 * **Unified time-series reading schema** — `yolink_readings` (extract.rs:133-139) should be the prototype for Garmin / IQAir. All three have:
   - `device_name` (foreign key to device config)
@@ -1408,14 +1408,14 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
 ### Shared UUIDv5 recipe module
 - **Providers**: Slack, Anthropic, ChatGPT, Notion, GitHub, GitLab, Beeper, Signal, Contacts, Perseus, (planned: Gemini, Garmin, IQAir)
 - **Concern**: Every provider re-implements `Uuid::new_v5(NS, format!("{provider}:{scope}:{kind}:{id}"))`. Namespaces are open-coded constants. Recipe strings drift from doc-comments; near-miss collisions (e.g. GitLab note UUID missing `mr_iid` qualifier) silently corrupt cross-source joins.
-- **Proposed shape**: `frankweiler_schema::uuid_recipes` crate exporting one function per (provider, entity) pair — `slack_message_uuid(team, channel, ts)`, `anthropic_message_uuid(org, conv, msg)`, `gitlab_note_uuid(proj, mr_iid, note_id)`, etc. — with namespace constants colocated and snapshot tests pinning every recipe's UUID output across releases. GridRow doc-comments cite the function name, not the recipe string.
+- **Proposed shape**: `datalib_schema::uuid_recipes` crate exporting one function per (provider, entity) pair — `slack_message_uuid(team, channel, ts)`, `anthropic_message_uuid(org, conv, msg)`, `gitlab_note_uuid(proj, mr_iid, note_id)`, etc. — with namespace constants colocated and snapshot tests pinning every recipe's UUID output across releases. GridRow doc-comments cite the function name, not the recipe string.
 PO: Getting stable identifiers right is incredibly important for the bytes at rest format, but I'm not sure centralizing it is the right idea. I want people to be able to implement their own ingestion and extraction code without having to necessarily register it in some central library. To me, the right thing to do is to just always construct UUIDs via function and put those functions in a known place inside of every data source. 
 - **Called out by**: `slack.md`, `anthropic.md`, `chatgpt.md`, `gitlab.md`, `beeper.md`, `signal.md`, `perseus.md`, `contacts.md`
 
 ### Shared timestamp → ISO-8601 helper
 - **Providers**: Slack, Beeper, Signal, Anthropic, ChatGPT, Notion, GitHub, GitLab, Email
 - **Concern**: Every chat provider does its own Unix-millis or RFC3339 conversion; almost all emit bare `Z` instead of explicit `+00:00`, violating the "strict ISO-8601 with offset" principle. ChatGPT has two near-identical `bump_micros` / `bump_iso` helpers diverging on format string. Beeper passes `use_z=true`. Signal's 1970 sentinel is bare-Z. Most providers don't validate that upstream timestamps actually carry an offset.
-- **Proposed shape**: `frankweiler_etl::timestamps` with:
+- **Proposed shape**: `datalib_etl::timestamps` with:
   - `iso_from_unix_ms(i64) -> String` (always `+00:00`)
   - `iso_from_unix_seconds_f64(f64) -> String` (precision-safe; lift Slack's `ts_to_iso`)
   - `normalize_iso(&str) -> Result<String>` (validates offset, rewrites `Z`→`+00:00`)
@@ -1426,7 +1426,7 @@ P0: I really like the idea of a shared timestamp handling library where all the 
 ### Shared retry / backoff machinery
 - **Providers**: Slack, Anthropic, ChatGPT, GitHub, GitLab, Email
 - **Concern**: Per-provider rate-limit + exponential-backoff loops with hardcoded constants (GitHub: `RETRY_MAX=7`, `RETRY_INITIAL_BACKOFF_MS=2000`; Slack identical shape). Architecture demands "retry policy is config, not code" and per-source `config.yaml` knobs; nothing implements it.
-- **Proposed shape**: `frankweiler_etl::retry::{RetryPolicy, retry_with_backoff}` taking a `RetryPolicy { max_attempts, initial_backoff_ms, max_backoff_ms, give_up_after_days }` loaded from per-source `sync:` block. Provider clients (Slack, Anthropic, ChatGPT, GitHub, GitLab) wrap their HTTP call in `retry_with_backoff(&policy, || ...)`. Surface `Retry-After` / `x-ratelimit-reset` parsing in a shared `parse_retry_after` helper.
+- **Proposed shape**: `datalib_etl::retry::{RetryPolicy, retry_with_backoff}` taking a `RetryPolicy { max_attempts, initial_backoff_ms, max_backoff_ms, give_up_after_days }` loaded from per-source `sync:` block. Provider clients (Slack, Anthropic, ChatGPT, GitHub, GitLab) wrap their HTTP call in `retry_with_backoff(&policy, || ...)`. Surface `Retry-After` / `x-ratelimit-reset` parsing in a shared `parse_retry_after` helper.
 - **Called out by**: `slack.md`, `_shared_layer.md`, `github.md`, `chatgpt.md`, `email.md`, `anthropic.md`
 P0: Let's set up a shared retry config that everyone uses to configure their retry in the YAML. And there is a shared implementation that helps track failures and schedule exponential backoff, etc. This is probably a solved problem in some ways. I wonder if we can use a pre-baked solution. 
 
@@ -1458,7 +1458,7 @@ P0: Yes, this sounds like a good way to make sure everything is being consistent
 - **Providers**: Slack, Beeper, Signal, Email (Fastmail JMAP), planned direct Signal/iMessage readers
 - **Concern**: All four project messages → threads → participants → attachments but raw schemas diverge (Email has `emails` + `threads` + `email_mailboxes` joins; Slack has `messages` flat; Beeper reads index.db; Signal reads backup frames). Per-message GridRow shape is unified but kind taxonomies leak network names (Beeper emits `"Signal Message"` vs Slack `"Channel Message"`), breaking cross-network grouping. Period bucketing borrowed from API providers is overkill for one-shot Signal imports.
 - **Proposed shape**:
-  - `frankweiler_etl::chat_human::translate` shared module with `render_threaded_docs(messages, period)`, common `kind` taxonomy (`Channel Message`, `Direct Message`, `Thread Reply`, `Reaction`), and shared period-bucketing knob (Signal/email should default `Period::All`).
+  - `datalib_etl::chat_human::translate` shared module with `render_threaded_docs(messages, period)`, common `kind` taxonomy (`Channel Message`, `Direct Message`, `Thread Reply`, `Reaction`), and shared period-bucketing knob (Signal/email should default `Period::All`).
   - Shared `chat_message`, `chat_thread`, `chat_participant_join` raw-table template (each provider extends with provider-specific columns).
   - Beeper's `source_label = "Beeper:Signal"` composite documented as the canonical multi-network labeling convention.
 - **Called out by**: `beeper.md` (kind taxonomy mismatch), `signal.md` (Period::All), `email.md` (chat-human family proposal), `slack.md` (shared threaded-render helper)
@@ -1468,7 +1468,7 @@ P2: Let's save the rendering concerns for later.
 - **Providers**: Anthropic, ChatGPT, (planned: Gemini, Claude Web)
 - **Concern**: Both emit GridRow kinds `User Input | LLM Response | LLM Thinking | Tool Call`; both pull conversations → messages → content blocks → attachments; both use two-hop signed-URL attachment download; both call an identity endpoint (`/api/account` vs `/me`) and stamp `account_id` on rows. Anthropic explodes messages from `chat_messages` payload at translate time; ChatGPT has Messages tables. Render ordering diverges (ChatGPT's parent-chain walk vs grid_rows sort).
 - **Proposed shape**:
-  - `frankweiler_etl::chat_llm` schema crate (users, orgs, conversations, messages, content_blocks, attachments) extensible per-provider (e.g. `anthropic_project_id`).
+  - `datalib_etl::chat_llm` schema crate (users, orgs, conversations, messages, content_blocks, attachments) extensible per-provider (e.g. `anthropic_project_id`).
   - Shared `LlmChatRenderer` trait emitting GridRow rows + sidecar; both providers plug in via provider-specific message iterators.
   - Shared `IdentityFetcher` helper for `me`/`account` endpoint.
   - Shared block-anchor naming (`section_uuid_for_block`).
@@ -1479,7 +1479,7 @@ P2: Let's save the rendering concerns for later.
 - **Providers**: GitHub, GitLab
 - **Concern**: Both populate GridRow `git_sha` + `external_id` correctly. Both use identical scope-state cursor + refresh-window logic via `since_for_scope`. Both compute identical canonical-JSON + RENDER_VERSION fingerprint. Raw schemas justifiably differ (GH has 4 tables, GL has 2), but fingerprint code and `CommentRow`/`NoteRow` projection logic are copy-pasted. GitHub re-fetches all PRs unconditionally; GitLab skips unchanged MRs. GitHub lacks GitLab's optimization.
 - **Proposed shape**:
-  - `frankweiler_etl::code_review` shared module with `CodeReviewThreadRow` projection, `fingerprint_code_review(payload, comments)`, and skip-unchanged helper.
+  - `datalib_etl::code_review` shared module with `CodeReviewThreadRow` projection, `fingerprint_code_review(payload, comments)`, and skip-unchanged helper.
   - Document shared family contract: every code-review GridRow MUST carry `git_sha` + `external_id`.
   - Backport GitLab's skipped-unchanged optimization to GitHub.
 - **Called out by**: `github.md`, `gitlab.md`
@@ -1489,55 +1489,55 @@ P2: Let's save the rendering concerns for later.
 - **Providers**: YoLink today; Garmin, IQAir planned
 - **Concern**: YoLink is the only time-series provider and has hardcoded everything: window-stride cursor, CSV-format-versioning, signing scheme, table DDL, `CONSECUTIVE_FAILURE_BUDGET` const. No translate phase, no GridRow projection, no sidecar — breaks the universal raw→translate→load contract. Cursor watermarking via `MAX(ts_ms)` is gap-prone.
 - **Proposed shape**:
-  - `frankweiler_etl::time_window` module with `WindowStrideCursor { stride, overlap, start, now }` iterator (per-window, not global-MAX watermark).
+  - `datalib_etl::time_window` module with `WindowStrideCursor { stride, overlap, start, now }` iterator (per-window, not global-MAX watermark).
   - `DeviceAuth` trait for per-device signed-URL schemes.
   - Shared `sensor_readings` raw-table template: `(device_name, ts_ms, metric, value, id_composite_pk)`.
-  - Shared time-series `GridRow.kind` taxonomy (`Temperature | Humidity | Heart Rate | PM2.5 | ...`) and a `frankweiler_etl::time_series::translate` projecting all three providers.
+  - Shared time-series `GridRow.kind` taxonomy (`Temperature | Humidity | Heart Rate | PM2.5 | ...`) and a `datalib_etl::time_series::translate` projecting all three providers.
 - **Called out by**: `yolink.md` (entire family section), `_shared_layer.md` (`periodize.rs` is narrowly YoLink-only)
 
 ### Shared blob materialization at render
 - **Providers**: ChatGPT, Anthropic, Notion, Slack, Signal, Email, Beeper, Contacts
 - **Concern**: CAS-stored blobs are reified to `blobs/<uid>.<ext>` next to the rendered `.md` by every provider via inline `BlobReader` → byte-stream loops. Contacts stores photos inline in payload (no CAS) and reinvents the materialize step.
-- **Proposed shape**: `frankweiler_etl::render::materialize_blob_refs(refs, out_dir)` shared helper for CAS-backed providers; `materialize_inline_blobs(parsed_payload, out_dir)` for the inline-payload case (Contacts, future Signal-attachments-in-frame). Both write through one chokepoint so disk-full / write errors are surfaced uniformly (today Contacts swallows errors with `.ok()`).
+- **Proposed shape**: `datalib_etl::render::materialize_blob_refs(refs, out_dir)` shared helper for CAS-backed providers; `materialize_inline_blobs(parsed_payload, out_dir)` for the inline-payload case (Contacts, future Signal-attachments-in-frame). Both write through one chokepoint so disk-full / write errors are surfaced uniformly (today Contacts swallows errors with `.ok()`).
 - **Called out by**: `slack.md`, `chatgpt.md`, `anthropic.md`, `contacts.md`, `email.md`, `signal.md`, `_shared_layer.md`
 
 ### Shared attachment-fetch dance (two-hop signed URL)
 - **Providers**: ChatGPT, Anthropic, Slack (files), planned Gemini
 - **Concern**: Same multi-step ritual: scan payload for refs → dedupe by file-id → auth-fetch metadata → fetch signed URL → curl signed URL → store_bytes in CAS → record_blob_error on failure. Repeated verbatim across providers.
-- **Proposed shape**: `frankweiler_etl::blob_cas::TwoHopFetcher` trait + `fetch_and_store_blobs(provider_id, refs, &client)` helper. Provider supplies `lookup_signed_url(file_id)`; helper does the rest including bookkeeping.
+- **Proposed shape**: `datalib_etl::blob_cas::TwoHopFetcher` trait + `fetch_and_store_blobs(provider_id, refs, &client)` helper. Provider supplies `lookup_signed_url(file_id)`; helper does the rest including bookkeeping.
 - **Called out by**: `chatgpt.md`, `anthropic.md`, `slack.md`
 
 ### Canonical sidecar header field naming
 - **Providers**: Slack, Beeper, Signal, Notion, Email, Contacts, Anthropic, ChatGPT, GitHub, GitLab, Perseus
-- **Concern**: Architecture spec field is `document_uuid` but multiple providers emit `markdown_uuid` (Signal, Contacts, Anthropic, Notion). ChatGPT correctly uses shared `frankweiler_etl::sidecar::Sidecar`. Field-name drift defeats load-side enforcement.
-- **Proposed shape**: All providers import `frankweiler_etl::sidecar::{Sidecar, SidecarHeader}` (no per-provider struct). Rename `markdown_uuid` → `document_uuid` everywhere. Load-layer reader asserts the canonical field name.
+- **Concern**: Architecture spec field is `document_uuid` but multiple providers emit `markdown_uuid` (Signal, Contacts, Anthropic, Notion). ChatGPT correctly uses shared `datalib_etl::sidecar::Sidecar`. Field-name drift defeats load-side enforcement.
+- **Proposed shape**: All providers import `datalib_etl::sidecar::{Sidecar, SidecarHeader}` (no per-provider struct). Rename `markdown_uuid` → `document_uuid` everywhere. Load-layer reader asserts the canonical field name.
 - **Called out by**: `signal.md`, `contacts.md`, `notion.md`, `chatgpt.md` (already compliant — model citizen)
 P0: Let's do work out a struct that specifies the shape of these rows that we're going to index and use that struct both at write time and at read time. 
 
 ### Shared fingerprint module
 - **Providers**: GitHub, GitLab, Notion, ChatGPT, Anthropic, Slack, Beeper, Signal, Contacts, Perseus
 - **Concern**: Every provider hashes `RENDER_VERSION + canonical_json(payload) + sorted_children` identically. ChatGPT recomputes canonical JSON on every render even when skipping. No shared module; behavior drifts.
-- **Proposed shape**: `frankweiler_etl::fingerprint` with `compute_fingerprint(render_version, sections: &[&[u8]])` builder. Cache canonical-JSON form in a `fingerprint` column at extract time so translate can fingerprint-skip in O(hash-compare).
+- **Proposed shape**: `datalib_etl::fingerprint` with `compute_fingerprint(render_version, sections: &[&[u8]])` builder. Cache canonical-JSON form in a `fingerprint` column at extract time so translate can fingerprint-skip in O(hash-compare).
 - **Called out by**: `chatgpt.md` (recompute waste), `gitlab.md` (duplicated with GitHub), `github.md`, `notion.md`
 
 ### Shared scope-state / cursor helpers
 - **Providers**: GitHub, GitLab, Email, Contacts (CardDAV sync-token), Slack (channel cursors)
 - **Concern**: `since_for_scope` + `sync_scope_state` already shared between GitHub/GitLab (good). Slack uses three keys in `sync_scope_state` that could collapse to one stamp. Email has redundant `jmap:` prefix on state-token keys. Contacts persists sync-tokens per addressbook. Patterns differ but the shape is identical: "for scope X, last-known-good cursor = Y."
-- **Proposed shape**: `frankweiler_etl::scope_state::{since_for_scope, save_scope_state, load_scope_state}` already exists — extend with `manifest_as_of(scope)` for sweep-style providers and document the canonical key shape `<scope_id>:<cursor_kind>` (no provider prefix).
+- **Proposed shape**: `datalib_etl::scope_state::{since_for_scope, save_scope_state, load_scope_state}` already exists — extend with `manifest_as_of(scope)` for sweep-style providers and document the canonical key shape `<scope_id>:<cursor_kind>` (no provider prefix).
 - **Called out by**: `slack.md`, `email.md`, `github.md`, `gitlab.md`, `contacts.md`
 
 ### Shared run / phase state machine
 - **Providers**: orchestrator + all providers
 - **Concern**: `PhaseOutcome`, `LoadOutcome`, `FetchSummary` are per-provider with no cross-phase union. Future status-line rendering, JSON summaries, and interrupt handling have to know about each variant. Beeper's `events_orphaned` and GitHub's unused `errors` field show the drift.
-- **Proposed shape**: `frankweiler_etl::run_state::{RunPhase, PhaseStatus, RowCounts { added, modified, removed, failed }}`. Every provider's FetchSummary embeds a `RowCounts`. Orchestrator renders status from this uniform shape.
+- **Proposed shape**: `datalib_etl::run_state::{RunPhase, PhaseStatus, RowCounts { added, modified, removed, failed }}`. Every provider's FetchSummary embeds a `RowCounts`. Orchestrator renders status from this uniform shape.
 - **Called out by**: `_shared_layer.md`, `beeper.md`, `github.md`, `perseus.md` (vestigial `skipped` field)
 
 ### `ObsArgs` + single-commit-per-source guards
 - **Providers**: orchestrator + every standalone `<provider>_download` binary
 - **Concern**: Architecture mandates `#[command(flatten)] obs: ObsArgs` and single-`dolt_commit`-per-source, but neither has compile-time enforcement. Vestigial download binaries may silently drop ObsArgs. A provider that called `dolt_commit` internally would not be stopped.
 - **Proposed shape**:
-  - `frankweiler_etl::cli::standard_args!()` declarative macro that bundles `ObsArgs` + `ExtractControl` flags; every binary uses it.
-  - `frankweiler_etl::commit_guard::ExtractCommitGate` that providers receive in lieu of raw `&mut DoltConn` — only the orchestrator holds the `commit_run` token.
+  - `datalib_etl::cli::standard_args!()` declarative macro that bundles `ObsArgs` + `ExtractControl` flags; every binary uses it.
+  - `datalib_etl::commit_guard::ExtractCommitGate` that providers receive in lieu of raw `&mut DoltConn` — only the orchestrator holds the `commit_run` token.
 - **Called out by**: `_shared_layer.md`
 CLARIFY: What is ObsArgs?
 
@@ -1551,7 +1551,7 @@ DO NOT DO: It's fine.
 ### Shared hierarchical UUID + alignment-edge schema
 - **Providers**: Perseus today; planned TEI / archival / multilingual corpora
 - **Concern**: Perseus's `(book, chapter, section, language, sentence_index)` UUID derivation and bilingual sentence-alignment edge schema (`(src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, label)`) are reusable templates for any hierarchical / parallel corpus.
-- **Proposed shape**: `frankweiler_schema::hierarchical_uuid::{section_span_uuid(work, level1, level2, lang, span_kind, span_idx)}` generalization; `frankweiler_etl::edges::AlignmentEdge` shared struct.
+- **Proposed shape**: `datalib_schema::hierarchical_uuid::{section_span_uuid(work, level1, level2, lang, span_kind, span_idx)}` generalization; `datalib_etl::edges::AlignmentEdge` shared struct.
 - **Called out by**: `perseus.md`
 
 ### Shared narrative logging
@@ -1569,5 +1569,5 @@ DO NOT DO: It's fine.
 ### Privacy / span redaction boundary
 - **Providers**: all (orchestrator)
 - **Concern**: OTLP export wraps spans containing potentially sensitive payloads. Architecture flags this as deferred; no redaction layer exists.
-- **Proposed shape**: `frankweiler_etl::obs::redact` helper consumed by every `tracing::info!` that mentions item bodies. Until built, document the gap in operator-facing docs.
+- **Proposed shape**: `datalib_etl::obs::redact` helper consumed by every `tracing::info!` that mentions item bodies. Until built, document the gap in operator-facing docs.
 - **Called out by**: `_shared_layer.md`

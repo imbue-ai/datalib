@@ -164,8 +164,8 @@ any provider parser or `schemas/grid_rows.schema.json`:
 3. If you add a new block type / content_type / attachment kind in
    real-life data, add an example to the table above and a fixture
    entry — so demos and integration tests cover it.
-4. UI mocks live at `frankweiler/ui/tests/mocks/`. Keep them aligned
-   with whatever the HTTP backend (`frankweiler/backend/http`) returns
+4. UI mocks live at `datalib/ui/tests/mocks/`. Keep them aligned
+   with whatever the HTTP backend (`datalib/backend/http`) returns
    on the matching route.
 
 **Golden snapshots.** `tests/test_snapshots.py` writes

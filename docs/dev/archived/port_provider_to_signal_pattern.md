@@ -48,9 +48,9 @@ canonical pattern. In order:
 For each target provider the agent should:
 
 - **Read those five commits.**
-- **Read `frankweiler/backend/etl/providers/signal/src/extract/schema_raw.rs`** as the simplest derive example.
-- **Read `frankweiler/backend/etl/providers/email/src/translate/parse.rs`** as the two-phase parse template.
-- **Read `frankweiler/backend/etl/providers/signal/src/translate/parse.rs`** as a second two-phase example (slightly different bucket key shape — period-bucketed).
+- **Read `datalib/backend/etl/providers/signal/src/extract/schema_raw.rs`** as the simplest derive example.
+- **Read `datalib/backend/etl/providers/email/src/translate/parse.rs`** as the two-phase parse template.
+- **Read `datalib/backend/etl/providers/signal/src/translate/parse.rs`** as a second two-phase example (slightly different bucket key shape — period-bucketed).
 
 Commit per phase, mirroring the email cadence. Each phase commits with
 all tests green at that checkpoint.
@@ -62,14 +62,14 @@ all tests green at that checkpoint.
 Carry these mental models into every port.
 
 **Shared, do not duplicate:**
-- `frankweiler_etl::blob_cas::BlobCas` + `cas_objects` table — bytes are
+- `datalib_etl::blob_cas::BlobCas` + `cas_objects` table — bytes are
   fully unified. `BlobCas::put_many` is the only CAS-write path.
-- `frankweiler_etl::bulk::bulk_upsert_in_tx<T>` — the chunked multi-row
+- `datalib_etl::bulk::bulk_upsert_in_tx<T>` — the chunked multi-row
   UPSERT helper. Every entity table goes through it.
-- `frankweiler_etl::doltlite_raw::bookkeeping_ddl_for` — the
+- `datalib_etl::doltlite_raw::bookkeeping_ddl_for` — the
   `<table>_bookkeeping` sidecars.
-- `frankweiler_etl::doltlite_raw::WirePayloadTriad` + the
-  `#[derive(WirePayloadRow)]` macro in `frankweiler-etl-macros`.
+- `datalib_etl::doltlite_raw::WirePayloadTriad` + the
+  `#[derive(WirePayloadRow)]` macro in `datalib-etl-macros`.
 
 **Per-provider, must be re-shaped:**
 - The schema's per-entity promoted columns and the row-struct field
@@ -102,12 +102,12 @@ are listed in the dedicated sections below.
 
 The agent should fully read:
 
-- `frankweiler/backend/etl/providers/<provider>/src/extract/schema_raw.rs`
-- `frankweiler/backend/etl/providers/<provider>/src/extract/db.rs`
-- `frankweiler/backend/etl/providers/<provider>/src/extract/mod.rs`
-- `frankweiler/backend/etl/providers/<provider>/src/translate/parse.rs`
-- `frankweiler/backend/etl/providers/<provider>/src/translate/render.rs`
-- Every test file under `frankweiler/backend/etl/providers/<provider>/tests/`
+- `datalib/backend/etl/providers/<provider>/src/extract/schema_raw.rs`
+- `datalib/backend/etl/providers/<provider>/src/extract/db.rs`
+- `datalib/backend/etl/providers/<provider>/src/extract/mod.rs`
+- `datalib/backend/etl/providers/<provider>/src/translate/parse.rs`
+- `datalib/backend/etl/providers/<provider>/src/translate/render.rs`
+- Every test file under `datalib/backend/etl/providers/<provider>/tests/`
 
 …and grep for `store_blob`, `pre_seed_blob_stub`, `record_blob_error`,
 `loaded_blob_ids`, `SqliteBlobReader`, `truncate_blob_refs` to find
@@ -120,9 +120,9 @@ every entity-write call goes through `bulk_upsert_in_tx`.
 
 Changes:
 
-1. **Add `frankweiler-etl-macros` to the provider's deps** (Cargo.toml
-   `frankweiler-etl-macros = { path = "../../macros" }`, BUILD.bazel
-   `proc_macro_deps = ["//frankweiler/backend/etl/macros:frankweiler_etl_macros"]`).
+1. **Add `datalib-etl-macros` to the provider's deps** (Cargo.toml
+   `datalib-etl-macros = { path = "../../macros" }`, BUILD.bazel
+   `proc_macro_deps = ["//datalib/backend/etl/macros:datalib_etl_macros"]`).
    Run `bash tools/repin_cargo.sh`.
 
 2. **Rewrite `extract/schema_raw.rs`:**
@@ -142,7 +142,7 @@ Changes:
          pub fn from_payload(/* upstream-args */, payload: &Value) -> Result<Self> {
              let payload_str = serde_json::to_string(payload)?;
              let payload_blake3 =
-                 frankweiler_etl::blob_cas::blake3_hex(payload_str.as_bytes());
+                 datalib_etl::blob_cas::blake3_hex(payload_str.as_bytes());
              // ... promote columns from payload ...
              Ok(Self {
                  triad: WirePayloadTriad { id, payload: payload_str, payload_blake3 },
@@ -168,11 +168,11 @@ Changes:
 4. **Refactor `extract/mod.rs`:**
    - Compute `now` exactly once at the top of `fetch()` (or
      `run_sync()`) via
-     `frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339()`
+     `datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339()`
      and thread it down. Don't compute it inside helpers.
    - Per-table wrapper functions take `(db, now, &rows)`, build
      `Vec<FooRow>`, and call `bulk_upsert_in_tx`. See
-     `frankweiler/backend/etl/providers/email/src/extract/mod.rs`
+     `datalib/backend/etl/providers/email/src/extract/mod.rs`
      functions `upsert_account`, `upsert_mailboxes`, `upsert_threads`,
      `upsert_emails`.
    - Replace every `db.upsert_*(...)` call site with a `bulk_upsert_in_tx`
@@ -186,7 +186,7 @@ Changes:
    API: build a row via `FooRow::from_payload`, call
    `bulk_upsert_in_tx` directly in the test helper.
 
-6. **Run `bazel test //frankweiler/backend/etl/providers/<provider>/...`**
+6. **Run `bazel test //datalib/backend/etl/providers/<provider>/...`**
    and iterate until green. Then commit:
 
    ```
@@ -229,8 +229,8 @@ Changes:
      for the bytes.
    - `read_by_owner` and `read_by_hash` return `Ok(None)` unless the
      renderer needs them.
-   - See `frankweiler/backend/etl/providers/email/src/translate/blob_reader.rs`
-     and `frankweiler/backend/etl/providers/signal/src/translate/parse.rs`
+   - See `datalib/backend/etl/providers/email/src/translate/blob_reader.rs`
+     and `datalib/backend/etl/providers/signal/src/translate/parse.rs`
      (the `SignalBlobReader` struct at the bottom of that file).
 
 3. **Replace `db.store_blob` calls** with batched accumulation:
@@ -239,10 +239,10 @@ Changes:
      one entity-pool tx with `UPDATE <table> SET blake3 = ? WHERE
      <pk> = ?` per row + per-row `record_object_attempt` for any
      errors. See `flush_blob_batch` in
-     `frankweiler/backend/etl/providers/email/src/extract/mod.rs`.
+     `datalib/backend/etl/providers/email/src/extract/mod.rs`.
 
 4. **`--refetch-blobs` control:** replace
-   `frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())`
+   `datalib_etl::doltlite_raw::truncate_blob_refs(db.pool())`
    with `db.clear_blob_hashes()` — a new method that sets every
    per-provider blake3 column back to NULL. See email's
    `clear_blob_hashes` in `extract/db.rs`.
@@ -292,7 +292,7 @@ Changes:
      is a deterministic concatenation of `payload_blake3` (and/or
      attachment `blake3`s, and/or any other content state the
      renderer reads). Hash each row's `bucket_concat` via
-     `frankweiler_etl::blob_cas::blake3_hex` with `RENDER_VERSION`
+     `datalib_etl::blob_cas::blake3_hex` with `RENDER_VERSION`
      mixed in.
    - **Phase 2** runs targeted `SELECT ... WHERE bucket_pk IN (?, ...)`
      for the surviving buckets only. See email's `load_buckets`
@@ -309,7 +309,7 @@ Changes:
    - Delete the `fingerprint_for_*` Rust functions — the SQL CTE
      subsumed them.
 
-3. **Update the orchestrator** in `frankweiler/backend/sync/src/main.rs`
+3. **Update the orchestrator** in `datalib/backend/sync/src/main.rs`
    (the provider's match arm):
    ```rust
    // Before:
@@ -525,7 +525,7 @@ phases 2 and 3.
 
 **Test surface:**
 - `whatsapp_etl_unittests` (under
-  `frankweiler/backend/etl/providers/whatsapp/`).
+  `datalib/backend/etl/providers/whatsapp/`).
 
 ---
 
@@ -535,7 +535,7 @@ These came out of the email port and are non-negotiable for the
 upcoming ones:
 
 1. **Commit per phase.** Each phase's commit must pass `bazel test
-   //frankweiler/backend/etl/providers/<provider>/...`. Phase 1 done +
+   //datalib/backend/etl/providers/<provider>/...`. Phase 1 done +
    committed before phase 2 starts, etc. Do not stack two phases in
    one commit.
 

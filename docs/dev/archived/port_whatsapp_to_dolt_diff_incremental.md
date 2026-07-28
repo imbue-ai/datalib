@@ -31,7 +31,7 @@ wire-payload provider.
 
 Quick mental model before touching any code:
 
-- **`frankweiler/backend/etl/providers/whatsapp/`** is structured
+- **`datalib/backend/etl/providers/whatsapp/`** is structured
   differently from email/signal: extract is one file
   (`src/extract.rs`, ~970 lines), not split into a `mod/db/schema_raw`
   trio. The schema is `src/schema_raw.rs` at the crate root, not
@@ -56,7 +56,7 @@ Quick mental model before touching any code:
   `src/translate/parse.rs` via the `Period` enum (Month / Day /
   Year / All — same enum signal uses).
 - **Render currently goes through `chat-common`** (see
-  `frankweiler/backend/etl/chat-common/`) — `render_all` builds an
+  `datalib/backend/etl/chat-common/`) — `render_all` builds an
   `SqliteBlobReader` and forwards into a shared renderer. The shared
   renderer does the actual markdown emission.
 
@@ -78,13 +78,13 @@ on two tables.
 
 Also read end-to-end:
 
-- `frankweiler/backend/etl/providers/whatsapp/src/extract.rs`
-- `frankweiler/backend/etl/providers/whatsapp/src/schema_raw.rs`
-- `frankweiler/backend/etl/providers/whatsapp/src/translate/parse.rs`
-- `frankweiler/backend/etl/providers/whatsapp/src/translate/render.rs`
-- `frankweiler/backend/etl/providers/email/src/translate/blob_reader.rs`
+- `datalib/backend/etl/providers/whatsapp/src/extract.rs`
+- `datalib/backend/etl/providers/whatsapp/src/schema_raw.rs`
+- `datalib/backend/etl/providers/whatsapp/src/translate/parse.rs`
+- `datalib/backend/etl/providers/whatsapp/src/translate/render.rs`
+- `datalib/backend/etl/providers/email/src/translate/blob_reader.rs`
   (the per-provider `BlobReader` template)
-- `frankweiler/backend/etl/providers/email/src/extract/mod.rs` —
+- `datalib/backend/etl/providers/email/src/extract/mod.rs` —
   specifically the `flush_blob_batch` function, which is the
   CAS-flush pattern to mirror.
 
@@ -104,7 +104,7 @@ upstream identifier; `blake3` is the CAS content hash, populated
 via UPDATE after the CAS write succeeds.
 
 ```rust
-// frankweiler/backend/etl/providers/whatsapp/src/schema_raw.rs
+// datalib/backend/etl/providers/whatsapp/src/schema_raw.rs
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
     sha256 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
@@ -137,7 +137,7 @@ shape:
 ```
 
 New shape (mirroring email's `flush_blob_batch` from
-`frankweiler/backend/etl/providers/email/src/extract/mod.rs`):
+`datalib/backend/etl/providers/email/src/extract/mod.rs`):
 
 1. Scan media files, accumulate `Vec<MediaEntry>` (already done).
 2. Bulk-insert metadata rows into `wa_media_files` with `blake3 = NULL`
@@ -159,7 +159,7 @@ loop. The `RefStub`/`blob_refs` path goes away entirely.
 ### `--refetch-blobs` control
 
 The `ExtractControl::refetch_blobs` flag today calls
-`frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())`. Replace
+`datalib_etl::doltlite_raw::truncate_blob_refs(db.pool())`. Replace
 with a per-provider `clear_blob_hashes` helper that sets every
 `wa_media_files.blake3` back to NULL:
 
@@ -178,7 +178,7 @@ the `put_many` is `INSERT OR IGNORE` on the CAS side.
 
 ### `WhatsAppBlobReader`
 
-New file: `frankweiler/backend/etl/providers/whatsapp/src/translate/blob_reader.rs`.
+New file: `datalib/backend/etl/providers/whatsapp/src/translate/blob_reader.rs`.
 Mirror `EmailBlobReader` (the file the user is looking at right now).
 The lookup chain is simpler than email's — only one table to query:
 
@@ -237,7 +237,7 @@ whatsapp: phase 1 — per-provider CAS edge column, retire blob_refs
 [body modeled on commit 2273227]
 ```
 
-Run `bazel test //frankweiler/backend/etl/providers/whatsapp/...` and
+Run `bazel test //datalib/backend/etl/providers/whatsapp/...` and
 iterate to green before committing.
 
 ---
@@ -323,7 +323,7 @@ Notes on the query:
 
 The "last-render commit" is a per-source piece of state. The orchestrator
 already loads a `prior_fingerprints` map per-source via
-`load_fingerprints(&index_pool)` in `frankweiler/backend/sync/src/main.rs:680`.
+`load_fingerprints(&index_pool)` in `datalib/backend/sync/src/main.rs:680`.
 
 Add a sister surface: a per-source last-render commit hash, stored
 in the same index_lib pool the markdown sidecars use. The simplest
@@ -332,7 +332,7 @@ shape:
 - New table `source_render_cursors(source_name TEXT PRIMARY KEY,
   last_render_commit TEXT NOT NULL, updated_at TEXT NOT NULL)`.
 - New helper `load_render_cursor(pool, source_name) -> Result<Option<String>>`
-  in `frankweiler/backend/index_lib/src/...`.
+  in `datalib/backend/index_lib/src/...`.
 - New helper `save_render_cursor(pool, source_name, commit)` called
   by the orchestrator **after** all docs for that source successfully
   flushed via `on_doc_complete`.
@@ -391,12 +391,12 @@ Update `src/translate/render.rs:render_all`:
 
 ### Orchestrator integration
 
-In `frankweiler/backend/sync/src/main.rs`, the WhatsApp arm currently
+In `datalib/backend/sync/src/main.rs`, the WhatsApp arm currently
 looks like the signal arm. Update it:
 
 ```rust
 SourceConfig::Whatsapp { sync, .. } => {
-    use frankweiler_etl_whatsapp::translate::{parse, render_all, Period};
+    use datalib_etl_whatsapp::translate::{parse, render_all, Period};
 
     let last_commit = load_render_cursor(&index_pool, name).await?;
     let parsed = parse(&fixture, period, name, last_commit.as_deref())
@@ -498,7 +498,7 @@ integration; tests]
    union across all intervening commits.
 
 6. **Concurrent renders.** The cursor is written after a successful
-   batch. If two `frankweiler-sync` processes race on the same source,
+   batch. If two `datalib-sync` processes race on the same source,
    the later one overwrites — fine for correctness (worst case: some
    chats render twice, none get skipped wrongly). Don't add locking
    for this port.
@@ -534,12 +534,12 @@ These came out of the email port and are non-negotiable here too:
 
 1. **Commit per phase.** Phase 1 (CAS migration) lands as one commit;
    phase 2 (dolt_diff incremental render) as another. Both green at
-   `bazel test //frankweiler/backend/etl/providers/whatsapp/...`
+   `bazel test //datalib/backend/etl/providers/whatsapp/...`
    before commit.
 
 2. **Pre-commit hook runs `bazelisk build --config=clippy //...`** —
    that means clippy on the whole workspace. Run
-   `cargo fmt -p frankweiler-etl-whatsapp` before committing. If
+   `cargo fmt -p datalib-etl-whatsapp` before committing. If
    clippy fires on `too_many_arguments`, prefer
    `#[allow(clippy::too_many_arguments)]` on the private helper
    over restructuring — same trade we made on the email port.

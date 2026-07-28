@@ -8,7 +8,7 @@
 # WITHOUT such a target, the inline tests compile only under `cargo test`
 # and are SILENTLY SKIPPED by the supported `bazel test //...` path —
 # i.e. they look like they pass while never running. We hit exactly this:
-# `frankweiler_etl_fsindex` shipped with inline tests in stamp.rs/hash.rs
+# `datalib_etl_fsindex` shipped with inline tests in stamp.rs/hash.rs
 # that no CI run ever executed. This check makes that failure loud.
 #
 # Mechanism: `labels(crate, kind(rust_test, //...))` is the set of crates
@@ -49,13 +49,13 @@ if [ -n "$missing" ]; then
     {
         echo "ERROR: these rust_library targets have NO rust_test(crate = ...) target."
         echo "Their inline #[cfg(test)] unit tests will NOT run under 'bazel test //...'."
-        echo "Add one next to the library (see //frankweiler/backend/etl/providers/contacts:contacts_unittests):"
+        echo "Add one next to the library (see //datalib/backend/etl/providers/contacts:contacts_unittests):"
         echo
         echo "    rust_test("
         echo "        name = \"<lib>_unittests\","
         echo "        crate = \":<lib>\","
         echo "        edition = \"2021\","
-        echo "        deps = [ ... dev-only deps, e.g. @frankweiler_crates//:tempfile ... ],"
+        echo "        deps = [ ... dev-only deps, e.g. @datalib_crates//:tempfile ... ],"
         echo "    )"
         echo
         echo "Missing unit-test targets:"

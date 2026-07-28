@@ -29,7 +29,7 @@ raw data) and a `<name>.render` step (raw → markdown +
 ```
 
 Four binaries ship in a release: `datalib-dag` (the sync runner),
-`datalib-step` (the built-in step commands), `frankweiler-http` (API
+`datalib-step` (the built-in step commands), `datalib-http` (API
 server + web UI), and `latchkey-curl-impersonate` (Cloudflare-safe
 HTTP for downloaders). End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
@@ -119,7 +119,7 @@ Pick the surface that fits the question:
   INDEX_PATH=<data_root>/system/qmd/index.sqlite \
       npx -y @tobilu/qmd query "that thing about the boat"
   ```
-- **HTTP API** — `frankweiler-http <data_root>` serves the UI plus:
+- **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /api/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values; fields include
   `source:`, `kind:`, `channel:`, `author:`, `account:`, `project:`,

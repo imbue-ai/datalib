@@ -5,8 +5,8 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 # can read the QMD_VERSION constant out of it at test time.
 exports_files(["BUILD.bazel"])
 
-# Materialize a frankweiler data root from :ingested_tng + :ingested_tng_qmd
-# into a caller-provided directory. Used by both `//frankweiler:dev_tng`
+# Materialize a datalib data root from :ingested_tng + :ingested_tng_qmd
+# into a caller-provided directory. Used by both `//datalib:dev_tng`
 # (interactive eyeballing) and the UI e2e test (fixture setup) so the two
 # paths can't drift apart.
 sh_binary(
@@ -18,7 +18,7 @@ sh_binary(
         # TNG-themed scan tree dropped into the root as `fsindex_scan/` — a
         # directory the `fsindex` (Unison-style) scanner can index. It's not
         # rendered (fsindex is extract-only), so it just sits in the root.
-        "//frankweiler/backend/etl/providers/fsindex:tng_fixture",
+        "//datalib/backend/etl/providers/fsindex:tng_fixture",
     ],
     visibility = ["//visibility:public"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
@@ -42,24 +42,24 @@ filegroup(
     ]) + [
         # Provider fixtures moved into their respective Rust crates so
         # the sample data is co-located with the code under test.
-        "//frankweiler/backend/etl/providers/slack:tng_fixture",
-        "//frankweiler/backend/etl/providers/chatgpt:tng_fixture",
-        "//frankweiler/backend/etl/providers/anthropic:tng_fixture",
-        "//frankweiler/backend/etl/providers/beeper:tng_fixture",
-        "//frankweiler/backend/etl/providers/contacts:tng_fixture",
-        "//frankweiler/backend/etl/providers/email:tng_fixture",
-        "//frankweiler/backend/etl/providers/signal:tng_fixture",
-        "//frankweiler/backend/etl/providers/whatsapp:tng_fixture",
-        "//frankweiler/backend/etl/providers/google_takeout:tng_fixture",
-        "//frankweiler/backend/etl/providers/linkedin:tng_fixture",
-        "//frankweiler/backend/etl/providers/sms_backup_restore:tng_fixture",
+        "//datalib/backend/etl/providers/slack:tng_fixture",
+        "//datalib/backend/etl/providers/chatgpt:tng_fixture",
+        "//datalib/backend/etl/providers/anthropic:tng_fixture",
+        "//datalib/backend/etl/providers/beeper:tng_fixture",
+        "//datalib/backend/etl/providers/contacts:tng_fixture",
+        "//datalib/backend/etl/providers/email:tng_fixture",
+        "//datalib/backend/etl/providers/signal:tng_fixture",
+        "//datalib/backend/etl/providers/whatsapp:tng_fixture",
+        "//datalib/backend/etl/providers/google_takeout:tng_fixture",
+        "//datalib/backend/etl/providers/linkedin:tng_fixture",
+        "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
 
 # Cacheable, deterministic ingest of the TNG fixtures via the DAG
-# runner (//frankweiler/backend/dag:datalib_dag driving
-# //frankweiler/backend/datalib_step:datalib_step). The pipeline runs
+# runner (//datalib/backend/dag:datalib_dag_bin driving
+# //datalib/backend/datalib_step:datalib_step). The pipeline runs
 # every source's download+render step pair over the checked-in
 # fixtures and the index fan-in loads the resulting sidecars into
 # `backend_index.doltlite_db` (the doltlite chunk store is linked
@@ -76,31 +76,31 @@ genrule(
         "ingested/qmd.tar",
     ],
     tools = [
-        "//frankweiler/backend/dag:datalib_dag",
-        "//frankweiler/backend/datalib_step:datalib_step",
+        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/datalib_step:datalib_step",
         # CLI that converts the signal TNG JSON spec into an encrypted
         # snapshot dir on the fly. Lives in the signal-backup library
         # crate; see that crate's BUILD.bazel.
-        "//frankweiler/backend/signal-backup:signal_make_fixture",
+        "//datalib/backend/signal-backup:signal_make_fixture",
         # Same idea for WhatsApp: spec → encrypted msgstore.db.crypt15 +
         # plaintext Media/. Root key defaults to 64 zeros, like the
         # signal fixture AEP.
-        "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
+        "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "run_sync_pipeline.py",
         "tar_qmd.py",
     ],
     cmd = " && ".join([
         " ".join([
             "python3 $(execpath run_sync_pipeline.py)",
-            "$(execpath //frankweiler/backend/dag:datalib_dag)",
-            "$(execpath //frankweiler/backend/datalib_step:datalib_step)",
-            "$(execpath //frankweiler/backend/signal-backup:signal_make_fixture)",
-            "$(execpath //frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
+            "$(execpath //datalib/backend/dag:datalib_dag_bin)",
+            "$(execpath //datalib/backend/datalib_step:datalib_step)",
+            "$(execpath //datalib/backend/signal-backup:signal_make_fixture)",
+            "$(execpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
             "'2369-04-15T00:00:00+00:00'",
             "$(RULEDIR)/sync_workspace",
-            "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
-            "frankweiler/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-            "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+            "datalib/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+            "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+            "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
             "tests/fixtures/github_api",
             "tests/fixtures/gitlab_api",
             "tests/fixtures/notion_web",
@@ -108,33 +108,33 @@ genrule(
             # an HTTP capture tree. run_sync_pipeline.py
             # materializes a BeeperTexts-shaped dir from it on the
             # fly.
-            "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+            "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
             # Contacts (carddav) is translate-only in the fixture
             # pipeline: vCard files on disk feed the translate path
             # directly, no synth/extract for these. The directory
             # structure is `carddav_tng/<addressbook>/*.vcf`.
-            "frankweiler/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
+            "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
             # Signal is similar to beeper — the fixture is a JSON
             # spec; run_sync_pipeline.py runs signal_make_fixture on
             # it to produce the encrypted snapshot dir before invoking
             # extract.
-            "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
+            "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
             # WhatsApp: same shape as signal.
-            "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
+            "datalib/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
             # Email: Google Takeout mbox file. Drives the email
             # extract path (mbox → raw doltlite → translate → render).
-            "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
+            "datalib/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
             # Google Takeout root. Google Chat feed renders; the rest land
             # in the raw store.
-            "frankweiler/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
+            "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
             # LinkedIn export dir (Connections + messages + Skills). The
             # message feeds + connections render; fetch_photos is on, so
             # the synth phase writes photo playback fixtures.
-            "frankweiler/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
+            "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
             # "SMS Backup & Restore" export dir (sms + calls XML with
             # inline base64 image/audio attachments). Texts + calls
             # render as one chat per phone number.
-            "frankweiler/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+            "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It now lives under the reserved `system/` dir (see core::layout).
@@ -168,35 +168,35 @@ py_test(
     srcs = ["ingested_tng_test.py"],
     args = [
         "$(rootpath run_sync_pipeline.py)",
-        "$(rootpath //frankweiler/backend/dag:datalib_dag)",
-        "$(rootpath //frankweiler/backend/datalib_step:datalib_step)",
-        "$(rootpath //frankweiler/backend/signal-backup:signal_make_fixture)",
-        "$(rootpath //frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
+        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //datalib/backend/datalib_step:datalib_step)",
+        "$(rootpath //datalib/backend/signal-backup:signal_make_fixture)",
+        "$(rootpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
         "2369-04-15T00:00:00+00:00",
         # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
-        "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
-        "frankweiler/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-        "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+        "datalib/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+        "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+        "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
         # FIXME: move these into their provider specific directories.
         "tests/fixtures/github_api",
         "tests/fixtures/gitlab_api",
         "tests/fixtures/notion_web",
-        "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
-        "frankweiler/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
-        "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
-        "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
-        "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
-        "frankweiler/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
-        "frankweiler/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
-        "frankweiler/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+        "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+        "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
+        "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
+        "datalib/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
+        "datalib/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
+        "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
+        "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
+        "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     ],
     data = [
         "run_sync_pipeline.py",
         ":source_json",
-        "//frankweiler/backend/dag:datalib_dag",
-        "//frankweiler/backend/datalib_step:datalib_step",
-        "//frankweiler/backend/signal-backup:signal_make_fixture",
-        "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
+        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend/signal-backup:signal_make_fixture",
+        "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
     ],
 )
 
@@ -206,7 +206,7 @@ py_test(
 # Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
 # so extracting both archives into the same directory (e.g. with
 # `tar -x --strip-components=1`) yields a complete root data directory —
-# markdown tree plus `.frankweiler/qmd/index.sqlite`.
+# markdown tree plus `.datalib/qmd/index.sqlite`.
 #
 # Caveats:
 #   * Requires `node` (and network on first run for npx to fetch qmd and its
@@ -220,12 +220,12 @@ genrule(
     srcs = ["ingested/qmd.tar"],
     outs = ["ingested/qmd-index.tar"],
     tools = [
-        "//frankweiler/backend/qmd_indexer:qmd_indexer_bin",
+        "//datalib/backend/qmd_indexer:qmd_indexer_bin",
         "build_qmd_index.py",
     ],
     cmd = " ".join([
         "python3 $(execpath build_qmd_index.py)",
-        "$(execpath //frankweiler/backend/qmd_indexer:qmd_indexer_bin)",
+        "$(execpath //datalib/backend/qmd_indexer:qmd_indexer_bin)",
         "$(execpath ingested/qmd.tar)",
         "$(execpath ingested/qmd-index.tar)",
         QMD_VERSION,

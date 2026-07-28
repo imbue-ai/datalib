@@ -6,7 +6,7 @@ and/or less parallel" + the dist-build invocation
 
 ## What I measured
 
-Local `bazel build //frankweiler/backend:dist -c opt` on the M-series
+Local `bazel build //datalib/backend:dist -c opt` on the M-series
 Mac, expunged output base, warm disk cache (`~/Library/Caches/bazel-disk-cache`),
 warm BuildBuddy remote cache:
 
@@ -19,28 +19,28 @@ Critical-path actions, sorted by wall:
 
 ```
 24.2s   third-party/doltlite/sqlite3.c
-17.7s   rlib frankweiler_etl_slack     (9 files)
-16.3s   bin  frankweiler_sync_bin      (3 files)
-15.8s   rlib frankweiler_etl_chatgpt   (10 files)
-15.7s   rlib frankweiler_etl_notion    (10 files)
-15.7s   rlib frankweiler_etl_anthropic (10 files)
-15.0s   rlib frankweiler_etl_beeper    (9 files)
-14.4s   rlib frankweiler_etl_gitlab    (9 files)
-14.4s   rlib frankweiler_etl_github    (9 files)
-13.7s   rlib frankweiler_etl_signal    (6 files)
-12.9s   bin  frankweiler_http_bin
+17.7s   rlib datalib_etl_slack     (9 files)
+16.3s   bin  datalib_sync_bin      (3 files)
+15.8s   rlib datalib_etl_chatgpt   (10 files)
+15.7s   rlib datalib_etl_notion    (10 files)
+15.7s   rlib datalib_etl_anthropic (10 files)
+15.0s   rlib datalib_etl_beeper    (9 files)
+14.4s   rlib datalib_etl_gitlab    (9 files)
+14.4s   rlib datalib_etl_github    (9 files)
+13.7s   rlib datalib_etl_signal    (6 files)
+12.9s   bin  datalib_http_bin
 10.6s   rlib rustls v0.23.40           (110 files)
-10.1s   rlib frankweiler_etl_email     (10 files)
- 9.5s   rlib frankweiler_etl_contacts  (7 files)
+10.1s   rlib datalib_etl_email     (10 files)
+ 9.5s   rlib datalib_etl_contacts  (7 files)
 ```
 
-(Provider crates parallel-fan-out after `frankweiler_etl` is done.)
+(Provider crates parallel-fan-out after `datalib_etl` is done.)
 
 The shape of the critical path is roughly:
 
 ```
 doltlite/sqlite3.c (24s) ─┐
-                          ├──► frankweiler_etl (~6s) ──► slowest provider (slack 17.7s) ──► sync_bin link (16s)
+                          ├──► datalib_etl (~6s) ──► slowest provider (slack 17.7s) ──► sync_bin link (16s)
 external rust deps         │
 (rustls, tonic, …)        ─┘
 ```
@@ -55,9 +55,9 @@ Two structural changes land most of the regression:
    real cost on the critical path.
 2. **The blob_cas migration** (commits `0782ff6` → `40c128d`). Every
    provider that used to carry its own blob/attachment plumbing now
-   imports `frankweiler_etl::blob_cas`. That centralized the symbols
+   imports `datalib_etl::blob_cas`. That centralized the symbols
    but also made every provider crate *strictly* depend on the
-   compiled `frankweiler_etl` rlib being finished — the rust-side
+   compiled `datalib_etl` rlib being finished — the rust-side
    parallel fan-out that used to start earlier now waits for the
    bigger etl rlib first.
 
@@ -76,9 +76,9 @@ the "providers wait on etl" bottleneck.
 It fails to link here:
 
 ```
-error[E0463]: can't find crate for `frankweiler_etl_anthropic`
-error[E0460]: found possibly newer version of crate `frankweiler_etl`
-              which `frankweiler_etl_yolink` depends on
+error[E0463]: can't find crate for `datalib_etl_anthropic`
+error[E0460]: found possibly newer version of crate `datalib_etl`
+              which `datalib_etl_yolink` depends on
 ```
 
 The metadata/rlib variants get out of sync for `rust_binary` targets
@@ -103,7 +103,7 @@ executed with any of the available strategies`.
 the *final* binary on every commit because its embedded
 `STABLE_GIT_HASH` changes — but it does NOT propagate into the
 rlib graph (rlibs don't read the stamp). So the cost is one
-re-link of `frankweiler_sync_bin` per commit.
+re-link of `datalib_sync_bin` per commit.
 
 However: with stamping ON we're forced to leave `pipelined_compilation`
 OFF (see above). With stamping OFF we can flip pipelining ON and the
@@ -123,15 +123,15 @@ build --stamp                      # CI still stamps the released binary
 Dev rebuilds drop ~15-20s on the critical path; release CI is
 unchanged.
 
-### 2. Split `frankweiler_etl::blob_cas` into its own leaf crate
+### 2. Split `datalib_etl::blob_cas` into its own leaf crate
 
-Today every provider waits for the full `frankweiler-etl` rlib (which
+Today every provider waits for the full `datalib-etl` rlib (which
 re-exports auth, doltlite, blob_cas, scope_state, latchkey, …) to
 finish compiling before it can start. Most providers only consume
 1–3 of those modules.
 
 Extracting `blob_cas` (the module every provider now uses, post-
-migration) into `frankweiler-etl-blobs` would:
+migration) into `datalib-etl-blobs` would:
 
 * drop blob_cas's ~600 LOC and its sqlx dep tree onto a much shorter
   critical path,
@@ -170,7 +170,7 @@ constrained runner this is a 30-50% wall-time saving on cache-hit
 builds — turns "everything cached but slow" into "nothing happens
 locally."
 
-### 5. Smaller: cap `frankweiler_sync_bin`'s codegen units too
+### 5. Smaller: cap `datalib_sync_bin`'s codegen units too
 
 `sync_bin` is a 16s compile + link single-threaded. It's a thin
 binary that pulls in everything; bumping its codegen units helps
@@ -201,7 +201,7 @@ separate commits so a regression can be bisected.
 
 ```
 bazel clean --expunge
-(time bazel build //frankweiler/backend:dist -c opt --profile=/tmp/p.json.gz) 2>&1
+(time bazel build //datalib/backend:dist -c opt --profile=/tmp/p.json.gz) 2>&1
 gunzip -c /tmp/p.json.gz | python3 -c '
 import json, sys
 e = json.load(sys.stdin)["traceEvents"]

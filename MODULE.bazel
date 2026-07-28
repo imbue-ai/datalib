@@ -8,10 +8,10 @@ reference (2026-05-07): rules_python 2.0.0, rules_rust 0.70.0,
 Rust 1.95.0, Bazel 9.1.0.
 
 Bazel owns:
-  - `frankweiler/backend/*` Rust crates (Extract/Translate/Load + HTTP)
+  - `datalib/backend/*` Rust crates (Extract/Translate/Load + HTTP)
   - `tests/fixtures/`       fixture genrule pipeline
   - (later) `schemas/`      cross-language types
-  - (later) `frankweiler/ui/` Vue + Vitest
+  - (later) `datalib/ui/` Vue + Vitest
 
 Bazel does NOT own:
   - The Tauri bundler (driven via cargo/pnpm directly)
@@ -73,10 +73,10 @@ pip.parse(
 )
 use_repo(pip, "py_pip")
 
-# Rust — rules_rust + crate_universe ingesting frankweiler/backend Cargo workspace.
+# Rust — rules_rust + crate_universe ingesting datalib/backend Cargo workspace.
 bazel_dep(name = "rules_rust", version = "0.70.0")
 
-# Proto / prost — first introduced for `frankweiler-signal-backup`, which
+# Proto / prost — first introduced for `datalib-signal-backup`, which
 # parses Signal-Android's `Backup.proto`. We use the Bazel-native prost
 # codegen path (rules_rust_prost) instead of a `prost-build` build.rs:
 # codegen runs as a Bazel action driven by `rust_prost_library`, so the
@@ -100,7 +100,7 @@ bazel_dep(name = "rules_rust", version = "0.70.0")
 #   * `rules_rust_prost` — provides `rust_prost_library` + the
 #     toolchain type. The actual toolchain wiring (which prost / tonic
 #     crate targets to use) lives at `//tools/prost_toolchain` so it
-#     can reach `@frankweiler_crates//:prost` etc.
+#     can reach `@datalib_crates//:prost` etc.
 bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
 bazel_dep(name = "toolchains_protoc", version = "0.6.1")
@@ -152,7 +152,7 @@ rust.toolchain(
 # Exec hosts covered: the two Linux release runners (each cross-libc
 # but same-arch → its own musl triple) and Apple Silicon macs (both
 # musl triples, so most of the release path can be debugged locally;
-# `frankweiler_sync_bin` is the exception — see the musl config notes
+# `datalib_sync_bin` is the exception — see the musl config notes
 # in .bazelrc). Intel macs keep their default set untouched.
 rust.repository_set(
     name = "rust_linux_x86_64",
@@ -306,7 +306,7 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 # this annotation, crate_universe would try to run `protobuf-src`'s
 # binary download from build.rs — which fails in Bazel's sandbox.
 crate.annotation(
-    crate = "frankweiler-signal-backup",
+    crate = "datalib-signal-backup",
     gen_build_script = "off",
 )
 
@@ -351,7 +351,7 @@ crate.annotation(
 )
 
 # aspect_rules_js — hermetic JS/TS toolchain so the Vite-built UI
-# bundle (consumed by frankweiler_http via rust-embed) is produced by
+# bundle (consumed by datalib_http via rust-embed) is produced by
 # Bazel without any host pnpm/Node. Mirrors the install snippet
 # published with aspect_rules_js v3.1.2 (released 2026-05-13).
 bazel_dep(name = "aspect_rules_js", version = "3.1.2")
@@ -362,26 +362,26 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
 npm.npm_translate_lock(
     name = "npm",
-    pnpm_lock = "//frankweiler/ui:pnpm-lock.yaml",
+    pnpm_lock = "//datalib/ui:pnpm-lock.yaml",
     verify_node_modules_ignored = "//:.bazelignore",
 )
 use_repo(npm, "npm")
 
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
-# frankweiler/ui install` works without a host install — useful for
-# refreshing the lockfile after editing frankweiler/ui/package.json.
+# datalib/ui install` works without a host install — useful for
+# refreshing the lockfile after editing datalib/ui/package.json.
 pnpm = use_extension("@aspect_rules_js//npm:extensions.bzl", "pnpm", dev_dependency = True)
 use_repo(pnpm, "pnpm")
 
 crate.from_cargo(
-    name = "frankweiler_crates",
-    cargo_lockfile = "//frankweiler/backend:Cargo.lock",
+    name = "datalib_crates",
+    cargo_lockfile = "//datalib/backend:Cargo.lock",
     # `bazel mod deps` emits an INFO note that with a workspace
     # Cargo.toml, only the workspace root is required here — bazel
     # discovers per-crate manifests via the workspace's `members =`
     # list. Adding a new provider crate now means a single edit to
-    # `frankweiler/backend/Cargo.toml`; no MODULE.bazel change.
-    manifests = ["//frankweiler/backend:Cargo.toml"],
+    # `datalib/backend/Cargo.toml`; no MODULE.bazel change.
+    manifests = ["//datalib/backend:Cargo.toml"],
     # rules_rust's default SUPPORTED_PLATFORM_TRIPLES is a "reduced
     # subset" that omits x86_64-apple-darwin, so generated crate
     # targets resolve to @platforms//:incompatible on Intel macs —
@@ -402,4 +402,4 @@ crate.from_cargo(
         "x86_64-unknown-nixos-gnu",
     ],
 )
-use_repo(crate, "frankweiler_crates")
+use_repo(crate, "datalib_crates")

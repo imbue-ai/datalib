@@ -1,0 +1,125 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_notion",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_notion",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
+        "//datalib/backend/time:datalib_time",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:once_cell",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_binary(
+    name = "notion_download",
+    srcs = ["src/bin/notion_download.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_notion",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "notion_unittests",
+    size = "small",
+    crate = ":datalib_etl_notion",
+    edition = "2021",
+    deps = [
+        # Used by `gather_documents_is_linear_in_blocks` to flush the
+        # per-phase `tracing::debug!` events from `gather_documents`
+        # to stderr — see the test's `init_tracing()` helper.
+        "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+rust_test(
+    name = "notion_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_notion",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "notion_blob_render",
+    srcs = ["tests/blob_render.rs"],
+    crate_root = "tests/blob_render.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_notion",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "notion_live",
+    srcs = ["tests/notion_live.rs"],
+    crate_root = "tests/notion_live.rs",
+    data = glob(["tests/snapshots/notion_live__*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to api.notion.com
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        ":datalib_etl_notion",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "notion_live.update",
+    test = ":notion_live",
+    test_args = ["--ignored"],
+)

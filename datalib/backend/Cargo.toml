@@ -1,0 +1,138 @@
+[workspace]
+resolver = "2"
+members = [
+    "schema",
+    "app_schema",
+    "index_lib",
+    "core",
+    "dag",
+    "http",
+    "obs",
+    "time",
+    "etl",
+    "etl/macros",
+    "etl/providers/anthropic",
+    "etl/providers/beeper",
+    "etl/providers/chatgpt",
+    "etl/providers/contacts",
+    "etl/providers/github",
+    "etl/providers/google_takeout",
+    "etl/providers/gitlab",
+    "etl/providers/email",
+    "etl/providers/linkedin",
+    "etl/providers/fsindex",
+    "etl/providers/notion",
+    "etl/providers/perseus",
+    "etl/providers/signal",
+    "etl/providers/slack",
+    "etl/providers/sms_backup_restore",
+    "etl/providers/yolink",
+    "qmd_indexer",
+    "signal-backup",
+    "tauri-backend",
+    "whatsapp-backup",
+    "etl/providers/whatsapp",
+    "etl/chat-common",
+    "etl/contact-common",
+    # NOTE: datalib_ingest_config, source_common, and the provider
+    # *_config crates are bazel-only (no Cargo.toml). This workspace
+    # exists for crate_universe's third-party resolution and is not
+    # cargo-compilable end to end: http and datalib_step consume ingest_config in
+    # code via BUILD.bazel deps that have no cargo counterpart. The
+    # tauri shell no longer links the backend (it spawns the bazel-built
+    # datalib-http binary), so nothing cargo-builds these crates.
+]
+
+[workspace.package]
+version = "0.23.2"
+edition = "2021"
+rust-version = "1.83"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+anyhow = "1.0"
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+axum = "0.8"
+tower-http = { version = "0.6.8", features = ["cors", "fs"] }
+# sqlx is the SQLite client driving DoltRepo against a single file at
+# `<data_root>/<dolt.db_filename>`. The file is a *doltlite* file with
+# the full version-control superpowers (`SELECT dolt_commit(...)` etc.);
+# `datalib-core::dolt_repo` probes `pragma_function_list` at connect
+# time and short-circuits cleanly when (in cargo-only / non-Bazel
+# builds) the linked libsqlite3 happens to be stock SQLite.
+#
+# We use sqlx's `sqlite` feature (NOT `sqlite-unbundled`). Under Bazel,
+# the `crate.annotation` on `libsqlite3-sys` in MODULE.bazel overrides
+# the bundled amalgamation with the doltlite archive built by
+# `//third-party/doltlite:sqlite3` (via `SQLITE3_LIB_DIR` +
+# `SQLITE3_STATIC=1`), so what's actually statically linked is doltlite,
+# not stock SQLite.
+#
+# `sqlite-unbundled` was a holdover that caused sqlx-sqlite to emit
+# `cargo:rustc-link-lib=dylib=sqlite3` on its own — producing a release
+# binary that statically embedded doltlite but ALSO declared a spurious
+# DT_NEEDED on `libsqlite3.so`, so it refused to launch on minimal Linux
+# hosts (e.g. the Docker base image) that didn't have a system libsqlite3
+# installed. The `sqlite` feature has no such side-emission; the binary
+# is fully self-contained.
+#
+# Features:
+#   runtime-tokio-rustls — async runtime
+#   sqlite               — bundled libsqlite3-sys; under Bazel the
+#                          crate annotation swaps the amalgamation for
+#                          our doltlite archive
+#   macros               — `query!` / `query_as!` (not yet used; cheap)
+#   chrono               — map ISO-8601 strings to/from chrono types
+#   uuid                 — `feedback_uuid` primary keys
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+    "macros",
+    "chrono",
+    "uuid",
+] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
+# Gitignore-style path matcher used by datalib-etl-fsindex's
+# walker for per-directory `.fsindex.yaml` ignore rules. Same crate
+# ripgrep and watchexec rely on; correct gitignore semantics out of
+# the box.
+ignore = "0.4"
+async-trait = "0.1"
+# Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
+# (see //tools/prost_toolchain), so we don't depend on `prost-build`
+# here — only the runtime. `protoc-gen-prost` is pulled in via the
+# toolchain wiring, not as a direct crate dep.
+prost = "0.13"
+prost-types = "0.13"
+protoc-gen-prost = "0.4"
+# Crypto + compression for the Signal backup container. Versions
+# chosen to satisfy the 7-day burn-in policy as of 2026-06-08.
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2.6"
+aes = "0.8"
+cbc = { version = "0.1", features = ["std"] }
+ctr = "0.9"
+cipher = { version = "0.4", features = ["block-padding"] }
+flate2 = "1.0"
+# GHASH (the universal hash inside GCM) and AES-CTR primitives,
+# composed by `datalib-whatsapp-backup` into a hand-rolled
+# GCM decrypt. We can't use the `aes-gcm` crate here: WhatsApp's
+# crypt15 uses a 16-byte IV, and `aes-gcm` 0.10's `AesGcm<_, U16>`
+# does not produce the NIST-spec J0 = GHASH(H, IV || 0^s || lenBits)
+# that pycryptodome (and WhatsApp Android) actually use — verified
+# empirically against a real msgstore.db.crypt15 backup.
+ghash = "0.5"
+# WhatsApp provider walks the Media/ tree to register attachment
+# files in `wa_media_files`. Used by `etl/providers/whatsapp` only.
+walkdir = "2"
+# MD5 for the trailing integrity checksum the crypt15 *file* format
+# stamps after the GCM tag. Not cryptographic; only used by the
+# fixture-generation encrypt path.
+md-5 = "0.10"

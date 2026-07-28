@@ -1,0 +1,72 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files([
+    "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
+    "Cargo.toml",
+])
+
+# Prototype DAG runner (see /dag-runner.md): step contract, edge
+# derivation from artifact-path overlap, incremental scheduler with
+# per-failure-kind retry + subtree poisoning, NDJSON progress events,
+# and subprocess step execution. Deliberately standalone — no dep on
+# etl/core — so the contract stays thin while it's being evaluated.
+rust_library(
+    name = "datalib_dag",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_dag",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:serde_yaml",
+        "@datalib_crates//:shlex",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "dag_unittests",
+    size = "small",
+    crate = ":datalib_dag",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# The DAG runner: loads a new-format DAG config file and executes each
+# step's `command:` as a subprocess, with `--binary-dir` (default: the
+# runner's own directory) prepended to the children's PATH so commands
+# can say `datalib-step` bare (//datalib/backend/datalib_step).
+rust_binary(
+    name = "datalib_dag_bin",
+    srcs = ["src/bin/datalib_dag.rs"],
+    crate_name = "datalib_dag",
+    edition = "2021",
+    # Must match [workspace.package].version in datalib/backend/Cargo.toml;
+    # //datalib/backend:version_consistency_test asserts that.
+    version = "0.23.2",
+    # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
+    # smoke-tests that the published tarball reports the tag). `stamp = -1`
+    # defers to the --stamp flag (on under --config=release); day-to-day
+    # dev builds keep the literal placeholder, which main.rs renders as
+    # "dev".
+    rustc_env_files = ["rustc_env.txt"],
+    stamp = -1,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:tokio",
+    ],
+)

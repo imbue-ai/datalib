@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bazel --workspace_status_command for frankweiler.
+# Bazel --workspace_status_command for datalib.
 #
 # Bazel runs this once per build (when --stamp is in effect) and writes
 # the `STABLE_*` lines into bazel-out/stable-status.txt, where stamp-aware

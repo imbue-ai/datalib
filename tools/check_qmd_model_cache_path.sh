@@ -3,7 +3,7 @@
 # resolves its model cache to `$XDG_CACHE_HOME/qmd/models` (with a
 # `$HOME/.cache/qmd/models` fallback) — i.e. the same path the build
 # mounts via `.bazelrc`'s `--sandbox_add_mount_pair` and that
-# `frankweiler_qmd_indexer::default_models_dir()` returns.
+# `datalib_qmd_indexer::default_models_dir()` returns.
 #
 # Why this exists: qmd is fetched at build time via `npx -y
 # @tobilu/qmd@<DEFAULT_QMD_VERSION>` (see core/src/qmd/mod.rs). The
@@ -13,7 +13,7 @@
 # only after a release rebuilds the multi-GB GGUF cache from scratch
 # at the new path. Pairs with the rust-side
 # `default_models_dir_matches_qmd_default` unit test in
-# //frankweiler/backend/qmd_indexer:qmd_indexer_unittests.
+# //datalib/backend/qmd_indexer:qmd_indexer_unittests.
 #
 # The matched line in third-party/qmd/src/llm.ts:
 #   const MODEL_CACHE_DIR = process.env.XDG_CACHE_HOME
@@ -33,7 +33,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 
 llm_ts="$(rlocation _main/third-party/qmd/src/llm.ts)"
 pkg_json="$(rlocation _main/third-party/qmd/package.json)"
-core_qmd_mod="$(rlocation _main/frankweiler/backend/core/src/qmd/mod.rs)"
+core_qmd_mod="$(rlocation _main/datalib/backend/core/src/qmd/mod.rs)"
 bazelrc="$(rlocation _main/.bazelrc)"
 
 for f in "$llm_ts" "$pkg_json" "$core_qmd_mod" "$bazelrc"; do
@@ -58,7 +58,7 @@ qmd model cache path drift detected.
 
 If upstream qmd intentionally moved the cache, update:
   * .bazelrc                                 (--sandbox_add_mount_pair)
-  * frankweiler/backend/qmd_indexer/src/lib.rs (default_models_dir)
+  * datalib/backend/qmd_indexer/src/lib.rs (default_models_dir)
   * tests/fixtures/build_qmd_index.py        (models_dir)
   * tests/fixtures/materialize_tng_root.sh   (SHARED_MODELS)
   * .github/workflows/release.yml            (mkdir step)

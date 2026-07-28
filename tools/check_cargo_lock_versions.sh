@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Asserts that every workspace-local crate in
-# `frankweiler/backend/Cargo.lock` is pinned to the same version
+# `datalib/backend/Cargo.lock` is pinned to the same version
 # declared by `[workspace.package].version` in
-# `frankweiler/backend/Cargo.toml`.
+# `datalib/backend/Cargo.toml`.
 #
 # Why this exists: rules_rust's `crate.from_cargo` reads BOTH
 # Cargo.toml manifests AND Cargo.lock, but only validates the
@@ -12,7 +12,7 @@
 # tarballs ship just fine because rustc reads `version =` from
 # Cargo.toml — but a fresh checkout where someone runs `cargo
 # build` would see the wrong version on the workspace crates, and a
-# `bazel sync --only=frankweiler_crates` could re-resolve in
+# `bazel sync --only=datalib_crates` could re-resolve in
 # surprising ways.
 #
 # Common cause of the drift: bumping `[workspace.package].version`
@@ -33,8 +33,8 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
   { echo>&2 "ERROR: cannot find $f"; exit 1; }; f=; set -e
 # --- end runfiles.bash initialization v3 ---
 
-cargo_toml="$(rlocation _main/frankweiler/backend/Cargo.toml)"
-cargo_lock="$(rlocation _main/frankweiler/backend/Cargo.lock)"
+cargo_toml="$(rlocation _main/datalib/backend/Cargo.toml)"
+cargo_lock="$(rlocation _main/datalib/backend/Cargo.lock)"
 
 [[ -f "$cargo_toml" ]] || { echo "ERROR: Cargo.toml not found at $cargo_toml" >&2; exit 1; }
 [[ -f "$cargo_lock" ]] || { echo "ERROR: Cargo.lock not found at $cargo_lock" >&2; exit 1; }
@@ -46,7 +46,7 @@ if [[ -z "$canonical" ]]; then
 fi
 
 # Pull every workspace-local crate's recorded version from Cargo.lock.
-# Workspace crates are the ones whose `name = "frankweiler-*"`. Cargo
+# Workspace crates are the ones whose `name = "datalib-*"`. Cargo
 # writes `[[package]]` blocks with `name` and `version` on adjacent
 # lines, so an awk pass tracks the most recent `name` and emits the
 # `version` when name matches our prefix.
@@ -56,7 +56,7 @@ while IFS=$'\t' read -r crate version; do
         mismatches+=("${crate}=${version}")
     fi
 done < <(awk '
-    /^name = "frankweiler-/ {
+    /^name = "datalib-/ {
         match($0, /"[^"]+"/);
         last_name = substr($0, RSTART + 1, RLENGTH - 2);
         next;
@@ -74,8 +74,8 @@ if [[ ${#mismatches[@]} -ne 0 ]]; then
 Cargo.lock has workspace-local crates pinned to versions that disagree
 with [workspace.package].version in Cargo.toml.
 
-  Canonical (frankweiler/backend/Cargo.toml): ${canonical}
-  Mismatched entries in frankweiler/backend/Cargo.lock:
+  Canonical (datalib/backend/Cargo.toml): ${canonical}
+  Mismatched entries in datalib/backend/Cargo.lock:
 EOF
     for m in "${mismatches[@]}"; do
         printf '    %s\n' "$m" >&2

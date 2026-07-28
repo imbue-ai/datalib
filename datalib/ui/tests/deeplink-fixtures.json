@@ -1,0 +1,26 @@
+[
+  {
+    "name": "search_basic",
+    "deeplink": "datalib://search?q=treemap",
+    "hash": "search?q=treemap",
+    "route": {"kind": "search", "params": {"q": "treemap"}}
+  },
+  {
+    "name": "search_with_type",
+    "deeplink": "datalib://search?q=hello%20world&type=message",
+    "hash": "search?q=hello%20world&type=message",
+    "route": {"kind": "search", "params": {"q": "hello world", "type": "message"}}
+  },
+  {
+    "name": "chat_with_msg",
+    "deeplink": "datalib://chat/abc-123?msg=def-456",
+    "hash": "chat/abc-123?msg=def-456",
+    "route": {"kind": "chat", "markdownUuid": "abc-123", "params": {"msg": "def-456"}}
+  },
+  {
+    "name": "prefs",
+    "deeplink": "datalib://prefs",
+    "hash": "prefs",
+    "route": {"kind": "prefs"}
+  }
+]

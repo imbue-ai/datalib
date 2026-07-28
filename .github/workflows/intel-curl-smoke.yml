@@ -71,10 +71,10 @@ jobs:
         run: mkdir -p "$HOME/.cache/qmd/models"
 
       - name: Build curl dist bins
-        run: bazel build //frankweiler/backend:curl_dist -c opt --config=release --build_metadata=ROLE=CI
+        run: bazel build //datalib/backend:curl_dist -c opt --config=release --build_metadata=ROLE=CI
 
       - name: Smoke-run the built binaries
         run: |
           set -euo pipefail
-          file bazel-bin/frankweiler/backend/etl/latchkey_curl_dispatch
-          file bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate
+          file bazel-bin/datalib/backend/etl/latchkey_curl_dispatch
+          file bazel-bin/datalib/backend/etl/latchkey_curl_impersonate

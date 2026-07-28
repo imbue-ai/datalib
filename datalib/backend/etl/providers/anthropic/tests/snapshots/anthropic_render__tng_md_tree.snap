@@ -1,0 +1,219 @@
+---
+source: datalib/backend/etl/providers/anthropic/tests/anthropic_render.rs
+expression: bundle
+---
+=== anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md ===
+---
+title: "Klingon Diplomatic Greeting Drafting (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: c0000003-1701-4d00-8000-00000000c003
+markdown_uuid: c0000003-1701-4d00-8000-00000000c003
+period: all
+display: "Klingon Diplomatic Greeting Drafting"
+account: 00000001-1701-4d00-8000-000000000001
+item_count: 6
+source_fingerprint: ee494d33941efc0884c950a892e0b23dbcfbccc8c09c3b16b3f8394568ba7be0
+---
+
+<h1 class="page-title" data-page-title-uuid="c0000003-1701-4d00-8000-00000000c003">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-30000001-1701-4d00-8000-000000030001" data-section-uuid="30000001-1701-4d00-8000-000000030001" class="msg msg--anthropic">
+
+## 2369-04-14 10:00:00 UTC — Human
+
+Look up the Klingon greeting "nuqneH" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.
+
+</div>
+
+<div id="m-th-30000002-1701-4d00-8000-000000030002-0" data-section-uuid="th-30000002-1701-4d00-8000-000000030002-0" class="msg msg--anthropic">
+
+## 2369-04-14 10:00:30 UTC — claude-opus-4-7
+
+<details><summary>Thinking</summary>
+
+> "nuqneH" literally means "what do you want" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.
+
+</details>
+
+</div>
+
+<div id="m-tu-toolu_FAKE0001ngfedcba9876543210" data-section-uuid="tu-toolu_FAKE0001ngfedcba9876543210" class="msg msg--anthropic">
+
+## 2369-04-14 10:00:32 UTC — claude-opus-4-7
+
+<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>
+
+```json
+{
+  "url": "https://memory-alpha.test/wiki/Klingon_language"
+}
+```
+</details>
+
+</div>
+
+<div id="m-30000002-1701-4d00-8000-000000030002" data-section-uuid="30000002-1701-4d00-8000-000000030002" class="msg msg--anthropic">
+
+## 2369-04-14 10:01:00 UTC — claude-opus-4-7
+
+For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH?" ("I am honored to see you — what do you want?"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.
+
+</div>
+
+<div id="m-tr-toolu_FAKE0001ngfedcba9876543210" data-section-uuid="tr-toolu_FAKE0001ngfedcba9876543210" class="msg msg--anthropic">
+
+## 2369-04-14 10:01:00 UTC — claude-opus-4-7
+
+<details><summary>Tool result: web_fetch</summary>
+
+```json
+{
+  "is_missing": false,
+  "metadata": {
+    "site_domain": "memory-alpha.test"
+  },
+  "text": "nuqneH (lit. \"what do you want\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \"qaleghneS\" (\"I am honored to see you\").",
+  "title": "Klingon language — Memory Alpha (test mirror)",
+  "type": "knowledge",
+  "url": "https://memory-alpha.test/wiki/Klingon_language"
+}
+```
+
+</details>
+
+</div>
+
+<div id="m-30000003-1701-4d00-8000-000000030003" data-section-uuid="30000003-1701-4d00-8000-000000030003" class="msg msg--anthropic">
+
+## 2369-04-14 10:02:00 UTC — Human
+
+Perfect. Make it so.
+
+</div>
+
+
+=== anthropic_api/rendered_md/c0000004-1701-4d00-8000-00000000c004/all.md ===
+---
+title: "Tricorder Image Diagnostic (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: c0000004-1701-4d00-8000-00000000c004
+markdown_uuid: c0000004-1701-4d00-8000-00000000c004
+period: all
+display: "Tricorder Image Diagnostic"
+account: 00000003-1701-4d00-8000-000000000003
+item_count: 2
+source_fingerprint: 33093472c7abe44edb9909b5f1e3d18b23fa0681fda358f0f7c05a3ba557602d
+---
+
+<h1 class="page-title" data-page-title-uuid="c0000004-1701-4d00-8000-00000000c004">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-40000001-1701-4d00-8000-000000040001" data-section-uuid="40000001-1701-4d00-8000-000000040001" class="msg msg--anthropic">
+
+## 2369-04-15 08:30:00 UTC — Human
+
+What's wrong with this medical-tricorder readout?
+
+🖼 *[tricorder-readout.png (not yet fetched)]*
+
+</div>
+
+<div id="m-40000002-1701-4d00-8000-000000040002" data-section-uuid="40000002-1701-4d00-8000-000000040002" class="msg msg--anthropic">
+
+## 2369-04-15 08:30:45 UTC — claude-opus-4-7
+
+The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
+
+</div>
+
+
+=== anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md ===
+---
+title: "Borg Encryption Signature Lookup (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: c0000005-1701-4d00-8000-00000000c005
+markdown_uuid: c0000005-1701-4d00-8000-00000000c005
+period: all
+display: "Borg Encryption Signature Lookup"
+account: 00000001-1701-4d00-8000-000000000001
+item_count: 6
+source_fingerprint: 87286bfafff1145c1e465857bbc53effc37917bf88bee30c4950f9d722895c4e
+---
+
+<h1 class="page-title" data-page-title-uuid="c0000005-1701-4d00-8000-00000000c005">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-50000001-1701-4d00-8000-000000050001" data-section-uuid="50000001-1701-4d00-8000-000000050001" class="msg msg--anthropic">
+
+## 2369-04-16 09:00:00 UTC — Human
+
+Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
+
+</div>
+
+<div id="m-tu-toolu_FAKE0002borgsigfirstattempt0" data-section-uuid="tu-toolu_FAKE0002borgsigfirstattempt0" class="msg msg--anthropic">
+
+## 2369-04-16 09:00:10 UTC — claude-opus-4-7
+
+<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
+
+```json
+{
+  "signature": "7-of-9-alpha",
+  "table": "borg_shield_signatures"
+}
+```
+</details>
+
+</div>
+
+<div id="m-tu-toolu_FAKE0003borgsigsecondtry00" data-section-uuid="tu-toolu_FAKE0003borgsigsecondtry00" class="msg msg--anthropic">
+
+## 2369-04-16 09:00:30 UTC — claude-opus-4-7
+
+<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
+
+```json
+{
+  "relay": "backup-2",
+  "signature": "7-of-9-alpha",
+  "table": "borg_shield_signatures"
+}
+```
+</details>
+
+</div>
+
+<div id="m-50000002-1701-4d00-8000-000000050002" data-section-uuid="50000002-1701-4d00-8000-000000050002" class="msg msg--anthropic">
+
+## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+
+Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
+
+</div>
+
+<div id="m-tr-toolu_FAKE0002borgsigfirstattempt0" data-section-uuid="tr-toolu_FAKE0002borgsigfirstattempt0" class="msg msg--anthropic">
+
+## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+
+<details><summary>Tool result: starfleet_db_query (error)</summary>
+
+```
+ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
+```
+</details>
+
+</div>
+
+<div id="m-tr-toolu_FAKE0003borgsigsecondtry00" data-section-uuid="tr-toolu_FAKE0003borgsigsecondtry00" class="msg msg--anthropic">
+
+## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+
+<details><summary>Tool result: starfleet_db_query</summary>
+
+Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
+
+</details>
+
+</div>

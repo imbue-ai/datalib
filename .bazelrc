@@ -23,8 +23,8 @@ test --test_output=errors
 # (handy when running the sync binary directly outside bazel), but
 # bazel doesn't propagate it into the action graph.
 # Resolver:
-#   * NPX_BIN  — frankweiler_qmd_indexer::run_qmd
-#                and frankweiler_etl::latchkey::latchkey_command
+#   * NPX_BIN  — datalib_qmd_indexer::run_qmd
+#                and datalib_etl::latchkey::latchkey_command
 build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
@@ -91,14 +91,14 @@ build --workspace_status_command=tools/workspace_status.sh
 # builds (`--config=release`).
 #
 # When `--stamp` is on, every action that consumes workspace status —
-# in this repo, just `frankweiler_sync_bin`'s rustc_env_files
+# in this repo, just `datalib_sync_bin`'s rustc_env_files
 # substitution of {STABLE_GIT_HASH} / {STABLE_GIT_DESCRIBE} — picks
 # up the new git SHA on every commit, which invalidates its action
 # cache key. Result: every commit forced a rebuild of the sync
 # binary even when no rust changed.
 #
 # We don't care about a stamped binary for day-to-day work — the
-# `frankweiler-sync --version` output reads "unknown" off the
+# `datalib-sync --version` output reads "unknown" off the
 # `option_env!` fallback in version.rs, which is fine for dev. When
 # building a release artifact, pass `--config=release` to opt back in.
 build:release --stamp
@@ -146,13 +146,13 @@ build:buildbuddy --remote_upload_local_results=true
 # configs are safe to combine with any build. Used by release.yml's
 # `*-unknown-linux-musl` matrix legs:
 #
-#     bazelisk build //frankweiler/backend:dist -c opt --config=musl-x86_64
+#     bazelisk build //datalib/backend:dist -c opt --config=musl-x86_64
 #
 # MODULE.bazel registers the same musl target toolchains for Apple
 # Silicon hosts, so much of the release path can be debugged locally
-# (e.g. `frankweiler_http_bin` cross-builds to a fully-static ELF from
+# (e.g. `datalib_http_bin` cross-builds to a fully-static ELF from
 # a mac). The known exception: anything that pulls boring-sys2 (wreq —
-# so `latchkey_curl_impersonate` and `frankweiler_sync_bin`) only musl-builds
+# so `latchkey_curl_impersonate` and `datalib_sync_bin`) only musl-builds
 # with a Linux exec platform (the CI runners, the devcontainer),
 # because boring-sys2's build script runs bindgen against the musl
 # target triple, which needs linux libc headers on the include path;
@@ -204,7 +204,7 @@ common --enable_platform_specific_config
 # records `libsqlite3.so` as a DT_NEEDED entry on the final binary, and
 # glibc's loader then refuses to launch on hosts without a system
 # libsqlite3 — even though no sqlite3_* symbols are actually unresolved
-# (verify with `nm -D --undefined-only frankweiler-sync | grep sqlite3`
+# (verify with `nm -D --undefined-only datalib-sync | grep sqlite3`
 # → empty). `--as-needed` tells ld to omit DT_NEEDED entries whose
 # library contributes no symbols to the final image.
 #
@@ -215,7 +215,7 @@ common --enable_platform_specific_config
 # `--host_linkopt` is the exec-config sibling. Bazel's exec config has
 # its own flag-application surface, and `--linkopt` alone doesn't
 # reach Rust binaries built `[for tool]` (the binaries genrules shell
-# out to). Without the host variant, exec-config `frankweiler_sync_bin`
+# out to). Without the host variant, exec-config `datalib_sync_bin`
 # still has the phantom `libsqlite3.so` DT_NEEDED and refuses to launch
 # inside the devcontainer's slim base image during
 # `//tests/fixtures:ingested_tng`.
@@ -265,9 +265,9 @@ build:clippy --output_groups=+clippy_checks
 #
 # Auto-discover via the workspace clippy.toml. clippy is picky about
 # the filename (must be `clippy.toml` or `.clippy.toml`); ours lives
-# at frankweiler/backend/clippy.toml and is exported via that
+# at datalib/backend/clippy.toml and is exported via that
 # package's BUILD.bazel.
-build --@rules_rust//rust/settings:clippy.toml=//frankweiler/backend:clippy.toml
+build --@rules_rust//rust/settings:clippy.toml=//datalib/backend:clippy.toml
 # Warnings-as-errors, matching `-D warnings` from the old cargo
 # invocation. `disallowed_macros` was the lint clippy.toml's
 # `disallowed-macros` table relied on being warned (then promoted to

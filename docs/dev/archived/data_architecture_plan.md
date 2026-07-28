@@ -114,7 +114,7 @@ stays per-provider, then bring each provider up to the convention.
 > could share the same schema as a sidecar row."
 
 **Today**: providers emit `.grid_rows.json` sidecars whose shape is
-defined in `frankweiler/backend/etl/src/sidecar.rs` (`Sidecar`,
+defined in `datalib/backend/etl/src/sidecar.rs` (`Sidecar`,
 `Header`), and Load reads them with its own deserialize path. Slack uses
 `document_uuid` in the header; signal calls it `markdown_uuid`
 (audit: signal). Multiple agents pointed out the field names drift.
@@ -240,7 +240,7 @@ where recipes were lifted.
 > have that assumption happen in exactly one place in the whole code
 > base."
 
-**Goal**: a tiny crate (`frankweiler-time`?) that all extract + all
+**Goal**: a tiny crate (`datalib-time`?) that all extract + all
 translate code uses. Public API around:
 
 - `IsoOffsetTimestamp` newtype that *requires* explicit offset on
@@ -261,7 +261,7 @@ forbid `chrono::DateTime::to_rfc3339` and similar shortcuts via a
 clippy / module-private discipline. Add the "no fabricated timestamp"
 rule to `data_architecture_ingestion.md`.
 
-**Landed**: `frankweiler-time` (`frankweiler/backend/time/`) owns
+**Landed**: `datalib-time` (`datalib/backend/time/`) owns
 `now_local`, `parse_strict`, `parse_with_assumed_utc`, `bump_micros`
 and friends; every `chrono::{Utc,Local}::now().to_rfc3339*` callsite
 in the workspace funnels through it (251981f). The "no fabricated

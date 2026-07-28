@@ -1,0 +1,32 @@
+[package]
+name = "datalib-etl-whatsapp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_whatsapp"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = "../.." }
+datalib-etl-chat-common = { path = "../../chat-common" }
+datalib-time = { path = "../../../time" }
+datalib-schema = { path = "../../../schema" }
+datalib-index-lib = { path = "../../../index_lib" }
+datalib-whatsapp-backup = { path = "../../../whatsapp-backup" }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tracing = "0.1"
+tempfile = "3"
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

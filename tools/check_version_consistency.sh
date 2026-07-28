@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Asserts that the version declared in frankweiler/backend/Cargo.toml's
+# Asserts that the version declared in datalib/backend/Cargo.toml's
 # [workspace.package] section matches the `version = "..."` attribute in
-# each BUILD.bazel that stamps one (dag's datalib_dag rust_binary,
+# each BUILD.bazel that stamps one (dag's datalib_dag_bin rust_binary,
 # http's rust_library — the latter feeds /api/health and, via the
 # bundled binary, the desktop app).
 #
@@ -25,7 +25,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
   { echo>&2 "ERROR: cannot find $f"; exit 1; }; f=; set -e
 # --- end runfiles.bash initialization v3 ---
 
-cargo_toml="$(rlocation _main/frankweiler/backend/Cargo.toml)"
+cargo_toml="$(rlocation _main/datalib/backend/Cargo.toml)"
 [[ -f "$cargo_toml" ]] || { echo "ERROR: Cargo.toml not found at $cargo_toml" >&2; exit 1; }
 
 # Pull the version literal from [workspace.package]. The match is
@@ -40,7 +40,7 @@ fi
 
 status=0
 for pkg in dag http; do
-    build_file="$(rlocation "_main/frankweiler/backend/$pkg/BUILD.bazel")"
+    build_file="$(rlocation "_main/datalib/backend/$pkg/BUILD.bazel")"
     [[ -f "$build_file" ]] || { echo "ERROR: $pkg/BUILD.bazel not found at $build_file" >&2; exit 1; }
 
     # Pull the version literal from the rust_binary/rust_library attr.
@@ -54,8 +54,8 @@ for pkg in dag http; do
         cat >&2 <<EOF
 Version mismatch — Cargo.toml is the canonical source of truth.
 
-  frankweiler/backend/Cargo.toml             [workspace.package].version = "$cargo_version"
-  frankweiler/backend/$pkg/BUILD.bazel       version = "$bazel_version"
+  datalib/backend/Cargo.toml             [workspace.package].version = "$cargo_version"
+  datalib/backend/$pkg/BUILD.bazel       version = "$bazel_version"
 
 Bump both to the same value (typically: edit Cargo.toml first, then
 the BUILD.bazel fields, then re-tag).

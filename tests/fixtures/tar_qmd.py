@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hermetic tar of the per-stanza `rendered_md/` trees into `qmd.tar`.
 
-Run by the `:ingested_tng` genrule after `frankweiler-sync` has produced
+Run by the `:ingested_tng` genrule after `datalib-sync` has produced
 its raw outputs. We deliberately keep tar packaging out of the sync
 binary so the pipeline operates at the layer of DB + qmd files; the
 genrule is the Bazel-distribution boundary that wants archives.

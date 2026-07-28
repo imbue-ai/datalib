@@ -207,15 +207,15 @@ We do not regain strict unknown-field rejection (already inert today under
 ```
 source_common (serde only)         ← SourceCommon, ExtractParams, EventTapeConfig
    ▲        ▲
-   │        └── frankweiler_etl (retry/http consume ExtractParams)
+   │        └── datalib_etl (retry/http consume ExtractParams)
    │                 ▲
    └── *-config crates (compose SourceCommon)
             ▲
             └── ingest_config (depends on source_common + all 16 *-config crates)
 ```
 
-`ExtractParams` moves **down** from `frankweiler_etl` into `source_common` so the
-`*-config` crates can name it without pulling ETL code; `frankweiler_etl` then
+`ExtractParams` moves **down** from `datalib_etl` into `source_common` so the
+`*-config` crates can name it without pulling ETL code; `datalib_etl` then
 depends on `source_common` for it (re-export to keep retry/http/linkedin call
 sites resolving). `EventTapeConfig` moves out of `ingest_config` into
 `source_common` for the same reason.
@@ -251,9 +251,9 @@ sites resolving). `EventTapeConfig` moves out of `ingest_config` into
 ## Steps (each a scoped commit)
 
 1. **Create `source_common` crate.** Move `ExtractParams` (from
-   `frankweiler_etl::extract_params`) and `EventTapeConfig` (from
+   `datalib_etl::extract_params`) and `EventTapeConfig` (from
    `ingest_config`) into it; add `SourceCommon` with `fold_defaults` +
-   `resolve_paths`. Re-export `ExtractParams` from `frankweiler_etl` so
+   `resolve_paths`. Re-export `ExtractParams` from `datalib_etl` so
    retry/http/linkedin keep resolving. Wire Bazel deps. `bazel build //...` green.
 
 2. **Compose `SourceCommon` into each `*-config`.** Add `#[serde(default)]
@@ -310,7 +310,7 @@ surprise before fanning out.
 
 ## Validation checklist (don't regress)
 
-- `//frankweiler/backend/ingest_config:ingest_config_unittests`
-- `//frankweiler/backend/ingest_config:config_examples_test`
+- `//datalib/backend/ingest_config:ingest_config_unittests`
+- `//datalib/backend/ingest_config:config_examples_test`
 - `//tests/fixtures:ingested_tng_test`
 - `bazel test //...`

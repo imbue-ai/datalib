@@ -11,7 +11,7 @@ dactalView()                                      # explore recent rows
 dactalView({ load: "provider:slack", q: "rows/channel" })
 ```
 
-`opts.load` is a Frankweiler search that seeds the working set; `opts.q` is the
+`opts.load` is a Datalib search that seeds the working set; `opts.q` is the
 initial DACTAL query. Both flow to the page as `?fw=`/`?dq=`.
 
 It is **data-agnostic**: there is no per-provider code. The page loads whatever
@@ -22,7 +22,7 @@ so it works over any corpus — Slack, GitHub, Notion, Perseus, all of it.
 
 A single-author, dependency-free, **client-side** data explorer distributed as
 three classic (non-module) browser scripts, vendored under
-`frankweiler/ui/public/dactal/vendor/` (see `vendor/PROVENANCE.md`):
+`datalib/ui/public/dactal/vendor/` (see `vendor/PROVENANCE.md`):
 
 | File | Role |
 |---|---|
@@ -62,23 +62,23 @@ dactalView() card ─► iframe ─► /dactal/index.html
                 + survey()
 ```
 
-- **App glue** (`frankweiler/ui/src/cards/`): `libs/dactalView.ts` (the factory),
+- **App glue** (`datalib/ui/src/cards/`): `libs/dactalView.ts` (the factory),
   registered in `libs/index.ts`, typed in `types.ts`, and advertised in the
   empty-card hints in `components/ShadowCard.vue`.
-- **Served page** (`frankweiler/ui/public/dactal/`):
-  - `bridge.js` — the **only** Frankweiler-specific glue: maps each `grid_rows`
+- **Served page** (`datalib/ui/public/dactal/`):
+  - `bridge.js` — the **only** Datalib-specific glue: maps each `grid_rows`
     row to a DACTAL item (`uuid`→`id`) and re-normalizes the facet columns
     (`author`, `channel`, `source`, `account`, `project`, `conversation`, …) into
     id-keyed entity datasets so DACTAL's relational joins light up on top of the
     denormalized table. It calls `dactal.survey()` after loading — required, or
     `autoresolve` never fires and `rows.author` stays a bare string.
   - `index.html` — the explorer page loaded in the iframe. Two inputs: a
-    Frankweiler search (pulls a working set into the browser) and a DACTAL query
+    Datalib search (pulls a working set into the browser) and a DACTAL query
     over it. Reuses DACTAL's engine + renderer but not its host page (no
     saved-query store / AI assist / adapters).
   - `vendor/` — the three pinned DACTAL scripts.
 
-`public/**` is already in `frankweiler/ui/BUILD.bazel`'s `vite_inputs`, so the
+`public/**` is already in `datalib/ui/BUILD.bazel`'s `vite_inputs`, so the
 page ships in packaged builds with no extra wiring; the embedded server serves
 `/dactal/index.html` the same as vite dev.
 
@@ -101,10 +101,10 @@ fallback, which serves the main app instead.
    replacement for the main grid.
 2. **No ingestion.** DACTAL's loaders + IndexedDB store compete with the ETL
    pipeline; we use none of it and treat DACTAL as read-only over `/api/search`.
-3. **Two query languages coexist** — Frankweiler's Gmail-style search vs.
+3. **Two query languages coexist** — Datalib's Gmail-style search vs.
    DACTAL's `.`/`:`/`/`/`#`. A learning curve; scoped as an optional view.
 4. **Drill-down stays inside DACTAL** — clicking a row re-runs a DACTAL query, it
-   does not open a Frankweiler document card. Wiring "open the chat" needs a
+   does not open a Datalib document card. Wiring "open the chat" needs a
    `postMessage` bridge from the iframe to `ctx.host.openCard(...)` (not yet done).
 5. **Provenance & licensing.** Single-author project, static JS from dactal.org;
    **no license is stated** in the files or on the site. A pinned snapshot is

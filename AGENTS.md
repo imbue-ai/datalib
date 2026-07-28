@@ -19,7 +19,7 @@ are relative to the repo root.
   the implementation decisions.
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
   write a custom step command**: the config entry, the `--params` /
-  `--inputs` / `--outputs` flags, `FRANKWEILER_DAG_*` env vars, the
+  `--inputs` / `--outputs` flags, `DATALIB_DAG_*` env vars, the
   NDJSON progress/outcome protocol, failure classification, and
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
@@ -74,7 +74,7 @@ treat them as current reference.
 ## Repo layout
 
 ```
-frankweiler/
+datalib/
   backend/     Rust workspace.
     dag/           `datalib-dag`: the DAG runner (scheduler, step
                    contract, subprocess driver, NDJSON event stream).
@@ -87,7 +87,7 @@ frankweiler/
     ingest_config/ `SourceConfig`: the per-source config structs the
                    download steps take as `params:`.
     core/          data-root layout, doltlite repo access, qmd, search.
-    http/          `frankweiler-http`: API server + sync worker + UI host.
+    http/          `datalib-http`: API server + sync worker + UI host.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
                    via #[derive(PortableTable)].
@@ -122,10 +122,10 @@ speaking the step protocol can be a step — see
 It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin (`DEFAULT_QMD_VERSION`
-in `frankweiler/backend/core/src/qmd/mod.rs`): the Tauri app bundles a pinned Node
+in `datalib/backend/core/src/qmd/mod.rs`): the Tauri app bundles a pinned Node
 runtime plus registry-installed `latchkey`/`qmd` trees (staged by
-`frankweiler/tauri/stage-runtime.sh`, resolved by
-`frankweiler_core::node_runtime`), and every other environment — and
+`datalib/tauri/stage-runtime.sh`, resolved by
+`datalib_core::node_runtime`), and every other environment — and
 the app, when a pinned version isn't staged — falls back to
 `npx -y @tobilu/qmd@<version>`.
 
@@ -146,7 +146,7 @@ deferred:
 
 If we want better isolation later, the more likely direction is to
 **re-implement the bits of qmd we actually use** (indexing + retrieval
-against our markdown tree) in Rust inside `frankweiler/backend/`, using
+against our markdown tree) in Rust inside `datalib/backend/`, using
 this vendored tree purely as the format/behavior reference. That keeps
 runtime deps inside the Cargo workspace and avoids growing a node
 toolchain footprint.
@@ -169,23 +169,23 @@ subtree and document why.
 The Vue grid is backed by a single denormalized table, `grid_rows`,
 populated by the `grid_index` step from every provider's
 `*.grid_rows.json` sidecars. The Rust backend
-(`frankweiler/backend/core/src/db.rs`) issues *one* SELECT against
+(`datalib/backend/core/src/db.rs`) issues *one* SELECT against
 `grid_rows` to render the grid — no per-provider branches in the query
 path. The schema (column names, types, per-provider mappings) is the
 hand-written `GridRow` struct in
-`frankweiler/backend/schema/src/grid_rows.rs`; `#[derive(PortableTable)]`
+`datalib/backend/schema/src/grid_rows.rs`; `#[derive(PortableTable)]`
 produces the `CREATE TABLE` DDL from it. See `docs/dev/grid_rows.md` for
 the full architecture.
 
 When you add or change a `grid_rows` column:
 
 1. Add the field to the `GridRow` struct in
-   `frankweiler/backend/schema/src/grid_rows.rs` with a `#[col(sql = "…")]`
+   `datalib/backend/schema/src/grid_rows.rs` with a `#[col(sql = "…")]`
    portable type (keep the per-provider mapping in the field's doc
    comment). Index-time-derived columns use `#[derived(…)]`.
 2. Update each provider's `render/grid_rows.rs` to populate the new
    column from that provider's parsed data.
-3. Update the row mapper in `frankweiler/backend/core/src/dolt_repo.rs`
+3. Update the row mapper in `datalib/backend/core/src/dolt_repo.rs`
    to read it back, plus `SearchRow` in `search.rs` if the column reaches
    the API.
 4. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
@@ -206,7 +206,7 @@ backend, stop — add the field to `grid_rows` instead.
 
 The backend opens the data root's `backend_index.doltlite_db` via
 `sqlx::sqlite::SqlitePool` and wraps it in `DoltRepo`
-(`frankweiler/backend/core/src/dolt_repo.rs`). doltlite is statically
+(`datalib/backend/core/src/dolt_repo.rs`). doltlite is statically
 linked into every Rust binary by `//third-party/doltlite:sqlite3`
 (see `MODULE.bazel`); no host `dolt` install, no subprocess, no MySQL
 client. The same pool serves reads and writes.
@@ -217,10 +217,10 @@ the grid emits `grid_cell` / `grid_row`; the search input emits
 cascades selection (`preview_selection`) → message (`preview_message`)
 → whole-thread (`page_header`); the page-header
 `FeedbackButton` is `page_header`. The producer-side types and DOM
-breadcrumb walker live in `frankweiler/ui/src/feedback/context.ts`;
+breadcrumb walker live in `datalib/ui/src/feedback/context.ts`;
 the backend-side row + discriminated payload schema is the hand-written
 `FeedbackRow` (+ `FeedbackContext` variants) in
-`frankweiler/backend/app_schema/src/feedback.rs`.
+`datalib/backend/app_schema/src/feedback.rs`.
 
 Each `POST /api/feedback` inserts a row **and** runs
 `SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
@@ -232,7 +232,7 @@ sees the commit immediately.
 
 Bazel stamps the binary with the git hash via
 `tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
-get the same value from `frankweiler/backend/core/build.rs`. Read-back
+get the same value from `datalib/backend/core/build.rs`. Read-back
 of feedback rows is out of scope — query the doltlite_db directly with
 any SQLite-shaped client.
 
@@ -291,9 +291,9 @@ captures Rust-subprocess hit counts too — see
 
 ```bash
 tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
-  //frankweiler/backend/dag:datalib_dag \
-  //frankweiler/backend/datalib_step:datalib_step \
-  //frankweiler/backend/signal-backup:signal_make_fixture
+  //datalib/backend/dag:datalib_dag_bin \
+  //datalib/backend/datalib_step:datalib_step \
+  //datalib/backend/signal-backup:signal_make_fixture
 ```
 
 **Default to `bazelisk test //...` for any "are tests passing?" question.**
@@ -302,13 +302,13 @@ Playwright e2e suite in one shot, the same way CI does. Bazel's action
 cache makes re-runs cheap — unchanged targets are served from cache, so
 iterating costs only what you actually touched. For a tight inner loop,
 narrow the *bazel* invocation to the package you're touching
-(`bazelisk test //frankweiler/backend/etl/...`) — don't shell out to
+(`bazelisk test //datalib/backend/etl/...`) — don't shell out to
 `cargo` / `pnpm`, which bypass the cache and can disagree with CI.
 
 **Do not add `--test_tag_filters=-manual,-external` to this invocation.**
 The canonical line is the bare `bazelisk test //...`. Filtering on
 `-external` silently drops `//:precommit_test` (cargo fmt / clippy /
-ruff / pyright / vue-tsc) and `//frankweiler/ui:e2e_test` (Playwright),
+ruff / pyright / vue-tsc) and `//datalib/ui:e2e_test` (Playwright),
 which lets fmt and UI regressions through. If a test is host- or
 network-dependent it's tagged `requires-network` and/or `no-sandbox`,
 which Bazel respects on its own — `external` is reserved for tests
@@ -335,15 +335,15 @@ insta-using `rust_test` in this tree has one declared via the
 
 ```bash
 # Hermetic snapshot tests — no host prereqs.
-bazel run //frankweiler/backend/core:fixture_db_snapshot_test.update
-bazel run //frankweiler/backend/etl/providers/chatgpt:chatgpt_render.update
-bazel run //frankweiler/backend/etl/providers/slack:slack_translate.update
+bazel run //datalib/backend/core:fixture_db_snapshot_test.update
+bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update
+bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 
 # Live tests — need LATCHKEY_CURL on the host (same as cargo). Builds
 # the shim once:
-bazel build //frankweiler/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
-bazel run //frankweiler/backend/etl/providers/anthropic:anthropic_live.update
+bazel build //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+bazel run //datalib/backend/etl/providers/anthropic:anthropic_live.update
 ```
 
 The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
@@ -360,7 +360,7 @@ load("//tools:insta.bzl", "insta_update")
 rust_test(
     name = "my_render_test",
     data = [":tng_fixture"],
-    env = {"MY_FIXTURE_DIR": "frankweiler/.../fixtures/my_api"},
+    env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
     ...
 )
 
@@ -372,7 +372,7 @@ insta_update(
     # sibling sh_binary wrapper — mirror every fixture / env-var dep
     # here or `bazel run …update` will panic with "fixture not found".
     extra_data = [":tng_fixture"],
-    extra_env = {"MY_FIXTURE_DIR": "frankweiler/.../fixtures/my_api"},
+    extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
 )
 ```
 
@@ -383,7 +383,7 @@ insta_update(
 bazelisk test //...
 
 # Narrower inner loop (faster) — still bazel, so the cache stays warm
-bazelisk test //frankweiler/backend/...
+bazelisk test //datalib/backend/...
 
 # Rebuild the fixture ingest (dump.sql + qmd.tar)
 bazelisk build //tests/fixtures:ingested_tng
@@ -396,10 +396,10 @@ unpacked bulk export (`type: claude_export`) — two separate source
 types, each its own stanza/step pair. The API downloader normalizes
 every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in
-`frankweiler/backend/etl/providers/anthropic/src/download/normalize.rs`,
+`datalib/backend/etl/providers/anthropic/src/download/normalize.rs`,
 stamping `_source: { via: "claude.ai/api", org_uuid }` provenance) so a
 single render path consumes either source indistinguishably. See
-`frankweiler/backend/etl/providers/anthropic/DOWNLOAD.md`.
+`datalib/backend/etl/providers/anthropic/DOWNLOAD.md`.
 
 ## Timestamp convention
 
@@ -422,7 +422,7 @@ timezone offset present in the source**.
   offset, `datetime.now().astimezone().isoformat()`. The local offset is
   itself information — it tells future-you what wall-clock time the ingest
   happened in the zone where it actually ran. Don't normalize to UTC.
-  Steps should prefer the run-pinned `FRANKWEILER_DAG_NOW` over sampling
+  Steps should prefer the run-pinned `DATALIB_DAG_NOW` over sampling
   their own clock, so one run's outputs agree.
 
 If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
@@ -431,7 +431,7 @@ the longest offset-suffixed form including microseconds.
 
 ## Auth (web API)
 
-The Rust downloaders under `frankweiler/backend/etl/providers/*/src/download/`
+The Rust downloaders under `datalib/backend/etl/providers/*/src/download/`
 read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
 issue the actual requests via the `latchkey-curl-impersonate` so Cloudflare's
 JA3 wall passes. If the cookie is missing or expired,

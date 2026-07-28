@@ -100,7 +100,7 @@ whole migration.
 
 ## The shared primitives
 
-### `frankweiler_etl::render_cursor`
+### `datalib_etl::render_cursor`
 
 A small JSON file at `<out_dir>/<stanza>/rendered_md/_render_cursor.json`.
 
@@ -123,7 +123,7 @@ A small JSON file at `<out_dir>/<stanza>/rendered_md/_render_cursor.json`.
 Single-writer assumption. No locking, no atomic-rename dance.
 Missing file → cold start → render everything.
 
-API (see `frankweiler/backend/etl/src/render_cursor.rs`):
+API (see `datalib/backend/etl/src/render_cursor.rs`):
 
 ```rust
 pub fn cursor_path(out_dir: &Path, provider: &str, source_name: &str) -> PathBuf;
@@ -267,7 +267,7 @@ subsequent files in the same run hit the cache without re-fetching.
 The dolt_diff scan is consolidated into one shared call:
 
 ```rust
-let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+let scan = datalib_etl::doltlite_raw::scan_buckets(
     pool,
     last_render_hash,
     &DiffScanSpec {
@@ -413,10 +413,10 @@ source `type:` by `datalib_step/src/dispatch.rs`. In the provider's
 render path:
 
 ```rust
-let cursor_path = frankweiler_etl::render_cursor::cursor_path(
+let cursor_path = datalib_etl::render_cursor::cursor_path(
     root, "<provider>", name,
 );
-let cursor = frankweiler_etl::render_cursor::read(&cursor_path)?;
+let cursor = datalib_etl::render_cursor::read(&cursor_path)?;
 let parsed = parse(
     &fixture,
     cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
@@ -465,7 +465,7 @@ Don't refactor that signature mid-migration.
 ### Slack
 
 - Schema: per-team / per-channel / per-thread layout (see
-  `frankweiler_etl_slack::download`). Already has a cheap per-thread
+  `datalib_etl_slack::download`). Already has a cheap per-thread
   cursor (`block_on_probe_thread_cursors`) probed in the
   orchestrator's slack arm.
 - **Migration is partial.** Slack's cheap-probe already does
