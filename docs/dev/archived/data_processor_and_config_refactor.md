@@ -22,7 +22,7 @@ about what exists:
 
 - `datalib` has **no** provider-dispatch trait at all (no `DataProcessor`, no
   `Source`), **no** `build_source`, **no** per-provider config crates.
-  `frankweiler-sync` still dispatches every provider through a
+  `datalib-sync` still dispatches every provider through a
   16-arm `ExtractKind` enum + a parallel `DbHandle` enum + a hand-maintained
   `(ExtractKind, DbHandle)` `match` in `sync/src/main.rs`, ending in
   `unreachable!("variant mismatch")`.
@@ -134,7 +134,7 @@ template for A. Two adjustments:
 
 **Keep as-is:**
 
-- The trait lives in `frankweiler_etl` (the base crate every provider already
+- The trait lives in `datalib_etl` (the base crate every provider already
   depends on). Dependency direction correct.
 - The orchestrator opens each raw-store-writing processor's pool and owns the
   post-run + SIGINT commit (today's behavior, made uniform). Deliberately *not*
@@ -172,7 +172,7 @@ One single-method trait for the run unit, plus a small `SourcePlan` a provider
 builds to group its processors into the two waves A keeps.
 
 ```rust
-// frankweiler_etl::processor
+// datalib_etl::processor
 
 /// One config-driven, monitorable unit of work. Single method. A configured
 /// source contributes one or more of these (an extract processor, a translate
@@ -257,10 +257,10 @@ single-binary tool yet.
 ### 4.3 Crate / dependency architecture
 
 ```
-                         frankweiler_etl   (base: DataProcessor trait, SourceCommon, pools, ...)
+                         datalib_etl   (base: DataProcessor trait, SourceCommon, pools, ...)
                           ▲          ▲
-   email-config ──────────┘          └────────── frankweiler_etl_email (impl DataProcessor; deps its email-config)
-   slack-config  (serde only)                    frankweiler_etl_slack  ...
+   email-config ──────────┘          └────────── datalib_etl_email (impl DataProcessor; deps its email-config)
+   slack-config  (serde only)                    datalib_etl_slack  ...
         ▲                                              ▲
    ingest-config  (Config envelope + SourceConfig oneof + load_config + validate)
         ├───────────────────────────► http   (schema only — links no extraction)
@@ -269,7 +269,7 @@ single-binary tool yet.
    core/config.rs  ─────────►  DELETED
 ```
 
-Every edge points **down**. `sync` → provider impls → `frankweiler_etl`.
+Every edge points **down**. `sync` → provider impls → `datalib_etl`.
 Providers → their own light `*-config`. `http` → `ingest-config` only. This makes
 the dependency rule *structural*, not merely intended. (#23's finding: under
 `rules_rust`, first-party crates that only use already-present third-party deps —
@@ -316,7 +316,7 @@ the lesson of the parked branch is that stopping after the pilot leaves the
 codebase with two dispatch systems, worse than either end state.
 
 1. **`DataProcessor` trait + `RunCtx` + `SourcePlan` + capability traits** in
-   `frankweiler_etl`. Types only.
+   `datalib_etl`. Types only.
 2. **Email pilot (proof).** Add `email-config`; implement `EmailExtract` and
    `EmailRender` (two `DataProcessor`s) + an email builder returning the
    `SourcePlan`; route **only** email through the new two-wave runner; leave the

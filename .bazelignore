@@ -1,6 +1,6 @@
-frankweiler/ui/node_modules
-frankweiler/ui/dist
-frankweiler/backend/target
+datalib/ui/node_modules
+datalib/ui/dist
+datalib/backend/target
 # Agent worktrees (Claude Code `isolation: worktree` / spawned tasks) live
 # here; each carries its own `bazel-*` convenience symlinks into the bazel
 # cache. Without this, `bazel ...` target expansion descends into a nested

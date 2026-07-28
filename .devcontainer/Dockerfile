@@ -17,7 +17,7 @@ ARG PROD_IMAGE_TAG=0.5.2
 FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}
 
 # Reset the prod image's ENTRYPOINT. Prod wraps everything in
-# `tini -- frankweiler-entrypoint.sh`, which bootstraps
+# `tini -- datalib-entrypoint.sh`, which bootstraps
 # LATCHKEY_ENCRYPTION_KEY from a per-bind-mount key file before
 # exec'ing the user's command. Inside a VS Code devcontainer that
 # wrapping just gets in the way — interactive shells, `bazel run`,
@@ -45,7 +45,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # git               needed by some build scripts (workspace_status.sh,
 #                   rules_rust crate fetches that vendor from git).
 # python3-pip       `tests/fixtures/build_qmd_index.py` and friends.
-# rsync             `//frankweiler/ui:e2e_test`'s wrapper (run_e2e.sh)
+# rsync             `//datalib/ui:e2e_test`'s wrapper (run_e2e.sh)
 #                   stages the Playwright spec tree via `rsync -aL`.
 #                   macOS ships rsync; Ubuntu's base image here does not.
 # sqlite3           the beeper provider's extract shells out to the
@@ -77,7 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zip \
     && rm -rf /var/lib/apt/lists/* \
     # Symlink the unversioned SONAME that the (currently) buggy
-    # exec-config frankweiler_sync_bin's DT_NEEDED expects. The
+    # exec-config datalib_sync_bin's DT_NEEDED expects. The
     # `--host_linkopt=-Wl,--as-needed` we added to .bazelrc fixes the
     # source of the bug, but until BuildBuddy's cache is reseeded with
     # post-fix actions, the warmup will still pull a stale cached
@@ -99,7 +99,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && rm -rf /root/.bun \
     && bun --version
 
-# Playwright Chromium + its OS libraries, for `//frankweiler/ui:e2e_test`.
+# Playwright Chromium + its OS libraries, for `//datalib/ui:e2e_test`.
 # The test resolves the browser from `~/.cache/ms-playwright` via
 # `env_inherit = ["HOME"]` (HOME=/root here) but never runs
 # `playwright install` itself, so the browser must be baked in. `npx
@@ -108,7 +108,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # exact Playwright version expects.
 #
 # PLAYWRIGHT_VERSION MUST match the resolved `playwright` /
-# `@playwright/test` version in `frankweiler/ui/pnpm-lock.yaml` — a
+# `@playwright/test` version in `datalib/ui/pnpm-lock.yaml` — a
 # mismatch means the bazel-linked Playwright looks for a browser
 # revision that isn't on disk. Bump both together.
 #
@@ -239,7 +239,7 @@ ARG WARM_BAZEL_CACHE=true
 # /root/.cache/bazel/_bazel_root/<hash>/external/.
 RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
-        bazelisk --batch --host_jvm_args=-Xmx1024m fetch //frankweiler/backend/...:all; \
+        bazelisk --batch --host_jvm_args=-Xmx1024m fetch //datalib/backend/...:all; \
     fi
 
 # Step 2: build — compiles the Rust backend in opt mode and lands
@@ -250,7 +250,7 @@ RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
 # because the action graph + analysis caches get hefty.
 RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
-        bazelisk --batch --host_jvm_args=-Xmx4096m build //frankweiler/backend/...:all -c opt; \
+        bazelisk --batch --host_jvm_args=-Xmx4096m build //datalib/backend/...:all -c opt; \
     fi
 
 # Bazel's output base lives under /root/.cache/bazel; the disk cache

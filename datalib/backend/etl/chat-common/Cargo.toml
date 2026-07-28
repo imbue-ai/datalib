@@ -1,0 +1,21 @@
+[package]
+name = "datalib-etl-chat-common"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_chat_common"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = ".." }
+datalib-time = { path = "../../time" }
+datalib-schema = { path = "../../schema" }
+datalib-index-lib = { path = "../../index_lib" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tracing = "0.1"
+uuid = { workspace = true }

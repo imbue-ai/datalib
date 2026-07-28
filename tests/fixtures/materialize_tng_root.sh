@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Materialize a frankweiler data root from the bazel-built TNG fixture.
+# Materialize a datalib data root from the bazel-built TNG fixture.
 #
 # Single source of truth for the on-disk layout shared between:
-#   * `bazelisk run //frankweiler:dev_tng`           (frankweiler/dev_tng.sh)
-#   * `bazelisk test //frankweiler/ui:e2e_test`      (run_e2e.sh → playwright)
+#   * `bazelisk run //datalib:dev_tng`           (datalib/dev_tng.sh)
+#   * `bazelisk test //datalib/ui:e2e_test`      (run_e2e.sh → playwright)
 #
 # Produces, under <out-root>:
 #   <stanza>/rendered_md/...           Conversation markdown trees (from qmd.tar).
@@ -11,7 +11,7 @@
 #   system/qmd/index.sqlite            QMD index (from qmd-index.tar).
 #   system/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
 #   config.yaml                        { data_root } — backend reads via
-#                                      FRANKWEILER_CONFIG.
+#                                      DATALIB_CONFIG.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
@@ -83,7 +83,7 @@ if (( ${#missing[@]} > 0 )); then
     echo
     echo "Populate the shared cache once by running the qmd indexer"
     echo "against any data root, e.g.:"
-    echo "  bazelisk run //frankweiler/backend/qmd_indexer -- --root <some-frankweiler-root>"
+    echo "  bazelisk run //datalib/backend/qmd_indexer -- --root <some-datalib-root>"
   } >&2
   exit 3
 fi
@@ -96,7 +96,7 @@ ln -sfn "$SHARED_MODELS" "$OUT_ROOT/system/qmd/models"
 # per-stanza markdown trees. Anchor off the checked-in `.fsindex.yaml`
 # breadcrumb and copy its containing dir, dereferencing the runfiles symlinks
 # (`cp -RL`) so the materialized tree is real files, like a user's directory.
-FSINDEX_BREADCRUMB="$(rlocation _main/frankweiler/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng/.fsindex.yaml)"
+FSINDEX_BREADCRUMB="$(rlocation _main/datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng/.fsindex.yaml)"
 if [[ -f "$FSINDEX_BREADCRUMB" ]]; then
   cp -RL "$(dirname "$FSINDEX_BREADCRUMB")" "$OUT_ROOT/fsindex_scan"
 else

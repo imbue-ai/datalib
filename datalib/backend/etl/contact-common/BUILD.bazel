@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_contact_common",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_contact_common",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "contact_common_unittests",
+    size = "small",
+    crate = ":datalib_etl_contact_common",
+    edition = "2021",
+)

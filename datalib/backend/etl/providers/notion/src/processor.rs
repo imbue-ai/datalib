@@ -1,0 +1,183 @@
+//! Program-A `DataProcessor`s for the `notion_api` source. Notion always
+//! contributes a render processor; when `sync:` is present it also
+//! contributes a download processor (the live Notion mirror). The source
+//! owns its raw store (open/commit/checkpoint); the orchestrator only drives
+//! `run`.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+
+use datalib_etl::http::HttpResponse;
+use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_notion_config::NotionRenderConfig;
+use datalib_etl_notion_config::{NotionApiSync, NotionConfig};
+
+use crate::download;
+
+/// Download wave: present iff `sync:` (managed). Consumes the
+/// playback root (BFS seeds in synth/playback mode).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: NotionConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let playback_root = ctx.playback_root;
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
+    if let Some(sync) = config.sync {
+        procs.push(Box::new(NotionDownload {
+            id: format!("notion/{name}/download"),
+            raw_path,
+            sync,
+            playback_root,
+        }));
+    }
+    Ok(procs)
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: NotionRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(NotionRender {
+        id: format!("notion/{name}/render"),
+        raw_path,
+    })])
+}
+
+struct NotionDownload {
+    id: String,
+    raw_path: PathBuf,
+    sync: NotionApiSync,
+    playback_root: Option<PathBuf>,
+}
+
+#[async_trait]
+impl DataProcessor for NotionDownload {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        // Notion has no listing endpoint; in playback mode we derive seeds by
+        // scanning the fixture tree for every synthesized page response.
+        // Outside playback we honor the configured subtree seeds verbatim.
+        let mut seeds: Vec<String> = self
+            .sync
+            .subtrees
+            .as_ref()
+            .map(|t| t.pages.clone())
+            .unwrap_or_default();
+        if let Some(pb) = self.playback_root.as_ref() {
+            let derived = derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
+            seeds.extend(derived);
+        }
+        seeds.sort();
+        seeds.dedup();
+        let s = download::fetch(download::FetchOptions {
+            db_path: self.raw_path.clone(),
+            db: Some(db),
+            subtree_pages: seeds,
+            inbox: self.sync.inbox.as_ref().is_some_and(|i| i.enabled),
+            inbox_mirror_referenced: self
+                .sync
+                .inbox
+                .as_ref()
+                .and_then(|i| i.mirror_referenced_pages)
+                .unwrap_or(true),
+            space: self.sync.inbox.as_ref().and_then(|i| i.space.clone()),
+            sleep_between: Duration::ZERO,
+            progress: ctx.progress.clone(),
+            control: ctx.control.clone(),
+            ..Default::default()
+        })
+        .await?;
+        let summary = format!(
+            "pages(new={}/upd={}) blocks(new={}/upd={}) comments(new={}/upd={}) requests(official={}/unofficial={})",
+            s.new_pages,
+            s.upd_pages,
+            s.new_blocks,
+            s.upd_blocks,
+            s.new_comments,
+            s.upd_comments,
+            s.official_requests,
+            s.unofficial_requests,
+        );
+        Ok(session.finish(ctx, summary).await)
+    }
+}
+
+struct NotionRender {
+    id: String,
+    raw_path: PathBuf,
+}
+
+#[async_trait]
+impl DataProcessor for NotionRender {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        use crate::render::{parse_api_dir, render::render_notion_official};
+        let parsed = parse_api_dir(&self.raw_path)
+            .with_context(|| format!("notion parse {}", self.raw_path.display()))?;
+        let mut on_doc = |md| ctx.emit_doc(md);
+        render_notion_official(
+            &parsed,
+            ctx.root,
+            ctx.name,
+            ctx.progress,
+            ctx.prior_fingerprints,
+            &mut on_doc,
+        )
+        .context("render_notion_official")?;
+        Ok("rendered".into())
+    }
+}
+
+/// Walk `<playback>/notion/*.json`, decode each as an [`HttpResponse`], and
+/// collect every page id. Used to seed the BFS in playback mode (Notion has
+/// no listing endpoint, so without this there'd be nothing to walk).
+fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
+    let mut seeds = Vec::new();
+    if !notion_dir.is_dir() {
+        return Ok(seeds);
+    }
+    for entry in
+        fs::read_dir(notion_dir).with_context(|| format!("read_dir {}", notion_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let resp: HttpResponse = match serde_json::from_slice(&bytes) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let body: serde_json::Value = match serde_json::from_slice(&resp.body) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if body.get("object").and_then(|v| v.as_str()) == Some("page") {
+            if let Some(id) = body.get("id").and_then(|v| v.as_str()) {
+                seeds.push(id.to_string());
+            }
+        }
+    }
+    seeds.sort();
+    seeds.dedup();
+    Ok(seeds)
+}

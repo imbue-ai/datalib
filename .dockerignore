@@ -16,10 +16,10 @@ bazel-out
 bazel-testlogs
 
 # Local build outputs.
-frankweiler/backend/target
-frankweiler/ui/node_modules
-frankweiler/ui/dist
-frankweiler/tauri/target
+datalib/backend/target
+datalib/ui/node_modules
+datalib/ui/dist
+datalib/tauri/target
 third-party/qmd/node_modules
 third-party/qmd/dist
 

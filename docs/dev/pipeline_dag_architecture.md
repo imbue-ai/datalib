@@ -1,8 +1,8 @@
 # Pipeline architecture: toward an arbitrary processing DAG
 
 > **Status (2026-07):** implemented. The scheduler and step contract live in
-> `frankweiler/backend/dag` (the `datalib-dag` runner binary), the step-type
-> host in `frankweiler/backend/datalib_step` (`datalib-step`), and the http
+> `datalib/backend/dag` (the `datalib-dag` runner binary), the step-type
+> host in `datalib/backend/datalib_step` (`datalib-step`), and the http
 > worker/UI drive syncs through them. Review notes from the original
 > addendum are folded in below as **Addendum** blocks, each with what the
 > prototype chose.
@@ -31,10 +31,10 @@ The framing constraint from the ingestion doc still holds — single user, singl
 ## Where things stood at the time of writing (pre-DAG, 2026-06)
 
 > **Addendum.** This section describes the baseline the DAG replaced.
-> `frankweiler-sync` has since been retired; the pipeline now runs as
+> `datalib-sync` has since been retired; the pipeline now runs as
 > subprocess steps under `datalib-dag`/`datalib-step`.
 
-The pipeline was three stages running in-process inside frankweiler-sync — one binary, statically dispatched over a closed enum of sources (SourceConfig, [core/src/config.rs](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/frankweiler/backend/core/src/config.rs)):
+The pipeline was three stages running in-process inside datalib-sync — one binary, statically dispatched over a closed enum of sources (SourceConfig, `core/src/config.rs`):
 
 ```
 raw/<source>/*.doltlite_db  →  rendered_md/<source>/*.md + *.grid_rows.json  →  dolt_db/ (index)
@@ -44,11 +44,11 @@ raw/<source>/*.doltlite_db  →  rendered_md/<source>/*.md + *.grid_rows.json  �
 What is already DAG-shaped, and is the expensive part to get right:
 
 * Artifacts are immutable files on disk. Every stage reads files and writes files; there is no in-memory handoff. This is exactly the "node \= a process reading input, writing output" contract.  
-* Change detection already exists. compute\_row\_set\_hash ([etl/src/load.rs](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/frankweiler/backend/etl/src/load.rs)) and the per-document source\_fingerprint / markdowns skip logic already answer "did this output change?" — which is precisely the cache layer a DAG scheduler needs to decide what to re-run. We built incremental re-execution before we built the DAG.
+* Change detection already exists. compute\_row\_set\_hash (`etl/src/load.rs`) and the per-document source\_fingerprint / markdowns skip logic already answer "did this output change?" — which is precisely the cache layer a DAG scheduler needs to decide what to re-run. We built incremental re-execution before we built the DAG.
 
 What is hardcoded — the actual gap:
 
-1. No node abstraction. A "stage" is match arms over the 13-variant SourceConfig enum in [sync/src/main.rs](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/frankweiler/backend/sync/src/main.rs), not a uniform interface. Adding a node means editing the orchestrator.  
+1. No node abstraction. A "stage" is match arms over the 13-variant SourceConfig enum in `sync/src/main.rs`, not a uniform interface. Adding a node means editing the orchestrator.  
 2. Fixed linear topology. Extract → Translate → Load is wired by hand, not derived from declared dependencies. There is no topological scheduler.  
 3. Load is fused into Translate — it runs as an on\_doc\_complete callback inside the translate loop, so there are really 2.5 stages.  
 4. In-process, statically linked. Providers are separate crates but are linked into one binary and dispatched by match, not spawned as processes.  
@@ -145,7 +145,7 @@ Think of the Flume / Apache Beam monitoring dashboard, which exposes counters th
 
 We don’t want to be as complex as the Flume dashboard, but probably just show, per running node, a running tally of “progress”, and if known, how close we are to the end.
 
-Today progress is purely in-process: a Progress handle wrapping Arc\<dyn ProgressSink\> ([etl/src/progress.rs](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/frankweiler/backend/etl/src/progress.rs)) is passed *into* each stage (FetchOptions { progress, .. }). A FanOut sink drives terminal bars (IndicatifSink, in-process only), structured tracing events (TracingSink, which already serialize as NDJSON on stderr), and OTLP spans to \--otlp-endpoint.
+Today progress is purely in-process: a Progress handle wrapping Arc\<dyn ProgressSink\> (`etl/src/progress.rs`) is passed *into* each stage (FetchOptions { progress, .. }). A FanOut sink drives terminal bars (IndicatifSink, in-process only), structured tracing events (TracingSink, which already serialize as NDJSON on stderr), and OTLP spans to \--otlp-endpoint.
 
 A process-boundary-friendly channel therefore already exists: TracingSink's NDJSON and OTLP both already cross process lines. The migration is small and the design choice is:
 
@@ -354,7 +354,7 @@ rough dependency order:
   propagation. The UI's per-source / multi-select "Sync now" maps onto
   it (`<name>.download` id convention), the whole selection as one run.
 * **Run-wide `--now`** is exported by the runner to every step as
-  `FRANKWEILER_DAG_NOW` (sampled once when omitted) so all stamped
+  `DATALIB_DAG_NOW` (sampled once when omitted) so all stamped
   outputs agree; reset controls (`--reset-and-redownload`,
   `--refetch-blobs`) are exported the same way and honored by steps
   that fetch from an origin, ignored by everything else.

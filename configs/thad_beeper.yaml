@@ -1,7 +1,7 @@
 # Beeper-only dev config for iterating on the Beeper provider.
 # Reads the desktop app's on-disk SQLite directly; no network or auth.
 #
-#   bazelisk run //frankweiler/backend/sync:frankweiler_sync_bin -- \
+#   bazelisk run //datalib/backend/sync:datalib_sync_bin -- \
 #     --config "$(pwd)/configs/thad_beeper.yaml" \
 #     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

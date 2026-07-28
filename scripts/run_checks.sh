@@ -56,15 +56,15 @@ uv run ruff format --check .
 echo "[python] pyright"
 uv run pyright
 
-# --- TypeScript (frankweiler/ui) ---
-if [ -d frankweiler/ui ]; then
+# --- TypeScript (datalib/ui) ---
+if [ -d datalib/ui ]; then
     echo "[ui] vue-tsc"
-    # pnpm pinned via frankweiler/ui/package.json's `packageManager`;
+    # pnpm pinned via datalib/ui/package.json's `packageManager`;
     # provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
     # shellcheck source=ensure_pnpm.sh
     source scripts/ensure_pnpm.sh
     (
-        cd frankweiler/ui
+        cd datalib/ui
         if [ ! -d node_modules ]; then
             echo "  installing pnpm deps..."
             pnpm install --frozen-lockfile
@@ -73,7 +73,7 @@ if [ -d frankweiler/ui ]; then
     )
 fi
 
-# --- Rust (frankweiler/backend) ---
+# --- Rust (datalib/backend) ---
 #
 # Formatting is NOT checked here with `cargo fmt`. The `rustfmt_aspect`
 # is always-on for every bazel build/test (see .bazelrc's
@@ -93,7 +93,7 @@ fi
 # inherits the same doltlite linkage as a normal `bazelisk build` —
 # no cargo-side workaround needed. See .bazelrc's `--config=clippy`
 # block for flag wiring.
-if [ -d frankweiler/backend ]; then
+if [ -d datalib/backend ]; then
     # Clippy is run via bazel's `rust_clippy_aspect`. We only invoke
     # it when this script is run interactively
     # (`bazel run :precommit`), not as a `bazel test` fixture.

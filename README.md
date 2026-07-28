@@ -4,9 +4,6 @@ Liberate your data from silos. datalib mirrors your personal data — chat
 exports, email, messages, contacts, and more — into a single queryable local
 store, so you can run SOTA AI and data tools on it, on your own terms.
 
-> Codenames in this project (`frankweiler`, etc.) are inspired by
-> [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
-
 ## Supported data sources
 
 | Source | `type` | Input mode | What it mirrors |

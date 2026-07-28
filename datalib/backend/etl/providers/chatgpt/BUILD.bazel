@@ -1,0 +1,180 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+# Filegroup for the checked-in TNG-themed fixture used by both Rust
+# integration tests here and the Python fixture-build pipeline at
+# //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/chatgpt_api/**/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_chatgpt",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_chatgpt",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:once_cell",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_binary(
+    name = "chatgpt_download",
+    srcs = ["src/bin/chatgpt_download.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_chatgpt",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "chatgpt_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_chatgpt",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "chatgpt_incremental_skip",
+    srcs = ["tests/incremental_skip.rs"],
+    crate_root = "tests/incremental_skip.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_chatgpt",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "chatgpt_unittests",
+    size = "small",
+    crate = ":datalib_etl_chatgpt",
+    edition = "2021",
+)
+
+# Translate smoke test against the in-crate TNG fixture. The fixture
+# lives in-crate; bazel stages it via `data` and points
+# CHATGPT_FIXTURE_DIR at the runfiles-relative path (the test source
+# reads that env var with CARGO_MANIFEST_DIR as the cargo fallback).
+rust_test(
+    name = "chatgpt_translate_test",
+    srcs = ["tests/chatgpt_translate.rs"],
+    crate_root = "tests/chatgpt_translate.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+    },
+    deps = [
+        ":datalib_etl_chatgpt",
+    ],
+)
+
+# Render golden test. Fixture lives in-crate; resolved via
+# CARGO_MANIFEST_DIR which bazel doesn't surface in sandbox runfiles,
+# so tag manual. Run via `cargo test -p datalib-etl-chatgpt`.
+rust_test(
+    name = "chatgpt_live",
+    srcs = ["tests/chatgpt_live.rs"],
+    crate_root = "tests/chatgpt_live.rs",
+    data = glob(["tests/snapshots/chatgpt_live__*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to chatgpt.com
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        ":datalib_etl_chatgpt",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "chatgpt_render",
+    srcs = ["tests/chatgpt_render.rs"],
+    crate_root = "tests/chatgpt_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        ":datalib_etl_chatgpt",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# `bazel run //...:foo.update` siblings that re-run the insta-using
+# test with INSTA_UPDATE=always and write back into the source tree.
+insta_update(
+    name = "chatgpt_render.update",
+    test = ":chatgpt_render",
+    extra_data = [":tng_fixture"],
+    extra_env = {
+        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+    },
+)
+
+insta_update(
+    name = "chatgpt_live.update",
+    test = ":chatgpt_live",
+    test_args = ["--ignored"],
+)

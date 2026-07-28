@@ -1,0 +1,69 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_yolink",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_yolink",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:csv",
+        "@datalib_crates//:md-5",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_binary(
+    name = "yolink_devices",
+    srcs = ["src/bin/yolink_devices.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Unit tests with insta snapshots. The crate_root override mirrors what
+# fixture_db_snapshot_test does so insta's `.snap` lookup keys on the
+# Cargo-style `<crate>__<test>.snap` rather than the Bazel rule name.
+rust_test(
+    name = "yolink_unittests",
+    size = "small",
+    crate = ":datalib_etl_yolink",
+    data = glob(["src/download/snapshots/*.snap"]),
+    edition = "2021",
+    env = {
+        # Insta resolves snapshot paths via CARGO_MANIFEST_DIR by
+        # default; Bazel doesn't surface the source tree, so we point
+        # at the runfiles root explicitly. The snapshot files are
+        # staged under their `src/snapshots/` paths via `data`.
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        "@datalib_crates//:insta",
+        "@datalib_crates//:tempfile",
+    ],
+)

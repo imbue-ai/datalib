@@ -6,10 +6,10 @@ rust_binary(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:sqlx",
-        "@frankweiler_crates//:tempfile",
-        "@frankweiler_crates//:tokio",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )

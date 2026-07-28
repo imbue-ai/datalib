@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* No PRAGMAs and no WAL — match the frankweiler-sync open path
+    /* No PRAGMAs and no WAL — match the datalib-sync open path
      * (no journal_mode override; doltlite rejects it anyway). */
     rc = sqlite3_exec(g_db,
         "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)",

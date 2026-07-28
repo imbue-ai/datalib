@@ -183,7 +183,7 @@ def main() -> int:
     # skip and write nothing — invoked anyway for symmetry, exactly
     # like the old whole-config synth pass.
     print(f"[run_sync_pipeline] synth → {playback}", flush=True)
-    step_env = {**os.environ, "FRANKWEILER_DAG_DATA_ROOT": str(workspace)}
+    step_env = {**os.environ, "DATALIB_DAG_DATA_ROOT": str(workspace)}
     for name, (type_str, synth_input, _extract_input) in sources.items():
         source: dict = {"common": {"input_path": str(synth_input)}}
         if type_str == "linkedin":
@@ -267,13 +267,13 @@ def main() -> int:
         shutil.copy(users_src, anth_raw / "users.json")
 
     print(f"[run_sync_pipeline] pipeline → {data_root}", flush=True)
-    # `FRANKWEILER_HTTP_PLAYBACK` redirects every provider transport to
+    # `DATALIB_HTTP_PLAYBACK` redirects every provider transport to
     # the playback tree (steps inherit the runner's env); the fixture
     # AEP/root key let the signal/whatsapp extractors decrypt the
     # snapshots generated above.
     pipeline_env = {
         **os.environ,
-        "FRANKWEILER_HTTP_PLAYBACK": str(playback),
+        "DATALIB_HTTP_PLAYBACK": str(playback),
         "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
     }

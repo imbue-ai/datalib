@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_qmd_indexer",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_qmd_indexer",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+    ],
+)
+
+rust_test(
+    name = "qmd_indexer_unittests",
+    crate = ":datalib_qmd_indexer",
+)
+
+rust_binary(
+    name = "qmd_indexer_bin",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":datalib_qmd_indexer",
+        "@datalib_crates//:anyhow",
+    ],
+)

@@ -1,14 +1,14 @@
 # Cards — source-defined cards and the layouts that host them
 
-The frankweiler UI is a surface of cards: each card is a piece of
+The datalib UI is a surface of cards: each card is a piece of
 JavaScript source the user can read (and edit) in the card's header
 bar. The host evaluates that source to produce the card's content.
-`frankweiler/ui/src/cards/types.ts` is the canonical home of every
+`datalib/ui/src/cards/types.ts` is the canonical home of every
 shape described here; this doc is the narrative version.
 
 A **layout** is what arranges cards on screen — a stack of miller
 columns, a 2D tree, a tiling window manager — selectable from the
-status bar (see `frankweiler/ui/src/views/CardsView.vue`). This doc is
+status bar (see `datalib/ui/src/views/CardsView.vue`). This doc is
 deliberately layout-agnostic: it describes the card contract and how a
 card interacts with whatever layout hosts it. The layouts differ only
 in *where* they put cards and what reshaping furniture they offer;
@@ -26,11 +26,11 @@ documentView("e28ed67d-507b-5319-8732-00e249b6ebf6")
 documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 ```
 
-`compileCardSource` (`frankweiler/ui/src/cards/cardSource.ts`) wraps
+`compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) wraps
 the expression in `new Function(...viewLibNames, "return (<source>)")`
 and calls it with the view factories as arguments — so the only names
 in scope are the factories in `ViewLibs`
-(`frankweiler/ui/src/cards/libs/index.ts`) plus JS globals. The
+(`datalib/ui/src/cards/libs/index.ts`) plus JS globals. The
 expression must evaluate to a `CardRender`; anything else (or a parse
 error) renders as an error message in place of the card.
 
@@ -52,19 +52,19 @@ type Teardown = () => void;
 ```
 
 Whatever the layout, the host mounts each card inside its own **shadow
-root** (via `frankweiler/ui/src/components/ShadowCard.vue`) and calls
+root** (via `datalib/ui/src/components/ShadowCard.vue`) and calls
 the render function with it. The card owns that DOM completely — the
 host renders nothing inside. The returned teardown runs when the card
 closes or its source is re-run after an edit.
 
 Shadow DOM is the isolation boundary: document-head styles do not
 reach inside, so a card must inject any CSS it needs into `root`
-itself. CSS custom properties (the app's `--fw-*` theme variables) do
+itself. CSS custom properties (the app's `--datalib-*` theme variables) do
 inherit across the boundary and are the supported way to pick up
 theming.
 
 The prebuilt cards are Vue components, adapted to this contract by
-`vueCard` (`frankweiler/ui/src/cards/vueCard.ts`): it injects the
+`vueCard` (`datalib/ui/src/cards/vueCard.ts`): it injects the
 component's compiled styles into the shadow root, mounts a dedicated
 Vue app with the ctx as a prop, and returns `app.unmount` as the
 teardown. Card components use the `*.ce.vue` suffix so
@@ -73,12 +73,12 @@ attaches their `<style>` blocks as `component.styles` (strings)
 instead of injecting them into the document head. Child components of
 a card must also be `.ce.vue` and listed in the adapter's
 `styleSources` so their CSS lands in the root too (see
-`frankweiler/ui/src/cards/libs/documentView.ts` for the pattern).
+`datalib/ui/src/cards/libs/documentView.ts` for the pattern).
 
 ## Titles and dev mode
 
 The chrome bar around each card has two faces, switched by the **dev**
-toggle in the status bar (`frankweiler/ui/src/devMode.ts`, persisted in
+toggle in the status bar (`datalib/ui/src/devMode.ts`, persisted in
 localStorage):
 
 - **Dev mode off** (the default): the bar shows the card's
@@ -90,7 +90,7 @@ The 🤖 agent hand-off button shows in **both** modes, but only on cards
 backed by a user-defined component (the source's callee is an alias in
 the `/api/lib` manifest — builtins live in the app bundle, so there's
 nothing an agent could modify). Pressing it walks the user through
-handing the component to a coding agent (`frankweiler/ui/src/handoff.ts`
+handing the component to a coding agent (`datalib/ui/src/handoff.ts`
 and `components/AgentHandoffModal.vue`): a step list whose first step
 copies a "wayfinder" prompt, plus a persisted "skip these steps next
 time" opt-out that turns the button into a straight copy.
@@ -99,7 +99,7 @@ Card creation is the same gesture in both modes: every layout has an
 "add card" affordance (the miller layout's "+" strip after the last
 column, the tree layout's "+ card" button, the tiling layout's ＋ add
 areas), and it always creates a `galleryView()` card — the **new-card
-gallery** (`frankweiler/ui/src/cards/libs/galleryView.ts`): a list of
+gallery** (`datalib/ui/src/cards/libs/galleryView.ts`): a list of
 every parameter-less component with a short description, builtins
 first (gridView leading), then any user-defined alias whose `/api/lib`
 entry carries a `description` (listed under its stored `title` when it
@@ -138,7 +138,7 @@ actual name once its fetch lands. This works the same for builtin
 factories and user-defined aliases. The host resets the title on every
 (re)compile, so a card that never calls `setTitle` — and the blank /
 error states — gets a best-effort fallback (`displayTitle`,
-`frankweiler/ui/src/cards/title.ts`): the bare factory/alias name for
+`datalib/ui/src/cards/title.ts`): the bare factory/alias name for
 `name(...)`-shaped source, `new card` for a blank card, or a generic
 label for anything else.
 
@@ -190,7 +190,7 @@ keeps it only until the page is gone — so a card must treat
 `initialState` as a best-effort restore, never a guarantee.
 
 The grid card is the reference user
-(`frankweiler/ui/src/cards/GridCard.ce.vue`): it keeps
+(`datalib/ui/src/cards/GridCard.ce.vue`): it keeps
 `URLSearchParams` of `q` (search query), `sel` (selected row uuid) and
 `cols` (AG Grid column state, base64url-encoded JSON), writing only on
 user-driven changes so a pristine grid keeps clean state.
@@ -267,7 +267,7 @@ programs against:
   the agent's first save replaces it.
 
 Adding a view = adding a factory to `ViewLibs` in
-`frankweiler/ui/src/cards/libs/index.ts` (and its name to the
+`datalib/ui/src/cards/libs/index.ts` (and its name to the
 `ViewLibs` type). The factory's job is to capture its arguments and
 return a `CardRender`; keep the heavy lifting in a `.ce.vue` component
 behind `vueCard`.

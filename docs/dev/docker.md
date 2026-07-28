@@ -1,14 +1,14 @@
-# Running frankweiler in Docker
+# Running datalib in Docker
 
 The `ghcr.io/imbue-ai/datalib` image bundles the four release
-binaries (`datalib-dag`, `datalib-step`, `frankweiler-http`,
+binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
 `latchkey-curl-impersonate`) and the `latchkey` CLI on top of an
 Ubuntu 24.04 base, so you can register service credentials and run syncs
 from a single self-contained container instead of dropping arbitrary
 binaries onto your host PATH.
 
 Published for `linux/amd64` and `linux/arm64`. The build is driven by
-[`frankweiler/docker/Dockerfile`](../../frankweiler/docker/Dockerfile) and
+[`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) and
 published from [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
 on every `v*` tag.
 
@@ -38,12 +38,12 @@ IMG=ghcr.io/imbue-ai/datalib:latest
 docker pull "$IMG"
 
 # Pick host paths for the two bind mounts.
-LATCHKEY_DIR="$HOME/.frankweiler-docker/latchkey"
+LATCHKEY_DIR="$HOME/.datalib-docker/latchkey"
 DATA_ROOT="$HOME/datalib"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
 # Drop a config.yaml into the data root. config.yaml is the DAG `steps:`
-# format (see docs/dev/step_protocol.md); the frankweiler-http Setup tab
+# format (see docs/dev/step_protocol.md); the datalib-http Setup tab
 # scaffolds/validates it and offers one-click migration of a legacy
 # `sources:` config (GET /api/config/migrate).
 
@@ -73,7 +73,7 @@ docker run --rm \
 docker run --rm -p 8731:8731 \
     -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
     -v "$DATA_ROOT:/data" \
-    "$IMG" frankweiler-http
+    "$IMG" datalib-http
 ```
 
 ## Bind-mount contract
@@ -84,9 +84,9 @@ docker run --rm -p 8731:8731 \
 | `$DATA_ROOT`                   | `/data`                    | RW                | `config.yaml`, one directory per source stanza (`<name>/raw/` + `<name>/rendered_md/`), and the aggregates under `system/` (`system/backend_index/db.doltlite_db`, `system/qmd/`). |
 | `~/.cache/qmd/models`          | `/root/.cache/qmd/models`  | RW (optional)     | qmd's embedding/reranker/expansion model cache (~2.25 GB). The image already ships the three default models pre-baked at `/root/.cache/qmd/models/`, so this mount is only needed if you've set `QMD_EMBED_MODEL=…` to override the default to an unbaked model, or you want to share a cache with a host `qmd` install. |
 
-Default `ENV` inside the image already sets `FRANKWEILER_ROOT=/data` and
+Default `ENV` inside the image already sets `DATALIB_ROOT=/data` and
 `LATCHKEY_CURL=/usr/local/bin/latchkey-curl-impersonate`, so
-`frankweiler-http` finds the data root and `datalib-dag`'s download steps
+`datalib-http` finds the data root and `datalib-dag`'s download steps
 find the Chrome-impersonating curl shim without further configuration.
 
 ## Latchkey encryption key — auto-provisioned inside the bind mount
@@ -97,7 +97,7 @@ neither is available — there's no Secret Service running in a minimal
 Ubuntu container. To avoid asking every user to invent and
 persist a key by hand (lose the key, lose the credentials), the
 container entrypoint
-([`frankweiler/docker/entrypoint.sh`](../../frankweiler/docker/entrypoint.sh))
+([`datalib/docker/entrypoint.sh`](../../datalib/docker/entrypoint.sh))
 auto-provisions one on first run:
 
 - If `LATCHKEY_ENCRYPTION_KEY` is already set in the env when you `docker
@@ -145,7 +145,7 @@ The fallback uses a file living alongside the encrypted blobs, so:
   expected headers.
 
 **Recommendation:** dedicate a fresh host directory (the docs above use
-`$HOME/.frankweiler-docker/latchkey`) to this container's latchkey
+`$HOME/.datalib-docker/latchkey`) to this container's latchkey
 store, and only ever populate it via `docker run …  latchkey auth set
 …`. Don't try to bind-mount your existing host `~/.latchkey`.
 
@@ -164,10 +164,10 @@ revisiting.
   flows (`latchkey auth set <service> -H "…"`) instead. The header
   values you need are documented in the `datalib-dag` error output
   when a service is missing credentials, in each provider's `DOWNLOAD.md`
-  under `frankweiler/backend/etl/providers/<name>/`, and in
+  under `datalib/backend/etl/providers/<name>/`, and in
   [docs/user/first_time_user.md](/docs/user/first_time_user.md).
 - **Tauri desktop UI / Vite dev server.** This image is the backend
-  only. To serve the UI in a browser, run `frankweiler-http` (port
+  only. To serve the UI in a browser, run `datalib-http` (port
   8731) and point the upstream openhost UI container or a local
   `pnpm dev` at it.
 
@@ -198,7 +198,7 @@ scripts/build_docker.sh
 scripts/build_docker.sh --load
 
 # Build against tarballs you produced locally via `bazel build
-# //frankweiler/backend:dist` (and then named to match the release
+# //datalib/backend:dist` (and then named to match the release
 # filenames):
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 

@@ -1,16 +1,16 @@
 #!/bin/sh
-# frankweiler installer — modeled on https://astral.sh/uv/install.sh
+# datalib installer — modeled on https://astral.sh/uv/install.sh
 #
 #   curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 #
 # Downloads the latest release tarball from
 #   https://github.com/imbue-ai/datalib/releases
-# and drops the binaries into ${FRANKWEILER_INSTALL_DIR:-$HOME/.local/bin}.
+# and drops the binaries into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
 #
 # Env vars:
-#   FRANKWEILER_INSTALL_DIR   target dir for the binaries (default ~/.local/bin)
-#   FRANKWEILER_VERSION       release tag to install (default: latest)
-#   FRANKWEILER_LIBC          Linux only: 'gnu' or 'musl' (default:
+#   DATALIB_INSTALL_DIR   target dir for the binaries (default ~/.local/bin)
+#   DATALIB_VERSION       release tag to install (default: latest)
+#   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
 #                             auto-detected; see libc detection below)
 #
 # Supported platforms (one published release tarball each):
@@ -23,11 +23,11 @@
 set -eu
 
 REPO="imbue-ai/datalib"
-INSTALL_DIR="${FRANKWEILER_INSTALL_DIR:-${HOME}/.local/bin}"
-VERSION="${FRANKWEILER_VERSION:-latest}"
+INSTALL_DIR="${DATALIB_INSTALL_DIR:-${HOME}/.local/bin}"
+VERSION="${DATALIB_VERSION:-latest}"
 
-say() { printf 'frankweiler-install: %s\n' "$1"; }
-err() { printf 'frankweiler-install: error: %s\n' "$1" >&2; exit 1; }
+say() { printf 'datalib-install: %s\n' "$1"; }
+err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
 
 # --- platform check ---
 # Map uname's kernel/arch to the Rust target triple in the published
@@ -39,7 +39,7 @@ err() { printf 'frankweiler-install: error: %s\n' "$1" >&2; exit 1; }
 # there. Every musl system ships its dynamic loader at
 # /lib/ld-musl-<arch>.so.1 — its presence is the detection signal.
 # glibc hosts default to the gnu build (the long-standing default);
-# set FRANKWEILER_LIBC=musl to force the static build anywhere — it
+# set DATALIB_LIBC=musl to force the static build anywhere — it
 # runs on any Linux of the right arch regardless of libc.
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -50,7 +50,7 @@ case "${os}/${arch}" in
             x86_64) cpu="x86_64" ;;
             *)      cpu="aarch64" ;;
         esac
-        libc="${FRANKWEILER_LIBC:-}"
+        libc="${DATALIB_LIBC:-}"
         if [ -z "${libc}" ]; then
             libc="gnu"
             for loader in /lib/ld-musl-*.so.1; do
@@ -62,13 +62,13 @@ case "${os}/${arch}" in
         fi
         case "${libc}" in
             gnu | musl) ;;
-            *) err "invalid FRANKWEILER_LIBC='${libc}' (expected 'gnu' or 'musl')" ;;
+            *) err "invalid DATALIB_LIBC='${libc}' (expected 'gnu' or 'musl')" ;;
         esac
         TRIPLE="${cpu}-unknown-linux-${libc}"
         ;;
     *) err "unsupported platform ${os}/${arch}; supported: macOS arm64, Linux x86_64, Linux arm64" ;;
 esac
-TARBALL="frankweiler-${TRIPLE}.tar.gz"
+TARBALL="datalib-${TRIPLE}.tar.gz"
 
 # --- tool check ---
 need() { command -v "$1" >/dev/null 2>&1 || err "required tool not found: $1"; }
@@ -88,7 +88,7 @@ else
 fi
 
 # --- download to tmpdir ---
-tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t frankweiler-install)"
+tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t datalib-install)"
 trap 'rm -rf "${tmpdir}"' EXIT INT TERM
 
 say "downloading ${url}"
@@ -122,13 +122,13 @@ fi
 say "extracting"
 tar -xzf "${tmpdir}/${TARBALL}" -C "${tmpdir}"
 
-# Find the unpacked dir: `frankweiler-<version>-<triple>/`. Glob is fine
+# Find the unpacked dir: `datalib-<version>-<triple>/`. Glob is fine
 # because the tarball contains exactly one top-level dir.
 staged=""
-for d in "${tmpdir}"/frankweiler-*-"${TRIPLE}"; do
+for d in "${tmpdir}"/datalib-*-"${TRIPLE}"; do
     [ -d "$d" ] && staged="$d" && break
 done
-[ -n "${staged}" ] || err "tarball did not contain expected frankweiler-*-${TRIPLE}/ dir"
+[ -n "${staged}" ] || err "tarball did not contain expected datalib-*-${TRIPLE}/ dir"
 
 # --- install ---
 mkdir -p "${INSTALL_DIR}"

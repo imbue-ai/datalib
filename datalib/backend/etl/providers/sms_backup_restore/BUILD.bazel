@@ -1,0 +1,75 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed "SMS Backup & Restore" export (sms + calls XML, with inline
+# base64 image/audio attachments) used by the e2e test and the central
+# fixture pipeline.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/sms_backup_restore_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_sms_backup_restore",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_sms_backup_restore",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:base64",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "sms_backup_restore_unittests",
+    size = "small",
+    crate = ":datalib_etl_sms_backup_restore",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# End-to-end test: points download at the checked-in TNG export tree,
+# asserts the landed raw tables + CAS blobs, runs render, and asserts the
+# rendered conversations + attachments. The fixture is staged via
+# `data = [":tng_fixture"]`.
+rust_test(
+    name = "sms_backup_restore_e2e",
+    srcs = ["tests/sms_backup_restore_e2e.rs"],
+    crate_root = "tests/sms_backup_restore_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+    },
+    deps = [
+        ":datalib_etl_sms_backup_restore",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

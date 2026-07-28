@@ -1,6 +1,6 @@
 //! Close-to-real reproducer for the doltlite × sqlx-sqlite BUSY bug.
 //!
-//! Mirrors frankweiler-sync's per-source RawDb pattern as closely as
+//! Mirrors datalib-sync's per-source RawDb pattern as closely as
 //! possible without provider-specific code or network. Each "source":
 //!
 //!   1. Opens a SqlitePool (max_connections=1) on its own .doltlite_db,
@@ -21,7 +21,7 @@
 //! N sources run concurrently in tokio tasks. We count user-visible
 //! BUSY errors on inserts and on the dolt_commit.
 
-// Standalone debug/benchmark CLI. Doesn't run under frankweiler-sync,
+// Standalone debug/benchmark CLI. Doesn't run under datalib-sync,
 // has no indicatif progress bars to corrupt, and emits its results +
 // per-iteration progress directly to stderr. The workspace clippy.toml
 // disallows raw eprintln!/println! because they'd race with the obs
@@ -38,7 +38,7 @@ use clap::Parser;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 #[derive(Parser, Debug, Clone)]
-#[command(about = "Close-to-real frankweiler-sync repro for doltlite BUSY")]
+#[command(about = "Close-to-real datalib-sync repro for doltlite BUSY")]
 struct Args {
     #[arg(long, default_value_t = 9)]
     sources: usize,

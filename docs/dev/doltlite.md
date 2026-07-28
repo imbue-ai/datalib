@@ -23,7 +23,7 @@ binary's argv is identical to `sqlite3`: `doltlite [OPTIONS] DBFILE [SQL...]`.
 > **Always pass `-readonly`** when you're just exploring. A second
 > writer against a doltlite file commits onto its own branch and can
 > wedge later ETL runs with `commit conflict` (the same scenario the
-> `max_connections = 1` rule in `frankweiler_etl::doltlite_raw` exists
+> `max_connections = 1` rule in `datalib_etl::doltlite_raw` exists
 > to prevent on the Rust side).
 
 ## Recipes
@@ -228,7 +228,7 @@ is crashing mid-batch. Look upstream of the rescue for the actual cause
 
 - **During a live ETL run.** The Rust pool is at `max_connections = 1`
   to keep doltlite's per-connection HEAD coherent (see the long doc
-  comment at the top of `frankweiler/backend/etl/src/doltlite_raw.rs`).
+  comment at the top of `datalib/backend/etl/src/doltlite_raw.rs`).
   Adding a second writer through the CLI defeats that.
 - **For routine reads from app code.** Open the file via `sqlx` like
   everything else in the backend; the CLI is for ad-hoc inspection.

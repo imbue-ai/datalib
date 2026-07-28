@@ -30,9 +30,6 @@ Liberate your data from silos. Run SOTA AI and data tools on it, on your own ter
  not just delete from the data source.
  **</span>
 
-Codenames in this project (`frankweiler`, etc.) are inspired by
-[_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
-
 ## 0. Setup pre-reqs
 
 If you don't already have it, you'll need `node` on `PATH`:
@@ -54,20 +51,20 @@ curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/insta
 ```
 
 This downloads the latest release tarball, verifies its checksum, and drops
-`datalib-dag`, `datalib-step`, `frankweiler-http`, and the latchkey curl
+`datalib-dag`, `datalib-step`, `datalib-http`, and the latchkey curl
 shim into `~/.local/bin`. If that directory isn't already on your `PATH`,
 the script prints the exact line to add to your `~/.zshrc` — add it and
 restart your shell so the installed commands resolve.
 
 Three optional knobs:
 
-- `FRANKWEILER_INSTALL_DIR` — install somewhere else, e.g.
-  `FRANKWEILER_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`.
-- `FRANKWEILER_VERSION` — pin a release tag instead of `latest`, e.g.
-  `FRANKWEILER_VERSION=v0.13.0 curl -LsSf …/install.sh | sh`.
-- `FRANKWEILER_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
+- `DATALIB_INSTALL_DIR` — install somewhere else, e.g.
+  `DATALIB_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`.
+- `DATALIB_VERSION` — pin a release tag instead of `latest`, e.g.
+  `DATALIB_VERSION=v0.13.0 curl -LsSf …/install.sh | sh`.
+- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
   distros like Alpine get the fully-static musl build); set
-  `FRANKWEILER_LIBC=musl` to force the static build on a glibc distro —
+  `DATALIB_LIBC=musl` to force the static build on a glibc distro —
   it runs on any Linux of the right architecture.
 
 > The install script supports macOS arm64 (Apple Silicon) and Linux
@@ -267,7 +264,7 @@ to make sure it is writing to the directory you created.
 The easiest way is through the app. From your data_root:
 
 ```sh
-frankweiler-http ./
+datalib-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
@@ -359,17 +356,17 @@ any step failed.
 ## 5. Browse the result
 
 If you synced from the app, you're already looking at the result —
-`frankweiler-http` is the single-binary search backend with the web UI
+`datalib-http` is the single-binary search backend with the web UI
 embedded. If you ran `datalib-dag` from the terminal instead, start it
 now from your data_root:
 
 ```sh
-frankweiler-http ./
+datalib-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
 your default browser. Pass `--no-open` if you'd rather click in
-yourself, and set `FRANKWEILER_BIND=127.0.0.1:<port>` to override the
+yourself, and set `DATALIB_BIND=127.0.0.1:<port>` to override the
 listen address.
 
 ## 6. Re-syncing
