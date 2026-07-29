@@ -31,6 +31,9 @@
 //!
 //! Combined short flags (`-sSL`, `-sSLo`) are exploded; a value-taking
 //! short must be last in the bundle.
+//!
+//! Two request headers are dropped rather than forwarded, whatever the
+//! caller passed — see [`is_suppressed_header`].
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -57,6 +60,31 @@ struct Args {
 fn die(msg: impl AsRef<str>) -> ! {
     eprintln!("latchkey-curl-impersonate: {}", msg.as_ref());
     std::process::exit(2);
+}
+
+/// Headers a caller may not set on an impersonated request.
+///
+/// * `User-Agent` — the entire point of this binary is to look like
+///   Chrome, and the emulation profile supplies the matching UA. A
+///   caller-supplied one silently wins over it, which is worse than not
+///   impersonating at all: a Chrome TLS fingerprint announcing itself as
+///   `curl/8.7.1` is a louder signal than either alone. The latchkey
+///   gateway forwards its client's `User-Agent` into every curl
+///   invocation it builds, so this is the normal case, not a corner one.
+/// * `X-Imbue-Impersonate` — the dispatch curl's routing marker
+///   (`src/bin/latchkey_curl_dispatch.rs`). It is stripped there before
+///   we are exec'd, so this only matters when this binary is used as
+///   `LATCHKEY_CURL` directly; dropping it keeps a private marker off the
+///   wire either way.
+const SUPPRESSED_HEADERS: &[&str] = &["User-Agent", "X-Imbue-Impersonate"];
+
+/// Whether `name` is a header this binary refuses to let a caller set.
+/// HTTP header names are case-insensitive, and the gateway echoes back
+/// whatever case its client sent, so compare that way.
+fn is_suppressed_header(name: &str) -> bool {
+    SUPPRESSED_HEADERS
+        .iter()
+        .any(|suppressed| name.eq_ignore_ascii_case(suppressed))
 }
 
 fn valueless_shorts() -> HashSet<char> {
@@ -131,9 +159,12 @@ fn parse(argv: Vec<String>) -> Args {
             "-H" | "--header" => {
                 let raw = need(&tok, &mut it);
                 match raw.split_once(':') {
-                    Some((n, v)) => out
-                        .headers
-                        .push((n.trim().to_string(), v.trim().to_string())),
+                    Some((n, v)) => {
+                        let name = n.trim();
+                        if !is_suppressed_header(name) {
+                            out.headers.push((name.to_string(), v.trim().to_string()));
+                        }
+                    }
                     None => die(format!("malformed header {raw:?}")),
                 }
             }
@@ -309,4 +340,55 @@ async fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_argv(tokens: &[&str]) -> Args {
+        parse(tokens.iter().map(|t| t.to_string()).collect())
+    }
+
+    /// A caller-supplied User-Agent is dropped in every casing, so the
+    /// Chrome emulation profile's own UA is what goes on the wire. This
+    /// is the latchkey gateway's normal behavior: it forwards its
+    /// client's `User-Agent: curl/...` into the invocation it builds.
+    #[test]
+    fn drops_caller_supplied_user_agent() {
+        for name in ["User-Agent", "user-agent", "USER-AGENT"] {
+            let args = parse_argv(&["-H", &format!("{name}: curl/8.7.1"), "https://example.com/"]);
+            assert!(
+                args.headers.is_empty(),
+                "{name} survived as {:?}",
+                args.headers,
+            );
+        }
+    }
+
+    /// The dispatch curl's private routing marker never reaches the wire,
+    /// even when this binary is used as `LATCHKEY_CURL` directly.
+    #[test]
+    fn drops_impersonation_marker() {
+        let args = parse_argv(&["-H", "X-Imbue-Impersonate: 1", "https://example.com/"]);
+        assert!(args.headers.is_empty());
+    }
+
+    #[test]
+    fn keeps_every_other_header() {
+        let args = parse_argv(&[
+            "-H",
+            "Accept: application/json",
+            "-H",
+            "Authorization: Bearer token",
+            "https://example.com/",
+        ]);
+        assert_eq!(
+            args.headers,
+            vec![
+                ("Accept".to_string(), "application/json".to_string()),
+                ("Authorization".to_string(), "Bearer token".to_string()),
+            ],
+        );
+    }
 }

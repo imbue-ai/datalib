@@ -11,6 +11,12 @@
 //! reject vanilla curl's TLS fingerprint, so the providers that hit them
 //! add the marker to their requests (see `http::latchkey_curl`).
 //!
+//! When latchkey is in gateway mode, the dispatch curl runs on the
+//! *gateway* side rather than here: `latchkey curl` re-points the URL at
+//! the gateway, and the gateway rebuilds the invocation it hands to its
+//! own `LATCHKEY_CURL`. The marker therefore has to cross an HTTP hop,
+//! which is why it carries a value — see `http::IMPERSONATE_MARKER_HEADER`.
+//!
 //! Resolution order for the dispatch-curl path (first hit wins):
 //!   1. `$LATCHKEY_CURL` — caller's explicit override; trusted as-is.
 //!   2. `$DATALIB_CURL_DISPATCH` — our own override (parallel to
