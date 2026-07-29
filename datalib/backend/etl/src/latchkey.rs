@@ -11,11 +11,18 @@
 //! reject vanilla curl's TLS fingerprint, so the providers that hit them
 //! add the marker to their requests (see `http::latchkey_curl`).
 //!
-//! When latchkey is in gateway mode, the dispatch curl runs on the
-//! *gateway* side rather than here: `latchkey curl` re-points the URL at
-//! the gateway, and the gateway rebuilds the invocation it hands to its
-//! own `LATCHKEY_CURL`. The marker therefore has to cross an HTTP hop,
-//! which is why it carries a value — see `http::IMPERSONATE_MARKER_HEADER`.
+//! **Except in gateway mode** (`$LATCHKEY_GATEWAY`, how minds workspaces
+//! reach third-party services), where we deliberately leave
+//! `LATCHKEY_CURL` alone. There, `latchkey curl` does not talk to the
+//! third party at all: it re-points the URL at the gateway, and the
+//! *gateway* rebuilds the invocation it hands to its own `LATCHKEY_CURL`,
+//! which is where impersonation belongs. Exporting ours would put a
+//! dispatch curl on the client hop instead, and that hop would consume
+//! the marker header and impersonate the connection to the gateway --
+//! leaving the hop that actually reaches the third party unimpersonated.
+//! Leaving it unset lets the system curl carry the marker to the gateway
+//! as an ordinary header, which is why the marker has a value (see
+//! `http::IMPERSONATE_MARKER_HEADER`).
 //!
 //! Resolution order for the dispatch-curl path (first hit wins):
 //!   1. `$LATCHKEY_CURL` — caller's explicit override; trusted as-is.
@@ -37,10 +44,15 @@
 //! On miss, the `Command` is still returned but a `warn!` is logged so
 //! the caller can see why CF-fronted endpoints are 403-ing.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const DISPATCH_BIN: &str = "latchkey-curl-dispatch";
+/// Where we publish the resolved dispatch curl for the `latchkey` CLI.
+const CURL_ENV_VAR: &str = "LATCHKEY_CURL";
+/// Set by latchkey's callers to route every request through a gateway.
+const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
 // Cargo emits the binary as `latchkey-curl-dispatch` (dashes — from
 // `[[bin]] name = "latchkey-curl-dispatch"` in Cargo.toml). Bazel emits it
 // as `latchkey_curl_dispatch` (underscores — the `rust_binary` target
@@ -72,13 +84,34 @@ pub struct CurlDispatchNotFound;
 pub fn ensure_curl_dispatch() -> Result<PathBuf, CurlDispatchNotFound> {
     match RESOLVED.get_or_init(resolve) {
         Some(path) => {
-            if std::env::var_os("LATCHKEY_CURL").is_none() {
-                std::env::set_var("LATCHKEY_CURL", path);
+            if should_export_curl_dispatch(
+                std::env::var_os(CURL_ENV_VAR).as_deref(),
+                std::env::var_os(GATEWAY_ENV_VAR).as_deref(),
+            ) {
+                std::env::set_var(CURL_ENV_VAR, path);
             }
             Ok(path.clone())
         }
         None => Err(CurlDispatchNotFound),
     }
+}
+
+/// Whether latchkey is configured to route requests through a gateway.
+fn is_gateway_mode(gateway: Option<&OsStr>) -> bool {
+    matches!(gateway, Some(value) if !value.is_empty())
+}
+
+/// Whether [`ensure_curl_dispatch`] should point `LATCHKEY_CURL` at the
+/// dispatch curl it resolved. Two reasons not to:
+///
+///   * the caller already set it — their override wins, and it is the
+///     first thing `resolve` consults anyway;
+///   * latchkey is in gateway mode, where the request reaching the third
+///     party is made by the gateway's curl, not ours. See the module docs
+///     for why putting a dispatch curl on the client hop actively breaks
+///     impersonation rather than merely failing to help.
+fn should_export_curl_dispatch(existing_curl: Option<&OsStr>, gateway: Option<&OsStr>) -> bool {
+    existing_curl.is_none() && !is_gateway_mode(gateway)
 }
 
 fn resolve() -> Option<PathBuf> {
@@ -231,7 +264,62 @@ pub fn latchkey_tokio_command() -> tokio::process::Command {
 }
 
 fn warn_if_missing() {
+    // In gateway mode the gateway supplies its own dispatch curl, so a
+    // missing local one costs nothing and the warning would be misleading.
+    if is_gateway_mode(std::env::var_os(GATEWAY_ENV_VAR).as_deref()) {
+        return;
+    }
     if let Err(e) = ensure_curl_dispatch() {
         tracing::warn!(error = %e, "running latchkey without the in-tree curl shim; Cloudflare-protected endpoints will likely 403");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn os(value: &str) -> &OsStr {
+        OsStr::new(value)
+    }
+
+    /// With no gateway and nothing preset, we publish our dispatch curl --
+    /// the standalone app's configuration, where `latchkey curl` makes the
+    /// request to the third party itself.
+    #[test]
+    fn exports_dispatch_curl_when_latchkey_talks_to_the_third_party() {
+        assert!(should_export_curl_dispatch(None, None));
+        assert!(should_export_curl_dispatch(None, Some(os(""))));
+    }
+
+    /// A caller's explicit `LATCHKEY_CURL` always wins.
+    #[test]
+    fn never_overrides_an_explicit_setting() {
+        assert!(!should_export_curl_dispatch(
+            Some(os("/usr/bin/curl")),
+            None
+        ));
+        assert!(!should_export_curl_dispatch(
+            Some(os("/usr/bin/curl")),
+            Some(os("http://127.0.0.1:9"))
+        ));
+    }
+
+    /// In gateway mode the gateway's own dispatch curl makes the request
+    /// that reaches the third party. Putting one on the client hop instead
+    /// would consume the marker header there and impersonate the hop to the
+    /// gateway, leaving the one that matters unimpersonated.
+    #[test]
+    fn leaves_latchkey_curl_alone_in_gateway_mode() {
+        assert!(!should_export_curl_dispatch(
+            None,
+            Some(os("http://127.0.0.1:9"))
+        ));
+    }
+
+    #[test]
+    fn treats_an_empty_gateway_setting_as_no_gateway() {
+        assert!(!is_gateway_mode(None));
+        assert!(!is_gateway_mode(Some(os(""))));
+        assert!(is_gateway_mode(Some(os("http://127.0.0.1:9"))));
     }
 }
