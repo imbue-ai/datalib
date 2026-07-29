@@ -130,7 +130,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app-schema"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "datalib-etl-macros",
  "serde",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-core"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-dag"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-anthropic"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-beeper"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-chat-common"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-chatgpt"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-contact-common"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-contacts"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1155,7 +1155,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-email"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-fsindex"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-github"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-gitlab"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-google-takeout"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-linkedin"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-macros"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1314,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-notion"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-perseus"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-signal"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-slack"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-sms-backup-restore"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1440,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-whatsapp"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-yolink"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-http"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-index-lib"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "datalib-schema",
@@ -1527,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-obs"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1544,7 +1544,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-qmd-indexer"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "datalib-core",
@@ -1553,7 +1553,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-schema"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "datalib-etl-macros",
  "datalib-time",
@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-signal-backup"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-tauri-backend"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "datalib-core",
  "datalib-schema",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-time"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-whatsapp-backup"
-version = "0.23.2"
+version = "0.24.0"
 dependencies = [
  "aes",
  "anyhow",
