@@ -72,10 +72,10 @@ fn die(msg: impl AsRef<str>) -> ! {
 ///   gateway forwards its client's `User-Agent` into every curl
 ///   invocation it builds, so this is the normal case, not a corner one.
 /// * `X-Imbue-Impersonate` — the dispatch curl's routing marker
-///   (`src/bin/latchkey_curl_dispatch.rs`). It is stripped there before
-///   we are exec'd, so this only matters when this binary is used as
-///   `LATCHKEY_CURL` directly; dropping it keeps a private marker off the
-///   wire either way.
+///   (`src/bin/latchkey_curl_dispatch.rs`). That binary routes on it and
+///   forwards it to us untouched, so this is the one place it is removed:
+///   whether we were reached through the dispatch curl or used as
+///   `LATCHKEY_CURL` directly, the private marker never reaches the wire.
 const SUPPRESSED_HEADERS: &[&str] = &["User-Agent", "X-Imbue-Impersonate"];
 
 /// Whether `name` is a header this binary refuses to let a caller set.
@@ -157,12 +157,20 @@ fn parse(argv: Vec<String>) -> Args {
         match tok.as_str() {
             "-X" | "--request" => out.method = Some(need(&tok, &mut it).to_uppercase()),
             "-H" | "--header" => {
+                // curl spells a header argument two ways: `Name: value`,
+                // and `Name;` to send one with no value (a colon with an
+                // empty right-hand side means *remove* the header, so it
+                // can't express that). Split on whichever separator comes
+                // first so both parse — the dispatch curl matches its
+                // routing marker in either spelling and forwards it here
+                // for us to drop.
                 let raw = need(&tok, &mut it);
-                match raw.split_once(':') {
-                    Some((n, v)) => {
-                        let name = n.trim();
+                match raw.find([':', ';']) {
+                    Some(index) => {
+                        let name = raw[..index].trim();
                         if !is_suppressed_header(name) {
-                            out.headers.push((name.to_string(), v.trim().to_string()));
+                            let value = raw[index + 1..].trim();
+                            out.headers.push((name.to_string(), value.to_string()));
                         }
                     }
                     None => die(format!("malformed header {raw:?}")),
@@ -366,12 +374,29 @@ mod tests {
         }
     }
 
-    /// The dispatch curl's private routing marker never reaches the wire,
-    /// even when this binary is used as `LATCHKEY_CURL` directly.
+    /// The dispatch curl's private routing marker never reaches the wire.
+    /// It forwards the marker to us untouched, in whichever spelling it
+    /// matched, so every one of those has to be dropped here.
     #[test]
     fn drops_impersonation_marker() {
-        let args = parse_argv(&["-H", "X-Imbue-Impersonate: 1", "https://example.com/"]);
-        assert!(args.headers.is_empty());
+        for marker in [
+            "X-Imbue-Impersonate: 1",
+            "X-Imbue-Impersonate:",
+            "X-Imbue-Impersonate;",
+            "x-imbue-impersonate: 1",
+        ] {
+            let args = parse_argv(&["-H", marker, "https://example.com/"]);
+            assert!(args.headers.is_empty(), "{marker:?} survived");
+        }
+    }
+
+    /// curl's `Name;` spelling sends a header with no value; a colon with
+    /// an empty right-hand side cannot express that (it means *remove*).
+    /// Both have to parse rather than being rejected as malformed.
+    #[test]
+    fn parses_valueless_header_spellings() {
+        let args = parse_argv(&["-H", "X-Trace;", "https://example.com/"]);
+        assert_eq!(args.headers, vec![("X-Trace".to_string(), String::new())]);
     }
 
     #[test]
