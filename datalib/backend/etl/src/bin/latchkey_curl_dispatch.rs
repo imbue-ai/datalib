@@ -11,22 +11,29 @@
 //! curl they expect.
 //!
 //! Routing:
-//!   * If the request carries the value-less marker header
-//!     `-H "X-Imbue-Impersonate:"`, the marker is stripped and the
-//!     remaining args are handed to the Chrome-impersonating curl
+//!   * If the request carries the marker header `X-Imbue-Impersonate`,
+//!     the args are handed to the Chrome-impersonating curl
 //!     (`latchkey-curl-impersonate`), found next to this binary
 //!     (installers ship the two side by side).
-//!   * Otherwise the args are passed through verbatim to the system
-//!     curl: `curl` on `$PATH` (skipping this binary, so a
-//!     `LATCHKEY_CURL`-on-PATH setup can't recurse).
+//!   * Otherwise they go to the system curl: `curl` on `$PATH` (skipping
+//!     this binary, so a `LATCHKEY_CURL`-on-PATH setup can't recurse).
 //!
-//! Why a header-*removal* marker: `-H "Name:"` with an empty right-hand
-//! side is curl's syntax for removing an internal header named `Name`.
-//! `X-Imbue-Impersonate` is a header curl never emits, so a real curl
-//! that ever sees the marker (e.g. if it leaks past this dispatcher)
-//! removes a header that was never there — a genuine no-op on the wire.
-//! The signature is therefore invisible to a real curl; only this
-//! dispatcher gives it meaning.
+//! Either way the args are passed on verbatim — this binary only reads
+//! them. Removing the marker so it never reaches the wire is the
+//! impersonator's job (see `SUPPRESSED_HEADERS` there), which has to
+//! handle it regardless because it can be pointed at by `LATCHKEY_CURL`
+//! directly, with no dispatcher in front of it.
+//!
+//! The marker is matched by header *name*, with any value, because it
+//! reaches us two different ways. Called directly, latchkey passes on
+//! the value-less `-H "X-Imbue-Impersonate:"` its caller wrote. Called
+//! by the latchkey *gateway* — how minds workspaces reach third-party
+//! services — the request first crossed an HTTP hop, so it can only
+//! have arrived with a value (a value-less header has no representation
+//! on the wire; see `IMPERSONATE_MARKER_HEADER` in `../../http.rs`), and
+//! the gateway rebuilds it as `-H "X-Imbue-Impersonate: 1"` in the
+//! invocation it hands us. Matching on the name covers both without the
+//! two sides having to agree on a spelling.
 //!
 //! Unix only (macOS + Linux): it `exec`s the chosen binary, replacing
 //! the process so exit status, signals, and stdio pass through
@@ -36,16 +43,9 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The private routing marker, matched as the exact value of a `-H`
-/// header argument. Value-less so on a real curl it's a no-op header
-/// removal (curl never emits `X-Imbue-Impersonate`); namespaced so it
-/// can't collide with a header a caller legitimately wants to strip.
-///
-/// Every caller — datalib's `latchkey curl` invocations and the minds
-/// latchkey gateway — emits it in exactly this two-token form
-/// (`-H` `X-Imbue-Impersonate:`), so the parser matches that spelling
-/// literally rather than reimplementing curl's header-argument grammar.
-const MARKER_HEADER_ARG: &str = "X-Imbue-Impersonate:";
+/// Name of the private routing marker header. Namespaced so it can't
+/// collide with a header a caller legitimately wants to set or strip.
+const MARKER_HEADER_NAME: &str = "X-Imbue-Impersonate";
 
 /// Filenames to look for next to `current_exe()` — mirrors
 /// `SIBLING_NAMES` in `latchkey.rs`. Installers ship the impersonator and
@@ -59,33 +59,47 @@ fn die(msg: impl AsRef<str>) -> ! {
     std::process::exit(2);
 }
 
-/// Scan argv (already sans program name) for the marker, recognized only
-/// as the exact two-token header argument `-H X-Imbue-Impersonate:` (or
-/// the `--header` long form). Returns argv with every marker occurrence
-/// removed and whether at least one was found. This is deliberately
-/// strict: callers emit exactly this spelling, so we don't reimplement
-/// curl's `-HVALUE` / `--header=VALUE` / combined-bundle grammar.
-fn strip_marker(argv: Vec<String>) -> (Vec<String>, bool) {
-    let mut out: Vec<String> = Vec::with_capacity(argv.len());
-    let mut found = false;
-    let mut it = argv.into_iter();
+/// Whether a `-H` / `--header` argument names the impersonation marker.
+///
+/// Only the header name is compared, so every value the marker can
+/// arrive with counts: none at all (`X-Imbue-Impersonate:`, what callers
+/// write), a value (`X-Imbue-Impersonate: 1`, the only form that
+/// survives an HTTP hop through the latchkey gateway), and curl's
+/// send-empty spelling (`X-Imbue-Impersonate;`). Header names are
+/// case-insensitive in HTTP and the gateway echoes back whatever case
+/// its client sent, so we compare that way too.
+fn is_marker(header_argument: &str) -> bool {
+    match header_argument.find([':', ';']) {
+        Some(index) => header_argument[..index]
+            .trim()
+            .eq_ignore_ascii_case(MARKER_HEADER_NAME),
+        // No separator: not a header argument curl would accept, so not
+        // a marker either.
+        None => false,
+    }
+}
+
+/// Whether argv (already sans program name) carries the marker, as the
+/// value of a two-token `-H` / `--header` argument.
+///
+/// Two tokens is the only form we need to handle: it is what latchkey's
+/// gateway emits when it rebuilds a curl invocation from an inbound
+/// request, and what `http::latchkey_curl` emits directly. Curl's glued
+/// spellings (`-HVALUE`, `--header=VALUE`) are not recognized — nothing
+/// that reaches us produces them, and missing one costs impersonation,
+/// never correctness.
+fn has_marker(argv: &[String]) -> bool {
+    let mut it = argv.iter();
     while let Some(tok) = it.next() {
+        // Consume the value along with the flag, so a header value that
+        // happens to look like a flag is never read as one.
         if tok == "-H" || tok == "--header" {
-            match it.next() {
-                Some(val) if val == MARKER_HEADER_ARG => found = true,
-                Some(val) => {
-                    out.push(tok);
-                    out.push(val);
-                }
-                // Dangling flag with no value: leave it for the target
-                // binary to reject rather than silently swallowing it.
-                None => out.push(tok),
+            if it.next().is_some_and(|value| is_marker(value)) {
+                return true;
             }
-        } else {
-            out.push(tok);
         }
     }
-    (out, found)
+    false
 }
 
 /// Look for one of `names` next to `current_exe()`, following the exe
@@ -137,15 +151,112 @@ fn main() {
         .ok()
         .map(|p| std::fs::canonicalize(&p).unwrap_or(p));
 
-    let (forwarded, impersonate) = strip_marker(argv);
-
-    let target = if impersonate {
+    let target = if has_marker(&argv) {
         resolve_impersonator()
     } else {
         resolve_real_curl(self_exe.as_deref())
     };
 
     // `exec` replaces this process on success and only returns on error.
-    let err = Command::new(&target).args(&forwarded).exec();
+    let err = Command::new(&target).args(&argv).exec();
     die(format!("failed to exec {}: {err}", target.display()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    /// Every value the marker can arrive with is recognized, under either
+    /// spelling of the header flag.
+    #[test]
+    fn detects_marker_whatever_its_value() {
+        for marker in [
+            "X-Imbue-Impersonate:",
+            "X-Imbue-Impersonate: 1",
+            "X-Imbue-Impersonate;",
+            "x-imbue-impersonate: 1",
+            "X-IMBUE-IMPERSONATE:",
+        ] {
+            for flag in ["-H", "--header"] {
+                let tokens = argv(&[
+                    "-sS",
+                    "-H",
+                    "Accept: */*",
+                    flag,
+                    marker,
+                    "https://example.com/",
+                ]);
+                assert!(has_marker(&tokens), "not recognized: {flag} {marker:?}");
+            }
+        }
+    }
+
+    /// The shape the latchkey gateway rebuilds an inbound request into
+    /// (`gatewayEndpoint.ts`'s `buildCurlArguments`, plus the `-sS -D`
+    /// it prepends) routes to the impersonator.
+    #[test]
+    fn detects_marker_in_the_gateway_reconstructed_invocation() {
+        let tokens = argv(&[
+            "-sS",
+            "-D",
+            "/tmp/headers",
+            "-X",
+            "POST",
+            "-H",
+            "User-Agent: curl/8.7.1",
+            "-H",
+            "Accept: */*",
+            "-H",
+            "X-Imbue-Impersonate: 1",
+            "--data-binary",
+            "@-",
+            "https://claude.ai/api/organizations",
+        ]);
+        assert!(has_marker(&tokens));
+    }
+
+    #[test]
+    fn leaves_unmarked_invocations_to_the_system_curl() {
+        let tokens = argv(&["-sS", "-H", "Accept: */*", "https://example.com/"]);
+        assert!(!has_marker(&tokens));
+    }
+
+    /// A header named something else is not the marker, and neither is a
+    /// bare name with no `:` / `;` separator.
+    #[test]
+    fn does_not_match_other_headers() {
+        for header in [
+            "X-Imbue-Impersonation:",
+            "Authorization: Bearer x",
+            "X-Imbue-Impersonate",
+        ] {
+            let tokens = argv(&["-H", header, "https://example.com/"]);
+            assert!(!has_marker(&tokens), "unexpectedly matched {header:?}");
+        }
+    }
+
+    /// A value belongs to the flag before it: something that merely looks
+    /// like a marker header argument is not read as one.
+    #[test]
+    fn does_not_match_inside_a_header_value() {
+        let tokens = argv(&[
+            "-H",
+            "X-Echo: -H",
+            "X-Imbue-Impersonate:",
+            "https://example.com/",
+        ]);
+        assert!(!has_marker(&tokens));
+    }
+
+    /// A dangling `-H` with no value is not a marker (and is left for the
+    /// target binary to reject).
+    #[test]
+    fn tolerates_dangling_header_flag() {
+        let tokens = argv(&["https://example.com/", "-H"]);
+        assert!(!has_marker(&tokens));
+    }
 }

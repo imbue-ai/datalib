@@ -314,10 +314,23 @@ const IMPERSONATE_PROVIDERS: &[&str] = &[
     "notion_unofficial",
 ];
 
-/// The exact value-less marker header the dispatch curl matches (see
-/// `src/bin/latchkey_curl_dispatch.rs`). Value-less so it is a no-op
-/// header removal if it ever reaches a real curl.
-pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate:";
+/// The marker header the dispatch curl routes on (see
+/// `src/bin/latchkey_curl_dispatch.rs`, which matches it by name and
+/// ignores the value).
+///
+/// It carries a value because it has to survive an HTTP hop. When
+/// latchkey is in gateway mode — how minds workspaces reach third-party
+/// services — `latchkey curl` does not make the request itself: it
+/// re-points the URL at `<gateway>/gateway/<target>`, and the gateway
+/// rebuilds a curl invocation from the request it receives. The marker
+/// used to be value-less (`X-Imbue-Impersonate:`), which is curl's
+/// syntax for *removing* a header: a genuine no-op if it ever reached a
+/// real curl, but for the same reason it has no representation on the
+/// wire, so it never survived that hop and agents never got
+/// impersonation. Giving it a value costs a stray header on requests
+/// that reach a third party with no dispatch curl in the chain — where
+/// impersonation was not happening anyway.
+pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
 pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
     latchkey_curl_classified(req, default_retryability).await
@@ -440,8 +453,8 @@ mod live {
         }
         // Route CF-fronted providers to the impersonating curl via the
         // dispatch curl's marker header. Only on the latchkey path -- a
-        // bypass_latchkey request uses plain curl, where the marker would
-        // be a pointless no-op header removal.
+        // bypass_latchkey request uses plain curl, which has no dispatch
+        // curl to act on the marker and would just send it upstream.
         if !req.bypass_latchkey && IMPERSONATE_PROVIDERS.contains(&req.provider) {
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
         }
