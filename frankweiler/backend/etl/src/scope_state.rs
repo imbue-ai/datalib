@@ -48,11 +48,67 @@ pub fn since_for_scope(
     refresh_window_days: u32,
     full: bool,
 ) -> Option<String> {
+    since_for_scope_with_prior(state, scope, refresh_window_days, full, None)
+}
+
+/// [`since_for_scope`] plus the config-change escape hatch.
+///
+/// The policy above is correct for resumption but wrong for a *config
+/// change*: because state unconditionally wins, widening
+/// `refresh_window_days` on an already-synced store does nothing at all.
+/// The stored cursor answers "where do I start?" by itself and the
+/// window never gets a second vote — see [`crate::scope_config`].
+///
+/// `prior` is the config blob recorded alongside this scope's cursor by
+/// the last run that satisfied it. When it shows a *narrower* window
+/// than the current config, the newly-in-scope range has never been
+/// walked, so this run reaches back to cover it:
+///
+/// - new window is `0` (unbounded) where the recorded one wasn't →
+///   `None`, a full scope walk.
+/// - otherwise → the earlier of the cursor and `now - window`, so the
+///   walk covers the gap without giving up the cursor's precision when
+///   the cursor is already older than the new floor.
+///
+/// A *narrowed* window is a no-op: the store already holds a superset.
+/// An absent or key-less blob is likewise a no-op — every store predating
+/// `sync_scope_config` has none, and reading that as "re-walk" would
+/// stampede every installed mirror on upgrade.
+pub fn since_for_scope_with_prior(
+    state: &HashMap<String, String>,
+    scope: &str,
+    refresh_window_days: u32,
+    full: bool,
+    prior: Option<&serde_json::Value>,
+) -> Option<String> {
     if full {
         return None;
     }
     if let Some(s) = state.get(scope) {
-        return Some(s.clone());
+        let Some(prev_window) = prior
+            .and_then(|p| p.get(REFRESH_WINDOW_KEY))
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return Some(s.clone());
+        };
+        // `0` means "no floor", i.e. the widest possible window, so it
+        // can't be compared as a plain number.
+        let widened = match (prev_window, refresh_window_days as u64) {
+            (0, _) => false, // was already unbounded
+            (_, 0) => true,  // now unbounded
+            (prev, cur) => cur > prev,
+        };
+        if !widened {
+            return Some(s.clone());
+        }
+        if refresh_window_days == 0 {
+            return None;
+        }
+        let floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
+        let floor = floor.to_rfc3339_opts(SecondsFormat::Secs, true);
+        // Both are RFC 3339 at seconds precision in UTC, so the
+        // lexicographic min is the chronological one.
+        return Some(if floor < *s { floor } else { s.clone() });
     }
     if refresh_window_days == 0 {
         return None;
@@ -60,6 +116,11 @@ pub fn since_for_scope(
     let floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
     Some(floor.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
+
+/// Key under which providers record `refresh_window_days` in their
+/// [`crate::scope_config`] blob. Shared so github and gitlab agree
+/// without either owning the string.
+pub const REFRESH_WINDOW_KEY: &str = "refresh_window_days";
 
 /// Snapshot every `(scope, last_seen_at)` row from `sync_scope_state`.
 /// Used by [`DownloadRun`] to capture before/after cursor positions for
@@ -152,6 +213,111 @@ mod tests {
         assert!(
             ago >= ChronoDuration::days(6) && ago <= ChronoDuration::days(8),
             "since={got} ago={ago:?}",
+        );
+    }
+
+    // ── config-change escape hatch ───────────────────────────────────
+
+    fn prior(window: u64) -> serde_json::Value {
+        serde_json::json!({ REFRESH_WINDOW_KEY: window })
+    }
+
+    /// Days between `now` and an RFC 3339 `since`, for window assertions.
+    fn days_back(since: &str) -> i64 {
+        let parsed = chrono::DateTime::parse_from_rfc3339(since).expect("rfc3339");
+        Utc::now()
+            .signed_duration_since(parsed.with_timezone(&Utc))
+            .num_days()
+    }
+
+    #[test]
+    fn absent_prior_keeps_the_cursor() {
+        // Every store predating `sync_scope_config`. Must not re-walk.
+        let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 365, false, None).as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn unchanged_window_keeps_the_cursor() {
+        let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 30, false, Some(&prior(30))).as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn narrowed_window_keeps_the_cursor() {
+        // Store is already a superset; nothing to fetch.
+        let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 7, false, Some(&prior(30))).as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn widened_window_reaches_back_past_the_cursor() {
+        // Cursor is recent, so the widened floor is the earlier bound and
+        // wins — this is the case the whole change exists for.
+        let s = state_with(&[(
+            "a",
+            Utc::now()
+                .to_rfc3339_opts(SecondsFormat::Secs, true)
+                .as_str(),
+        )]);
+        let got = since_for_scope_with_prior(&s, "a", 365, false, Some(&prior(30)))
+            .expect("expected a widened floor");
+        assert!(
+            (364..=366).contains(&days_back(&got)),
+            "expected ~365d back, got {got}"
+        );
+    }
+
+    #[test]
+    fn widened_window_keeps_an_older_cursor() {
+        // The cursor already predates the new floor, so it stays: no
+        // reason to give up its precision and re-walk what it covers.
+        let s = state_with(&[("a", "2020-01-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 365, false, Some(&prior(30))).as_deref(),
+            Some("2020-01-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn window_widened_to_unbounded_drops_the_filter() {
+        let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 0, false, Some(&prior(30))),
+            None
+        );
+    }
+
+    #[test]
+    fn already_unbounded_window_is_never_widened() {
+        // `0` is the widest window there is; moving to a finite one is a
+        // narrowing, so the cursor stands.
+        let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 30, false, Some(&prior(0))).as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 0, false, Some(&prior(0))).as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn full_still_wins_over_a_widened_window() {
+        let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
+        assert_eq!(
+            since_for_scope_with_prior(&s, "a", 365, true, Some(&prior(30))),
+            None
         );
     }
 

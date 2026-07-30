@@ -54,6 +54,20 @@ impl Period {
         })
     }
 
+    /// The config spelling this variant round-trips from
+    /// [`Self::from_config`]. Stable across releases — it's recorded in
+    /// render cursors (see
+    /// [`crate::render_cursor::read_for_params`]), so changing a string
+    /// here would read as a config change and re-render every tree.
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Period::Month => "month",
+            Period::Day => "day",
+            Period::Year => "year",
+            Period::All => "all",
+        }
+    }
+
     /// SQLite format string passed to `strftime(<fmt>, ts/1000,
     /// 'unixepoch')`. `All` returns a value that won't be used in a
     /// real GROUP BY (callers detect All and substitute

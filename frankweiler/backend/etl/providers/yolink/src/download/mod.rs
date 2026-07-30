@@ -228,7 +228,37 @@ pub struct FetchSummary {
     pub requests: usize,
 }
 
+/// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
+const SCOPE_CONFIG_KEY: &str = "yolink:download";
+
+/// Per-device `start` dates, the only knob that decides which data lands
+/// on disk. `overlap_minutes` / `window_days` shape *how* the walk
+/// paginates and are re-applied every run, so they don't belong here.
+fn scope_config_blob(opts: &FetchOptions) -> serde_json::Value {
+    let starts: std::collections::BTreeMap<&str, &str> = opts
+        .sync
+        .devices
+        .iter()
+        .map(|d| (d.name.as_str(), d.start.as_str()))
+        .collect();
+    serde_json::json!({ "device_starts": starts })
+}
+
+/// The `start` this device had on the last run that satisfied the
+/// config, if any. Keyed by device name — the same key that keys the
+/// row's history, so renaming a device reads as a new device (which it
+/// effectively is; see `YolinkDevice::name`).
+fn prior_start_for(prior: Option<&serde_json::Value>, name: &str) -> Option<String> {
+    prior?
+        .get("device_starts")?
+        .get(name)?
+        .as_str()
+        .map(str::to_string)
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    // Built before `opts.db` is moved out below.
+    let scope_cfg = scope_config_blob(&opts);
     let db = match opts.db {
         Some(d) => d,
         None => RawDb::open(&db_path_for(&opts.db_path)).await?,
@@ -246,22 +276,53 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress
         .set_length(Some(opts.sync.devices.len() as u64));
     let now_ms = Utc::now().timestamp_millis();
+    // Diff the per-device `start` dates against the ones that produced
+    // the stored watermarks. `None` (fresh store, or one written before
+    // `sync_scope_config` existed) plans no backfill.
+    let prior_scope_cfg = frankweiler_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY)
+        .await
+        .unwrap_or_else(|e| {
+            warn!(event = "yolink_scope_config_load_failed", error = %format!("{e:#}"));
+            None
+        });
     for dev in &opts.sync.devices {
         opts.progress.set_message(&format!("yolink: {}", dev.name));
-        if let Err(e) =
-            fetch_device(&db, dev, overlap_ms, stride_ms, window_ms, now_ms, &mut s).await
+        let prior_start = prior_start_for(prior_scope_cfg.as_ref(), &dev.name);
+        if let Err(e) = fetch_device(
+            &db,
+            dev,
+            prior_start.as_deref(),
+            overlap_ms,
+            stride_ms,
+            window_ms,
+            now_ms,
+            &mut s,
+        )
+        .await
         {
             s.errors += 1;
             warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"));
         }
         opts.progress.inc(1);
     }
+    // Record the config only when every device succeeded: a device that
+    // errored hasn't covered its widened `start`, and the blob is one
+    // row for all of them.
+    if s.errors == 0 {
+        if let Err(e) =
+            frankweiler_etl::scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await
+        {
+            warn!(event = "yolink_scope_config_store_failed", error = %format!("{e:#}"));
+        }
+    }
     Ok(s)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_device(
     db: &RawDb,
     dev: &YolinkDevice,
+    prior_start: Option<&str>,
     overlap_ms: i64,
     stride_ms: i64,
     window_ms: i64,
@@ -289,9 +350,45 @@ async fn fetch_device(
             .bind(&dev.name)
             .fetch_one(db.pool())
             .await?;
-    let mut cursor = watermark
-        .map(|w| (w - overlap_ms).max(start_ms))
-        .unwrap_or(start_ms);
+    // Normally the watermark wins (clamped forward to `start`, which is
+    // a floor). Two config-change cases break that:
+    //
+    //  - `start` moved *earlier*: the range below the old start was
+    //    never walked, and the watermark can't express going back. Reset
+    //    the cursor to the new start; the windows are UPSERT-deduped, so
+    //    re-walking the overlap costs requests, not correctness.
+    //  - `start` moved *later*, past the watermark: the clamp jumps the
+    //    cursor forward and `[watermark, start]` is silently never
+    //    fetched. Preserved (it's what `start` literally asks for) but
+    //    no longer silent.
+    let start_widened = prior_start.is_some_and(|p| dev.start.as_str() < p);
+    let mut cursor = match watermark {
+        _ if start_widened => {
+            info!(
+                event = "yolink_start_widened",
+                device = %dev.name,
+                from = prior_start.unwrap_or_default(),
+                to = %dev.start,
+                "re-walking from the new start",
+            );
+            start_ms
+        }
+        Some(w) => {
+            let clamped = (w - overlap_ms).max(start_ms);
+            if clamped > w {
+                warn!(
+                    event = "yolink_start_skips_ahead",
+                    device = %dev.name,
+                    start = %dev.start,
+                    watermark_ms = w,
+                    "start is later than the stored watermark; \
+                     the range between them will not be fetched",
+                );
+            }
+            clamped
+        }
+        None => start_ms,
+    };
 
     info!(event = "yolink_begin", device = %dev.name, cursor, now_ms);
 
@@ -499,5 +596,83 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 2, "second upsert updates, doesn't duplicate");
+    }
+}
+
+#[cfg(test)]
+mod scope_config_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn dev(name: &str, start: &str) -> YolinkDevice {
+        YolinkDevice {
+            name: name.into(),
+            kind: "watermeter".into(),
+            start: start.into(),
+            family_device_id: "0123456789abcdef0123456789abcdef".into(),
+            device_udid: "fedcba9876543210fedcba9876543210".into(),
+        }
+    }
+
+    fn opts_with(devices: Vec<YolinkDevice>) -> FetchOptions {
+        FetchOptions {
+            db_path: std::path::PathBuf::new(),
+            db: None,
+            sync: YolinkSync {
+                overlap_minutes: None,
+                window_days: None,
+                devices,
+            },
+            progress: Progress::noop(),
+            control: DownloadControl::default(),
+        }
+    }
+
+    #[test]
+    fn blob_records_starts_keyed_by_device_name() {
+        let blob = scope_config_blob(&opts_with(vec![dev("freezer", "2024-01-01")]));
+        assert_eq!(blob, json!({"device_starts": {"freezer": "2024-01-01"}}));
+    }
+
+    #[test]
+    fn blob_omits_pagination_knobs() {
+        // `overlap_minutes` / `window_days` are re-applied every run, so
+        // recording them would only provoke pointless re-walks.
+        let mut o = opts_with(vec![dev("freezer", "2024-01-01")]);
+        o.sync.overlap_minutes = Some(99);
+        o.sync.window_days = Some(3);
+        let obj = scope_config_blob(&o);
+        let obj = obj.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("device_starts"));
+    }
+
+    #[test]
+    fn prior_start_reads_the_matching_device() {
+        let blob = json!({"device_starts": {"freezer": "2024-01-01", "tank": "2023-06-01"}});
+        assert_eq!(
+            prior_start_for(Some(&blob), "freezer").as_deref(),
+            Some("2024-01-01")
+        );
+        assert_eq!(
+            prior_start_for(Some(&blob), "tank").as_deref(),
+            Some("2023-06-01")
+        );
+        // A device not in the record is new: no prior, so no backfill.
+        assert_eq!(prior_start_for(Some(&blob), "unknown"), None);
+    }
+
+    #[test]
+    fn absent_prior_reads_as_no_information() {
+        assert_eq!(prior_start_for(None, "freezer"), None);
+        assert_eq!(prior_start_for(Some(&json!({})), "freezer"), None);
+    }
+
+    #[test]
+    fn start_widening_is_a_plain_date_comparison() {
+        // `YYYY-MM-DD` sorts lexicographically as it does chronologically,
+        // which is what `fetch_device` relies on.
+        assert!("2023-01-01" < "2024-01-01");
+        assert!(!("2025-01-01" < "2024-01-01"));
     }
 }

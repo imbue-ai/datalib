@@ -130,6 +130,24 @@ fn profile() -> RenderProfile {
     }
 }
 
+/// The render params recorded alongside the cursor. Both knobs change
+/// what the tree should contain for documents the upstream diff would
+/// never surface, so a change to either invalidates the cursor — see
+/// [`frankweiler_etl::render_cursor::read_for_params`].
+pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> serde_json::Value {
+    // Sorted so a reordered config list isn't mistaken for a change.
+    let mut labels: Vec<&str> = only_labels.iter().map(String::as_str).collect();
+    labels.sort_unstable();
+    serde_json::json!({
+        "outlink_format": outlink.map(|o| match o {
+            OutlinkFormat::Gmail => "gmail",
+            OutlinkFormat::Fastmail => "fastmail",
+        }),
+        "only_render_labels": labels,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn render_all(
     parsed: &ParsedEmail,
     root: &std::path::Path,
@@ -137,6 +155,7 @@ pub fn render_all(
     outlink: Option<OutlinkFormat>,
     only_labels: &[String],
     progress: &Progress,
+    render_params: &serde_json::Value,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
@@ -234,7 +253,7 @@ pub fn render_all(
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(root, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed, render_params)
             .with_context(|| format!("write email render cursor {}", cursor_path.display()))?;
     }
     Ok(())

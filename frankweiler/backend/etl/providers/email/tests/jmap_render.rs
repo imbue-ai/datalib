@@ -13,7 +13,9 @@ use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::download::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use frankweiler_etl_email::render::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
-use frankweiler_etl_email::render::render::{render_all, thread_uuid, OutlinkFormat};
+use frankweiler_etl_email::render::render::{
+    render_all, render_params, thread_uuid, OutlinkFormat,
+};
 use serde_json::json;
 
 const EML_E1: &str = "From: Alice <a@x.test>\r\n\
@@ -144,6 +146,7 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
         Some(OutlinkFormat::Fastmail),
         &[],
         &progress,
+        &render_params(Some(OutlinkFormat::Fastmail), &[]),
         &mut on_done,
     )
     .expect("render_all");

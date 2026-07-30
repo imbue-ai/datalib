@@ -138,7 +138,7 @@ pub fn render_all(
     )?;
 
     if let Some(head) = new_head {
-        render_cursor::write(&cursor_path, &head, scan_elapsed)?;
+        render_cursor::write(&cursor_path, &head, scan_elapsed, &serde_json::json!({}))?;
     }
     Ok(summary)
 }

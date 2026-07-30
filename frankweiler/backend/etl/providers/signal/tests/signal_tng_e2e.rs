@@ -14,10 +14,11 @@ use std::path::Path;
 use anyhow::Result;
 use frankweiler_etl::control::DownloadControl;
 use frankweiler_etl::grid_index::RenderedMarkdown;
+use frankweiler_etl::periodize::Period;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::render_cursor;
 use frankweiler_etl_signal::download::{self, FetchOptions};
-use frankweiler_etl_signal::render::{parse_raw_dir, render_all};
+use frankweiler_etl_signal::render::{parse_raw_dir, render_all, render_params};
 use frankweiler_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
@@ -195,6 +196,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             &data_root,
             "signal-tng",
             &progress,
+            &render_params(Period::Month),
             &mut on_doc_complete,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
@@ -318,6 +320,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         &data_root,
         "signal-tng",
         &progress,
+        &render_params(Period::Month),
         &mut |doc: RenderedMarkdown| -> Result<()> {
             rendered_docs_second_pass.push(doc);
             Ok(())

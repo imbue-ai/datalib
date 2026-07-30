@@ -98,18 +98,26 @@ pub struct FetchSummary {
 /// Pick the `since` date for a GitHub search scope.
 ///
 /// Thin wrapper around the canonical
-/// [`frankweiler_etl::scope_state::since_for_scope`] that truncates
-/// the returned RFC 3339 timestamp to `YYYY-MM-DD` (what GitHub's
-/// `updated:>=` syntax expects). Behavior is otherwise identical to
-/// gitlab's: state is the cursor; window is a cold-start floor.
+/// [`frankweiler_etl::scope_state::since_for_scope_with_prior`] that
+/// truncates the returned RFC 3339 timestamp to `YYYY-MM-DD` (what
+/// GitHub's `updated:>=` syntax expects). Behavior is otherwise
+/// identical to gitlab's: state is the cursor, the window is a
+/// cold-start floor, and `prior` lets a *widened* window reach back
+/// past the cursor to cover the range it never walked.
 fn since_for_scope(
     state: &HashMap<String, String>,
     scope: &str,
     refresh_window_days: u32,
     full: bool,
+    prior: Option<&Value>,
 ) -> Option<String> {
-    let raw =
-        frankweiler_etl::scope_state::since_for_scope(state, scope, refresh_window_days, full)?;
+    let raw = frankweiler_etl::scope_state::since_for_scope_with_prior(
+        state,
+        scope,
+        refresh_window_days,
+        full,
+        prior,
+    )?;
     // Truncate to YYYY-MM-DD. The raw string is RFC 3339 in seconds
     // precision, so a 10-char prefix is the date portion.
     Some(raw.get(..10).unwrap_or(&raw).to_string())
@@ -135,24 +143,41 @@ async fn search_prs(client: &GitHubClient, scope: &str, since: Option<&str>) -> 
     Ok(client.paginate(&url).await?)
 }
 
-/// Union-of-scopes discovery. Returns sorted unique `(repo_full_name, number)`
-/// pairs plus the max `updated_at` per scope for the next-run state.
+/// Outcome of a discovery pass.
+struct Discovery {
+    /// Sorted unique `(repo_full_name, number)` pairs.
+    keys: Vec<(String, u32)>,
+    /// Next-run cursor per scope. Only scopes that actually searched
+    /// appear, so a failed scope keeps its old cursor and retries.
+    new_state: HashMap<String, String>,
+    /// Scopes whose search call failed and were stepped over. Non-zero
+    /// means discovery was incomplete, so a widened window has *not*
+    /// been satisfied and the config must not be recorded — the blob is
+    /// one row for all scopes, so recording it would lose the widening
+    /// for the scopes that never ran.
+    failed_scopes: usize,
+}
+
+/// Union-of-scopes discovery.
 async fn discover_prs(
     client: &GitHubClient,
     scopes: &[String],
     state: &HashMap<String, String>,
     refresh_window_days: u32,
     full: bool,
-) -> Result<(Vec<(String, u32)>, HashMap<String, String>)> {
+    prior: Option<&Value>,
+) -> Result<Discovery> {
     let mut seen: std::collections::BTreeSet<(String, u32)> = Default::default();
     let mut new_state: HashMap<String, String> = Default::default();
+    let mut failed_scopes = 0usize;
     for scope in scopes {
-        let since = since_for_scope(state, scope, refresh_window_days, full);
+        let since = since_for_scope(state, scope, refresh_window_days, full, prior);
         tracing::info!(scope, ?since, "searching PRs");
         let results = match search_prs(client, scope, since.as_deref()).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(scope, error = %e, "search failed; skipping scope");
+                failed_scopes += 1;
                 continue;
             }
         };
@@ -173,7 +198,11 @@ async fn discover_prs(
         );
         tracing::info!(scope, count = results.len(), "scope done");
     }
-    Ok((seen.into_iter().collect(), new_state))
+    Ok(Discovery {
+        keys: seen.into_iter().collect(),
+        new_state,
+        failed_scopes,
+    })
 }
 
 async fn fetch_one_pr(
@@ -218,6 +247,22 @@ async fn fetch_one_pr(
     Ok(())
 }
 
+/// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
+/// Discovery scopes share one record because `refresh_window_days` is a
+/// single workspace-wide knob; the per-scope cursors it interacts with
+/// stay in `sync_scope_state`.
+const SCOPE_CONFIG_KEY: &str = "github:download";
+
+/// The subset of [`FetchOptions`] that decides which data lands on disk.
+/// `max_prs` / `targets` / `full_sync` are per-run knobs and one-off
+/// overrides, so recording them would make a smoke run read as a config
+/// change to the next real sync.
+fn scope_config_blob(opts: &FetchOptions) -> Value {
+    json!({
+        frankweiler_etl::scope_state::REFRESH_WINDOW_KEY: opts.refresh_window_days,
+    })
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
     let _ = frankweiler_etl::latchkey::ensure_curl_dispatch();
@@ -243,31 +288,53 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
 
+    // Diff the scope-affecting params against the ones that produced the
+    // current cursors. `None` (fresh store, or one written before
+    // `sync_scope_config` existed) means no adjustment — see the module
+    // docs on `scope_config`.
+    let scope_cfg = scope_config_blob(&opts);
+    let prior_scope_cfg = frankweiler_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "scope config load failed");
+            None
+        });
+
     let client = GitHubClient::new();
     let mut summary = FetchSummary::default();
+    // Whether discovery actually covered every scope this run. Only then
+    // has the run satisfied `refresh_window_days`; see `scope_config`.
+    let discovery_complete = std::sync::atomic::AtomicBool::new(true);
 
     let work = async {
         fetch_self(&client, &db).await?;
 
         let had_prs = db.any_pull_requests().await?;
         let pr_keys: Vec<(String, u32)> = if !opts.targets.is_empty() {
+            // Explicit targets skip discovery entirely, so this run says
+            // nothing about whether a widened window was covered.
+            discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
             opts.targets.clone()
         } else {
             let state = db.load_scope_state().await?;
-            let (keys, new_scope_state) = discover_prs(
+            let discovered = discover_prs(
                 &client,
                 &opts.scopes,
                 &state,
                 opts.refresh_window_days,
                 opts.full_sync || !had_prs,
+                prior_scope_cfg.as_ref(),
             )
             .await?;
+            if discovered.failed_scopes > 0 {
+                discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
             // Persist updated state *before* per-PR fetch so a crash
             // halfway doesn't lose discovery progress.
-            for (k, v) in &new_scope_state {
+            for (k, v) in &discovered.new_state {
                 db.upsert_scope_state(k, v).await?;
             }
-            keys
+            discovered.keys
         };
         let pr_keys: Vec<(String, u32)> = if let Some(cap) = opts.max_prs {
             pr_keys.into_iter().take(cap).collect()
@@ -292,6 +359,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.requests = client.request_count();
+    // Record the config only once this run has actually satisfied it. A
+    // skipped scope or a targets-only run leaves the prior blob in place
+    // so the next run re-plans the widening.
+    if result.is_ok() && discovery_complete.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Err(e) =
+            frankweiler_etl::scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await
+        {
+            tracing::warn!(error = %format!("{e:#}"), "scope config store failed");
+        }
+    }
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)

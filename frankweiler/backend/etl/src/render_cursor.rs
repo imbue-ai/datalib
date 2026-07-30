@@ -37,6 +37,14 @@ pub struct RenderCursor {
     /// the most recent successful render completed. Informational.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_render_at: Option<String>,
+    /// The render params that produced the documents this cursor points
+    /// past. Not informational: [`read_for_params`] invalidates the
+    /// cursor when they differ, because the diff-driven skip would
+    /// otherwise apply new params only to documents that happen to
+    /// change. See that function for why render invalidates wholesale
+    /// where the download side reacts proportionally.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub params: Option<serde_json::Value>,
 }
 
 /// Standard cursor path for a stanza: one cursor at the root of that stanza's
@@ -57,10 +65,53 @@ pub fn read(path: &Path) -> Result<Option<RenderCursor>> {
     }
 }
 
-/// Write a cursor with the new commit hash and the scan duration from
-/// the run that's about to be persisted. Caller passes `scan_elapsed =
-/// None` on cold-start renders (no diff query happened).
-pub fn write(path: &Path, hash: &str, scan_elapsed: Option<Duration>) -> Result<()> {
+/// [`read`], but treating a params change as "no cursor".
+///
+/// The cursor turns each render into a `dolt_diff` over what changed
+/// upstream, so a render param only ever reaches documents that happen
+/// to be in that diff. Widening `only_render_labels` surfaces nothing
+/// (no email in the newly-allowed mailbox changed), and changing
+/// `period` re-buckets only the chats that moved. Dropping the cursor
+/// re-renders the whole tree under the new params.
+///
+/// Unlike the download side — where a cursor guards rate-limited network
+/// calls and so earns a proportional response — render is local work
+/// over an on-disk store, so wholesale invalidation is the right trade
+/// and much easier to reason about.
+///
+/// `None` stored params means a cursor written before this field
+/// existed. That reads as "no information", never as "changed": every
+/// rendered tree in the field is in that state on first upgrade, and
+/// invalidating them all would re-render every mirror at once.
+pub fn read_for_params(path: &Path, current: &serde_json::Value) -> Result<Option<RenderCursor>> {
+    let Some(cursor) = read(path)? else {
+        return Ok(None);
+    };
+    match &cursor.params {
+        Some(stored) if stored != current => {
+            tracing::info!(
+                event = "render_cursor_params_changed",
+                cursor = %path.display(),
+                from = %stored,
+                to = %current,
+                "render params changed; re-rendering the whole tree",
+            );
+            Ok(None)
+        }
+        _ => Ok(Some(cursor)),
+    }
+}
+
+/// Write a cursor with the new commit hash, the scan duration from the
+/// run that's about to be persisted, and the render params that run
+/// used. Caller passes `scan_elapsed = None` on cold-start renders (no
+/// diff query happened).
+pub fn write(
+    path: &Path,
+    hash: &str,
+    scan_elapsed: Option<Duration>,
+    params: &serde_json::Value,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("mkdir -p {}", parent.display()))?;
@@ -70,6 +121,7 @@ pub fn write(path: &Path, hash: &str, scan_elapsed: Option<Duration>) -> Result<
         last_rendered_hash: hash.to_string(),
         last_scan_ms: scan_elapsed.map(|d| d.as_millis() as u64),
         last_render_at: Some(last_render_at),
+        params: Some(params.clone()),
     })
     .context("serialize render cursor")?;
     std::fs::write(path, body).with_context(|| format!("write render cursor {}", path.display()))
@@ -78,12 +130,13 @@ pub fn write(path: &Path, hash: &str, scan_elapsed: Option<Duration>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn round_trip_with_scan_ms() {
         let td = tempfile::tempdir().unwrap();
         let p = cursor_path(td.path(), "my-source");
-        write(&p, "abc123", Some(Duration::from_millis(42))).unwrap();
+        write(&p, "abc123", Some(Duration::from_millis(42)), &json!({})).unwrap();
         let read_back = read(&p).unwrap().unwrap();
         assert_eq!(read_back.last_rendered_hash, "abc123");
         assert_eq!(read_back.last_scan_ms, Some(42));
@@ -98,10 +151,46 @@ mod tests {
     }
 
     #[test]
+    fn params_change_invalidates_the_cursor() {
+        let td = tempfile::tempdir().unwrap();
+        let p = cursor_path(td.path(), "src");
+        write(&p, "h", None, &json!({"period": "month"})).unwrap();
+        assert!(read_for_params(&p, &json!({"period": "month"}))
+            .unwrap()
+            .is_some());
+        // Any difference invalidates — render is local work, so there's
+        // no reason to reason about widening vs narrowing here.
+        assert!(read_for_params(&p, &json!({"period": "day"}))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn cursor_without_params_survives_upgrade() {
+        // A cursor written before the field existed. Must NOT re-render
+        // every tree in the field on first upgrade.
+        let td = tempfile::tempdir().unwrap();
+        let p = cursor_path(td.path(), "src");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, r#"{"last_rendered_hash": "old"}"#).unwrap();
+        let got = read_for_params(&p, &json!({"period": "day"}))
+            .unwrap()
+            .expect("legacy cursor should survive");
+        assert_eq!(got.last_rendered_hash, "old");
+    }
+
+    #[test]
+    fn missing_cursor_is_none_for_params_read() {
+        let td = tempfile::tempdir().unwrap();
+        let p = cursor_path(td.path(), "nope");
+        assert!(read_for_params(&p, &json!({})).unwrap().is_none());
+    }
+
+    #[test]
     fn cold_start_scan_ms_is_omitted() {
         let td = tempfile::tempdir().unwrap();
         let p = cursor_path(td.path(), "src");
-        write(&p, "h", None).unwrap();
+        write(&p, "h", None, &json!({})).unwrap();
         let s = std::fs::read_to_string(&p).unwrap();
         assert!(
             !s.contains("last_scan_ms"),

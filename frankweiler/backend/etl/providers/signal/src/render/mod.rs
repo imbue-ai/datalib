@@ -24,4 +24,4 @@ pub use super::download::schema_raw::{
 
 pub use frankweiler_etl::periodize::Period;
 pub use parse::{parse, parse_raw_dir, ParsedSignal};
-pub use render::{render_all, RenderSummary, RENDER_VERSION};
+pub use render::{render_all, render_params, RenderSummary, RENDER_VERSION};
