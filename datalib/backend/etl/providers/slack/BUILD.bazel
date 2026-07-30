@@ -127,11 +127,11 @@ rust_test(
     crate_root = "tests/config_change_backfill.rs",
     edition = "2021",
     deps = [
-        ":frankweiler_etl_slack",
-        "//frankweiler/backend/etl:frankweiler_etl",
-        "@frankweiler_crates//:serde_json",
-        "@frankweiler_crates//:tempfile",
-        "@frankweiler_crates//:tokio",
+        ":datalib_etl_slack",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 

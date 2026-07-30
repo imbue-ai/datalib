@@ -64,7 +64,7 @@ nothing — and structurally *could* not do anything, because the forward
 walk only moves forward while a widened `since` asks to go backwards.
 
 So the scope-affecting params are recorded after each successful run via
-`frankweiler_etl::scope_config` (scope key `slack:download`, stored in
+`datalib_etl::scope_config` (scope key `slack:download`, stored in
 the raw store's `sync_scope_config` table), and the next run diffs them.
 This is the one piece of bookkeeping outside the dedup index that
 participates in the resume decision.

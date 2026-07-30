@@ -1,6 +1,6 @@
 //! End-to-end test: write an encrypted TNG snapshot via the
-//! [`frankweiler_signal_backup::write`] writer, drive
-//! [`frankweiler_etl_signal::download::fetch`] over it, then drive the
+//! [`datalib_signal_backup::write`] writer, drive
+//! [`datalib_etl_signal::download::fetch`] over it, then drive the
 //! render path, and assert on both the doltlite row counts and the
 //! rendered markdown.
 //!
@@ -12,14 +12,14 @@
 use std::path::Path;
 
 use anyhow::Result;
-use frankweiler_etl::control::DownloadControl;
-use frankweiler_etl::grid_index::RenderedMarkdown;
-use frankweiler_etl::periodize::Period;
-use frankweiler_etl::progress::Progress;
-use frankweiler_etl::render_cursor;
-use frankweiler_etl_signal::download::{self, FetchOptions};
-use frankweiler_etl_signal::render::{parse_raw_dir, render_all, render_params};
-use frankweiler_signal_backup::{
+use datalib_etl::control::DownloadControl;
+use datalib_etl::grid_index::RenderedMarkdown;
+use datalib_etl::periodize::Period;
+use datalib_etl::progress::Progress;
+use datalib_etl::render_cursor;
+use datalib_etl_signal::download::{self, FetchOptions};
+use datalib_etl_signal::render::{parse_raw_dir, render_all, render_params};
+use datalib_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
 };
@@ -142,18 +142,18 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // and the second-pass docs_skipped assertion below would fail.
     // Self-skips on stock libsqlite3.
     {
-        use frankweiler_etl::doltlite_raw::commit_run;
+        use datalib_etl::doltlite_raw::commit_run;
         use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
         use std::str::FromStr;
-        let db_path = frankweiler_etl::doltlite_raw::db_path_for(&raw_db_path);
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_db_path);
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?;
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)
             .await?;
         for q in [
-            "SELECT dolt_config('user.name', 'frankweiler-test')",
-            "SELECT dolt_config('user.email', 'test@frankweiler.local')",
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
         ] {
             let _ = sqlx::query(q).execute(&pool).await;
         }
@@ -295,9 +295,9 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         let raw = raw_db_path.clone();
         let last_hash = cursor.last_rendered_hash.clone();
         move || {
-            frankweiler_etl_signal::render::parse(
+            datalib_etl_signal::render::parse(
                 &raw,
-                frankweiler_etl::periodize::Period::Month,
+                datalib_etl::periodize::Period::Month,
                 "signal-tng",
                 Some(last_hash.as_str()),
             )

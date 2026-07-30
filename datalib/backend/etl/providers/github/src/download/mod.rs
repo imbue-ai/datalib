@@ -1,7 +1,7 @@
 //! GitHub downloader: identity + every authored/commented/@mentioned PR
 //! plus its comments + reviews. Writes a single doltlite database at
 //! `<data_root>/<name>/raw/entities.doltlite_db`; see [`db`] for the schema and
-//! [`frankweiler_etl::doltlite_raw`] for the design rationale.
+//! [`datalib_etl::doltlite_raw`] for the design rationale.
 //!
 //! Port of `src/download/github_web.py`. Two refinements vs Python:
 //!
@@ -20,8 +20,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::download_run::DownloadRun;
-use frankweiler_time::IsoOffsetTimestamp;
+use datalib_etl::download_run::DownloadRun;
+use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -64,9 +64,9 @@ pub struct FetchOptions {
     /// Skip the persisted per-scope state so this run does a full backfill.
     pub full_sync: bool,
     pub sleep_between: Duration,
-    pub progress: frankweiler_etl::progress::Progress,
+    pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
-    pub control: frankweiler_etl::control::DownloadControl,
+    pub control: datalib_etl::control::DownloadControl,
 }
 
 impl Default for FetchOptions {
@@ -80,8 +80,8 @@ impl Default for FetchOptions {
             targets: Vec::new(),
             full_sync: false,
             sleep_between: Duration::ZERO,
-            progress: frankweiler_etl::progress::Progress::noop(),
-            control: frankweiler_etl::control::DownloadControl::default(),
+            progress: datalib_etl::progress::Progress::noop(),
+            control: datalib_etl::control::DownloadControl::default(),
         }
     }
 }
@@ -98,7 +98,7 @@ pub struct FetchSummary {
 /// Pick the `since` date for a GitHub search scope.
 ///
 /// Thin wrapper around the canonical
-/// [`frankweiler_etl::scope_state::since_for_scope`] that truncates the returned RFC 3339 timestamp to `YYYY-MM-DD` (what
+/// [`datalib_etl::scope_state::since_for_scope`] that truncates the returned RFC 3339 timestamp to `YYYY-MM-DD` (what
 /// GitHub's `updated:>=` syntax expects). Behavior is otherwise
 /// identical to gitlab's: state is the cursor, the window is a
 /// cold-start floor, and `prior` lets a *widened* window reach back
@@ -110,13 +110,8 @@ fn since_for_scope(
     full: bool,
     prior: Option<&Value>,
 ) -> Option<String> {
-    let raw = frankweiler_etl::scope_state::since_for_scope(
-        state,
-        scope,
-        refresh_window_days,
-        full,
-        prior,
-    )?;
+    let raw =
+        datalib_etl::scope_state::since_for_scope(state, scope, refresh_window_days, full, prior)?;
     // Truncate to YYYY-MM-DD. The raw string is RFC 3339 in seconds
     // precision, so a 10-char prefix is the date portion.
     Some(raw.get(..10).unwrap_or(&raw).to_string())
@@ -246,7 +241,7 @@ async fn fetch_one_pr(
     Ok(())
 }
 
-/// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
 /// Discovery scopes share one record because `refresh_window_days` is a
 /// single workspace-wide knob; the per-scope cursors it interacts with
 /// stay in `sync_scope_state`.
@@ -257,12 +252,12 @@ const SCOPE_CONFIG_KEY: &str = "github:download";
 /// overrides, so recording them would make a smoke run read as a config
 /// change to the next real sync.
 fn scope_config_blob(opts: &FetchOptions) -> Value {
-    frankweiler_etl::scope_state::refresh_window_blob(opts.refresh_window_days)
+    datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days)
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
-    let _ = frankweiler_etl::latchkey::ensure_curl_dispatch();
+    let _ = datalib_etl::latchkey::ensure_curl_dispatch();
     let db = match opts.db.clone() {
         Some(db) => db,
         None => RawDb::open(&db_path)
@@ -291,7 +286,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // docs on `scope_config`.
     let scope_cfg = scope_config_blob(&opts);
     let prior_scope_cfg =
-        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
 
     let client = GitHubClient::new();
     let mut summary = FetchSummary::default();
@@ -355,7 +350,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only once this run has actually satisfied it. A
     // skipped scope or a targets-only run leaves the prior blob in place
     // so the next run re-plans the widening.
-    frankweiler_etl::scope_config::store_if_satisfied(
+    datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,
@@ -404,7 +399,7 @@ mod tests {
 #[cfg(test)]
 mod scope_config_tests {
     use super::*;
-    use frankweiler_etl::scope_state::REFRESH_WINDOW_KEY;
+    use datalib_etl::scope_state::REFRESH_WINDOW_KEY;
     use serde_json::json;
 
     fn opts(window: u32, targets: Vec<(String, u32)>) -> FetchOptions {
@@ -437,13 +432,13 @@ mod scope_config_tests {
         state.insert("s".to_string(), "2026-06-01T00:00:00Z".to_string());
         // Unchanged window: cursor stands.
         assert_eq!(
-            frankweiler_etl::scope_state::since_for_scope(&state, "s", 30, false, Some(&blob))
+            datalib_etl::scope_state::since_for_scope(&state, "s", 30, false, Some(&blob))
                 .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
         // Widened to unbounded: filter dropped entirely.
         assert_eq!(
-            frankweiler_etl::scope_state::since_for_scope(&state, "s", 0, false, Some(&blob)),
+            datalib_etl::scope_state::since_for_scope(&state, "s", 0, false, Some(&blob)),
             None
         );
     }

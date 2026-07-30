@@ -18,7 +18,7 @@
 //! earlier date, which the forward walk can't express because it only
 //! ever moves forward. [`Adjustments`] closes that gap: the
 //! scope-affecting params are recorded via
-//! [`frankweiler_etl::scope_config`] after each successful run, and the
+//! [`datalib_etl::scope_config`] after each successful run, and the
 //! next run diffs them to schedule a bounded backfill (or, for a
 //! relaxed blob knob, a re-walk). Narrowing is always a no-op — the
 //! store is a superset and nothing in the pipeline deletes.
@@ -33,16 +33,16 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use frankweiler_etl::blob_cas::CasEdgeAccumulator;
+use datalib_etl::blob_cas::CasEdgeAccumulator;
 use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
+use datalib_etl::events;
+use datalib_etl::scope_config;
 pub use db::{
     block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb, TsBounds,
 };
-use frankweiler_etl::events;
-use frankweiler_etl::scope_config;
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
@@ -76,7 +76,7 @@ async fn call(method: &str, params: &BTreeMap<String, String>) -> Result<Value> 
 }
 
 #[instrument(skip_all)]
-async fn fetch_self(db: &RawDb, progress: &frankweiler_etl::progress::Progress) -> Result<String> {
+async fn fetch_self(db: &RawDb, progress: &datalib_etl::progress::Progress) -> Result<String> {
     progress.set_message("auth.test");
     let t0 = std::time::Instant::now();
     let resp = call(M_AUTH_TEST, &empty_params()).await?;
@@ -99,7 +99,7 @@ async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
     include_archived: bool,
-    progress: &frankweiler_etl::progress::Progress,
+    progress: &datalib_etl::progress::Progress,
 ) -> Result<Vec<(String, Option<String>)>> {
     let sweep_key = format!("channels:archived={include_archived}");
     if let Some(age) = db.manifest_sweep_age(&sweep_key).await? {
@@ -165,7 +165,7 @@ async fn fetch_channels(
 }
 
 #[instrument(skip_all)]
-async fn fetch_users(db: &RawDb, progress: &frankweiler_etl::progress::Progress) -> Result<usize> {
+async fn fetch_users(db: &RawDb, progress: &datalib_etl::progress::Progress) -> Result<usize> {
     let sweep_key = "users";
     if let Some(age) = db.manifest_sweep_age(sweep_key).await? {
         if age < MANIFEST_TTL {
@@ -232,7 +232,7 @@ fn next_cursor(resp: &Value) -> Option<String> {
 // Config-change adjustments.
 // ---------------------------------------------------------------------------
 
-/// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
 /// Slack's incremental state is per-channel (`MAX(ts)` in `messages`),
 /// but every knob we remember applies workspace-wide, so one row per
 /// source is the right grain.
@@ -409,7 +409,7 @@ async fn export_channel(
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
-    progress: &frankweiler_etl::progress::Progress,
+    progress: &datalib_etl::progress::Progress,
 ) -> Result<()> {
     // Per-channel attachment accumulator: every (message, file)
     // reference is appended, the BlobBundle carries one byte set per
@@ -611,7 +611,7 @@ async fn list_history(
     totals: &mut ChannelTotals,
     attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
-    progress: &frankweiler_etl::progress::Progress,
+    progress: &datalib_etl::progress::Progress,
     collected: &mut Vec<Value>,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
@@ -813,8 +813,8 @@ pub struct FetchOptions {
     pub members_only: bool,
     pub media: bool,
     pub blob_size_limit_bytes: Option<u64>,
-    pub progress: frankweiler_etl::progress::Progress,
-    pub control: frankweiler_etl::control::DownloadControl,
+    pub progress: datalib_etl::progress::Progress,
+    pub control: datalib_etl::control::DownloadControl,
 }
 
 impl Default for FetchOptions {
@@ -828,8 +828,8 @@ impl Default for FetchOptions {
             members_only: true,
             media: true,
             blob_size_limit_bytes: None,
-            progress: frankweiler_etl::progress::Progress::noop(),
-            control: frankweiler_etl::control::DownloadControl::default(),
+            progress: datalib_etl::progress::Progress::noop(),
+            control: datalib_etl::control::DownloadControl::default(),
         }
     }
 }
@@ -844,7 +844,7 @@ pub struct FetchSummary {
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
-    let _ = frankweiler_etl::latchkey::ensure_curl_dispatch();
+    let _ = datalib_etl::latchkey::ensure_curl_dispatch();
     let db = match opts.db.clone() {
         Some(db) => db,
         None => RawDb::open(&db_path)
@@ -876,7 +876,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "media": opts.media,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
     });
-    let run = frankweiler_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
+    let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
 
     // Diff this run's scope-affecting params against the ones that
     // produced the store's current contents. `None` (fresh store, or one
@@ -1027,8 +1027,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
-    let t = frankweiler_time::parse_strict(s)
-        .or_else(|_| frankweiler_time::parse_yyyy_mm_dd_assumed_utc(s))
+    let t = datalib_time::parse_strict(s)
+        .or_else(|_| datalib_time::parse_yyyy_mm_dd_assumed_utc(s))
         .with_context(|| format!("expected RFC 3339 or YYYY-MM-DD, got {s:?}"))?;
     Ok(t.inner().with_timezone(&Utc))
 }

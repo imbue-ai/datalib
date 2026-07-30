@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::periodize::Period;
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use frankweiler_etl_signal_config::SignalRenderConfig;
-use frankweiler_etl_signal_config::{SignalConfig, SignalSync};
+use datalib_etl::periodize::Period;
+use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_signal_config::SignalRenderConfig;
+use datalib_etl_signal_config::{SignalConfig, SignalSync};
 
 use crate::download;
 
@@ -117,12 +117,12 @@ impl DataProcessor for SignalRender {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
 
-        let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
+        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
         // `period` decides how messages bucket into documents, so a
         // cursor written under a different one points past documents
         // that no longer exist under this one.
         let render_params = crate::render::render_params(self.period);
-        let cursor = frankweiler_etl::render_cursor::read_for_params(&cursor_path, &render_params)
+        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)
             .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
         let parsed = parse(
             &self.raw_path,

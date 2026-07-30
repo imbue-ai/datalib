@@ -168,7 +168,7 @@ pub struct FetchSummary {
 /// Walk `opts.input_path` and land every message into the raw store
 /// via in-memory accumulation + chunked multi-row `INSERT`s — see
 /// [`FLUSH_BATCH`] for the per-batch-flush shape.
-/// Scope key for the mbox path's [`frankweiler_etl::scope_config`]
+/// Scope key for the mbox path's [`datalib_etl::scope_config`]
 /// record. Distinct from the JMAP path's `jmap:download` — the two
 /// modes of `type: email` keep separate state.
 const SCOPE_CONFIG_KEY: &str = "mbox:download";
@@ -226,8 +226,8 @@ impl Adjustments {
             return out;
         };
 
-        use frankweiler_etl::scope_config::FilterChange;
-        match frankweiler_etl::scope_config::filter_widened(
+        use datalib_etl::scope_config::FilterChange;
+        match datalib_etl::scope_config::filter_widened(
             Some(prior),
             K_ONLY_LABELS,
             &opts.only_labels,
@@ -251,7 +251,7 @@ impl Adjustments {
             }
         }
 
-        if frankweiler_etl::scope_config::limit_relaxed(
+        if datalib_etl::scope_config::limit_relaxed(
             Some(prior),
             K_BLOB_CAP,
             opts.blob_size_limit_bytes,
@@ -304,7 +304,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // current checkpoints.
     let scope_cfg = scope_config_blob(&opts);
     let prior_scope_cfg =
-        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
     let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
 
     let known_blobs = db.loaded_blob_ids().await?;
@@ -447,13 +447,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only once this run satisfied it, so a failure
     // leaves the previous record in place and the next run re-plans.
     // (Errors above return early, so reaching here means success.)
-    frankweiler_etl::scope_config::store_if_satisfied(
-        db.pool(),
-        SCOPE_CONFIG_KEY,
-        &scope_cfg,
-        true,
-    )
-    .await;
+    datalib_etl::scope_config::store_if_satisfied(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg, true)
+        .await;
 
     Ok(summary)
 }

@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
-use frankweiler_etl_email_config::EmailRenderConfig;
-use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
+use datalib_etl_email_config::EmailRenderConfig;
+use datalib_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
 
 use crate::download;
 use crate::render::render::OutlinkFormat;
@@ -238,13 +238,13 @@ impl DataProcessor for EmailRender {
         // Two-phase parse driven by the render cursor's commit, identical to
         // the old registry path; `prior_fingerprints` is intentionally unused
         // for email (the cursor is the single source of truth).
-        let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
+        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
         // Both knobs change the rendered output for documents the diff
         // would never surface, so a cursor from a different pair has to
         // go — see `render_cursor::read_for_params`.
         let render_params =
             crate::render::render::render_params(self.outlink, &self.only_render_labels);
-        let cursor = frankweiler_etl::render_cursor::read_for_params(&cursor_path, &render_params)?;
+        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)?;
         let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))?;
 
         let mut on_doc = |md| ctx.emit_doc(md);

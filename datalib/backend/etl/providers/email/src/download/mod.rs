@@ -212,7 +212,7 @@ pub struct FetchSummary {
 
 /// Run one download pass against a JMAP account. Returns a summary the
 /// orchestrator stamps into `sync_runs.summary`.
-/// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
 /// Matches the `jmap:` prefix the state tokens use.
 const SCOPE_CONFIG_KEY: &str = "jmap:download";
 
@@ -291,8 +291,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // before `sync_scope_config` existed) plans no backfill.
     let scope_cfg = scope_config_blob(&opts);
     let prior_scope_cfg =
-        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let label_change = frankweiler_etl::scope_config::filter_widened(
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+    let label_change = datalib_etl::scope_config::filter_widened(
         prior_scope_cfg.as_ref(),
         K_ONLY_EXTRACT_LABELS,
         &opts.only_mailbox_labels,
@@ -302,7 +302,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only once the run satisfied it, so a failure
     // leaves the previous label set in place and the next run re-plans
     // the backfill.
-    frankweiler_etl::scope_config::store_if_satisfied(
+    datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,
@@ -327,7 +327,7 @@ async fn run_sync(
     // stored cursor. `Email/changes` can't surface existing mail in
     // newly-admitted mailboxes — nothing in them *changed* — so a
     // widening needs its own enumeration.
-    label_change: &frankweiler_etl::scope_config::FilterChange,
+    label_change: &datalib_etl::scope_config::FilterChange,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary {
         account_id: account_id.to_string(),
@@ -366,7 +366,7 @@ async fn run_sync(
     // widened-label backfill resolve label paths against it.
     let mailbox_nodes: Vec<crate::mailbox_labels::MailboxNode> =
         if opts.only_mailbox_labels.is_empty()
-            && *label_change == frankweiler_etl::scope_config::FilterChange::Unchanged
+            && *label_change == datalib_etl::scope_config::FilterChange::Unchanged
         {
             Vec::new()
         } else {
@@ -411,8 +411,8 @@ async fn run_sync(
     // the newly-admitted mailboxes.
     #[allow(clippy::option_option)]
     let backfill: Option<Option<HashSet<String>>> = match label_change {
-        frankweiler_etl::scope_config::FilterChange::Unchanged => None,
-        frankweiler_etl::scope_config::FilterChange::WidenedToAll => {
+        datalib_etl::scope_config::FilterChange::Unchanged => None,
+        datalib_etl::scope_config::FilterChange::WidenedToAll => {
             info!(
                 event = "jmap_label_filter_widened",
                 added = "<filter removed>",
@@ -420,7 +420,7 @@ async fn run_sync(
             );
             Some(None)
         }
-        frankweiler_etl::scope_config::FilterChange::Added(added) => {
+        datalib_etl::scope_config::FilterChange::Added(added) => {
             let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, added);
             if resolved.ids.is_empty() {
                 None

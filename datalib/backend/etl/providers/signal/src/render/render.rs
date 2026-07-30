@@ -22,15 +22,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::grid_index::RenderedMarkdown;
-use frankweiler_etl::periodize::Period;
-use frankweiler_etl::progress::Progress;
-use frankweiler_etl::render_cursor;
-use frankweiler_etl::section::section_attrs;
-use frankweiler_etl::title::Title;
-use frankweiler_index_lib::emit_sidecar;
-use frankweiler_schema::grid_rows::GridRow;
-use frankweiler_time::IsoOffsetTimestamp;
+use datalib_etl::grid_index::RenderedMarkdown;
+use datalib_etl::periodize::Period;
+use datalib_etl::progress::Progress;
+use datalib_etl::render_cursor;
+use datalib_etl::section::section_attrs;
+use datalib_etl::title::Title;
+use datalib_index_lib::emit_sidecar;
+use datalib_schema::grid_rows::GridRow;
+use datalib_time::IsoOffsetTimestamp;
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
 use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
@@ -65,7 +65,7 @@ pub struct RenderSummary {
 /// The render params recorded alongside the cursor. `period` decides
 /// how messages bucket into documents, so changing it invalidates every
 /// document the previous run wrote — see
-/// [`frankweiler_etl::render_cursor::read_for_params`].
+/// [`datalib_etl::render_cursor::read_for_params`].
 pub fn render_params(period: Period) -> serde_json::Value {
     serde_json::json!({ "period": period.as_config_str() })
 }
@@ -303,7 +303,7 @@ fn output_paths(
     // One directory per chat keyed by the chat's stable UUID — never a
     // title-derived slug, so a contact/group rename re-renders in place.
     // period_key files live inside; mirrors beeper's `<room_uuid>/<period>.md`.
-    let page_dir = frankweiler_etl::layout::rendered_md_root(out_dir, source_name).join(chat_uuid);
+    let page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name).join(chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
     let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
     (md_path, json_path, page_dir)

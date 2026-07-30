@@ -12,9 +12,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use frankweiler_etl_slack_config::SlackRenderConfig;
-use frankweiler_etl_slack_config::{SlackApiSync, SlackConfig};
+use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_slack_config::SlackRenderConfig;
+use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
 
 use crate::download;
 
@@ -73,8 +73,8 @@ impl DataProcessor for SlackDownload {
         // resolved shared config leaves it enabled. (The orchestrator used to
         // attach this; now the one provider that consumes it does.)
         if self.event_tape_enabled {
-            let tape = Arc::new(frankweiler_etl::event_tape::EventTape::new(
-                frankweiler_etl::raw_layout::events_dir(&self.raw_path),
+            let tape = Arc::new(datalib_etl::event_tape::EventTape::new(
+                datalib_etl::raw_layout::events_dir(&self.raw_path),
             ));
             tracing::info!(
                 source = %ctx.name,
@@ -125,10 +125,10 @@ impl DataProcessor for SlackRender {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = frankweiler_etl::render_cursor::read_for_params(
+        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
+        let cursor = datalib_etl::render_cursor::read_for_params(
             &cursor_path,
-            &frankweiler_etl::render_cursor::no_params(),
+            &datalib_etl::render_cursor::no_params(),
         )
         .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
         let parsed = parse(

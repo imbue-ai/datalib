@@ -131,7 +131,7 @@ fn profile() -> RenderProfile {
 /// The render params recorded alongside the cursor. Both knobs change
 /// what the tree should contain for documents the upstream diff would
 /// never surface, so a change to either invalidates the cursor — see
-/// [`frankweiler_etl::render_cursor::read_for_params`].
+/// [`datalib_etl::render_cursor::read_for_params`].
 pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> serde_json::Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = only_labels.iter().map(String::as_str).collect();

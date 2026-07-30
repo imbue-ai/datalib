@@ -349,7 +349,7 @@ config filter to a freshly-fetched listing every run, so moving `since`
 back simply makes previously-out-of-scope items reappear as missing.
 That's worth preferring when an upstream API allows it.
 
-Where a cursor is unavoidable, `frankweiler_etl::scope_config` records
+Where a cursor is unavoidable, `datalib_etl::scope_config` records
 the scope-affecting config subset alongside it, in the raw store's
 `sync_scope_config` table. The next run diffs current-vs-stored and
 reacts proportionally rather than re-downloading wholesale — a widened
@@ -384,7 +384,7 @@ changes the cursor would otherwise swallow".
 ### The same problem on the render side
 
 Render has its own cursor (`_render_cursor.json`, see
-[`render_cursor`](../../frankweiler/backend/etl/src/render_cursor.rs)) and the
+[`render_cursor`](../../datalib/backend/etl/src/render_cursor.rs)) and the
 same failure mode: a render param only reaches documents that the
 upstream diff happens to surface, so widening `only_render_labels`
 renders nothing new and changing `period` re-buckets only the chats that

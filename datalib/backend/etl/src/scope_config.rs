@@ -95,7 +95,7 @@ pub async fn load(pool: &SqlitePool, scope: &str) -> Result<Option<Value>> {
 
 /// Upsert the config blob for `scope`. Call on the success path only.
 pub async fn store(pool: &SqlitePool, scope: &str, config: &Value) -> Result<()> {
-    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let body = serde_json::to_string(config).context("serialize scope config")?;
     sqlx::query(
         "INSERT INTO sync_scope_config (scope, config, updated_at) VALUES (?, ?, ?)

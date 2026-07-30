@@ -228,7 +228,7 @@ pub struct FetchSummary {
     pub requests: usize,
 }
 
-/// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
 const SCOPE_CONFIG_KEY: &str = "yolink:download";
 
 /// Blob key. Named so writer and reader can't drift.
@@ -283,7 +283,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // the stored watermarks. `None` (fresh store, or one written before
     // `sync_scope_config` existed) plans no backfill.
     let prior_scope_cfg =
-        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
     for dev in &opts.sync.devices {
         opts.progress.set_message(&format!("yolink: {}", dev.name));
         let prior_start = prior_start_for(prior_scope_cfg.as_ref(), &dev.name);
@@ -307,7 +307,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only when every device succeeded: a device that
     // errored hasn't covered its widened `start`, and the blob is one
     // row for all of them.
-    frankweiler_etl::scope_config::store_if_satisfied(
+    datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,

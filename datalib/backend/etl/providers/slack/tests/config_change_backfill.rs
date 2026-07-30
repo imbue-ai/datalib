@@ -18,10 +18,10 @@
 use std::fs;
 use std::path::Path;
 
-use frankweiler_etl::http::PLAYBACK_ENV;
-use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions};
-use frankweiler_etl_slack::synthesize::SlackSynth;
+use datalib_etl::http::PLAYBACK_ENV;
+use datalib_etl::synthesize::Synthesizer;
+use datalib_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions};
+use datalib_etl_slack::synthesize::SlackSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 use tokio::sync::Mutex;

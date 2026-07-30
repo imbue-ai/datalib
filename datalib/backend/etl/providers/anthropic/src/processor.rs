@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use frankweiler_etl_anthropic_config::AnthropicRenderConfig;
-use frankweiler_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
+use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_anthropic_config::AnthropicRenderConfig;
+use datalib_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
 
 use crate::download;
 
@@ -112,10 +112,10 @@ impl DataProcessor for AnthropicRender {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = frankweiler_etl::render_cursor::read_for_params(
+        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
+        let cursor = datalib_etl::render_cursor::read_for_params(
             &cursor_path,
-            &frankweiler_etl::render_cursor::no_params(),
+            &datalib_etl::render_cursor::no_params(),
         )
         .with_context(|| format!("read anthropic render cursor {}", cursor_path.display()))?;
         let parsed = parse(
