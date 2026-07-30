@@ -206,7 +206,7 @@ A sync that gets interrupted — ^C, OOM, laptop sleep, upstream 5xx — must be
 The dedup index *is* the resume cursor:
 
 - Provider-side dedup keys every UPSERT on the upstream identifier, so re-walking already-fetched items is cheap and correct.
-- There are no separate checkpoint files. The data we already have tells us where to resume.
+- There are no separate checkpoint files. The data we already have tells us where to resume. (One narrow exception, for config changes rather than for resumption: see [Cursor / resume strategy](#cursor--resume-strategy).)
 
 ## Efficiently incremental
 Any subsequent sync should pick up as close as possible to where the last one left off: walk what the upstream API forces us to walk, although it should also be safe to fetch with a bit of overlap, too.
@@ -334,6 +334,40 @@ Cursor / resume is the **download-side specialization** of the [Incremental upda
 - **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
 
 No checkpoint files. The dedup index is the resume cursor.
+
+### When the cursor swallows a config change
+
+A forward-walk cursor answers "where do I start?" from stored data
+alone, so it stops consulting the config that set it. The knob that set
+the starting point is read only on the cold-start arm, which makes
+*widening* it a silent no-op on an already-synced data root — and for a
+strictly-forward walk, structurally unrepresentable: a widened `since`
+is a request to go backwards.
+
+Listing-diff providers are immune by construction. They re-apply the
+config filter to a freshly-fetched listing every run, so moving `since`
+back simply makes previously-out-of-scope items reappear as missing.
+That's worth preferring when an upstream API allows it.
+
+Where a cursor is unavoidable, `frankweiler_etl::scope_config` records
+the scope-affecting config subset alongside it, in the raw store's
+`sync_scope_config` table. The next run diffs current-vs-stored and
+reacts proportionally rather than re-downloading wholesale — a widened
+`since` backfills only the newly-in-scope window. Two invariants:
+
+- **Only widenings do work.** A narrowed knob leaves an on-disk
+  superset, and nothing in the pipeline deletes.
+- **An absent record plans no work.** Stores predating the table have
+  none, and reading that as "unknown, therefore re-download" would
+  backfill every installed mirror at once on upgrade.
+
+What belongs in the record is only what changes *which data lands on
+disk* — not per-run budgets (`max_prs`, `limit`), not one-off overrides
+(`conv_uuids`, `targets`, `full_sync`). That curation is why it isn't
+just a diff of `sync_runs.config`, which is an audit log and records
+everything. Slack is the first consumer; see
+`providers/slack/DOWNLOAD.md` § "Config changes the cursor would
+otherwise swallow".
 
 ## Auth and credentials
 Two patterns:

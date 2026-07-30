@@ -7,7 +7,7 @@
 //! `schema_raw.rs` for the table layout.
 //!
 //! Resume cursor: derived at startup from the DB.
-//! `RawDb::latest_ts_by_channel` gives the per-channel `max(ts)` we've
+//! `RawDb::ts_bounds_by_channel` gives the per-channel `max(ts)` we've
 //! ever recorded, and the next forward pass starts there. The trailing
 //! refresh window re-queries the last N days; idempotent upserts
 //! collapse no-op refresh passes to zero writes.
@@ -38,7 +38,9 @@ use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
-pub use db::{block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb};
+pub use db::{
+    block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb, TsBounds,
+};
 use frankweiler_etl::events;
 use frankweiler_etl::scope_config;
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
@@ -359,11 +361,18 @@ impl Adjustments {
             );
         }
 
-        if scope_config::limit_relaxed(
-            Some(prev),
-            "blob_size_limit_bytes",
-            opts.blob_size_limit_bytes,
-        ) {
+        // Gated on `media`: the cap is only consulted inside
+        // `download_files_for_messages`, which the whole walk skips when
+        // blobs are off. Re-walking every channel (and re-paginating
+        // every mirrored thread) against a rate-limited API to download
+        // exactly zero bytes is pure cost.
+        if opts.media
+            && scope_config::limit_relaxed(
+                Some(prev),
+                "blob_size_limit_bytes",
+                opts.blob_size_limit_bytes,
+            )
+        {
             out.force_full_walk = true;
             info!(
                 event = "slack_blob_limit_relaxed",
@@ -878,14 +887,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
 
     let t_scan = std::time::Instant::now();
-    let channel_latest_ts = db.latest_ts_by_channel().await?;
-    // Only needed to bound a backfill window, and `force_full_walk`
-    // subsumes the backfill — skip the aggregate scan otherwise.
-    let channel_oldest_ts = if adjust.backfill_below_oldest && !adjust.force_full_walk {
-        db.oldest_ts_by_channel().await?
-    } else {
-        std::collections::HashMap::new()
-    };
+    let channel_ts_bounds = db.ts_bounds_by_channel().await?;
     let latest_reply_map = db.latest_reply_by_thread().await?;
     // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
     // the per-file dedupe check inside `download_one_file` is a
@@ -896,7 +898,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut blake3_by_file = db.load_attachment_blake3s().await?;
     info!(
         event = "slack_resume_scan_done",
-        channels_with_history = channel_latest_ts.len(),
+        channels_with_history = channel_ts_bounds.len(),
         threads_with_replies = latest_reply_map.len(),
         attachments_with_bytes = blake3_by_file.len(),
         elapsed_ms = t_scan.elapsed().as_millis() as u64,
@@ -964,8 +966,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 cid,
                 &since_ts,
                 opts.refresh_window_days,
-                channel_latest_ts.get(cid).map(|s| s.as_str()),
-                channel_oldest_ts.get(cid).map(|s| s.as_str()),
+                channel_ts_bounds.get(cid).map(|b| b.latest.as_str()),
+                channel_ts_bounds.get(cid).map(|b| b.oldest.as_str()),
                 &adjust,
                 &latest_reply_map,
                 &now,
@@ -1136,6 +1138,16 @@ mod tests {
         let prev = scope_config_blob(&opts("2024-01-01", true, Some(1000)));
         let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, None));
         assert!(plan.force_full_walk);
+    }
+
+    #[test]
+    fn relaxed_blob_cap_with_media_off_is_a_noop() {
+        // The cap is only consulted inside `download_files_for_messages`,
+        // which the walk skips entirely when blobs are off. Re-walking to
+        // download zero bytes is pure rate-limit burn.
+        let prev = scope_config_blob(&opts("2024-01-01", false, Some(1000)));
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, Some(5000))).any());
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, None)).any());
     }
 
     #[test]
