@@ -365,9 +365,42 @@ What belongs in the record is only what changes *which data lands on
 disk* — not per-run budgets (`max_prs`, `limit`), not one-off overrides
 (`conv_uuids`, `targets`, `full_sync`). That curation is why it isn't
 just a diff of `sync_runs.config`, which is an audit log and records
-everything. Slack is the first consumer; see
-`providers/slack/DOWNLOAD.md` § "Config changes the cursor would
-otherwise swallow".
+everything.
+
+Current consumers, and what each does when the knob widens:
+
+| Provider | Knob | Reaction |
+|---|---|---|
+| slack | `since` | Walk `[since, min(ts)]` per channel |
+| slack | `media`, `blob_size_limit_bytes` | Re-walk from `since` (blob knobs only reach messages the walk visits) |
+| github, gitlab | `refresh_window_days` | `scope_state::since_for_scope_with_prior` reaches back to the earlier of the cursor and `now - window` |
+| email (JMAP) | `only_extract_labels` | `Email/query` scoped to the newly-added mailboxes |
+| yolink | `devices[].start` | Re-walk that device from the new start |
+
+The longest write-up of the reasoning, including what is deliberately
+*not* recorded and why, is `providers/slack/DOWNLOAD.md` § "Config
+changes the cursor would otherwise swallow".
+
+### The same problem on the render side
+
+Render has its own cursor (`_render_cursor.json`, see
+[`render_cursor`](../../frankweiler/backend/etl/src/render_cursor.rs)) and the
+same failure mode: a render param only reaches documents that the
+upstream diff happens to surface, so widening `only_render_labels`
+renders nothing new and changing `period` re-buckets only the chats that
+moved.
+
+The cursor therefore records the render params too, and
+`read_for_params` drops it when they differ. Render invalidates
+*wholesale* where download reacts proportionally — it's local work over
+an on-disk store, so there's no rate limit to ration and the simpler
+rule is easier to trust.
+
+**Known gap:** nothing prunes `rendered_md/`. A re-render under new
+params writes the new documents but leaves any that changed identity
+(notably a different `period` bucketing) beside them as orphans, and
+they stay in the grid index. Fixing that needs a pruning pass that knows
+the full expected document set.
 
 ## Auth and credentials
 Two patterns:
