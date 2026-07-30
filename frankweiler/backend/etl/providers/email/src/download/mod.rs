@@ -292,13 +292,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let scope_cfg = scope_config_blob(&opts);
     let prior_scope_cfg =
         frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let added_labels = frankweiler_etl::scope_config::strings_added(
+    let label_change = frankweiler_etl::scope_config::filter_widened(
         prior_scope_cfg.as_ref(),
         K_ONLY_EXTRACT_LABELS,
         &opts.only_mailbox_labels,
     );
 
-    let result = run_sync(&db, &session, &account_id, &opts, &added_labels).await;
+    let result = run_sync(&db, &session, &account_id, &opts, &label_change).await;
     // Record the config only once the run satisfied it, so a failure
     // leaves the previous label set in place and the next run re-plans
     // the backfill.
@@ -323,10 +323,11 @@ async fn run_sync(
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
-    // Label paths added since the run that produced the stored cursor.
-    // `Email/changes` can't surface their existing mail — nothing in
-    // those mailboxes *changed* — so they need their own enumeration.
-    added_labels: &[String],
+    // How `only_extract_labels` moved since the run that produced the
+    // stored cursor. `Email/changes` can't surface existing mail in
+    // newly-admitted mailboxes — nothing in them *changed* — so a
+    // widening needs its own enumeration.
+    label_change: &frankweiler_etl::scope_config::FilterChange,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary {
         account_id: account_id.to_string(),
@@ -364,7 +365,9 @@ async fn run_sync(
     // Parse the mailbox tree once: both the extraction filter and the
     // widened-label backfill resolve label paths against it.
     let mailbox_nodes: Vec<crate::mailbox_labels::MailboxNode> =
-        if opts.only_mailbox_labels.is_empty() && added_labels.is_empty() {
+        if opts.only_mailbox_labels.is_empty()
+            && *label_change == frankweiler_etl::scope_config::FilterChange::Unchanged
+        {
             Vec::new()
         } else {
             db.load_mailboxes()
@@ -403,20 +406,33 @@ async fn run_sync(
     // `Email/changes` only reports what changed since the cursor, so
     // existing mail in these mailboxes is invisible to it and needs its
     // own bounded enumeration.
-    let backfill_mailboxes: Option<HashSet<String>> = if added_labels.is_empty() {
-        None
-    } else {
-        let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, added_labels);
-        if resolved.ids.is_empty() {
-            None
-        } else {
+    // `None` = no backfill. `Some(None)` = the filter was removed, so
+    // enumerate the whole account. `Some(Some(ids))` = enumerate just
+    // the newly-admitted mailboxes.
+    #[allow(clippy::option_option)]
+    let backfill: Option<Option<HashSet<String>>> = match label_change {
+        frankweiler_etl::scope_config::FilterChange::Unchanged => None,
+        frankweiler_etl::scope_config::FilterChange::WidenedToAll => {
             info!(
                 event = "jmap_label_filter_widened",
-                added = ?added_labels,
-                resolved_mailboxes = resolved.ids.len(),
-                "enumerating newly-in-scope mailboxes",
+                added = "<filter removed>",
+                "enumerating the whole account",
             );
-            Some(resolved.ids)
+            Some(None)
+        }
+        frankweiler_etl::scope_config::FilterChange::Added(added) => {
+            let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, added);
+            if resolved.ids.is_empty() {
+                None
+            } else {
+                info!(
+                    event = "jmap_label_filter_widened",
+                    added = ?added,
+                    resolved_mailboxes = resolved.ids.len(),
+                    "enumerating newly-in-scope mailboxes",
+                );
+                Some(Some(resolved.ids))
+            }
         }
     };
 
@@ -429,7 +445,7 @@ async fn run_sync(
         account_id,
         opts,
         mailbox_filter.as_ref(),
-        backfill_mailboxes.as_ref(),
+        backfill.as_ref(),
         &mut summary,
     )
     .await?;
@@ -587,7 +603,7 @@ async fn sync_emails(
     account_id: &str,
     opts: &FetchOptions,
     mailbox_filter: Option<&HashSet<String>>,
-    backfill_mailboxes: Option<&HashSet<String>>,
+    #[allow(clippy::option_option)] backfill: Option<&Option<HashSet<String>>>,
     summary: &mut FetchSummary,
 ) -> Result<HashSet<String>> {
     let stored = if opts.full_resync {
@@ -614,13 +630,13 @@ async fn sync_emails(
                 // The incremental pass covered everything that changed.
                 // A widened label filter additionally needs the mail
                 // that did *not* change in the newly-admitted mailboxes.
-                if let Some(added) = backfill_mailboxes {
+                if let Some(scope) = backfill {
                     full_enumerate_emails(
                         db,
                         now,
                         session,
                         account_id,
-                        Some(added),
+                        scope.as_ref(),
                         summary,
                         &mut touched_threads,
                     )

@@ -209,7 +209,51 @@ pub fn limit_relaxed(prev: Option<&Value>, key: &str, cur: Option<u64>) -> bool 
     }
 }
 
+/// How a list-shaped filter moved, for the common convention where an
+/// **empty list means "no filter"** — i.e. the *widest* setting, not the
+/// narrowest.
+///
+/// That convention is easy to get wrong with [`strings_added`] alone:
+/// `[] -> ["Sent"]` looks like an addition but is a *narrowing*, and
+/// `["Sent"] -> []` looks like nothing changed but admits everything.
+/// Both directions are inverted from the naive reading, so the rule
+/// lives here rather than in each provider. Compare
+/// [`crate::scope_state::since_for_scope`], which has the identical
+/// shape for `refresh_window_days: 0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilterChange {
+    /// Nothing newly in scope. Includes every narrowing, and the case
+    /// where the record is absent or lacks the key.
+    Unchanged,
+    /// The filter was removed entirely: everything is now in scope.
+    WidenedToAll,
+    /// These entries are newly in scope; the rest of the filter stands.
+    Added(Vec<String>),
+}
+
+/// Classify a list-shaped filter change under the empty-means-all
+/// convention. See [`FilterChange`].
+pub fn filter_widened(prev: Option<&Value>, key: &str, cur: &[String]) -> FilterChange {
+    let Some(stored) = prev.and_then(|p| p.get(key)).and_then(Value::as_array) else {
+        return FilterChange::Unchanged;
+    };
+    if stored.is_empty() {
+        // Was already unfiltered; nothing can widen past it.
+        return FilterChange::Unchanged;
+    }
+    if cur.is_empty() {
+        return FilterChange::WidenedToAll;
+    }
+    match strings_added(prev, key, cur) {
+        added if added.is_empty() => FilterChange::Unchanged,
+        added => FilterChange::Added(added),
+    }
+}
+
 /// Entries in `cur` that aren't in the stored string array at `key`.
+///
+/// Raw set difference: it knows nothing about the empty-means-all
+/// convention. Reach for [`filter_widened`] when the list is a filter.
 ///
 /// Empty when the blob is absent or the key is missing — an unknown
 /// prior set can't tell us anything was added. Useful for providers
@@ -316,6 +360,62 @@ mod tests {
         let b = blob();
         let cur = vec!["Inbox".to_string()];
         assert!(strings_added(Some(&b), "labels", &cur).is_empty());
+    }
+
+    // ── filter_widened ───────────────────────────────────────────────
+
+    fn labels(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn empty_to_populated_is_a_narrowing() {
+        // The trap: `[]` means "no filter", so adding an entry *shrinks*
+        // scope even though the set grew.
+        let b = json!({"labels": []});
+        assert_eq!(
+            filter_widened(Some(&b), "labels", &labels(&["Sent"])),
+            FilterChange::Unchanged
+        );
+    }
+
+    #[test]
+    fn populated_to_empty_widens_to_all() {
+        let b = json!({"labels": ["Sent"]});
+        assert_eq!(
+            filter_widened(Some(&b), "labels", &[]),
+            FilterChange::WidenedToAll
+        );
+    }
+
+    #[test]
+    fn added_entries_are_reported() {
+        let b = json!({"labels": ["Sent"]});
+        assert_eq!(
+            filter_widened(Some(&b), "labels", &labels(&["Sent", "Inbox"])),
+            FilterChange::Added(vec!["Inbox".to_string()])
+        );
+    }
+
+    #[test]
+    fn removing_an_entry_is_unchanged() {
+        let b = json!({"labels": ["Sent", "Inbox"]});
+        assert_eq!(
+            filter_widened(Some(&b), "labels", &labels(&["Sent"])),
+            FilterChange::Unchanged
+        );
+    }
+
+    #[test]
+    fn absent_record_is_unchanged() {
+        assert_eq!(
+            filter_widened(None, "labels", &labels(&["Sent"])),
+            FilterChange::Unchanged
+        );
+        assert_eq!(
+            filter_widened(Some(&json!({})), "labels", &labels(&["Sent"])),
+            FilterChange::Unchanged
+        );
     }
 
     // ── storage ──────────────────────────────────────────────────────
