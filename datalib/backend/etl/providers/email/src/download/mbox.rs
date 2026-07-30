@@ -165,9 +165,6 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
-/// Walk `opts.input_path` and land every message into the raw store
-/// via in-memory accumulation + chunked multi-row `INSERT`s — see
-/// [`FLUSH_BATCH`] for the per-batch-flush shape.
 /// Scope key for the mbox path's [`datalib_etl::scope_config`]
 /// record. Distinct from the JMAP path's `jmap:download` — the two
 /// modes of `type: email` keep separate state.
@@ -280,6 +277,9 @@ impl Adjustments {
     }
 }
 
+/// Walk `opts.input_path` and land every message into the raw store
+/// via in-memory accumulation + chunked multi-row `INSERT`s — see
+/// [`FLUSH_BATCH`] for the per-batch-flush shape.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,

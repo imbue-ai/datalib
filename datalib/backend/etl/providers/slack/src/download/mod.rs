@@ -238,6 +238,14 @@ fn next_cursor(resp: &Value) -> Option<String> {
 /// source is the right grain.
 const SCOPE_CONFIG_KEY: &str = "slack:download";
 
+/// Blob keys. Named so the writer below and the readers in
+/// [`Adjustments::plan`] can't drift — a typo in either half degrades
+/// silently to "no information, plan no work", which is the exact
+/// failure this machinery exists to eliminate.
+const K_SINCE: &str = "since";
+const K_MEDIA: &str = "media";
+const K_BLOB_CAP: &str = "blob_size_limit_bytes";
+
 /// The subset of [`FetchOptions`] that decides *which data lands on
 /// disk*, recorded after a successful run so the next one can spot a
 /// widening the per-channel watermark would otherwise swallow.
@@ -248,14 +256,6 @@ const SCOPE_CONFIG_KEY: &str = "slack:download";
 ///   without any help from us.
 /// - `refresh_window_days` — already re-applied on every run.
 /// - `conv`-style one-offs and paths — not scope-affecting.
-/// Blob keys. Named so the writer above and the readers in
-/// [`Adjustments::plan`] can't drift — a typo in either half degrades
-/// silently to "no information, plan no work", which is the exact
-/// failure this machinery exists to eliminate.
-const K_SINCE: &str = "since";
-const K_MEDIA: &str = "media";
-const K_BLOB_CAP: &str = "blob_size_limit_bytes";
-
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({
         K_SINCE: opts.since,

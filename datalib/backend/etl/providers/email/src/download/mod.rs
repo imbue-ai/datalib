@@ -210,11 +210,12 @@ pub struct FetchSummary {
     pub blobs_oversize: usize,
 }
 
-/// Run one download pass against a JMAP account. Returns a summary the
-/// orchestrator stamps into `sync_runs.summary`.
 /// Scope key for this provider's [`datalib_etl::scope_config`] blob.
 /// Matches the `jmap:` prefix the state tokens use.
 const SCOPE_CONFIG_KEY: &str = "jmap:download";
+
+/// Blob key. Named so writer and reader can't drift.
+const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
 
 /// The subset of [`FetchOptions`] that decides which data lands on disk.
 /// Only the label filter qualifies: `hostname`/`account_id` re-key the
@@ -222,9 +223,6 @@ const SCOPE_CONFIG_KEY: &str = "jmap:download";
 /// `blob_download_concurrency` is a throughput knob. The blob cap isn't
 /// here either — `sync_blobs` re-scans every email for missing bytes on
 /// every run, so raising it already backfills on its own.
-/// Blob key. Named so writer and reader can't drift.
-const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
-
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = opts
@@ -236,6 +234,8 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({ K_ONLY_EXTRACT_LABELS: labels })
 }
 
+/// Run one download pass against a JMAP account. Returns a summary the
+/// orchestrator stamps into `sync_runs.summary`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(d) => d,
@@ -356,14 +356,9 @@ async fn run_sync(
     sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
     opts.progress.inc(1);
 
-    // Resolve the configured label paths to mailbox ids now that the
-    // full tree is in the db (`Mailbox/get` always re-lists, even on an
-    // incremental run). Empty config = no filter (sync every mailbox).
-    // An all-unmatched filter resolves to an empty set, which means
-    // "match nothing" — loud-warned below so a typo'd path doesn't
-    // silently drop the whole account.
     // Parse the mailbox tree once: both the extraction filter and the
     // widened-label backfill resolve label paths against it.
+    // (`Mailbox/get` always re-lists, even on an incremental run.)
     let mailbox_nodes: Vec<crate::mailbox_labels::MailboxNode> =
         if opts.only_mailbox_labels.is_empty()
             && *label_change == datalib_etl::scope_config::FilterChange::Unchanged
