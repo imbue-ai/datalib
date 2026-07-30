@@ -1,0 +1,110 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Checked-in ST:TNG-themed fixture, consumed by:
+#   * the per-crate `beeper_tng_e2e` integration test (data = below)
+#   * the unified //tests/fixtures:ingested_tng genrule that builds
+#     `backend_index.doltlite_db` against every provider's fixtures.
+#
+# The fixture is SQL + a couple of small media files; the consumer
+# `materialize`s a Beeper-Texts-shaped dir from those before running
+# `beeper-download`.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob([
+        "tests/fixtures/beeper_tng/*.sql",
+        "tests/fixtures/beeper_tng/media/**/*",
+    ]) + [
+        "tests/fixtures/beeper_tng/build_fixture.sh",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_beeper",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_beeper",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+# Extract step (Beeper). CLI driver. Reads BeeperTexts' on-disk
+# SQLite stores (index.db, media/) directly — no network, no auth.
+rust_binary(
+    name = "beeper_download",
+    srcs = ["src/bin/beeper_download.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_beeper",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "beeper_unittests",
+    size = "small",
+    crate = ":datalib_etl_beeper",
+    edition = "2021",
+)
+
+# End-to-end test against the checked-in TNG fixture: materializes a
+# BeeperTexts-shaped dir from `:tng_fixture` into a tempdir, runs the
+# download + render pipeline, asserts the resulting doltlite and
+# rendered markdown.
+#
+# `BEEPER_SQLITE3` can be set to an absolute sqlite3 path if the
+# sandbox doesn't put one on PATH; macOS sandboxes include
+# /usr/bin/sqlite3 by default.
+rust_test(
+    name = "beeper_tng_e2e",
+    srcs = ["tests/beeper_tng_e2e.rs"],
+    crate_root = "tests/beeper_tng_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    # Bazel doesn't surface fixture dirs via CARGO_MANIFEST_DIR in the
+    # sandbox — the test reads BEEPER_FIXTURE_DIR with CARGO_MANIFEST_DIR
+    # as the cargo fallback. Mirrors the chatgpt / anthropic /
+    # notion translate-test wiring.
+    env = {
+        "BEEPER_FIXTURE_DIR": "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+    },
+    deps = [
+        ":datalib_etl_beeper",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

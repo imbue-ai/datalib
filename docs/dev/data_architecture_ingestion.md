@@ -21,13 +21,13 @@ Practitioner-facing material — how we test, how to add a provider, how the sch
 
 # General pipeline structure
 
-The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`frankweiler/backend/dag`](/frankweiler/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`frankweiler/backend/datalib_step`](/frankweiler/backend/datalib_step)); see [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the orchestration design and [`step_protocol.md`](step_protocol.md) for the step contract:
+The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the orchestration design and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<data_source>/raw/entities.doltlite_db` (entities) and `<data_root>/<data_source>/raw/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
 2. **Render** — derive sidecar `.md` + `.grid_rows.json` under `<stanza>/rendered_md/...` from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
 3. **Grid index (currently: view in UI)** — feed the sidecar tree into the canonical `grid_rows` table to drive the UI
 
-Each provider (data source) is its own crate at [`frankweiler/backend/etl/providers/<name>/`](/frankweiler/backend/etl/providers), named `frankweiler-etl-<name>`. The provider crate owns its Download + Render code, its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." Grid index is provider-agnostic and lives at [`src/grid_index.rs`](/frankweiler/backend/etl/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
+Each provider (data source) is its own crate at [`datalib/backend/etl/providers/<name>/`](/datalib/backend/etl/providers), named `datalib-etl-<name>`. The provider crate owns its Download + Render code, its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." Grid index is provider-agnostic and lives at [`src/grid_index.rs`](/datalib/backend/etl/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
 
 ## Layering of concerns: download is downstream-agnostic
 The per-stage modules within a provider crate form a strict layer with a single allowed dependency direction:
@@ -36,9 +36,9 @@ The per-stage modules within a provider crate form a strict layer with a single 
 upstream → download → render → grid_index
 ```
 
-- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<name>/raw/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `frankweiler_schema::grid_rows::GridRow`, sidecar types, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
+- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<name>/raw/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, sidecar types, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
 - **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + sidecar shape). `download::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<name>/raw/` (`SourceEntry::raw_path`); it must never reach back into upstream (the API) or into a file-backed source's `input_path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
-- **`grid_index`** is provider-agnostic; it lives at [`src/grid_index.rs`](/frankweiler/backend/etl/src/grid_index.rs) and depends on no provider's download or render. Its input contract is the sidecar tree.
+- **`grid_index`** is provider-agnostic; it lives at [`src/grid_index.rs`](/datalib/backend/etl/src/grid_index.rs) and depends on no provider's download or render. Its input contract is the sidecar tree.
 
 Why the discipline matters: download is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if render has bugs or hasn't been written yet. Render can then be re-implemented or extended without touching download, and disabling a render path for one provider doesn't disturb that provider's download.
 
@@ -86,7 +86,7 @@ Within each provider crate the bytes-at-rest schema is its own file, deliberatel
 - **`providers/<name>/src/download/schema_raw.rs`** — the raw-store schema: DDL constants (one per table / index / bookkeeping sidecar), schema-evolution migration constants co-located with the table they touch, any synthesized-PK recipe functions, and a tiny `full_ddl()` composer that splices in `dr::bookkeeping_ddl_for(table)` for each entity. **No manipulation code** — `RawDb`, UPSERTs, SELECTs, and parameter binding stay in `download/db.rs` and import from `schema_raw`. The convention is proto/pydantic-flavored: opening the `schema_raw.rs` files at the same fixed path answers "what does the world look like at rest?" without opening anything else.
 - **`providers/<name>/src/render/schema_translate.rs`** (aspirational, landing per provider) — the normalized representation render emits: mostly serde-shaped Rust types, not SQL DDL, the in-memory POD form before it's shredded into sidecar rows. A provider may have multiple `schema_translate_<family>.rs` files; where a shape is shared across providers (chat-human, code-review, time-series, …) the canonical type lives in a shared crate and the per-provider file re-exports.
 
-Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port guide §6a](/frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads)) — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port guide §6a](/datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads)) — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
 
 ### More details
 
@@ -109,7 +109,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 - Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from.  Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
- Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). Full schema + helpers in [port guide §7](/frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+ Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). Full schema + helpers in [port guide §7](/datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
 
 **Per-provider CAS edge tables**
 
@@ -118,7 +118,7 @@ Every provider with attachments owns a small four-column edge table that maps `(
 The four-column shape is universal — `id` (synth PK `{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]` struct. The derive emits the DDL, the two indices, the synth-PK recipe, and the `BulkUpsertable` impl. See [`provider_migration_dolt_diff_and_cas_edge.md`](/docs/dev/provider_migration_dolt_diff_and_cas_edge.md) for the full recipe.
 
 ### Shared attachment-flush primitives
-Per-bucket attachment-fetch flow is consolidated into three shared pieces in `frankweiler_etl::blob_cas`:
+Per-bucket attachment-fetch flow is consolidated into three shared pieces in `datalib_etl::blob_cas`:
 
 - **`load_blake3_index(pool, table, ref_id_column)`** — one SQL scan at fetch entry produces the run-scoped `(ref_id → blake3)` map. The per-file dedupe check is a HashMap hit, not a SQL round trip queued behind preceding multi-MB CAS commits on the single-connection doltlite pool.
 - **`CasEdgeAccumulator`** — per-bucket walker. Three add paths: `add_fetched`, `add_known`, `add_failed`. Tracks the `BlobBundle`, the `(owning, ref)` edge list, and per-`ref_id` error strings. Dedupes by `(owning, ref)`.
@@ -136,7 +136,7 @@ to `<data_root>/<name>/raw` but overridable per source via `raw_path:` in the
 config, identically for every source. It's a single resolver used by both
 sides: the downloader writes there and the renderer reads there. The
 filenames inside it (`entities.doltlite_db`, `blobs.doltlite_db`, `events/`)
-are the constants in `frankweiler_etl::raw_layout`, the one place the layout
+are the constants in `datalib_etl::raw_layout`, the one place the layout
 is defined. This is distinct from a file-backed source's `input_path:`, which
 says where the data is read *from* (a `.mbox`, a Takeout export, …).
 
@@ -195,7 +195,7 @@ Rules:
 ## Monitorable
 The first sync from a given source is often very long (hours to days, many GB, subject to rate limits). Every stage must surface progress the user can watch in real time.
 
-- Every binary flattens [`obs::ObsArgs`](/frankweiler/backend/obs/src/lib.rs) into its clap parser, so every stage takes the same logging / OTLP / progress-bar flags. On a TTY, pretty log lines on stderr; otherwise NDJSON events. Log emissions route through an `IndicatifWriter` coordinating with the shared `MultiProgress` (`frankweiler_obs::shared_multi()`) so caller progress bars don't get stomped by log lines.
+- Every binary flattens [`obs::ObsArgs`](/datalib/backend/obs/src/lib.rs) into its clap parser, so every stage takes the same logging / OTLP / progress-bar flags. On a TTY, pretty log lines on stderr; otherwise NDJSON events. Log emissions route through an `IndicatifWriter` coordinating with the shared `MultiProgress` (`datalib_obs::shared_multi()`) so caller progress bars don't get stomped by log lines.
 - `--otlp-endpoint http://host:4317` exports spans + events via OTLP, so a single Tempo/Jaeger collector can ingest every stage. (See [the privacy-boundary unresolved question](/docs/dev/data_architecture_ingestion_practices.md#observability-and-the-privacy-boundary) for the contract that constrains what may be in those spans.)
 - Each stage emits `*_start`, `*_complete`, and per-document progress events with a stable provider-prefixed name (`slack_download_*`, `grid_rows_load_*`, …). The `*Summary` structs are `Serialize`, so a web UI can consume the final stats line provider-agnostically.
 - Long-running operations must report something visible every few seconds; a download that walks 100k items silently for an hour is a bug.
@@ -255,8 +255,8 @@ The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
 - **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
 
-### Single source of truth: `frankweiler-time`
-Every `now()` call and every inbound RFC 3339 parse in the workspace funnels through the `frankweiler-time` crate (`frankweiler/backend/time/`). The crate exposes:
+### Single source of truth: `datalib-time`
+Every `now()` call and every inbound RFC 3339 parse in the workspace funnels through the `datalib-time` crate (`datalib/backend/time/`). The crate exposes:
 
 - `IsoOffsetTimestamp::now_local()` — the canonical "now," returning the wall clock with the **generating system's local-tz offset** (e.g. `2026-06-10T14:23:00-07:00`). An offset-bearing timestamp is strictly more information than the same instant in UTC: you can recover UTC from `-07:00`, but you can't recover the originating offset once it's been normalized away. This is the policy for every generated `fetched_at` / `created_at` / run-marker stamp.
 - `parse_strict(s)` — accepts only strings that already carry an explicit offset. Most parse callsites should use this.
@@ -304,7 +304,7 @@ Every download is shaped the same at the bottom: for some entity table `<t>`, up
 
 The principle: **every provider's download uses shared chunked-multi-row helpers for the entity-table UPSERT, the `<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs are an anti-pattern outside ad-hoc maintenance code.
 
-### The shared pieces, all in `frankweiler_etl`:
+### The shared pieces, all in `datalib_etl`:
 
 - **`bulk::SQL_CHUNK` + `bulk::push_placeholders` / `bulk::push_placeholder_list`** — chunking utilities the provider's per-table multi-row `INSERT` builders use.
 - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the generic `<t>_bookkeeping` UPSERT. Call directly inside the provider's tx after the entity UPSERT.
@@ -405,8 +405,8 @@ the full expected document set.
 ## Auth and credentials
 Two patterns:
 
-- **Most providers**: shell out to `latchkey curl` (see [`backend/etl/src/latchkey.rs`](/frankweiler/backend/etl/src/latchkey.rs)). Auth lives in the latchkey keyring, indexed by URL host. The provider's HTTP transport never sees the bearer token.
-- **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`build_signed_url` in [`providers/yolink/src/download/mod.rs`](/frankweiler/backend/etl/providers/yolink/src/download/mod.rs)). Per-device secrets live in config (REDACT before publishing).
+- **Most providers**: shell out to `latchkey curl` (see [`backend/etl/src/latchkey.rs`](/datalib/backend/etl/src/latchkey.rs)). Auth lives in the latchkey keyring, indexed by URL host. The provider's HTTP transport never sees the bearer token.
+- **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`build_signed_url` in [`providers/yolink/src/download/mod.rs`](/datalib/backend/etl/providers/yolink/src/download/mod.rs)). Per-device secrets live in config (REDACT before publishing).
 
 If you add a new provider with a new auth shape, prefer extending latchkey upstream before adding a third pattern.
 

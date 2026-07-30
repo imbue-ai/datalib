@@ -3,7 +3,7 @@
 #
 # Why this exists
 # ---------------
-# `frankweiler/ui/` uses pnpm (`pnpm-lock.yaml` is checked in, and
+# `datalib/ui/` uses pnpm (`pnpm-lock.yaml` is checked in, and
 # `package.json` pins a specific version via the `packageManager`
 # field). Nothing about the UI _requires_ pnpm — no workspaces, no
 # pnpm-specific lockfile features — but pnpm is what the lockfile is
@@ -29,8 +29,8 @@ if ! command -v corepack >/dev/null 2>&1; then
     cat >&2 <<'EOF'
 ERROR: neither `pnpm` nor `corepack` on PATH.
 
-The frankweiler UI uses pnpm (pinned via `packageManager` in
-frankweiler/ui/package.json). On a recent Node install (16.9+),
+The datalib UI uses pnpm (pinned via `packageManager` in
+datalib/ui/package.json). On a recent Node install (16.9+),
 `corepack` is bundled — make sure your Node bin dir is on PATH.
 
 If you really don't want corepack: `npm install -g pnpm`.

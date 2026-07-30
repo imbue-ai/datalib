@@ -1,0 +1,131 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Framework crate. Provider-specific Extract/Translate code lives in
+# sibling crates under providers/<name>/ (see providers/slack/BUILD.bazel).
+rust_library(
+    name = "datalib_etl",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    # The dispatch curl + the impersonator it fronts travel with the
+    # library so any binary that links `datalib_etl` gets both in
+    # runfiles (co-located, so the dispatch curl finds the impersonator as
+    # a sibling); `latchkey::ensure_curl_dispatch` resolves the dispatch curl
+    # via the bazel runfiles lookup in `resolve()`.
+    data = [
+        ":latchkey_curl_dispatch",
+        ":latchkey_curl_impersonate",
+    ],
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/time:datalib_time",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:indicatif",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# Chrome-impersonating curl shim. Depends transitively on `boring-sys2`,
+# whose build script shells out to `cmake` + a C toolchain to build
+# boringssl. We rely on the host having those on PATH (pinned to a
+# deterministic value via `--action_env=PATH=…` in `.bazelrc`) rather
+# than going through rules_foreign_cc.
+rust_binary(
+    name = "latchkey_curl_impersonate",
+    srcs = ["src/bin/latchkey_curl_impersonate.rs"],
+    edition = "2021",
+    # Intentionally NOT stamped. The shim ships in the runfiles of
+    # `datalib_etl` (see `data = [":latchkey_curl_impersonate"]` above), so
+    # any consumer of that library — every etl/providers/* test — picks
+    # it up as a runfile. Stamping it makes every git commit invalidate
+    # those test actions via the stable-status.txt input. Its `--version`
+    # is informational (the shim isn't a release artifact); the
+    # user-facing stamp lives on //datalib/backend/sync:datalib_sync_bin.
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:wreq",
+        "@datalib_crates//:wreq-util",
+    ],
+)
+
+rust_test(
+    name = "latchkey_curl_impersonate_test",
+    size = "small",
+    crate = ":latchkey_curl_impersonate",
+    edition = "2021",
+)
+
+# Drop-in `curl` that routes on the `X-Imbue-Impersonate` marker header:
+# marked requests go to the impersonating binary above (found as a
+# sibling of this one), all others pass through to `curl` on PATH.
+# std-only — no deps — so it builds without the boring-sys2 / wreq
+# toolchain the impersonator needs.
+rust_binary(
+    name = "latchkey_curl_dispatch",
+    srcs = ["src/bin/latchkey_curl_dispatch.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "latchkey_curl_dispatch_test",
+    size = "small",
+    crate = ":latchkey_curl_dispatch",
+    edition = "2021",
+)
+
+# Provider-agnostic Load step: walk *.grid_rows.json sidecars and
+# upsert into Dolt; tracks markdowns_loaded(qmd_path, fingerprint) for
+# idempotent skips.
+rust_binary(
+    name = "grid_rows_load",
+    srcs = ["src/bin/grid_rows_load.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "etl_unittests",
+    size = "small",
+    crate = ":datalib_etl",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)

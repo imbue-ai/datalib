@@ -21,7 +21,7 @@ test through bazel:**
 
 ```bash
 bazelisk test //...                                        # everything
-bazelisk test //frankweiler/backend/etl/providers/<name>/...  # one provider
+bazelisk test //datalib/backend/etl/providers/<name>/...  # one provider
 ```
 
 Bazel is the only supported build and test driver. It gets caching,
@@ -40,18 +40,18 @@ machine.
 
 The TNG fixtures catch code-level regressions; a **live-golden e2e**
 used to catch what happens against the actual world. The
-`//frankweiler/backend/sync:manual_e2e_live_sync_golden` target ran
+`//datalib/backend/sync:manual_e2e_live_sync_golden` target ran
 the full pipeline, every source, against live upstreams using
 host-side latchkey credentials, snapshotting the run summary, a
 file-tree manifest of `raw/` + `rendered_md/`, and per-file content
-snapshots into a private dir named by `$FRANKWEILER_MANUAL_E2E_DIR`
+snapshots into a private dir named by `$DATALIB_MANUAL_E2E_DIR`
 (kept outside the repo so the slightly sensitive source data isn't
 shared when the repo is open-sourced). It was the only test that
 caught **render-side drift against real payloads** — upstream shape
 changes, schema-projection bugs, timestamp-fabrication bugs,
 attachment-handling gaps — with a human-reviewable diff, triaged
 per cluster as deliberate / accidental / noise. The target was
-retired along with the `frankweiler-sync` crate; **no in-tree runner
+retired along with the `datalib-sync` crate; **no in-tree runner
 exists today** (the machine-readable run record is now the
 `run_summary` NDJSON event emitted by `datalib-dag`). The practice
 is still worth reviving against the DAG runner.
@@ -59,8 +59,8 @@ is still worth reviving against the DAG runner.
 ## Adding new sources is meant to be easy
 
 A new provider is a sibling crate under
-[`frankweiler/backend/etl/providers/`](../../frankweiler/backend/etl/providers/),
-named `frankweiler-etl-<name>`.
+[`datalib/backend/etl/providers/`](../../datalib/backend/etl/providers/),
+named `datalib-etl-<name>`.
 
 ### Pick a template to copy from
 
@@ -88,21 +88,21 @@ Reach for the simplest existing provider that's shaped like yours,
 
 1. Copy your chosen template into `providers/<name>/`, then strip out
    the provider-specific code.
-2. Rename the package in its `Cargo.toml` to `frankweiler-etl-<name>`,
-   lib name `frankweiler_etl_<name>`.
+2. Rename the package in its `Cargo.toml` to `datalib-etl-<name>`,
+   lib name `datalib_etl_<name>`.
 3. Add `etl/providers/<name>` to the workspace `members =` list in
-   `frankweiler/backend/Cargo.toml` and to the `crate.from_cargo`
+   `datalib/backend/Cargo.toml` and to the `crate.from_cargo`
    manifest list in `MODULE.bazel`.
 4. Implement `download::fetch(...)` and `<name>::render::...`. The
    render side must emit `*.grid_rows.json` sidecars matching
-   [`Sidecar`](../../frankweiler/backend/index_lib/src/lib.rs).
+   [`Sidecar`](../../datalib/backend/index_lib/src/lib.rs).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Add the new source's `type:` discriminator to the `SourceConfig`
-   variants in [`backend/ingest_config/src/lib.rs`](../../frankweiler/backend/ingest_config/src/lib.rs)
+   variants in [`backend/ingest_config/src/lib.rs`](../../datalib/backend/ingest_config/src/lib.rs)
    and wire the provider's `processor.rs` (`plan_download` /
    `plan_render`) into the per-type dispatch in
-   [`datalib_step/src/dispatch.rs`](../../frankweiler/backend/datalib_step/src/dispatch.rs).
+   [`datalib_step/src/dispatch.rs`](../../datalib/backend/datalib_step/src/dispatch.rs).
 
 Grid index needs no per-provider changes — the `grid_index` step
 (`datalib-step grid_index`, `build_grid_index` in
@@ -186,7 +186,7 @@ document, Render emits two co-located files —
 
   - `<id>.md` — human-readable, with YAML frontmatter.
   - `<id>.grid_rows.json` — the
-    [`Sidecar`](../../frankweiler/backend/index_lib/src/lib.rs):
+    [`Sidecar`](../../datalib/backend/index_lib/src/lib.rs):
 
     ```jsonc
     {
@@ -233,7 +233,7 @@ consistent.
 
 Where unification actually happens **today**: the `GridRow` projection
 (the hand-written struct at
-[`frankweiler/backend/schema/src/grid_rows.rs`](../../frankweiler/backend/schema/src/grid_rows.rs),
+[`datalib/backend/schema/src/grid_rows.rs`](../../datalib/backend/schema/src/grid_rows.rs),
 whose DDL is derived via `#[derive(PortableTable)]` — see
 [`grid_rows.md`](grid_rows.md)).
 Every searchable entity from every provider collapses into rows of one
@@ -385,7 +385,7 @@ a checked-in input. The flow is: synth reads JSONL → emits HTTP
 playback responses → download reads playback → writes the runtime
 `.doltlite_db`.
 
-This is stated in [port guide §3](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
+This is stated in [port guide §3](../../datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
 but it's a project-wide invariant that belongs at the architecture
 level too.
 
@@ -404,7 +404,7 @@ Edits to these docs and their neighbors that we've agreed to do, but
 haven't yet. Each is intentionally not blocking the audit thread —
 they're listed here so they don't get lost.
 
-  - **Move `frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md` →
+  - **Move `datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md` →
     `docs/dev/doltlite_patterns.md`**, and reframe it from a porting
     guide into "shape of how we use doltlite." The current doc reads
     as one-time migration instructions (which JSONL-tree raw stores

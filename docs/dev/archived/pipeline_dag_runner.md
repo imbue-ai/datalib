@@ -1,10 +1,10 @@
 # Program B (aspirational): the processing DAG
 
 > **Archived (2026-07): implemented.** The DAG runner shipped as
-> `datalib-dag` + `datalib-step` (`frankweiler/backend/dag`,
-> `frankweiler/backend/datalib_step`) under different names than this plan
-> uses: `NodeSpec`/`NodeOutcome`/`frankweiler_pipeline` became
-> `StepSpec`/`StepOutcome`/`frankweiler_dag`, and the extract/translate
+> `datalib-dag` + `datalib-step` (`datalib/backend/dag`,
+> `datalib/backend/datalib_step`) under different names than this plan
+> uses: `NodeSpec`/`NodeOutcome`/`datalib_pipeline` became
+> `StepSpec`/`StepOutcome`/`datalib_dag`, and the extract/translate
 > vocabulary became download/render/grid_index. For the current design see
 > [`pipeline_dag_architecture.md`](../pipeline_dag_architecture.md); for
 > the step contract see [`step_protocol.md`](../step_protocol.md).
@@ -78,7 +78,7 @@ forward; B changes *the orchestration around the trait*, not the trait.
 ## 2. The node contract
 
 ```rust
-// crate: frankweiler_pipeline (base)
+// crate: datalib_pipeline (base)
 pub struct ArtifactRef(pub PathBuf);        // path or glob under data_root
 
 pub struct NodeSpec {
@@ -154,7 +154,7 @@ Do not begin B until there is appetite for *these two*, specifically.
 
 ## 5. Migration sketch (assumes A complete)
 
-1. `frankweiler_pipeline` crate: `NodeSpec`, `Node`, `NodeOutcome`, `ArtifactRef`,
+1. `datalib_pipeline` crate: `NodeSpec`, `Node`, `NodeOutcome`, `ArtifactRef`,
    `ContentVersion`. Types only.
 2. Give one provider (email — its render path is already unified and its config is
    already clean from A) a `plan()` emitting 2 nodes; run them through a minimal

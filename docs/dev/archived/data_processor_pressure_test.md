@@ -25,7 +25,7 @@ match — it's been a clean trait-dispatch registry all along.
 
 But it owns config a **third** way: each renderer parses an **opaque
 `serde_yaml::Value` stanza** (`Email::from_stanza`, `Beeper::from_stanza`, …),
-deliberately so the registry depends on *nothing* from `frankweiler_core::config`.
+deliberately so the registry depends on *nothing* from `datalib_core::config`.
 That is the "config lives with the step, orchestrator forwards an opaque subtree"
 direction from issue #23's thread — the opposite of §4.2's "typed `oneof`,
 provider owns a typed `Config`."
@@ -97,7 +97,7 @@ in `ExtractPlan.db` by the pre-open loop). The new trait *formalizes* what's the
 
 - **Duplication removed.** `core::config::GoogleTakeoutSync` (config.rs:636-650,
   9 feed bools) is a hand-maintained mirror of
-  `frankweiler_etl_google_takeout::extract::SyncFlags`, copied field-by-field in
+  `datalib_etl_google_takeout::extract::SyncFlags`, copied field-by-field in
   `for_source` (main.rs:1687-1697). Provider-owned config kills this: the provider
   owns a `GoogleTakeoutConfig` whose `sync:` block *is* `SyncFlags` (or trivially
   `into()`s to it), and `core::config` stops naming it. Goal #1, canary cleared.
@@ -229,14 +229,14 @@ re-parse) get folded into Step 1's trait definition. No shape needs redesign —
 
 ### What landed in the pilot (Steps 1–2, `bazel test //...` green: 70/70)
 
-- **Step 1 (base crate `frankweiler_etl`):** `processor.rs` — `DataProcessor`
+- **Step 1 (base crate `datalib_etl`):** `processor.rs` — `DataProcessor`
   (single `async run() -> String`), `SourcePlan{extract,translate}`, opaque
   `Checkpoint`, `RunCtx` (`for_extract`/`for_translate`, `register_checkpoint`,
   `emit_doc`), `CheckpointSink`, `HasSynthesizer`. `raw_store.rs` — `PoolCheckpoint`
   (the reusable interrupt-commit hook). `async-trait` added as a Bazel
   **`proc_macro_deps`** entry.
 - **Step 2 (email):** new Bazel-only `email_config` crate (`EmailConfig`);
-  `frankweiler_etl_email::processor` — `EmailExtract` (JMAP + mbox, owns its
+  `datalib_etl_email::processor` — `EmailExtract` (JMAP + mbox, owns its
   store/commit/checkpoint), `EmailRender`, and `plan() -> SourcePlan`. The
   orchestrator routes **only** email through the two-wave processor path
   (`email_processor_plan` in extract, `render_email_translate` in translate);

@@ -1,0 +1,55 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Checked-in TNG-themed vCard fixture consumed by both this crate's
+# parse tests and //tests/fixtures:ingested_tng (which runs the
+# translate path end-to-end into the grid). The directory shape is
+# `carddav_tng/<addressbook>/<name>.vcf` — the parser uses the
+# first subdirectory as the addressbook label.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/carddav_tng/**/*.vcf"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_contacts",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_contacts",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
+        "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:base64",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "contacts_unittests",
+    size = "small",
+    crate = ":datalib_etl_contacts",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)

@@ -9,15 +9,15 @@ exports_files([
 test_suite(
     name = "all_tests",
     tests = [
-        "//frankweiler/backend/core:core_unittests",
-        "//frankweiler/backend/http:http_unittests",
-        "//frankweiler/backend/schema:schema_unittests",
-        "//frankweiler/backend/tauri-backend:tauri_backend_unittests",
+        "//datalib/backend/core:core_unittests",
+        "//datalib/backend/http:http_unittests",
+        "//datalib/backend/schema:schema_unittests",
+        "//datalib/backend/tauri-backend:tauri_backend_unittests",
     ],
 )
 
 # Pre-commit checks exposed two ways from the same wrapper script,
-# matching the //frankweiler/ui:e2e pattern:
+# matching the //datalib/ui:e2e pattern:
 #   bazelisk run  //:precommit       — interactive, uses BUILD_WORKSPACE_DIRECTORY
 #   bazelisk test //:precommit_test  — picked up by `bazel test //...`
 #

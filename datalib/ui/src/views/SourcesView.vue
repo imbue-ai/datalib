@@ -1,0 +1,1064 @@
+<script setup lang="ts">
+// The merged Setup + Sync tab: the sources table and the raw
+// config.yaml editor sit side by side (stacking when the window is
+// narrow) — not two tabs but two views of the same text. The editor is
+// the single source of truth; the table re-derives from it on every
+// keystroke. A row's "Locate config" button selects that stanza in the
+// editor; the chips append a template stanza and select it. Save PUTs
+// the text to the backend, which validates with the real config loader
+// before writing. Below all that, the recent-jobs table.
+import { computed, nextTick, ref, onMounted, onUnmounted } from "vue";
+import {
+  fetchConfig,
+  fetchConfigScaffold,
+  fetchMigratedConfig,
+  saveConfig,
+  fetchSyncSources,
+  fetchAllJobs,
+  fetchJobLog,
+  enqueueJob,
+  cancelJob,
+  openJobStream,
+  type SyncSource,
+  type SyncJob,
+  type JobProgressEvent,
+} from "@/api";
+import StepProgress from "@/components/StepProgress.vue";
+import DagPanel from "@/components/DagPanel.vue";
+import { listSources, type SourceRow } from "@/config/configSources";
+import { SNIPPETS } from "@/config/snippets";
+import { modifyConfigWithAgent } from "@/handoff";
+
+// --- Config state ----------------------------------------------------------
+
+// The whole config.yaml text — the single source of truth.
+const yamlText = ref("");
+const editorEl = ref<HTMLTextAreaElement | null>(null);
+
+const configPath = ref("");
+const existed = ref(false);
+const loadError = ref<string | null>(null);
+// Result of the last Save attempt (null = unsaved edits or never saved).
+const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | null>(
+  null,
+);
+const saving = ref(false);
+const dirty = ref(false);
+const latchkeyCli = ref("npx -y latchkey");
+// True when the on-disk file is an old-style `sources:` config for the
+// retired sync binary; shows the migrate banner.
+const legacy = ref(false);
+const migrating = ref(false);
+const migrateError = ref<string | null>(null);
+
+// Table view of the text: re-derived on every edit. While the text
+// doesn't parse the last good rows stay up (grayed) with the parse
+// error shown, so a half-typed edit doesn't blank the table.
+const rows = ref<SourceRow[]>([]);
+const parseError = ref<string | null>(null);
+
+function reparse() {
+  try {
+    rows.value = listSources(yamlText.value);
+    parseError.value = null;
+  } catch (e) {
+    parseError.value = (e as Error).message;
+  }
+}
+
+function onEdit() {
+  dirty.value = true;
+  saveStatus.value = null;
+  reparse();
+}
+
+// Saved-config source list from the backend (fringe step ids, derived
+// by the Rust loader from the file on disk). Gates the Sync buttons:
+// sync runs against the saved file, so a row is syncable only once
+// the backend has seen it — and not at all while the editor has
+// unsaved changes (syncing would silently use the stale on-disk
+// version).
+const serverSources = ref<SyncSource[]>([]);
+const serverIds = computed(() => new Set(serverSources.value.map((s) => s.id)));
+
+// What's on disk server-side, as of the last fetch — the baseline the
+// auto-refresh poll compares against ("" while the file doesn't exist,
+// so the scaffold draft never reads as an on-disk change).
+const serverYaml = ref("");
+// The file changed on disk while the editor held unsaved edits; we
+// won't clobber those, so surface a banner instead.
+const diskChanged = ref(false);
+
+async function loadConfig() {
+  loadError.value = null;
+  try {
+    let cfg = await fetchConfig();
+    serverYaml.value = cfg.exists ? cfg.yaml : "";
+    if (!cfg.exists) {
+      // Fresh root — start from the server's scaffold so the user has a
+      // valid base to add sources to.
+      cfg = await fetchConfigScaffold();
+    } else {
+      existed.value = true;
+    }
+    configPath.value = cfg.path;
+    if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
+    legacy.value = cfg.legacy;
+    yamlText.value = cfg.yaml;
+    reparse();
+  } catch (e) {
+    loadError.value = (e as Error).message;
+  }
+}
+
+// The config can change under us — that's the point of the agent
+// hand-off (the agent PUTs /api/config, or edits the file directly).
+// Poll the backend for external changes: with no unsaved edits the
+// editor reloads silently; with unsaved edits we keep the user's text
+// and raise the diskChanged banner instead of clobbering.
+const CONFIG_POLL_MS = 2000;
+async function pollConfig() {
+  // Our own PUT is in flight — whatever the poll sees is stale.
+  if (saving.value) return;
+  try {
+    const cfg = await fetchConfig();
+    if ((cfg.exists ? cfg.yaml : "") === serverYaml.value) return;
+    if (dirty.value) {
+      serverYaml.value = cfg.exists ? cfg.yaml : "";
+      diskChanged.value = true;
+      return;
+    }
+    await reloadFromDisk();
+  } catch {
+    // Backend blip — try again next tick.
+  }
+}
+
+// Adopt the on-disk config, discarding any local edits, and refresh
+// the saved-source list that gates the Sync buttons.
+async function reloadFromDisk() {
+  diskChanged.value = false;
+  dirty.value = false;
+  saveStatus.value = null;
+  await loadConfig();
+  await loadSources();
+}
+
+// Select [start, end) in the editor and scroll it into view. Textareas
+// don't scroll to their selection on their own; estimate the target
+// line's offset from the line count and the computed line height.
+function selectRange(start: number, end: number) {
+  nextTick(() => {
+    const el = editorEl.value;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(start, end);
+    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 16;
+    const line = yamlText.value.slice(0, start).split("\n").length - 1;
+    el.scrollTop = Math.max(0, line * lineHeight - el.clientHeight / 3);
+  });
+}
+
+// "Locate config" = jump to the stanza: select the row's slice of the text.
+function selectSource(idx: number) {
+  const r = rows.value[idx];
+  if (!r) return;
+  selectRange(r.start, r.end);
+}
+
+// Append a source's step pair (download + render) to the text and
+// select it. The scaffold already carries a `steps:` block (with the
+// shared index/qmd fan-in steps); create one only when the user
+// started from a blank file. Steps are appended at the end — the DAG
+// derives execution order from artifact paths, not file order.
+function addSnippet(body: string) {
+  let text = yamlText.value;
+  if (/^steps:\s*\[\s*\]\s*$/m.test(text)) {
+    text = text.replace(/^steps:\s*\[\s*\]\s*$/m, "steps:");
+  } else if (!/^steps:/m.test(text)) {
+    text = text.replace(/\s*$/, "") + "\n\nsteps:";
+  }
+  // Blank line before the pair keeps sources visually separated.
+  const before = text.replace(/\s*$/, "") + "\n\n";
+  yamlText.value = before + body + "\n";
+  onEdit();
+  selectRange(before.length, yamlText.value.length - 1);
+}
+
+async function onSave() {
+  saving.value = true;
+  saveStatus.value = null;
+  try {
+    const res = await saveConfig(yamlText.value);
+    saveStatus.value = { ok: res.ok, error: res.error, count: res.source_count };
+    if (res.ok) {
+      dirty.value = false;
+      existed.value = true;
+      // Saving is an explicit choice over whatever landed on disk
+      // meanwhile — retire the banner and rebase the poll on our text.
+      serverYaml.value = yamlText.value;
+      diskChanged.value = false;
+      await loadSources();
+    }
+  } catch (e) {
+    saveStatus.value = { ok: false, error: (e as Error).message, count: 0 };
+  } finally {
+    saving.value = false;
+  }
+}
+
+// Convert the on-disk legacy config to the DAG format and drop the
+// result into the editor as an unsaved draft — the user reviews and
+// hits Save explicitly. Nothing is written server-side by this call.
+async function onMigrate() {
+  migrating.value = true;
+  migrateError.value = null;
+  try {
+    const res = await fetchMigratedConfig();
+    if (!res.ok || !res.yaml) {
+      migrateError.value = res.error || "migration failed";
+      return;
+    }
+    yamlText.value = res.yaml;
+    legacy.value = false;
+    onEdit();
+  } catch (e) {
+    migrateError.value = (e as Error).message;
+  } finally {
+    migrating.value = false;
+  }
+}
+
+// --- Sync / jobs state (same behavior as the old Sync tab) ------------------
+
+const jobs = ref<SyncJob[]>([]);
+const error = ref<string | null>(null);
+const loading = ref(false);
+// Row checkboxes for "Sync selected". Keyed by step id; pruned to
+// existing rows on reparse via the computed below.
+const selected = ref<Set<string>>(new Set());
+const busySelected = ref(false);
+const busyGlobal = ref(false);
+
+function toggleSelected(id: string) {
+  const s = new Set(selected.value);
+  if (s.has(id)) s.delete(id);
+  else s.add(id);
+  selected.value = s;
+}
+
+// Only selections that are still syncable count (present in the saved
+// config and still in the table).
+const selectedSyncable = computed(() =>
+  [...selected.value].filter(
+    (n) => serverIds.value.has(n) && rows.value.some((r) => r.id === n),
+  ),
+);
+
+// Per-job log viewer. `expandedId` is the job whose detail row is open;
+// `logText`/`logError` hold the fetched tail. The backend serves it from
+// `<root>/state/job-logs/<id>.log` via GET /api/sync/jobs/{id}/log.
+const expandedId = ref<string | null>(null);
+const logText = ref("");
+const logError = ref<string | null>(null);
+const logLoading = ref(false);
+
+// Log lines with a severity class for the structured-JSON ones (the
+// tracing subscriber emits NDJSON with a top-level `level`); qmd's and
+// other plain-text lines pass through unhighlighted.
+const logLines = computed(() =>
+  logText.value.split("\n").map((text) => {
+    let cls = "";
+    if (text.startsWith("{")) {
+      try {
+        const level = JSON.parse(text)?.level;
+        if (level === "ERROR") cls = "log-line-error";
+        else if (level === "WARN") cls = "log-line-warn";
+      } catch {
+        // Not valid JSON after all — leave unhighlighted.
+      }
+    }
+    return { text, cls };
+  }),
+);
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let configPollTimer: ReturnType<typeof setInterval> | null = null;
+let stream: EventSource | null = null;
+let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function loadSources() {
+  try {
+    serverSources.value = await fetchSyncSources();
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
+async function loadJobs() {
+  try {
+    jobs.value = await fetchAllJobs(50);
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
+// Apply one SSE push. If the job is already in the list, patch it in
+// place so the segmented bar updates without a full reload; otherwise
+// (a brand-new job, or a terminal event that needs finished_at/error)
+// schedule a debounced reload to pull the authoritative row.
+function onProgress(ev: JobProgressEvent) {
+  const j = jobs.value.find((x) => x.id === ev.id);
+  const terminal = ev.state === "done" || ev.state === "failed" || ev.state === "canceled";
+  if (j) {
+    j.state = ev.state;
+    j.progress_pct = ev.progress_pct;
+    j.progress_msg = ev.progress_msg;
+    // Terminal rows need server-stamped finished_at/error: reload soon.
+    if (terminal) scheduleReload();
+  } else {
+    // Unknown job (just enqueued): bring it into the list.
+    scheduleReload();
+  }
+  // Live-tail the open log while its job is still active.
+  if (expandedId.value === ev.id && !terminal) {
+    loadLog(ev.id);
+  }
+}
+
+// Coalesce reloads so a burst of events (e.g. all-sources finishing)
+// triggers a single fetch.
+function scheduleReload() {
+  if (reloadTimer) return;
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null;
+    loadJobs();
+  }, 250);
+}
+
+// Reconnect fallback: SSE auto-reconnects, but if the page was
+// backgrounded or the stream silently stalled we still want eventual
+// consistency. A slow full reload covers the gap without the old
+// sub-second hammering.
+async function slowReload() {
+  await loadJobs();
+}
+
+// One job syncing every checked source: comma-joined step ids become
+// repeated --sync flags in the worker, so the whole selection runs as
+// a single DAG invocation (shared fan-in steps run once).
+async function syncSelected() {
+  const names = selectedSyncable.value;
+  if (names.length === 0) return;
+  busySelected.value = true;
+  error.value = null;
+  try {
+    await enqueueJob({ kind: "all", source_name: names.join(",") });
+    await loadJobs();
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busySelected.value = false;
+  }
+}
+
+async function syncEverything() {
+  busyGlobal.value = true;
+  error.value = null;
+  try {
+    await enqueueJob({ kind: "all" });
+    await loadJobs();
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busyGlobal.value = false;
+  }
+}
+
+async function onCancel(job: SyncJob) {
+  try {
+    await cancelJob(job.id);
+    await loadJobs();
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
+async function loadLog(id: string) {
+  logLoading.value = true;
+  logError.value = null;
+  try {
+    logText.value = await fetchJobLog(id);
+  } catch (e) {
+    // 404 = worker hasn't created the log file yet (job still pending).
+    logText.value = "";
+    logError.value = (e as Error).message.includes("404")
+      ? "no log yet — the job hasn't started running."
+      : (e as Error).message;
+  } finally {
+    logLoading.value = false;
+  }
+}
+
+async function toggleLog(job: SyncJob) {
+  if (expandedId.value === job.id) {
+    expandedId.value = null;
+    return;
+  }
+  expandedId.value = job.id;
+  await loadLog(job.id);
+}
+
+function isActive(j: SyncJob): boolean {
+  return j.state === "pending" || j.state === "running";
+}
+
+function fmtTime(s: string | null): string {
+  if (!s) return "";
+  // Trim seconds for terseness; keep original if parse fails.
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  return d.toLocaleString();
+}
+
+onMounted(async () => {
+  loading.value = true;
+  await Promise.all([loadConfig(), loadSources(), loadJobs()]);
+  loading.value = false;
+  // Realtime push: the backend streams every job state change over SSE,
+  // so progress moves the instant the worker writes it — no polling.
+  stream = openJobStream(onProgress);
+  // Reconnect/safety fallback: a slow full reload covers a silently
+  // stalled stream (backgrounded tab, proxy timeout) without hammering.
+  pollTimer = setInterval(slowReload, 15000);
+  // Fast poll for external config edits (agents saving via PUT).
+  configPollTimer = setInterval(() => void pollConfig(), CONFIG_POLL_MS);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+  if (configPollTimer) clearInterval(configPollTimer);
+  if (reloadTimer) clearTimeout(reloadTimer);
+  if (stream) stream.close();
+});
+</script>
+
+<template>
+  <section class="sources-view">
+    <h2>Configure data sources</h2>
+
+    <p v-if="error" class="error">error: {{ error }}</p>
+    <p v-if="loadError" class="error">Could not load config: {{ loadError }}</p>
+
+    <p class="path">
+      <span class="label">File:</span> <code>{{ configPath }}</code>
+      <span v-if="!existed" class="pill new">not created yet</span>
+    </p>
+
+    <div v-if="diskChanged" class="migrate-banner">
+      <span>
+        The config file changed on disk (an agent saving?), but you have
+        unsaved edits here. Saving keeps your version.
+      </span>
+      <button class="btn" @click="reloadFromDisk">
+        Load the disk version (discard my edits)
+      </button>
+    </div>
+
+    <div v-if="legacy" class="migrate-banner">
+      <span>
+        This looks like an old-style <code>sources:</code> config for the
+        retired sync binary. Convert it to the new step-based format
+        (loads a draft into the editor for review; nothing is saved until
+        you hit Save).
+      </span>
+      <button class="btn btn-primary" :disabled="migrating" @click="onMigrate">
+        {{ migrating ? "Converting…" : "Migrate config" }}
+      </button>
+      <span v-if="migrateError" class="status err">✗ {{ migrateError }}</span>
+    </div>
+
+    <!-- Raw config (left) and table side by side — two views of the
+         same text. The table keeps a relatively narrow width; the
+         editor takes the remainder. The columns wrap into a vertical
+         stack when the window is too narrow for both. -->
+    <div class="config-columns">
+      <div class="editor-col">
+        <textarea
+          ref="editorEl"
+          v-model="yamlText"
+          class="editor"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          @input="onEdit"
+        />
+        <div class="footer">
+          <div class="save-status">
+            <!-- A failed Save outranks the live parse error (it already
+                 carries the loader's message). Otherwise the parse
+                 error and the unsaved-changes note are independent —
+                 show both when both apply. -->
+            <span v-if="saveStatus && !saveStatus.ok" class="status err">
+              ✗ Not saved: {{ saveStatus.error }}
+            </span>
+            <template v-else>
+              <span v-if="parseError" class="status err">
+                ✗ YAML error (table may be stale): {{ parseError }}
+              </span>
+              <span v-if="saveStatus && saveStatus.ok" class="status ok">
+                ✓ Saved — {{ saveStatus.count }} source(s) configured.
+              </span>
+              <span v-else-if="dirty" class="status muted">unsaved changes</span>
+            </template>
+          </div>
+          <button
+            class="btn"
+            title="let a coding agent edit this config"
+            @click="modifyConfigWithAgent(configPath)"
+          >
+            🤖
+          </button>
+          <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
+            {{ saving ? "Saving…" : "Save" }}
+          </button>
+        </div>
+      </div>
+
+      <div class="table-col">
+        <div class="table-toolbar">
+          <button
+            class="btn btn-sync"
+            :disabled="busySelected || dirty || selectedSyncable.length === 0"
+            :title="
+              dirty
+                ? 'Save your changes first — sync runs against the saved file'
+                : selectedSyncable.length === 0
+                  ? 'Check some sources first'
+                  : ''
+            "
+            @click="syncSelected"
+          >
+            {{
+              busySelected
+                ? "Queuing…"
+                : `Sync selected (${selectedSyncable.length})`
+            }}
+          </button>
+          <button
+            class="btn btn-sync"
+            :disabled="busyGlobal || dirty || serverSources.length === 0"
+            :title="
+              dirty
+                ? 'Save your changes first — sync runs against the saved file'
+                : serverSources.length === 0
+                  ? 'Add a source first'
+                  : ''
+            "
+            @click="syncEverything"
+          >
+            {{ busyGlobal ? "Queuing…" : "Sync all" }}
+          </button>
+        </div>
+        <table class="sync-table sources-table" :class="{ stale: parseError }">
+          <colgroup>
+            <col class="col-check" />
+            <col class="col-name" />
+            <col class="col-actions" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="th-check"></th>
+              <th>Source step</th>
+              <th class="th-actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(r, idx) in rows"
+              :key="idx"
+              :class="{ 'row-selected': selected.has(r.id) }"
+            >
+              <td class="check-cell">
+                <input
+                  type="checkbox"
+                  :checked="selected.has(r.id)"
+                  :disabled="!serverIds.has(r.id)"
+                  :title="
+                    !serverIds.has(r.id) ? 'Not in the saved config yet' : ''
+                  "
+                  @change="toggleSelected(r.id)"
+                />
+              </td>
+              <td>{{ r.id || "(unnamed)" }}</td>
+              <td class="actions-cell src-actions">
+                <button class="btn" title="Select this step in the config file" @click="selectSource(idx)">
+                  Locate config
+                </button>
+              </td>
+            </tr>
+            <tr v-if="rows.length === 0 && !loading">
+              <td colspan="3" class="empty">
+                no sources configured yet — add one with the buttons below.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="snippets">
+          <span class="label">Add:</span>
+          <!-- Buttons wrap inside their own flex box, so a second line
+               starts under the first button, not under the label. -->
+          <div class="chips">
+            <button
+              v-for="sn in SNIPPETS"
+              :key="sn.label"
+              class="btn chip"
+              @click="addSnippet(sn.body(latchkeyCli))"
+            >
+              {{ sn.label }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3>Recent jobs</h3>
+    <table class="sync-table jobs-table">
+      <colgroup>
+        <col style="width: 6rem" />
+        <col style="width: 5rem" />
+        <col style="width: 8rem" />
+        <col style="width: 6.5rem" />
+        <col />
+        <col style="width: 9.5rem" />
+        <col style="width: 9.5rem" />
+        <col style="width: 9rem" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Kind</th>
+          <th>Source</th>
+          <th>State</th>
+          <th>Progress</th>
+          <th>Started</th>
+          <th>Finished</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template v-for="j in jobs" :key="j.id">
+          <tr :class="{ 'row-failed': j.state === 'failed' }">
+            <td><code>{{ j.id.slice(0, 8) }}</code></td>
+            <td>{{ j.kind }}</td>
+            <td>{{ j.source_name || "" }}</td>
+            <td>
+              <span class="state-pill" :data-state="j.state">{{ j.state }}</span>
+            </td>
+            <td class="progress-cell">
+              <StepProgress :msg="j.progress_msg" :state="j.state" />
+            </td>
+            <td>{{ fmtTime(j.started_at) }}</td>
+            <td>{{ fmtTime(j.finished_at) }}</td>
+            <td class="actions-cell">
+              <button class="btn btn-log" @click="toggleLog(j)">
+                {{ expandedId === j.id ? "Hide log" : "Log" }}
+              </button>
+              <button
+                v-if="isActive(j)"
+                class="btn btn-cancel"
+                @click="onCancel(j)"
+              >
+                Cancel
+              </button>
+            </td>
+          </tr>
+          <tr v-if="expandedId === j.id" class="detail-row">
+            <td colspan="8">
+              <div v-if="j.error" class="job-error">
+                <strong>error:</strong> {{ j.error }}
+              </div>
+              <div class="log-head">
+                <span>log <code>state/job-logs/{{ j.id }}.log</code></span>
+                <button class="btn btn-mini" :disabled="logLoading" @click="loadLog(j.id)">
+                  {{ logLoading ? "…" : "Refresh" }}
+                </button>
+              </div>
+              <p v-if="logError" class="log-empty">{{ logError }}</p>
+              <pre
+                v-else-if="logText"
+                class="log-body"
+              ><span v-for="(l, i) in logLines" :key="i" :class="l.cls">{{ l.text + "\n" }}</span></pre>
+              <p v-else class="log-empty">(empty)</p>
+            </td>
+          </tr>
+        </template>
+        <tr v-if="jobs.length === 0 && !loading">
+          <td colspan="8" class="empty">no jobs yet.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <template v-if="jobs.some(isActive)">
+      <h3>Pipeline</h3>
+      <DagPanel />
+    </template>
+  </section>
+</template>
+
+<style scoped>
+.sources-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0 0.25rem;
+}
+h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+h3 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.95rem;
+  color: var(--datalib-muted);
+  font-weight: 600;
+}
+.path {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.label {
+  color: var(--datalib-muted);
+  margin-right: 0.4rem;
+}
+/* Side-by-side columns that wrap into a vertical stack when the window
+   can't fit both at a usable width. The table keeps a relatively
+   narrow width (no grow); the editor takes the remainder. */
+.config-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.table-col {
+  flex: 0 1 32rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.editor-col {
+  flex: 1 1 30rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.snippets {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.snippets .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.sync-table {
+  width: 100%;
+  /* `separate` (with zero spacing) instead of `collapse`: collapsed
+     borders + border-radius/overflow render the per-cell bottom
+     borders as broken segments in WebKit once cell content animates
+     (the progress bar). Separate borders always join into one line. */
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9rem;
+  background: var(--datalib-card-bg);
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+/* Fixed layout (widths from the colgroup): the live progress cell
+   re-renders constantly and must not reflow the other columns. */
+.jobs-table {
+  table-layout: fixed;
+}
+.jobs-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Fixed layout: column widths don't reflow with content. */
+.sources-table {
+  table-layout: fixed;
+}
+.sources-table.stale tbody {
+  opacity: 0.6;
+}
+.table-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+.sources-table .col-check {
+  width: 2rem;
+}
+.sources-table .check-cell {
+  text-align: center;
+}
+.sources-table .check-cell input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--datalib-accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.sources-table tr.row-selected td {
+  background: var(--datalib-hover);
+}
+.migrate-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.8rem;
+  border: 1px solid var(--datalib-accent);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.sources-table .col-actions {
+  width: 9rem;
+}
+/* "Sync all" lives in the header row, right-aligned so it lines
+   up with the rows' Sync buttons. Undo the th's uppercase styling for
+   the button label. */
+.sources-table .th-actions {
+  text-align: right;
+}
+.sources-table .th-actions .btn {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+.src-actions {
+  text-align: right;
+}
+/* A little footprint stability for the "Sync" ↔ "Queuing…" label swap,
+   without making the buttons look padded out. */
+.src-actions .btn {
+  min-width: 3.6rem;
+}
+.sync-table th,
+.sync-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.sync-table th {
+  background: var(--datalib-hover);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--datalib-muted);
+}
+.sync-table tr:last-child td {
+  border-bottom: none;
+}
+.btn {
+  background: var(--datalib-input-bg);
+  color: var(--datalib-fg);
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.btn.chip {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+}
+.btn-primary {
+  background: var(--datalib-accent);
+  border-color: var(--datalib-accent);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) {
+  /* Re-assert the accent background: `.btn:hover:not(:disabled)` above
+     has equal specificity and would otherwise paint the generic light
+     hover background under this button's white text. */
+  background: var(--datalib-accent);
+  filter: brightness(1.08);
+}
+.btn-cancel {
+  color: #c0392b;
+}
+/* Accent-outlined sync actions ("Sync" and "Sync all" match). */
+.btn-sync {
+  color: var(--datalib-accent);
+  border-color: var(--datalib-accent);
+}
+.btn-log {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+}
+.btn-mini {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+}
+.progress-cell {
+  min-width: 14rem;
+}
+.actions-cell {
+  /* NOT display:flex — a td that leaves table-cell layout can't join
+     the row's border line (the "broken divider"). */
+  white-space: nowrap;
+}
+.actions-cell .btn + .btn {
+  margin-left: 0.4rem;
+}
+.row-failed .state-pill[data-state="failed"] {
+  font-weight: 600;
+}
+.detail-row td {
+  background: var(--datalib-code-bg);
+}
+.editor {
+  width: 100%;
+  min-height: 24rem;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  tab-size: 2;
+  padding: 0.75rem;
+  border: 1px solid var(--datalib-border);
+  border-radius: 6px;
+  background: var(--datalib-code-bg);
+  color: var(--datalib-fg);
+  resize: vertical;
+}
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+.save-status {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.75rem;
+}
+.pill {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 9999px;
+  border: 1px solid var(--datalib-border);
+}
+.pill.new {
+  color: var(--datalib-muted);
+}
+.status {
+  font-size: 0.85rem;
+}
+.status.ok {
+  color: #2e8b57;
+}
+.status.err {
+  color: #c0392b;
+}
+.status.muted {
+  color: var(--datalib-muted);
+}
+.job-error {
+  color: #c0392b;
+  font-size: 0.82rem;
+  margin-bottom: 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--datalib-muted);
+  margin-bottom: 0.35rem;
+}
+.log-body {
+  margin: 0;
+  max-height: 22rem;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--datalib-bg);
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+}
+.log-line-error {
+  color: var(--datalib-log-error);
+}
+.log-line-warn {
+  color: var(--datalib-log-warn);
+}
+.log-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--datalib-muted);
+  font-style: italic;
+}
+.state-pill {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid var(--datalib-border);
+  background: var(--datalib-input-bg);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.state-pill[data-state="running"] {
+  border-color: var(--datalib-accent);
+  color: var(--datalib-accent);
+}
+.state-pill[data-state="done"] {
+  color: #2e8b57;
+  border-color: #2e8b57;
+}
+.state-pill[data-state="failed"] {
+  color: #c0392b;
+  border-color: #c0392b;
+}
+.state-pill[data-state="canceled"] {
+  color: var(--datalib-muted);
+}
+.empty {
+  color: var(--datalib-muted);
+  font-style: italic;
+  text-align: center;
+}
+.error {
+  color: #e35d6a;
+}
+code {
+  background: var(--datalib-code-bg);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+  font-size: 0.8rem;
+}
+</style>

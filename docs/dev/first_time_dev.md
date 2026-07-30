@@ -38,7 +38,7 @@ because clang is more permissive than gcc), `.devcontainer/` ships an Ubuntu
 
 ```sh
 devcontainer up --workspace-folder .
-devcontainer exec --workspace-folder . bazelisk build //frankweiler/backend:dist -c opt
+devcontainer exec --workspace-folder . bazelisk build //datalib/backend:dist -c opt
 ```
 
 Caches (bazel output base, disk cache, qmd model cache, npm cache) live in
@@ -48,20 +48,20 @@ named volumes so rebuilds aren't cold.
 
 Two coupled projects that mirror personal data into a queryable local store:
 
-- **`frankweiler/backend/`** — Rust workspace that downloads + ingests LLM
+- **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
   chat exports and other sources (Anthropic, OpenAI, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
   doltlite DB, renders one Markdown file per conversation, builds a qmd
   search index, and serves the result over axum / Tauri.
-- **`frankweiler/ui/`** — Vue 3 UI that searches and views the mirrored
+- **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and an Open Host container.
 
 Backend row shapes are defined as hand-written Rust structs in two crates —
-**`frankweiler/backend/schema`** (the *render schema*: `grid_rows` / `edges`
-/ `markdowns`) and **`frankweiler/backend/app_schema`** (app-state tables:
+**`datalib/backend/schema`** (the *render schema*: `grid_rows` / `edges`
+/ `markdowns`) and **`datalib/backend/app_schema`** (app-state tables:
 `feedback` / `sync_jobs`). Each row struct derives its portable
 `CREATE TABLE` DDL via `#[derive(PortableTable)]` (in
-`frankweiler/backend/etl/macros`). The struct is the single source of truth —
+`datalib/backend/etl/macros`). The struct is the single source of truth —
 there is no codegen step.
 
 ```
@@ -70,7 +70,7 @@ there is no codegen step.
 ├── BUILD.bazel               :all_tests aggregator
 ├── docs/                     dev/ architecture notes · user/ guides + config_examples
 ├── tests/fixtures/           checked-in fixture JSON + ingested_tng genrule
-└── frankweiler/
+└── datalib/
     ├── backend/              Cargo workspace
     │   ├── schema/           render schema: grid_rows / edges / markdowns structs
     │   ├── app_schema/       app-state schema: feedback / sync_jobs structs
@@ -103,10 +103,10 @@ second invocation only re-executes what your changes actually touched.
 Skipping Bazel skips that cache.
 
 Runs:
-- Rust unit tests (`//frankweiler/backend/{schema,core,etl,http,tauri-backend}:*_unittests`)
+- Rust unit tests (`//datalib/backend/{schema,core,etl,http,tauri-backend}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
-- Playwright e2e suite (`//frankweiler/ui:e2e_test`) — non-hermetic by
+- Playwright e2e suite (`//datalib/ui:e2e_test`) — non-hermetic by
   design: the test shells out to host `pnpm` / `node` / Playwright browser
   cache rather than wiring `rules_js`.
 
@@ -118,7 +118,7 @@ It materializes a one-shot data root from the checked-in TNG fixtures
 so you can eyeball the grid without a real on-disk root or any credentials:
 
 ```sh
-bazelisk run //frankweiler:dev_tng
+bazelisk run //datalib:dev_tng
 ```
 
 `:dev_perseus` is the same shape, but bootstraps from the in-crate Perseus
@@ -127,44 +127,44 @@ bilingual `edges` UI.
 
 ### Launch the dev UI against your own data
 
-Full dev — backend (`frankweiler_http_bin`) **and** Vite (`pnpm dev`) at the
+Full dev — backend (`datalib_http_bin`) **and** Vite (`pnpm dev`) at the
 same time, browser opens at the Vite URL. The trailing path is the data root:
 
 ```sh
-bazelisk run //frankweiler:dev -- ~/datalib.thad
+bazelisk run //datalib:dev -- ~/datalib.thad
 ```
 
 Both Vite and the backend default to ephemeral ports (printed at startup);
 Vite's `/api/*` proxy is wired to the chosen backend port, so multiple
 concurrent runs (different agents, different worktrees) don't collide. Pin
-specific ports with `FRANKWEILER_PORT` (Vite) and `FRANKWEILER_BIND`
+specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 (backend). Ctrl-C tears both down.
 
 Data root resolution (the rendered Markdown feeds the search index, but
 `system/backend_index/db.doltlite_db` remains the source of truth):
 
-1. positional arg to `bazelisk run //frankweiler:dev` (or `:serve`)
-2. `$FRANKWEILER_ROOT`
-3. `root:` from `~/.config/frankweiler/config.yaml` (or `$FRANKWEILER_CONFIG`)
+1. positional arg to `bazelisk run //datalib:dev` (or `:serve`)
+2. `$DATALIB_ROOT`
+3. `root:` from `~/.config/datalib/config.yaml` (or `$DATALIB_CONFIG`)
 4. `~/Documents/datalib`
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows.
 
-For a backend-only launch (no Vite), use `bazelisk run //frankweiler:serve`.
-Override the listen address with `FRANKWEILER_BIND=127.0.0.1:<port>` (or set
-`FRANKWEILER_URL=...` to point the browser at a different URL than the one
+For a backend-only launch (no Vite), use `bazelisk run //datalib:serve`.
+Override the listen address with `DATALIB_BIND=127.0.0.1:<port>` (or set
+`DATALIB_URL=...` to point the browser at a different URL than the one
 being bound — useful behind a reverse proxy).
 
 ### Re-run ingestion
 
 Ingestion is a DAG of subprocess steps orchestrated by
-`//frankweiler/backend/dag:datalib_dag`, which reads the data root's
+`//datalib/backend/dag:datalib_dag_bin`, which reads the data root's
 `config.yaml` (the `steps:` format) and runs each step's `command:` as a
 subprocess. The built-in steps live in the `datalib-step` binary
-(`//frankweiler/backend/datalib_step:datalib_step`): `download
+(`//datalib/backend/datalib_step:datalib_step`): `download
 <source_type>` fetches a provider's raw dir (each provider crate under
-`frankweiler/backend/etl/providers/` also exposes a standalone
+`datalib/backend/etl/providers/` also exposes a standalone
 `*_download` binary), `render <source_type>` renders markdown + sidecars,
 and `grid_index` loads them into
 `<root>/system/backend_index/db.doltlite_db`. See
@@ -176,11 +176,11 @@ DAG design.
 
 `datalib-step qmd_index` rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
-(`frankweiler/backend/qmd_indexer/`) shells out to `npx -y @tobilu/qmd@<version>`
+(`datalib/backend/qmd_indexer/`) shells out to `npx -y @tobilu/qmd@<version>`
 with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/system/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/rendered_md/**/*.md` mask), alongside the per-stanza
 `<name>/rendered_md/` trees and `system/backend_index/db.doltlite_db`. This is what the search bar's hybrid / vector
-queries hit (see `frankweiler/backend/core/src/qmd/`).
+queries hit (see `datalib/backend/core/src/qmd/`).
 
 Design notes:
 
@@ -203,7 +203,7 @@ Design notes:
 
 Several provider crates ship a `*_live` snapshot test that hits the real
 service API through `latchkey`:
-`//frankweiler/backend/etl/providers/anthropic:anthropic_live`, plus the
+`//datalib/backend/etl/providers/anthropic:anthropic_live`, plus the
 sibling `chatgpt_live`, `github_live`, `gitlab_live`, `notion_live`, and
 `email:jmap_live` targets. Each downloads a small known fixture (e.g. one
 conversation), then asserts a curated stable view against committed
@@ -213,16 +213,16 @@ conversation), then asserts a curated stable view against committed
 shim:
 
 ```sh
-bazel build //frankweiler/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_impersonate"
-bazelisk test //frankweiler/backend/etl/providers/anthropic:anthropic_live \
+bazel build //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+bazelisk test //datalib/backend/etl/providers/anthropic:anthropic_live \
     --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
     --test_env=LATCHKEY_CURL
 ```
 
 When upstream content changes, the test will fail with a diff; accept the
 change with the sibling `.update` target (e.g. `bazel run
-//frankweiler/backend/etl/providers/anthropic:anthropic_live.update` —
+//datalib/backend/etl/providers/anthropic:anthropic_live.update` —
 see [`/AGENTS.md`](/AGENTS.md) § "Updating insta snapshots").
 
 ### Changing a row schema
@@ -231,9 +231,9 @@ Row shapes are plain Rust structs — no codegen. To add or change a column,
 edit the struct directly:
 
 - render-schema tables (`grid_rows` / `edges` / `markdowns`) in
-  `frankweiler/backend/schema/src/`,
+  `datalib/backend/schema/src/`,
 - app-state tables (`feedback` / `sync_jobs`) in
-  `frankweiler/backend/app_schema/src/`.
+  `datalib/backend/app_schema/src/`.
 
 Give each field a `#[col(sql = "…")]` portable type;
 `#[derive(PortableTable)]` produces the matching `CREATE TABLE` DDL (and
@@ -249,7 +249,7 @@ regressions hide; a week of community shake-out is cheap insurance. When
 upgrading, check the upstream release date before pinning. If a useful
 version exists but is too new, pin the previous patch and revisit next week.
 
-`MODULE.bazel`, `.bazelversion`, and `frankweiler/ui/package.json` are the
+`MODULE.bazel`, `.bazelversion`, and `datalib/ui/package.json` are the
 source of truth for the current pins; as of this writing:
 
 | Component       | Version        |

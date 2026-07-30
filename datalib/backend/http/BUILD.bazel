@@ -1,0 +1,167 @@
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files([
+    "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
+    "Cargo.toml",
+])
+
+# The embedded UI bundle, pinned to the HOST platform. The Vite build
+# always executes on the build host, but as `compile_data` it sits in
+# the TARGET configuration — so under `--config=musl-*` (or any other
+# cross-compile) rules_js would select() rollup's native binding for
+# the *target* platform (e.g. `@rollup/rollup-linux-*-musl`) while the
+# Vite action still executes on the host, dying with MODULE_NOT_FOUND.
+# The bundle is platform-independent bytes, so transitioning it back
+# to the host platform is safe, and is the standard rules_js
+# cross-compilation fix.
+platform_transition_filegroup(
+    name = "ui_dist_host",
+    srcs = ["//datalib/ui:dist"],
+    target_platform = "@platforms//host",
+)
+
+rust_library(
+    name = "datalib_http",
+    srcs = [
+        "src/boot.rs",
+        "src/embed.rs",
+        "src/lib.rs",
+        "src/worker.rs",
+    ],
+    crate_name = "datalib_http",
+    edition = "2021",
+    # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read
+    # Cargo.toml) — /api/health and the feedback cards report it, and
+    # since the Tauri shell ships this bazel-built binary, it's also the
+    # desktop app's version. Must match [workspace.package].version in
+    # datalib/backend/Cargo.toml; the
+    # //datalib/backend:version_consistency_test asserts that.
+    version = "0.25.0",
+    # The rust-embed proc macro reads `$DATALIB_UI_DIST` (env-var
+    # interpolation via the `interpolate-folder-path` feature). We
+    # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
+    # the host-platform-pinned wrapper above); the `compile_data`
+    # entry makes those files visible to the rustc invocation.
+    # `$(execpath)` expands to the execroot-relative path of the
+    # directory output — usable directly from rustc's CWD (execroot).
+    # The guide .md files are `include_str!`'d by the `/agent/cards.md`
+    # and `/agent/config.md` handlers.
+    compile_data = [
+        ":ui_dist_host",
+        "src/agent_cards_guide.md",
+        "src/agent_config_guide.md",
+    ],
+    rustc_env = {
+        "DATALIB_UI_DIST": "$(execpath :ui_dist_host)",
+    },
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/ingest_config:datalib_ingest_config",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:mime_guess",
+        "@datalib_crates//:rust-embed",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:serde_yaml",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower-http",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "http_unittests",
+    size = "small",
+    crate = ":datalib_http",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# End-to-end test for POST /api/feedback against a doltlite file in a
+# temp dir. No subprocess, no port — runs anywhere.
+rust_test(
+    name = "feedback_endpoint_test",
+    srcs = ["tests/feedback_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/ingest_config:datalib_ingest_config",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+rust_test(
+    name = "lib_endpoint_test",
+    srcs = ["tests/lib_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/ingest_config:datalib_ingest_config",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+rust_test(
+    name = "card_endpoint_test",
+    srcs = ["tests/card_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/ingest_config:datalib_ingest_config",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+rust_binary(
+    name = "datalib_http_bin",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = [
+        "//datalib:__subpackages__",
+        "//tests:__subpackages__",
+    ],
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/ingest_config:datalib_ingest_config",
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:webbrowser",
+    ],
+)

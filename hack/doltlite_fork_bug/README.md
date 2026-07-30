@@ -23,7 +23,7 @@ until the child exits.
   persistent prepared statement, counting `SQLITE_BUSY` returns.
 - **Forker thread**: in a tight loop, `posix_spawn`s `/bin/sleep 0.05`.
   This is exactly the syscall shape Rust's `std::process::Command::spawn()`
-  uses on macOS — and what frankweiler-sync's `latchkey_curl` HTTP
+  uses on macOS — and what datalib-sync's `latchkey_curl` HTTP
   transport does on every HTTPS call.
 
 `run.sh` downloads both amalgamations fresh from their canonical

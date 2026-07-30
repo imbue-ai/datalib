@@ -17,15 +17,15 @@
 # directly against the workspace. Either always re-resolves; the
 # metadata variant is faster because it doesn't touch the registry.
 #
-# Pairs with //frankweiler/backend:cargo_lock_versions_test which
+# Pairs with //datalib/backend:cargo_lock_versions_test which
 # refuses the next `bazel test //...` if the lockfile drifts.
 
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${repo_root}/frankweiler/backend"
+cd "${repo_root}/datalib/backend"
 
-echo "tools/repin_cargo.sh: refreshing frankweiler/backend/Cargo.lock"
+echo "tools/repin_cargo.sh: refreshing datalib/backend/Cargo.lock"
 cargo metadata --format-version=1 --offline >/dev/null 2>&1 \
     || cargo metadata --format-version=1 >/dev/null
 
@@ -33,9 +33,9 @@ cargo metadata --format-version=1 --offline >/dev/null 2>&1 \
 # version. Re-running the test would be cleaner but adds a bazel
 # dependency; this 5-line shell check is enough to catch a no-op repin.
 canonical="$(grep -E '^version = "[^"]+"$' Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
-got="$(awk '/^name = "frankweiler-core"/ {f=1; next} f && /^version = "/{match($0,/"[^"]+"/); print substr($0,RSTART+1,RLENGTH-2); exit}' Cargo.lock)"
+got="$(awk '/^name = "datalib-core"/ {f=1; next} f && /^version = "/{match($0,/"[^"]+"/); print substr($0,RSTART+1,RLENGTH-2); exit}' Cargo.lock)"
 if [[ "${canonical}" != "${got}" ]]; then
-    echo "tools/repin_cargo.sh: ERROR — Cargo.lock still pins frankweiler-core at ${got} after refresh, expected ${canonical}." >&2
+    echo "tools/repin_cargo.sh: ERROR — Cargo.lock still pins datalib-core at ${got} after refresh, expected ${canonical}." >&2
     echo "If you just bumped [workspace.package].version, you may need to remove Cargo.lock and rerun this script." >&2
     exit 1
 fi

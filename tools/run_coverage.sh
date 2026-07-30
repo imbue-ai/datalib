@@ -15,11 +15,11 @@
 #   tools/run_coverage.sh \
 #     //tests/fixtures:ingested_tng_test \
 #     -- \
-#     //frankweiler/backend/dag:datalib_dag \
-#     //frankweiler/backend/datalib_step:datalib_step \
-#     //frankweiler/backend/signal-backup:signal_make_fixture
+#     //datalib/backend/dag:datalib_dag_bin \
+#     //datalib/backend/datalib_step:datalib_step \
+#     //datalib/backend/signal-backup:signal_make_fixture
 #
-# Output: /tmp/frankweiler_coverage.lcov (override with $LCOV_OUT).
+# Output: /tmp/datalib_coverage.lcov (override with $LCOV_OUT).
 set -euo pipefail
 
 # Split args on the literal `--`.
@@ -53,8 +53,8 @@ LLVM_COV="$(xcrun --find llvm-cov)"
 export LLVM_PROFDATA LLVM_COV
 
 # Default to instrumenting only the backend; override with $INSTRUMENT.
-INSTRUMENT="${INSTRUMENT:-^//frankweiler/backend[/:]}"
-LCOV_OUT="${LCOV_OUT:-/tmp/frankweiler_coverage.lcov}"
+INSTRUMENT="${INSTRUMENT:-^//datalib/backend[/:]}"
+LCOV_OUT="${LCOV_OUT:-/tmp/datalib_coverage.lcov}"
 
 echo "==> bazelisk coverage (filter=$INSTRUMENT)" >&2
 bazelisk coverage \
@@ -101,7 +101,7 @@ for label in "${TARGETS[@]}"; do
 done
 
 # Merge per-test profdatas into one.
-MERGED="$(mktemp -t frankweiler_merged.profdata.XXXXXX)"
+MERGED="$(mktemp -t datalib_merged.profdata.XXXXXX)"
 trap 'rm -f "$MERGED"' EXIT
 echo "==> llvm-profdata merge (${#PROFDATAS[@]} profile(s))" >&2
 "$LLVM_PROFDATA" merge -sparse -o "$MERGED" "${PROFDATAS[@]}"

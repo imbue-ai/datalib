@@ -58,13 +58,13 @@ drop them).
 
 | variable | meaning |
 | --- | --- |
-| `FRANKWEILER_DAG_STEP` | this step's config `id` |
-| `FRANKWEILER_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
-| `FRANKWEILER_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root — wildcards in `inputs:` are already expanded against producer outputs |
-| `FRANKWEILER_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty on a first run |
-| `FRANKWEILER_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `FRANKWEILER_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-fetch — honor it if you fetch from an origin, ignore otherwise |
-| `FRANKWEILER_DAG_REFETCH_BLOBS` | `1` when the user asked for attachments/blobs to re-fetch |
+| `DATALIB_DAG_STEP` | this step's config `id` |
+| `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
+| `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root — wildcards in `inputs:` are already expanded against producer outputs |
+| `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty on a first run |
+| `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
+| `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-fetch — honor it if you fetch from an origin, ignore otherwise |
+| `DATALIB_DAG_REFETCH_BLOBS` | `1` when the user asked for attachments/blobs to re-fetch |
 
 plus anything in the entry's `env:` map (which wins over the run-wide
 values on collision).
@@ -186,8 +186,8 @@ A python step using inputs + progress + outcome:
 #!/usr/bin/env python3
 import json, os, sys
 
-inputs = [p for p in os.environ["FRANKWEILER_DAG_INPUTS"].split("\n") if p]
-changed = set(os.environ["FRANKWEILER_DAG_CHANGED_INPUTS"].split("\n"))
+inputs = [p for p in os.environ["DATALIB_DAG_INPUTS"].split("\n") if p]
+changed = set(os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n"))
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
 params = json.loads(args.get("--params", "{}"))
 outputs = json.loads(args["--outputs"])
@@ -214,7 +214,7 @@ provider's **phase-specific** config — the download step carries the
 provider's download config (`common:` envelope, `sync:` block, …),
 the render step only the render knobs (nothing for most providers;
 beeper/signal `period`, perseus `alignment_pairs`, email
-`outlink_format`/`only_render_labels`) — honors `FRANKWEILER_DAG_NOW`
+`outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`
 and the reset env vars, checkpoints on SIGINT, and emits versions
 where it has them (the grid index claims its dolt commit hash). Use
 it as the reference implementation.

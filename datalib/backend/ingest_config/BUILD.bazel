@@ -1,0 +1,79 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# The orchestrator's config: the app `Config` envelope + the `SourceConfig`
+# discriminated union over `type:`. Relocated out of `datalib_core::config`
+# so it sits above the providers (and `http` links it without `core`'s db/repo
+# code). Issue #41: each `SourceConfig` arm is a newtype over a provider
+# `*-config` crate (config defined once); the shared `SourceCommon`/`Defaults`/
+# `ExtractParams` come from `source_common`.
+rust_library(
+    name = "datalib_ingest_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_ingest_config",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
+        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
+        "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
+        "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
+        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
+        "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
+        "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
+        "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
+        "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
+        "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
+        "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
+        "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
+        "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
+        "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
+        "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
+        "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
+        "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_yaml",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "ingest_config_unittests",
+    size = "small",
+    crate = ":datalib_ingest_config",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# Validates the checked-in `docs/user/config_examples/*.yaml` (DAG steps
+# format): each file must load + graph-build like the runner would, every
+# `datalib-step download <type>` step's params must round-trip into
+# `SourceConfig`, and render params must match the provider's
+# `<P>RenderConfig` — so the docs can't drift from the real schemas.
+rust_test(
+    name = "config_examples_test",
+    srcs = ["tests/config_examples.rs"],
+    data = [
+        "//docs/user/config_examples:all_sources.yaml",
+        "//docs/user/config_examples:claude_only.yaml",
+        "//docs/user/config_examples:sample_config.yaml",
+    ],
+    edition = "2021",
+    deps = [
+        ":datalib_ingest_config",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
+        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
+        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
+        "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
+        "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_yaml",
+    ],
+)

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Datalib",
+  "version": "0.10.0",
+  "identifier": "com.imbue.datalib",
+  "build": {
+    "beforeBuildCommand": "bazelisk build //datalib/backend/http:datalib_http_bin //datalib/backend/dag:datalib_dag_bin //datalib/backend/datalib_step:datalib_step //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate && d=\"$(bazelisk info workspace)/datalib/tauri/binaries\" && b=\"$(bazelisk info bazel-bin)\" && mkdir -p \"$d\" && cp -f \"$b/datalib/backend/http/datalib_http_bin\" \"$d/datalib-http\" && cp -f \"$b/datalib/backend/dag/datalib_dag_bin\" \"$d/datalib-dag\" && cp -f \"$b/datalib/backend/datalib_step/datalib_step\" \"$d/datalib-step\" && cp -f \"$b/datalib/backend/etl/latchkey_curl_dispatch\" \"$d/latchkey-curl-dispatch\" && cp -f \"$b/datalib/backend/etl/latchkey_curl_impersonate\" \"$d/latchkey-curl-impersonate\" && chmod u+w \"$d/datalib-http\" \"$d/datalib-dag\" \"$d/datalib-step\" \"$d/latchkey-curl-dispatch\" \"$d/latchkey-curl-impersonate\" && { [ -z \"${APPLE_SIGNING_IDENTITY:-}\" ] || codesign --force --options runtime --timestamp --sign \"$APPLE_SIGNING_IDENTITY\" \"$d/datalib-http\" \"$d/datalib-dag\" \"$d/datalib-step\" \"$d/latchkey-curl-dispatch\" \"$d/latchkey-curl-impersonate\"; } && bash \"$(bazelisk info workspace)/datalib/tauri/stage-runtime.sh\"",
+    "frontendDist": "./dummy-dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "resources": [
+      "binaries/datalib-http",
+      "binaries/datalib-dag",
+      "binaries/datalib-step",
+      "binaries/latchkey-curl-dispatch",
+      "binaries/latchkey-curl-impersonate",
+      "binaries/latchkey",
+      "runtime"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "datalib-etl-contact-common"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_contact_common"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = ".." }
+datalib-schema = { path = "../../schema" }
+datalib-index-lib = { path = "../../index_lib" }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+tracing = "0.1"

@@ -1,0 +1,37 @@
+[package]
+name = "datalib-dag"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_dag"
+path = "src/lib.rs"
+
+[[bin]]
+name = "datalib-dag"
+path = "src/bin/datalib_dag.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+# Shell-style splitting of config `command:` strings; already pinned
+# transitively.
+shlex = "1"
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+# Workspace tokio lacks `process`/`sync`/`time`/`fs`; features are
+# additive so we add what the scheduler + subprocess runner need.
+tokio = { workspace = true, features = ["process", "sync", "time", "fs", "io-util"] }
+# Same pinned spec as datalib-etl: default content hash for
+# artifact versions when a step doesn't report its own.
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+walkdir = { workspace = true }
+# Signal forwarding to step subprocesses (kill(2)); already pinned
+# transitively.
+libc = "0.2"
+datalib-time = { path = "../time" }
+
+[dev-dependencies]
+tempfile = "3"

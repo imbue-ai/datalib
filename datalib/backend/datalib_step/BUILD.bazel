@@ -1,0 +1,79 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+# `datalib-step` — the step-type host binary for the DAG runner
+# (//datalib/backend/dag:datalib_dag_bin). One subcommand per step
+# type: download / render / grid_index / qmd_index, each honoring the DAG step
+# contract (NDJSON events on stdout, final outcome line).
+#
+# Bazel-only (like sync): it links datalib_ingest_config and the
+# provider crates, which have no cargo counterpart.
+rust_binary(
+    name = "datalib_step",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_step",
+    crate_root = "src/main.rs",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/anthropic:datalib_etl_anthropic",
+        "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
+        "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
+        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
+        "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
+        "//datalib/backend/etl/providers/chatgpt:datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
+        "//datalib/backend/etl/providers/contacts:datalib_etl_contacts",
+        "//datalib/backend/etl/providers/email:datalib_etl_email",
+        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
+        "//datalib/backend/etl/providers/fsindex:datalib_etl_fsindex",
+        "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
+        "//datalib/backend/etl/providers/github:datalib_etl_github",
+        "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
+        "//datalib/backend/etl/providers/gitlab:datalib_etl_gitlab",
+        "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
+        "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",
+        "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
+        "//datalib/backend/etl/providers/linkedin:datalib_etl_linkedin",
+        "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
+        "//datalib/backend/etl/providers/notion:datalib_etl_notion",
+        "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
+        "//datalib/backend/etl/providers/perseus:datalib_etl_perseus",
+        "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
+        "//datalib/backend/etl/providers/signal:datalib_etl_signal",
+        "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
+        "//datalib/backend/etl/providers/slack:datalib_etl_slack",
+        "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
+        "//datalib/backend/etl/providers/sms_backup_restore:datalib_etl_sms_backup_restore",
+        "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
+        "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
+        "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
+        "//datalib/backend/etl/providers/yolink:datalib_etl_yolink",
+        "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "datalib_step_unittests",
+    size = "small",
+    crate = ":datalib_step",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)

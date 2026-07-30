@@ -14,14 +14,14 @@ exports_files([
 # and `default_models_dir()` all agree on `~/.cache/qmd/models` (the
 # upstream qmd default). See check_qmd_model_cache_path.sh for the
 # full rationale. Pairs with the rust-side unit test
-# //frankweiler/backend/qmd_indexer:qmd_indexer_unittests.
+# //datalib/backend/qmd_indexer:qmd_indexer_unittests.
 sh_test(
     name = "qmd_model_cache_path_test",
     size = "small",
     srcs = ["check_qmd_model_cache_path.sh"],
     data = [
         "//:.bazelrc",
-        "//frankweiler/backend/core:src/qmd/mod.rs",
+        "//datalib/backend/core:src/qmd/mod.rs",
         "//third-party/qmd:package.json",
         "//third-party/qmd:src/llm.ts",
     ],
@@ -32,15 +32,15 @@ sh_test(
 # `DEFAULT_QMD_VERSION` in core/src/qmd/mod.rs (the ONE Rust constant;
 # runner/daemon read it directly and qmd_indexer re-exports it).
 # Catches the case where the Dockerfile bakes one qmd version into the
-# image but frankweiler-sync runtime fetches a different one via
+# image but datalib-sync runtime fetches a different one via
 # `npx -y @tobilu/qmd@<v>` — leaving the baked model layer unused.
 sh_test(
     name = "qmd_version_pins_test",
     size = "small",
     srcs = ["check_qmd_version_pins.sh"],
     data = [
-        "//frankweiler/backend/core:src/qmd/mod.rs",
-        "//frankweiler/docker:Dockerfile",
+        "//datalib/backend/core:src/qmd/mod.rs",
+        "//datalib/docker:Dockerfile",
         "//tests/fixtures:BUILD.bazel",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],

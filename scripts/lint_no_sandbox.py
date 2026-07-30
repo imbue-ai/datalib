@@ -42,30 +42,27 @@ from pathlib import Path
 # unsandboxed. New additions require updating this dict AND landing
 # the BUILD change in the same commit.
 ALLOWED_NO_SANDBOX: dict[str, str] = {
-    # Live API tests under `frankweiler/backend/etl/providers/*` —
+    # Live API tests under `datalib/backend/etl/providers/*` —
     # tagged `manual`, never auto-run via `bazel test //...`. They
     # shell out to `latchkey`, which reads tokens from the host's
     # keychain / Secret Service — fundamentally non-hermetic.
-    "frankweiler/backend/etl/providers/anthropic:anthropic_live": (
+    "datalib/backend/etl/providers/anthropic:anthropic_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "frankweiler/backend/etl/providers/chatgpt:chatgpt_live": (
+    "datalib/backend/etl/providers/chatgpt:chatgpt_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "frankweiler/backend/etl/providers/github:github_live": (
+    "datalib/backend/etl/providers/github:github_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "frankweiler/backend/etl/providers/email:jmap_live": (
+    "datalib/backend/etl/providers/email:jmap_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "frankweiler/backend/etl/providers/gitlab:gitlab_live": (
+    "datalib/backend/etl/providers/gitlab:gitlab_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "frankweiler/backend/etl/providers/notion:notion_live": (
+    "datalib/backend/etl/providers/notion:notion_live": (
         "manual live test, latchkey needs host keychain"
-    ),
-    "frankweiler/backend/sync:manual_e2e_live_sync_golden": (
-        "manual end-to-end test, latchkey needs host keychain"
     ),
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
@@ -73,7 +70,7 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "//:precommit_test": (
         "reads source tree (.venv, node_modules, target) deliberately"
     ),
-    "frankweiler/ui:e2e_test": (
+    "datalib/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
 }

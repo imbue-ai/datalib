@@ -10,7 +10,7 @@ Rust unit + integration tests, the cross-language goldens, `//:precommit_test`
 (cargo fmt / clippy / ruff / pyright / vue-tsc), and the Playwright e2e suite,
 the same way CI does. Bazel's action cache makes re-runs cheap, so for a
 tight inner loop narrow the *bazel* invocation to what you're touching
-(e.g. `bazelisk test //frankweiler/backend/etl/...`). Bazel is the only
+(e.g. `bazelisk test //datalib/backend/etl/...`). Bazel is the only
 supported build/test driver — don't shell out to `cargo` / `pnpm`, which
 bypass (and never warm) the cache and can disagree with CI.
 
@@ -26,8 +26,8 @@ sibling `.update` target (via the `insta_update` macro in
 [`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`:
 
 ```bash
-bazel run //frankweiler/backend/core:fixture_db_snapshot_test.update
-bazel run //frankweiler/backend/etl/providers/slack:slack_translate.update
+bazel run //datalib/backend/core:fixture_db_snapshot_test.update
+bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 ```
 
 These land the new snapshots in the source tree where `git status` shows them.
@@ -37,8 +37,8 @@ Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
 
 ## Manual e2e live-sync golden — retired
 
-The `//frankweiler/backend/sync:manual_e2e_live_sync_golden` test was
-retired together with the `frankweiler-sync` binary when the pipeline moved
+The `//datalib/backend/sync:manual_e2e_live_sync_golden` test was
+retired together with the `datalib-sync` binary when the pipeline moved
 to the DAG runner (`datalib-dag` — see
 [`/docs/dev/pipeline_dag_architecture.md`](/docs/dev/pipeline_dag_architecture.md)).
 Its config, file-based source data, and golden snapshots still live in the
@@ -49,7 +49,7 @@ runs against it.
 ### Caveat: old copies are still in this repo's history
 
 This data used to live in-repo (`configs/thad_tiny.yaml` +
-`frankweiler/backend/sync/tests/snapshots/`). It was moved out and deleted from
+`datalib/backend/sync/tests/snapshots/`). It was moved out and deleted from
 the working tree, but it's still recoverable from past commits. Before this
 repo is ever made public, expunge those paths from history with `git
 filter-repo` — see the note at the top of [`/TODO.md`](/TODO.md).

@@ -16,13 +16,13 @@ Usage from a provider's `BUILD.bazel`:
         test = ":chatgpt_render",
     )
 
-Then `bazel run //frankweiler/backend/etl/providers/chatgpt:chatgpt_render.update`
+Then `bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update`
 re-runs the test with `INSTA_UPDATE=always` and `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
 which is the standard insta-with-bazel idiom: insta resolves snapshot
 paths against the user's actual workspace, not the bazel sandbox.
 
 When the underlying `rust_test` uses additional `data` deps + `env` vars
-(e.g. //frankweiler/backend/etl/providers/anthropic:anthropic_render,
+(e.g. //datalib/backend/etl/providers/anthropic:anthropic_render,
 which reaches its fixture tree through `ANTHROPIC_FIXTURE_DIR`), pass
 them via `extra_data` + `extra_env` so the `.update` target picks them
 up too — `rust_test`'s env doesn't propagate to a sibling sh_binary.

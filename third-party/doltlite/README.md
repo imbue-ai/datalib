@@ -29,8 +29,8 @@ runtime `brew install`, no system libsqlite3 dependency.
        │  crate.annotation(crate="libsqlite3-sys",
        │                   deps=[":sqlite3"])
        ▼
-   @frankweiler_crates//:libsqlite3-sys
-   @frankweiler_crates//:sqlx-sqlite
+   @datalib_crates//:libsqlite3-sys
+   @datalib_crates//:sqlx-sqlite
    …all the way up to the binaries.
 ```
 

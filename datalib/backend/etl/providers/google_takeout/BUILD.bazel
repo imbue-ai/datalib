@@ -1,0 +1,52 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed fictional Takeout tree used by the integration tests.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/Takeout/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_google_takeout",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_google_takeout",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "google_takeout_unittests",
+    size = "small",
+    crate = ":datalib_etl_google_takeout",
+    edition = "2021",
+    data = [":tng_fixture"],
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)

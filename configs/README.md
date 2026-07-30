@@ -10,10 +10,10 @@ Build the DAG runner and the step binary, symlink the step binary
 under its `datalib-step` name, and point the runner at a config:
 
 ```sh
-bazelisk build //frankweiler/backend/dag:datalib_dag \
-               //frankweiler/backend/datalib_step:datalib_step
-bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/frankweiler/backend/datalib_step/datalib_step "$bindir"/datalib-step
-bazel-bin/frankweiler/backend/dag/datalib_dag configs/dag_example.yaml \
+bazelisk build //datalib/backend/dag:datalib_dag_bin \
+               //datalib/backend/datalib_step:datalib_step
+bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/datalib/backend/datalib_step/datalib_step "$bindir"/datalib-step
+bazel-bin/datalib/backend/dag/datalib_dag_bin configs/dag_example.yaml \
     --binary-dir "$bindir"
 ```
 
