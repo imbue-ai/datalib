@@ -422,12 +422,30 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
     last_seen_at TEXT NOT NULL
 )";
 
+/// The config subset that produced each scope's current cursor. Read at
+/// the top of a download to spot config changes the cursor would
+/// otherwise silently swallow (a widened `since`, a relaxed blob cap);
+/// written on the success path once the run has actually satisfied it.
+/// See [`crate::scope_config`] for the policy and for what belongs in
+/// the blob — deliberately *not* everything `sync_runs.config` records.
+///
+/// Separate table rather than a column on `sync_scope_state` because
+/// the two aren't 1:1: a provider can have config worth remembering
+/// without a `last_seen_at` cursor to hang it on (slack keeps its
+/// per-channel watermark in `messages`, not here), and the cursor
+/// column is `NOT NULL`.
+pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_config (
+    scope TEXT PRIMARY KEY,
+    config TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)";
+
 /// DDL every provider gets for free. Concatenated after the
 /// provider-specific table list inside [`open`]. The legacy
 /// `blob_refs` + `blob_refs_bookkeeping` tables used to live here —
 /// they were retired once every provider moved to per-provider CAS
 /// edge tables (`CasEdgeRow`); see git history for the old shape.
-pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL];
+pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, SYNC_SCOPE_CONFIG_DDL];
 
 // ─────────────────────────────────────────────────────────────────────
 // Path helper

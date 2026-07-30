@@ -466,6 +466,27 @@ impl RawDb {
         Ok(out)
     }
 
+    /// Oldest stored `ts` per channel — the floor of what we've already
+    /// mirrored. Only read when a `since` widening schedules a backfill:
+    /// the newly-in-scope window is `[since, oldest_ts]`, so this is its
+    /// upper bound. Mirror of [`Self::latest_ts_by_channel`].
+    pub async fn oldest_ts_by_channel(&self) -> Result<HashMap<String, String>> {
+        let rows =
+            sqlx::query("SELECT channel_id, MIN(ts) AS min_ts FROM messages GROUP BY channel_id")
+                .fetch_all(&self.pool)
+                .await
+                .context("select oldest_ts_by_channel")?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for r in rows {
+            let cid: String = r.try_get("channel_id").unwrap_or_default();
+            let ts: Option<String> = r.try_get("min_ts").ok();
+            if let Some(ts) = ts {
+                out.insert(cid, ts);
+            }
+        }
+        Ok(out)
+    }
+
     // ── replies_pages ───────────────────────────────────────────────
 
     pub async fn upsert_replies_page(
