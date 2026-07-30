@@ -126,8 +126,11 @@ impl DataProcessor for SlackRender {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
-            .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
+        let cursor = frankweiler_etl::render_cursor::read_for_params(
+            &cursor_path,
+            &frankweiler_etl::render_cursor::no_params(),
+        )
+        .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
         let parsed = parse(
             &self.raw_path,
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),

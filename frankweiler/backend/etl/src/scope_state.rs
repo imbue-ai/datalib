@@ -13,7 +13,11 @@
 //! This module is the single source of truth:
 //!
 //! - [`since_for_scope`] is the canonical policy. State, if present,
-//!   *is* the cursor; the refresh window is only a cold-start floor.
+//!   *is* the cursor — with one exception: a `refresh_window_days` that
+//!   has *widened* since the run that produced the cursor reaches back
+//!   past it, because otherwise the cursor would silently swallow the
+//!   config change. See [`crate::scope_config`] for the general shape
+//!   of that problem and [`REFRESH_WINDOW_KEY`] for the recorded key.
 //! - [`snapshot`] reads every `(scope, last_seen_at)` row for diffing.
 //! - [`CursorMove`] / [`diff`] turn a before/after snapshot pair into
 //!   the per-scope advancement stamped into `sync_runs.summary.cursors`
@@ -26,38 +30,28 @@ use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-/// Canonical `since` policy for an incremental-sync scope. Returns
-/// what to pass as `updated_after` / `updated:>=` on the next listing
-/// call — `None` means "no `since` filter; do a full scope walk."
+/// Canonical `since` policy for an incremental-sync scope. Returns what
+/// to pass as `updated_after` / `updated:>=` on the next listing call —
+/// `None` means "no `since` filter; do a full scope walk."
 ///
 /// Policy:
-/// 1. `full == true`  → `None` (caller forced a full rescan).
-/// 2. `state[scope] = Some(s)` → `Some(s)` (last successful sync's
-///    timestamp is the authoritative cursor; refresh_window_days is
-///    only a cold-start floor).
-/// 3. otherwise, if `refresh_window_days > 0` → `Some(now - window)`
-///    formatted as RFC 3339 (seconds precision, `Z` suffix).
+/// 1. `full == true` → `None` (caller forced a full rescan).
+/// 2. `state[scope] = Some(s)` → `Some(s)`; the last successful sync's
+///    timestamp is the authoritative cursor, *unless* `prior` shows the
+///    window has widened (below).
+/// 3. otherwise, if `refresh_window_days > 0` → `Some(now - window)`.
 /// 4. otherwise → `None` (no state, no window, no filter).
 ///
-/// Returns full RFC 3339 (`2026-06-07T18:00:00Z`). Callers that need
-/// a different form (github's `updated:>=YYYY-MM-DD`) should reformat
-/// locally — the API surfaces both providers use accept either.
-pub fn since_for_scope(
-    state: &HashMap<String, String>,
-    scope: &str,
-    refresh_window_days: u32,
-    full: bool,
-) -> Option<String> {
-    since_for_scope_with_prior(state, scope, refresh_window_days, full, None)
-}
-
-/// [`since_for_scope`] plus the config-change escape hatch.
+/// Returns full RFC 3339 (`2026-06-07T18:00:00Z`). Callers needing
+/// another form (github's `updated:>=YYYY-MM-DD`) reformat locally.
 ///
-/// The policy above is correct for resumption but wrong for a *config
+/// # The widened-window exception
+///
+/// Rule 2 alone is correct for resumption but wrong for a *config
 /// change*: because state unconditionally wins, widening
-/// `refresh_window_days` on an already-synced store does nothing at all.
-/// The stored cursor answers "where do I start?" by itself and the
-/// window never gets a second vote — see [`crate::scope_config`].
+/// `refresh_window_days` on an already-synced store would do nothing at
+/// all. The cursor answers "where do I start?" by itself and the window
+/// never gets a second vote — see [`crate::scope_config`].
 ///
 /// `prior` is the config blob recorded alongside this scope's cursor by
 /// the last run that satisfied it. When it shows a *narrower* window
@@ -74,7 +68,7 @@ pub fn since_for_scope(
 /// An absent or key-less blob is likewise a no-op — every store predating
 /// `sync_scope_config` has none, and reading that as "re-walk" would
 /// stampede every installed mirror on upgrade.
-pub fn since_for_scope_with_prior(
+pub fn since_for_scope(
     state: &HashMap<String, String>,
     scope: &str,
     refresh_window_days: u32,
@@ -118,9 +112,19 @@ pub fn since_for_scope_with_prior(
 }
 
 /// Key under which providers record `refresh_window_days` in their
-/// [`crate::scope_config`] blob. Shared so github and gitlab agree
-/// without either owning the string.
+/// [`crate::scope_config`] blob. Shared so writer and reader can't
+/// drift — a typo in either half would degrade silently to "no
+/// information, plan no work", the exact failure this machinery exists
+/// to eliminate.
 pub const REFRESH_WINDOW_KEY: &str = "refresh_window_days";
+
+/// The [`crate::scope_config`] blob for a discovery-scoped provider
+/// whose only scope-affecting knob is the refresh window. Written by
+/// github and gitlab; paired with the `prior` argument to
+/// [`since_for_scope`], which reads the same key.
+pub fn refresh_window_blob(refresh_window_days: u32) -> serde_json::Value {
+    serde_json::json!({ REFRESH_WINDOW_KEY: refresh_window_days })
+}
 
 /// Snapshot every `(scope, last_seen_at)` row from `sync_scope_state`.
 /// Used by [`DownloadRun`] to capture before/after cursor positions for
@@ -186,14 +190,14 @@ mod tests {
     #[test]
     fn full_returns_none_regardless_of_state_or_window() {
         let s = state_with(&[("created_by_me", "2026-01-01T00:00:00Z")]);
-        assert_eq!(since_for_scope(&s, "created_by_me", 7, true), None);
+        assert_eq!(since_for_scope(&s, "created_by_me", 7, true, None), None);
     }
 
     #[test]
     fn state_present_takes_priority_over_window() {
         let s = state_with(&[("created_by_me", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "created_by_me", 7, false).as_deref(),
+            since_for_scope(&s, "created_by_me", 7, false, None).as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -201,13 +205,14 @@ mod tests {
     #[test]
     fn no_state_no_window_returns_none() {
         let s = state_with(&[]);
-        assert_eq!(since_for_scope(&s, "created_by_me", 0, false), None);
+        assert_eq!(since_for_scope(&s, "created_by_me", 0, false, None), None);
     }
 
     #[test]
     fn no_state_with_window_uses_window_floor() {
         let s = state_with(&[]);
-        let got = since_for_scope(&s, "created_by_me", 7, false).expect("expected window floor");
+        let got =
+            since_for_scope(&s, "created_by_me", 7, false, None).expect("expected window floor");
         let parsed = chrono::DateTime::parse_from_rfc3339(&got).expect("rfc3339");
         let ago = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
         assert!(
@@ -235,7 +240,7 @@ mod tests {
         // Every store predating `sync_scope_config`. Must not re-walk.
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope_with_prior(&s, "a", 365, false, None).as_deref(),
+            since_for_scope(&s, "a", 365, false, None).as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -244,7 +249,7 @@ mod tests {
     fn unchanged_window_keeps_the_cursor() {
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope_with_prior(&s, "a", 30, false, Some(&prior(30))).as_deref(),
+            since_for_scope(&s, "a", 30, false, Some(&prior(30))).as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -254,7 +259,7 @@ mod tests {
         // Store is already a superset; nothing to fetch.
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope_with_prior(&s, "a", 7, false, Some(&prior(30))).as_deref(),
+            since_for_scope(&s, "a", 7, false, Some(&prior(30))).as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -269,7 +274,7 @@ mod tests {
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
                 .as_str(),
         )]);
-        let got = since_for_scope_with_prior(&s, "a", 365, false, Some(&prior(30)))
+        let got = since_for_scope(&s, "a", 365, false, Some(&prior(30)))
             .expect("expected a widened floor");
         assert!(
             (364..=366).contains(&days_back(&got)),
@@ -283,7 +288,7 @@ mod tests {
         // reason to give up its precision and re-walk what it covers.
         let s = state_with(&[("a", "2020-01-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope_with_prior(&s, "a", 365, false, Some(&prior(30))).as_deref(),
+            since_for_scope(&s, "a", 365, false, Some(&prior(30))).as_deref(),
             Some("2020-01-01T00:00:00Z")
         );
     }
@@ -291,10 +296,7 @@ mod tests {
     #[test]
     fn window_widened_to_unbounded_drops_the_filter() {
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
-        assert_eq!(
-            since_for_scope_with_prior(&s, "a", 0, false, Some(&prior(30))),
-            None
-        );
+        assert_eq!(since_for_scope(&s, "a", 0, false, Some(&prior(30))), None);
     }
 
     #[test]
@@ -303,11 +305,11 @@ mod tests {
         // narrowing, so the cursor stands.
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope_with_prior(&s, "a", 30, false, Some(&prior(0))).as_deref(),
+            since_for_scope(&s, "a", 30, false, Some(&prior(0))).as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
         assert_eq!(
-            since_for_scope_with_prior(&s, "a", 0, false, Some(&prior(0))).as_deref(),
+            since_for_scope(&s, "a", 0, false, Some(&prior(0))).as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -315,10 +317,7 @@ mod tests {
     #[test]
     fn full_still_wins_over_a_widened_window() {
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
-        assert_eq!(
-            since_for_scope_with_prior(&s, "a", 365, true, Some(&prior(30))),
-            None
-        );
+        assert_eq!(since_for_scope(&s, "a", 365, true, Some(&prior(30))), None);
     }
 
     #[test]

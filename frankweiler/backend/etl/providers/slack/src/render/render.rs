@@ -42,13 +42,6 @@ use crate::download::schema_raw::slack_reaction_uuid;
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::{slack_link, Message, ParsedSlack};
 
-/// This provider has no render-specific knobs (its render config is the
-/// bare envelope), so the cursor's params record is a stable empty
-/// object and never invalidates.
-fn no_render_params() -> serde_json::Value {
-    serde_json::json!({})
-}
-
 /// Bump when the on-disk render layout changes in a way that must
 /// invalidate stale docs. v3: render via chat-common.
 pub const RENDER_VERSION: u32 = 3;
@@ -129,7 +122,7 @@ pub fn render_all(
             &cursor_path,
             head,
             parsed.scan.scan_elapsed,
-            &no_render_params(),
+            &render_cursor::no_params(),
         )
         .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
     }

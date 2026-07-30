@@ -147,7 +147,6 @@ pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> 
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn render_all(
     parsed: &ParsedEmail,
     root: &std::path::Path,
@@ -155,9 +154,12 @@ pub fn render_all(
     outlink: Option<OutlinkFormat>,
     only_labels: &[String],
     progress: &Progress,
-    render_params: &serde_json::Value,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
+    // Derived here rather than passed in: it is a pure function of two
+    // arguments we already have, and a caller supplying an inconsistent
+    // pair would record params that don't describe this render.
+    let render_params = render_params(outlink, only_labels);
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_name,
@@ -253,7 +255,7 @@ pub fn render_all(
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(root, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed, render_params)
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed, &render_params)
             .with_context(|| format!("write email render cursor {}", cursor_path.display()))?;
     }
     Ok(())
@@ -834,5 +836,44 @@ mod tests {
         );
         assert_eq!(primary_mailbox(&["Work".into()]), "Work");
         assert_eq!(primary_mailbox(&[]), "Inbox");
+    }
+}
+
+#[cfg(test)]
+mod render_params_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn label_order_is_not_a_change() {
+        // A reordered config list must not read as a config change and
+        // re-render the whole tree.
+        let a = render_params(None, &["b".into(), "a".into()]);
+        let b = render_params(None, &["a".into(), "b".into()]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn outlink_spellings_are_stable() {
+        // These literals live in on-disk cursors; changing one would
+        // invalidate every rendered tree in the field.
+        assert_eq!(
+            render_params(Some(OutlinkFormat::Gmail), &[])["outlink_format"],
+            json!("gmail")
+        );
+        assert_eq!(
+            render_params(Some(OutlinkFormat::Fastmail), &[])["outlink_format"],
+            json!("fastmail")
+        );
+        assert_eq!(render_params(None, &[])["outlink_format"], json!(null));
+    }
+
+    #[test]
+    fn distinct_configs_are_distinct_params() {
+        assert_ne!(render_params(None, &[]), render_params(None, &["a".into()]));
+        assert_ne!(
+            render_params(None, &[]),
+            render_params(Some(OutlinkFormat::Gmail), &[])
+        );
     }
 }

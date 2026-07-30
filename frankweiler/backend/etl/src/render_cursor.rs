@@ -13,6 +13,14 @@
 //! `from_ref` for the per-provider `dolt_diff_<table>` union query, and
 //! re-written with the new HEAD + scan duration after `on_doc_complete`
 //! has succeeded for every doc the diff turned up.
+//!
+//! It also records the **render params** that produced those documents.
+//! Without that, a render knob only ever reaches documents the upstream
+//! diff happens to surface — widening `only_render_labels` renders
+//! nothing new, and changing `period` re-buckets only the chats that
+//! moved. [`read_for_params`] drops the cursor when the params differ,
+//! re-rendering the tree; providers with no knobs pass [`no_params`].
+//! Read through [`read_for_params`], not [`read`] — see both.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -53,6 +61,12 @@ pub fn cursor_path(data_root: &Path, stanza: &str) -> PathBuf {
     crate::layout::rendered_md_root(data_root, stanza).join("_render_cursor.json")
 }
 
+/// Parse the cursor file, ignoring its recorded params.
+///
+/// Almost every caller wants [`read_for_params`] instead: this variant
+/// will happily hand back a cursor produced under a *different* render
+/// config, which is exactly the bug the params record exists to prevent.
+/// Kept public for tooling that wants to inspect a cursor as-is.
 pub fn read(path: &Path) -> Result<Option<RenderCursor>> {
     match std::fs::read_to_string(path) {
         Ok(s) => {
@@ -100,6 +114,15 @@ pub fn read_for_params(path: &Path, current: &serde_json::Value) -> Result<Optio
         }
         _ => Ok(Some(cursor)),
     }
+}
+
+/// The params record for a provider with no render-specific knobs (its
+/// render config is the bare envelope). A stable empty object, so
+/// [`read_for_params`] never invalidates — but the provider still goes
+/// through the same read/write pair, so adding a knob later is a local
+/// change rather than a silent one.
+pub fn no_params() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 /// Write a cursor with the new commit hash, the scan duration from the

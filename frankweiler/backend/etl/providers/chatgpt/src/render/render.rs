@@ -31,13 +31,6 @@ use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
 };
 
-/// This provider has no render-specific knobs (its render config is the
-/// bare envelope), so the cursor's params record is a stable empty
-/// object and never invalidates.
-fn no_render_params() -> serde_json::Value {
-    serde_json::json!({})
-}
-
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v4: render via chat-common.
 pub const RENDER_VERSION: u32 = 4;
@@ -106,7 +99,7 @@ pub fn render_all(
             &cursor_path,
             head,
             parsed.scan.scan_elapsed,
-            &no_render_params(),
+            &render_cursor::no_params(),
         )
         .with_context(|| format!("write chatgpt render cursor {}", cursor_path.display()))?;
     }

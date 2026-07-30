@@ -84,7 +84,7 @@ pub fn render_all(
     // bump). Same-bytes rewrites are fine; if a downstream consumer
     // grows sensitive to mtime, reintroduce a per-bucket compare.
     let cursor_path = render_cursor::cursor_path(out_dir, source_name);
-    let prior = render_cursor::read(&cursor_path)?;
+    let prior = render_cursor::read_for_params(&cursor_path, &render_cursor::no_params())?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
     let (filtered_owned, new_head, scan_elapsed): (
@@ -138,7 +138,12 @@ pub fn render_all(
     )?;
 
     if let Some(head) = new_head {
-        render_cursor::write(&cursor_path, &head, scan_elapsed, &serde_json::json!({}))?;
+        render_cursor::write(
+            &cursor_path,
+            &head,
+            scan_elapsed,
+            &render_cursor::no_params(),
+        )?;
     }
     Ok(summary)
 }

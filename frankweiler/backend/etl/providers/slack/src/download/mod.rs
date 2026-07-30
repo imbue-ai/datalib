@@ -248,11 +248,19 @@ const SCOPE_CONFIG_KEY: &str = "slack:download";
 ///   without any help from us.
 /// - `refresh_window_days` — already re-applied on every run.
 /// - `conv`-style one-offs and paths — not scope-affecting.
+/// Blob keys. Named so the writer above and the readers in
+/// [`Adjustments::plan`] can't drift — a typo in either half degrades
+/// silently to "no information, plan no work", which is the exact
+/// failure this machinery exists to eliminate.
+const K_SINCE: &str = "since";
+const K_MEDIA: &str = "media";
+const K_BLOB_CAP: &str = "blob_size_limit_bytes";
+
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({
-        "since": opts.since,
-        "media": opts.media,
-        "blob_size_limit_bytes": opts.blob_size_limit_bytes,
+        K_SINCE: opts.since,
+        K_MEDIA: opts.media,
+        K_BLOB_CAP: opts.blob_size_limit_bytes,
     })
 }
 
@@ -329,7 +337,7 @@ impl Adjustments {
             return out;
         };
 
-        if let Some(stored) = scope_config::field(Some(prev), "since").and_then(Value::as_str) {
+        if let Some(stored) = prev.get(K_SINCE).and_then(Value::as_str) {
             match (
                 parse_iso_or_utc_date(stored),
                 parse_iso_or_utc_date(&opts.since),
@@ -353,7 +361,7 @@ impl Adjustments {
             }
         }
 
-        if scope_config::turned_on(Some(prev), "media", opts.media) {
+        if scope_config::turned_on(Some(prev), K_MEDIA, opts.media) {
             out.force_full_walk = true;
             info!(
                 event = "slack_media_turned_on",
@@ -367,11 +375,7 @@ impl Adjustments {
         // every mirrored thread) against a rate-limited API to download
         // exactly zero bytes is pure cost.
         if opts.media
-            && scope_config::limit_relaxed(
-                Some(prev),
-                "blob_size_limit_bytes",
-                opts.blob_size_limit_bytes,
-            )
+            && scope_config::limit_relaxed(Some(prev), K_BLOB_CAP, opts.blob_size_limit_bytes)
         {
             out.force_full_walk = true;
             info!(
@@ -878,12 +882,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // produced the store's current contents. `None` (fresh store, or one
     // written before `sync_scope_config` existed) plans no adjustments.
     let scope_cfg = scope_config_blob(&opts);
-    let prior_scope_cfg = scope_config::load(db.pool(), SCOPE_CONFIG_KEY)
-        .await
-        .unwrap_or_else(|e| {
-            warn!(event = "slack_scope_config_load_failed", error = %format!("{e:#}"));
-            None
-        });
+    let prior_scope_cfg = scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
     let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
 
     let t_scan = std::time::Instant::now();
@@ -1009,18 +1008,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // place and the next run retries the adjustment. Bookkeeping
     // failures are logged and swallowed: they must never mask the run's
     // own error.
-    if Adjustments::run_satisfied_config(result.is_ok(), channel_failures) {
-        if let Err(e) = scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await {
-            warn!(event = "slack_scope_config_store_failed", error = %format!("{e:#}"));
-        }
-    } else if result.is_ok() {
-        warn!(
-            event = "slack_scope_config_not_recorded",
-            failed_channels = channel_failures,
-            "some channels failed; keeping the prior config so the next \
-             run re-plans any backfill",
-        );
-    }
+    scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        Adjustments::run_satisfied_config(result.is_ok(), channel_failures),
+    )
+    .await;
     run.finish(&result, &grand).await;
     result?;
 
@@ -1101,7 +1095,7 @@ mod tests {
     #[test]
     fn unparseable_stored_since_is_ignored() {
         let mut prev = scope_config_blob(&opts("2024-01-01", true, None));
-        prev["since"] = json!("not-a-date");
+        prev[K_SINCE] = json!("not-a-date");
         // No information beats guessing: a garbage stored value must not
         // fail the sync or provoke a backfill.
         assert!(!Adjustments::plan(Some(&prev), &opts("2020-01-01", true, None)).any());

@@ -13,9 +13,7 @@ use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::download::db::{db_path_for, RawDb};
 use frankweiler_etl_email::download::mbox;
 use frankweiler_etl_email::render::parse::parse;
-use frankweiler_etl_email::render::render::{
-    render_all, render_params, thread_uuid, OutlinkFormat,
-};
+use frankweiler_etl_email::render::render::{render_all, thread_uuid, OutlinkFormat};
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {
@@ -234,7 +232,6 @@ async fn render_only_labels_filters_to_thread_subset() {
         Some(OutlinkFormat::Gmail),
         &["Sent".to_string()],
         &progress,
-        &render_params(Some(OutlinkFormat::Gmail), &["Sent".to_string()]),
         &mut |doc| {
             docs.push(doc);
             Ok(())
@@ -261,7 +258,6 @@ async fn star_trek_mbox_renders_through_render_all() {
         Some(OutlinkFormat::Gmail),
         &[],
         &progress,
-        &render_params(Some(OutlinkFormat::Gmail), &[]),
         &mut |doc| {
             docs.push(doc);
             Ok(())

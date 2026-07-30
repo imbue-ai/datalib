@@ -88,11 +88,11 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-// `since_for_scope` was lifted to `frankweiler_etl::scope_state`
-// alongside github's identical (modulo bugs) helper; this provider
-// just re-exports the call site name so the rest of the module
-// doesn't have to change.
-use frankweiler_etl::scope_state::since_for_scope_with_prior as since_for_scope;
+// The `since` policy — including the widened-window exception — is
+// shared with github in `frankweiler_etl::scope_state`. GitLab's
+// `updated_after` takes the RFC 3339 form it returns verbatim, so
+// there's nothing to adapt here.
+use frankweiler_etl::scope_state::since_for_scope;
 
 pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
     let rest = web_url.strip_prefix("https://gitlab.com/")?;
@@ -265,9 +265,7 @@ const SCOPE_CONFIG_KEY: &str = "gitlab:download";
 /// overrides, so recording them would make a smoke run read as a config
 /// change to the next real sync.
 fn scope_config_blob(opts: &FetchOptions) -> Value {
-    json!({
-        frankweiler_etl::scope_state::REFRESH_WINDOW_KEY: opts.refresh_window_days,
-    })
+    frankweiler_etl::scope_state::refresh_window_blob(opts.refresh_window_days)
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -300,12 +298,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // `sync_scope_config` existed) means no adjustment — see the module
     // docs on `scope_config`.
     let scope_cfg = scope_config_blob(&opts);
-    let prior_scope_cfg = frankweiler_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %format!("{e:#}"), "scope config load failed");
-            None
-        });
+    let prior_scope_cfg =
+        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
 
     let client = GitLabClient::new();
     let mut summary = FetchSummary::default();
@@ -403,13 +397,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only once this run has actually satisfied it. A
     // skipped scope or a targets-only run leaves the prior blob in place
     // so the next run re-plans the widening.
-    if result.is_ok() && discovery_complete.load(std::sync::atomic::Ordering::Relaxed) {
-        if let Err(e) =
-            frankweiler_etl::scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await
-        {
-            tracing::warn!(error = %format!("{e:#}"), "scope config store failed");
-        }
-    }
+    frankweiler_etl::scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        result.is_ok() && discovery_complete.load(std::sync::atomic::Ordering::Relaxed),
+    )
+    .await;
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -465,4 +459,65 @@ mod tests {
     // `since_for_scope` policy tests live in
     // `frankweiler_etl::scope_state` now that the implementation is
     // shared — gitlab just re-exports the helper.
+}
+
+#[cfg(test)]
+mod scope_config_tests {
+    use super::*;
+    use frankweiler_etl::scope_state::REFRESH_WINDOW_KEY;
+    use serde_json::json;
+
+    fn opts(window: u32, targets: Vec<(String, u32)>) -> FetchOptions {
+        FetchOptions {
+            refresh_window_days: window,
+            targets,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn blob_records_only_the_refresh_window() {
+        // Per-run budgets and one-off overrides must stay out: a
+        // `--max-mrs 5` smoke run must not read as a config change to
+        // the next real sync.
+        let mut o = opts(30, vec![]);
+        o.max_mrs = Some(5);
+        o.full_sync = true;
+        let blob = scope_config_blob(&o);
+        assert_eq!(blob, json!({ REFRESH_WINDOW_KEY: 30 }));
+    }
+
+    #[test]
+    fn blob_round_trips_into_the_since_policy() {
+        // The blob this provider writes is the same shape
+        // `since_for_scope` reads back — the pairing the whole scheme
+        // depends on.
+        let blob = scope_config_blob(&opts(30, vec![]));
+        let mut state = std::collections::HashMap::new();
+        state.insert("s".to_string(), "2026-06-01T00:00:00Z".to_string());
+        // Unchanged window: cursor stands.
+        assert_eq!(
+            frankweiler_etl::scope_state::since_for_scope(&state, "s", 30, false, Some(&blob))
+                .as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+        // Widened to unbounded: filter dropped entirely.
+        assert_eq!(
+            frankweiler_etl::scope_state::since_for_scope(&state, "s", 0, false, Some(&blob)),
+            None
+        );
+    }
+
+    #[test]
+    fn discovery_is_incomplete_when_a_scope_fails() {
+        // The blob is one row for every scope, so recording it after a
+        // partial discovery would lose the widening for the scopes that
+        // never searched.
+        let d = Discovery {
+            keys: Vec::new(),
+            new_state: Default::default(),
+            failed_scopes: 1,
+        };
+        assert!(d.failed_scopes > 0, "must block recording");
+    }
 }

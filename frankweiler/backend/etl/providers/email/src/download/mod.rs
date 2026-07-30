@@ -222,6 +222,9 @@ const SCOPE_CONFIG_KEY: &str = "jmap:download";
 /// `blob_download_concurrency` is a throughput knob. The blob cap isn't
 /// here either — `sync_blobs` re-scans every email for missing bytes on
 /// every run, so raising it already backfills on its own.
+/// Blob key. Named so writer and reader can't drift.
+const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
+
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = opts
@@ -230,7 +233,7 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
         .map(String::as_str)
         .collect();
     labels.sort_unstable();
-    json!({ "only_extract_labels": labels })
+    json!({ K_ONLY_EXTRACT_LABELS: labels })
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -287,15 +290,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // stored `Email/changes` cursor. `None` (fresh store, or one written
     // before `sync_scope_config` existed) plans no backfill.
     let scope_cfg = scope_config_blob(&opts);
-    let prior_scope_cfg = frankweiler_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY)
-        .await
-        .unwrap_or_else(|e| {
-            warn!(event = "jmap_scope_config_load_failed", error = %format!("{e:#}"));
-            None
-        });
+    let prior_scope_cfg =
+        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
     let added_labels = frankweiler_etl::scope_config::strings_added(
         prior_scope_cfg.as_ref(),
-        "only_extract_labels",
+        K_ONLY_EXTRACT_LABELS,
         &opts.only_mailbox_labels,
     );
 
@@ -303,13 +302,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only once the run satisfied it, so a failure
     // leaves the previous label set in place and the next run re-plans
     // the backfill.
-    if result.is_ok() {
-        if let Err(e) =
-            frankweiler_etl::scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await
-        {
-            warn!(event = "jmap_scope_config_store_failed", error = %format!("{e:#}"));
-        }
-    }
+    frankweiler_etl::scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        result.is_ok(),
+    )
+    .await;
     // On error we still serialize a partial-summary stub so the row
     // has fields for grafana-style dashboards to graph. The summary
     // type is the same on both paths; on error its fields will simply
@@ -362,15 +361,29 @@ async fn run_sync(
     // An all-unmatched filter resolves to an empty set, which means
     // "match nothing" — loud-warned below so a typo'd path doesn't
     // silently drop the whole account.
+    // Parse the mailbox tree once: both the extraction filter and the
+    // widened-label backfill resolve label paths against it.
+    let mailbox_nodes: Vec<crate::mailbox_labels::MailboxNode> =
+        if opts.only_mailbox_labels.is_empty() && added_labels.is_empty() {
+            Vec::new()
+        } else {
+            db.load_mailboxes()
+                .await?
+                .iter()
+                .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
+                .collect()
+        };
+
+    // Resolve the configured label paths to mailbox ids now that the
+    // full tree is in the db (`Mailbox/get` always re-lists, even on an
+    // incremental run). Empty config = no filter (sync every mailbox).
+    // An all-unmatched filter resolves to an empty set, which means
+    // "match nothing" — loud-warned below so a typo'd path doesn't
+    // silently drop the whole account.
     let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_labels.is_empty() {
         None
     } else {
-        let payloads = db.load_mailboxes().await?;
-        let nodes: Vec<crate::mailbox_labels::MailboxNode> = payloads
-            .iter()
-            .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
-            .collect();
-        let resolved = crate::mailbox_labels::resolve(&nodes, &opts.only_mailbox_labels);
+        let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, &opts.only_mailbox_labels);
         if !resolved.unmatched.is_empty() {
             warn!(
                 event = "jmap_label_filter_unmatched",
@@ -393,12 +406,7 @@ async fn run_sync(
     let backfill_mailboxes: Option<HashSet<String>> = if added_labels.is_empty() {
         None
     } else {
-        let payloads = db.load_mailboxes().await?;
-        let nodes: Vec<crate::mailbox_labels::MailboxNode> = payloads
-            .iter()
-            .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
-            .collect();
-        let resolved = crate::mailbox_labels::resolve(&nodes, added_labels);
+        let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, added_labels);
         if resolved.ids.is_empty() {
             None
         } else {

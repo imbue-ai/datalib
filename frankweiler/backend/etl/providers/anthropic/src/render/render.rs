@@ -38,13 +38,6 @@ use super::parse::{
     shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ShreddedConversation,
 };
 
-/// This provider has no render-specific knobs (its render config is the
-/// bare envelope), so the cursor's params record is a stable empty
-/// object and never invalidates.
-fn no_render_params() -> serde_json::Value {
-    serde_json::json!({})
-}
-
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (block-explosion).
 pub const RENDER_VERSION: u32 = 3;
@@ -110,7 +103,7 @@ pub fn render_all(
             &cursor_path,
             head,
             parsed.scan.scan_elapsed,
-            &no_render_params(),
+            &render_cursor::no_params(),
         )
         .with_context(|| format!("write anthropic render cursor {}", cursor_path.display()))?;
     }

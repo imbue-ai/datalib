@@ -231,6 +231,9 @@ pub struct FetchSummary {
 /// Scope key for this provider's [`frankweiler_etl::scope_config`] blob.
 const SCOPE_CONFIG_KEY: &str = "yolink:download";
 
+/// Blob key. Named so writer and reader can't drift.
+const K_DEVICE_STARTS: &str = "device_starts";
+
 /// Per-device `start` dates, the only knob that decides which data lands
 /// on disk. `overlap_minutes` / `window_days` shape *how* the walk
 /// paginates and are re-applied every run, so they don't belong here.
@@ -241,7 +244,7 @@ fn scope_config_blob(opts: &FetchOptions) -> serde_json::Value {
         .iter()
         .map(|d| (d.name.as_str(), d.start.as_str()))
         .collect();
-    serde_json::json!({ "device_starts": starts })
+    serde_json::json!({ K_DEVICE_STARTS: starts })
 }
 
 /// The `start` this device had on the last run that satisfied the
@@ -250,7 +253,7 @@ fn scope_config_blob(opts: &FetchOptions) -> serde_json::Value {
 /// effectively is; see `YolinkDevice::name`).
 fn prior_start_for(prior: Option<&serde_json::Value>, name: &str) -> Option<String> {
     prior?
-        .get("device_starts")?
+        .get(K_DEVICE_STARTS)?
         .get(name)?
         .as_str()
         .map(str::to_string)
@@ -279,12 +282,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Diff the per-device `start` dates against the ones that produced
     // the stored watermarks. `None` (fresh store, or one written before
     // `sync_scope_config` existed) plans no backfill.
-    let prior_scope_cfg = frankweiler_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY)
-        .await
-        .unwrap_or_else(|e| {
-            warn!(event = "yolink_scope_config_load_failed", error = %format!("{e:#}"));
-            None
-        });
+    let prior_scope_cfg =
+        frankweiler_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
     for dev in &opts.sync.devices {
         opts.progress.set_message(&format!("yolink: {}", dev.name));
         let prior_start = prior_start_for(prior_scope_cfg.as_ref(), &dev.name);
@@ -308,14 +307,58 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Record the config only when every device succeeded: a device that
     // errored hasn't covered its widened `start`, and the blob is one
     // row for all of them.
-    if s.errors == 0 {
-        if let Err(e) =
-            frankweiler_etl::scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await
-        {
-            warn!(event = "yolink_scope_config_store_failed", error = %format!("{e:#}"));
+    frankweiler_etl::scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        s.errors == 0,
+    )
+    .await;
+    Ok(s)
+}
+
+/// What the resume decision did, for the caller to log.
+#[derive(Debug, PartialEq, Eq)]
+enum CursorNote {
+    /// Resumed from the watermark (clamped forward to `start`, which is
+    /// a floor). The ordinary case.
+    Normal,
+    /// `start` moved earlier than the run that produced the watermark,
+    /// so the range below the old start was never walked. Reset to the
+    /// new start; windows are UPSERT-deduped, so re-walking the overlap
+    /// costs requests, not correctness.
+    Backfill,
+    /// `start` moved later, past the watermark. The clamp jumps the
+    /// cursor forward and `[watermark, start]` is never fetched. That is
+    /// what `start` literally asks for, so it's preserved — but said out
+    /// loud rather than done silently.
+    SkipsAhead,
+}
+
+/// Where this run should begin walking for one device.
+///
+/// Pure so the config-change branches are testable without a transport;
+/// `fetch_device` shells out to curl.
+fn resume_cursor(
+    watermark: Option<i64>,
+    start_ms: i64,
+    overlap_ms: i64,
+    start_widened: bool,
+    start_narrowed: bool,
+) -> (i64, CursorNote) {
+    match watermark {
+        _ if start_widened => (start_ms, CursorNote::Backfill),
+        None => (start_ms, CursorNote::Normal),
+        Some(w) => {
+            let clamped = (w - overlap_ms).max(start_ms);
+            let note = if start_narrowed && clamped > w {
+                CursorNote::SkipsAhead
+            } else {
+                CursorNote::Normal
+            };
+            (clamped, note)
         }
     }
-    Ok(s)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -350,45 +393,40 @@ async fn fetch_device(
             .bind(&dev.name)
             .fetch_one(db.pool())
             .await?;
-    // Normally the watermark wins (clamped forward to `start`, which is
-    // a floor). Two config-change cases break that:
-    //
-    //  - `start` moved *earlier*: the range below the old start was
-    //    never walked, and the watermark can't express going back. Reset
-    //    the cursor to the new start; the windows are UPSERT-deduped, so
-    //    re-walking the overlap costs requests, not correctness.
-    //  - `start` moved *later*, past the watermark: the clamp jumps the
-    //    cursor forward and `[watermark, start]` is silently never
-    //    fetched. Preserved (it's what `start` literally asks for) but
-    //    no longer silent.
+
+    // Only a *recorded* move counts. Comparing `start` to the watermark
+    // alone would fire on every run of any store whose configured start
+    // simply sits ahead of its data. `YYYY-MM-DD` sorts lexicographically
+    // as it does chronologically (validated at config load).
     let start_widened = prior_start.is_some_and(|p| dev.start.as_str() < p);
-    let mut cursor = match watermark {
-        _ if start_widened => {
-            info!(
-                event = "yolink_start_widened",
-                device = %dev.name,
-                from = prior_start.unwrap_or_default(),
-                to = %dev.start,
-                "re-walking from the new start",
-            );
-            start_ms
-        }
-        Some(w) => {
-            let clamped = (w - overlap_ms).max(start_ms);
-            if clamped > w {
-                warn!(
-                    event = "yolink_start_skips_ahead",
-                    device = %dev.name,
-                    start = %dev.start,
-                    watermark_ms = w,
-                    "start is later than the stored watermark; \
-                     the range between them will not be fetched",
-                );
-            }
-            clamped
-        }
-        None => start_ms,
-    };
+    let start_narrowed = prior_start.is_some_and(|p| dev.start.as_str() > p);
+
+    let (cursor_start, note) = resume_cursor(
+        watermark,
+        start_ms,
+        overlap_ms,
+        start_widened,
+        start_narrowed,
+    );
+    match note {
+        CursorNote::Backfill => info!(
+            event = "yolink_start_widened",
+            device = %dev.name,
+            from = prior_start.unwrap_or_default(),
+            to = %dev.start,
+            "re-walking from the new start",
+        ),
+        CursorNote::SkipsAhead => warn!(
+            event = "yolink_start_skips_ahead",
+            device = %dev.name,
+            from = prior_start.unwrap_or_default(),
+            to = %dev.start,
+            "start moved past the stored watermark; the range between \
+             them will not be fetched",
+        ),
+        CursorNote::Normal => {}
+    }
+    let mut cursor = cursor_start;
 
     info!(event = "yolink_begin", device = %dev.name, cursor, now_ms);
 
@@ -668,11 +706,55 @@ mod scope_config_tests {
         assert_eq!(prior_start_for(Some(&json!({})), "freezer"), None);
     }
 
+    // ── resume_cursor ────────────────────────────────────────────────
+
+    const HOUR: i64 = 3_600_000;
+
     #[test]
-    fn start_widening_is_a_plain_date_comparison() {
-        // `YYYY-MM-DD` sorts lexicographically as it does chronologically,
-        // which is what `fetch_device` relies on.
-        assert!("2023-01-01" < "2024-01-01");
-        assert!(!("2025-01-01" < "2024-01-01"));
+    fn cold_start_begins_at_start() {
+        assert_eq!(
+            resume_cursor(None, 1_000, 60_000, false, false),
+            (1_000, CursorNote::Normal)
+        );
+    }
+
+    #[test]
+    fn watermark_resumes_with_overlap() {
+        let (c, note) = resume_cursor(Some(100 * HOUR), HOUR, HOUR, false, false);
+        assert_eq!(c, 99 * HOUR, "one overlap back from the watermark");
+        assert_eq!(note, CursorNote::Normal);
+    }
+
+    #[test]
+    fn start_is_a_floor_on_the_overlap() {
+        // Overlap would reach below the configured start; clamp to it,
+        // and that is the ordinary case, not a config change.
+        let (c, note) = resume_cursor(Some(10 * HOUR), 9 * HOUR, 5 * HOUR, false, false);
+        assert_eq!(c, 9 * HOUR);
+        assert_eq!(note, CursorNote::Normal);
+    }
+
+    #[test]
+    fn widened_start_resets_the_cursor() {
+        // The whole point: a watermark far ahead does not suppress the
+        // backfill when `start` moved earlier.
+        let (c, note) = resume_cursor(Some(100 * HOUR), 2 * HOUR, HOUR, true, false);
+        assert_eq!(c, 2 * HOUR);
+        assert_eq!(note, CursorNote::Backfill);
+    }
+
+    #[test]
+    fn narrowed_start_past_the_watermark_is_flagged() {
+        let (c, note) = resume_cursor(Some(10 * HOUR), 50 * HOUR, HOUR, false, true);
+        assert_eq!(c, 50 * HOUR, "start wins; the gap is what it asks for");
+        assert_eq!(note, CursorNote::SkipsAhead);
+    }
+
+    #[test]
+    fn stable_config_never_reports_skips_ahead() {
+        // Without a recorded move, a start that simply sits ahead of the
+        // watermark must not warn on every single run.
+        let (_, note) = resume_cursor(Some(10 * HOUR), 50 * HOUR, HOUR, false, false);
+        assert_eq!(note, CursorNote::Normal);
     }
 }

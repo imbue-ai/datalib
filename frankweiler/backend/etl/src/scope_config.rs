@@ -111,6 +111,57 @@ pub async fn store(pool: &SqlitePool, scope: &str, config: &Value) -> Result<()>
     Ok(())
 }
 
+/// [`store`], but only when `satisfied` — and never fatal.
+///
+/// Encodes the rule every consumer needs: the record describes work that
+/// has *actually happened*, so a run that failed, was cancelled, or
+/// stepped over part of its scope must leave the previous record in
+/// place for the next run to re-plan against. Bookkeeping failures are
+/// logged and swallowed; they must never mask the run's own error.
+pub async fn store_if_satisfied(
+    pool: &SqlitePool,
+    scope: &str,
+    config: &Value,
+    satisfied: bool,
+) -> bool {
+    if !satisfied {
+        tracing::info!(
+            event = "scope_config_not_recorded",
+            scope = scope,
+            "run did not fully satisfy its config; keeping the prior record",
+        );
+        return false;
+    }
+    match store(pool, scope, config).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                event = "scope_config_store_failed",
+                scope = scope,
+                error = %format!("{e:#}"),
+            );
+            false
+        }
+    }
+}
+
+/// [`load`], downgrading a read failure to "no record" rather than
+/// failing the run. A missing record only ever costs a skipped
+/// adjustment; failing the sync over bookkeeping would cost the sync.
+pub async fn load_or_none(pool: &SqlitePool, scope: &str) -> Option<Value> {
+    match load(pool, scope).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                event = "scope_config_load_failed",
+                scope = scope,
+                error = %format!("{e:#}"),
+            );
+            None
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Field comparisons
 // ─────────────────────────────────────────────────────────────────────
@@ -175,13 +226,6 @@ pub fn strings_added(prev: Option<&Value>, key: &str, cur: &[String]) -> Vec<Str
         .collect()
 }
 
-/// The raw stored value for `key`, for providers that need to parse it
-/// themselves (slack's `since` is a date string whose comparison rules
-/// live in the provider).
-pub fn field<'a>(prev: Option<&'a Value>, key: &str) -> Option<&'a Value> {
-    prev.and_then(|p| p.get(key))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,7 +248,6 @@ mod tests {
         assert!(!turned_on(None, "media", true));
         assert!(!limit_relaxed(None, "blob_size_limit_bytes", None));
         assert!(strings_added(None, "labels", &["New".to_string()]).is_empty());
-        assert!(field(None, "since").is_none());
     }
 
     #[test]

@@ -255,7 +255,6 @@ impl DataProcessor for EmailRender {
             self.outlink,
             &self.only_render_labels,
             ctx.progress,
-            &render_params,
             &mut on_doc,
         )?;
         Ok("rendered".into())

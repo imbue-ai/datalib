@@ -157,4 +157,20 @@ mod tests {
         let k = Period::Month.key_for_ms(-1_000);
         assert!(k.starts_with("1969") || k == "1970-01");
     }
+
+    #[test]
+    fn as_config_str_round_trips_every_variant() {
+        // The spelling is recorded in render cursors, so a typo in one
+        // arm would silently invalidate every signal render tree in the
+        // field on the next release.
+        for p in [Period::Month, Period::Day, Period::Year, Period::All] {
+            assert_eq!(
+                Period::from_config(Some(p.as_config_str())).unwrap(),
+                p,
+                "{:?} did not round-trip through {:?}",
+                p,
+                p.as_config_str()
+            );
+        }
+    }
 }
