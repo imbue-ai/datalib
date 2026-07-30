@@ -281,6 +281,38 @@ impl Adjustments {
         self.backfill_below_oldest || self.force_full_walk
     }
 
+    /// Whether pass B can skip a thread because its replies are already
+    /// mirrored.
+    ///
+    /// Normally "stored `latest_reply` is at or past what the API
+    /// advertises" is sufficient. Under [`Self::force_full_walk`] it is
+    /// not: reply attachments are downloaded *only* inside
+    /// `paginate_replies`, so a thread that is fully mirrored
+    /// message-wise still has unfetched files hanging off it when the
+    /// blob knob that skipped them is later relaxed. Re-walking pass A
+    /// alone would fetch top-level attachments and silently miss every
+    /// in-thread one.
+    fn thread_up_to_date(&self, api_latest: Option<&str>, stored: Option<&str>) -> bool {
+        if self.force_full_walk {
+            return false;
+        }
+        matches!((api_latest, stored), (Some(api), Some(s)) if s >= api)
+    }
+
+    /// Whether a completed run has actually satisfied the config it
+    /// planned for, and may therefore record it.
+    ///
+    /// Per-channel failures are swallowed into a `warn!` so one bad
+    /// channel can't sink a whole sync, which means `Ok(())` from the
+    /// work future does *not* imply every channel was covered. Recording
+    /// the blob anyway would make the next run see no widening and drop
+    /// the scheduled backfill permanently — unlike the per-channel
+    /// watermark, which self-heals because it is derived from stored
+    /// rows rather than from bookkeeping.
+    fn run_satisfied_config(run_ok: bool, channel_failures: usize) -> bool {
+        run_ok && channel_failures == 0
+    }
+
     /// Diff the recorded blob against this run's options.
     ///
     /// Only *widenings* produce work. A narrowed knob leaves an on-disk
@@ -488,10 +520,8 @@ async fn export_channel(
             }
             let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
             let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-            if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
-                if stored >= api {
-                    return None;
-                }
+            if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
+                return None;
             }
             Some(reply_count as u64)
         })
@@ -508,10 +538,8 @@ async fn export_channel(
         }
         let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
         let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-        if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
-            if stored >= api {
-                continue;
-            }
+        if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
+            continue;
         }
         let before = totals.replies;
         paginate_replies(
@@ -879,6 +907,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         replies: 0,
         media: BTreeMap::new(),
     };
+    // Channels whose export errored. A per-channel failure is warned and
+    // stepped over so one bad channel can't sink the sync, which means
+    // the work future can return `Ok` on a run that did NOT cover
+    // everything the config asked for — see `run_satisfied_config`.
+    let mut channel_failures: usize = 0;
 
     let work = async {
         let setup = opts.progress.child("setup");
@@ -959,21 +992,32 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         *grand.media.entry(k).or_insert(0) += v;
                     }
                 }
-                Err(e) => warn!(event = "slack_channel_failed", channel = %name, error = %e),
+                Err(e) => {
+                    channel_failures += 1;
+                    warn!(event = "slack_channel_failed", channel = %name, error = %e);
+                }
             }
         }
         Ok::<(), anyhow::Error>(())
     };
 
     let result = work.await;
-    // Record the config this run actually satisfied — success path only,
-    // so a failed or cancelled sync leaves the previous blob in place
-    // and the next run retries the adjustment. Bookkeeping failures are
-    // logged and swallowed: they must never mask the run's own error.
-    if result.is_ok() {
+    // Record the config only once this run has actually satisfied it, so
+    // a failed, partial, or cancelled sync leaves the previous blob in
+    // place and the next run retries the adjustment. Bookkeeping
+    // failures are logged and swallowed: they must never mask the run's
+    // own error.
+    if Adjustments::run_satisfied_config(result.is_ok(), channel_failures) {
         if let Err(e) = scope_config::store(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg).await {
             warn!(event = "slack_scope_config_store_failed", error = %format!("{e:#}"));
         }
+    } else if result.is_ok() {
+        warn!(
+            event = "slack_scope_config_not_recorded",
+            failed_channels = channel_failures,
+            "some channels failed; keeping the prior config so the next \
+             run re-plans any backfill",
+        );
     }
     run.finish(&result, &grand).await;
     result?;
@@ -1098,6 +1142,65 @@ mod tests {
     fn lowered_blob_cap_is_a_noop() {
         let prev = scope_config_blob(&opts("2024-01-01", true, Some(5000)));
         assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", true, Some(1000))).any());
+    }
+
+    // ── thread reply skip ────────────────────────────────────────────
+
+    #[test]
+    fn mirrored_thread_is_skipped_normally() {
+        let plan = Adjustments::default();
+        assert!(plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
+        assert!(plan.thread_up_to_date(Some("100.000000"), Some("101.000000")));
+    }
+
+    #[test]
+    fn advanced_thread_is_never_skipped() {
+        let plan = Adjustments::default();
+        assert!(!plan.thread_up_to_date(Some("101.000000"), Some("100.000000")));
+        // Never-fetched thread, or an API response without `latest_reply`:
+        // fetch rather than silently drop.
+        assert!(!plan.thread_up_to_date(Some("101.000000"), None));
+        assert!(!plan.thread_up_to_date(None, Some("100.000000")));
+    }
+
+    #[test]
+    fn force_full_walk_re_walks_mirrored_threads() {
+        // Reply attachments are downloaded only inside `paginate_replies`,
+        // so a relaxed blob knob has to re-enter fully-mirrored threads or
+        // it silently misses every in-thread file.
+        let plan = Adjustments {
+            force_full_walk: true,
+            ..Default::default()
+        };
+        assert!(!plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
+    }
+
+    #[test]
+    fn backfill_alone_leaves_thread_skipping_intact() {
+        // A widened `since` adds older messages; it says nothing about
+        // threads already mirrored above the floor.
+        let plan = Adjustments {
+            backfill_below_oldest: true,
+            ..Default::default()
+        };
+        assert!(plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
+    }
+
+    // ── recording the blob ───────────────────────────────────────────
+
+    #[test]
+    fn partial_run_does_not_record_config() {
+        // Per-channel failures are swallowed, so `Ok` does not imply full
+        // coverage. Recording anyway would drop the scheduled backfill
+        // permanently for the channels that failed.
+        assert!(!Adjustments::run_satisfied_config(true, 1));
+        assert!(!Adjustments::run_satisfied_config(false, 0));
+        assert!(!Adjustments::run_satisfied_config(false, 3));
+    }
+
+    #[test]
+    fn clean_run_records_config() {
+        assert!(Adjustments::run_satisfied_config(true, 0));
     }
 
     // ── blob contents ────────────────────────────────────────────────
