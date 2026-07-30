@@ -7,10 +7,21 @@
 //! `schema_raw.rs` for the table layout.
 //!
 //! Resume cursor: derived at startup from the DB.
-//! `RawDb::latest_ts_by_channel` gives the per-channel `max(ts)` we've
+//! `RawDb::ts_bounds_by_channel` gives the per-channel `max(ts)` we've
 //! ever recorded, and the next forward pass starts there. The trailing
 //! refresh window re-queries the last N days; idempotent upserts
 //! collapse no-op refresh passes to zero writes.
+//!
+//! Because that cursor answers "where do I start?" on its own, a config
+//! change that *widens* what should be on disk would otherwise be
+//! silently ignored — the classic case being `since` moved to an
+//! earlier date, which the forward walk can't express because it only
+//! ever moves forward. [`Adjustments`] closes that gap: the
+//! scope-affecting params are recorded via
+//! [`datalib_etl::scope_config`] after each successful run, and the
+//! next run diffs them to schedule a bounded backfill (or, for a
+//! relaxed blob knob, a re-walk). Narrowing is always a no-op — the
+//! store is a superset and nothing in the pipeline deletes.
 
 pub mod api;
 pub mod db;
@@ -28,7 +39,10 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
 use datalib_etl::events;
-pub use db::{block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb};
+use datalib_etl::scope_config;
+pub use db::{
+    block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb, TsBounds,
+};
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
@@ -215,6 +229,167 @@ fn next_cursor(resp: &Value) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Config-change adjustments.
+// ---------------------------------------------------------------------------
+
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
+/// Slack's incremental state is per-channel (`MAX(ts)` in `messages`),
+/// but every knob we remember applies workspace-wide, so one row per
+/// source is the right grain.
+const SCOPE_CONFIG_KEY: &str = "slack:download";
+
+/// Blob keys. Named so the writer below and the readers in
+/// [`Adjustments::plan`] can't drift — a typo in either half degrades
+/// silently to "no information, plan no work", which is the exact
+/// failure this machinery exists to eliminate.
+const K_SINCE: &str = "since";
+const K_MEDIA: &str = "media";
+const K_BLOB_CAP: &str = "blob_size_limit_bytes";
+
+/// The subset of [`FetchOptions`] that decides *which data lands on
+/// disk*, recorded after a successful run so the next one can spot a
+/// widening the per-channel watermark would otherwise swallow.
+///
+/// Deliberately excludes:
+/// - `channels` / `members_only` — a newly listed channel has no rows,
+///   so `channel_latest_ts` is `None` and it cold-starts from `since`
+///   without any help from us.
+/// - `refresh_window_days` — already re-applied on every run.
+/// - `conv`-style one-offs and paths — not scope-affecting.
+fn scope_config_blob(opts: &FetchOptions) -> Value {
+    json!({
+        K_SINCE: opts.since,
+        K_MEDIA: opts.media,
+        K_BLOB_CAP: opts.blob_size_limit_bytes,
+    })
+}
+
+/// What this run has to do differently because the config widened since
+/// the run that produced the store's current contents.
+///
+/// Both fields default to "nothing to do", which is what an absent or
+/// unreadable blob must produce — see `scope_config`'s module docs on
+/// why a first upgrade can't be allowed to stampede every mirror into a
+/// full re-download.
+#[derive(Debug, Default, Clone)]
+struct Adjustments {
+    /// `since` moved earlier: walk `[since_ts, oldest_stored_ts]` for
+    /// each channel that already has history. The forward watermark is
+    /// untouched — this only fills in below the floor.
+    backfill_below_oldest: bool,
+    /// A blob knob was relaxed (`media` off→on, or a raised/lifted size
+    /// cap): re-walk each channel from `since_ts` instead of resuming
+    /// at its watermark. Attachment rows only exist for messages walked
+    /// while the knob was on, so there is nothing to backfill in place —
+    /// the messages have to come past `download_files_for_messages`
+    /// again.
+    force_full_walk: bool,
+}
+
+impl Adjustments {
+    fn any(&self) -> bool {
+        self.backfill_below_oldest || self.force_full_walk
+    }
+
+    /// Whether pass B can skip a thread because its replies are already
+    /// mirrored.
+    ///
+    /// Normally "stored `latest_reply` is at or past what the API
+    /// advertises" is sufficient. Under [`Self::force_full_walk`] it is
+    /// not: reply attachments are downloaded *only* inside
+    /// `paginate_replies`, so a thread that is fully mirrored
+    /// message-wise still has unfetched files hanging off it when the
+    /// blob knob that skipped them is later relaxed. Re-walking pass A
+    /// alone would fetch top-level attachments and silently miss every
+    /// in-thread one.
+    fn thread_up_to_date(&self, api_latest: Option<&str>, stored: Option<&str>) -> bool {
+        if self.force_full_walk {
+            return false;
+        }
+        matches!((api_latest, stored), (Some(api), Some(s)) if s >= api)
+    }
+
+    /// Whether a completed run has actually satisfied the config it
+    /// planned for, and may therefore record it.
+    ///
+    /// Per-channel failures are swallowed into a `warn!` so one bad
+    /// channel can't sink a whole sync, which means `Ok(())` from the
+    /// work future does *not* imply every channel was covered. Recording
+    /// the blob anyway would make the next run see no widening and drop
+    /// the scheduled backfill permanently — unlike the per-channel
+    /// watermark, which self-heals because it is derived from stored
+    /// rows rather than from bookkeeping.
+    fn run_satisfied_config(run_ok: bool, channel_failures: usize) -> bool {
+        run_ok && channel_failures == 0
+    }
+
+    /// Diff the recorded blob against this run's options.
+    ///
+    /// Only *widenings* produce work. A narrowed knob leaves an on-disk
+    /// superset, and nothing in the pipeline deletes, so it is always a
+    /// no-op. A `since` that fails to parse is treated as no
+    /// information rather than an error: the caller has already
+    /// validated the current value, and a garbage *stored* value must
+    /// not fail an otherwise-good sync.
+    fn plan(prev: Option<&Value>, opts: &FetchOptions) -> Self {
+        let mut out = Self::default();
+        let Some(prev) = prev else {
+            return out;
+        };
+
+        if let Some(stored) = prev.get(K_SINCE).and_then(Value::as_str) {
+            match (
+                parse_iso_or_utc_date(stored),
+                parse_iso_or_utc_date(&opts.since),
+            ) {
+                (Ok(before), Ok(now)) if now < before => {
+                    out.backfill_below_oldest = true;
+                    info!(
+                        event = "slack_since_widened",
+                        from = stored,
+                        to = %opts.since,
+                        "backfilling below each channel's oldest stored message",
+                    );
+                }
+                (Err(e), _) => warn!(
+                    event = "slack_stored_since_unparseable",
+                    stored = stored,
+                    error = %e,
+                    "ignoring stored since",
+                ),
+                _ => {}
+            }
+        }
+
+        if scope_config::turned_on(Some(prev), K_MEDIA, opts.media) {
+            out.force_full_walk = true;
+            info!(
+                event = "slack_media_turned_on",
+                "re-walking history so existing messages' attachments get fetched",
+            );
+        }
+
+        // Gated on `media`: the cap is only consulted inside
+        // `download_files_for_messages`, which the whole walk skips when
+        // blobs are off. Re-walking every channel (and re-paginating
+        // every mirrored thread) against a rate-limited API to download
+        // exactly zero bytes is pure cost.
+        if opts.media
+            && scope_config::limit_relaxed(Some(prev), K_BLOB_CAP, opts.blob_size_limit_bytes)
+        {
+            out.force_full_walk = true;
+            info!(
+                event = "slack_blob_limit_relaxed",
+                limit = ?opts.blob_size_limit_bytes,
+                "re-walking history so previously-oversize attachments get fetched",
+            );
+        }
+
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-channel history + threads.
 // ---------------------------------------------------------------------------
 
@@ -226,6 +401,8 @@ async fn export_channel(
     since_ts: &str,
     refresh_window_days: i64,
     channel_latest_ts: Option<&str>,
+    channel_oldest_ts: Option<&str>,
+    adjust: &Adjustments,
     latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
     now: &DateTime<Utc>,
     download_blobs: bool,
@@ -247,7 +424,12 @@ async fn export_channel(
     // the long-tail fetch.
     let mut collected: Vec<Value> = Vec::new();
 
-    let (forward_oldest, inclusive) = match channel_latest_ts {
+    // Resume at the channel's watermark when it has one — unless a
+    // relaxed blob knob means the already-stored messages have to come
+    // back past `download_files_for_messages`, in which case we walk
+    // the whole configured range again. Upserts are idempotent, so the
+    // cost is API calls, not duplicate rows.
+    let (forward_oldest, inclusive) = match channel_latest_ts.filter(|_| !adjust.force_full_walk) {
         Some(ts) => (ts.to_string(), false),
         None => (since_ts.to_string(), true),
     };
@@ -268,7 +450,11 @@ async fn export_channel(
     )
     .await?;
 
-    if refresh_window_days > 0 {
+    // Skipped under `force_full_walk`: the pass above already re-walked
+    // `[since_ts, now]`, which strictly contains the trailing window, so
+    // running it again would just double the API calls on exactly the
+    // run that is already the expensive one.
+    if refresh_window_days > 0 && !adjust.force_full_walk {
         if let Some(latest_ts) = channel_latest_ts {
             let window_dt = *now - ChronoDuration::days(refresh_window_days);
             let window_oldest = datetime_to_slack_ts(&window_dt);
@@ -298,6 +484,44 @@ async fn export_channel(
         }
     }
 
+    // Backfill pass: `since` moved earlier than the run that built this
+    // channel's history, so the window below our oldest stored message
+    // was never fetched. Walk `[since_ts, oldest]` to fill it in. Runs
+    // before pass B so backfilled thread roots land in `collected` and
+    // get their replies fetched like any other message.
+    //
+    // Skipped when `force_full_walk` already re-walked the whole range
+    // above, and when the channel has no history (the cold-start arm
+    // started at `since_ts` already).
+    if adjust.backfill_below_oldest && !adjust.force_full_walk {
+        if let Some(oldest) = channel_oldest_ts {
+            if since_ts < oldest {
+                info!(
+                    event = "slack_backfill_window",
+                    channel = %channel_id,
+                    from = since_ts,
+                    to = oldest,
+                );
+                list_history(
+                    db,
+                    team_id,
+                    channel_id,
+                    since_ts,
+                    true,
+                    Some(oldest),
+                    download_blobs,
+                    blob_size_limit_bytes,
+                    totals,
+                    &mut attach,
+                    blake3_by_file,
+                    progress,
+                    &mut collected,
+                )
+                .await?;
+            }
+        }
+    }
+
     // Pass B: thread replies for threads whose latest_reply advanced.
     let replies_to_fetch: u64 = collected
         .iter()
@@ -309,10 +533,8 @@ async fn export_channel(
             }
             let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
             let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-            if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
-                if stored >= api {
-                    return None;
-                }
+            if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
+                return None;
             }
             Some(reply_count as u64)
         })
@@ -329,10 +551,8 @@ async fn export_channel(
         }
         let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
         let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-        if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
-            if stored >= api {
-                continue;
-            }
+        if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
+            continue;
         }
         let before = totals.replies;
         paginate_replies(
@@ -658,8 +878,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
 
+    // Diff this run's scope-affecting params against the ones that
+    // produced the store's current contents. `None` (fresh store, or one
+    // written before `sync_scope_config` existed) plans no adjustments.
+    let scope_cfg = scope_config_blob(&opts);
+    let prior_scope_cfg = scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
+
     let t_scan = std::time::Instant::now();
-    let channel_latest_ts = db.latest_ts_by_channel().await?;
+    let channel_ts_bounds = db.ts_bounds_by_channel().await?;
     let latest_reply_map = db.latest_reply_by_thread().await?;
     // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
     // the per-file dedupe check inside `download_one_file` is a
@@ -670,7 +897,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut blake3_by_file = db.load_attachment_blake3s().await?;
     info!(
         event = "slack_resume_scan_done",
-        channels_with_history = channel_latest_ts.len(),
+        channels_with_history = channel_ts_bounds.len(),
         threads_with_replies = latest_reply_map.len(),
         attachments_with_bytes = blake3_by_file.len(),
         elapsed_ms = t_scan.elapsed().as_millis() as u64,
@@ -681,6 +908,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         replies: 0,
         media: BTreeMap::new(),
     };
+    // Channels whose export errored. A per-channel failure is warned and
+    // stepped over so one bad channel can't sink the sync, which means
+    // the work future can return `Ok` on a run that did NOT cover
+    // everything the config asked for — see `run_satisfied_config`.
+    let mut channel_failures: usize = 0;
 
     let work = async {
         let setup = opts.progress.child("setup");
@@ -733,7 +965,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 cid,
                 &since_ts,
                 opts.refresh_window_days,
-                channel_latest_ts.get(cid).map(|s| s.as_str()),
+                channel_ts_bounds.get(cid).map(|b| b.latest.as_str()),
+                channel_ts_bounds.get(cid).map(|b| b.oldest.as_str()),
+                &adjust,
                 &latest_reply_map,
                 &now,
                 opts.media,
@@ -759,13 +993,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         *grand.media.entry(k).or_insert(0) += v;
                     }
                 }
-                Err(e) => warn!(event = "slack_channel_failed", channel = %name, error = %e),
+                Err(e) => {
+                    channel_failures += 1;
+                    warn!(event = "slack_channel_failed", channel = %name, error = %e);
+                }
             }
         }
         Ok::<(), anyhow::Error>(())
     };
 
     let result = work.await;
+    // Record the config only once this run has actually satisfied it, so
+    // a failed, partial, or cancelled sync leaves the previous blob in
+    // place and the next run retries the adjustment. Bookkeeping
+    // failures are logged and swallowed: they must never mask the run's
+    // own error.
+    scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        Adjustments::run_satisfied_config(result.is_ok(), channel_failures),
+    )
+    .await;
     run.finish(&result, &grand).await;
     result?;
 
@@ -782,4 +1031,203 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
         .or_else(|_| datalib_time::parse_yyyy_mm_dd_assumed_utc(s))
         .with_context(|| format!("expected RFC 3339 or YYYY-MM-DD, got {s:?}"))?;
     Ok(t.inner().with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(since: &str, media: bool, blob_size_limit_bytes: Option<u64>) -> FetchOptions {
+        FetchOptions {
+            since: since.to_string(),
+            media,
+            blob_size_limit_bytes,
+            ..Default::default()
+        }
+    }
+
+    /// The steady state: same config as last run plans no work. Guards
+    /// the round trip `scope_config_blob` → store → load → `plan`, which
+    /// is what every unchanged sync exercises.
+    #[test]
+    fn unchanged_config_plans_nothing() {
+        let o = opts("2024-01-01", true, Some(1000));
+        let prev = scope_config_blob(&o);
+        assert!(!Adjustments::plan(Some(&prev), &o).any());
+    }
+
+    #[test]
+    fn absent_prior_config_plans_nothing() {
+        // Every data root in the field on first upgrade. Must not
+        // trigger a backfill.
+        let o = opts("2020-01-01", true, None);
+        assert!(!Adjustments::plan(None, &o).any());
+    }
+
+    // ── since ────────────────────────────────────────────────────────
+
+    #[test]
+    fn since_moved_earlier_schedules_backfill_only() {
+        let prev = scope_config_blob(&opts("2024-01-01", true, None));
+        let plan = Adjustments::plan(Some(&prev), &opts("2023-01-01", true, None));
+        assert!(plan.backfill_below_oldest);
+        // A widened `since` never needs the expensive re-walk — the
+        // forward watermark is still valid.
+        assert!(!plan.force_full_walk);
+    }
+
+    #[test]
+    fn since_moved_later_is_a_noop() {
+        let prev = scope_config_blob(&opts("2024-01-01", true, None));
+        // Narrowing leaves an on-disk superset; nothing to fetch.
+        assert!(!Adjustments::plan(Some(&prev), &opts("2025-01-01", true, None)).any());
+    }
+
+    #[test]
+    fn since_compares_instants_not_strings() {
+        // `2024-01-01` and its RFC 3339 spelling are the same instant, so
+        // rewriting the config in the other format must not backfill.
+        let prev = scope_config_blob(&opts("2024-01-01", true, None));
+        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01T00:00:00Z", true, None));
+        assert!(!plan.any());
+    }
+
+    #[test]
+    fn unparseable_stored_since_is_ignored() {
+        let mut prev = scope_config_blob(&opts("2024-01-01", true, None));
+        prev[K_SINCE] = json!("not-a-date");
+        // No information beats guessing: a garbage stored value must not
+        // fail the sync or provoke a backfill.
+        assert!(!Adjustments::plan(Some(&prev), &opts("2020-01-01", true, None)).any());
+    }
+
+    // ── media ────────────────────────────────────────────────────────
+
+    #[test]
+    fn media_turned_on_forces_full_walk() {
+        let prev = scope_config_blob(&opts("2024-01-01", false, None));
+        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, None));
+        // Attachment rows only exist for messages walked with media on,
+        // so the messages have to come back past the download path.
+        assert!(plan.force_full_walk);
+    }
+
+    #[test]
+    fn media_turned_off_is_a_noop() {
+        let prev = scope_config_blob(&opts("2024-01-01", true, None));
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, None)).any());
+    }
+
+    // ── blob_size_limit_bytes ────────────────────────────────────────
+
+    #[test]
+    fn raised_blob_cap_forces_full_walk() {
+        let prev = scope_config_blob(&opts("2024-01-01", true, Some(1000)));
+        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, Some(5000)));
+        assert!(plan.force_full_walk);
+    }
+
+    #[test]
+    fn lifted_blob_cap_forces_full_walk() {
+        let prev = scope_config_blob(&opts("2024-01-01", true, Some(1000)));
+        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, None));
+        assert!(plan.force_full_walk);
+    }
+
+    #[test]
+    fn relaxed_blob_cap_with_media_off_is_a_noop() {
+        // The cap is only consulted inside `download_files_for_messages`,
+        // which the walk skips entirely when blobs are off. Re-walking to
+        // download zero bytes is pure rate-limit burn.
+        let prev = scope_config_blob(&opts("2024-01-01", false, Some(1000)));
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, Some(5000))).any());
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, None)).any());
+    }
+
+    #[test]
+    fn lowered_blob_cap_is_a_noop() {
+        let prev = scope_config_blob(&opts("2024-01-01", true, Some(5000)));
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", true, Some(1000))).any());
+    }
+
+    // ── thread reply skip ────────────────────────────────────────────
+
+    #[test]
+    fn mirrored_thread_is_skipped_normally() {
+        let plan = Adjustments::default();
+        assert!(plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
+        assert!(plan.thread_up_to_date(Some("100.000000"), Some("101.000000")));
+    }
+
+    #[test]
+    fn advanced_thread_is_never_skipped() {
+        let plan = Adjustments::default();
+        assert!(!plan.thread_up_to_date(Some("101.000000"), Some("100.000000")));
+        // Never-fetched thread, or an API response without `latest_reply`:
+        // fetch rather than silently drop.
+        assert!(!plan.thread_up_to_date(Some("101.000000"), None));
+        assert!(!plan.thread_up_to_date(None, Some("100.000000")));
+    }
+
+    #[test]
+    fn force_full_walk_re_walks_mirrored_threads() {
+        // Reply attachments are downloaded only inside `paginate_replies`,
+        // so a relaxed blob knob has to re-enter fully-mirrored threads or
+        // it silently misses every in-thread file.
+        let plan = Adjustments {
+            force_full_walk: true,
+            ..Default::default()
+        };
+        assert!(!plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
+    }
+
+    #[test]
+    fn backfill_alone_leaves_thread_skipping_intact() {
+        // A widened `since` adds older messages; it says nothing about
+        // threads already mirrored above the floor.
+        let plan = Adjustments {
+            backfill_below_oldest: true,
+            ..Default::default()
+        };
+        assert!(plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
+    }
+
+    // ── recording the blob ───────────────────────────────────────────
+
+    #[test]
+    fn partial_run_does_not_record_config() {
+        // Per-channel failures are swallowed, so `Ok` does not imply full
+        // coverage. Recording anyway would drop the scheduled backfill
+        // permanently for the channels that failed.
+        assert!(!Adjustments::run_satisfied_config(true, 1));
+        assert!(!Adjustments::run_satisfied_config(false, 0));
+        assert!(!Adjustments::run_satisfied_config(false, 3));
+    }
+
+    #[test]
+    fn clean_run_records_config() {
+        assert!(Adjustments::run_satisfied_config(true, 0));
+    }
+
+    // ── blob contents ────────────────────────────────────────────────
+
+    #[test]
+    fn blob_records_only_scope_affecting_params() {
+        let o = FetchOptions {
+            since: "2024-01-01".into(),
+            channels: Some(vec!["general".into()]),
+            refresh_window_days: 30,
+            members_only: false,
+            ..Default::default()
+        };
+        let blob = scope_config_blob(&o);
+        let obj = blob.as_object().expect("blob is an object");
+        // A newly listed channel cold-starts on its own, and the refresh
+        // window is re-applied every run — recording either would only
+        // provoke pointless re-walks.
+        assert!(!obj.contains_key("channels"));
+        assert!(!obj.contains_key("refresh_window_days"));
+        assert!(!obj.contains_key("members_only"));
+        assert_eq!(obj.len(), 3, "unexpected keys in blob: {obj:?}");
+    }
 }

@@ -210,6 +210,30 @@ pub struct FetchSummary {
     pub blobs_oversize: usize,
 }
 
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
+/// Matches the `jmap:` prefix the state tokens use.
+const SCOPE_CONFIG_KEY: &str = "jmap:download";
+
+/// Blob key. Named so writer and reader can't drift.
+const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
+
+/// The subset of [`FetchOptions`] that decides which data lands on disk.
+/// Only the label filter qualifies: `hostname`/`account_id` re-key the
+/// whole store, `full_resync` is a one-off override, and
+/// `blob_download_concurrency` is a throughput knob. The blob cap isn't
+/// here either — `sync_blobs` re-scans every email for missing bytes on
+/// every run, so raising it already backfills on its own.
+fn scope_config_blob(opts: &FetchOptions) -> Value {
+    // Sorted so a reordered config list isn't mistaken for a change.
+    let mut labels: Vec<&str> = opts
+        .only_mailbox_labels
+        .iter()
+        .map(String::as_str)
+        .collect();
+    labels.sort_unstable();
+    json!({ K_ONLY_EXTRACT_LABELS: labels })
+}
+
 /// Run one download pass against a JMAP account. Returns a summary the
 /// orchestrator stamps into `sync_runs.summary`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -262,7 +286,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
 
-    let result = run_sync(&db, &session, &account_id, &opts).await;
+    // Diff the scope-affecting params against the ones that produced the
+    // stored `Email/changes` cursor. `None` (fresh store, or one written
+    // before `sync_scope_config` existed) plans no backfill.
+    let scope_cfg = scope_config_blob(&opts);
+    let prior_scope_cfg =
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+    let label_change = datalib_etl::scope_config::filter_widened(
+        prior_scope_cfg.as_ref(),
+        K_ONLY_EXTRACT_LABELS,
+        &opts.only_mailbox_labels,
+    );
+
+    let result = run_sync(&db, &session, &account_id, &opts, &label_change).await;
+    // Record the config only once the run satisfied it, so a failure
+    // leaves the previous label set in place and the next run re-plans
+    // the backfill.
+    datalib_etl::scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        result.is_ok(),
+    )
+    .await;
     // On error we still serialize a partial-summary stub so the row
     // has fields for grafana-style dashboards to graph. The summary
     // type is the same on both paths; on error its fields will simply
@@ -277,6 +323,11 @@ async fn run_sync(
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
+    // How `only_extract_labels` moved since the run that produced the
+    // stored cursor. `Email/changes` can't surface existing mail in
+    // newly-admitted mailboxes — nothing in them *changed* — so a
+    // widening needs its own enumeration.
+    label_change: &datalib_etl::scope_config::FilterChange,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary {
         account_id: account_id.to_string(),
@@ -305,6 +356,22 @@ async fn run_sync(
     sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
     opts.progress.inc(1);
 
+    // Parse the mailbox tree once: both the extraction filter and the
+    // widened-label backfill resolve label paths against it.
+    // (`Mailbox/get` always re-lists, even on an incremental run.)
+    let mailbox_nodes: Vec<crate::mailbox_labels::MailboxNode> =
+        if opts.only_mailbox_labels.is_empty()
+            && *label_change == datalib_etl::scope_config::FilterChange::Unchanged
+        {
+            Vec::new()
+        } else {
+            db.load_mailboxes()
+                .await?
+                .iter()
+                .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
+                .collect()
+        };
+
     // Resolve the configured label paths to mailbox ids now that the
     // full tree is in the db (`Mailbox/get` always re-lists, even on an
     // incremental run). Empty config = no filter (sync every mailbox).
@@ -314,12 +381,7 @@ async fn run_sync(
     let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_labels.is_empty() {
         None
     } else {
-        let payloads = db.load_mailboxes().await?;
-        let nodes: Vec<crate::mailbox_labels::MailboxNode> = payloads
-            .iter()
-            .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
-            .collect();
-        let resolved = crate::mailbox_labels::resolve(&nodes, &opts.only_mailbox_labels);
+        let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, &opts.only_mailbox_labels);
         if !resolved.unmatched.is_empty() {
             warn!(
                 event = "jmap_label_filter_unmatched",
@@ -335,6 +397,40 @@ async fn run_sync(
         Some(resolved.ids)
     };
 
+    // Mailboxes newly admitted by a widened `only_extract_labels`.
+    // `Email/changes` only reports what changed since the cursor, so
+    // existing mail in these mailboxes is invisible to it and needs its
+    // own bounded enumeration.
+    // `None` = no backfill. `Some(None)` = the filter was removed, so
+    // enumerate the whole account. `Some(Some(ids))` = enumerate just
+    // the newly-admitted mailboxes.
+    #[allow(clippy::option_option)]
+    let backfill: Option<Option<HashSet<String>>> = match label_change {
+        datalib_etl::scope_config::FilterChange::Unchanged => None,
+        datalib_etl::scope_config::FilterChange::WidenedToAll => {
+            info!(
+                event = "jmap_label_filter_widened",
+                added = "<filter removed>",
+                "enumerating the whole account",
+            );
+            Some(None)
+        }
+        datalib_etl::scope_config::FilterChange::Added(added) => {
+            let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, added);
+            if resolved.ids.is_empty() {
+                None
+            } else {
+                info!(
+                    event = "jmap_label_filter_widened",
+                    added = ?added,
+                    resolved_mailboxes = resolved.ids.len(),
+                    "enumerating newly-in-scope mailboxes",
+                );
+                Some(Some(resolved.ids))
+            }
+        }
+    };
+
     // ── emails (+ collect threadIds) ────────────────────────────────
     opts.progress.set_message("email: emails");
     let touched_threads = sync_emails(
@@ -344,6 +440,7 @@ async fn run_sync(
         account_id,
         opts,
         mailbox_filter.as_ref(),
+        backfill.as_ref(),
         &mut summary,
     )
     .await?;
@@ -493,6 +590,7 @@ async fn incremental_mailboxes(
 // Emails
 // ─────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn sync_emails(
     db: &RawDb,
     now: &str,
@@ -500,6 +598,7 @@ async fn sync_emails(
     account_id: &str,
     opts: &FetchOptions,
     mailbox_filter: Option<&HashSet<String>>,
+    #[allow(clippy::option_option)] backfill: Option<&Option<HashSet<String>>>,
     summary: &mut FetchSummary,
 ) -> Result<HashSet<String>> {
     let stored = if opts.full_resync {
@@ -522,7 +621,24 @@ async fn sync_emails(
         )
         .await
         {
-            Ok(()) => return Ok(touched_threads),
+            Ok(()) => {
+                // The incremental pass covered everything that changed.
+                // A widened label filter additionally needs the mail
+                // that did *not* change in the newly-admitted mailboxes.
+                if let Some(scope) = backfill {
+                    full_enumerate_emails(
+                        db,
+                        now,
+                        session,
+                        account_id,
+                        scope.as_ref(),
+                        summary,
+                        &mut touched_threads,
+                    )
+                    .await?;
+                }
+                return Ok(touched_threads);
+            }
             Err(e) => warn!(
                 event = "jmap_email_changes_fallback",
                 error = %e,

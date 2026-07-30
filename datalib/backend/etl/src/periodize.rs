@@ -54,6 +54,20 @@ impl Period {
         })
     }
 
+    /// The config spelling this variant round-trips from
+    /// [`Self::from_config`]. Stable across releases — it's recorded in
+    /// render cursors (see
+    /// [`crate::render_cursor::read_for_params`]), so changing a string
+    /// here would read as a config change and re-render every tree.
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Period::Month => "month",
+            Period::Day => "day",
+            Period::Year => "year",
+            Period::All => "all",
+        }
+    }
+
     /// SQLite format string passed to `strftime(<fmt>, ts/1000,
     /// 'unixepoch')`. `All` returns a value that won't be used in a
     /// real GROUP BY (callers detect All and substitute
@@ -142,5 +156,21 @@ mod tests {
         // Pre-1970 timestamp shouldn't panic.
         let k = Period::Month.key_for_ms(-1_000);
         assert!(k.starts_with("1969") || k == "1970-01");
+    }
+
+    #[test]
+    fn as_config_str_round_trips_every_variant() {
+        // The spelling is recorded in render cursors, so a typo in one
+        // arm would silently invalidate every signal render tree in the
+        // field on the next release.
+        for p in [Period::Month, Period::Day, Period::Year, Period::All] {
+            assert_eq!(
+                Period::from_config(Some(p.as_config_str())).unwrap(),
+                p,
+                "{:?} did not round-trip through {:?}",
+                p,
+                p.as_config_str()
+            );
+        }
     }
 }

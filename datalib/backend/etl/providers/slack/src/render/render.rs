@@ -118,8 +118,13 @@ pub fn render_all(
     // another cold start (the right behavior — nothing to anchor on).
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(out_dir, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
-            .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
+        render_cursor::write(
+            &cursor_path,
+            head,
+            parsed.scan.scan_elapsed,
+            &render_cursor::no_params(),
+        )
+        .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
     }
 
     Ok(RenderSummary {

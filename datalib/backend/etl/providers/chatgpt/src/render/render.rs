@@ -95,8 +95,13 @@ pub fn render_all(
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(root, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
-            .with_context(|| format!("write chatgpt render cursor {}", cursor_path.display()))?;
+        render_cursor::write(
+            &cursor_path,
+            head,
+            parsed.scan.scan_elapsed,
+            &render_cursor::no_params(),
+        )
+        .with_context(|| format!("write chatgpt render cursor {}", cursor_path.display()))?;
     }
     Ok(())
 }

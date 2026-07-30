@@ -118,7 +118,11 @@ impl DataProcessor for SignalRender {
         use crate::render::{parse, render_all};
 
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = datalib_etl::render_cursor::read(&cursor_path)
+        // `period` decides how messages bucket into documents, so a
+        // cursor written under a different one points past documents
+        // that no longer exist under this one.
+        let render_params = crate::render::render_params(self.period);
+        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)
             .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
         let parsed = parse(
             &self.raw_path,
@@ -128,8 +132,15 @@ impl DataProcessor for SignalRender {
         )
         .with_context(|| format!("signal parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
-            .context("signal render_all")?;
+        render_all(
+            &parsed,
+            ctx.root,
+            &self.name,
+            ctx.progress,
+            &render_params,
+            &mut on_doc,
+        )
+        .context("signal render_all")?;
         Ok("rendered".into())
     }
 }

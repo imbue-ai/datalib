@@ -239,7 +239,12 @@ impl DataProcessor for EmailRender {
         // the old registry path; `prior_fingerprints` is intentionally unused
         // for email (the cursor is the single source of truth).
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = datalib_etl::render_cursor::read(&cursor_path)?;
+        // Both knobs change the rendered output for documents the diff
+        // would never surface, so a cursor from a different pair has to
+        // go — see `render_cursor::read_for_params`.
+        let render_params =
+            crate::render::render::render_params(self.outlink, &self.only_render_labels);
+        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)?;
         let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))?;
 
         let mut on_doc = |md| ctx.emit_doc(md);

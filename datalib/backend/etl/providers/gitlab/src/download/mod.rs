@@ -88,10 +88,10 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-// `since_for_scope` was lifted to `datalib_etl::scope_state`
-// alongside github's identical (modulo bugs) helper; this provider
-// just re-exports the call site name so the rest of the module
-// doesn't have to change.
+// The `since` policy — including the widened-window exception — is
+// shared with github in `datalib_etl::scope_state`. GitLab's
+// `updated_after` takes the RFC 3339 form it returns verbatim, so
+// there's nothing to adapt here.
 use datalib_etl::scope_state::since_for_scope;
 
 pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
@@ -135,19 +135,22 @@ async fn discover_mrs(
     state: &HashMap<String, String>,
     refresh_window_days: u32,
     full: bool,
-) -> Result<(Vec<DiscoveredMr>, HashMap<String, String>)> {
+    prior: Option<&Value>,
+) -> Result<Discovery> {
     // Per-(proj, iid) we keep the *latest* `updated_at` we saw across
     // scopes — search/scope/reviewer can each surface the same MR with
     // (in principle) different freshness; take the newest.
     let mut by_key: HashMap<(String, u32), String> = HashMap::new();
     let mut new_state: HashMap<String, String> = Default::default();
+    let mut failed_scopes = 0usize;
     for scope in scopes {
-        let since = since_for_scope(state, scope, refresh_window_days, full);
+        let since = since_for_scope(state, scope, refresh_window_days, full, prior);
         tracing::info!(scope, ?since, "searching MRs");
         let results = match search_mrs(client, scope, user_id, since.as_deref()).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(scope, error = %e, "search failed; skipping scope");
+                failed_scopes += 1;
                 continue;
             }
         };
@@ -192,7 +195,19 @@ async fn discover_mrs(
         .collect();
     // Stable order for deterministic logs / progress.
     out.sort_by(|a, b| (a.proj.as_str(), a.iid).cmp(&(b.proj.as_str(), b.iid)));
-    Ok((out, new_state))
+    Ok(Discovery {
+        keys: out,
+        new_state,
+        failed_scopes,
+    })
+}
+
+/// Outcome of a discovery pass. See github's identical struct for why
+/// `failed_scopes` gates recording the config blob.
+struct Discovery {
+    keys: Vec<DiscoveredMr>,
+    new_state: HashMap<String, String>,
+    failed_scopes: usize,
 }
 
 /// A (proj, iid) pair surfaced by `discover_mrs`, carrying the listing's
@@ -239,6 +254,20 @@ async fn fetch_one_mr(
     Ok(())
 }
 
+/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
+/// Discovery scopes share one record because `refresh_window_days` is a
+/// single workspace-wide knob; the per-scope cursors it interacts with
+/// stay in `sync_scope_state`.
+const SCOPE_CONFIG_KEY: &str = "gitlab:download";
+
+/// The subset of [`FetchOptions`] that decides which data lands on disk.
+/// `max_mrs` / `targets` / `full_sync` are per-run knobs and one-off
+/// overrides, so recording them would make a smoke run read as a config
+/// change to the next real sync.
+fn scope_config_blob(opts: &FetchOptions) -> Value {
+    datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days)
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
@@ -264,8 +293,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
 
+    // Diff the scope-affecting params against the ones that produced the
+    // current cursors. `None` (fresh store, or one written before
+    // `sync_scope_config` existed) means no adjustment — see the module
+    // docs on `scope_config`.
+    let scope_cfg = scope_config_blob(&opts);
+    let prior_scope_cfg =
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+
     let client = GitLabClient::new();
     let mut summary = FetchSummary::default();
+    // Whether discovery actually covered every scope this run. Only then
+    // has the run satisfied `refresh_window_days`; see `scope_config`.
+    let discovery_complete = std::sync::atomic::AtomicBool::new(true);
 
     let work = async {
         let user_id = fetch_self(&client, &db).await?;
@@ -273,7 +313,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let had_mrs = db.any_merge_requests().await?;
         let mr_keys: Vec<DiscoveredMr> = if !opts.targets.is_empty() {
             // Explicit targets: no listing call, no `updated_at` to
-            // compare against — always fetch.
+            // compare against — always fetch. Discovery is skipped, so
+            // this run says nothing about a widened window.
+            discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
             opts.targets
                 .iter()
                 .cloned()
@@ -285,19 +327,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .collect()
         } else {
             let state = db.load_scope_state().await?;
-            let (keys, new_scope_state) = discover_mrs(
+            let discovered = discover_mrs(
                 &client,
                 user_id,
                 &opts.scopes,
                 &state,
                 opts.refresh_window_days,
                 opts.full_sync || !had_mrs,
+                prior_scope_cfg.as_ref(),
             )
             .await?;
-            for (k, v) in &new_scope_state {
+            if discovered.failed_scopes > 0 {
+                discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            for (k, v) in &discovered.new_state {
                 db.upsert_scope_state(k, v).await?;
             }
-            keys
+            discovered.keys
         };
         let mr_keys: Vec<DiscoveredMr> = if let Some(cap) = opts.max_mrs {
             mr_keys.into_iter().take(cap).collect()
@@ -348,6 +394,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.requests = client.request_count();
+    // Record the config only once this run has actually satisfied it. A
+    // skipped scope or a targets-only run leaves the prior blob in place
+    // so the next run re-plans the widening.
+    datalib_etl::scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        result.is_ok() && discovery_complete.load(std::sync::atomic::Ordering::Relaxed),
+    )
+    .await;
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -403,4 +459,65 @@ mod tests {
     // `since_for_scope` policy tests live in
     // `datalib_etl::scope_state` now that the implementation is
     // shared — gitlab just re-exports the helper.
+}
+
+#[cfg(test)]
+mod scope_config_tests {
+    use super::*;
+    use datalib_etl::scope_state::REFRESH_WINDOW_KEY;
+    use serde_json::json;
+
+    fn opts(window: u32, targets: Vec<(String, u32)>) -> FetchOptions {
+        FetchOptions {
+            refresh_window_days: window,
+            targets,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn blob_records_only_the_refresh_window() {
+        // Per-run budgets and one-off overrides must stay out: a
+        // `--max-mrs 5` smoke run must not read as a config change to
+        // the next real sync.
+        let mut o = opts(30, vec![]);
+        o.max_mrs = Some(5);
+        o.full_sync = true;
+        let blob = scope_config_blob(&o);
+        assert_eq!(blob, json!({ REFRESH_WINDOW_KEY: 30 }));
+    }
+
+    #[test]
+    fn blob_round_trips_into_the_since_policy() {
+        // The blob this provider writes is the same shape
+        // `since_for_scope` reads back — the pairing the whole scheme
+        // depends on.
+        let blob = scope_config_blob(&opts(30, vec![]));
+        let mut state = std::collections::HashMap::new();
+        state.insert("s".to_string(), "2026-06-01T00:00:00Z".to_string());
+        // Unchanged window: cursor stands.
+        assert_eq!(
+            datalib_etl::scope_state::since_for_scope(&state, "s", 30, false, Some(&blob))
+                .as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
+        // Widened to unbounded: filter dropped entirely.
+        assert_eq!(
+            datalib_etl::scope_state::since_for_scope(&state, "s", 0, false, Some(&blob)),
+            None
+        );
+    }
+
+    #[test]
+    fn discovery_is_incomplete_when_a_scope_fails() {
+        // The blob is one row for every scope, so recording it after a
+        // partial discovery would lose the widening for the scopes that
+        // never searched.
+        let d = Discovery {
+            keys: Vec::new(),
+            new_state: Default::default(),
+            failed_scopes: 1,
+        };
+        assert!(d.failed_scopes > 0, "must block recording");
+    }
 }

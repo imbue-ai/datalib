@@ -41,6 +41,16 @@ use super::schema_raw::{
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
+/// The `ts` range a channel currently occupies in the raw store.
+#[derive(Clone, Debug)]
+pub struct TsBounds {
+    /// `min(ts)` — the floor of what's mirrored. Upper bound of a
+    /// `since`-widening backfill.
+    pub oldest: String,
+    /// `max(ts)` — the forward resume cursor.
+    pub latest: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
@@ -445,20 +455,31 @@ impl RawDb {
         Ok(out)
     }
 
-    /// `max(ts)` per channel — drives the live downloader's resume
-    /// cursor.
-    pub async fn latest_ts_by_channel(&self) -> Result<HashMap<String, String>> {
-        let rows =
-            sqlx::query("SELECT channel_id, MAX(ts) AS max_ts FROM messages GROUP BY channel_id")
-                .fetch_all(&self.pool)
-                .await
-                .context("select latest_ts_by_channel")?;
+    /// `(min(ts), max(ts))` per channel, in one aggregate scan.
+    ///
+    /// `latest` drives the downloader's forward resume cursor. `oldest`
+    /// is the floor of what we've already mirrored, which bounds the
+    /// backfill window a widened `since` schedules — see
+    /// `download::Adjustments`. Both come from the same GROUP BY because
+    /// they're read at the same scan point in a run, and a second full
+    /// aggregate over `messages` is not free on a large workspace.
+    pub async fn ts_bounds_by_channel(&self) -> Result<HashMap<String, TsBounds>> {
+        let rows = sqlx::query(
+            "SELECT channel_id, MIN(ts) AS min_ts, MAX(ts) AS max_ts \
+             FROM messages GROUP BY channel_id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select ts_bounds_by_channel")?;
         let mut out = HashMap::with_capacity(rows.len());
         for r in rows {
             let cid: String = r.try_get("channel_id").unwrap_or_default();
-            let ts: Option<String> = r.try_get("max_ts").ok();
-            if let Some(ts) = ts {
-                out.insert(cid, ts);
+            let oldest: Option<String> = r.try_get("min_ts").ok();
+            let latest: Option<String> = r.try_get("max_ts").ok();
+            // A channel row only exists here because it has messages, so
+            // both aggregates are populated together or not at all.
+            if let (Some(oldest), Some(latest)) = (oldest, latest) {
+                out.insert(cid, TsBounds { oldest, latest });
             }
         }
         Ok(out)

@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
+use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::section::section_attrs;
@@ -61,11 +62,20 @@ pub struct RenderSummary {
     pub blobs_materialized: usize,
 }
 
+/// The render params recorded alongside the cursor. `period` decides
+/// how messages bucket into documents, so changing it invalidates every
+/// document the previous run wrote — see
+/// [`datalib_etl::render_cursor::read_for_params`].
+pub fn render_params(period: Period) -> serde_json::Value {
+    serde_json::json!({ "period": period.as_config_str() })
+}
+
 pub fn render_all(
     parsed: &ParsedSignal,
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
+    render_params: &serde_json::Value,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     // Log how long the dolt_diff scan took. Logged on every render
@@ -127,7 +137,7 @@ pub fn render_all(
     // right behavior since we have no way to anchor the diff.
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(out_dir, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed, render_params)
             .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)

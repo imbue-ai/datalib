@@ -62,7 +62,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use mail_parser::{Address, HeaderValue, MessageParser, MimeHeaders, PartType};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
@@ -165,6 +165,118 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
+/// Scope key for the mbox path's [`datalib_etl::scope_config`]
+/// record. Distinct from the JMAP path's `jmap:download` — the two
+/// modes of `type: email` keep separate state.
+const SCOPE_CONFIG_KEY: &str = "mbox:download";
+
+/// Blob keys. Named so writer and reader can't drift.
+const K_ONLY_LABELS: &str = "only_extract_labels";
+const K_BLOB_CAP: &str = "blob_size_limit_bytes";
+const K_ACCOUNT: &str = "account";
+
+/// The subset of [`FetchOptions`] that decides which data lands on disk.
+///
+/// The per-file `(size, mtime)` checkpoint answers "did the input
+/// change?", which is all it can answer. It cannot answer "is the output
+/// already correct?" — and those diverge the moment config participates
+/// in the transformation. This record covers the difference.
+fn scope_config_blob(opts: &FetchOptions) -> Value {
+    // Sorted so a reordered config list isn't mistaken for a change.
+    let mut labels: Vec<&str> = opts.only_labels.iter().map(String::as_str).collect();
+    labels.sort_unstable();
+    json!({
+        K_ONLY_LABELS: labels,
+        K_BLOB_CAP: opts.blob_size_limit_bytes,
+        // The account row is derived wholly from these, so comparing the
+        // rendered values is exactly right.
+        K_ACCOUNT: {
+            "account_id": opts.account_config.account_id,
+            "display_name": opts.account_config.display_name,
+            "email_address": opts.account_config.email_address,
+            "is_personal": opts.account_config.is_personal,
+        },
+    })
+}
+
+/// What a config change since the last satisfying run requires.
+///
+/// Only *widenings* need the files re-read; a narrowed filter or a
+/// tightened cap leaves an on-disk superset, and nothing in the
+/// pipeline deletes. The account fields are separable: they feed
+/// `flush_account_and_lookups`, which is independent of message ingest,
+/// so editing an `mbox:` block costs one UPSERT rather than a re-read of
+/// a multi-gigabyte export.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Adjustments {
+    /// Ignore the per-file checkpoints and re-read every mbox.
+    reingest_files: bool,
+    /// Re-run the account/lookup flush even if every file was skipped.
+    refresh_account: bool,
+}
+
+impl Adjustments {
+    fn plan(prior: Option<&Value>, opts: &FetchOptions) -> Self {
+        let mut out = Self::default();
+        let Some(prior) = prior else {
+            // Every store predating this record. Adopt, do nothing.
+            return out;
+        };
+
+        use datalib_etl::scope_config::FilterChange;
+        match datalib_etl::scope_config::filter_widened(
+            Some(prior),
+            K_ONLY_LABELS,
+            &opts.only_labels,
+        ) {
+            FilterChange::Unchanged => {}
+            FilterChange::WidenedToAll => {
+                out.reingest_files = true;
+                info!(
+                    event = "mbox_labels_widened",
+                    added = "<filter removed>",
+                    "re-reading mbox files; every label is now in scope",
+                );
+            }
+            FilterChange::Added(added) => {
+                out.reingest_files = true;
+                info!(
+                    event = "mbox_labels_widened",
+                    added = ?added,
+                    "re-reading mbox files for newly-in-scope labels",
+                );
+            }
+        }
+
+        if datalib_etl::scope_config::limit_relaxed(
+            Some(prior),
+            K_BLOB_CAP,
+            opts.blob_size_limit_bytes,
+        ) {
+            out.reingest_files = true;
+            info!(
+                event = "mbox_blob_limit_relaxed",
+                limit = ?opts.blob_size_limit_bytes,
+                "re-reading mbox files for previously-oversize attachments",
+            );
+        }
+
+        let cur_account = scope_config_blob(opts);
+        if prior.get(K_ACCOUNT) != cur_account.get(K_ACCOUNT) {
+            // Deliberately does NOT set `reingest_files`: the account row
+            // is written by `flush_account_and_lookups`, which doesn't
+            // read a single message.
+            out.refresh_account = true;
+            info!(
+                event = "mbox_account_config_changed",
+                "refreshing the account row without re-reading any mbox",
+            );
+        }
+
+        out
+    }
+}
+
 /// Walk `opts.input_path` and land every message into the raw store
 /// via in-memory accumulation + chunked multi-row `INSERT`s — see
 /// [`FLUSH_BATCH`] for the per-batch-flush shape.
@@ -188,6 +300,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .or_else(|| opts.account_id_override.clone())
         .unwrap_or_else(|| default_account_id(&opts.input_path));
 
+    // Diff the scope-affecting params against the ones that produced the
+    // current checkpoints.
+    let scope_cfg = scope_config_blob(&opts);
+    let prior_scope_cfg =
+        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
+
     let known_blobs = db.loaded_blob_ids().await?;
 
     // Per-file (size, mtime_ns) fingerprints. Files whose stamped
@@ -208,9 +327,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             }
         };
-        if stamped
-            .get(&job.canonical)
-            .is_some_and(|(sz, mt)| *sz == job.size_bytes && *mt == job.mtime_ns)
+        if !adjust.reingest_files
+            && stamped
+                .get(&job.canonical)
+                .is_some_and(|(sz, mt)| *sz == job.size_bytes && *mt == job.mtime_ns)
         {
             info!(
                 event = "mbox_file_skipped",
@@ -300,7 +420,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // upserts (which are idempotent ON CONFLICT chains, not
     // delete-then-insert) aren't worth the round-trip when every
     // file was a cache hit.
-    if files_processed > 0 {
+    if files_processed > 0 || adjust.refresh_account {
+        // With no files processed the accumulator is empty, so this
+        // writes the account row and nothing else — which is exactly
+        // what an `mbox:` block edit needs. Every write here is an
+        // idempotent ON CONFLICT chain, never delete-then-insert, so
+        // running it over an empty accumulator can't drop anything.
         flush_account_and_lookups(
             &db,
             &account_id,
@@ -309,12 +434,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             &mut summary,
         )
         .await?;
-    } else if skipped_count > 0 {
+    }
+    if files_processed == 0 && skipped_count > 0 {
         info!(
             event = "mbox_all_files_skipped",
-            skipped_count, "every mbox file matched its checkpoint; nothing to ingest",
+            skipped_count,
+            account_refreshed = adjust.refresh_account,
+            "every mbox file matched its checkpoint",
         );
     }
+
+    // Record the config only once this run satisfied it, so a failure
+    // leaves the previous record in place and the next run re-plans.
+    // (Errors above return early, so reaching here means success.)
+    datalib_etl::scope_config::store_if_satisfied(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg, true)
+        .await;
 
     Ok(summary)
 }
@@ -1433,5 +1567,277 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stamped, 1);
+    }
+
+    /// Run `fetch` once against `path`, opening and closing its own
+    /// pool so the next run sees a clean connection. Mirrors
+    /// `re_running_is_idempotent`.
+    async fn run_once(db_path: &Path, path: &Path, opts: FetchOptions) -> FetchSummary {
+        let db = RawDb::open(db_path).await.unwrap();
+        let pool = db.pool().clone();
+        let s = fetch(FetchOptions {
+            db_path: db_path.to_path_buf(),
+            db: Some(db),
+            input_path: path.to_path_buf(),
+            ..opts
+        })
+        .await
+        .unwrap();
+        pool.close().await;
+        s
+    }
+
+    /// The headline case: an unchanged file whose config widened must be
+    /// re-read. Guards the plumbing, not just `Adjustments::plan` — the
+    /// gate fails silently to a no-op, so a dropped `!adjust.reingest_files`
+    /// would leave every unit test green while restoring the bug.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn widening_labels_reingests_an_unchanged_file() {
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+
+        // Only the `Sent` message is in scope. (Msg two carries
+        // `Inbox,Sent`; msg one carries `Inbox,Starred,Unread`.)
+        let first = run_once(
+            &db_path,
+            &path,
+            FetchOptions {
+                only_labels: vec!["Sent".into()],
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(first.emails_upserted, 1, "only the Sent message");
+
+        // Widen to include Inbox. The file is byte-identical, so the
+        // (size, mtime) checkpoint alone would skip it forever.
+        let second = run_once(
+            &db_path,
+            &path,
+            FetchOptions {
+                only_labels: vec!["Sent".into(), "Inbox".into()],
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            second.emails_upserted, 2,
+            "widened labels must re-read the file"
+        );
+
+        let db = RawDb::open(&db_path).await.unwrap();
+        assert_eq!(db.load_emails().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn narrowing_labels_does_not_reingest() {
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+
+        run_once(&db_path, &path, FetchOptions::default()).await;
+        let second = run_once(
+            &db_path,
+            &path,
+            FetchOptions {
+                only_labels: vec!["Sent".into()],
+                ..Default::default()
+            },
+        )
+        .await;
+        // The store is already a superset; re-reading would produce
+        // nothing. This is the case a config *hash* would get wrong.
+        assert_eq!(second.emails_upserted, 0);
+        let db = RawDb::open(&db_path).await.unwrap();
+        assert_eq!(
+            db.load_emails().await.unwrap().len(),
+            2,
+            "narrowing must not drop already-ingested mail"
+        );
+    }
+
+    /// The case that motivated storing values instead of a hash: an
+    /// `mbox:` block edit updates one row and never opens the file.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn account_edit_refreshes_without_reingesting() {
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+
+        run_once(&db_path, &path, FetchOptions::default()).await;
+
+        let second = run_once(
+            &db_path,
+            &path,
+            FetchOptions {
+                account_config: MboxAccountConfig {
+                    display_name: Some("Work Gmail".into()),
+                    is_personal: Some(false),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            second.emails_upserted, 0,
+            "an account-field edit must not re-read the mbox"
+        );
+
+        let db = RawDb::open(&db_path).await.unwrap();
+        let accounts = db.load_accounts().await.unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0]["name"], "Work Gmail");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unchanged_config_still_skips() {
+        // Guards the other direction: the adjustment must not fire on
+        // every run and turn each sync into a full re-read.
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let opts = || FetchOptions {
+            only_labels: vec!["Inbox".into()],
+            ..Default::default()
+        };
+        assert_eq!(run_once(&db_path, &path, opts()).await.emails_upserted, 2);
+        assert_eq!(run_once(&db_path, &path, opts()).await.emails_upserted, 0);
+        assert_eq!(run_once(&db_path, &path, opts()).await.emails_upserted, 0);
+    }
+}
+
+#[cfg(test)]
+mod scope_config_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn opts(labels: &[&str], cap: Option<u64>, account: MboxAccountConfig) -> FetchOptions {
+        FetchOptions {
+            only_labels: labels.iter().map(|s| s.to_string()).collect(),
+            blob_size_limit_bytes: cap,
+            account_config: account,
+            ..Default::default()
+        }
+    }
+
+    fn named(display: Option<&str>) -> MboxAccountConfig {
+        MboxAccountConfig {
+            display_name: display.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn absent_record_plans_nothing() {
+        // Every mbox store predating this record. Must not re-read a
+        // multi-gigabyte export on upgrade.
+        let o = opts(&["Sent"], Some(1000), named(None));
+        assert_eq!(Adjustments::plan(None, &o), Adjustments::default());
+    }
+
+    #[test]
+    fn unchanged_config_plans_nothing() {
+        let o = opts(&["Sent"], Some(1000), named(Some("Work")));
+        let prior = scope_config_blob(&o);
+        assert_eq!(Adjustments::plan(Some(&prior), &o), Adjustments::default());
+    }
+
+    #[test]
+    fn label_order_is_not_a_change() {
+        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)));
+        let o = opts(&["Inbox", "Sent"], None, named(None));
+        assert_eq!(Adjustments::plan(Some(&prior), &o), Adjustments::default());
+    }
+
+    // ── the headline case ────────────────────────────────────────────
+
+    #[test]
+    fn widened_labels_reingest_files() {
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)));
+        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent", "Inbox"], None, named(None)));
+        assert!(plan.reingest_files);
+        assert!(!plan.refresh_account);
+    }
+
+    #[test]
+    fn adding_to_an_empty_filter_is_a_narrowing() {
+        // `[]` means "no filter", so it is the *widest* setting: moving
+        // to `["Sent"]` shrinks scope even though the list grew. Caught
+        // by `narrowing_labels_does_not_reingest` before this existed.
+        let prior = scope_config_blob(&opts(&[], None, named(None)));
+        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)));
+        assert_eq!(plan, Adjustments::default());
+    }
+
+    #[test]
+    fn removing_the_filter_reingests() {
+        // The mirror image: dropping to `[]` admits every label, and the
+        // naive set-difference reading would see no addition at all.
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)));
+        assert!(Adjustments::plan(Some(&prior), &opts(&[], None, named(None))).reingest_files);
+    }
+
+    #[test]
+    fn narrowed_labels_are_a_noop() {
+        // The store is already a superset. A hash-based record would
+        // re-read the whole export here and produce nothing.
+        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)));
+        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)));
+        assert_eq!(plan, Adjustments::default());
+    }
+
+    #[test]
+    fn relaxed_blob_cap_reingests_files() {
+        let prior = scope_config_blob(&opts(&[], Some(1000), named(None)));
+        assert!(
+            Adjustments::plan(Some(&prior), &opts(&[], Some(5000), named(None))).reingest_files
+        );
+        assert!(Adjustments::plan(Some(&prior), &opts(&[], None, named(None))).reingest_files);
+    }
+
+    #[test]
+    fn tightened_blob_cap_is_a_noop() {
+        let prior = scope_config_blob(&opts(&[], Some(5000), named(None)));
+        let plan = Adjustments::plan(Some(&prior), &opts(&[], Some(1000), named(None)));
+        assert_eq!(plan, Adjustments::default());
+    }
+
+    // ── the case a hash would get wrong ──────────────────────────────
+
+    #[test]
+    fn account_edit_refreshes_without_rereading() {
+        // The account row is written by `flush_account_and_lookups`,
+        // which never reads a message — so this must cost one UPSERT,
+        // not a re-read of the whole export.
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)));
+        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(Some("Work"))));
+        assert!(plan.refresh_account);
+        assert!(
+            !plan.reingest_files,
+            "an account-field edit must not re-read the mbox"
+        );
+    }
+
+    #[test]
+    fn account_and_labels_can_both_move() {
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)));
+        let plan = Adjustments::plan(
+            Some(&prior),
+            &opts(&["Sent", "Inbox"], None, named(Some("Work"))),
+        );
+        assert!(plan.reingest_files);
+        assert!(plan.refresh_account);
+    }
+
+    #[test]
+    fn blob_shape_is_the_scope_affecting_subset() {
+        let obj = scope_config_blob(&opts(&["Sent"], Some(7), named(Some("Work"))));
+        let obj = obj.as_object().unwrap();
+        assert_eq!(obj.len(), 3, "unexpected keys: {obj:?}");
+        assert_eq!(obj[K_ONLY_LABELS], json!(["Sent"]));
+        assert_eq!(obj[K_BLOB_CAP], json!(7));
+        assert_eq!(obj[K_ACCOUNT]["display_name"], json!("Work"));
     }
 }
