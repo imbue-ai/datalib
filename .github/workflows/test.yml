@@ -149,25 +149,6 @@ jobs:
         with:
           buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
 
-      # FIXME(devcontainer-republish): TEMPORARY bridge — DELETE this whole
-      # step once a devcontainer image built after the `sqlite3` Dockerfile
-      # addition is published on a `v*` tag. It installs the stock
-      # `sqlite3` CLI the beeper provider's extract shells out to
-      # (`//tests/fixtures:ingested_tng`); the Dockerfile now lists
-      # `sqlite3` in its apt set, but `:latest` only moves on republish, so
-      # until then it's installed at runtime here. (Harmless if left in —
-      # the `command -v` guard makes it a no-op once the image carries it —
-      # but it's dead weight worth removing.) apt lists are pruned in the
-      # image, hence the `update`. Runs as root in the container; no sudo.
-      - name: Install runtime test deps not yet baked into the image
-        run: |
-          set -euo pipefail
-          if ! command -v sqlite3 >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y --no-install-recommends sqlite3
-          fi
-          echo "sqlite3: $(command -v sqlite3) ($(sqlite3 --version))"
-
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
       # dist build uses, so the BuildBuddy action cache populated here
       # on every PR / main push warms exactly the entries tag-time

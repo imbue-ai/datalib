@@ -7,7 +7,12 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-bazel-*
+# Bazel's convenience symlinks (bazel-bin, bazel-out, bazel-testlogs,
+# bazel-datalib). Anchored: bazel only ever creates them in the
+# workspace root, and unanchored `bazel-*` silently swallows any
+# path with that prefix at any depth — it ate
+# `.github/actions/bazel-env/` during review of #104.
+/bazel-*
 node_modules/
 target/
 dolt_repo/

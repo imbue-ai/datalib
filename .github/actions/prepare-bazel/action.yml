@@ -48,22 +48,22 @@ runs:
             echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
         fi
 
-    # FIXME(devcontainer-republish): TEMPORARY bridge — delete this step and
-    # the `--action_env`/`--host_action_env=LIBCLANG_PATH` flags at both call
-    # sites once a devcontainer image built after the `.bazelrc`/Dockerfile
-    # `--host_action_env` additions is published on a `v*` tag.
+    # Standing CI accommodation, NOT a republish bridge — this looked like
+    # one for a while, so: the devcontainer image does bake both
+    # `--action_env` and `--host_action_env=LIBCLANG_PATH` into
+    # `/root/.bazelrc` (verified against `:latest`). Bazel never reads that
+    # file here, because bazel's user rc is `$HOME/.bazelrc` and GitHub
+    # forces `HOME=/github/home` for container jobs, where no rc exists.
+    # So the values have to reach bazel on the command line regardless of
+    # how recently the image was republished. Same root cause as the qmd
+    # model mount in `test.yml`.
     #
-    # `LIBCLANG_PATH` has to be passed on the command line for BOTH the target
-    # and exec configs. The devcontainer bakes `LIBCLANG_PATH` into
-    # `/root/.bazelrc`, but only `--host_action_env` makes it reach exec-config
+    # Both configs need it: only `--host_action_env` reaches exec-config
     # (`[for tool]`) bindgen actions — e.g. boring-sys2, pulled in when an
-    # exec-config tool needs the HTTP stack — and the current `:latest` image
-    # only baked the `--action_env` half. Computing it here from `llvm-config`
-    # (the same source the image uses) means CI is correct regardless of which
-    # devcontainer image `:latest` currently points at, instead of waiting for
-    # the republish. Mirrors `release.yml`'s `bazelargs` step. Once the
-    # republished image carries the baked `--host_action_env` line these flags
-    # are a redundant no-op (identical value).
+    # exec-config tool needs the HTTP stack — and only `--action_env`
+    # reaches target-config ones. Computing the path from `llvm-config`
+    # (the same source the image uses) keeps CI correct whichever image
+    # `:latest` points at. Mirrors `release.yml`'s `bazelargs` step.
     - name: Resolve LIBCLANG_PATH
       id: libclang
       shell: bash
