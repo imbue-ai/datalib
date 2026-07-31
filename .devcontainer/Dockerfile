@@ -17,10 +17,21 @@
 # `devcontainer up` only needs to fetch the dev-only build toolchain
 # layers added below.
 #
-# Pin: the FROM tag should track a published prod image. Bump by
-# editing the ARG default below; the bump is intentionally manual
-# (rather than `:latest`) so devcontainer builds are reproducible.
-ARG PROD_IMAGE_TAG=0.5.2
+# Pin: the FROM tag tracks a published prod image, by exact version
+# rather than `:latest`, so a devcontainer build is reproducible.
+#
+# It must equal [workspace.package].version in
+# datalib/backend/Cargo.toml — `//datalib/backend:version_consistency_test`
+# enforces that, alongside the same check for dag's and http's
+# BUILD.bazel `version` attrs. The pin had drifted twenty minor versions
+# behind (0.5.2 against a 0.25.0 release series) before the test covered
+# it.
+#
+# There is a short window during a release, between the version-bump
+# commit and `release.yml` publishing the new tag, where this points at
+# an image that does not exist yet. That is the same window the rest of
+# the version bump lives in; `release.yml` closes it minutes later.
+ARG PROD_IMAGE_TAG=0.25.0
 FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}
 
 # Reset the prod image's ENTRYPOINT. Prod wraps everything in

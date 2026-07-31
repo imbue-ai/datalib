@@ -17,10 +17,15 @@ published from a local machine — the tag is the trigger.
   `datalib/backend/Cargo.toml`.
 - Must match the `version = "..."` fields in
   `datalib/backend/dag/BUILD.bazel` and
-  `datalib/backend/http/BUILD.bazel` — asserted by
-  `//datalib/backend:version_consistency_test`, which names both
-  files on failure. If that test's `data` list has grown, bump every
-  file it checks.
+  `datalib/backend/http/BUILD.bazel`, and `ARG PROD_IMAGE_TAG` in
+  `.devcontainer/Dockerfile` — asserted by
+  `//datalib/backend:version_consistency_test`, which names the
+  offending file on failure. If that test's `data` list has grown, bump
+  every file it checks.
+- `ARG PROD_IMAGE_TAG` selects the prod image a LOCAL devcontainer
+  builds FROM, so between this bump and `release.yml` publishing the new
+  tag it points at an image that does not exist yet. That window closes
+  when the tag build finishes.
 - The git tag is `vX.Y.Z` with the same number. Minor bump for
   feature releases, patch for fix-only ones.
 - `datalib/tauri/tauri.conf.json`'s `"version"` is the desktop

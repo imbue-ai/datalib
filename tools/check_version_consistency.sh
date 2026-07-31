@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Asserts that the version declared in datalib/backend/Cargo.toml's
-# [workspace.package] section matches the `version = "..."` attribute in
-# each BUILD.bazel that stamps one (dag's datalib_dag_bin rust_binary,
-# http's rust_library — the latter feeds /api/health and, via the
-# bundled binary, the desktop app).
+# [workspace.package] section matches:
+#   * the `version = "..."` attribute in each BUILD.bazel that stamps one
+#     (dag's datalib_dag_bin rust_binary, http's rust_library — the
+#     latter feeds /api/health and, via the bundled binary, the desktop
+#     app), and
+#   * `ARG PROD_IMAGE_TAG` in .devcontainer/Dockerfile, which selects the
+#     prod image a local devcontainer builds FROM.
 #
 # Why this exists: Cargo.toml is the canonical source of truth for the
 # project version (all member crates use `version.workspace = true`).
@@ -63,6 +66,32 @@ EOF
         status=1
     fi
 done
-exit_msg="OK: Cargo.toml, dag/BUILD.bazel, and http/BUILD.bazel all declare version $cargo_version"
+# The devcontainer's FROM tag. Unenforced, this rots silently: nothing
+# builds it in CI (release.yml passes --build-arg PROD_IMAGE_TAG), so a
+# stale value only surfaces when a contributor rebuilds their
+# devcontainer and lands on an ancient prod base.
+dockerfile="$(rlocation _main/.devcontainer/Dockerfile)"
+[[ -f "$dockerfile" ]] || { echo "ERROR: .devcontainer/Dockerfile not found at $dockerfile" >&2; exit 1; }
+
+devcontainer_pin="$(grep -E '^ARG PROD_IMAGE_TAG=' "$dockerfile" | head -n1 | sed -E 's/^ARG PROD_IMAGE_TAG=(.*)$/\1/')"
+if [[ -z "$devcontainer_pin" ]]; then
+    echo "ERROR: could not find an 'ARG PROD_IMAGE_TAG=' line in $dockerfile" >&2
+    exit 1
+fi
+if [[ "$cargo_version" != "$devcontainer_pin" ]]; then
+    cat >&2 <<EOF
+Version mismatch — Cargo.toml is the canonical source of truth.
+
+  datalib/backend/Cargo.toml    [workspace.package].version = "$cargo_version"
+  .devcontainer/Dockerfile      ARG PROD_IMAGE_TAG=$devcontainer_pin
+
+The devcontainer builds FROM ghcr.io/imbue-ai/datalib:\${PROD_IMAGE_TAG},
+so leaving this behind means local devcontainers build on a stale prod
+image. Bump it with the rest of the version.
+EOF
+    status=1
+fi
+
+exit_msg="OK: Cargo.toml, dag/BUILD.bazel, http/BUILD.bazel, and .devcontainer/Dockerfile all declare version $cargo_version"
 [[ "$status" -eq 0 ]] && echo "$exit_msg"
 exit "$status"
