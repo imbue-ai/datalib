@@ -73,7 +73,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   2. the qmd step shells out to `npx -y @tobilu/qmd@<version>`
 #      to (re)build the qmd search index at sync time. The qmd version
 #      is chosen by the binary, not pinned here.
-# Keep `NODE_MAJOR` in sync with .devcontainer/Dockerfile.
 ARG NODE_MAJOR=22
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
@@ -149,17 +148,37 @@ RUN arch="$(dpkg --print-architecture)" \
 # fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
 # aggressive cleanup pulls node out from under us) and the marginal
 # disk-size savings don't matter against the model layer.
-#
-# Keep this block in sync with `.devcontainer/Dockerfile`.
 ARG QMD_VERSION=2.5.3
+# `QMD_PREFETCH_MODELS=false` skips `qmd pull`, which is what makes the
+# `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of a 6.45 GB
+# image. Prod keeps them (default `true`): a first sync would otherwise
+# stall on a multi-GB HuggingFace download. CI does not need them,
+# because the one action that reads them
+# (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit on almost
+# every run — see `.github/workflows/release.yml`'s docker-publish job.
+#
+# The `else` branch still creates the empty directory: `test.yml` passes
+# `--sandbox_add_mount_pair=/root/.cache/qmd/models` unconditionally, and
+# a mount pair whose source does not exist is not a state we want to
+# discover on the first PR that runs a sandboxed action.
+#
+# `npm cache clean --force` at the end drops npm's download cache: 512 MB
+# of tarballs neither variant ever reads again. It is pure image weight,
+# so both prod and the slim base shed it.
+ARG QMD_PREFETCH_MODELS=true
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         python3 \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
     && qmd --version \
-    && qmd pull \
-    && ls -lh /root/.cache/qmd/models
+    && if [ "${QMD_PREFETCH_MODELS}" = "true" ]; then \
+           qmd pull && ls -lh /root/.cache/qmd/models; \
+       else \
+           echo "QMD_PREFETCH_MODELS=false - skipping the model prefetch"; \
+           mkdir -p /root/.cache/qmd/models; \
+       fi \
+    && npm cache clean --force
 
 # Pre-create the bind-mount targets so empty-dir mounts behave predictably
 # and so an unmounted run still has somewhere to write.

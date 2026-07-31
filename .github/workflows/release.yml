@@ -785,6 +785,30 @@ jobs:
               --push \
               ctx
 
+          # The same image without qmd's 2.2 GB of GGUFs, for the
+          # devcontainer below to build on. Only CI pulls the
+          # devcontainer image, and CI's one consumer of those models
+          # (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit
+          # on almost every run, so it was downloading them for nothing:
+          # measured 6.45 GB -> 3.78 GB, cold pull 80s -> 37s, and the
+          # whole CI job 218s -> 133s.
+          #
+          # Deliberately NOT tagged `:latest` and deliberately amd64
+          # only: this is a build input for the devcontainer, not a
+          # product image, and the only thing that consumes it runs on
+          # x86_64 runners. Every layer up to the qmd step is identical
+          # to the build above and comes from the same `type=gha` cache,
+          # so this costs one extra qmd/npm layer, not a second image.
+          docker buildx build \
+              --platform linux/amd64 \
+              --build-arg QMD_PREFETCH_MODELS=false \
+              --tag "${image}:${version}-slim" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --cache-from type=gha,scope=docker-publish,version=2 \
+              --cache-to type=gha,mode=max,scope=docker-publish,version=2 \
+              --push \
+              ctx
+
   # Build and push the devcontainer image to ghcr.io. The devcontainer
   # image inherits from the prod image (`FROM
   # ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`), so this MUST
@@ -874,10 +898,19 @@ jobs:
           set -euo pipefail
           version="${REF_NAME#v}"
           image="ghcr.io/${GITHUB_REPOSITORY,,}_devcontainer"
+          # `${version}-slim` rather than `${version}`: see the slim
+          # build in docker-publish above. CI is the only consumer of
+          # this image, and it does not need the qmd models.
+          #
+          # amd64 only, because the slim base is amd64 only and CI runs
+          # on x86_64. Contributors are unaffected — `devcontainer.json`
+          # sets `build.dockerfile`, so a local devcontainer is built
+          # from `.devcontainer/Dockerfile` against the FULL prod image,
+          # models included.
           docker buildx build \
               --file .devcontainer/Dockerfile \
-              --platform linux/amd64,linux/arm64 \
-              --build-arg PROD_IMAGE_TAG=${version} \
+              --platform linux/amd64 \
+              --build-arg PROD_IMAGE_TAG=${version}-slim \
               --build-arg WARM_BAZEL_CACHE=false \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
