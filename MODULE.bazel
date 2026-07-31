@@ -242,7 +242,7 @@ register_toolchains("@rust_toolchains//:all")
 # constraint the rust musl toolchains use onto the cc toolchains, so
 # only an explicit `--config=musl-*` build resolves them; host builds
 # keep the autodetected host cc toolchain.
-bazel_dep(name = "toolchains_musl", version = "0.1.27")
+bazel_dep(name = "toolchains_musl", version = "0.1.27.bcr.1")
 
 toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolchains_musl")
 toolchains_musl.config(
