@@ -1,0 +1,84 @@
+# Setup every bazel job in this repo needs, in one place: point bazel at the
+# BuildBuddy cache and resolve the LIBCLANG_PATH the image's bindgen actions
+# want. Both `test.yml` jobs use it; `release.yml`'s matrix legs do their own
+# thing because they run on bare runners rather than in the devcontainer.
+#
+# Callers must run `actions/checkout` first — a local composite action is
+# loaded from the checked-out workspace, so it cannot check itself out.
+name: Prepare bazel environment
+description: Configure the BuildBuddy remote cache and resolve LIBCLANG_PATH.
+
+inputs:
+  buildbuddy-api-key:
+    description: >
+      BuildBuddy API key. Optional: when empty (a PR from a fork, or a local
+      `act` run without secrets) the remote cache is simply not configured and
+      bazel runs everything locally.
+    required: false
+    default: ""
+
+outputs:
+  libclang-path:
+    description: Directory holding libclang, for --action_env=LIBCLANG_PATH.
+    value: ${{ steps.libclang.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    # Drop the key into the workspace `.bazelrc.user` (gitignored) —
+    # `.bazelrc`'s `try-import` at the bottom picks it up, and
+    # `build --config=buildbuddy` activates the remote cache + BES endpoint.
+    # `test` inherits from `build`, so a single `build --config=...` line
+    # covers both; adding a separate `test --config=...` line on top
+    # double-expands the config and trips bazel's "config expanded more than
+    # once" warning.
+    - name: Configure BuildBuddy remote cache
+      shell: bash
+      env:
+        BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
+      run: |
+        set -euo pipefail
+        if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            cat > .bazelrc.user <<EOF
+        common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+        build --config=buildbuddy
+        EOF
+            echo "BuildBuddy remote cache enabled for this job."
+        else
+            echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+        fi
+
+    # Standing CI accommodation, NOT a republish bridge — this looked like
+    # one for a while, so: the devcontainer image does bake both
+    # `--action_env` and `--host_action_env=LIBCLANG_PATH` into
+    # `/root/.bazelrc` (verified against `:latest`). Bazel never reads that
+    # file here, because bazel's user rc is `$HOME/.bazelrc` and GitHub
+    # forces `HOME=/github/home` for container jobs, where no rc exists.
+    # So the values have to reach bazel on the command line regardless of
+    # how recently the image was republished. Same root cause as the qmd
+    # model mount in `test.yml`.
+    #
+    # Both configs need it: only `--host_action_env` reaches exec-config
+    # (`[for tool]`) bindgen actions — e.g. boring-sys2, pulled in when an
+    # exec-config tool needs the HTTP stack — and only `--action_env`
+    # reaches target-config ones. Computing the path from `llvm-config`
+    # (the same source the image uses) keeps CI correct whichever image
+    # `:latest` points at. Mirrors `release.yml`'s `bazelargs` step.
+    - name: Resolve LIBCLANG_PATH
+      id: libclang
+      shell: bash
+      run: |
+        set -euo pipefail
+        libdir="$(llvm-config --libdir)"
+        if [[ -z "${libdir}" || ! -d "${libdir}" ]]; then
+            echo "ERROR: llvm-config --libdir returned '${libdir}' (not a dir)." >&2
+            exit 1
+        fi
+        echo "path=${libdir}" >> "${GITHUB_OUTPUT}"
+        echo "Resolved LIBCLANG_PATH=${libdir}"
+
+    - name: Show toolchain versions
+      shell: bash
+      run: |
+        bazel version
+        rustc --version || true

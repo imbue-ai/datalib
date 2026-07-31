@@ -44,6 +44,62 @@ concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Two jobs, deliberately. `bazel-test` and `musl-dist` share nothing at
+# execution time — different configurations, disjoint action sets — so
+# running them in sequence just parked the musl build (~80s, of which
+# ~45s is a second analysis phase) at the end of the critical path.
+# Measured on a warm cache: 483s in one job -> 398s as two (n=4).
+#
+# The costs are a second container pull and a second analysis phase, and
+# both are compute rather than wall clock: the jobs run concurrently on
+# separate runners. Neither is a `needs:` of the other, and both are
+# merge gates, so a musl regression doesn't mask a test failure.
+#
+# Their common setup — the BuildBuddy key and LIBCLANG_PATH — lives in
+# `.github/actions/prepare-bazel` so the two jobs cannot drift apart.
+#
+# --------------------------------------------------------------------
+# Both jobs pass `--nostamp --jobs=16`. Why:
+#
+# `--nostamp` turns OFF the `--stamp` that `--config=release` turns on
+# (later flags win). Stamping is worth nothing to CI and costs a lot, in
+# two separate ways:
+#
+#   1. rules_rust defaults `rust_binary`'s `stamp` attribute to -1
+#      ("defer to --stamp"), and when stamping is on it adds
+#      `stable-status.txt` to EVERY rust_binary's Rustc action inputs —
+#      unconditionally, whether or not the target references a
+#      {STABLE_*} placeholder (rules_rust 0.70.0,
+#      rust/private/rustc.bzl:849). `tools/workspace_status.sh` emits
+#      STABLE_GIT_HASH, so every commit relinked every binary in the
+#      repo: measured at 20 Rustc actions plus the two fixture genrules
+#      they feed, ~2.5 min of a 4-vCPU runner, on a run where NOTHING
+#      else had changed.
+#   2. `--stamp` is part of the build configuration, so the subgraph
+#      reachable from a stamped binary is configured a second time under
+#      a `k8-opt-ST-<hash>` output tree. Measured from
+#      `--execution_log_json_file`: 786 extra spawns, 4133 vs 3350
+#      total, purely duplicate work.
+#
+# Nothing is lost. The stamped variants can never be cache hits anyway —
+# their key contains the commit SHA, which is new by definition — so
+# `release.yml` rebuilds them at tag time whether or not this workflow
+# also built them, and it still stamps everything it publishes. The
+# unstamped rlibs that dominate the graph are shared either way
+# (`rust_library` defaults to `stamp = 0` and ignores the flag).
+# `-c opt --config=release` stays, so the rest of the cache-warming
+# rationale below still holds.
+#
+# `--jobs=16` is 4x this runner's vCPU count, which is what `--jobs`
+# defaults to. A remote cache HIT does not take a CPU token from bazel's
+# ResourceManager, so on a warm run the ~3400 hits are gated purely by
+# the --jobs thread count while they wait on the network: the execution
+# log shows 508 spawn-seconds of cache-hit materialization finishing in
+# ~120s of wall clock, i.e. 4 at a time. Local execution is still
+# CPU/RAM-gated by the ResourceManager, so this does not oversubscribe
+# compile-bound runs — verified on a run with a real source change (226
+# locally executed actions): 1183s with --jobs=16 vs 1209s without, no
+# memory pressure.
 jobs:
   bazel-test:
     name: bazel test //...
@@ -82,60 +138,16 @@ jobs:
         with:
           # `tools/workspace_status.sh` runs `git describe --tags`; the
           # default shallow clone has no tag history, so describe would
-          # always fall back to a bare sha and the `--stamp` outputs
-          # would churn on every run.
+          # always fall back to a bare sha. We pass `--nostamp` now (see
+          # the block above), but `release.yml` does stamp, and keeping
+          # the two checkouts identical means a tag-time build sees the
+          # same repo state this one tested.
           fetch-depth: 0
 
-      # Drop the BuildBuddy API key into the workspace `.bazelrc.user`
-      # (gitignored) — `.bazelrc`'s `try-import` at the bottom picks it
-      # up, and `build --config=buildbuddy` activates the remote cache
-      # + BES endpoint. `test` inherits from `build`, so a single
-      # `build --config=...` line covers both; adding a separate
-      # `test --config=...` line on top double-expands the config and
-      # trips bazel's "config expanded more than once" warning.
-      #
-      # If the secret isn't available (PR from a fork; manual local
-      # `act` runs without secrets), the step writes nothing and bazel
-      # runs without remote caching — actions still execute locally,
-      # just without the cross-machine cache hits.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy
-          EOF
-              echo "BuildBuddy remote cache enabled for this job."
-          else
-              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
-          fi
-
-      - name: Show toolchain versions
-        run: |
-          bazel version
-          rustc --version || true
-
-      # FIXME(devcontainer-republish): TEMPORARY bridge — DELETE this whole
-      # step once a devcontainer image built after the `sqlite3` Dockerfile
-      # addition is published on a `v*` tag. It installs the stock
-      # `sqlite3` CLI the beeper provider's extract shells out to
-      # (`//tests/fixtures:ingested_tng`); the Dockerfile now lists
-      # `sqlite3` in its apt set, but `:latest` only moves on republish, so
-      # until then it's installed at runtime here. (Harmless if left in —
-      # the `command -v` guard makes it a no-op once the image carries it —
-      # but it's dead weight worth removing.) apt lists are pruned in the
-      # image, hence the `update`. Runs as root in the container; no sudo.
-      - name: Install runtime test deps not yet baked into the image
-        run: |
-          set -euo pipefail
-          if ! command -v sqlite3 >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y --no-install-recommends sqlite3
-          fi
-          echo "sqlite3: $(command -v sqlite3) ($(sqlite3 --version))"
+      - id: env
+        uses: ./.github/actions/prepare-bazel
+        with:
+          buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
 
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
       # dist build uses, so the BuildBuddy action cache populated here
@@ -158,33 +170,9 @@ jobs:
       # `--host_action_env=LIBCLANG_PATH`) are now fixed at the source,
       # so the suppression is removed and real failures gate merges
       # again.
-      #
-      # FIXME(devcontainer-republish): the `--host_action_env=LIBCLANG_PATH`
-      # half below is a TEMPORARY bridge — DROP both `LIBCLANG_PATH` flags
-      # (and the `libdir` resolution above) once a devcontainer image built
-      # after the `.bazelrc`/Dockerfile `--host_action_env` additions is
-      # published on a `v*` tag.
-      #
-      # `LIBCLANG_PATH` is passed on the command line for BOTH the target
-      # and exec configs. The devcontainer bakes `LIBCLANG_PATH` into
-      # `/root/.bazelrc`, but only `--host_action_env` makes it reach
-      # exec-config (`[for tool]`) bindgen actions — e.g. boring-sys2,
-      # pulled in when an exec-config tool needs the HTTP stack — and the
-      # current `:latest` image only baked the `--action_env` half.
-      # Computing it here from `llvm-config` (the same source the image
-      # uses) means CI is correct regardless of which devcontainer image
-      # `:latest` currently points at, instead of waiting for the
-      # republish. Mirrors `release.yml`'s `bazelargs` step. Once the
-      # republished image carries the baked `--host_action_env` line these
-      # flags are a redundant no-op (identical value).
       - name: bazel test //...
         run: |
-          libdir="$(llvm-config --libdir)"
-          if [[ -z "${libdir}" || ! -d "${libdir}" ]]; then
-              echo "ERROR: llvm-config --libdir returned '${libdir}' (not a dir)." >&2
-              exit 1
-          fi
-          echo "Resolved LIBCLANG_PATH=${libdir}"
+          libdir="${{ steps.env.outputs.libclang-path }}"
           # FIXME(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
           # e2e suite from the CI gate. It needs `rsync` + a Chromium
           # browser cache the *current* `:latest` devcontainer image does
@@ -213,30 +201,57 @@ jobs:
           # skips the download (etag matches the unchanged HF release).
           # Standing CI accommodation — not a republish bridge: the image
           # bakes as root and GH always sets HOME=/github/home.
-          bazel test -c opt --config=release --build_metadata=ROLE=CI \
+          bazel test -c opt --config=release --nostamp --jobs=16 \
+            --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
             --sandbox_add_mount_pair=/root/.cache/qmd/models \
             --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
             -- //... -//datalib/ui:e2e_test
 
-      # PR-time gate for the fully-static musl release leg. The musl
-      # dist build only otherwise runs at tag time (release.yml), and
-      # this repo has been burned before by release-only build paths
-      # rotting between tags (see the incident notes in release.yml).
-      # Building `:dist` under `--config=musl-x86_64` here catches
-      # musl-only breakage — a new crate that links a system library,
-      # a native build script that mishandles the musl toolchain — on
-      # every PR instead of at the next release. It also warms
-      # BuildBuddy with the exact opt-mode musl actions the tag-time
-      # release build will replay. The static-ness assertion mirrors
-      # release.yml's: no PT_INTERP, no DT_NEEDED. (This runs on the
-      # x86_64 runner only; the aarch64-musl leg differs by
-      # arch, not by build logic, and stays tag-time-only.)
+  # PR-time gate for the fully-static musl release leg. The musl dist
+  # build only otherwise runs at tag time (release.yml), and this repo
+  # has been burned before by release-only build paths rotting between
+  # tags (see the incident notes in release.yml). Building `:dist` under
+  # `--config=musl-x86_64` here catches musl-only breakage — a new crate
+  # that links a system library, a native build script that mishandles
+  # the musl toolchain — on every PR instead of at the next release. It
+  # also warms BuildBuddy with the exact opt-mode musl actions the
+  # tag-time release build will replay. The static-ness assertion mirrors
+  # release.yml's: no PT_INTERP, no DT_NEEDED. (This runs on the x86_64
+  # runner only; the aarch64-musl leg differs by arch, not by build
+  # logic, and stays tag-time-only.)
+  musl-dist:
+    name: bazel build :dist (musl static)
+    runs-on: ubuntu-latest
+
+    # Same shell, image and checkout depth as `bazel-test` above, for the
+    # reasons documented there.
+    defaults:
+      run:
+        shell: bash
+
+    container:
+      image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: env
+        uses: ./.github/actions/prepare-bazel
+        with:
+          buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
+
       - name: bazel build //datalib/backend:dist (musl static)
         run: |
-          libdir="$(llvm-config --libdir)"
+          libdir="${{ steps.env.outputs.libclang-path }}"
           bazel build -c opt --config=release --config=musl-x86_64 \
+            --nostamp --jobs=16 \
             --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
