@@ -1,10 +1,17 @@
 # Devcontainer that inherits from the prod runtime image and adds the
 # Bazel build toolchain on top. The prod image already carries
-# `ubuntu:24.04` + Node 22 + latchkey + the doltlite CLI + qmd's three
-# default GGUFs at /root/.cache/qmd/models + the bind-mount target
-# directories, so inheriting from it gives the devcontainer all of that
+# `ubuntu:24.04` + Node 22 + latchkey + the doltlite CLI + qmd + the
+# bind-mount target directories, so inheriting from it gives the
+# devcontainer all of that
 # "for free" — no Dockerfile mirroring, no double download. Contributors
-# who've already pulled the prod image during `docker pull
+# qmd's three default GGUFs at /root/.cache/qmd/models come with it too
+# when building against `datalib:<ver>` — the default, and what a local
+# devcontainer gets. `release.yml` builds the PUBLISHED devcontainer
+# against `datalib:<ver>-slim` instead, which omits them; only CI pulls
+# that image, and it hits the remote cache for the one action that reads
+# them. See `QMD_PREFETCH_MODELS` in `datalib/docker/Dockerfile`.
+#
+# Contributors who've already pulled the prod image during `docker pull
 # ghcr.io/imbue-ai/datalib:<ver>` (or anyone who ran
 # `scripts/build_docker.sh --load`) reuse the cached layers; a fresh
 # `devcontainer up` only needs to fetch the dev-only build toolchain

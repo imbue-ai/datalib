@@ -799,13 +799,22 @@ jobs:
           # x86_64 runners. Every layer up to the qmd step is identical
           # to the build above and comes from the same `type=gha` cache,
           # so this costs one extra qmd/npm layer, not a second image.
+          #
+          # Reads the full build's cache (every layer up to the qmd step
+          # is identical) but writes to its OWN scope. BuildKit keeps one
+          # mutable index per scope, so exporting both builds to
+          # `docker-publish` would leave the amd64-only slim index as the
+          # survivor and cost the multi-arch build its cache on the next
+          # tag — the exact cold-start this job's cache config exists to
+          # avoid.
           docker buildx build \
               --platform linux/amd64 \
               --build-arg QMD_PREFETCH_MODELS=false \
               --tag "${image}:${version}-slim" \
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
               --cache-from type=gha,scope=docker-publish,version=2 \
-              --cache-to type=gha,mode=max,scope=docker-publish,version=2 \
+              --cache-from type=gha,scope=docker-publish-slim,version=2 \
+              --cache-to type=gha,mode=max,scope=docker-publish-slim,version=2 \
               --push \
               ctx
 
@@ -813,9 +822,10 @@ jobs:
   # image inherits from the prod image (`FROM
   # ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`), so this MUST
   # run after `docker-publish` has uploaded prod:${version}. We pass
-  # `--build-arg PROD_IMAGE_TAG=${version}` so the published
-  # devcontainer:${version} inherits from the prod image at the same
-  # tag — not whatever default is baked into `.devcontainer/Dockerfile`.
+  # `--build-arg PROD_IMAGE_TAG=${version}-slim` so the published
+  # devcontainer:${version} inherits from the model-free prod variant at
+  # the matching tag, rather than the default baked into
+  # `.devcontainer/Dockerfile`. See the build step below for why -slim.
   #
   # Consumer: `.github/workflows/test.yml` runs `bazel test //...`
   # inside this image. The image carries the full Bazel/clang/cmake
@@ -890,7 +900,7 @@ jobs:
       # `devcontainer-` tag prefix on the prod image so the two are
       # cleanly separable in the GHCR UI and ghcr retention policies
       # can be set independently.
-      - name: Build and push multi-arch devcontainer image
+      - name: Build and push the devcontainer image (amd64)
         env:
           REF_NAME: ${{ github.ref_name }}
           BUILDKIT_PROGRESS: plain
