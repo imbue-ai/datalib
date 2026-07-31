@@ -30,7 +30,7 @@ bazel_dep(name = "rules_shell", version = "0.6.1")
 # Rules CC — needed for the cc_library that compiles doltlite's
 # amalgamation. Pulled in transitively by rules_rust today but worth
 # declaring explicitly since our own BUILD files use it directly.
-bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_cc", version = "0.2.18")
 bazel_dep(name = "platforms", version = "1.0.0")
 
 # doltlite amalgamation — a single-translation-unit `doltlite.c` that
