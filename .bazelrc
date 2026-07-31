@@ -165,20 +165,7 @@ build:buildbuddy --remote_upload_local_results=true
 # DT_NEEDED entries at all — verify with `file`, which should say
 # "statically linked" / "static-pie linked"), so they run on any Linux
 # of the right arch regardless of libc.
-# FIXME(toolchains_musl-bazel9): the autoload line below is a
-# TEMPORARY bridge — DROP it once toolchains_musl publishes a release
-# containing bazel-contrib/musl-toolchain#67 (merged 2026-05-03,
-# unreleased as of 0.1.27) and we bump to it. The v0.1.27 toolchain
-# tarballs still use three natives that Bazel 9 removed from the
-# builtins (`CcToolchainConfigInfo`, `cc_toolchain`,
-# `cc_common.create_cc_toolchain_config_info`); `+symbol` re-injects
-# just those three from rules_cc at loading time. Scoped to the musl
-# configs (via the shared `musl` base config) so every non-musl build
-# keeps stock Bazel 9 symbol resolution.
-build:musl --incompatible_autoload_externally=+CcToolchainConfigInfo,+cc_toolchain,+cc_common
-build:musl-x86_64 --config=musl
 build:musl-x86_64 --platforms=//platforms:linux_x86_64_musl
-build:musl-aarch64 --config=musl
 build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
 
 # `.bazelrc.user` is per-user (gitignored). Today it carries the
