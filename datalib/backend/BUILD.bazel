@@ -8,10 +8,11 @@ exports_files([
     "clippy.toml",
 ])
 
-# Enforces that datalib/backend/sync/BUILD.bazel's `rust_binary
-# version = "..."` matches [workspace.package].version in
-# datalib/backend/Cargo.toml (the single source of truth). Picked
-# up by `bazelisk test //...`; fails with a diff that names both
+# Enforces that every copy of the project version matches
+# [workspace.package].version in datalib/backend/Cargo.toml (the single
+# source of truth): the `rust_binary version = "..."` attrs in dag's and
+# http's BUILD.bazel, and `ARG PROD_IMAGE_TAG` in .devcontainer/Dockerfile.
+# Picked up by `bazelisk test //...`; fails with a diff that names both
 # files so the bump is obvious.
 sh_test(
     name = "version_consistency_test",
@@ -19,6 +20,7 @@ sh_test(
     srcs = ["//tools:check_version_consistency.sh"],
     data = [
         "Cargo.toml",
+        "//.devcontainer:Dockerfile",
         "//datalib/backend/dag:BUILD.bazel",
         "//datalib/backend/http:BUILD.bazel",
     ],
