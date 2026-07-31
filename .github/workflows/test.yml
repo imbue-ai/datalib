@@ -184,9 +184,15 @@ jobs:
           #
           # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
           # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
-          # into the sandbox. The devcontainer bakes them at
-          # `/root/.cache/qmd/models` (prod image's `qmd pull`, run as
-          # root). But GitHub Actions overrides HOME=/github/home for
+          # into the sandbox. The PROD image bakes them at
+          # `/root/.cache/qmd/models`; the devcontainer CI pulls is built
+          # on the `-slim` prod variant, where that path exists but is
+          # empty, so on the rare run where this genrule misses the remote
+          # cache qmd downloads the models into it instead. Both flags
+          # below stay load-bearing either way: they are what make the
+          # path reachable from inside the sandbox at all.
+          #
+          # GitHub Actions overrides HOME=/github/home for
           # container steps, so `.bazelrc`'s `$(HOME)/.cache/qmd/models`
           # mount + build_qmd_index.py's `~/.cache/qmd/models` both point
           # at an EMPTY /github/home path — and qmd re-downloads ~2GB on
