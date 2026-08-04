@@ -135,12 +135,21 @@ steps:
         download_params:
           maximum_sequential_failed_requests: 100
       sync:
+        since: "2025-01-01"    # oldest message to mirror (YYYY-MM-DD or RFC 3339;
+                               # default 2024-01-01). This is the knob that decides
+                               # how far back to go — for just the last week, set it
+                               # to seven days ago. Moving it earlier backfills on
+                               # the next run; moving it later is a no-op.
         media: true            # pull file attachments into blobs
         all_channels: false
         channels:
           - project-data-liberation
           - general
-        # refresh_window_days: 30
+        # refresh_window_days: 30  # re-fetch the trailing 30 days of channels that
+                                   # already have history, to pick up edits and
+                                   # reactions. NOT a range bound — it only adds
+                                   # work on top of the walk from `since`. Unset
+                                   # here means no refresh pass.
 
   - id: slack.render
     command: datalib-step render slack_api
