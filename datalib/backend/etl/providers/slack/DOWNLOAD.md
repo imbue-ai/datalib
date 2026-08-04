@@ -41,15 +41,30 @@ registration is needed — the same `slack` credential signs both
 `shapes.rs` is the shape-of-the-response catalog: which path holds the
 items, what counts as the cursor key, how to dedup.
 
+## What bounds how far back we mirror
+
+`since` — and only `since`. It is the oldest message any pass will ask
+for (`YYYY-MM-DD` or RFC 3339, default `DEFAULT_SINCE` = 2024-01-01), so
+"mirror just the last week" is `since` set to seven days ago.
+
+`refresh_window_days` is *not* that knob, despite reading like one. It
+adds a trailing re-query on top of the forward walk so edits and
+reactions on already-stored messages get picked up; it never narrows a
+run's range. Setting it to 7 on a fresh store still walks everything
+from `since`, and setting it on an existing store only adds API calls.
+
+Its default also differs by entry point: the `slack-download` CLI
+defaults to `DEFAULT_REFRESH_WINDOW_DAYS` (30), while a config-driven
+run (`params.sync`) treats an unset value as 0 — no refresh pass.
+
 ## Resume + dedup
 
 The dedup index doubles as the resume cursor:
 
   * For each channel, take `max(ts)` across all recorded `history`
     pages and start the next forward pass there.
-  * For the trailing refresh window (default `DEFAULT_REFRESH_WINDOW_DAYS`,
-    30 days), re-query that range — the dedup pass collapses no-op
-    refreshes to zero writes.
+  * For the trailing refresh window, re-query that range — the dedup
+    pass collapses no-op refreshes to zero writes.
 
 A page is skipped if every item in it matches a prior capture by
 canonical content hash, so re-running soon after a successful run is

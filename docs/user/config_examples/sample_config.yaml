@@ -58,6 +58,9 @@ steps:
         media: true
         channels:
           - "project-data-liberation"
+        # since: "2025-01-01"   # oldest message to mirror (default 2024-01-01).
+                                # This — not `refresh_window_days` — is how you
+                                # bound how far back the mirror goes.
 
   - id: slack.render
     command: datalib-step render slack_api
