@@ -19,6 +19,8 @@ serde = { workspace = true }
 # transitively.
 shlex = "1"
 serde_json = { workspace = true }
+toml = { workspace = true }
+# Only for the legacy `config.yaml` fallback in `config::load`.
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 # Workspace tokio lacks `process`/`sync`/`time`/`fs`; features are

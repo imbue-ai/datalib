@@ -70,7 +70,7 @@ filegroup(
         # `datalib-http <data_root>` is the user-facing invocation.
         "//datalib/backend/http:datalib_http_bin",
         # The DAG runner + step host, spawned by http's sync worker (and
-        # invocable standalone against a data root's config.yaml).
+        # invocable standalone against a data root's config.toml).
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
     ],

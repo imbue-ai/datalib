@@ -52,6 +52,15 @@ publish = false
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# The config file format. `toml` is the serde front end (parsing the
+# DAG config, `params` subtrees); `toml_edit` is the document model,
+# used where we *generate* config text and want control over key order
+# and comments (the legacy-config migrator).
+toml = "1"
+toml_edit = "0.25"
+# Still needed to read the two legacy YAML formats we accept but no
+# longer write: the retired stanza-based `sources:` config, and
+# pre-TOML `config.yaml` DAG configs.
 serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "2.0"

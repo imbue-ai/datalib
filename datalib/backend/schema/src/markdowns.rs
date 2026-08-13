@@ -32,7 +32,8 @@ pub struct MarkdownRow {
     /// idempotent.
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: String,
-    /// `sources[].name` from `config.yaml` that produced this markdown.
+    /// Name of the source that produced this markdown — the `<name>`
+    /// prefix of the producing step's artifact paths in `config.toml`.
     /// Lets the sync UI show per-source delta counts and the worker
     /// scope re-renders to a single source.
     #[col(sql = "VARCHAR(64)")]

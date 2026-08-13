@@ -23,7 +23,7 @@ are relative to the repo root.
   NDJSON progress/outcome protocol, failure classification, and
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
-- [`configs/dag_example.yaml`](configs/dag_example.yaml) — a complete,
+- [`configs/dag_example.toml`](configs/dag_example.toml) — a complete,
   commented steps-format config, including the `--binary-dir` recipe for
   running `datalib-dag` from a bazel build.
 
@@ -101,8 +101,8 @@ third-party/   vendored upstream code (see below).
 
 ## The sync pipeline in one paragraph
 
-`datalib-dag <config.yaml>` runs a DAG of subprocess steps declared in
-the config's `steps:` list; edges are derived from output/input path
+`datalib-dag <config.toml>` runs a DAG of subprocess steps declared as
+the config's `[[steps]]` tables; edges are derived from output/input path
 overlap, never written by hand. Each source is a `<name>.download` +
 `<name>.render` step pair (`datalib-step download|render <type>`), and
 two shared fan-in steps index every source's `rendered_md` tree:

@@ -199,60 +199,70 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 
 ## 3. Configuration
 
-The running config lives at `config.yaml` in your data_root, and it's a
+The running config lives at `config.toml` in your data_root, and it's a
 **steps** config: each source becomes a `<name>.download` +
 `<name>.render` step pair, plus two shared index steps that fan in over
 everything rendered. A one-source config looks like this:
 
-```yaml
-data_root: ~/datalib
+```toml
+data_root = "~/datalib"
 
-steps:
-  - id: claude.download
-    command: datalib-step download claude_api
-    outputs: [claude/raw]
-    params:
-      sync: {}
+[[steps]]
+id = "claude.download"
+command = "datalib-step download claude_api"
+outputs = ["claude/raw"]
+[steps.params]
+sync = {}
 
-  - id: claude.render
-    command: datalib-step render claude_api
-    inputs: [claude/raw]
-    outputs: [claude/rendered_md]
+[[steps]]
+id = "claude.render"
+command = "datalib-step render claude_api"
+inputs = ["claude/raw"]
+outputs = ["claude/rendered_md"]
 
-  - id: grid_index
-    command: datalib-step grid_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/backend_index]
+[[steps]]
+id = "grid_index"
+command = "datalib-step grid_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/backend_index"]
 
-  - id: qmd_index
-    command: datalib-step qmd_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/qmd]
+[[steps]]
+id = "qmd_index"
+command = "datalib-step qmd_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/qmd"]
 ```
+
+Two TOML rules worth knowing before you hand-edit: `data_root` has to
+come *above* the first `[[steps]]`, and within a step the `params`
+sub-table comes last — anything you write after a `[…]` header belongs
+to that header's table until the next one.
 
 You normally don't write this by hand — the app's **Setup** tab
 scaffolds it for you (next step). If you'd rather hand-edit, copy
-[**configs/dag_example.yaml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.yaml),
+[**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
 a complete commented example.
 
 For ready-made configs and each source's knobs, the files in
 [docs/user/config_examples/](https://github.com/imbue-ai/datalib/tree/main/docs/user/config_examples)
 are the reference — all in the steps format, so you can copy a file (or
-just one source's step pair) straight into `<data_root>/config.yaml`:
+just one source's step pair) straight into `<data_root>/config.toml`:
 
-- [**sample_config.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.yaml)
+- [**sample_config.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.toml)
   — the Slack source, the Claude API source, and an email source that
   reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
   up).
-- [**claude_only.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.yaml)
+- [**claude_only.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.toml)
   — just the Claude source, plus the two index steps.
-- [**all_sources.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.yaml)
+- [**all_sources.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.toml)
   — every supported source type with realistic defaults (including
   both input modes for email and contacts).
 
-(If you have an old-style `sources:` config from an earlier datalib,
-drop it at `<data_root>/config.yaml` — the app detects the legacy
-format and offers one-click migration to steps.)
+(Upgrading from an earlier datalib? Both older formats are still read
+from `<data_root>/config.yaml`: a YAML steps config, and the much older
+stanza-based `sources:` one. Leave the file where it is and open the
+**Setup** tab — it detects either and offers one-click conversion to
+`config.toml`.)
 
 Credentials are not in the config — downloaders that need them use `latchkey` at runtime.
 
@@ -268,14 +278,14 @@ datalib-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
-your default browser. The **Setup** tab scaffolds `config.yaml` if you
+your default browser. The **Setup** tab scaffolds `config.toml` if you
 don't have one yet and lets you add sources; **Sync now** then runs the
 pipeline (`datalib-dag` under the hood).
 
 Prefer the terminal? Run the pipeline directly on your steps config:
 
 ```sh
-datalib-dag config.yaml
+datalib-dag config.toml
 ```
 
 (`datalib-step` must be findable: on `PATH`, next to `datalib-dag` —
@@ -344,7 +354,7 @@ and should be faster.
 > ```
 >
 > What's left in the backup is exactly what you want to keep: the per-stanza
-> `<name>/raw/` stores (your precious captured data), `config.yaml`, and
+> `<name>/raw/` stores (your precious captured data), `config.toml`, and
 > `system/state/` (scheduler state + sync job logs — operational
 > history, not rebuildable).
 
@@ -371,7 +381,7 @@ listen address.
 
 ## 6. Re-syncing
 
-Re-run the sync (**Sync now** in the app, or `datalib-dag config.yaml`)
+Re-run the sync (**Sync now** in the app, or `datalib-dag config.toml`)
 whenever you want to pull new conversations.
 The downloader is incremental and the qmd index is content-hashed, so
 re-runs against an unchanged corpus are relatively fast no-ops.

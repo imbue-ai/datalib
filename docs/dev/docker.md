@@ -42,10 +42,10 @@ LATCHKEY_DIR="$HOME/.datalib-docker/latchkey"
 DATA_ROOT="$HOME/datalib"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
-# Drop a config.yaml into the data root. config.yaml is the DAG `steps:`
-# format (see docs/dev/step_protocol.md); the datalib-http Setup tab
-# scaffolds/validates it and offers one-click migration of a legacy
-# `sources:` config (GET /api/config/migrate).
+# Drop a config.toml into the data root. config.toml is the DAG
+# `[[steps]]` format (see docs/dev/step_protocol.md); the datalib-http
+# Setup tab scaffolds/validates it, and converts a pre-TOML
+# config.yaml in either legacy shape (GET /api/config/migrate).
 
 # 1. Register a self-hosted service entry.
 docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
@@ -65,7 +65,7 @@ docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 docker run --rm \
     -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
     -v "$DATA_ROOT:/data" \
-    "$IMG" datalib-dag /data/config.yaml
+    "$IMG" datalib-dag /data/config.toml
 
 # 5. Serve the HTTP backend (UI bundle not included in this image — point
 #    a local Vite dev server or another openhost UI container at
@@ -81,7 +81,7 @@ docker run --rm -p 8731:8731 \
 | Host path                      | Container path             | Mode at sync time | Why                                                                                          |
 |--------------------------------|----------------------------|-------------------|----------------------------------------------------------------------------------------------|
 | `$LATCHKEY_DIR`                | `/root/.latchkey`          | `:ro`             | latchkey's encrypted credential store. Needs RW only during `services register` / `auth set` / `auth browser-prepare`. |
-| `$DATA_ROOT`                   | `/data`                    | RW                | `config.yaml`, one directory per source stanza (`<name>/raw/` + `<name>/rendered_md/`), and the aggregates under `system/` (`system/backend_index/db.doltlite_db`, `system/qmd/`). |
+| `$DATA_ROOT`                   | `/data`                    | RW                | `config.toml`, one directory per source stanza (`<name>/raw/` + `<name>/rendered_md/`), and the aggregates under `system/` (`system/backend_index/db.doltlite_db`, `system/qmd/`). |
 | `~/.cache/qmd/models`          | `/root/.cache/qmd/models`  | RW (optional)     | qmd's embedding/reranker/expansion model cache (~2.25 GB). The image already ships the three default models pre-baked at `/root/.cache/qmd/models/`, so this mount is only needed if you've set `QMD_EMBED_MODEL=…` to override the default to an unbaked model, or you want to share a cache with a host `qmd` install. |
 
 Default `ENV` inside the image already sets `DATALIB_ROOT=/data` and
@@ -177,7 +177,7 @@ The image runs as `root` inside the container so that latchkey's
 keyring fallback file (which lives under `/root/.latchkey`) and the
 data root (`/data`) are owned by a predictable user. Files written into
 the bind-mounted host paths will be owned by `uid=0` on the host. If
-that's awkward (e.g. you want to edit `config.yaml` from your normal
+that's awkward (e.g. you want to edit `config.toml` from your normal
 host user without `sudo`), pass `--user $(id -u):$(id -g)` on every
 `docker run` — but be aware that latchkey may need to recreate its
 internal state under the new uid the first time.

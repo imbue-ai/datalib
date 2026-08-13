@@ -51,7 +51,7 @@ rust_test(
     ],
 )
 
-# Validates the checked-in `docs/user/config_examples/*.yaml` (DAG steps
+# Validates the checked-in `docs/user/config_examples/*.toml` (DAG steps
 # format): each file must load + graph-build like the runner would, every
 # `datalib-step download <type>` step's params must round-trip into
 # `SourceConfig`, and render params must match the provider's
@@ -60,9 +60,9 @@ rust_test(
     name = "config_examples_test",
     srcs = ["tests/config_examples.rs"],
     data = [
-        "//docs/user/config_examples:all_sources.yaml",
-        "//docs/user/config_examples:claude_only.yaml",
-        "//docs/user/config_examples:sample_config.yaml",
+        "//docs/user/config_examples:all_sources.toml",
+        "//docs/user/config_examples:claude_only.toml",
+        "//docs/user/config_examples:sample_config.toml",
     ],
     edition = "2021",
     deps = [
@@ -74,6 +74,6 @@ rust_test(
         "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
         "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
         "@datalib_crates//:runfiles",
-        "@datalib_crates//:serde_yaml",
+        "@datalib_crates//:toml",
     ],
 )

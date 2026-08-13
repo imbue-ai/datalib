@@ -32,6 +32,12 @@ rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-pat
 serde = { workspace = true }
 webbrowser = "1"
 serde_json = { workspace = true }
+toml = { workspace = true }
+# Generating config text (the legacy-config migrator) — key order and
+# comment placement need the document model, not the serde front end.
+toml_edit = { workspace = true }
+# Reading the legacy formats: the retired `sources:` config and
+# pre-TOML `config.yaml` DAG configs.
 serde_yaml = { workspace = true }
 sha2 = "0.10"
 anyhow = { workspace = true }

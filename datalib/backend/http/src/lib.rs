@@ -54,12 +54,6 @@ pub struct AppState {
     /// the `accounts.json` lookup. The SQL store is reached through
     /// [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// Self-contained config path for this data root (`<root>/config.yaml`).
-    /// The config + setup endpoints read and write it, and the sync
-    /// worker drives `datalib-dag <this>`. Keeping the
-    /// config inside the root is what lets the app bootstrap from an
-    /// empty directory with no external `~/.config` file.
-    pub config_path: Arc<PathBuf>,
     /// All SQL flows through this seam.
     /// [`datalib_core::dolt_repo::DoltRepo`] against a single
     /// doltlite file is the only impl today.
@@ -75,6 +69,22 @@ pub struct AppState {
     /// `GET /api/sync/stream` subscribes and pushes them to the UI over
     /// SSE, so progress is realtime push, not poll.
     pub progress_tx: worker::ProgressTx,
+}
+
+impl AppState {
+    /// Self-contained config path for this data root: `<root>/config.toml`,
+    /// or a pre-TOML `<root>/config.yaml` while one is still there. The
+    /// config + setup endpoints read and write it, and the sync worker
+    /// drives `datalib-dag <this>`. Keeping the config inside the root
+    /// is what lets the app bootstrap from an empty directory with no
+    /// external `~/.config` file.
+    ///
+    /// Resolved per call rather than pinned at boot, so converting a
+    /// legacy YAML config takes effect the moment the new
+    /// `config.toml` lands — no restart.
+    pub fn config_path(&self) -> PathBuf {
+        datalib_ingest_config::resolve_root_config_path(&self.root)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1079,17 +1089,22 @@ pub struct JobsAllParams {
 // --- Config / setup --------------------------------------------------------
 //
 // These three endpoints make the data root self-contained: the app reads
-// and writes its own `<root>/config.yaml` instead of relying on a
+// and writes its own `<root>/config.toml` instead of relying on a
 // separate `~/.config/datalib/config.yaml`. An empty data root opens
 // with no config; the UI's Setup tab scaffolds one, lets the user edit
 // it, and saves it back here, after which `/api/sync/*` lights up.
+//
+// Two legacy shapes still come through here, both YAML, both read-only:
+// a pre-TOML `config.yaml` in the steps format, and the retired
+// stanza-based `sources:` format. `/api/config/migrate` converts either
+// one to TOML; the UI drops the result in the editor for review.
 
 /// Parse + validate the DAG config at `path` the same way the runner
 /// does (`config::load` → `to_specs` → `Graph::build`, so cycle /
-/// ownership / bad-command errors are caught, not just YAML syntax),
+/// ownership / bad-command errors are caught, not just TOML syntax),
 /// and derive the source step ids.
 ///
-/// A source is any step with no declared `inputs:` — a fringe step,
+/// A source is any step with no declared `inputs` — a fringe step,
 /// which is exactly what the runner's `--sync` can target (its real
 /// input is outside the DAG: a remote service, a user-staged tree).
 /// Nothing about the step's command matters here; the derivation is
@@ -1097,31 +1112,70 @@ pub struct JobsAllParams {
 fn load_dag_config(
     path: &std::path::Path,
 ) -> anyhow::Result<(datalib_dag::config::DagConfig, Vec<String>)> {
-    use datalib_dag::config;
-    let (cfg, _root) = config::load(path)?;
-    // Validation only — nothing is executed here.
-    let specs = config::to_specs(&cfg)?;
-    datalib_dag::Graph::build(specs)?;
+    let (cfg, _root) = datalib_dag::config::load(path)?;
+    let sources = check_dag_config(&cfg)?;
+    Ok((cfg, sources))
+}
 
-    let sources = cfg
+/// [`load_dag_config`] against text that isn't on disk yet — the
+/// about-to-be-saved config in `put_config`. `path` supplies nothing
+/// but its extension, which picks the parser.
+fn validate_config_text(text: &str, path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    check_dag_config(&datalib_dag::config::parse(text, path)?)
+}
+
+/// Run the runner's own validation over a parsed config and return its
+/// source step ids. Nothing is executed here.
+fn check_dag_config(cfg: &datalib_dag::config::DagConfig) -> anyhow::Result<Vec<String>> {
+    let specs = datalib_dag::config::to_specs(cfg)?;
+    datalib_dag::Graph::build(specs)?;
+    Ok(cfg
         .steps
         .iter()
         .filter(|e| e.inputs.is_empty())
         .map(|e| e.id.clone())
-        .collect();
-    Ok((cfg, sources))
+        .collect())
+}
+
+/// Which syntax [`ConfigResponse::text`] is in — the editor needs it
+/// to pick a parser, and the UI keys its "convert this" prompt off it.
+/// Serialized lowercase (`"toml"` / `"yaml"`) as the wire contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigFormat {
+    Toml,
+    /// A pre-TOML config, in either the steps or the retired `sources:`
+    /// format. Read-only as far as new roots are concerned; still
+    /// saveable in place so a user can fix one without converting.
+    Yaml,
+}
+
+impl ConfigFormat {
+    /// The format implied by a config path's extension — the same rule
+    /// [`datalib_dag::config::parse`] picks its parser by, so the UI
+    /// can never disagree with the backend about how bytes are read.
+    fn of_path(path: &std::path::Path) -> Self {
+        if datalib_dag::config::is_legacy_yaml_path(path) {
+            Self::Yaml
+        } else {
+            Self::Toml
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
 pub struct ConfigResponse {
-    /// Absolute path of `<root>/config.yaml` — shown in the UI so the
-    /// user knows exactly which file they're editing.
+    /// Absolute path of `<root>/config.toml` (or the legacy
+    /// `<root>/config.yaml`) — shown in the UI so the user knows
+    /// exactly which file they're editing.
     pub path: String,
     /// Whether that file exists yet. `false` on a fresh data root.
     pub exists: bool,
-    /// Raw YAML text (empty string when the file doesn't exist).
-    pub yaml: String,
-    /// Whether the current bytes parse + validate as a `Config`.
+    /// Raw config text (empty string when the file doesn't exist).
+    pub text: String,
+    /// The syntax `text` is in, from the path's extension.
+    pub format: ConfigFormat,
+    /// Whether the current bytes parse + validate as a `DagConfig`.
     pub parsed_ok: bool,
     /// Loader error message when `parsed_ok` is false.
     pub error: Option<String>,
@@ -1133,15 +1187,19 @@ pub struct ConfigResponse {
     /// `npx -y latchkey@<pin>`. The Setup UI splices this into its
     /// copy-pasteable credential-setup snippets.
     pub latchkey_cli: String,
-    /// True when the file looks like an old-style `sources:` config for
-    /// the retired sync binary (top-level `sources:` and no `steps:`).
-    /// The UI offers a one-click migration to the DAG format.
+    /// True when the file is an old-style `sources:` config for the
+    /// retired sync binary (top-level `sources:` and no `steps:`).
+    /// Always YAML. The UI offers a one-click migration to the DAG
+    /// format; a `format: yaml` response with `legacy: false` is a
+    /// pre-TOML *steps* config, which converts too but through a much
+    /// shorter path.
     pub legacy: bool,
 }
 
 /// Cheap probe: is this text an old-style `sources:` config? Top-level
 /// `sources:` with no `steps:` — the two formats are disjoint on those
-/// keys.
+/// keys. Only meaningful for YAML text; the `sources:` format predates
+/// TOML entirely and was never written in it.
 fn looks_legacy(yaml: &str) -> bool {
     let Ok(v) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
         return false;
@@ -1152,20 +1210,22 @@ fn looks_legacy(yaml: &str) -> bool {
     m.contains_key("sources") && !m.contains_key("steps")
 }
 
-/// `GET /api/config` — current `<root>/config.yaml` plus a parse check.
+/// `GET /api/config` — current `<root>/config.toml` plus a parse check.
 async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
-    let path = s.config_path.as_ref().clone();
+    let path = s.config_path();
     let exists = path.exists();
-    let yaml = std::fs::read_to_string(&path).unwrap_or_default();
+    let format = ConfigFormat::of_path(&path);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
     let (parsed_ok, error, source_count) = match load_dag_config(&path) {
         Ok((_cfg, sources)) => (true, None, sources.len()),
         Err(e) => (false, Some(format!("{e:#}")), 0),
     };
-    let legacy = exists && looks_legacy(&yaml);
+    let legacy = exists && format == ConfigFormat::Yaml && looks_legacy(&text);
     Json(ConfigResponse {
         path: path.display().to_string(),
         exists,
-        yaml,
+        text,
+        format,
         parsed_ok,
         error,
         source_count,
@@ -1176,7 +1236,15 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
 
 #[derive(Debug, Deserialize)]
 pub struct PutConfigRequest {
-    pub yaml: String,
+    pub text: String,
+    /// Which syntax `text` is in, and thus which file it lands in:
+    /// `toml` → `<root>/config.toml`, `yaml` → `<root>/config.yaml`.
+    /// The client sends it explicitly because saving is exactly when
+    /// the format can *change* — accepting a converted config is a PUT
+    /// of TOML text against a root whose current file is still YAML,
+    /// and inferring the target from what's on disk would write TOML
+    /// bytes into a `.yaml` name.
+    pub format: ConfigFormat,
 }
 
 #[derive(Debug, Serialize)]
@@ -1186,64 +1254,82 @@ pub struct PutConfigResponse {
     pub source_count: usize,
 }
 
-/// `PUT /api/config` — validate then atomically write `<root>/config.yaml`.
+/// `PUT /api/config` — validate then atomically write the data root's
+/// config file, `<root>/config.toml` for `format: toml` and
+/// `<root>/config.yaml` for `format: yaml`.
 ///
 /// We validate by writing to a sibling `.tmp` file and running the real
-/// `load_config` (so date-format / Notion / Yolink invariants are caught,
-/// not just YAML syntax), then `rename` into place only on success. A
-/// rejected config never clobbers the existing one. Validation failures
-/// return `200 {ok:false, error}` (the UI shows it inline); only genuine
-/// I/O failures are 5xx.
+/// loader (so cycle / ownership / bad-command errors are caught, not
+/// just syntax), then writing via a sibling `.tmp` + `rename` so a
+/// rejected — or half-written — config never clobbers the existing
+/// one. Validation failures return `200 {ok:false, error}` (the UI
+/// shows it inline); only genuine I/O failures are 5xx.
+///
+/// Saving a converted config therefore *adds* `config.toml` and leaves
+/// the old `config.yaml` sitting there. That's deliberate — the user
+/// keeps their pre-conversion file as a fallback, and
+/// [`AppState::config_path`] prefers the TOML one from the next
+/// request onward, so nothing reads the stale copy.
 async fn put_config(
     State(s): State<AppState>,
     Json(req): Json<PutConfigRequest>,
 ) -> Result<Json<PutConfigResponse>, StatusCode> {
-    let path = s.config_path.as_ref().clone();
+    let path = match req.format {
+        ConfigFormat::Toml => datalib_ingest_config::root_config_path(&s.root),
+        ConfigFormat::Yaml => s.root.join("config.yaml"),
+    };
+
+    // Validate the submitted text before it touches the filesystem.
+    // Note this can't go through a temp file the way it used to: the
+    // parser is chosen by extension, and no `.tmp` name can carry the
+    // real one (`config.yaml.tmp` has extension `tmp`, not `yaml`), so
+    // a legacy save would be validated as TOML and always fail.
+    let sources = match validate_config_text(&req.text, &path) {
+        Ok(sources) => sources,
+        Err(e) => {
+            return Ok(Json(PutConfigResponse {
+                ok: false,
+                error: Some(format!("{e:#}")),
+                source_count: 0,
+            }))
+        }
+    };
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             eprintln!("put_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    let tmp = path.with_extension("yaml.tmp");
-    if let Err(e) = std::fs::write(&tmp, req.yaml.as_bytes()) {
+    let tmp = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp, req.text.as_bytes()) {
         eprintln!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    match load_dag_config(&tmp) {
-        Ok((_cfg, sources)) => {
-            let n = sources.len();
-            if let Err(e) = std::fs::rename(&tmp, &path) {
-                let _ = std::fs::remove_file(&tmp);
-                eprintln!("put_config: rename {}: {e}", path.display());
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-            Ok(Json(PutConfigResponse {
-                ok: true,
-                error: None,
-                source_count: n,
-            }))
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            Ok(Json(PutConfigResponse {
-                ok: false,
-                error: Some(format!("{e:#}")),
-                source_count: 0,
-            }))
-        }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        eprintln!("put_config: rename {}: {e}", path.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    Ok(Json(PutConfigResponse {
+        ok: true,
+        error: None,
+        source_count: sources.len(),
+    }))
 }
 
-/// `GET /api/config/scaffold` — a minimal starter `config.yaml` for this
+/// `GET /api/config/scaffold` — a minimal starter `config.toml` for this
 /// data root. The UI drops it into the editor when the root has no config
 /// yet; the user then fills in sources via the Setup tab's buttons.
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
-    let yaml = scaffold_yaml();
+    // Always TOML, whatever the root currently holds: a scaffold is by
+    // definition a fresh config, and fresh configs are TOML.
+    let path = datalib_ingest_config::root_config_path(&s.root);
     Json(ConfigResponse {
-        path: s.config_path.display().to_string(),
-        exists: s.config_path.exists(),
-        yaml,
+        exists: path.exists(),
+        path: path.display().to_string(),
+        text: scaffold_toml(),
+        format: ConfigFormat::Toml,
         parsed_ok: true,
         error: None,
         source_count: 0,
@@ -1281,7 +1367,7 @@ pub struct DagResponse {
 async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     use datalib_dag::config;
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
-        let (cfg, _root) = config::load(&s.config_path)?;
+        let (cfg, _root) = config::load(&s.config_path())?;
         let commands: std::collections::HashMap<String, String> = cfg
             .steps
             .iter()
@@ -1322,40 +1408,123 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 }
 
 /// Response for `GET /api/config/migrate`: the current legacy config
-/// converted to the DAG format. Nothing is written — the UI drops the
-/// YAML into the editor for review; the user saves explicitly.
+/// converted to TOML. Nothing is written — the UI drops the `text`
+/// into the editor for review; the user saves explicitly.
 #[derive(Debug, Serialize)]
 pub struct MigrateResponse {
     pub ok: bool,
-    pub yaml: Option<String>,
+    pub text: Option<String>,
     pub error: Option<String>,
 }
 
-/// `GET /api/config/migrate` — convert the on-disk old-style
-/// `sources:` config into the DAG step format.
+/// `GET /api/config/migrate` — convert the data root's legacy config to
+/// a TOML one. Handles both legacy shapes, distinguished the same way
+/// [`get_config`] reports them:
+///
+/// - the retired stanza-based `sources:` YAML → the steps format, a
+///   real schema translation ([`migrate_legacy_config`]);
+/// - a pre-TOML `config.yaml` already in the steps format → the same
+///   steps, re-emitted as TOML ([`yaml_steps_to_toml`]).
+///
+/// A config that's already TOML has nothing to do and says so.
 async fn config_migrate(State(s): State<AppState>) -> Json<MigrateResponse> {
-    let text = match std::fs::read_to_string(s.config_path.as_ref()) {
-        Ok(t) => t,
-        Err(e) => {
-            return Json(MigrateResponse {
-                ok: false,
-                yaml: None,
-                error: Some(format!("read {}: {e}", s.config_path.display())),
-            })
-        }
+    let path = s.config_path();
+    let fail = |msg: String| {
+        Json(MigrateResponse {
+            ok: false,
+            text: None,
+            error: Some(msg),
+        })
     };
-    match migrate_legacy_config(&text) {
-        Ok(yaml) => Json(MigrateResponse {
+    if ConfigFormat::of_path(&path) == ConfigFormat::Toml {
+        return fail(format!("{} is already TOML", path.display()));
+    }
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => return fail(format!("read {}: {e}", path.display())),
+    };
+    let converted = if looks_legacy(&text) {
+        migrate_legacy_config(&text)
+    } else {
+        yaml_steps_to_toml(&text, &path)
+    };
+    match converted {
+        Ok(text) => Json(MigrateResponse {
             ok: true,
-            yaml: Some(yaml),
+            text: Some(text),
             error: None,
         }),
-        Err(e) => Json(MigrateResponse {
-            ok: false,
-            yaml: None,
-            error: Some(format!("{e:#}")),
-        }),
+        Err(e) => fail(format!("{e:#}")),
     }
+}
+
+/// Re-emit a pre-TOML `config.yaml` that's already in the steps format
+/// as TOML. A straight reserialization of the parsed config: the steps
+/// and their params survive exactly, comments and YAML-only spellings
+/// (anchors, in particular, which get expanded into their two copies)
+/// do not. Same contract as the `sources:` migrator — a reviewable
+/// draft, not a byte-faithful rewrite.
+fn yaml_steps_to_toml(text: &str, path: &std::path::Path) -> anyhow::Result<String> {
+    let cfg = datalib_dag::config::parse(text, path)?;
+    let mut doc = toml_edit::DocumentMut::new();
+    if let Some(root) = &cfg.data_root {
+        doc["data_root"] = toml_edit::value(root.display().to_string());
+    }
+    if let Some(dir) = &cfg.binary_dir {
+        doc["binary_dir"] = toml_edit::value(dir.display().to_string());
+    }
+    let mut steps = toml_edit::ArrayOfTables::new();
+    for e in &cfg.steps {
+        let mut t = toml_edit::Table::new();
+        t["id"] = toml_edit::value(e.id.as_str());
+        t["command"] = toml_edit::value(e.command.as_str());
+        if !e.inputs.is_empty() {
+            t["inputs"] = toml_edit::value(str_array(&e.inputs));
+        }
+        if !e.outputs.is_empty() {
+            t["outputs"] = toml_edit::value(str_array(&e.outputs));
+        }
+        if !e.env.is_empty() {
+            let mut env = toml_edit::Table::new();
+            for (k, v) in &e.env {
+                env[k.as_str()] = toml_edit::value(v.as_str());
+            }
+            t["env"] = toml_edit::Item::Table(env);
+        }
+        if let Some(params) = &e.params {
+            // Sub-tables must follow the plain keys; `params` is set
+            // last so the emitted step reads id/command/inputs/outputs
+            // and *then* its `[steps.params]` headers.
+            t["params"] = params_table(params)
+                .map_err(|err| anyhow::anyhow!("step {:?}: params → TOML: {err:#}", e.id))?;
+        }
+        t.decor_mut().set_prefix("\n");
+        steps.push(t);
+    }
+    doc["steps"] = toml_edit::Item::ArrayOfTables(steps);
+    Ok(format!(
+        "# Converted from config.yaml — review, save, then delete the old\n\
+         # file. Comments and formatting from it are not carried over.\n{doc}"
+    ))
+}
+
+fn str_array(items: &[String]) -> toml_edit::Array {
+    items.iter().map(|s| s.as_str()).collect()
+}
+
+/// A step's params subtree as a `[steps.params]` sub-table, so nested
+/// structure reads as TOML headers rather than one dense inline table.
+/// Round-tripping through text is what gives us that shape for free:
+/// `toml::to_string` already orders values before tables, which is the
+/// one rule a hand-built document is easy to violate.
+fn params_table(params: &toml::Value) -> anyhow::Result<toml_edit::Item> {
+    let doc: toml_edit::DocumentMut = toml::to_string(params)?.parse()?;
+    let mut t = doc.as_table().clone();
+    // Implicit = emit the `[steps.params]` header only if something is
+    // directly under it. A params subtree that's all sub-tables would
+    // otherwise lead with a bare header holding nothing.
+    t.set_implicit(true);
+    Ok(toml_edit::Item::Table(t))
 }
 
 /// Convert an old-style `sources:` config to the DAG step format:
@@ -1377,15 +1546,32 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
     let mut out = String::new();
     out.push_str("# Migrated from the old sources: format — review before saving.\n");
     if !cfg.data_root.as_os_str().is_empty() {
-        let _ = writeln!(out, "data_root: {}\n", cfg.data_root.display());
-    }
-    out.push_str(
-        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: grid_index\n    command: datalib-step grid_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
-    );
-    if !cfg.qmd.skip {
-        out.push_str(
-            "\n  - id: qmd_index\n    command: datalib-step qmd_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
+        // Above the first [[steps]], as TOML requires: everything after
+        // a table header belongs to that table.
+        let _ = writeln!(
+            out,
+            "data_root = {}\n",
+            toml_edit::Value::from(cfg.data_root.display().to_string())
         );
+    }
+    let _ = write!(out, "{}", divider("shared fan-in steps"));
+    out.push_str("# Every source's rendered markdown feeds these.\n");
+    out.push_str(&step_block(
+        "grid_index",
+        "datalib-step grid_index",
+        &["**/rendered_md"],
+        &["system/backend_index"],
+        None,
+    )?);
+    if !cfg.qmd.skip {
+        out.push('\n');
+        out.push_str(&step_block(
+            "qmd_index",
+            "datalib-step qmd_index",
+            &["**/rendered_md"],
+            &["system/qmd"],
+            None,
+        )?);
     }
 
     for entry in &mut cfg.sources {
@@ -1397,7 +1583,9 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         // The provider subtree, minus the `type:` tag (the command's
         // nested subcommand carries it now) and any nulls serde emitted for
         // unset fields. The old top-level `name:` is gone too — the
-        // step derives it from its first declared output.
+        // step derives it from its first declared output. Stripping the
+        // nulls isn't cosmetic here: TOML has no null, so a surviving
+        // one would fail to serialize at all.
         let mut val = serde_yaml::to_value(&entry.source)
             .map_err(|e| anyhow::anyhow!("serialize source {name:?}: {e}"))?;
         if let Some(m) = val.as_mapping_mut() {
@@ -1406,43 +1594,91 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         strip_nulls(&mut val);
         // Per-phase params split: pull the render-wave knobs out of
         // the legacy subtree into the render step's params; the rest
-        // is the download step's. An empty side just omits `params:`.
+        // is the download step's. An empty side just omits `params`.
         let render_val = split_render_params(&mut val, ty);
-        let dl_params = params_block(&val, &name)?;
-        let rn_params = params_block(&render_val, &name)?;
 
-        let divider_pad = "\u{2500}".repeat(66usize.saturating_sub(name.chars().count()));
-        let mut block = format!("\n  # \u{2500}\u{2500} {name} {divider_pad}\n");
+        let mut block = format!("\n{}", divider(&name));
         if managed {
-            let _ = write!(
-                block,
-                "  - id: {name}.download\n    command: datalib-step download {ty}\n    outputs: [{name}/raw]\n{dl_params}\
-                 \n  - id: {name}.render\n    command: datalib-step render {ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
-            );
-        } else {
-            let _ = write!(
-                block,
-                "  - id: {name}.render\n    command: datalib-step render {ty}\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n{rn_params}",
-            );
+            block.push_str(&step_block(
+                &format!("{name}.download"),
+                &format!("datalib-step download {ty}"),
+                &[],
+                &[&format!("{name}/raw")],
+                Some(&val),
+            )?);
+            block.push('\n');
         }
+        block.push_str(&step_block(
+            &format!("{name}.render"),
+            &format!("datalib-step render {ty}"),
+            &[&format!("{name}/raw")],
+            &[&format!("{name}/rendered_md")],
+            Some(&render_val),
+        )?);
+
         if entry.enabled {
             out.push_str(&block);
         } else {
             // Disabled sources come over commented out — the new
             // format has no per-source enable flag.
-            out.push_str("\n  # (was `enabled: false` — uncomment to activate)\n");
+            out.push_str("\n# (was `enabled: false` — uncomment to activate)\n");
             for line in block.trim_start_matches('\n').lines() {
                 if line.is_empty() {
-                    out.push_str("  #\n");
+                    out.push_str("#\n");
                 } else {
-                    // Strip the base list indent once (not repeatedly —
-                    // nested indentation must survive the round-trip).
-                    let _ = writeln!(out, "  # {}", line.strip_prefix("  ").unwrap_or(line));
+                    let _ = writeln!(out, "# {line}");
                 }
             }
         }
     }
     Ok(out)
+}
+
+/// A full-width `# ── label ───────` section divider, padded to a fixed
+/// width so the migrated file's sections are scannable.
+fn divider(label: &str) -> String {
+    const WIDTH: usize = 68;
+    if label.is_empty() {
+        return format!("# {}\n", "\u{2500}".repeat(WIDTH + 3));
+    }
+    let pad = "\u{2500}".repeat(WIDTH.saturating_sub(label.chars().count()));
+    format!("# \u{2500}\u{2500} {label} {pad}\n")
+}
+
+/// One `[[steps]]` block as text, ready to concatenate. Built through
+/// `toml_edit` rather than `format!` so ids, commands, and artifact
+/// paths get quoted and escaped properly, and so the `[steps.params]`
+/// sub-table lands after the plain keys.
+fn step_block(
+    id: &str,
+    command: &str,
+    inputs: &[&str],
+    outputs: &[&str],
+    params: Option<&serde_yaml::Value>,
+) -> anyhow::Result<String> {
+    let mut t = toml_edit::Table::new();
+    t["id"] = toml_edit::value(id);
+    t["command"] = toml_edit::value(command);
+    if !inputs.is_empty() {
+        t["inputs"] = toml_edit::value(inputs.iter().copied().collect::<toml_edit::Array>());
+    }
+    if !outputs.is_empty() {
+        t["outputs"] = toml_edit::value(outputs.iter().copied().collect::<toml_edit::Array>());
+    }
+    // An empty subtree means the step takes no params at all; note that
+    // an empty-but-present `sync` table is *not* empty by this test,
+    // which is what keeps a managed source managed.
+    if let Some(v) = params.filter(|v| !v.as_mapping().is_none_or(|m| m.is_empty())) {
+        let as_toml = toml::Value::try_from(v)
+            .map_err(|e| anyhow::anyhow!("step {id:?}: params → TOML: {e}"))?;
+        t["params"] = params_table(&as_toml)
+            .map_err(|e| anyhow::anyhow!("step {id:?}: params → TOML: {e:#}"))?;
+    }
+    let mut steps = toml_edit::ArrayOfTables::new();
+    steps.push(t);
+    let mut doc = toml_edit::DocumentMut::new();
+    doc["steps"] = toml_edit::Item::ArrayOfTables(steps);
+    Ok(doc.to_string())
 }
 
 /// Pull the render-wave knobs out of a legacy source subtree (post
@@ -1497,22 +1733,6 @@ fn split_render_params(val: &mut serde_yaml::Value, ty: &str) -> serde_yaml::Val
     Value::Mapping(render)
 }
 
-/// Render a params subtree as an indented `    params:` block for a
-/// migrated step entry; an empty subtree yields no block at all.
-fn params_block(val: &serde_yaml::Value, name: &str) -> anyhow::Result<String> {
-    use std::fmt::Write as _;
-    if val.as_mapping().is_none_or(|m| m.is_empty()) {
-        return Ok(String::new());
-    }
-    let dumped =
-        serde_yaml::to_string(val).map_err(|e| anyhow::anyhow!("dump params for {name:?}: {e}"))?;
-    let mut block = String::from("    params:\n");
-    for line in dumped.lines() {
-        let _ = writeln!(block, "      {line}");
-    }
-    Ok(block)
-}
-
 /// Drop `key: null` entries and (bottom-up) mappings that emptied out —
 /// serde emits both for unset optional/default fields, and they'd read
 /// as clutter in the migrated draft. `sync:` is kept even when empty:
@@ -1545,23 +1765,29 @@ fn strip_nulls(v: &mut serde_yaml::Value) {
 /// `<name>.download` + `<name>.render` pair). `data_root` is omitted:
 /// it defaults to this file's own directory, keeping the root
 /// self-contained.
-fn scaffold_yaml() -> String {
-    "\
-steps:
-  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
-  # Every source's rendered markdown feeds these.
-  - id: grid_index
-    command: datalib-step grid_index
-    inputs: [\"**/rendered_md\"]
-    outputs: [system/backend_index]
+fn scaffold_toml() -> String {
+    format!(
+        "\
+{}# Every source's rendered markdown feeds these.
 
-  - id: qmd_index
-    command: datalib-step qmd_index
-    inputs: [\"**/rendered_md\"]
-    outputs: [system/qmd]
-  # \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
-"
-    .to_string()
+[[steps]]
+id = \"grid_index\"
+command = \"datalib-step grid_index\"
+inputs = [\"**/rendered_md\"]
+outputs = [\"system/backend_index\"]
+
+[[steps]]
+id = \"qmd_index\"
+command = \"datalib-step qmd_index\"
+inputs = [\"**/rendered_md\"]
+outputs = [\"system/qmd\"]
+
+# Source steps go below. Anything you add above the first [[steps]]
+# is a top-level key (data_root, binary_dir), not part of a step.
+{}",
+        divider("shared fan-in steps"),
+        divider("")
+    )
 }
 
 /// Surface the DAG config's source steps to the UI as `{id}` entries —
@@ -1571,7 +1797,7 @@ steps:
 /// when the file is missing or fails to parse, mirroring the previous
 /// behavior.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
-    let sources = match load_dag_config(&s.config_path) {
+    let sources = match load_dag_config(&s.config_path()) {
         Ok((_cfg, sources)) => sources,
         Err(_) => return Json(Vec::new()),
     };
@@ -1742,5 +1968,96 @@ mod tests {
     #[test]
     fn default_columns_listed() {
         assert_eq!(default_columns().len(), 11);
+    }
+
+    /// Whatever these generators emit has to survive the round trip
+    /// the user is about to put it through: parse as TOML, then pass
+    /// the runner's own validation.
+    fn assert_valid_toml_config(text: &str) -> Vec<String> {
+        validate_config_text(text, std::path::Path::new("config.toml"))
+            .unwrap_or_else(|e| panic!("generated config rejected: {e:#}\n---\n{text}"))
+    }
+
+    #[test]
+    fn scaffold_is_valid_toml() {
+        let sources = assert_valid_toml_config(&scaffold_toml());
+        // The two fan-in steps both declare inputs, so neither is a
+        // source — a scaffolded root has nothing to sync yet.
+        assert!(sources.is_empty(), "{sources:?}");
+    }
+
+    /// The retired `sources:` format converts to TOML step pairs, with
+    /// the params subtree landing under each step as a sub-table.
+    #[test]
+    fn legacy_sources_config_migrates_to_toml() {
+        let out = migrate_legacy_config(
+            "data_root: /tmp/dl\nsources:\n\
+             \n  - name: slack\n    source:\n      type: slack_api\n      \
+             sync: {channels: [chat-qi]}\n\
+             \n  - name: off\n    enabled: false\n    source:\n      type: slack_api\n      \
+             sync: {}\n",
+        )
+        .unwrap();
+        let sources = assert_valid_toml_config(&out);
+
+        assert!(out.contains("data_root = \"/tmp/dl\""), "{out}");
+        assert!(out.contains("[[steps]]"), "{out}");
+        assert!(out.contains("[steps.params.sync]"), "{out}");
+        assert!(out.contains("channels = [\"chat-qi\"]"), "{out}");
+        // Only the download half is a source (the render step declares
+        // inputs), and the disabled entry came over commented out, so
+        // it contributes no step at all.
+        assert_eq!(sources, ["slack.download"]);
+        assert!(out.contains("# (was `enabled: false`"), "{out}");
+        assert!(out.contains("# [[steps]]"), "{out}");
+        let ids: Vec<String> =
+            datalib_dag::config::parse(&out, std::path::Path::new("config.toml"))
+                .unwrap()
+                .steps
+                .into_iter()
+                .map(|s| s.id)
+                .collect();
+        assert_eq!(
+            ids,
+            ["grid_index", "qmd_index", "slack.download", "slack.render"]
+        );
+    }
+
+    /// A pre-TOML config already in the steps format converts by
+    /// reserialization — including expanding a YAML anchor into the two
+    /// copies TOML needs.
+    #[test]
+    fn yaml_steps_config_converts_to_toml() {
+        let out = yaml_steps_to_toml(
+            "steps:\n  - id: slack.download\n    command: datalib-step download slack_api\n\
+             \n    outputs: [slack/raw]\n    params: &p\n      sync: {channels: [chat-qi]}\n\
+             \n  - id: slack.render\n    command: datalib-step render slack_api\n\
+             \n    inputs: [slack/raw]\n    outputs: [slack/rendered_md]\n    params: *p\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        let sources = assert_valid_toml_config(&out);
+        assert_eq!(sources, ["slack.download"]);
+        assert_eq!(out.matches("channels = [\"chat-qi\"]").count(), 2, "{out}");
+    }
+
+    /// The format field, not the file already on disk, decides which
+    /// parser validates a save — otherwise accepting a conversion
+    /// (TOML text, root still holding config.yaml) would be rejected.
+    #[test]
+    fn saves_are_validated_in_their_own_format() {
+        let toml = "[[steps]]\nid = \"x\"\ncommand = \"s\"\noutputs = [\"x/raw\"]\n";
+        let yaml = "steps:\n  - id: x\n    command: s\n    outputs: [x/raw]\n";
+        assert_eq!(
+            validate_config_text(toml, std::path::Path::new("config.toml")).unwrap(),
+            ["x"]
+        );
+        assert_eq!(
+            validate_config_text(yaml, std::path::Path::new("config.yaml")).unwrap(),
+            ["x"]
+        );
+        // Each is nonsense to the other's parser.
+        assert!(validate_config_text(yaml, std::path::Path::new("config.toml")).is_err());
+        assert!(validate_config_text(toml, std::path::Path::new("config.yaml")).is_err());
     }
 }

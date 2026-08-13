@@ -27,7 +27,7 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 | Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3) — download-only, no rendered markdown |
 
-See [`docs/user/config_examples/all_sources.yaml`](docs/user/config_examples/all_sources.yaml)
+See [`docs/user/config_examples/all_sources.toml`](docs/user/config_examples/all_sources.toml)
 for one fully-commented step pair per source.
 
 ## Getting started

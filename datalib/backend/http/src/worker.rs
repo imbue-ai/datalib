@@ -4,7 +4,7 @@
 //! task at startup. It drains the `sync_jobs` queue the HTTP handlers
 //! fill (`POST /api/sync/jobs`): claim the oldest `pending` row, shell
 //! out to the `datalib-dag` runner against the data root's
-//! `config.yaml` (the new-format DAG config), stream the child's
+//! `config.toml` (the DAG config), stream the child's
 //! stdout+stderr to `<root>/system/state/job-logs/<id>.log` (which
 //! `GET /api/sync/jobs/{id}/log` tails live), and write the terminal
 //! state back into the queue.
@@ -244,14 +244,13 @@ impl TaskBoard {
 }
 
 /// Everything the worker needs that isn't the repo: where the data root
-/// is (for the per-job log dir), which config to drive the runner
-/// against, and where the binaries live. `dag_bin == None` means we
+/// is (for the per-job log dir and the config the runner is driven
+/// against), and where the binaries live. `dag_bin == None` means we
 /// couldn't find the runner — claimed jobs then fail fast with a clear
 /// message rather than hanging in `pending` forever.
 #[derive(Clone)]
 pub struct WorkerConfig {
     pub root: Arc<PathBuf>,
-    pub config_path: PathBuf,
     /// The `datalib-dag` runner binary.
     pub dag_bin: Option<PathBuf>,
     /// Directory holding the step binaries (`datalib-step`, …), passed
@@ -420,10 +419,14 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     let Some(dag_bin) = cfg.dag_bin.as_ref() else {
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
     };
-    if !cfg.config_path.is_file() {
+    // Resolved per job, not once at boot: the Setup tab can create the
+    // config — or convert a legacy YAML one to `config.toml` — while
+    // the worker is already running.
+    let config_path = datalib_ingest_config::resolve_root_config_path(&cfg.root);
+    if !config_path.is_file() {
         anyhow::bail!(
             "no config at {} — create one from the Setup tab before syncing",
-            cfg.config_path.display()
+            config_path.display()
         );
     }
 
@@ -434,7 +437,7 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     let log_file = File::create(&log_path)?;
 
     let mut command = Command::new(dag_bin);
-    command.arg(&cfg.config_path);
+    command.arg(&config_path);
     if let Some(binary_dir) = cfg.binary_dir.as_ref() {
         command.arg("--binary-dir").arg(binary_dir);
     }

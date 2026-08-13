@@ -17,7 +17,7 @@ raw data) and a `<name>.render` step (raw → markdown +
 
 ```
 <data_root>/
-├── config.yaml                     # the pipeline config (steps format)
+├── config.toml                     # the pipeline config (steps format)
 ├── <name>/raw/                     # per-source raw stores
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.doltlite_db
@@ -36,17 +36,22 @@ HTTP for downloaders). End-to-end setup walkthrough:
 
 ## Configuring sources
 
-`<data_root>/config.yaml` declares the steps directly; edges are derived
-from input/output paths, never written by hand.
+`<data_root>/config.toml` is TOML: one `[[steps]]` table per step,
+declaring the steps directly; edges are derived from input/output
+paths, never written by hand. Top-level keys (`data_root`,
+`binary_dir`) go above the first `[[steps]]`, and a step's `params`
+sub-tables come after its plain keys — a `[…]` header ends the table it
+appears in.
 
 - **Complete commented example:**
-  [`configs/dag_example.yaml`](../configs/dag_example.yaml).
+  [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Per-source knobs and step pairs**:
-  [`docs/user/config_examples/all_sources.yaml`](user/config_examples/all_sources.yaml)
+  [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
   — one commented `<name>.download` + `<name>.render` step pair per
-  supported source, in the steps format, ready to copy. (Old-style
-  `sources:` configs still exist in the wild; the web UI detects them
-  and offers one-click migration.)
+  supported source, in the steps format, ready to copy. (Two pre-TOML
+  `config.yaml` formats still exist in the wild — a YAML steps config
+  and the older stanza-based `sources:` one. Both still load; the web
+  UI detects either and offers one-click conversion to TOML.)
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
   walkthroughs for getting cookies/tokens/exports:
@@ -62,8 +67,8 @@ from input/output paths, never written by hand.
 CLI:
 
 ```sh
-datalib-dag <data_root>/config.yaml            # everything
-datalib-dag <data_root>/config.yaml --sync slack.download   # one source
+datalib-dag <data_root>/config.toml            # everything
+datalib-dag <data_root>/config.toml --sync slack.download   # one source
 ```
 
 Useful flags: `--sync <step-id>` (repeatable; subset sync from selected
@@ -130,8 +135,8 @@ Pick the surface that fits the question:
 ## Extending datalib
 
 - **Custom step commands** — the headline extension point. Any
-  executable can be a pipeline step: declare it in `config.yaml` with
-  `command:`/`inputs:`/`outputs:`/`params:`, and the runner feeds it
+  executable can be a pipeline step: declare it in `config.toml` with
+  `command`/`inputs`/`outputs`/`params`, and the runner feeds it
   flags + env vars and (optionally) parses NDJSON progress/outcome
   events from its stdout. A plain shell script works; adopting more of
   the protocol buys incrementality, live progress, and retry

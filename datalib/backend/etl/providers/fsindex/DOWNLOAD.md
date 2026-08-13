@@ -212,42 +212,55 @@ hint, surfaced by these queries:
 
 ## `scan_meta.id` is the source name from config
 
-The per-root metadata table (`scan_meta`) keys by the `name:` from
-the `sources:` entry in `config.yaml`, *not* by the absolute path
-of the scan root. The `name:` is the same per-source stable
+The per-root metadata table (`scan_meta`) keys by the source name —
+the `<name>` prefix of the step's declared outputs in `config.toml`
+(`fsindex-home/raw` → `fsindex-home`) — *not* by the absolute path
+of the scan root. That name is the same per-source stable
 identifier used everywhere else in the framework (`.doltlite_db`
 filenames, log lines, render cursor paths), it survives moves of
 the data root because it's user-supplied, and it sidesteps the
 "what do we do if the root moves?" question entirely — `abs_path`
 lives in a regular column and is allowed to evolve between scans
 without disturbing the PK. If the user renames a source in config,
-the orchestrator treats that as a separate source and the old row
+the runner treats that as a separate source and the old row
 stays put until garbage-collected.
 
 ## Multi-root via doltlite branches
 
+> **Stale:** the `doltlite_db` / `target_doltlite_branch` knobs this
+> section describes are not in the current `FsindexConfig` schema
+> (`common` + `stamp` are the only fields, and the config structs are
+> `deny_unknown_fields`), so the config below would be rejected. The
+> storage design is recorded here because the branch-level diff
+> primitive still holds; the config surface for it does not exist yet.
+
 Two scan roots that want to share storage and benefit from
-prolly-tree dedup point at the same `<name>.doltlite_db` and pick
-different `target_doltlite_branch` values in their `sources:`
-entries:
+prolly-tree dedup would point at the same `<name>.doltlite_db` and
+pick different `target_doltlite_branch` values:
 
-```yaml
-- name: laptop_home
-  type: fsindex
-  root: /Users/thad
-  doltlite_db: fsindex.doltlite_db
-  target_doltlite_branch: laptop
+```toml
+# NOT CURRENTLY SUPPORTED — see the note above.
+[[steps]]
+id = "laptop_home.download"
+command = "datalib-step download fsindex"
+outputs = ["laptop_home/raw"]
+[steps.params.common]
+input_path = "/Users/thad"
 
-- name: nas_backup
-  type: fsindex
-  root: /Volumes/nas/thad
-  doltlite_db: fsindex.doltlite_db
-  target_doltlite_branch: nas
+[[steps]]
+id = "nas_backup.download"
+command = "datalib-step download fsindex"
+outputs = ["nas_backup/raw"]
+[steps.params.common]
+input_path = "/Volumes/nas/thad"
 ```
 
-The §"Single writer per doltlite file" rule still applies — sync's
-orchestrator serializes per-source, so the two roots scan one at a
-time even though they share the file. Branch-level diff is the
+Today each of those two steps gets its own raw store under
+`<name>/raw/` instead, which is the supported way to scan two roots.
+
+The §"Single writer per doltlite file" rule still applies — the
+runner serializes per-source, so two roots sharing a file would scan
+one at a time. Branch-level diff is the
 diff/sync primitive:
 
 ```sql
@@ -257,7 +270,7 @@ FROM db.laptop.files m FULL OUTER JOIN db.nas.files n USING(id)
 WHERE m.blake3 IS NOT n.blake3;
 ```
 
-`target_doltlite_branch` defaults to `main`, so a single-root
+`target_doltlite_branch` would default to `main`, so a single-root
 configuration needs nothing extra.
 
 ## Inspecting a scan: what changed?

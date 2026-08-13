@@ -211,18 +211,25 @@ export function fetchChat(
 
 // --- Config / setup API ----------------------------------------------------
 //
-// The data root is self-contained: its `config.yaml` lives at
-// `<root>/config.yaml` and is read/written through these endpoints. A
+// The data root is self-contained: its config lives at
+// `<root>/config.toml` and is read/written through these endpoints. A
 // fresh root has no config (`exists: false`); the Setup view scaffolds
 // one, lets the user edit, and PUTs it back.
 
+// Which syntax a config's text is in. `yaml` means a data root written
+// before the TOML switch — still readable and still saveable in place,
+// but `/api/config/migrate` converts it and everything new is `toml`.
+export type ConfigFormat = "toml" | "yaml";
+
 export type ConfigResponse = {
-  // Absolute path of `<root>/config.yaml`.
+  // Absolute path of `<root>/config.toml` (or the legacy config.yaml).
   path: string;
   // Whether that file exists yet (false on a fresh data root).
   exists: boolean;
-  // Raw YAML text ("" when missing).
-  yaml: string;
+  // Raw config text ("" when missing).
+  text: string;
+  // The syntax `text` is in, from the path's extension.
+  format: ConfigFormat;
   // Whether the current bytes parse + validate.
   parsed_ok: boolean;
   // Loader error when parsed_ok is false.
@@ -234,16 +241,18 @@ export type ConfigResponse = {
   // copy-pasteable credential snippets.
   latchkey_cli: string;
   // True when the file is an old-style `sources:` config for the
-  // retired sync binary; the UI offers a one-click migration.
+  // retired sync binary; the UI offers a one-click migration. A
+  // `format: "yaml"` response with `legacy: false` is a pre-TOML
+  // *steps* config, which converts through the same endpoint.
   legacy: boolean;
 };
 
 // Response for GET /api/config/migrate: the legacy config converted to
-// the DAG step format. Nothing is written server-side — the UI drops
-// the YAML into the editor for review.
+// TOML. Nothing is written server-side — the UI drops `text` into the
+// editor for review.
 export type MigrateResponse = {
   ok: boolean;
-  yaml: string | null;
+  text: string | null;
   error: string | null;
 };
 
@@ -288,17 +297,22 @@ export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {
   return getJson<DagResponse>("/api/dag", signal);
 }
 
-// PUT the edited YAML. The backend validates before persisting; a
-// validation failure comes back as `{ok:false, error}` (HTTP 200), not a
-// thrown error, so the caller can show it inline.
+// PUT the edited config text. `format` says which syntax it is in and
+// therefore which file it lands in, so saving a just-converted config
+// (TOML text against a root whose current file is still config.yaml)
+// writes config.toml rather than corrupting the old file. The backend
+// validates before persisting; a validation failure comes back as
+// `{ok:false, error}` (HTTP 200), not a thrown error, so the caller
+// can show it inline.
 export async function saveConfig(
-  yaml: string,
+  text: string,
+  format: ConfigFormat,
   signal?: AbortSignal,
 ): Promise<SaveConfigResponse> {
   const r = await fetch("/api/config", {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ yaml }),
+    body: JSON.stringify({ text, format }),
     signal,
   });
   if (!r.ok) {

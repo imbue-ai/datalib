@@ -45,25 +45,27 @@ echo "Perseus data root: $ROOT" >&2
 # hard-fails at startup if the index is missing (see
 # `datalib/backend/http/src/main.rs`'s qmd_daemon block), so it's
 # easier to pay the cost once than special-case it out.
-cat > "$ROOT/config.yaml" <<EOF
-data_root: $ROOT
-steps:
-  - id: perseus.render
-    command: datalib-step render perseus
-    outputs: [perseus/rendered_md]
-    params:
-      common:
-        input_path: $PERSEUS_FIXTURE_DIR
+cat > "$ROOT/config.toml" <<EOF
+data_root = "$ROOT"
 
-  - id: grid_index
-    command: datalib-step grid_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/backend_index]
+[[steps]]
+id = "perseus.render"
+command = "datalib-step render perseus"
+outputs = ["perseus/rendered_md"]
+[steps.params.common]
+input_path = "$PERSEUS_FIXTURE_DIR"
 
-  - id: qmd_index
-    command: datalib-step qmd_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/qmd]
+[[steps]]
+id = "grid_index"
+command = "datalib-step grid_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/backend_index"]
+
+[[steps]]
+id = "qmd_index"
+command = "datalib-step qmd_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/qmd"]
 EOF
 
 # Step commands find `datalib-step` via PATH; bazel names the binary
@@ -87,6 +89,6 @@ fi
 # launches. Value matches `:dev_tng`'s style — far-future date so
 # it sorts last in any timestamp comparison.
 echo "[dev_perseus] running render+index against $PERSEUS_FIXTURE_DIR" >&2
-"$DAG_BIN" "$ROOT/config.yaml" --binary-dir "$BINDIR" --now '2369-04-15T00:00:00+00:00'
+"$DAG_BIN" "$ROOT/config.toml" --binary-dir "$BINDIR" --now '2369-04-15T00:00:00+00:00'
 
 exec "$SERVE_SH" "$ROOT"

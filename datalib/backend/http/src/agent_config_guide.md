@@ -7,63 +7,82 @@ alias instead, read `<origin>/agent/cards.md`.)
 
 ## The model
 
-The sync pipeline is driven by `<root>/config.yaml`: a `steps:` list
-where each step has an `id`, a shell `command`, and declared `inputs` /
-`outputs` (artifact paths; wildcards allowed in inputs). The runner
-derives the execution DAG from input/output overlap — file order does
-not matter. A step with no `inputs` is a **source** (what a sync can
-target); every source's rendered markdown feeds the shared
-`grid_index` / `qmd_index` fan-in steps:
+The sync pipeline is driven by `<root>/config.toml`: an array of
+`[[steps]]` tables where each step has an `id`, a shell `command`, and
+declared `inputs` / `outputs` (artifact paths; wildcards allowed in
+inputs). The runner derives the execution DAG from input/output overlap
+— file order does not matter. A step with no `inputs` is a **source**
+(what a sync can target); every source's rendered markdown feeds the
+shared `grid_index` / `qmd_index` fan-in steps:
 
-```yaml
-steps:
-  # one source = a download step + a render step. The download step
-  # has no inputs (that makes it a source); the source's name comes
-  # from its first output (`slack/raw` → `slack`). `params:` carries
-  # per-provider config; credentials never live here (latchkey
-  # provides them at runtime).
-  - id: slack.download
-    command: datalib-step download slack_api
-    outputs: [slack/raw]
-    params:
-      sync: {}
-  - id: slack.render
-    command: datalib-step render slack_api
-    inputs: [slack/raw]
-    outputs: [slack/rendered_md]
+```toml
+# One source = a download step + a render step. The download step has
+# no inputs (that makes it a source); the source's name comes from its
+# first output ("slack/raw" → slack). `params` carries per-provider
+# config; credentials never live here (latchkey provides them at
+# runtime).
+[[steps]]
+id = "slack.download"
+command = "datalib-step download slack_api"
+outputs = ["slack/raw"]
+# A sub-table ends the table it sits in, so `params` goes after this
+# step's plain keys — and the next step starts with its own [[steps]].
+[steps.params]
+sync = {}
 
-  # shared fan-in steps every source's rendered markdown feeds
-  - id: grid_index
-    command: datalib-step grid_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/backend_index]
-  - id: qmd_index
-    command: datalib-step qmd_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/qmd]
+[[steps]]
+id = "slack.render"
+command = "datalib-step render slack_api"
+inputs = ["slack/raw"]
+outputs = ["slack/rendered_md"]
+
+# Shared fan-in steps every source's rendered markdown feeds.
+[[steps]]
+id = "grid_index"
+command = "datalib-step grid_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/backend_index"]
+
+[[steps]]
+id = "qmd_index"
+command = "datalib-step qmd_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/qmd"]
 ```
+
+Any top-level keys (`data_root`, `binary_dir`) must be written *above*
+the first `[[steps]]`.
 
 ## What you do
 
 Work through the HTTP API, not the file:
 
 ```sh
-# read the current config (JSON: {yaml, path, parsed_ok, error, …})
+# read the current config
+# (JSON: {text, format, path, parsed_ok, error, …})
 curl "<origin>/api/config"
 
 # save a new version — send the FULL new text, not a diff
 curl -X PUT "<origin>/api/config" \
   -H 'content-type: application/json' \
-  -d "$(jq -Rs '{yaml: .}' < config.yaml)"
+  -d "$(jq -Rs '{text: ., format: "toml"}' < config.toml)"
 ```
 
 The PUT validates with the real config loader before writing anything:
 an invalid config returns `{ok: false, error}` and leaves the file on
 disk untouched — fix and re-PUT. Only a valid config ever lands.
 
+`format` says which syntax you are sending and therefore which file it
+lands in. Always send `"toml"` — `"yaml"` exists only so a data root
+that still has a pre-TOML `config.yaml` can be edited in place. If
+`GET /api/config` comes back with `"format": "yaml"`, that root is on
+the old format: `GET <origin>/api/config/migrate` returns
+`{ok, text}` with it converted to TOML, which you can then PUT as
+`"toml"`.
+
 ## Adding your own step commands
 
-A step's `command:` is an ordinary command line — it is not limited to
+A step's `command` is an ordinary command line — it is not limited to
 the built-in `datalib-step` subcommands. If the user's request needs a
 new program (a custom fetcher, a converter, …), write it and install
 it into **`~/.datalib/bin`** — either the binary itself or a symlink
@@ -75,7 +94,7 @@ ln -sf /path/to/my-fetcher ~/.datalib/bin/my-fetcher
 ```
 
 `~/.datalib/bin` is prepended to `PATH` whenever the UI runs the
-pipeline, so a bare `command: my-fetcher --out .` resolves. Keep step
+pipeline, so a bare `command = "my-fetcher --out ."` resolves. Keep step
 commands non-interactive; they run headless with their output captured
 into the job log.
 

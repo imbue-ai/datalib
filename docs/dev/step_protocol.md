@@ -14,24 +14,29 @@ poisoning) is in `pipeline_dag_architecture.md`.
 
 ## The config entry
 
-```yaml
-steps:
-  - id: weather.download
-    command: fetch-weather --station KSFO   # split shell-style
-    outputs: [weather/raw]
-    params:                                  # arbitrary YAML, yours
-      units: metric
-    env:                                     # extra child environment
-      WEATHER_DEBUG: "1"
+The config is TOML; each step is one `[[steps]]` table.
+
+```toml
+[[steps]]
+id = "weather.download"
+command = "fetch-weather --station KSFO"   # split shell-style
+outputs = ["weather/raw"]
+env = { WEATHER_DEBUG = "1" }              # extra child environment
+[steps.params]                             # arbitrary TOML, yours
+units = "metric"
 ```
 
-`command:` is one string, split into an argv shell-style (quotes and
+Sub-tables like `[steps.params]` must come after the step's plain keys:
+in TOML a table header ends the table it appears in, so everything
+below it belongs to `params` until the next header.
+
+`command` is one string, split into an argv shell-style (quotes and
 backslash escapes work; there is **no** variable expansion, globbing,
 or piping — wrap in `sh -c '…'` if you need real shell). The first
 word resolves via `PATH`, with the runner's `--binary-dir` (default:
 the directory `datalib-dag` itself lives in; also settable as
-`binary_dir:` in the config) prepended — which is how `datalib-step`
-is found without an absolute path.
+`binary_dir` in the config, above the first `[[steps]]`) prepended —
+which is how `datalib-step` is found without an absolute path.
 
 ## What your command receives
 
@@ -43,9 +48,9 @@ declared fields to your argv, each only when present/non-empty:
 
 | flag | value |
 | --- | --- |
-| `--params <json>` | the entry's `params:` subtree, converted YAML → JSON |
-| `--inputs <json>` | the entry's `inputs:` patterns, as a JSON string array |
-| `--outputs <json>` | the entry's `outputs:` paths, as a JSON string array |
+| `--params <json>` | the entry's `params` subtree, converted TOML → JSON (TOML dates/times arrive as their string form) |
+| `--inputs <json>` | the entry's `inputs` patterns, as a JSON string array |
+| `--outputs <json>` | the entry's `outputs` paths, as a JSON string array |
 
 So the entry above runs
 `fetch-weather --station KSFO --params {"units":"metric"} --outputs ["weather/raw"]`.
@@ -60,7 +65,7 @@ drop them).
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's config `id` |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
-| `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root — wildcards in `inputs:` are already expanded against producer outputs |
+| `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root — wildcards in `inputs` are already expanded against producer outputs |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty on a first run |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-fetch — honor it if you fetch from an origin, ignore otherwise |
@@ -73,7 +78,7 @@ values on collision).
 
 These are what the scheduler's correctness rests on:
 
-* **Write only under your declared `outputs:`.** No two steps'
+* **Write only under your declared `outputs`.** No two steps'
   outputs may overlap; edges are derived purely from one step's
   outputs matching another's inputs.
 * **Be idempotent.** Retries and re-runs simply invoke you again; a
@@ -127,7 +132,7 @@ Per declared output you can claim, in order of preference:
   blake3-hashes the output tree and decides for itself. Always
   correct, just slower and mtime-blind (content only).
 
-Claiming a path you didn't declare in `outputs:` is a contract
+Claiming a path you didn't declare in `outputs` is a contract
 violation and fails the step. Exit `0` means success; the outcome
 line is purely informational.
 
@@ -174,10 +179,11 @@ correct, just wasteful.
 
 A shell step, no protocol at all (scheduler hashes the output tree):
 
-```yaml
-  - id: notes.import
-    command: sh -c 'mkdir -p notes/raw && cp -R "$HOME/notes/." notes/raw/'
-    outputs: [notes/raw]
+```toml
+[[steps]]
+id = "notes.import"
+command = "sh -c 'mkdir -p notes/raw && cp -R \"$HOME/notes/.\" notes/raw/'"
+outputs = ["notes/raw"]
 ```
 
 A python step using inputs + progress + outcome:
@@ -211,7 +217,7 @@ protocol: `datalib-step download|render <provider>` (plus
 `grid_index` / `qmd_index`). It derives its source name from the first
 `--outputs` entry (`slack/raw` → `slack`), reads `--params` as the
 provider's **phase-specific** config — the download step carries the
-provider's download config (`common:` envelope, `sync:` block, …),
+provider's download config (`common` envelope, `sync` block, …),
 the render step only the render knobs (nothing for most providers;
 beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`

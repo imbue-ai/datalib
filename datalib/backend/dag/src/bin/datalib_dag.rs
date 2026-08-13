@@ -1,15 +1,15 @@
-//! `datalib-dag` — run a DAG config file (the new-format config; see
-//! `datalib_dag::config` for the schema).
+//! `datalib-dag` — run a DAG config file (see `datalib_dag::config`
+//! for the schema).
 //!
 //! ```sh
-//! datalib-dag pipeline.yaml [--binary-dir DIR] [--sync STEP_ID[,…]]…
+//! datalib-dag config.toml [--binary-dir DIR] [--sync STEP_ID[,…]]…
 //!     [--now RFC3339] [--parallelism N]
 //!     [--reset-and-redownload] [--refetch-blobs]
 //! ```
 //!
 //! * `--binary-dir` is prepended to every step's `PATH`, so commands
 //!   can name step binaries bare (`datalib-step …`). Defaults to the
-//!   config `binary_dir:`, then this executable's own directory.
+//!   config `binary_dir`, then this executable's own directory.
 //! * `--sync` selects a subset of the download steps (the steps with
 //!   no inputs) to actually sync; the rest are treated as up to date,
 //!   so only the selected chains — plus any fan-in steps they dirty —
@@ -63,7 +63,7 @@ use datalib_dag::{config, subprocess, Graph, NdjsonSink, Runner};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    const USAGE: &str = "usage: datalib-dag <pipeline.yaml> [--binary-dir DIR] \
+    const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
          [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--parallelism N] \
          [--reset-and-redownload] [--refetch-blobs]";
     let mut config_path: Option<PathBuf> = None;

@@ -15,15 +15,15 @@
 //! re-exporting and re-ingesting a fresh backup upserts in place rather
 //! than duplicating — see [`download::schema_raw`].
 //!
-//! Wired into the config-driven `sync` orchestrator as the
-//! `sms_backup_restore` source type:
+//! Wired into the pipeline as the `sms_backup_restore` source type:
 //!
-//! ```yaml
-//! - name: sms_backup_restore
-//!   source:
-//!     type: sms_backup_restore
-//!     common:
-//!       input_path: ~/backups/SMSBackupRestore
+//! ```toml
+//! [[steps]]
+//! id = "sms_backup_restore.download"
+//! command = "datalib-step download sms_backup_restore"
+//! outputs = ["sms_backup_restore/raw"]
+//! [steps.params.common]
+//! input_path = "~/backups/SMSBackupRestore"
 //! ```
 
 pub mod download;

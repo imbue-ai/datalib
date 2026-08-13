@@ -23,14 +23,21 @@ bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
    Google Chat, etc.) inside the desktop app. Let it run long
    enough to do its first sync; the app's caches need to be
    populated.
-3. Configure the source in YAML:
-   ```yaml
-   - name: beeper
-     source:
-       type: beeper
-       sync:
-         sources: ["signal", "googlechat"]
-         media: true
+3. Add the step pair to your `config.toml`:
+   ```toml
+   [[steps]]
+   id = "beeper.download"
+   command = "datalib-step download beeper"
+   outputs = ["beeper/raw"]
+   [steps.params.sync]
+   sources = ["signal", "googlechat"]
+   media = true
+
+   [[steps]]
+   id = "beeper.render"
+   command = "datalib-step render beeper"
+   inputs = ["beeper/raw"]
+   outputs = ["beeper/rendered_md"]
    ```
 
 That's it.

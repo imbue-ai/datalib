@@ -19,24 +19,26 @@
 //!     [`datalib_schema::grid_rows::GridRow`] struct, so a column
 //!     rename in `schemas/grid_rows.schema.json` breaks the build
 //!     instead of silently producing stale sidecars.
-//!   * **The same `bazel run //...:sync` UX as every other source.**
-//!     Add a `- name: perseus` source (`source: {type: perseus}`) to
-//!     `config.yaml` and one command renders + loads + qmd-indexes.
+//!   * **The same UX as every other source.** Add a perseus step
+//!     pair to `config.toml` and one command renders + loads +
+//!     qmd-indexes.
 //!   * **A real Bazel test target** ([rust_test
 //!     `perseus_translate_test`]) that catches regressions before they
 //!     reach a user's data root.
 //!
 //! ## Configuration
 //!
-//! ```yaml
-//! - name: perseus
-//!   source:
-//!     type: perseus
-//!     sync: {}            # default: Thucydides Histories (grc + eng)
+//! ```toml
+//! [[steps]]
+//! id = "perseus.download"
+//! command = "datalib-step download perseus"
+//! outputs = ["perseus/raw"]
+//! [steps.params]
+//! sync = {}            # default: Thucydides Histories (grc + eng)
 //! ```
 //!
-//! With a bare `sync: {}` block, `bazel run //datalib/backend/sync`
-//! downloads the default Thucydides pair from
+//! With an empty `sync` block, the download step
+//! fetches the default Thucydides pair from
 //! `PerseusDL/canonical-greekLit` (master branch) to
 //! `<data_root>/perseus/raw/`, and Render + Load + qmd-index pick
 //! them up on the same run. **No latchkey registration is required**
@@ -47,14 +49,16 @@
 //!
 //! ### Customizing the files list
 //!
-//! ```yaml
-//! - name: perseus
-//!   source:
-//!     type: perseus
-//!     sync:
-//!       files:
-//!         - tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml
-//!         - tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml
+//! ```toml
+//! [[steps]]
+//! id = "perseus.download"
+//! command = "datalib-step download perseus"
+//! outputs = ["perseus/raw"]
+//! [steps.params.sync]
+//! files = [
+//!   "tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml",
+//!   "tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml",
+//! ]
 //! ```
 //!
 //! Each entry is a subpath under

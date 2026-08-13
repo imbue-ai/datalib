@@ -20,7 +20,7 @@ use crate::{worker, AppState};
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the doltlite repo at
 /// [`datalib_core::layout::backend_index_db`], the lazy qmd daemon,
-/// `<root>/config.yaml`, the sync-progress channel, and the background
+/// `<root>/config.toml`, the sync-progress channel, and the background
 /// sync worker. The worker is spawned onto the ambient tokio runtime,
 /// so this must be called from within one. `dag_bin` is the
 /// `datalib-dag` runner the worker shells out to (with `binary_dir`
@@ -54,10 +54,6 @@ pub async fn build_state(
     // download on the first semantic search instead of blocking boot.
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
 
-    // Self-contained config: the app reads/writes `<root>/config.yaml`,
-    // so a fresh data root needs no external `~/.config` file.
-    let config_path = Arc::new(datalib_ingest_config::root_config_path(&root));
-
     // Live sync-job progress fan-out: the worker + enqueue/cancel
     // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
     // Buffer a few hundred events so a briefly-stalled client lags
@@ -69,7 +65,6 @@ pub async fn build_state(
     // with a clear message instead of hanging (search is unaffected).
     let worker_cfg = worker::WorkerConfig {
         root: root.clone(),
-        config_path: (*config_path).clone(),
         dag_bin,
         binary_dir,
         progress_tx: progress_tx.clone(),
@@ -81,7 +76,6 @@ pub async fn build_state(
 
     Ok(AppState {
         root,
-        config_path,
         repo,
         qmd_daemon,
         progress_tx,

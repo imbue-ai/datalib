@@ -18,7 +18,7 @@
 #   /root/.latchkey                latchkey credentials store
 #                                  (RW for `auth set` / `services register`;
 #                                  may be RO for `datalib-dag`).
-#   /data                          data root: config.yaml, the doltlite
+#   /data                          data root: config.toml, the doltlite
 #                                  DB, raw_api/ trees, rendered QMDs,
 #                                  the qmd index.
 #   /root/.cache/qmd/models        (optional) embedding-model cache; avoids

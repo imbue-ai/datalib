@@ -1,12 +1,12 @@
-// The merged Sources tab: the sources table and the raw config.yaml
+// The merged Sources tab: the sources table and the raw config.toml
 // editor sit side by side as two views of the same text. The editor is
 // the single source of truth; the table re-derives from it on every
-// keystroke. A row's "Locate config" button selects that stanza in the
-// editor; the chips append a template stanza. Save PUTs the text to
-// /api/config, which validates with the real config loader before
-// persisting.
+// keystroke. A row's "Locate config" button selects that step's tables
+// in the editor; the chips append a template step pair. Save PUTs the
+// text to /api/config, which validates with the real config loader
+// before persisting.
 //
-// The fixture root's config.yaml starts as a single `data_root:` line
+// The fixture root's config.toml starts as a single `data_root` line
 // with no sources. Specs that save restore the original file at the end
 // (the fixture root is shared by every spec in the run).
 
@@ -23,14 +23,14 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // Fixture config has no sources; the editor holds the raw file.
   await expect(page.getByText("no sources configured yet")).toBeVisible();
   const editor = page.locator(".editor");
-  await expect(editor).toHaveValue(/data_root:/);
+  await expect(editor).toHaveValue(/data_root = /);
   const original = await editor.inputValue();
 
   // The chip appends the source's step pair to the text; the table
   // row appears immediately (derived from the text), but stays
   // unsyncable — checkbox disabled — until the config is saved.
   await page.getByRole("button", { name: "Perseus (sample)" }).click();
-  await expect(editor).toHaveValue(/command: datalib-step download perseus/);
+  await expect(editor).toHaveValue(/command = "datalib-step download perseus"/);
   const row = page.locator(".sources-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
   await expect(page.getByText("unsaved changes")).toBeVisible();
@@ -84,8 +84,8 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
     const t = el as HTMLTextAreaElement;
     return t.value.slice(t.selectionStart, t.selectionEnd);
   });
-  expect(selected).toContain("id: perseus.download");
-  expect(selected).not.toContain("id: perseus.render");
+  expect(selected).toContain('id = "perseus.download"');
+  expect(selected).not.toContain('id = "perseus.render"');
   expect(selected).not.toContain("chatgpt");
 
   // Unsaved edits never reached the server; a reload restores the file.
@@ -93,16 +93,16 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
   await expect(page.locator(".editor")).not.toHaveValue(/perseus/);
 });
 
-test("a YAML error marks the table stale instead of blanking it", async ({ page }) => {
+test("a TOML error marks the table stale instead of blanking it", async ({ page }) => {
   await openSources(page);
 
   const editor = page.locator(".editor");
   const original = await editor.inputValue();
 
-  await editor.fill(original + "\nbroken: [unclosed\n");
+  await editor.fill(original + "\nbroken = [unclosed\n");
   // The parse error and the unsaved-changes note are independent — both
   // show at once.
-  await expect(page.getByText(/YAML error \(table may be stale\)/)).toBeVisible();
+  await expect(page.getByText(/TOML error \(table may be stale\)/)).toBeVisible();
   await expect(page.getByText("unsaved changes")).toBeVisible();
   // Save is still possible but the backend rejects it.
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -110,7 +110,7 @@ test("a YAML error marks the table stale instead of blanking it", async ({ page 
 
   // Fixing the text clears the error.
   await editor.fill(original);
-  await expect(page.getByText(/YAML error \(table may be stale\)/)).not.toBeVisible();
+  await expect(page.getByText(/TOML error \(table may be stale\)/)).not.toBeVisible();
 });
 
 test("invalid config is rejected by Save and not persisted", async ({ page }) => {
@@ -119,8 +119,12 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
   const editor = page.locator(".editor");
   const original = await editor.inputValue();
 
-  // Parses as YAML but fails the config loader (unknown source type).
-  await editor.fill("sources:\n  - name: x\n    source: {type: not_a_provider}\n");
+  // Parses as TOML but fails the config loader: two steps claiming the
+  // same output is an ownership conflict the graph build rejects.
+  await editor.fill(
+    '[[steps]]\nid = "a"\ncommand = "c"\noutputs = ["x/raw"]\n\n' +
+      '[[steps]]\nid = "b"\ncommand = "c"\noutputs = ["x/raw"]\n',
+  );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();
 

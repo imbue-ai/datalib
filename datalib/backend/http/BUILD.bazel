@@ -74,6 +74,8 @@ rust_library(
         "@datalib_crates//:serde_yaml",
         "@datalib_crates//:sha2",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:toml",
+        "@datalib_crates//:toml_edit",
         "@datalib_crates//:tower-http",
         "@datalib_crates//:uuid",
     ],

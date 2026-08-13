@@ -1,5 +1,10 @@
-//! Ingest config: the orchestrator's view of `config.yaml` — the app envelope
+//! Ingest config: the **retired** stanza-based config format — the app envelope
 //! ([`Config`]) plus a [`SourceConfig`] discriminated union over `type:`.
+//!
+//! This format is YAML and stays YAML: it is only ever *read*, and only to
+//! migrate an old `config.yaml` into the current `config.toml` steps format
+//! (see `datalib_dag::config`). The per-source schemas below are still live,
+//! though — the download/render steps take them as their `params` subtree.
 //!
 //! Relocated out of `datalib_core::config` (Program A): it sits *above* the
 //! providers (it names every source `type:`), so `http` can link the config
@@ -462,11 +467,38 @@ impl Config {
     }
 }
 
-/// Path to the config file that lives *inside* a data root: `<root>/config.yaml`.
+/// Path to the config file that lives *inside* a data root:
+/// `<root>/config.toml`. This is the canonical name — the one we
+/// create and write back to. To *read* an existing root, go through
+/// [`resolve_root_config_path`], which also finds pre-TOML configs.
 pub fn root_config_path(data_root: &Path) -> PathBuf {
-    data_root.join("config.yaml")
+    data_root.join("config.toml")
 }
 
+/// The config file to actually open in `data_root`: `config.toml` when
+/// it exists, else a pre-TOML `config.yaml` when *that* exists, else
+/// `config.toml` (the path a scaffold would create).
+///
+/// Preferring `.toml` means converting a root leaves the old file
+/// harmlessly in place rather than demanding it be deleted, and a root
+/// that somehow has both is unambiguous. `datalib_dag::config` picks
+/// its parser off the same extension, so whichever comes back parses
+/// correctly.
+pub fn resolve_root_config_path(data_root: &Path) -> PathBuf {
+    let toml = root_config_path(data_root);
+    if toml.exists() {
+        return toml;
+    }
+    let yaml = data_root.join("config.yaml");
+    if yaml.exists() {
+        return yaml;
+    }
+    toml
+}
+
+/// Path to the legacy out-of-root config, for the retired
+/// `$DATALIB_CONFIG` / `~/.config/datalib/` layout. Data roots are
+/// self-contained now — see [`resolve_root_config_path`].
 pub fn default_config_path() -> PathBuf {
     if let Ok(env) = std::env::var("DATALIB_CONFIG") {
         return PathBuf::from(env);

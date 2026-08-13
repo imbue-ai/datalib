@@ -28,6 +28,7 @@ rust_library(
         "@datalib_crates//:serde_yaml",
         "@datalib_crates//:shlex",
         "@datalib_crates//:thiserror",
+        "@datalib_crates//:toml",
         "@datalib_crates//:tokio",
         "@datalib_crates//:walkdir",
     ],
