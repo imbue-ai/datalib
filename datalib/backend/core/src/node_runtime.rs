@@ -67,7 +67,7 @@ pub fn latchkey_cli_hint() -> String {
 
 /// Single-quote `s` for POSIX shells unless it's plainly safe. Good
 /// enough for rendering paths inside copy-pasteable instructions.
-fn shell_quote(s: &str) -> String {
+pub fn shell_quote(s: &str) -> String {
     let safe = |c: char| c.is_ascii_alphanumeric() || "/._+-@%".contains(c);
     if !s.is_empty() && s.chars().all(safe) {
         return s.to_string();

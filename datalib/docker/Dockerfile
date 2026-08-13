@@ -1,6 +1,7 @@
 # Datalib — production runtime image.
 #
 # Ships the release binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
+# `datalib-migrate-config`,
 # `latchkey-curl-impersonate`) plus Node + `latchkey` so users can
 # register services and run syncs from a single container.
 #
@@ -205,6 +206,7 @@ RUN set -eux; \
     staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' | head -n1)"; \
     test -n "$staged"; \
     install -m 0755 "$staged/datalib-dag"                       /usr/local/bin/datalib-dag; \
+    install -m 0755 "$staged/datalib-migrate-config"            /usr/local/bin/datalib-migrate-config; \
     install -m 0755 "$staged/datalib-step"                      /usr/local/bin/datalib-step; \
     install -m 0755 "$staged/datalib-http"                  /usr/local/bin/datalib-http; \
     install -m 0755 "$staged/latchkey-curl-dispatch"            /usr/local/bin/latchkey-curl-dispatch; \

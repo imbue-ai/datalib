@@ -34,11 +34,11 @@ members = [
     "etl/providers/whatsapp",
     "etl/chat-common",
     "etl/contact-common",
-    # NOTE: datalib_ingest_config, source_common, and the provider
+    # NOTE: datalib_migrate_config, source_common, and the provider
     # *_config crates are bazel-only (no Cargo.toml). This workspace
     # exists for crate_universe's third-party resolution and is not
-    # cargo-compilable end to end: http and datalib_step consume ingest_config in
-    # code via BUILD.bazel deps that have no cargo counterpart. The
+    # cargo-compilable end to end: those crates are consumed in code via
+    # BUILD.bazel deps that have no cargo counterpart. The
     # tauri shell no longer links the backend (it spawns the bazel-built
     # datalib-http binary), so nothing cargo-builds these crates.
 ]
@@ -52,15 +52,13 @@ publish = false
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# The config file format. `toml` is the serde front end (parsing the
-# DAG config, `params` subtrees); `toml_edit` is the document model,
-# used where we *generate* config text and want control over key order
-# and comments (the legacy-config migrator).
+# The config file format, everywhere: the DAG config and every step's
+# `params` subtree.
 toml = "1"
-toml_edit = "0.25"
-# Still needed to read the two legacy YAML formats we accept but no
-# longer write: the retired stanza-based `sources:` config, and
-# pre-TOML `config.yaml` DAG configs.
+# YAML survives in exactly two places, neither of them the config the
+# pipeline reads: fsindex's per-directory `.fsindex.yaml` breadcrumbs,
+# and `datalib-migrate-config`, which parses the retired config formats
+# so the shipping programs don't have to.
 serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "2.0"

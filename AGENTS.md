@@ -84,8 +84,10 @@ datalib/
                    render cursors) + etl/providers/<p>/ crates, each
                    with src/download/ and src/render/ and a sibling
                    <p>_config/ crate for its config schema.
-    ingest_config/ `SourceConfig`: the per-source config structs the
-                   download steps take as `params:`.
+    migrate_config/ `datalib-migrate-config`: one-shot conversion of a
+                   pre-TOML `config.yaml`. Holds every retired config
+                   schema and the tree's last YAML parser, so the
+                   shipping programs accept only `config.toml`.
     core/          data-root layout, doltlite repo access, qmd, search.
     http/          `datalib-http`: API server + sync worker + UI host.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
@@ -109,8 +111,11 @@ two shared fan-in steps index every source's `rendered_md` tree:
 `grid_index` (SQL index at `system/backend_index/db.doltlite_db`) and
 `qmd_index` (semantic search at `system/qmd/`). Scheduler state lives at
 `system/state/dag_state.json`. The http server's sync worker shells out
-to `datalib-dag`; the UI's Setup tab scaffolds/edits the config and
-offers one-click migration of legacy `sources:` configs. Any executable
+to `datalib-dag`; the UI's Setup tab scaffolds/edits the config.
+Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
+`sources:` one) are converted out of band by `datalib-migrate-config`,
+the only place their schemas — and the tree's last YAML parser — still
+live. Any executable
 speaking the step protocol can be a step — see
 `docs/dev/step_protocol.md`.
 

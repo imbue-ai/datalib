@@ -30,16 +30,16 @@ command = "my-exporter --flag"
 outputs = ["custom/out"]
 `;
 
-describe("listSources (toml)", () => {
+describe("listSources", () => {
   it("lists every step without inputs, by id", () => {
-    const rows = listSources(FULL, "toml");
+    const rows = listSources(FULL);
     // grid_index and claude.render declare inputs → infrastructure;
     // any input-less step is a source, whatever its command runs.
     expect(rows.map((r) => r.id)).toEqual(["claude.download", "custom"]);
   });
 
   it("returns ranges that select the step entry", () => {
-    const rows = listSources(FULL, "toml");
+    const rows = listSources(FULL);
     const claude = FULL.slice(rows[0].start, rows[0].end);
     expect(claude.startsWith("[[steps]]")).toBe(true);
     // The range is widened past the step's own table to cover its
@@ -54,15 +54,14 @@ describe("listSources (toml)", () => {
   it("treats an empty inputs list as input-less", () => {
     const rows = listSources(
       '[[steps]]\nid = "x"\ncommand = "fetch-x"\ninputs = []\noutputs = ["x/raw"]\n',
-      "toml",
     );
     expect(rows.map((r) => r.id)).toEqual(["x"]);
   });
 
   it("handles empty, scaffold, and stepless files", () => {
-    expect(listSources("", "toml")).toEqual([]);
-    expect(listSources("steps = []\n", "toml")).toEqual([]);
-    expect(listSources('data_root = "/x"\n', "toml")).toEqual([]);
+    expect(listSources("")).toEqual([]);
+    expect(listSources("steps = []\n")).toEqual([]);
+    expect(listSources('data_root = "/x"\n')).toEqual([]);
   });
 
   it("tolerates malformed entries without crashing", () => {
@@ -70,54 +69,20 @@ describe("listSources (toml)", () => {
     // range ("not locatable") rather than pointing at something else.
     const rows = listSources(
       'steps = [{id = "inline", command = "c", outputs = ["i/raw"]}]\n',
-      "toml",
     );
     expect(rows.map((r) => r.id)).toEqual(["inline"]);
     expect(rows[0]).toMatchObject({ start: 0, end: 0 });
   });
 
   it("throws on unparseable TOML", () => {
-    expect(() => listSources("a = [unclosed", "toml")).toThrow();
-  });
-});
-
-// Data roots written before the TOML switch are served as YAML and
-// must still populate the table — that's what makes converting
-// optional rather than a hard cutover.
-describe("listSources (legacy yaml)", () => {
-  const YAML = `data_root: /tmp/data
-
-steps:
-  - id: grid_index
-    command: datalib-step grid_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/backend_index]
-
-  - id: claude.download
-    command: datalib-step download claude_api
-    outputs: [claude/raw]
-    params:
-      sync: {}
-`;
-
-  it("lists sources and selects the stanza", () => {
-    const rows = listSources(YAML, "yaml");
-    expect(rows.map((r) => r.id)).toEqual(["claude.download"]);
-    const claude = YAML.slice(rows[0].start, rows[0].end);
-    expect(claude.trimStart().startsWith("- id: claude.download")).toBe(true);
-    expect(claude).toContain("sync: {}");
+    expect(() => listSources("a = [unclosed")).toThrow();
   });
 
-  it("throws on unparseable YAML", () => {
-    expect(() => listSources("a: [unclosed", "yaml")).toThrow();
-  });
-
-  // The formats are not interchangeable, and nothing guesses: each
-  // parser is handed only what the backend said it is. Feeding one
-  // the other's syntax surfaces as a parse error, never as a silently
-  // empty source list.
-  it("rejects TOML rather than reading it as empty", () => {
-    expect(() => listSources('[[steps]]\nid = "x"\n', "yaml")).toThrow();
-    expect(() => listSources("steps:\n  - id: x\n", "toml")).toThrow();
+  // TOML is the only format the app reads; a legacy config is a parse
+  // error here, never a silently empty source list. Converting one is
+  // `datalib-migrate-config`'s job, out of band.
+  it("rejects a legacy YAML config rather than reading it as empty", () => {
+    expect(() => listSources("steps:\n  - id: x\n    command: c\n")).toThrow();
+    expect(() => listSources("sources:\n  - name: x\n")).toThrow();
   });
 });

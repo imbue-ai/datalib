@@ -45,17 +45,13 @@
 //!
 //! TOML has no anchors, so a params subtree shared between a download
 //! and a render step is written out twice. In practice the two halves
-//! want different knobs anyway (that's what the migrator's per-phase
-//! split produces), so this is rarely the duplication it looks like.
+//! want different knobs anyway, so this is rarely the duplication it
+//! looks like.
 //!
-//! # Legacy YAML
-//!
-//! A config file named `.yaml`/`.yml` is parsed as YAML into the very
-//! same structs, so data roots written before the TOML switch keep
-//! working untouched. It's a read-only path — everything we *write*
-//! is TOML — and the UI offers a one-click conversion. The one thing
-//! that doesn't survive: YAML `null`, which TOML can't express, so a
-//! legacy `params` containing one is rejected with a pointer to it.
+//! This is the *only* config format the runner accepts. Data roots
+//! written before the TOML switch are converted once, out of band, by
+//! the separate `datalib-migrate-config` program — which is where every
+//! legacy schema and the last YAML parser live.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -107,35 +103,27 @@ pub struct StepEntry {
     pub env: BTreeMap<String, String>,
 }
 
-/// Is this path a legacy YAML config? Decided purely by extension —
-/// `.yaml` / `.yml` are YAML, everything else (including the canonical
-/// `config.toml` and the extension-less paths the CLI accepts) is
-/// TOML. Sniffing the contents instead would make a typo'd TOML file
-/// silently reparse as YAML, which is a mapping of strings and would
-/// then fail with a confusing schema error rather than a syntax one.
-pub fn is_legacy_yaml_path(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|e| e.to_str()),
-        Some("yaml") | Some("yml")
-    )
+/// The config file inside a data root: `<data_root>/config.toml`. The
+/// app reads and writes only this, which is what makes a data root
+/// self-contained.
+pub fn root_config_path(data_root: &Path) -> PathBuf {
+    data_root.join(CONFIG_FILE_NAME)
 }
 
-/// Parse config text in the format implied by `path`'s extension. Both
-/// formats target the identical structs, so the only difference is
-/// which parser produces them — and which one's error messages you get.
-pub fn parse(text: &str, path: &Path) -> Result<DagConfig> {
-    if is_legacy_yaml_path(path) {
-        serde_yaml::from_str(text).with_context(|| format!("parse {} as YAML", path.display()))
-    } else {
-        toml::from_str(text).with_context(|| format!("parse {}", path.display()))
-    }
+/// The canonical config filename.
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// Parse config text. Errors carry TOML's own line/column, which is
+/// what the UI surfaces in its editor.
+pub fn parse(text: &str) -> Result<DagConfig> {
+    toml::from_str(text).map_err(Into::into)
 }
 
 /// Load + resolve a config file. `data_root` defaults to the config
 /// file's directory and gets `~` expanded.
 pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let cfg = parse(&text, path)?;
+    let cfg = parse(&text).with_context(|| format!("parse {}", path.display()))?;
     let data_root = match &cfg.data_root {
         Some(p) => expand_tilde(p),
         None => {
@@ -465,57 +453,5 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown field"), "{err}");
-    }
-
-    /// Data roots written before the TOML switch still load, parsed as
-    /// YAML purely on the strength of the `.yaml` extension.
-    #[test]
-    fn legacy_yaml_configs_still_load() {
-        let td = tempfile::tempdir().unwrap();
-        let p = td.path().join("config.yaml");
-        std::fs::write(
-            &p,
-            "steps:\n  - id: slack.download\n    command: datalib-step download slack_api\n\
-             \n    outputs: [slack/raw]\n    params: &slack\n      sync: {channels: [chat-qi]}\n\
-             \n  - id: slack.render\n    command: datalib-step render slack_api\n\
-             \n    inputs: [slack/raw]\n    outputs: [slack/rendered_md]\n    params: *slack\n",
-        )
-        .unwrap();
-        let (cfg, root) = load(&p).unwrap();
-        assert_eq!(root, std::fs::canonicalize(td.path()).unwrap());
-        // Including YAML-only features like anchors, which the legacy
-        // parser still honors even though TOML has no equivalent.
-        assert_eq!(cfg.steps[0].params, cfg.steps[1].params);
-        let specs = to_specs(&cfg).unwrap();
-        assert_eq!(specs.len(), 2);
-
-        // TOML can't express null, so a legacy config carrying one is
-        // rejected — with the path to the offending key.
-        let p = td.path().join("nulls.yaml");
-        std::fs::write(
-            &p,
-            "steps:\n  - id: x\n    command: s\n    params: {k: null}\n",
-        )
-        .unwrap();
-        let err = format!("{:#}", load(&p).unwrap_err());
-        assert!(err.contains("params.k"), "{err}");
-    }
-
-    /// The extension picks the parser, so TOML syntax in a `.yaml`
-    /// file (and vice versa) fails as a parse error naming the format
-    /// we tried — never a silent reinterpretation.
-    #[test]
-    fn the_extension_picks_the_parser() {
-        assert!(is_legacy_yaml_path(Path::new("/r/config.yaml")));
-        assert!(is_legacy_yaml_path(Path::new("/r/config.yml")));
-        assert!(!is_legacy_yaml_path(Path::new("/r/config.toml")));
-        // The CLI takes any path; an unfamiliar extension means TOML.
-        assert!(!is_legacy_yaml_path(Path::new("/r/pipeline")));
-
-        let err = format!(
-            "{:#}",
-            parse("[[steps]]\nid = \"x\"\n", Path::new("c.yaml")).unwrap_err()
-        );
-        assert!(err.contains("as YAML"), "{err}");
     }
 }

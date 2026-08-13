@@ -25,7 +25,7 @@
 import { ref, watch } from "vue";
 import { freshAliasName, noteAlias } from "@/cards/aliasRegistry";
 import { encodeColumns } from "@/router/columns";
-import { putLib, type ConfigFormat } from "@/api";
+import { putLib } from "@/api";
 import { pushToast } from "@/toasts";
 import type { HostCommands } from "@/cards/types";
 
@@ -98,30 +98,20 @@ function modifyWayfinder(name: string, cardSource: string, state: string): strin
   ].join("\n");
 }
 
-function configWayfinder(configPath: string, format: ConfigFormat): string {
+function configWayfinder(configPath: string): string {
   const origin = window.location.origin;
-  // The format has to be stated, not assumed: on a data root that
-  // still holds a pre-TOML config.yaml, GET returns YAML text and a
-  // PUT claiming `format: "toml"` would be rejected by the loader.
-  const shape =
-    format === "toml"
-      ? `The config is TOML — an array of [[steps]] tables.`
-      : `This root still uses the pre-TOML config.yaml, so GET returns ` +
-        `YAML.\nEither keep editing it as YAML, or convert it: ` +
-        `GET ${origin}/api/config/migrate\nreturns {"ok", "text"} with a ` +
-        `TOML draft you can PUT as format "toml".`;
   return [
     `Modify the datalib data-source config — the user has its editor`,
     `open in the Manage tab right now.`,
     ``,
     `Read the guide first: ${origin}/agent/config.md`,
     ``,
-    shape,
+    `The config is TOML — an array of [[steps]] tables.`,
     ``,
     `Fetch the current config:`,
-    `  GET ${origin}/api/config   → {"text": "<current text>", "format": "${format}", …}`,
+    `  GET ${origin}/api/config   → {"text": "<current text>", …}`,
     `Save the modified config with:`,
-    `  PUT ${origin}/api/config   (JSON body {"text": "<full new text>", "format": "${format}"})`,
+    `  PUT ${origin}/api/config   (JSON body {"text": "<full new text>"})`,
     ``,
     `PUT validates with the real config loader before writing anything;`,
     `an invalid config comes back as {"ok": false, "error": "…"} and the`,
@@ -245,15 +235,12 @@ export function modifyComponentWithAgent(
 
 // The 🤖 button on the Manage tab's config editor: hand the config file
 // to an agent for modification.
-export function modifyConfigWithAgent(
-  configPath: string,
-  format: ConfigFormat,
-): void {
+export function modifyConfigWithAgent(configPath: string): void {
   handOff(
     {
       kind: "config",
       subject: configPath,
-      wayfinder: configWayfinder(configPath, format),
+      wayfinder: configWayfinder(configPath),
     },
     skipConfigInstructions.value,
   );

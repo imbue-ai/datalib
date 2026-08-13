@@ -28,10 +28,11 @@ raw data) and a `<name>.render` step (raw → markdown +
     └── state/dag_state.json          # scheduler state (per-step versions)
 ```
 
-Four binaries ship in a release: `datalib-dag` (the sync runner),
+Five binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
-server + web UI), and `latchkey-curl-impersonate` (Cloudflare-safe
-HTTP for downloaders). End-to-end setup walkthrough:
+server + web UI), `latchkey-curl-impersonate` (Cloudflare-safe HTTP
+for downloaders), and `datalib-migrate-config` (one-shot conversion of
+a pre-TOML `config.yaml`; see below). End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
 ## Configuring sources
@@ -50,8 +51,9 @@ appears in.
   — one commented `<name>.download` + `<name>.render` step pair per
   supported source, in the steps format, ready to copy. (Two pre-TOML
   `config.yaml` formats still exist in the wild — a YAML steps config
-  and the older stanza-based `sources:` one. Both still load; the web
-  UI detects either and offers one-click conversion to TOML.)
+  and the older stanza-based `sources:` one. Neither is read by
+  anything any more: convert once with `datalib-migrate-config
+  <data_root>`, which is the only program that still knows them.)
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
   walkthroughs for getting cookies/tokens/exports:
@@ -165,5 +167,6 @@ Pick the surface that fits the question:
 - **Wedged doltlite file** (`commit conflict` after a stray writer):
   recovery recipes in [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **A config the runner rejects**: `PUT /api/config` (or the Setup tab)
-  returns the loader error inline; legacy `sources:` files need the
-  one-click migration first.
+  returns the loader error inline. A data root still holding a
+  pre-TOML `config.yaml` reads as unconfigured — run
+  `datalib-migrate-config <data_root>` first.

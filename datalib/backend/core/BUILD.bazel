@@ -57,8 +57,9 @@ rust_test(
     ],
 )
 
-# (config_examples_test moved to //datalib/backend/ingest_config with the
-# config module.)
+# (config_examples_test lives at
+# //datalib/backend/migrate_config:config_examples_test, next to the
+# `SourceConfig` union it validates the documented examples against.)
 
 # Insta snapshot of the TNG fixture's `backend_index.doltlite_db` contents. Catches
 # silent data drift in the load pipeline — most recently the

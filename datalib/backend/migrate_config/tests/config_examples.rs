@@ -1,5 +1,11 @@
 //! Parse-and-validate the checked-in example configs under
-//! `docs/user/config_examples/`, which are in the DAG steps format.
+//! `docs/user/config_examples/`, which are in the current TOML steps
+//! format.
+//!
+//! This test lives in the migration crate for one reason: `SourceConfig`
+//! does. The stanza envelope around it is retired, but its `type:`-tagged
+//! union is still the only mapping from a source type string to that
+//! provider's config schema — which is exactly what layer 2 below needs.
 //!
 //! Three layers of validation:
 //!
@@ -20,7 +26,7 @@
 //! `type` plus both input modes for `email` and `carddav`, so this test
 //! doubles as a "did someone add a source without documenting it?" nudge.
 
-use datalib_ingest_config::SourceConfig;
+use datalib_migrate_config::legacy_stanza::SourceConfig;
 
 /// Resolve a `docs/user/config_examples/<name>` file from the test's runfiles
 /// tree (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles

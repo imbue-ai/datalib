@@ -1,21 +1,32 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
-# The orchestrator's config: the app `Config` envelope + the `SourceConfig`
-# discriminated union over `type:`. Relocated out of `datalib_core::config`
-# so it sits above the providers (and `http` links it without `core`'s db/repo
-# code). Issue #41: each `SourceConfig` arm is a newtype over a provider
-# `*-config` crate (config defined once); the shared `SourceCommon`/`Defaults`/
-# `ExtractParams` come from `source_common`.
+# `datalib-migrate-config` — the one-shot converter from a pre-TOML
+# `config.yaml` to the `config.toml` the pipeline reads today.
+#
+# This package is where every legacy config schema lives, and the only
+# place in the tree that still links a YAML parser. Keeping it out of
+# `datalib-dag` / `datalib-http` is the point: the shipping programs
+# accept exactly one format, so a shape we stopped writing can't widen
+# what a running pipeline will load.
+#
+# Two legacy formats, told apart by content:
+#   * the current steps schema written in YAML — a reserialization;
+#   * the retired stanza-based `sources:` schema (`legacy_stanza.rs`) —
+#     a real translation into download/render step pairs. Each arm of
+#     its `SourceConfig` is a newtype over a provider `*_config` crate
+#     (issue #41: provider config defined exactly once).
 rust_library(
-    name = "datalib_ingest_config",
-    srcs = glob(["src/**/*.rs"]),
-    crate_name = "datalib_ingest_config",
+    name = "datalib_migrate_config",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    crate_name = "datalib_migrate_config",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
@@ -38,24 +49,43 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_yaml",
         "@datalib_crates//:thiserror",
+        "@datalib_crates//:toml",
     ],
 )
 
 rust_test(
-    name = "ingest_config_unittests",
+    name = "migrate_config_unittests",
     size = "small",
-    crate = ":datalib_ingest_config",
+    crate = ":datalib_migrate_config",
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",
     ],
 )
 
-# Validates the checked-in `docs/user/config_examples/*.toml` (DAG steps
-# format): each file must load + graph-build like the runner would, every
-# `datalib-step download <type>` step's params must round-trip into
-# `SourceConfig`, and render params must match the provider's
-# `<P>RenderConfig` — so the docs can't drift from the real schemas.
+rust_binary(
+    name = "datalib_migrate_config_bin",
+    srcs = ["src/main.rs"],
+    crate_name = "datalib_migrate_config_bin",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":datalib_migrate_config",
+        "@datalib_crates//:anyhow",
+    ],
+)
+
+# Validates the checked-in `docs/user/config_examples/*.toml` (the
+# current TOML steps format): each file must load + graph-build like the
+# runner would, every `datalib-step download <type>` step's params must
+# round-trip into `SourceConfig`, and render params must match the
+# provider's `<P>RenderConfig` — so the docs can't drift from the real
+# schemas.
+#
+# It lives in this package because `SourceConfig` does: the retired
+# stanza envelope is dead, but its `type:`-tagged union is still the one
+# mapping from a source type string to that provider's config schema,
+# which is exactly what validating documented examples needs.
 rust_test(
     name = "config_examples_test",
     srcs = ["tests/config_examples.rs"],
@@ -66,7 +96,7 @@ rust_test(
     ],
     edition = "2021",
     deps = [
-        ":datalib_ingest_config",
+        ":datalib_migrate_config",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",

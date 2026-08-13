@@ -420,9 +420,8 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
     };
     // Resolved per job, not once at boot: the Setup tab can create the
-    // config — or convert a legacy YAML one to `config.toml` — while
-    // the worker is already running.
-    let config_path = datalib_ingest_config::resolve_root_config_path(&cfg.root);
+    // config while the worker is already running.
+    let config_path = datalib_dag::config::root_config_path(&cfg.root);
     if !config_path.is_file() {
         anyhow::bail!(
             "no config at {} — create one from the Setup tab before syncing",

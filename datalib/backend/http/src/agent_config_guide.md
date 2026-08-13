@@ -59,26 +59,25 @@ Work through the HTTP API, not the file:
 
 ```sh
 # read the current config
-# (JSON: {text, format, path, parsed_ok, error, …})
+# (JSON: {text, path, exists, parsed_ok, error, …})
 curl "<origin>/api/config"
 
 # save a new version — send the FULL new text, not a diff
 curl -X PUT "<origin>/api/config" \
   -H 'content-type: application/json' \
-  -d "$(jq -Rs '{text: ., format: "toml"}' < config.toml)"
+  -d "$(jq -Rs '{text: .}' < config.toml)"
 ```
 
 The PUT validates with the real config loader before writing anything:
 an invalid config returns `{ok: false, error}` and leaves the file on
 disk untouched — fix and re-PUT. Only a valid config ever lands.
 
-`format` says which syntax you are sending and therefore which file it
-lands in. Always send `"toml"` — `"yaml"` exists only so a data root
-that still has a pre-TOML `config.yaml` can be edited in place. If
-`GET /api/config` comes back with `"format": "yaml"`, that root is on
-the old format: `GET <origin>/api/config/migrate` returns
-`{ok, text}` with it converted to TOML, which you can then PUT as
-`"toml"`.
+The config is always TOML — the server reads and writes no other
+format. If `GET /api/config` comes back with `exists: false` and a
+non-null `legacy_yaml_path`, that data root still has a pre-TOML
+`config.yaml`, which nothing reads any more. Tell the user to convert
+it once with `datalib-migrate-config <data_root>`; there is no API for
+it, and you should not try to translate the file yourself.
 
 ## Adding your own step commands
 

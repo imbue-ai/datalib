@@ -1,5 +1,5 @@
-//! Schema-only foundation crate shared by the orchestrator (`ingest_config`)
-//! and every provider `*-config` crate.
+//! Schema-only foundation crate shared by every provider `*-config`
+//! crate (and by the retired stanza schema in `migrate_config`).
 //!
 //! Holds the per-source **common envelope** of shared tunables ([`SourceCommon`])
 //! that each provider config composes, the global [`Defaults`] block those

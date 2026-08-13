@@ -1,8 +1,8 @@
 //! Datalib core: query engine. v0 skeleton.
 
-// `config` relocated to the `datalib_ingest_config` crate (Program A): it
-// names every source `type:`, so it sits above the providers rather than in
-// this base crate.
+// `config` left this crate long ago: naming every source `type:` puts it
+// above the providers rather than in this base crate. What remains of it
+// is the retired stanza schema in `datalib_migrate_config`.
 pub mod db;
 pub mod deeplink;
 pub mod dolt_repo;

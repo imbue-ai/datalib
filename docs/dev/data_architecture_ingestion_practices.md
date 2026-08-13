@@ -98,11 +98,15 @@ Reach for the simplest existing provider that's shaped like yours,
    [`Sidecar`](../../datalib/backend/index_lib/src/lib.rs).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
-6. Add the new source's `type:` discriminator to the `SourceConfig`
-   variants in [`backend/ingest_config/src/lib.rs`](../../datalib/backend/ingest_config/src/lib.rs)
-   and wire the provider's `processor.rs` (`plan_download` /
-   `plan_render`) into the per-type dispatch in
-   [`datalib_step/src/dispatch.rs`](../../datalib/backend/datalib_step/src/dispatch.rs).
+6. Wire the provider's `processor.rs` (`plan_download` / `plan_render`)
+   into the per-type dispatch in
+   [`datalib_step/src/dispatch.rs`](../../datalib/backend/datalib_step/src/dispatch.rs),
+   which is what the running pipeline reads. Optionally also add the
+   type to the `SourceConfig` variants in
+   [`backend/migrate_config/src/legacy_stanza.rs`](../../datalib/backend/migrate_config/src/legacy_stanza.rs):
+   that union is retired as a config format, but it still backs the
+   `config_examples_test` schema check, so a new source is only covered
+   by that test if it appears there too.
 
 Grid index needs no per-provider changes — the `grid_index` step
 (`datalib-step grid_index`, `build_grid_index` in

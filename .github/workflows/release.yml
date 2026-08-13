@@ -324,6 +324,7 @@ jobs:
               bazel-bin/datalib/backend/dag/datalib_dag_bin \
               bazel-bin/datalib/backend/datalib_step/datalib_step \
               bazel-bin/datalib/backend/http/datalib_http_bin \
+              bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin \
               bazel-bin/datalib/backend/etl/latchkey_curl_impersonate \
               bazel-bin/datalib/backend/etl/latchkey_curl_dispatch; do
               echo "--- ${bin}"
@@ -413,6 +414,7 @@ jobs:
               cp bazel-bin/datalib/backend/dag/datalib_dag_bin "${stage}/datalib-dag"
               cp bazel-bin/datalib/backend/datalib_step/datalib_step "${stage}/datalib-step"
               cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
+              cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
               cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
               cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
               chmod +x "${stage}"/*

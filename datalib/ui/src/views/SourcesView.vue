@@ -8,14 +8,13 @@
 // Save PUTs the text to the backend, which validates with the real
 // config loader before writing. Below all that, the recent-jobs table.
 //
-// A data root written before the TOML switch still opens here, as
-// YAML, with a banner offering conversion. That's the one mode where
-// the quick-add chips are unavailable: their bodies are TOML.
+// TOML is the only format this edits. A data root written before the
+// switch is converted once, out of band, by `datalib-migrate-config`;
+// all this view does is notice the stray config.yaml and say so.
 import { computed, nextTick, ref, onMounted, onUnmounted } from "vue";
 import {
   fetchConfig,
   fetchConfigScaffold,
-  fetchMigratedConfig,
   saveConfig,
   fetchSyncSources,
   fetchAllJobs,
@@ -26,7 +25,6 @@ import {
   type SyncSource,
   type SyncJob,
   type JobProgressEvent,
-  type ConfigFormat,
 } from "@/api";
 import StepProgress from "@/components/StepProgress.vue";
 import DagPanel from "@/components/DagPanel.vue";
@@ -36,12 +34,8 @@ import { modifyConfigWithAgent } from "@/handoff";
 
 // --- Config state ----------------------------------------------------------
 
-// The whole config text — the single source of truth — and the syntax
-// it's in. `format` follows the file: `toml` for anything current,
-// `yaml` only for a data root that predates the switch. It changes
-// exactly once, when a conversion draft is loaded.
+// The whole config text — the single source of truth.
 const configText = ref("");
-const format = ref<ConfigFormat>("toml");
 const editorEl = ref<HTMLTextAreaElement | null>(null);
 
 const configPath = ref("");
@@ -54,15 +48,12 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 const saving = ref(false);
 const dirty = ref(false);
 const latchkeyCli = ref("npx -y latchkey");
-// True when the on-disk file is an old-style `sources:` config for the
-// retired sync binary. Both it and a pre-TOML steps config show the
-// migrate banner (`legacy` only picks which wording); either converts
-// through the same endpoint.
-const legacy = ref(false);
-const migrating = ref(false);
-const migrateError = ref<string | null>(null);
-// Anything still on YAML wants converting, whichever legacy shape it is.
-const convertible = computed(() => format.value === "yaml");
+// Set when this root still has a pre-TOML config.yaml and no
+// config.toml: the path of that file, and the exact command that
+// converts it (backend-resolved — in the packaged app the migrator
+// isn't on $PATH). Nothing here parses the file.
+const legacyYamlPath = ref<string | null>(null);
+const legacyMigrateCmd = ref<string | null>(null);
 
 // Table view of the text: re-derived on every edit. While the text
 // doesn't parse the last good rows stay up (grayed) with the parse
@@ -72,7 +63,7 @@ const parseError = ref<string | null>(null);
 
 function reparse() {
   try {
-    rows.value = listSources(configText.value, format.value);
+    rows.value = listSources(configText.value);
     parseError.value = null;
   } catch (e) {
     parseError.value = (e as Error).message;
@@ -116,8 +107,8 @@ async function loadConfig() {
     }
     configPath.value = cfg.path;
     if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
-    legacy.value = cfg.legacy;
-    format.value = cfg.format;
+    legacyYamlPath.value = cfg.legacy_yaml_path;
+    legacyMigrateCmd.value = cfg.legacy_migrate_cmd;
     configText.value = cfg.text;
     reparse();
   } catch (e) {
@@ -199,7 +190,7 @@ async function onSave() {
   saving.value = true;
   saveStatus.value = null;
   try {
-    const res = await saveConfig(configText.value, format.value);
+    const res = await saveConfig(configText.value);
     saveStatus.value = { ok: res.ok, error: res.error, count: res.source_count };
     if (res.ok) {
       dirty.value = false;
@@ -208,10 +199,10 @@ async function onSave() {
       // meanwhile — retire the banner and rebase the poll on our text.
       serverText.value = configText.value;
       diskChanged.value = false;
-      // Re-read the file we just wrote, so `configPath` and `format`
-      // track it. Converting a legacy root saves to a *different* file
-      // than the one loaded at open, and the poll below can't notice:
-      // it compares text, which now matches by construction.
+      // Re-read what we just wrote, so the legacy-config banner
+       // retires itself the moment config.toml exists. The poll below
+       // can't notice: it compares text, which now matches by
+       // construction.
       await loadConfig();
       await loadSources();
     }
@@ -219,30 +210,6 @@ async function onSave() {
     saveStatus.value = { ok: false, error: (e as Error).message, count: 0 };
   } finally {
     saving.value = false;
-  }
-}
-
-// Convert the on-disk legacy config to TOML and drop the result into
-// the editor as an unsaved draft — the user reviews and hits Save
-// explicitly. Nothing is written server-side by this call; the editor
-// switches to TOML here, so the eventual Save lands in config.toml.
-async function onMigrate() {
-  migrating.value = true;
-  migrateError.value = null;
-  try {
-    const res = await fetchMigratedConfig();
-    if (!res.ok || !res.text) {
-      migrateError.value = res.error || "conversion failed";
-      return;
-    }
-    configText.value = res.text;
-    format.value = "toml";
-    legacy.value = false;
-    onEdit();
-  } catch (e) {
-    migrateError.value = (e as Error).message;
-  } finally {
-    migrating.value = false;
   }
 }
 
@@ -482,23 +449,13 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="convertible" class="migrate-banner">
-      <span v-if="legacy">
-        This looks like an old-style <code>sources:</code> config for the
-        retired sync binary. Convert it to the current step-based
-        <code>config.toml</code> format (loads a draft into the editor for
-        review; nothing is saved until you hit Save).
+    <div v-if="legacyYamlPath" class="migrate-banner">
+      <span>
+        This data root still has a pre-TOML config at
+        <code>{{ legacyYamlPath }}</code>, which datalib no longer reads.
+        Convert it with the migration tool, then reload:
+        <code>{{ legacyMigrateCmd }}</code>
       </span>
-      <span v-else>
-        This root still uses a <code>config.yaml</code>. Convert it to
-        <code>config.toml</code> (loads a draft into the editor for review;
-        nothing is saved until you hit Save). Adding sources with the
-        buttons below needs TOML.
-      </span>
-      <button class="btn btn-primary" :disabled="migrating" @click="onMigrate">
-        {{ migrating ? "Converting…" : "Convert to TOML" }}
-      </button>
-      <span v-if="migrateError" class="status err">✗ {{ migrateError }}</span>
     </div>
 
     <!-- Raw config (left) and table side by side — two views of the
@@ -527,8 +484,7 @@ onUnmounted(() => {
             </span>
             <template v-else>
               <span v-if="parseError" class="status err">
-                ✗ {{ format === "yaml" ? "YAML" : "TOML" }} error (table may
-                be stale): {{ parseError }}
+                ✗ TOML error (table may be stale): {{ parseError }}
               </span>
               <span v-if="saveStatus && saveStatus.ok" class="status ok">
                 ✓ Saved — {{ saveStatus.count }} source(s) configured.
@@ -539,7 +495,7 @@ onUnmounted(() => {
           <button
             class="btn"
             title="let a coding agent edit this config"
-            @click="modifyConfigWithAgent(configPath, format)"
+            @click="modifyConfigWithAgent(configPath)"
           >
             🤖
           </button>
@@ -638,12 +594,6 @@ onUnmounted(() => {
               v-for="sn in SNIPPETS"
               :key="sn.label"
               class="btn chip"
-              :disabled="convertible"
-              :title="
-                convertible
-                  ? 'Convert this config to TOML first — the templates are TOML'
-                  : ''
-              "
               @click="addSnippet(sn.body(latchkeyCli))"
             >
               {{ sn.label }}

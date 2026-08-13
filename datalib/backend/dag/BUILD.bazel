@@ -25,7 +25,6 @@ rust_library(
         "@datalib_crates//:libc",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:serde_yaml",
         "@datalib_crates//:shlex",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:toml",

@@ -1,14 +1,15 @@
-//! Ingest config: the **retired** stanza-based config format — the app envelope
+//! The **retired** stanza-based config format — the app envelope
 //! ([`Config`]) plus a [`SourceConfig`] discriminated union over `type:`.
 //!
-//! This format is YAML and stays YAML: it is only ever *read*, and only to
-//! migrate an old `config.yaml` into the current `config.toml` steps format
-//! (see `datalib_dag::config`). The per-source schemas below are still live,
-//! though — the download/render steps take them as their `params` subtree.
+//! Nothing in the shipping pipeline reads this any more; it lives here,
+//! in the migration tool, purely so an old `config.yaml` can still be
+//! translated into a current `config.toml`. Always YAML — this format
+//! predates the TOML switch and was never written in anything else.
 //!
-//! Relocated out of `datalib_core::config` (Program A): it sits *above* the
-//! providers (it names every source `type:`), so `http` can link the config
-//! schema without pulling `core`'s db/repo/search code.
+//! [`SourceConfig`] outlives its envelope in one respect: it is the only
+//! mapping from a source `type:` string to that provider's config
+//! schema, which is what makes it useful for validating the documented
+//! example configs (see `tests/config_examples.rs`).
 //!
 //! **Compose, don't flatten (issue #41).** Each `type:` arm of [`SourceConfig`]
 //! is a *newtype* over the provider's own `*-config` crate (`SlackConfig`,
@@ -467,57 +468,11 @@ impl Config {
     }
 }
 
-/// Path to the config file that lives *inside* a data root:
-/// `<root>/config.toml`. This is the canonical name — the one we
-/// create and write back to. To *read* an existing root, go through
-/// [`resolve_root_config_path`], which also finds pre-TOML configs.
-pub fn root_config_path(data_root: &Path) -> PathBuf {
-    data_root.join("config.toml")
-}
-
-/// The config file to actually open in `data_root`: `config.toml` when
-/// it exists, else a pre-TOML `config.yaml` when *that* exists, else
-/// `config.toml` (the path a scaffold would create).
-///
-/// Preferring `.toml` means converting a root leaves the old file
-/// harmlessly in place rather than demanding it be deleted, and a root
-/// that somehow has both is unambiguous. `datalib_dag::config` picks
-/// its parser off the same extension, so whichever comes back parses
-/// correctly.
-pub fn resolve_root_config_path(data_root: &Path) -> PathBuf {
-    let toml = root_config_path(data_root);
-    if toml.exists() {
-        return toml;
-    }
-    let yaml = data_root.join("config.yaml");
-    if yaml.exists() {
-        return yaml;
-    }
-    toml
-}
-
-/// Path to the legacy out-of-root config, for the retired
-/// `$DATALIB_CONFIG` / `~/.config/datalib/` layout. Data roots are
-/// self-contained now — see [`resolve_root_config_path`].
-pub fn default_config_path() -> PathBuf {
-    if let Ok(env) = std::env::var("DATALIB_CONFIG") {
-        return PathBuf::from(env);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".config/datalib/config.yaml");
-    }
-    PathBuf::from("config.yaml")
-}
-
-pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
-    let owned;
-    let p = match path {
-        Some(p) => p,
-        None => {
-            owned = default_config_path();
-            owned.as_path()
-        }
-    };
+/// Read + normalize a legacy stanza config. The migrator itself parses
+/// raw (it wants the fields as written, not resolved absolute paths);
+/// this is the fully-resolved load, kept because it is what the tests
+/// exercise the `normalize`/`validate` invariants through.
+pub fn load_config(p: &Path) -> Result<Config, ConfigError> {
     if !p.exists() {
         return Err(ConfigError::NotFound(p.to_path_buf()));
     }
@@ -565,7 +520,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let cfg_path = tmp.join("config.yaml");
         std::fs::write(&cfg_path, format!("data_root: {}\n", root.display())).unwrap();
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         assert_eq!(cfg.data_root, root);
         assert_eq!(cfg.backend.bind, "127.0.0.1:8731");
     }
@@ -576,7 +531,7 @@ mod tests {
         let cfg_path = tmp.join("config.yaml");
         // No `data_root:` key at all.
         std::fs::write(&cfg_path, "sources: []\n").unwrap();
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         // Canonicalize the expected dir too: on macOS the temp dir is
         // under a `/var -> /private/var` symlink, which canonicalize
         // resolves.
@@ -670,7 +625,7 @@ sources:
         subtrees: {pages: ['p1']}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         assert_eq!(cfg.sources.len(), 7);
         assert_eq!(cfg.sources[0].type_str(), "claude_export");
         assert!(!cfg.sources[0].is_managed());
@@ -703,7 +658,7 @@ sources:
     source: {type: claude_export}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         assert_eq!(cfg.sources.len(), 1);
         assert!(!cfg.sources[0].is_managed());
     }
@@ -717,10 +672,7 @@ sources:
     source: {type: not_a_provider}
 ",
         );
-        assert!(matches!(
-            load_config(Some(&cfg_path)),
-            Err(ConfigError::Yaml(_))
-        ));
+        assert!(matches!(load_config(&cfg_path), Err(ConfigError::Yaml(_))));
     }
 
     #[test]
@@ -733,7 +685,7 @@ sources:
 ",
         );
         assert!(matches!(
-            load_config(Some(&cfg_path)),
+            load_config(&cfg_path),
             Err(ConfigError::DuplicateSourceNames(_))
         ));
     }
@@ -762,7 +714,7 @@ sources:
 ",
         );
         assert!(matches!(
-            load_config(Some(&cfg_path)),
+            load_config(&cfg_path),
             Err(ConfigError::InvalidSourceName(_, _))
         ));
     }
@@ -790,7 +742,7 @@ sources:
             device_udid: 'fedcba9876543210fedcba9876543210'
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         let yl = cfg.sources.iter().find(|s| s.name() == "yolink").unwrap();
         assert!(yl.is_managed());
         if let SourceConfig::Yolink(c) = &yl.source {
@@ -821,7 +773,7 @@ sources:
             device_udid: 'ffeeddccbbaa99887766554433221100'
 ",
         );
-        let err = load_config(Some(&cfg_path)).unwrap_err();
+        let err = load_config(&cfg_path).unwrap_err();
         assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
         assert!(err.to_string().contains("unknown kind"));
     }
@@ -843,7 +795,7 @@ sources:
             device_udid: 'ffeeddccbbaa99887766554433221100'
 ",
         );
-        let err = load_config(Some(&cfg_path)).unwrap_err();
+        let err = load_config(&cfg_path).unwrap_err();
         assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
         assert!(err.to_string().contains("family_device_id"));
     }
@@ -860,7 +812,7 @@ sources:
         devices: []
 ",
         );
-        let err = load_config(Some(&cfg_path)).unwrap_err();
+        let err = load_config(&cfg_path).unwrap_err();
         assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
         assert!(err.to_string().contains("at least one device"));
     }
@@ -877,7 +829,7 @@ sources:
         inbox: {enabled: false}
 ",
         );
-        let err = load_config(Some(&cfg_path)).unwrap_err();
+        let err = load_config(&cfg_path).unwrap_err();
         assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
         assert!(err.to_string().contains("inbox or list at least one"));
     }
@@ -893,7 +845,7 @@ sources:
       sync: {channels: ['c']}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         // API source: no explicit input_path → input resolves to the raw dir.
         assert_eq!(cfg.sources[0].input_path(), root.join("slack/raw"));
         assert!(cfg.sources[0].source.common().input_path.is_none());
@@ -916,7 +868,7 @@ sources:
       sync: {}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         // Default: <data_root>/<name>/raw.
         assert_eq!(cfg.sources[0].raw_path(), root.join("slack/raw"));
         // Override: the store can live anywhere.
@@ -932,7 +884,7 @@ sources:
   - {name: off, enabled: false, source: {type: claude_export}}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         let names: Vec<&str> = cfg.enabled_sources().map(|s| s.name()).collect();
         assert_eq!(names, vec!["on"]);
     }
@@ -950,7 +902,7 @@ sources:
       sync: {channels: ['c']}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         // After normalize(), the global default is folded into the source.
         assert_eq!(
             cfg.sources[0].source.common().blob_size_limit_bytes,
@@ -977,7 +929,7 @@ sources:
       sync: {}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
         let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
         assert_eq!(slack.source.common().blob_size_limit_bytes, Some(100_000));
@@ -996,7 +948,7 @@ sources:
       sync: {channels: ['c']}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         assert_eq!(cfg.sources[0].source.common().blob_size_limit_bytes, None);
     }
 
@@ -1035,7 +987,7 @@ sources:
       sync: {}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
         let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
 
@@ -1073,7 +1025,7 @@ sources:
       sync: {channels: ['c']}
 ",
         );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let cfg = load_config(&cfg_path).unwrap();
         let ep = &cfg.sources[0].source.common().download_params;
         assert_eq!(ep.max_sequential_failures(), 99);
         assert_eq!(

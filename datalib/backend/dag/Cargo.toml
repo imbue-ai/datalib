@@ -20,8 +20,6 @@ serde = { workspace = true }
 shlex = "1"
 serde_json = { workspace = true }
 toml = { workspace = true }
-# Only for the legacy `config.yaml` fallback in `config::load`.
-serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 # Workspace tokio lacks `process`/`sync`/`time`/`fs`; features are
 # additive so we add what the scheduler + subprocess runner need.

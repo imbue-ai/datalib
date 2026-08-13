@@ -258,11 +258,18 @@ just one source's step pair) straight into `<data_root>/config.toml`:
   — every supported source type with realistic defaults (including
   both input modes for email and contacts).
 
-(Upgrading from an earlier datalib? Both older formats are still read
-from `<data_root>/config.yaml`: a YAML steps config, and the much older
-stanza-based `sources:` one. Leave the file where it is and open the
-**Setup** tab — it detects either and offers one-click conversion to
-`config.toml`.)
+(Upgrading from an earlier datalib? Nothing reads `config.yaml` any
+more — in either of its old shapes, the YAML steps format or the much
+older stanza-based `sources:` one. Convert it once:
+
+```sh
+datalib-migrate-config ~/datalib     # writes ~/datalib/config.toml
+```
+
+It auto-detects which of the two you have, writes `config.toml` beside
+the old file, and refuses to overwrite an existing one. Your
+`config.yaml` is left untouched; review the result, then delete it.
+Comments from the old file don't carry over.)
 
 Credentials are not in the config — downloaders that need them use `latchkey` at runtime.
 
