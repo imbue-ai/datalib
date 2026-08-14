@@ -355,11 +355,12 @@ pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 /// gateway that terminates the request — so routing this way reaches nothing a
 /// direct request could not.
 ///
-/// It rides latchkey's `LATCHKEY_*` env namespace, alongside the `LATCHKEY_GATEWAY`
-/// wiring a workspace already receives, because the value is inert without
-/// latchkey: only `latchkey curl` can interpret a `latchkey-self.invalid` URL.
-/// minds defines it, not upstream latchkey.
-pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "LATCHKEY_VIA_DESKTOP_URL_PREFIX";
+/// It is namespaced `MINDS_` rather than `LATCHKEY_` even though the value is a
+/// latchkey URL: a workspace's env names each var after the tool that *reads*
+/// it, and latchkey never reads this one — we hand it the concatenated result
+/// as a URL argument. minds is the authority that decides the value, since it
+/// follows from workspace topology.
+pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
 
 /// Prepend [`VIA_DESKTOP_URL_PREFIX_ENV`] to `url` when this request should
 /// leave from the user's machine.
