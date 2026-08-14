@@ -95,8 +95,10 @@ and the guide it reads can't drift apart.
    files — `.agents/skills/datalib/SKILL.md`, `README.md`, and
    `inspiration-datalib.md`. That covers the `install.sh` raw URL, the
    `DATALIB_VERSION` env var, the `docs/agent_user.md` links (including
-   the relative-link base), and the "pinned to datalib v..." prose.
-   `grep -rn 'imbue-ai/datalib/v' --exclude-dir=.git .` finds them all.
+   the relative-link base), and the "pinned to datalib v..." prose. Grep
+   the three files for the literal old version — `grep -n v<old> README.md
+   inspiration-datalib.md .agents/skills/datalib/SKILL.md` — rather than
+   for a URL shape; the pins are spelled several different ways.
 3. Leave two things alone:
    - `system/vendor/mngr/**`, which is vendored from mngr. Its
      `DATALIB_CURL_VERSION` pins the datalib *curl* release the latchkey
@@ -104,9 +106,12 @@ and the guide it reads can't drift apart.
    - "as of datalib v..." capability notes (e.g. which providers work
      inside Minds). Those record when a fact became true and are only
      touched when the fact changes.
-4. If this release changed `docs/agent_user.md`, the config format, or
-   the install script's interface, update the surrounding prose too —
-   the version pin is not the whole contract.
+4. Read the release's commits against the inspiration's prose and fix
+   what went stale — the pin is not the whole contract. The two files
+   describe real behaviour (which sources work and under what
+   conditions, where the store lives, what needs a recent Minds app), so
+   a change to any of that lands here even when nothing about the
+   install or the config format moved.
 5. Commit as `datalib inspiration: bump pinned version to vX.Y.Z` and
    push straight to `main`. The repo is unprotected and these land
    directly, no PR.
