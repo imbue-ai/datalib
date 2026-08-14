@@ -354,7 +354,12 @@ pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 /// Credentials are still injected, and the permission check still runs, at the
 /// gateway that terminates the request — so routing this way reaches nothing a
 /// direct request could not.
-pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "VIA_DESKTOP_URL_PREFIX";
+///
+/// It rides latchkey's `LATCHKEY_*` env namespace, alongside the `LATCHKEY_GATEWAY`
+/// wiring a workspace already receives, because the value is inert without
+/// latchkey: only `latchkey curl` can interpret a `latchkey-self.invalid` URL.
+/// minds defines it, not upstream latchkey.
+pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "LATCHKEY_VIA_DESKTOP_URL_PREFIX";
 
 /// Prepend [`VIA_DESKTOP_URL_PREFIX_ENV`] to `url` when this request should
 /// leave from the user's machine.
