@@ -29,7 +29,6 @@ members = [
     "etl/providers/yolink",
     "qmd_indexer",
     "signal-backup",
-    "tauri-backend",
     "whatsapp-backup",
     "etl/providers/whatsapp",
     "etl/chat-common",
