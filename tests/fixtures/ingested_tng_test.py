@@ -1,34 +1,36 @@
 """End-to-end pipeline test.
 
-Replaces the previous `run_pipeline_test.sh` shell wrapper. Drives
-the same fixture-backed sync pipeline three times against a single
-data root and asserts on the resume-cursor behavior:
+Drives the fixture-backed sync pipeline three times against a single
+data root and asserts on what actually landed in the doltlite stores:
 
-  Run 1: fresh data root — full ingest happens; the
-         `signal_snapshot_already_ingested` event is NOT emitted.
-  Run 2: same data root, no flags — signal's `ingested_backups`
-         cursor (Blake3 over the snapshot's three on-disk files)
-         must short-circuit the second extract: the
-         `signal_snapshot_already_ingested` event IS emitted.
-  Run 3: `--reset-and-redownload` — orchestrator emits its reset
-         banner, the cursor row is wiped, signal re-ingests, and
-         `signal_snapshot_already_ingested` is again NOT emitted.
+  Run 1: fresh data root — full ingest. Every expected provider must
+         appear in the grid index, and signal's resume cursor must be
+         recorded.
+  Run 2: same data root, no flags — a steady-state re-run. Row counts
+         must be IDENTICAL to run 1 (re-running must not duplicate or
+         drop rows), signal's cursor must be untouched, and the
+         `signal_snapshot_already_ingested` event must be emitted.
+  Run 3: `--reset-and-redownload` — the cursor row is wiped and signal
+         re-ingests, so the event must NOT be emitted; the store must
+         then converge back to exactly the same contents.
 
 The pytest invokes `run_sync_pipeline.py` as a subprocess (same
-contract as the prior sh_test). Per-run assertions read the
-subprocess's combined stderr, which carries the orchestrator's
-tracing events on a TTY-less run as pretty-printed lines.
+contract as the prior sh_test).
 
 Stdlib `unittest` rather than third-party pytest to keep the
 toolchain dep graph small — one self-contained test doesn't
 justify wiring pytest through pip.parse.
 
-Why stderr inspection and not direct doltlite reads: doltlite's
-on-disk format isn't sqlite-file-compatible, the doltlite CLI
-isn't built by bazel, and we don't want to depend on a system
-binary. The orchestrator's tracing events are an explicit,
-load-bearing API surface already used by the obs stack — asserting
-on them keeps the test hermetic.
+Reading the stores directly: `//third-party/doltlite:doltlite` is a
+bazel-built sqlite3-shell CLI linked against the same amalgamation the
+pipeline uses (doltlite's on-disk format is not sqlite-file-compatible,
+so stock sqlite3 cannot open these). It arrives through `data`, so this
+stays hermetic — no system binary. Before it existed this test could
+only grep the orchestrator's tracing events out of stderr, which meant
+"the pipeline re-downloaded everything on run 2" was indistinguishable
+from a pass. The stderr assertions are kept: they cover the one
+transition (cursor hit / miss) that leaves no trace in the final state,
+since run 3 wipes the cursor and then re-creates it.
 """
 
 from __future__ import annotations
@@ -43,22 +45,51 @@ from pathlib import Path
 # Bazel runfiles layout: under bzlmod, the workspace dir is `_main`.
 _BAZEL_WORKSPACE_DIR = "_main"
 
-# Tracing event name emitted by signal extract when the
+# Tracing event name emitted by signal download when the
 # `ingested_backups` cursor short-circuits a fetch. Source of truth:
-# providers/signal/src/extract/mod.rs. Presence or absence of this
-# event across the three runs is the load-bearing signal.
+# providers/signal/src/download/mod.rs.
 EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
+
+# Providers that must appear in `grid_rows` after a full fixture run.
+#
+# These are `grid_rows.provider` values, which are provider *types* and
+# so don't always match the DAG step names (chatgpt-api reports
+# `openai`, the carddav source reports `contacts`, the mbox source
+# reports `jmap`).
+#
+# NOTE: `gitlab` is deliberately absent. It is a configured source in
+# run_sync_pipeline.py but currently renders zero markdowns and
+# contributes zero grid rows, so it would fail this assertion. That is
+# a real gap — see the PR that introduced these assertions — not an
+# intended exclusion; add it here once its fixture produces output.
+EXPECTED_PROVIDERS = frozenset(
+    {
+        "anthropic",
+        "beeper",
+        "contacts",
+        "github",
+        "google_takeout",
+        "jmap",
+        "linkedin",
+        "notion",
+        "openai",
+        "signal",
+        "slack",
+        "sms_backup_restore",
+        "whatsapp",
+    }
+)
 
 
 def _argv():
     """sys.argv layout, matching `args = [...]` in BUILD.bazel:
 
-    [0]: test script (set by py_test)
-    [1]: run_sync_pipeline.py path
-    [2]: datalib_dag path
-    [3]: datalib_step path
-    [4]: signal_make_fixture path
-    [5]: whatsapp_make_fixture path
+    [0]: run_sync_pipeline.py path
+    [1]: datalib_dag path
+    [2]: datalib_step path
+    [3]: signal_make_fixture path
+    [4]: whatsapp_make_fixture path
+    [5]: doltlite CLI path
     [6]: --now stamp
     [7..]: fixture paths
     """
@@ -74,8 +105,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         cls.step_bin = argv[2]
         cls.signal_bin = argv[3]
         cls.whatsapp_bin = argv[4]
-        cls.now = argv[5]
-        cls.fixture_paths = argv[6:]
+        cls.doltlite_bin = argv[5]
+        cls.now = argv[6]
+        cls.fixture_paths = argv[7:]
 
         cls.workspace = Path(os.environ["TEST_TMPDIR"]) / "sync_workspace"
         cls.workspace.mkdir(parents=True, exist_ok=True)
@@ -85,6 +117,60 @@ class IngestedTngPipelineTest(unittest.TestCase):
             cls.cwd = Path(runfiles_root) / _BAZEL_WORKSPACE_DIR
         else:
             cls.cwd = Path.cwd()
+
+    # ── doltlite store access ───────────────────────────────────────
+
+    @property
+    def _index_db(self) -> Path:
+        """The grid index the `grid_index` fan-in step writes."""
+        return self.workspace / "system" / "backend_index" / "db.doltlite_db"
+
+    @property
+    def _signal_entities_db(self) -> Path:
+        """Signal's raw entity store, which holds `ingested_backups`."""
+        return self.workspace / "signal" / "raw" / "entities.doltlite_db"
+
+    def _query(self, db: Path, sql: str) -> list[str]:
+        """Run one SQL statement, returning stripped non-empty lines."""
+        self.assertTrue(db.is_file(), f"expected a doltlite store at {db}")
+        result = subprocess.run(
+            [str(Path(self.cwd) / self.doltlite_bin), str(db), sql],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+
+    def _scalar(self, db: Path, sql: str) -> str:
+        rows = self._query(db, sql)
+        self.assertEqual(len(rows), 1, f"expected one row from {sql!r}, got {rows}")
+        return rows[0]
+
+    def _count(self, db: Path, table: str) -> int:
+        return int(self._scalar(db, f"SELECT COUNT(*) FROM {table};"))
+
+    def _index_shape(self) -> dict[str, int]:
+        """The index contents that a re-run must leave unchanged."""
+        return {
+            "grid_rows": self._count(self._index_db, "grid_rows"),
+            "markdowns": self._count(self._index_db, "markdowns"),
+        }
+
+    def _providers(self) -> frozenset[str]:
+        return frozenset(
+            self._query(
+                self._index_db, "SELECT DISTINCT provider FROM grid_rows;"
+            )
+        )
+
+    def _signal_cursor(self) -> list[str]:
+        """Signal's `ingested_backups` rows as `<snapshot_dir>|<blake3>`."""
+        return self._query(
+            self._signal_entities_db,
+            "SELECT snapshot_dir, blake3 FROM ingested_backups ORDER BY snapshot_dir;",
+        )
+
+    # ── pipeline driver ────────────────────────────────────────────
 
     def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
         env = {**os.environ}
@@ -118,7 +204,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return result
 
     def test_pipeline_resume_and_reset(self) -> None:
-        # --- Run 1: fresh workspace. No cursor hit yet.
+        # --- Run 1: fresh workspace. Full ingest.
         run1 = self._run_pipeline(reset=False)
         self.assertNotIn(
             EV_SIGNAL_ALREADY_INGESTED,
@@ -126,9 +212,37 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "run 1 is a fresh ingest — signal must NOT report already_ingested",
         )
 
+        shape1 = self._index_shape()
+        self.assertGreater(
+            shape1["grid_rows"], 0, "run 1 must load grid rows into the index"
+        )
+        self.assertGreater(
+            shape1["markdowns"], 0, "run 1 must load markdowns into the index"
+        )
+        # Every source that renders must be represented. An exact set
+        # comparison (not a subset check) is deliberate: it catches a
+        # source silently dropping out of the pipeline, which is the
+        # failure this test previously could not see at all.
+        self.assertEqual(
+            self._providers(),
+            EXPECTED_PROVIDERS,
+            "grid_rows providers after a full run",
+        )
+        # The index is committed, so its version history is non-empty.
+        self.assertGreater(
+            int(self._scalar(self._index_db, "SELECT COUNT(*) FROM dolt_log;")),
+            0,
+            "grid_index must commit, leaving a dolt_log entry",
+        )
+        # Signal recorded exactly one snapshot in its resume cursor.
+        cursor1 = self._signal_cursor()
+        self.assertEqual(
+            len(cursor1), 1, f"expected one ingested_backups row, got {cursor1}"
+        )
+
         # --- Run 2: same data root, no flags. Signal's
         # ingested_backups cursor MUST short-circuit the second
-        # extract. That's the load-bearing assertion of this test.
+        # download.
         run2 = self._run_pipeline(reset=False)
         self.assertIn(
             EV_SIGNAL_ALREADY_INGESTED,
@@ -136,19 +250,47 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "run 2 must hit signal's ingested_backups cursor and emit "
             f"the {EV_SIGNAL_ALREADY_INGESTED!r} event",
         )
+        # The load-bearing state assertion: a steady-state re-run is
+        # idempotent. Re-rendering and re-loading the same documents
+        # must not duplicate rows (upserts keyed correctly) or drop
+        # them (a cursor short-circuit skipping too much).
+        self.assertEqual(
+            self._index_shape(), shape1, "run 2 must leave the index unchanged"
+        )
+        self.assertEqual(
+            self._providers(), EXPECTED_PROVIDERS, "run 2 providers"
+        )
+        self.assertEqual(
+            self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
+        )
 
         # --- Run 3: --reset-and-redownload. The flag wipes signal's
         # ingested_backups row before fetch, so the cursor MUST NOT
-        # short-circuit; we should see signal re-ingest from scratch
-        # instead. (If --reset-and-redownload were silently dropped,
-        # the cursor row would still be present and this run would
-        # behave like run 2 — this assertion catches that case.)
+        # short-circuit. (If --reset-and-redownload were silently
+        # dropped, this run would behave like run 2.)
         run3 = self._run_pipeline(reset=True)
         self.assertNotIn(
             EV_SIGNAL_ALREADY_INGESTED,
             run3.stderr,
             "after --reset-and-redownload wipes ingested_backups, "
             "signal must NOT report already_ingested on run 3",
+        )
+        # A reset re-downloads from scratch and must converge to the
+        # same store, not to a duplicated or partial one.
+        self.assertEqual(
+            self._index_shape(),
+            shape1,
+            "run 3 (--reset-and-redownload) must converge to the same index",
+        )
+        self.assertEqual(
+            self._providers(), EXPECTED_PROVIDERS, "run 3 providers"
+        )
+        # The cursor is wiped mid-run, so by the end it must be back —
+        # same snapshot, same fingerprint.
+        self.assertEqual(
+            self._signal_cursor(),
+            cursor1,
+            "run 3 must re-record the same signal snapshot fingerprint",
         )
 
 
