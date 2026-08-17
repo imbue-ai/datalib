@@ -78,6 +78,61 @@ fn die(msg: impl AsRef<str>) -> ! {
 ///   `LATCHKEY_CURL` directly, the private marker never reaches the wire.
 const SUPPRESSED_HEADERS: &[&str] = &["User-Agent", "X-Imbue-Impersonate"];
 
+/// Env var overriding the Chrome emulation profile.
+const PROFILE_ENV: &str = "DATALIB_IMPERSONATE_PROFILE";
+
+/// Profile used when [`PROFILE_ENV`] is unset.
+///
+/// Bumping this changes the TLS fingerprint every impersonated provider
+/// sees, so it stays a deliberate edit rather than tracking whatever the
+/// pinned `wreq-util` happens to ship. The env var exists so the value
+/// can be moved without a rebuild — to chase a Chrome release, or to back
+/// out fast if a provider starts rejecting the current one.
+const DEFAULT_PROFILE: &str = "chrome_131";
+
+/// The profiles we accept, spelled exactly as `wreq-util` names them.
+///
+/// The pinned `wreq-util` exposes `chrome_100`..=`chrome_147`; only the
+/// recent range is listed, because an older fingerprint is strictly worse
+/// at the one job this binary has. Adding a newer Chrome means bumping
+/// `wreq-util`, which is a code change anyway.
+fn emulation_from_name(name: &str) -> Option<Emulation> {
+    Some(match name {
+        "chrome_131" => Emulation::Chrome131,
+        "chrome_132" => Emulation::Chrome132,
+        "chrome_133" => Emulation::Chrome133,
+        "chrome_134" => Emulation::Chrome134,
+        "chrome_135" => Emulation::Chrome135,
+        "chrome_136" => Emulation::Chrome136,
+        "chrome_137" => Emulation::Chrome137,
+        "chrome_138" => Emulation::Chrome138,
+        "chrome_139" => Emulation::Chrome139,
+        "chrome_140" => Emulation::Chrome140,
+        "chrome_141" => Emulation::Chrome141,
+        "chrome_142" => Emulation::Chrome142,
+        "chrome_143" => Emulation::Chrome143,
+        "chrome_144" => Emulation::Chrome144,
+        "chrome_145" => Emulation::Chrome145,
+        "chrome_146" => Emulation::Chrome146,
+        "chrome_147" => Emulation::Chrome147,
+        _ => return None,
+    })
+}
+
+/// Resolve the emulation profile, dying with the accepted spellings
+/// rather than silently falling back — a typo that quietly reverted to
+/// the default would present one fingerprint while the operator believed
+/// they had set another.
+fn resolve_emulation() -> Emulation {
+    let name = std::env::var(PROFILE_ENV).unwrap_or_else(|_| DEFAULT_PROFILE.to_string());
+    match emulation_from_name(&name) {
+        Some(e) => e,
+        None => die(format!(
+            "unknown {PROFILE_ENV}={name:?}; accepted: chrome_131 ..= chrome_147"
+        )),
+    }
+}
+
 /// Whether `name` is a header this binary refuses to let a caller set.
 /// HTTP header names are case-insensitive, and the gateway echoes back
 /// whatever case its client sent, so compare that way.
@@ -222,7 +277,16 @@ async fn main() -> ExitCode {
     }
 
     let client = match Client::builder()
-        .emulation(Emulation::Chrome131)
+        .emulation(resolve_emulation())
+        // `wreq` defaults `auto_sys_proxy: true`, so it would otherwise
+        // honor `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and the macOS
+        // system proxy pane. This binary only ever fetches provider APIs
+        // with the caller's credentials attached, and nothing in the
+        // pipeline wants an ambient proxy in that path — anything able to
+        // set an env var could otherwise route tokens through a host of
+        // its choosing. Real curl honors those vars too, so this is
+        // deliberately stricter than the binary we stand in for.
+        .no_proxy()
         .redirect(if args.follow_redirects {
             redirect::Policy::limited(10)
         } else {
@@ -356,6 +420,48 @@ mod tests {
 
     fn parse_argv(tokens: &[&str]) -> Args {
         parse(tokens.iter().map(|t| t.to_string()).collect())
+    }
+
+    /// The default has to resolve, or every impersonated request dies on
+    /// a machine that never sets the env var — i.e. all of them.
+    #[test]
+    fn default_profile_resolves() {
+        assert!(
+            emulation_from_name(DEFAULT_PROFILE).is_some(),
+            "DEFAULT_PROFILE {DEFAULT_PROFILE:?} is not an accepted name",
+        );
+    }
+
+    /// Every advertised name maps to a distinct profile. Guards against a
+    /// copy-paste in the match arms silently pinning two spellings to the
+    /// same fingerprint — which would look fine until someone bumped the
+    /// profile and nothing changed on the wire.
+    #[test]
+    fn accepted_names_map_to_distinct_profiles() {
+        let names: Vec<String> = (131..=147).map(|v| format!("chrome_{v}")).collect();
+        let mut seen = HashSet::new();
+        for name in &names {
+            let e = emulation_from_name(name)
+                .unwrap_or_else(|| panic!("{name} is advertised but does not resolve"));
+            assert!(
+                seen.insert(format!("{e:?}")),
+                "{name} duplicates an earlier profile"
+            );
+        }
+        assert_eq!(seen.len(), names.len());
+    }
+
+    /// An unknown name is rejected rather than silently falling back: a
+    /// typo that reverted to the default would present one fingerprint
+    /// while the operator believed they had set another.
+    #[test]
+    fn unknown_profile_is_rejected() {
+        for bad in ["chrome_130", "chrome131", "Chrome_131", "firefox_133", ""] {
+            assert!(
+                emulation_from_name(bad).is_none(),
+                "{bad:?} unexpectedly resolved",
+            );
+        }
     }
 
     /// A caller-supplied User-Agent is dropped in every casing, so the
