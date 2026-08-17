@@ -57,17 +57,20 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # `openai`, the carddav source reports `contacts`, the mbox source
 # reports `jmap`).
 #
-# NOTE: `gitlab` is deliberately absent. It is a configured source in
-# run_sync_pipeline.py but currently renders zero markdowns and
-# contributes zero grid rows, so it would fail this assertion. That is
-# a real gap — see the PR that introduced these assertions — not an
-# intended exclusion; add it here once its fixture produces output.
+# Keep this exhaustive over the sources run_sync_pipeline.py
+# configures. The first draft had to omit `gitlab`, which turned out to
+# be a dead fixture rather than an intended exclusion — its records
+# spelled the project path `project_path` while every consumer had
+# moved to `project_full_path`, so it silently produced nothing for
+# three months. A source that stops producing rows should fail here,
+# not disappear quietly.
 EXPECTED_PROVIDERS = frozenset(
     {
         "anthropic",
         "beeper",
         "contacts",
         "github",
+        "gitlab",
         "google_takeout",
         "jmap",
         "linkedin",
