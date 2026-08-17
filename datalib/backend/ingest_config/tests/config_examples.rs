@@ -92,38 +92,73 @@ fn validate_render_params(file: &str, id: &str, ty: &str, params: &serde_yaml::V
     }
 }
 
+/// The three validation layers from the module header, applied to one config
+/// file. `name` is only used for panic messages.
+fn validate_config(name: &str, path: &std::path::Path) {
+    let (cfg, _data_root) = datalib_dag::config::load(path)
+        .unwrap_or_else(|e| panic!("{name}: failed to load as a DAG config: {e:#}"));
+    let specs =
+        datalib_dag::config::to_specs(&cfg).unwrap_or_else(|e| panic!("{name}: to_specs: {e:#}"));
+    datalib_dag::Graph::build(specs).unwrap_or_else(|e| panic!("{name}: graph build: {e:#}"));
+
+    for step in &cfg.steps {
+        let Some((phase, ty)) = step_phase_and_type(&step.command) else {
+            continue;
+        };
+        match phase {
+            "download" => {
+                let v = params_with_type(ty, step.params.as_ref());
+                let _: SourceConfig = serde_yaml::from_value(v).unwrap_or_else(|e| {
+                    panic!(
+                        "{name}: step {}: download params don't match the \
+                         {ty} config schema: {e}",
+                        step.id
+                    )
+                });
+            }
+            "render" => {
+                if let Some(params) = step.params.as_ref() {
+                    validate_render_params(name, &step.id, ty, params);
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[test]
 fn example_configs_parse_and_validate() {
     for name in ["sample_config.yaml", "claude_only.yaml", "all_sources.yaml"] {
-        let path = example_config(name);
-        let (cfg, _data_root) = datalib_dag::config::load(&path)
-            .unwrap_or_else(|e| panic!("{name}: failed to load as a DAG config: {e:#}"));
-        let specs = datalib_dag::config::to_specs(&cfg)
-            .unwrap_or_else(|e| panic!("{name}: to_specs: {e:#}"));
-        datalib_dag::Graph::build(specs).unwrap_or_else(|e| panic!("{name}: graph build: {e:#}"));
-
-        for step in &cfg.steps {
-            let Some((phase, ty)) = step_phase_and_type(&step.command) else {
-                continue;
-            };
-            match phase {
-                "download" => {
-                    let v = params_with_type(ty, step.params.as_ref());
-                    let _: SourceConfig = serde_yaml::from_value(v).unwrap_or_else(|e| {
-                        panic!(
-                            "{name}: step {}: download params don't match the \
-                             {ty} config schema: {e}",
-                            step.id
-                        )
-                    });
-                }
-                "render" => {
-                    if let Some(params) = step.params.as_ref() {
-                        validate_render_params(name, &step.id, ty, params);
-                    }
-                }
-                _ => unreachable!(),
-            }
-        }
+        validate_config(name, &example_config(name));
     }
+}
+
+/// Same validation, applied to the manual-e2e live-golden config — which lives
+/// OUTSIDE this repo (it names real accounts), in the private dir given by
+/// `DATALIB_MANUAL_E2E_DIR`. See `docs/dev/testing.md`.
+///
+/// `#[ignore]` because it depends on a host path that only exists on the one
+/// machine that runs the live golden; it is otherwise cheap — pure parsing, no
+/// network, no credentials, no subprocess. That makes it the fast way to catch
+/// the config drifting from the provider schemas *without* paying for a live
+/// re-bake:
+///
+/// ```sh
+/// bazel test //datalib/backend/ingest_config:config_examples_test \
+///     --test_arg=--ignored --test_env=DATALIB_MANUAL_E2E_DIR --test_output=all
+/// ```
+#[test]
+#[ignore]
+fn manual_e2e_config_parses_and_validates() {
+    let dir = std::env::var("DATALIB_MANUAL_E2E_DIR").expect(
+        "set DATALIB_MANUAL_E2E_DIR to the private manual-e2e data dir \
+         (the one holding dag.yaml + sources/ + snapshots/)",
+    );
+    let path = std::path::PathBuf::from(dir).join("dag.yaml");
+    assert!(
+        path.exists(),
+        "missing {} — expected the DAG-format config in the manual-e2e data dir",
+        path.display()
+    );
+    validate_config("dag.yaml", &path);
 }

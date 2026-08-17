@@ -20,7 +20,9 @@ bazel-bin/datalib/backend/dag/datalib_dag_bin configs/dag_example.yaml \
 ## Tiny run
 
 The "tiny" config (a handful of sources, used by the manual e2e live-sync
-golden test) now lives OUTSIDE this repo so its slightly sensitive source
-data isn't shared when the repo is open-sourced. It's in the private
-`data_liberation_manual_e2e_test_data` dir; point the runner above at
-its config (which must be in the new steps format).
+golden test) lives OUTSIDE this repo so its slightly sensitive source data
+isn't shared when the repo is open-sourced. It's `dag.yaml` in the private
+`data_liberation_manual_e2e_test_data` dir, in the steps format. You rarely
+need to point the runner at it by hand — `datalib/backend/dag/manual_e2e_run.sh`
+does that, and `--config` validates it offline. See
+[`/docs/dev/testing.md`](/docs/dev/testing.md).

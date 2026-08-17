@@ -67,6 +67,9 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "datalib/backend/etl/providers/notion:notion_live": (
         "manual live test, latchkey needs host keychain"
     ),
+    "datalib/backend/dag:manual_e2e_live_sync_golden": (
+        "manual live golden, latchkey needs host keychain"
+    ),
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
     # ms-playwright browser cache.
