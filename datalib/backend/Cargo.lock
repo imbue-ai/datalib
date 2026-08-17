@@ -1587,14 +1587,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datalib-tauri-backend"
-version = "0.27.0"
-dependencies = [
- "datalib-core",
- "datalib-schema",
-]
-
-[[package]]
 name = "datalib-time"
 version = "0.27.0"
 dependencies = [

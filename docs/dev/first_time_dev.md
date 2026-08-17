@@ -80,8 +80,7 @@ there is no codegen step.
     │   ├── qmd_indexer/      qmd search index binary
     │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
     │   ├── datalib_step/     datalib-step built-in step commands
-    │   ├── http/             axum binary
-    │   └── tauri-backend/    Tauri command surface
+    │   └── http/             axum binary
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
     ├── tauri/                Tauri shell (out of Bazel)
     └── openhost/             Dockerfile + openhost.toml stubs
@@ -103,7 +102,7 @@ second invocation only re-executes what your changes actually touched.
 Skipping Bazel skips that cache.
 
 Runs:
-- Rust unit tests (`//datalib/backend/{schema,core,etl,http,tauri-backend}:*_unittests`)
+- Rust unit tests (`//datalib/backend/{schema,core,etl,http}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
 - Playwright e2e suite (`//datalib/ui:e2e_test`) — non-hermetic by

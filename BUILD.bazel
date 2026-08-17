@@ -12,7 +12,6 @@ test_suite(
         "//datalib/backend/core:core_unittests",
         "//datalib/backend/http:http_unittests",
         "//datalib/backend/schema:schema_unittests",
-        "//datalib/backend/tauri-backend:tauri_backend_unittests",
     ],
 )
 
