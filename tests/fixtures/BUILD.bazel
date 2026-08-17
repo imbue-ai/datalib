@@ -172,6 +172,11 @@ py_test(
         "$(rootpath //datalib/backend/datalib_step:datalib_step)",
         "$(rootpath //datalib/backend/signal-backup:signal_make_fixture)",
         "$(rootpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
+        # Bazel-built sqlite3 shell linked against the doltlite
+        # amalgamation, so the test can open the stores the pipeline
+        # just wrote. Stock sqlite3 cannot: doltlite's on-disk format
+        # is not sqlite-file-compatible.
+        "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
         # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "datalib/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
@@ -197,6 +202,7 @@ py_test(
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/signal-backup:signal_make_fixture",
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
+        "//third-party/doltlite:doltlite",
     ],
 )
 

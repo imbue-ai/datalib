@@ -271,9 +271,54 @@ sees the commit immediately.
 
 Bazel stamps the binary with the git hash via
 `tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
-get the same value from `datalib/backend/core/build.rs`. Read-back
-of feedback rows is out of scope — query the doltlite_db directly with
-any SQLite-shaped client.
+get the same value from `datalib/backend/core/build.rs`. Read-back of
+feedback rows is out of scope — query the store directly with the CLI
+below.
+
+## Inspecting doltlite stores
+
+**Stock `sqlite3` cannot open these files.** doltlite's on-disk format
+is not sqlite-file-compatible; a `.doltlite_db` is a prolly-tree store
+that only a doltlite-linked binary can read. Reaching for the system
+`sqlite3` and concluding the database is corrupt is a well-worn dead
+end.
+
+Use the Bazel-built shell, which links the same amalgamation the Rust
+binaries do:
+
+```sh
+bazelisk build //third-party/doltlite:doltlite
+dl=bazel-bin/third-party/doltlite/doltlite
+
+$dl path/to/db.doltlite_db ".tables"
+$dl path/to/db.doltlite_db ".schema grid_rows"
+$dl path/to/db.doltlite_db "SELECT provider, COUNT(*) FROM grid_rows GROUP BY provider;"
+$dl path/to/db.doltlite_db "SELECT COUNT(*) FROM dolt_log;"   # commit history
+```
+
+It is a sqlite3-shell drop-in, so dot-commands, `-json`, `-csv` and an
+interactive REPL all work, plus the dolt SQL surface
+(`dolt_commit`, `dolt_log`, `dolt_diff`, …).
+
+Where the stores live under a data root:
+
+```
+<data_root>/<name>/raw/entities.doltlite_db   per-source entities + sync bookkeeping
+<data_root>/<name>/raw/blobs.doltlite_db      content-addressed blobs
+<data_root>/system/backend_index/db.doltlite_db   grid_rows / markdowns / edges
+```
+
+There is also a host `/usr/local/bin/doltlite` on some machines. Prefer
+the Bazel target: it is version-locked to `MODULE.bazel`'s pin, so it
+can't silently disagree with what the pipeline wrote.
+
+**From a test**, take it as a `data` dep and pass `$(rootpath ...)`
+rather than shelling out to a host binary — that keeps the test
+hermetic. `//tests/fixtures:ingested_tng_test` is the worked example:
+it opens the stores the pipeline just wrote and asserts row counts and
+per-provider coverage. Prefer that over grepping tracing events out of
+stderr; a log line tells you what the code *said*, the store tells you
+what it *did*.
 
 ## Git: prefer merges over rebases
 

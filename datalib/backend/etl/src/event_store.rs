@@ -122,6 +122,24 @@ where
 /// Walk `created/` then `updated/`, returning the most recent record
 /// keyed by `key_of`. `updated/` entries shadow `created/` entries for
 /// the same key.
+///
+/// # An unkeyable record is an error, not a skip
+///
+/// Every `key_of` in this tree is built from `unwrap_or_default()` over
+/// a few field lookups, so a record whose fields don't match what the
+/// key function expects yields `""`. Tolerating that loses data twice:
+/// every unkeyable record collapses onto the same `""` entry, and
+/// callers then skip the empty key — so a whole entity stream reads as
+/// "no records", the synthesizer writes no fixtures, the downloader
+/// replays an empty listing, nothing renders, and every step reports
+/// success.
+///
+/// That is not hypothetical. `tests/fixtures/gitlab_api` spelled the
+/// project path `project_path` while every consumer had moved to
+/// `project_full_path`; gitlab contributed zero rows to the fixture
+/// pipeline for three months without one failing test. The error below
+/// names the file, the line, and the fields the record actually has,
+/// which is enough to spot a renamed field on sight.
 pub fn load_latest_by_key<F>(
     out_dir: &Path,
     entity: &str,
@@ -145,7 +163,23 @@ where
             }
             let rec: Value = serde_json::from_str(&line)
                 .with_context(|| format!("parse {}:{}", path.display(), lineno + 1))?;
-            latest.insert(key_of(&rec), rec);
+            let key = key_of(&rec);
+            if key.is_empty() {
+                let fields = rec
+                    .as_object()
+                    .map(|m| m.keys().cloned().collect::<Vec<_>>().join(", "))
+                    .unwrap_or_else(|| "<not a JSON object>".to_string());
+                anyhow::bail!(
+                    "{}:{}: could not derive a key for entity {entity:?} — the key \
+                     function found none of the fields it needs. The record has: \
+                     [{fields}]. A stale fixture whose field names predate a rename \
+                     is the usual cause; left unchecked this silently yields an \
+                     empty entity stream.",
+                    path.display(),
+                    lineno + 1,
+                );
+            }
+            latest.insert(key, rec);
         }
     }
     Ok(latest)
@@ -213,5 +247,43 @@ mod tests {
         let updated = std::fs::read_to_string(events_path(out, "ent", "updated")).unwrap();
         assert_eq!(created.lines().count(), 2);
         assert_eq!(updated.lines().count(), 3);
+    }
+
+    /// A record the key function can't identify must fail loudly. This
+    /// is the gitlab `project_path` / `project_full_path` bug in
+    /// miniature: before this check the stream read as empty and the
+    /// whole provider silently produced nothing.
+    #[test]
+    fn unkeyable_record_is_an_error_naming_its_fields() {
+        let dir = tempdir().unwrap();
+        let out = dir.path();
+        let mut k = Map::new();
+        // The writer spells it `renamed_id`; `key_id` looks for `id`.
+        k.insert("renamed_id".into(), Value::String("p1".into()));
+        let rec = make_record(k, json!({"title": "a"}));
+        append_jsonl(&events_path(out, "ent", "created"), &[rec]).unwrap();
+
+        let err = load_latest_by_key(out, "ent", key_id)
+            .expect_err("an unkeyable record must not read as an empty stream");
+        let msg = err.to_string();
+        // The message has to be actionable on sight: which entity, and
+        // what the record actually carries.
+        assert!(msg.contains("\"ent\""), "should name the entity: {msg}");
+        assert!(msg.contains("renamed_id"), "should list the fields: {msg}");
+        assert!(msg.contains(":1:"), "should name the line: {msg}");
+    }
+
+    /// The guard must not fire on well-formed records.
+    #[test]
+    fn keyable_records_load_without_error() {
+        let dir = tempdir().unwrap();
+        let out = dir.path();
+        let mut k = Map::new();
+        k.insert("id".into(), Value::String("p1".into()));
+        let rec = make_record(k, json!({"title": "a"}));
+        append_jsonl(&events_path(out, "ent", "created"), &[rec]).unwrap();
+
+        let latest = load_latest_by_key(out, "ent", key_id).unwrap();
+        assert_eq!(latest["p1"]["raw"]["title"], "a");
     }
 }
