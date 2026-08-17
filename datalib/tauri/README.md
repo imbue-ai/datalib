@@ -11,8 +11,9 @@ unchanged — same code as the hosted packaging, two front doors.
 The backend is deliberately **not** linked in-process: the shell is a
 thin process manager, so there is no backend crate graph in this cargo
 workspace, no doltlite static-link plumbing, and no drift between what
-the web and desktop packagings run. `datalib-http` and
-`datalib-sync` are Bazel-built (fully cached) and shipped under the
+the web and desktop packagings run. `datalib-http`, `datalib-dag`,
+`datalib-step` and the two latchkey curl binaries are Bazel-built (fully
+cached) and shipped under the
 .app's `Contents/Resources/binaries/`; see `tauri.conf.json`'s
 `beforeBuildCommand` + `bundle.resources` and `resolve_http_bin` in
 `src/main.rs`. Port handshake: the child gets
@@ -26,7 +27,7 @@ which ingests `datalib/backend`'s workspace via `crate.from_cargo`,
 never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 ```sh
-# Run it — one command. Bazel-builds datalib-http + datalib-sync
+# Run it — one command. Bazel-builds the bundled binaries
 # via the config's beforeBuildCommand, compiles the shell, bundles the
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh
@@ -62,10 +63,11 @@ with neither set it falls back to the native folder picker.
 
 Backend resolution at runtime: `$DATALIB_HTTP_BIN` (dev override,
 point it at a fresh Bazel build without rebundling) → the bundled
-`Resources/binaries/datalib-http`. The child finds
-`datalib-sync` itself: `$DATALIB_SYNC_BIN` (inherited) → a
-sibling of its own executable, which is exactly where the bundle puts
-it. The spawned backend logs to `$TMPDIR/datalib-http-<pid>.log`;
+`Resources/binaries/datalib-http`. The child finds the pipeline
+binaries itself: `$DATALIB_DAG_BIN` / `$DATALIB_BINARY_DIR`
+(inherited) → a sibling of its own executable, which is exactly where
+the bundle puts them. The spawned backend logs to
+`$TMPDIR/datalib-http-<pid>.log`;
 startup failures quote the log tail in the error dialog.
 
 `icons/` is generated from `app-icon.png` (placeholder) via
