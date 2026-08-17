@@ -91,6 +91,16 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Gemi
                 continue;
             }
             n_attachments += 1;
+            // Exact join, deliberately — NOT the truncation-tolerant
+            // `attachment_path::resolve` that Chat uses (issue #64).
+            // `file_name` here comes from an `href` Google wrote into the
+            // export HTML, which points at the file it actually wrote, so
+            // there's no full-vs-truncated mismatch to bridge. Chat's
+            // `export_name` is JSON metadata describing the *original*
+            // upload, which is where that mismatch comes from. If missing
+            // Gemini attachments ever show up, this is the line to
+            // re-examine first — unverified against an export with a
+            // long-enough filename to trigger the cap.
             let sibling = cell_dir.join(&file_name);
             match std::fs::read(&sibling) {
                 Ok(bytes) => {
