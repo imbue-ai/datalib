@@ -11,8 +11,7 @@ runtime `brew install`, no system libsqlite3 dependency.
 ```
    MODULE.bazel
        │
-       │  bazel_dep + http_archive(name="doltlite_amalgamation",
-       │                           sha256="…")
+       │  http_archive(name="doltlite_amalgamation", sha256="…")
        ▼
    @doltlite_amalgamation//
        (extracted zip: doltlite.c + doltlite.h)
@@ -26,13 +25,30 @@ runtime `brew install`, no system libsqlite3 dependency.
    //third-party/doltlite:sqlite3
        (cc_library — compiles sqlite3.c into libsqlite3.a)
        │
-       │  crate.annotation(crate="libsqlite3-sys",
-       │                   deps=[":sqlite3"])
-       ▼
+       ├─────────────────────────────┐
+       │                             │
+       │  crate.annotation(          │  deps=[":sqlite3"]
+       │    crate="libsqlite3-sys",  │
+       │    deps=[":sqlite3"])       ▼
+       │                     //third-party/doltlite:doltlite
+       │                         (cc_binary — the CLI, for tests
+       │                          and hand-inspecting raw stores)
+       │                             ▲
+       │                             │  srcs=[shell.c]
+       │                     @doltlite_autoconf//
+       │                         (tarball; we take only its
+       │                          pre-generated ext/wasm/.../shell.c)
+       │                             ▲
+       │                             │  http_archive(name="doltlite_autoconf")
+       ▼                        MODULE.bazel
    @datalib_crates//:libsqlite3-sys
    @datalib_crates//:sqlx-sqlite
    …all the way up to the binaries.
 ```
+
+The two `http_archive`s must be pinned to the same doltlite version.
+Nothing in Bazel couples them, and `:cli_version_test` does not
+actually catch it either — see [Upgrading doltlite](#upgrading-doltlite).
 
 ## How caching works
 
@@ -53,24 +69,60 @@ In normal day-to-day edits to Rust code, none of these actions re-run.
 
 ## Upgrading doltlite
 
+A version lives in **four** places and they must all move together:
+
+| # | Location |
+|---|----------|
+| 1 | `MODULE.bazel` → `http_archive(name = "doltlite_amalgamation")` — the library |
+| 2 | `MODULE.bazel` → `http_archive(name = "doltlite_autoconf")` — the CLI's `shell.c` |
+| 3 | `BUILD.bazel` → `DOLTLITE_VERSION` |
+| 4 | `datalib/docker/Dockerfile` → `DOLTLITE_CLI_VERSION` — the container's debug-shell `.deb` |
+
+**Nothing mechanically verifies that these four agree — check them by
+hand.** `:cli_version_test` reads like it does this, and its comments
+say so, but the check is circular: the CLI prints the version it was
+compiled with (`-DDOLTLITE_VERSION`, from #3), and the test compares
+that against #3 again. Setting `DOLTLITE_VERSION = "0.11.49"` while
+both archives are on 0.11.50 passes. What the test *does* genuinely
+catch is worth keeping — that the CLI links and runs at all, and that
+its dolt-SQL surface is real (it exercises `dolt_commit` and
+`dolt_log`, so a shell accidentally linked against stock SQLite fails).
+It just isn't a pin-drift guard. Pin #4 has drifted before, sitting at
+0.11.8 while the library was on 0.11.13.
+
+Steps:
+
 1. Find the new release: <https://github.com/dolthub/doltlite/releases>.
-2. Pick the **amalgamation** zip (e.g.
-   `doltlite-amalgamation-X.Y.Z.zip`). **Do not use any 0.11.x release
-   before 0.11.4** — those amalgamation zips were broken and built
-   stock SQLite, missing the prolly hooks.
-3. Compute the sha256:
+2. You need **two** assets, at the same version:
+   - `doltlite-amalgamation-X.Y.Z.zip` — the library (`doltlite.{c,h}`).
+   - `doltlite-autoconf-X.Y.Z.tar.gz` — for its pre-generated `shell.c`
+     only. The amalgamation is library-only (no `main()`), so the CLI
+     has to come from here.
+
+   **Do not use any 0.11.x release before 0.11.4** — those amalgamation
+   zips were broken and built stock SQLite, missing the prolly hooks.
+3. Compute both sha256s:
    ```sh
    curl -fsSL <url> | shasum -a 256
    ```
-4. Update `urls` + `sha256` + `strip_prefix` in `MODULE.bazel`'s
-   `http_archive(name = "doltlite_amalgamation", ...)`.
-5. Bump `DOLTLITE_VERSION` in `BUILD.bazel`'s `copts`.
-6. Bump `DOLTLITE_CLI_VERSION` in `datalib/docker/Dockerfile` to match —
-   that's the debug-shell CLI `.deb`, pinned to the same version on
-   purpose so the SQL surface in the shell matches the linked library.
-   It's a separate pin and drifts silently if you forget it.
-7. `bazelisk build //...` — Bazel re-downloads, recompiles, and feeds
-   the new archive into every downstream binary.
+4. Update `urls` + `sha256` + `strip_prefix` in **both** `MODULE.bazel`
+   `http_archive`s — `doltlite_amalgamation` and `doltlite_autoconf`.
+5. Bump the `DOLTLITE_VERSION` constant at the top of `BUILD.bazel`.
+   It feeds `-DDOLTLITE_VERSION` into both the library and the CLI, so
+   there's only one to change.
+6. Bump `DOLTLITE_CLI_VERSION` in `datalib/docker/Dockerfile`: a `.deb`
+   from the same upstream release, pinned to the linked library on
+   purpose so the SQL surface in the container's debug shell matches
+   what the binary observes.
+7. Re-grep to confirm all four moved — this is the only thing standing
+   between you and a silent mismatch:
+   ```sh
+   grep -rn '0\.11\.' MODULE.bazel third-party/doltlite/BUILD.bazel \
+       datalib/docker/Dockerfile
+   ```
+8. `bazelisk test //third-party/doltlite:cli_version_test` — confirms
+   the CLI links and its dolt-SQL surface works against the new
+   engine. Then `bazelisk build //...` for everything downstream.
 
 Before bumping, check whether the chunk-store format moved: grep
 `CHUNK_STORE_VERSION` in the old and new `doltlite.c`. The open path
@@ -87,7 +139,9 @@ No code or wiring changes needed unless the doltlite public API shifts
 
 | Path                        | Purpose                                                                |
 |-----------------------------|------------------------------------------------------------------------|
-| `BUILD.bazel`               | `rename_amalgamation` genrule + `sqlite3` cc_library.                  |
+| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `cli_version_test`. |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
+| `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |
+| `cli_version_test.sh`       | Smoke-tests the built CLI: that it links, runs, and has a real dolt-SQL surface. Its `--version` comparison is circular and catches no drift — see [Upgrading doltlite](#upgrading-doltlite). |
 | `libsqlite3-sys.patch`      | Absolutize `$(BINDIR)`-derived paths inside libsqlite3-sys's build.rs. |
 | `README.md`                 | This file.                                                             |
