@@ -81,6 +81,55 @@ impl RawDb {
         Ok(row.is_some())
     }
 
+    /// Age of the most recent successful sweep for `key`.
+    ///
+    /// Same shape as slack's manifest-sweep marker (see
+    /// `providers/slack/src/download/db.rs`): a row in the shared
+    /// `sync_scope_state` table under a provider-namespaced `scope`, so no
+    /// extra schema is needed. `None` when the sweep has never completed —
+    /// which is what keeps a cold store doing the real call.
+    pub async fn sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
+        let scope = format!("anthropic:sweep:{key}");
+        let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+            .bind(&scope)
+            .fetch_optional(&self.pool)
+            .await
+            .context("select anthropic sweep marker")?;
+        let Some(row) = row else { return Ok(None) };
+        let s: String = row
+            .try_get("last_seen_at")
+            .context("read anthropic sweep timestamp")?;
+        let dt = datalib_time::parse_strict(&s)
+            .with_context(|| format!("parse anthropic sweep timestamp {s:?}"))?
+            .inner()
+            .with_timezone(&chrono::Utc);
+        Ok(Some(chrono::Utc::now() - dt))
+    }
+
+    /// Stamp `key`'s sweep as completed at `now()`. Call only after the
+    /// sweep's rows have been written, so an interrupted sweep doesn't
+    /// poison the TTL check.
+    pub async fn record_sweep(&self, key: &str) -> Result<()> {
+        let scope = format!("anthropic:sweep:{key}");
+        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?) \
+             ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+        )
+        .bind(&scope)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .context("record anthropic sweep marker")?;
+        Ok(())
+    }
+
+    /// The `orgs` rows we already have, as raw payloads — what a warm
+    /// [`Self::sweep_age`] hit serves instead of re-listing upstream.
+    pub async fn load_orgs(&self) -> Result<Vec<Value>> {
+        dr::load_payloads(&self.pool, "orgs").await
+    }
+
     pub async fn load_users(&self) -> Result<Vec<Value>> {
         dr::load_payloads(&self.pool, "users").await
     }
@@ -273,5 +322,86 @@ mod tests {
             tx.commit().await.unwrap();
         }
         assert_eq!(db.first_user_uuid().await.unwrap(), Some("u1".into()));
+    }
+
+    /// A cold store has no marker, so `fetch` still makes the live
+    /// `/organizations` call — which is what keeps that call working as a
+    /// credential preflight on the run where a bad credential is likely.
+    #[tokio::test]
+    async fn sweep_age_is_none_before_any_sweep() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        assert!(
+            db.sweep_age("orgs").await.unwrap().is_none(),
+            "a store that never completed a sweep must report no marker"
+        );
+    }
+
+    /// After recording, the marker is fresh — so a warm store serves the
+    /// stored rows instead of re-listing.
+    #[tokio::test]
+    async fn recorded_sweep_is_fresh_and_serves_stored_orgs() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        {
+            let mut tx = db.pool().begin().await.unwrap();
+            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], NOW)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        db.record_sweep("orgs").await.unwrap();
+
+        let age = db
+            .sweep_age("orgs")
+            .await
+            .unwrap()
+            .expect("marker recorded");
+        assert!(
+            age < chrono::Duration::minutes(1),
+            "a just-recorded sweep should be seconds old, got {age}"
+        );
+        assert!(
+            age < super::super::ORGS_TTL,
+            "a just-recorded sweep must be inside the TTL"
+        );
+        assert_eq!(
+            db.load_orgs().await.unwrap().len(),
+            1,
+            "the warm path must be able to serve the stored orgs"
+        );
+    }
+
+    /// Re-recording moves the marker rather than inserting a second row —
+    /// the `ON CONFLICT` upsert. A duplicate would make `sweep_age`'s
+    /// single-row read arbitrary.
+    #[tokio::test]
+    async fn record_sweep_is_idempotent() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        db.record_sweep("orgs").await.unwrap();
+        db.record_sweep("orgs").await.unwrap();
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sync_scope_state WHERE scope = 'anthropic:sweep:orgs'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(n, 1, "expected exactly one marker row, got {n}");
+    }
+
+    /// The marker is namespaced per provider and per key, so it can share
+    /// `sync_scope_state` with slack's markers and with the real resume
+    /// cursors without collisions.
+    #[tokio::test]
+    async fn sweep_keys_are_namespaced() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        db.record_sweep("orgs").await.unwrap();
+        assert!(db.sweep_age("orgs").await.unwrap().is_some());
+        assert!(
+            db.sweep_age("something-else").await.unwrap().is_none(),
+            "an unrelated key must not see the orgs marker"
+        );
     }
 }

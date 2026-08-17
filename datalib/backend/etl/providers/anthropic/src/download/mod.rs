@@ -41,6 +41,13 @@ pub const DEFAULT_OVERLAP: usize = 3;
 const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
+/// How long a completed `/organizations` listing stays good. Matches
+/// slack's `MANIFEST_TTL`, and for the same reason: the org set is
+/// near-static, while the endpoint is the first thing claude.ai
+/// rate-limits. See the sweep comment in `fetch`.
+pub const ORGS_TTL: chrono::Duration = chrono::Duration::hours(6);
+const ORGS_SWEEP_KEY: &str = "orgs";
+
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
     /// Path to the doltlite database file. The entity db lives inside
@@ -151,11 +158,63 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // with setup instructions — instead of first emitting a
         // misleading account-fetch warning and then dying on a cryptic
         // curl error.
-        let orgs = client.list_orgs().await.map_err(credential_hint)?;
-        info!(event = "anthropic_orgs", count = orgs.len());
-        if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
-            warn!(event = "anthropic_orgs_upsert_failed", error = %e);
-        }
+        //
+        // But `/organizations` is also the endpoint claude.ai rate-limits
+        // first: hammering it (three pipeline runs per manual-e2e
+        // invocation, each re-listing an org set that changes maybe once a
+        // year) earns a 403 that fails the whole run. So reuse the stored
+        // rows while a completed sweep is younger than ORGS_TTL, mirroring
+        // slack's `conversations.list` / `users.list` markers.
+        //
+        // The preflight survives where it matters: a cold store has no
+        // marker, so a first run — the one where a missing registration or
+        // dead sessionKey is actually likely — still calls upstream and
+        // still fails loudly. Only a warm store, which has already proven
+        // the credential once, skips.
+        let cached_orgs = match db.sweep_age(ORGS_SWEEP_KEY).await {
+            Ok(Some(age)) if age < ORGS_TTL => match db.load_orgs().await {
+                // An empty `orgs` table with a fresh marker shouldn't
+                // silently yield zero orgs (that would skip every
+                // conversation); fall through to the live call.
+                Ok(orgs) if !orgs.is_empty() => {
+                    info!(
+                        event = "anthropic_orgs_skipped",
+                        reason = "ttl",
+                        age_s = age.num_seconds().max(0),
+                        ttl_s = ORGS_TTL.num_seconds(),
+                        count = orgs.len(),
+                    );
+                    Some(orgs)
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    warn!(event = "anthropic_orgs_load_failed", error = %e);
+                    None
+                }
+            },
+            Ok(_) => None,
+            Err(e) => {
+                warn!(event = "anthropic_orgs_sweep_age_failed", error = %e);
+                None
+            }
+        };
+
+        let orgs = match cached_orgs {
+            Some(orgs) => orgs,
+            None => {
+                let orgs = client.list_orgs().await.map_err(credential_hint)?;
+                info!(event = "anthropic_orgs", count = orgs.len());
+                if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
+                    warn!(event = "anthropic_orgs_upsert_failed", error = %e);
+                } else if let Err(e) = db.record_sweep(ORGS_SWEEP_KEY).await {
+                    // Only stamp the marker once the rows are actually
+                    // stored — otherwise a failed upsert would leave a
+                    // fresh marker pointing at an empty table.
+                    warn!(event = "anthropic_orgs_sweep_record_failed", error = %e);
+                }
+                orgs
+            }
+        };
 
         // users.json from the bulk export carries the account.uuid we
         // need on every conversation. If the DB doesn't have any user
