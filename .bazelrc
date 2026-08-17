@@ -180,6 +180,62 @@ build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
 # Get your key at https://imbue.buildbuddy.io/settings.
 try-import %workspace%/.bazelrc.user
 
+# `--config=ci` — turn silent staleness into a build failure. Applied by
+# both jobs in `test.yml`; NOT applied locally on purpose (see below).
+#
+# `MODULE.bazel.lock` records content hashes of its resolution inputs,
+# including `datalib/backend/Cargo.{toml,lock}`. Bumping the workspace
+# version invalidates them, and bazel's DEFAULT `--lockfile_mode=update`
+# then re-resolves and rewrites the file silently — never failing, never
+# printing anything a releaser would notice. The result is that the lock
+# only ever gets refreshed by accident:
+#
+#   fixed incidentally: 07282e94 (a toolchains_musl change),
+#                       73ae15e6 (a crate deletion)
+#   skipped by the bumps that actually invalidated it:
+#                       71c315d4, 786b628f, 75abc2a7, d5f2aa47
+#
+# Four consecutive release bumps shipped stale, and CI stayed green
+# throughout, because "silently re-resolve" is indistinguishable from
+# "nothing to do". `error` makes bazel refuse instead, naming the
+# extension and the offending input file:
+#
+#   ERROR: MODULE.bazel.lock is no longer up-to-date because an input to
+#   the extension '@@rules_rust+//crate_universe:extensions.bzl%crate'
+#   changed: file info or contents of @@//datalib/backend/Cargo.lock
+#   changed.
+#
+# It also stops real work being repeated: with a stale lock bazel cannot
+# replay the recorded extension results, so it re-runs the crate_universe
+# extension on every cold server — i.e. every CI run.
+#
+# Deliberately CI-only. Locally `update` is the friendlier default: you
+# change a dep, bazel fixes the lock, you commit it. Forcing `error` on
+# developers would fail the build before they had any chance to
+# regenerate, and the fix would be "run bazel again" — pure friction.
+# `test.yml` runs on `pull_request` AND `push: main`, so both routes into
+# main are covered, including release bumps that are pushed straight to
+# main without a PR.
+#
+# When this fails, regenerate without the config and commit the result:
+#
+#     bazel build --nobuild //...                 # note: no --config=ci
+#     git status --porcelain MODULE.bazel.lock    # expect it staged/committed
+#
+# One pass is enough for a plain dependency change. After a *version
+# bump* it is not — measured, not guessed: the crate_universe extension
+# also rewrites `datalib/backend/Cargo.lock` on pass 1, which
+# invalidates the hash it recorded in the same pass, so `--config=ci`
+# still fails afterwards. Pass 2 converges; pass 3 is a no-op. For
+# release bumps prefer the release skill's order instead
+# (`tools/repin_cargo.sh` settles Cargo.lock up front), which avoids the
+# two-pass dance entirely.
+#
+# Note that a failed `--config=ci` run does NOT rewrite the lock — it
+# aborts during module resolution — so a red CI job never leaves a
+# half-updated file behind.
+common:ci --lockfile_mode=error
+
 # Auto-apply per-OS `build:<os>` configs below based on the build host.
 common --enable_platform_specific_config
 
