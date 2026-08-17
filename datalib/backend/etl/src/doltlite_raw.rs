@@ -158,19 +158,28 @@ pub const COL_LAST_ERROR: &str = "last_error";
 /// NULL; the first fetch attempt updates them via
 /// [`record_object_attempt`].
 pub fn bookkeeping_ddl_for(table: &str) -> String {
-    // NB: `attempt_count` is deliberately `INTEGER NOT NULL` WITHOUT a
-    // `DEFAULT` clause. A column with ANY `DEFAULT <const>` triggers an
-    // O(n²) `dolt_commit` in doltlite v0.11.9 — committing a working set
-    // with a few hundred thousand rows in such a table takes minutes,
-    // and a million rows effectively never finishes. The minimal repro
-    // is a single `CREATE TABLE t (id TEXT PRIMARY KEY, a INTEGER
-    // DEFAULT 0)` + bulk insert + commit (≈1.3s at 40k, ~0s without the
-    // default; quadratic from there). The default was never load-bearing
-    // anyway: `bulk_upsert_bookkeeping` always binds `attempt_count = 1`
-    // explicitly on insert, so dropping `DEFAULT 0` is a semantic no-op.
-    // See the fsindex perf investigation (2026-06) and the upstream
-    // doltlite issue. DO NOT re-add a DEFAULT here without re-checking
-    // commit performance at scale.
+    // NB: `attempt_count` is `INTEGER NOT NULL` without a `DEFAULT`
+    // clause. This started as a workaround: a column with ANY
+    // `DEFAULT <const>` triggered an O(n²) `dolt_commit` in doltlite
+    // v0.11.9 — a few hundred thousand rows took minutes, a million
+    // effectively never finished (minimal repro: `CREATE TABLE t (id
+    // TEXT PRIMARY KEY, a INTEGER DEFAULT 0)` + bulk insert + commit,
+    // ≈1.3s at 40k, ~0s without the default, quadratic from there).
+    // See the fsindex perf investigation (2026-06).
+    //
+    // That bug is FIXED, and has been since v0.11.13 — i.e. it was
+    // already fixed in the version this workaround was written against
+    // (upstream dolthub/doltlite#1424 closed 2026-06-15; v0.11.13
+    // published a minute later). Re-running the same repro on both
+    // v0.11.13 and v0.11.50 measures a flat ~3-10ms commit through 80k
+    // rows with and without the default; quadratic would have predicted
+    // ~5s. There is no longer a performance reason to avoid `DEFAULT`
+    // here or in any other table.
+    //
+    // The shape stays as-is only because the default was never
+    // load-bearing: `bulk_upsert_bookkeeping` always binds
+    // `attempt_count = 1` explicitly on insert, so adding one back
+    // would be a semantic no-op rather than an improvement.
     //
     // `volatile_payload` holds the per-fetch *bookkeeping* fields split
     // out of the object table's content `payload` (see
@@ -179,8 +188,8 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     // this row had none), an object of the split-out fields otherwise.
     // Living on the sidecar keeps it out of the data diff, so churn in
     // fields like Slack's channel `updated` doesn't show up as a
-    // content change. As with the other columns: NO `DEFAULT` (the
-    // O(n²)-commit caveat above); writers bind it explicitly.
+    // content change. As with the other columns it carries no
+    // `DEFAULT`; writers bind it explicitly.
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
@@ -1032,7 +1041,8 @@ pub async fn ensure_object_row(
         .with_context(|| format!("ensure_object_row data {table}={id}"))?;
     // `attempt_count` is supplied explicitly (0) rather than via a
     // column DEFAULT: see [`bookkeeping_ddl_for`] for why the schema
-    // carries no `DEFAULT` clause (it makes `dolt_commit` O(n²)).
+    // carries no `DEFAULT` clause (a since-fixed doltlite bug, kept
+    // only because binding it explicitly is equivalent anyway).
     let bk_sql = format!(
         "INSERT INTO {table}_bookkeeping (id, attempt_count) VALUES (?, 0) ON CONFLICT(id) DO NOTHING"
     );

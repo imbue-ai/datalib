@@ -11,10 +11,12 @@ doltlite version during this work: **v0.11.9 → v0.11.12**.
 
 ## TL;DR — the load-bearing facts
 
-1. **A column `DEFAULT` clause makes `dolt_commit` O(n²).** This was the
-   single biggest gotcha; it made commits of ~100k+ rows take minutes
-   and a million effectively never finish. Fixed by removing the
-   `DEFAULT 0` from the bookkeeping schema; filed upstream as
+1. **A column `DEFAULT` clause made `dolt_commit` O(n²)** — *fixed
+   upstream in v0.11.13; no longer a constraint, see below.* This was
+   the single biggest gotcha at the time; it made commits of ~100k+
+   rows take minutes and a million effectively never finish. Worked
+   around by removing the `DEFAULT 0` from the bookkeeping schema;
+   filed upstream as
    [dolthub/doltlite#1424](https://github.com/dolthub/doltlite/issues/1424).
 2. **The path dominates the on-disk size**, and doltlite does not yet
    compress chunks, so a 60-char path costs ~181 B/row stored (~3×).
@@ -57,6 +59,18 @@ fsindex then dropped the bookkeeping sidecars entirely (below), so it
 sidesteps the bug regardless.
 
 Reported: [dolthub/doltlite#1424](https://github.com/dolthub/doltlite/issues/1424).
+
+**Resolved.** Upstream closed #1424 on 2026-06-15 and shipped the fix in
+v0.11.13 — published about a minute later, and the version this
+investigation's conclusions were adopted against, so the workaround was
+already unnecessary by the time it landed. Re-measured during the
+v0.11.50 bump (2026-08) by re-running the bisected repro above against
+both v0.11.13 and v0.11.50: commit time is flat at ~3-10ms through 80k
+rows, with and without the `DEFAULT`, where quadratic would have
+predicted ~5s at 80k. Nothing above needs to constrain new schemas —
+`DEFAULT` clauses are fine. The remaining points (path size, the
+two-table split, commit-before-gc, no secondary indexes) were not
+re-measured and still stand as written.
 
 ## 2. Where the bytes go (and why ~1 GB / 10M is hard today)
 
