@@ -46,10 +46,13 @@ private `data_liberation_manual_e2e_test_data` directory (outside this repo
 — it holds slightly sensitive personal data), but nothing in-tree currently
 runs against it.
 
-### Caveat: old copies are still in this repo's history
+### Note: the old in-repo copies have been purged from history
 
 This data used to live in-repo (`configs/thad_tiny.yaml` +
-`datalib/backend/sync/tests/snapshots/`). It was moved out and deleted from
-the working tree, but it's still recoverable from past commits. Before this
-repo is ever made public, expunge those paths from history with `git
-filter-repo` — see the note at the top of [`/TODO.md`](/TODO.md).
+`datalib/backend/sync/tests/snapshots/`). It left the working tree in
+26412853 and was later expunged from git history with `git filter-repo` —
+no reachable commit on `main` or `origin/main` contains either path. What
+remains before the repo is made public is server-side: GitHub still holds
+the pre-rewrite blobs as unreachable objects, and any collaborator who
+never re-cloned still has them locally. See the note at the top of
+[`/TODO.md`](/TODO.md).
