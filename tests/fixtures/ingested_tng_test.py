@@ -161,9 +161,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     def _providers(self) -> frozenset[str]:
         return frozenset(
-            self._query(
-                self._index_db, "SELECT DISTINCT provider FROM grid_rows;"
-            )
+            self._query(self._index_db, "SELECT DISTINCT provider FROM grid_rows;")
         )
 
     def _signal_cursor(self) -> list[str]:
@@ -260,9 +258,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
         )
-        self.assertEqual(
-            self._providers(), EXPECTED_PROVIDERS, "run 2 providers"
-        )
+        self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 2 providers")
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
         )
@@ -285,9 +281,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             shape1,
             "run 3 (--reset-and-redownload) must converge to the same index",
         )
-        self.assertEqual(
-            self._providers(), EXPECTED_PROVIDERS, "run 3 providers"
-        )
+        self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 3 providers")
         # The cursor is wiped mid-run, so by the end it must be back —
         # same snapshot, same fingerprint.
         self.assertEqual(
