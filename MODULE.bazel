@@ -54,6 +54,28 @@ http_archive(
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
+# The autoconf source tarball, for its pre-generated `shell.c` — the
+# sqlite3-shell entry point that `//third-party/doltlite:doltlite`
+# links against the amalgamation to get a CLI for tests.
+#
+# The amalgamation cannot supply this: it is library-only — two files,
+# no `main()` anywhere in `doltlite.c`. `shell.c` is generated from
+# `src/shell.c.in` by the upstream build, and this tarball is the only
+# release artifact shipping the generated result. We take exactly one
+# file out of it; the rest of the tarball is never compiled.
+#
+# MUST move in lockstep with `doltlite_amalgamation` above: `shell.c`
+# is generated against a specific doltlite version and reports it via
+# `-DDOLTLITE_VERSION`. `//third-party/doltlite:cli_version_test`
+# fails the build if the two pins drift.
+http_archive(
+    name = "doltlite_autoconf",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.50/doltlite-autoconf-0.11.50.tar.gz"],
+    sha256 = "4a33e89cd9e68a872ccdae15b6ff4f9d05aa9dbbf8414101ecda863935549380",
+    strip_prefix = "doltlite-autoconf-0.11.50",
+    build_file = "//third-party/doltlite:autoconf.BUILD",
+)
+
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.0.0")
 
