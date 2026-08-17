@@ -207,7 +207,7 @@ jobs:
           # skips the download (etag matches the unchanged HF release).
           # Standing CI accommodation — not a republish bridge: the image
           # bakes as root and GH always sets HOME=/github/home.
-          bazel test -c opt --config=release --nostamp --jobs=16 \
+          bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
             --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
