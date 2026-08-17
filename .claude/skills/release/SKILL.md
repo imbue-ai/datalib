@@ -61,13 +61,17 @@ published from a local machine — the tag is the trigger.
    it in the diff:
    `git status --porcelain MODULE.bazel.lock`. That file records content
    hashes of `datalib/backend/Cargo.{toml,lock}`, which steps 3–4 just
-   changed, so the bazel run above rewrites it. It is a ~360 KB diff
-   nobody reads and it falls straight through a targeted `git add` —
-   v0.27.0 (`d5f2aa47`) shipped without it, and every `bazel` run on main
-   since has produced a spurious dirty file for whoever built next.
-   Nothing breaks (`lockfile_mode` is unset, so bazel's default is to
-   refresh silently rather than fail), which is exactly why it goes
-   unnoticed. Stage it whenever that command prints anything.
+   changed, so the bazel run above rewrites it. Don't be alarmed by its
+   size: it is a **3-line** diff that prints as ~360 KB, because one of
+   those lines is a 17 KB single-line generated blob. That is also why it
+   falls straight through a targeted `git add` — the last four release
+   bumps (`d5f2aa47`, `75abc2a7`, `786b628f`, `71c315d4`) all shipped
+   without it, leaving the lock stuck on the v0.25.0 state until it was
+   refreshed wholesale. Nothing breaks when it's missed (`lockfile_mode`
+   is unset, so bazel's default is to re-resolve and rewrite silently
+   rather than fail) — which is exactly why four releases passed without
+   anyone noticing, and why this is a step rather than a test. Stage it
+   whenever that command prints anything.
 7. Commit as `chore(release): bump version X.Y.Z → X.Y'.Z'` with a
    short summary of what the release carries (see commits `835946a9`
    and `c05fa424` for the shape). Expected files: `Cargo.toml`,
