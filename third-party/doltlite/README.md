@@ -65,8 +65,20 @@ In normal day-to-day edits to Rust code, none of these actions re-run.
 4. Update `urls` + `sha256` + `strip_prefix` in `MODULE.bazel`'s
    `http_archive(name = "doltlite_amalgamation", ...)`.
 5. Bump `DOLTLITE_VERSION` in `BUILD.bazel`'s `copts`.
-6. `bazelisk build //...` — Bazel re-downloads, recompiles, and feeds
+6. Bump `DOLTLITE_CLI_VERSION` in `datalib/docker/Dockerfile` to match —
+   that's the debug-shell CLI `.deb`, pinned to the same version on
+   purpose so the SQL surface in the shell matches the linked library.
+   It's a separate pin and drifts silently if you forget it.
+7. `bazelisk build //...` — Bazel re-downloads, recompiles, and feeds
    the new archive into every downstream binary.
+
+Before bumping, check whether the chunk-store format moved: grep
+`CHUNK_STORE_VERSION` in the old and new `doltlite.c`. The open path
+hard-rejects any mismatch (`SQLITE_NOTADB`, "written by an incompatible
+doltlite version") with no migration path, so a bump there orphans every
+existing `.doltlite_db` on disk rather than merely needing a rebuild.
+It has been `12` from 0.11.13 through 0.11.50; 0.11.40 froze 12 as the
+beta compatibility boundary.
 
 No code or wiring changes needed unless the doltlite public API shifts
 (it's a SQLite fork, so it shouldn't).
