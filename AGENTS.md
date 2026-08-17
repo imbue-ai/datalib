@@ -71,6 +71,45 @@ are relative to the repo root.
 point-in-time plans and audits (each with an "Archived" banner). Don't
 treat them as current reference.
 
+## Prose can be stale — verify claims against the tree
+
+The docs above, `TODO.md`, and this repo's commit messages are unusually
+detailed and well-argued. That is exactly what makes a wrong one
+dangerous: a well-reasoned paragraph reads as evidence, so an incorrect
+claim tends to get repeated rather than checked.
+
+**Before reporting any "we now do X" or "X still needs doing" claim as
+current fact, verify it against the tree or the diff.** The checks are
+cheap:
+
+```sh
+git show --stat <sha>                    # did that commit touch what its message says?
+git log --diff-filter=A -- <path>        # was this file ever actually added?
+grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
+```
+
+Two confirmed instances, both found 2026-08-17:
+
+- `TODO.md` led with "expunge the manual-e2e test data from git HISTORY"
+  as a pending pre-open-sourcing blocker. The purge had already been done.
+  `git filter-repo` preserves commit messages and the working tree, so the
+  instruction outlived its own completion — and `docs/dev/testing.md`
+  carried a second copy citing `TODO.md` as its source (#112, #120).
+- `b27039d0` states it gave a toothless slack test teeth with a "poison
+  fixture". Its diff touches 20 files, none of them the test file, and the
+  comment the message itself calls out as false is still there verbatim
+  (#123).
+
+**Test-quality claims are the highest-risk category**, because a false one
+is self-concealing: if a test cannot fail, nothing downstream will ever
+reveal that the claim was wrong. Treat "now covered by a test" as
+unverified until you have read the assertion — and for a test whose job is
+to catch a silent no-op, until you have watched it fail against the broken
+behavior.
+
+When prose and the tree disagree, the tree wins. Fix the prose in the same
+change.
+
 ## Repo layout
 
 ```
