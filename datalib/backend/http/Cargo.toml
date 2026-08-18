@@ -32,7 +32,6 @@ rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-pat
 serde = { workspace = true }
 webbrowser = "1"
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 sha2 = "0.10"
 anyhow = { workspace = true }
 axum = { workspace = true }

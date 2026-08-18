@@ -29,11 +29,9 @@ async fn post_feedback_inserts_row() {
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let pool = dolt.pool().clone();
-    let config_path = Arc::new(root.join("config.yaml"));
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
     let app_state = AppState {
         root,
-        config_path,
         repo: Arc::new(dolt),
         qmd_daemon,
         progress_tx: tokio::sync::broadcast::channel(16).0,

@@ -16,7 +16,7 @@
 //     alias, and either show the instructions or — once the user has
 //     opted out of them — copy the wayfinder straight to the clipboard.
 //   - config (the 🤖 button on the Manage tab's config editor): same
-//     shape as modify, but the wayfinder targets `<root>/config.yaml`
+//     shape as modify, but the wayfinder targets `<root>/config.toml`
 //     through GET/PUT /api/config instead of a component alias.
 //
 // As the agent re-saves the alias, the card live-reloads (see
@@ -106,10 +106,12 @@ function configWayfinder(configPath: string): string {
     ``,
     `Read the guide first: ${origin}/agent/config.md`,
     ``,
+    `The config is TOML — an array of [[steps]] tables.`,
+    ``,
     `Fetch the current config:`,
-    `  GET ${origin}/api/config   → {"yaml": "<current text>", …}`,
+    `  GET ${origin}/api/config   → {"text": "<current text>", …}`,
     `Save the modified config with:`,
-    `  PUT ${origin}/api/config   (JSON body {"yaml": "<full new text>"})`,
+    `  PUT ${origin}/api/config   (JSON body {"text": "<full new text>"})`,
     ``,
     `PUT validates with the real config loader before writing anything;`,
     `an invalid config comes back as {"ok": false, "error": "…"} and the`,
@@ -118,7 +120,7 @@ function configWayfinder(configPath: string): string {
     `the PUT so validation runs. The user's editor reloads automatically`,
     `after every successful save.`,
     ``,
-    `A step's \`command:\` can run any program, including new ones you`,
+    `A step's \`command\` can run any program, including new ones you`,
     `write. Install such a program (binary or symlink) into`,
     `~/.datalib/bin — that dir is prepended to PATH when the pipeline`,
     `runs. Details in the guide.`,

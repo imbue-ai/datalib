@@ -37,15 +37,16 @@
 //!   export (Google "Export contacts", Fastmail bulk export, etc.)
 //!   on disk and point a render-only source at it:
 //!
-//!   ```yaml
-//!   - name: contacts
-//!     source:
-//!       type: carddav
-//!       common:
-//!         input_path: ~/Downloads/contacts.vcf
+//!   ```toml
+//!   [[steps]]
+//!   id = "contacts.download"
+//!   command = "datalib-step download carddav"
+//!   outputs = ["contacts/raw"]
+//!   [steps.params.common]
+//!   input_path = "~/Downloads/contacts.vcf"
 //!   ```
 //!
-//!   No `sync:` block ⇒ download is skipped; the render path
+//!   No `sync` block ⇒ download is skipped; the render path
 //!   reads the file directly. See
 //!   [`render::parse`] for the directory-vs-file + multi-block
 //!   semantics.

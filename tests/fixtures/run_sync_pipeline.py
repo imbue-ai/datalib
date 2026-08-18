@@ -211,11 +211,11 @@ def main() -> int:
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
-        # Per-phase params, verbatim JSON (valid YAML). The source name
+        # Per-phase params, as a TOML inline table. The source name
         # isn't in either — each step derives it from its first
         # declared output. Download gets the provider config subtree;
         # render gets only the render-side knobs (most sources: none).
-        params = json.dumps(
+        params = _toml_value(
             _source_config(
                 type_str,
                 extract_input,
@@ -227,26 +227,32 @@ def main() -> int:
         )
         render_params = _render_config(type_str)
         render_params_line = (
-            f"\n    params: {json.dumps(render_params)}" if render_params else ""
+            f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
         steps.append(
-            f"""  - id: {name}.download
-    command: datalib-step download {type_str}
-    outputs: [{name}/raw]
-    params: {params}
-  - id: {name}.render
-    command: datalib-step render {type_str}
-    inputs: [{name}/raw]
-    outputs: [{name}/rendered_md]{render_params_line}"""
+            f"""[[steps]]
+id = "{name}.download"
+command = "datalib-step download {type_str}"
+outputs = ["{name}/raw"]
+params = {params}
+
+[[steps]]
+id = "{name}.render"
+command = "datalib-step render {type_str}"
+inputs = ["{name}/raw"]
+outputs = ["{name}/rendered_md"]{render_params_line}"""
         )
     steps.append(
-        """  - id: grid_index
-    command: datalib-step grid_index
-    inputs: ["**/rendered_md"]
-    outputs: [system/backend_index]"""
+        """[[steps]]
+id = "grid_index"
+command = "datalib-step grid_index"
+inputs = ["**/rendered_md"]
+outputs = ["system/backend_index"]"""
     )
-    dag_yaml = workspace / "dag.yaml"
-    dag_yaml.write_text(f"data_root: {workspace}\nsteps:\n" + "\n".join(steps) + "\n")
+    dag_config = workspace / "dag.toml"
+    dag_config.write_text(
+        f"data_root = {_toml_value(str(workspace))}\n\n" + "\n\n".join(steps) + "\n"
+    )
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
@@ -279,7 +285,7 @@ def main() -> int:
     }
     pipeline_argv = [
         str(dag_bin),
-        str(dag_yaml),
+        str(dag_config),
         "--binary-dir",
         str(bindir),
         "--now",
@@ -293,6 +299,34 @@ def main() -> int:
         pipeline_argv.append("--reset-and-redownload")
     _run(pipeline_argv, env=pipeline_env)
     return 0
+
+
+def _toml_value(v: object) -> str:
+    """Serialize a JSON-shaped value as a single-line TOML value.
+
+    The params blobs here are plain dict/list/str/bool/int/float trees
+    (they came from JSON), so an inline table is enough and keeps each
+    step to one `params = …` line. Python ships a TOML *reader*
+    (tomllib) but no writer, and this is not worth a third-party dep.
+    Note JSON is not TOML: object keys need bare/quoted-key syntax and
+    `=` rather than `:`, and there is no null.
+    """
+    if isinstance(v, bool):
+        # Before int — bool is a subclass of int.
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v)  # TOML basic strings escape like JSON's
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return (
+            "{"
+            + ", ".join(f"{json.dumps(k)} = {_toml_value(x)}" for k, x in v.items())
+            + "}"
+        )
+    raise TypeError(f"no TOML spelling for {type(v).__name__}: {v!r}")
 
 
 def _source_config(

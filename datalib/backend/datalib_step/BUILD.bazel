@@ -5,8 +5,8 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 # type: download / render / grid_index / qmd_index, each honoring the DAG step
 # contract (NDJSON events on stdout, final outcome line).
 #
-# Bazel-only (like sync): it links datalib_ingest_config and the
-# provider crates, which have no cargo counterpart.
+# Bazel-only: it links the provider crates, which have no cargo
+# counterpart.
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),

@@ -1,26 +1,32 @@
 //! Parse-and-validate the checked-in example configs under
-//! `docs/user/config_examples/`, which are in the DAG steps format.
+//! `docs/user/config_examples/`, which are in the current TOML steps
+//! format.
+//!
+//! This test lives in the migration crate for one reason: `SourceConfig`
+//! does. The stanza envelope around it is retired, but its `type:`-tagged
+//! union is still the only mapping from a source type string to that
+//! provider's config schema — which is exactly what layer 2 below needs.
 //!
 //! Three layers of validation:
 //!
 //! 1. Each file loads as a `DagConfig` and builds a valid `Graph` —
 //!    the same `load → to_specs → Graph::build` chain the runner uses,
 //!    so cycle / output-ownership / bad-command errors are caught, not
-//!    just YAML syntax.
-//! 2. Every `datalib-step download <type>` step's `params:` round-trip
+//!    just TOML syntax.
+//! 2. Every `datalib-step download <type>` step's `params` round-trip
 //!    into `SourceConfig` (the subcommand's type re-injected as the
 //!    serde tag), which is `deny_unknown_fields` — this test fails the
 //!    moment a documented knob drifts from the real schema: a
-//!    misspelled field, a renamed `type:`, or a removed source variant.
-//! 3. Every `datalib-step render <type>` step carrying `params:`
+//!    misspelled field, a renamed `type`, or a removed source variant.
+//! 3. Every `datalib-step render <type>` step carrying `params`
 //!    deserializes into that provider's `<P>RenderConfig` (also
 //!    `deny_unknown_fields`).
 //!
-//! `all_sources.yaml` is the important one: it enumerates every source
+//! `all_sources.toml` is the important one: it enumerates every source
 //! `type` plus both input modes for `email` and `carddav`, so this test
 //! doubles as a "did someone add a source without documenting it?" nudge.
 
-use datalib_ingest_config::SourceConfig;
+use datalib_migrate_config::legacy_stanza::SourceConfig;
 
 /// Resolve a `docs/user/config_examples/<name>` file from the test's runfiles
 /// tree (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles
@@ -50,26 +56,26 @@ fn step_phase_and_type(command: &str) -> Option<(&str, &str)> {
 }
 
 /// Rebuild the value `datalib-step download <ty>` deserializes: the
-/// step's `params:` mapping with the subcommand's type re-injected as
-/// the `type:` tag `SourceConfig` discriminates on.
-fn params_with_type(ty: &str, params: Option<&serde_yaml::Value>) -> serde_yaml::Value {
-    let mut m = serde_yaml::Mapping::new();
+/// step's `params` table with the subcommand's type re-injected as
+/// the `type` tag `SourceConfig` discriminates on.
+fn params_with_type(ty: &str, params: Option<&toml::Value>) -> toml::Value {
+    let mut m = toml::Table::new();
     m.insert("type".into(), ty.into());
-    if let Some(serde_yaml::Value::Mapping(p)) = params {
+    if let Some(toml::Value::Table(p)) = params {
         for (k, v) in p {
             m.insert(k.clone(), v.clone());
         }
     }
-    serde_yaml::Value::Mapping(m)
+    toml::Value::Table(m)
 }
 
-/// Validate a render step's `params:` against the provider's
+/// Validate a render step's `params` against the provider's
 /// `<P>RenderConfig`. Only the types the examples actually give render
 /// params to are matched; a new one panics with a pointer here.
-fn validate_render_params(file: &str, id: &str, ty: &str, params: &serde_yaml::Value) {
+fn validate_render_params(file: &str, id: &str, ty: &str, params: &toml::Value) {
     macro_rules! check {
         ($t:ty) => {{
-            let _: $t = serde_yaml::from_value(params.clone()).unwrap_or_else(|e| {
+            let _: $t = params.clone().try_into().unwrap_or_else(|e| {
                 panic!(
                     "{file}: step {id}: render params don't match {}: {e}",
                     stringify!($t)
@@ -108,7 +114,7 @@ fn validate_config(name: &str, path: &std::path::Path) {
         match phase {
             "download" => {
                 let v = params_with_type(ty, step.params.as_ref());
-                let _: SourceConfig = serde_yaml::from_value(v).unwrap_or_else(|e| {
+                let _: SourceConfig = v.try_into().unwrap_or_else(|e| {
                     panic!(
                         "{name}: step {}: download params don't match the \
                          {ty} config schema: {e}",
@@ -128,7 +134,7 @@ fn validate_config(name: &str, path: &std::path::Path) {
 
 #[test]
 fn example_configs_parse_and_validate() {
-    for name in ["sample_config.yaml", "claude_only.yaml", "all_sources.yaml"] {
+    for name in ["sample_config.toml", "claude_only.toml", "all_sources.toml"] {
         validate_config(name, &example_config(name));
     }
 }
@@ -144,7 +150,7 @@ fn example_configs_parse_and_validate() {
 /// re-bake:
 ///
 /// ```sh
-/// bazel test //datalib/backend/ingest_config:config_examples_test \
+/// bazel test //datalib/backend/migrate_config:config_examples_test \
 ///     --test_arg=--ignored --test_env=DATALIB_MANUAL_E2E_DIR --test_output=all
 /// ```
 #[test]
@@ -152,13 +158,15 @@ fn example_configs_parse_and_validate() {
 fn manual_e2e_config_parses_and_validates() {
     let dir = std::env::var("DATALIB_MANUAL_E2E_DIR").expect(
         "set DATALIB_MANUAL_E2E_DIR to the private manual-e2e data dir \
-         (the one holding dag.yaml + sources/ + snapshots/)",
+         (the one holding dag.toml + sources/ + snapshots/)",
     );
-    let path = std::path::PathBuf::from(dir).join("dag.yaml");
+    let path = std::path::PathBuf::from(dir).join("dag.toml");
     assert!(
         path.exists(),
-        "missing {} — expected the DAG-format config in the manual-e2e data dir",
+        "missing {} — expected the DAG-format config in the manual-e2e data dir. \
+         If that dir still holds a pre-TOML dag.yaml, convert it once: \
+         `datalib-migrate-config <dir>/dag.yaml -o <dir>/dag.toml`",
         path.display()
     );
-    validate_config("dag.yaml", &path);
+    validate_config("dag.toml", &path);
 }

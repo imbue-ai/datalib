@@ -12,7 +12,7 @@
 //! open-sourced. That dir holds:
 //!
 //!   <DATALIB_MANUAL_E2E_DIR>/
-//!     dag.yaml             ← the pipeline config (file sources point at sources/)
+//!     dag.toml             ← the pipeline config (file sources point at sources/)
 //!     sources/             ← LinkedIn / Takeout / SMS … export data
 //!     snapshots/           ← the golden .snap tree (below)
 //!
@@ -53,7 +53,7 @@
 //!     therefore reads `sync_runs` per stanza rather than one aggregate file —
 //!     see [`incrementality_report`]. Same signal, correct grain.
 //!
-//! Spawns the runner against that `dag.yaml` (with two test-only tweaks:
+//! Spawns the runner against that `dag.toml` (with two test-only tweaks:
 //! per-run `data_root` and slack `refresh_window_days=30`), hitting real
 //! provider APIs through `latchkey curl`. Then snapshots the produced data
 //! tree, one `.snap` per file under `<DATALIB_MANUAL_E2E_DIR>/snapshots/`,
@@ -354,7 +354,7 @@ const REDACTED: &str = "[redacted]";
 /// about extract correctness.
 const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "events"];
 
-/// External, out-of-repo home for this manual test's `config.yaml`, the
+/// External, out-of-repo home for this manual test's `config.toml`, the
 /// file-based `sources/`, and the golden `snapshots/`. Kept outside the repo
 /// so the (slightly sensitive) source data is never shared when the repo is
 /// open-sourced; versioned separately in a private repo. `manual_e2e_run.sh`
@@ -505,15 +505,15 @@ fn manual_e2e_live_sync_golden() {
         Err(_) => e2e_dir()
             .expect(
                 "set DATALIB_MANUAL_E2E_DIR to the external test-data dir \
-                 (holding dag.yaml + sources/ + snapshots/), or set \
+                 (holding dag.toml + sources/ + snapshots/), or set \
                  DATALIB_TEST_CONFIG to a config explicitly",
             )
-            .join("dag.yaml"),
+            .join("dag.toml"),
     };
     assert!(
         src_config.exists(),
         "missing {}. Point DATALIB_MANUAL_E2E_DIR at the external test-data \
-         dir (holding dag.yaml + sources/ + snapshots/), or set \
+         dir (holding dag.toml + sources/ + snapshots/), or set \
          DATALIB_TEST_CONFIG to a config explicitly.",
         src_config.display()
     );
@@ -531,7 +531,7 @@ fn manual_e2e_live_sync_golden() {
     DATA_ROOT.set(data_root.to_string_lossy().into_owned()).ok();
 
     let cfg_out = rewrite_config(&cfg_text, &data_root);
-    let cfg_path = run_root.join("config.yaml");
+    let cfg_path = run_root.join("config.toml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
     let bin = dag_binary();
@@ -1309,9 +1309,9 @@ fn summarize_file(path: &Path) -> SnapValue {
     }
 }
 
-/// Patch the DAG YAML with the two test-only tweaks: point `data_root` at this
-/// run's directory, and bump slack `refresh_window_days` so a fresh data_root
-/// re-downloads media.
+/// Patch the DAG config with the two test-only tweaks: point `data_root` at
+/// this run's directory, and bump slack `refresh_window_days` so a fresh
+/// data_root re-downloads media.
 ///
 /// The pre-DAG version also forced `qmd.skip=true`; in the steps format that
 /// is expressed by the config simply not declaring a `qmd_index` step, so
@@ -1320,28 +1320,27 @@ fn summarize_file(path: &Path) -> SnapValue {
 /// byte sizes and a relative "updated N seconds ago").
 ///
 /// Slack's knob is reached by *step id* (`<stanza>.download` whose command is
-/// `datalib-step download slack_api`), not by a `type:` field — in the steps
-/// format the provider type lives in the `command:` string.
+/// `datalib-step download slack_api`), not by a `type` field — in the steps
+/// format the provider type lives in the `command` string.
 fn rewrite_config(text: &str, data_root: &Path) -> String {
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(text).expect("parse config yaml");
-    let map = doc.as_mapping_mut().expect("config root mapping");
-    map.insert(
-        serde_yaml::Value::String("data_root".into()),
-        serde_yaml::Value::String(data_root.display().to_string()),
+    let mut doc: toml::Table = toml::from_str(text).expect("parse config toml");
+    doc.insert(
+        "data_root".into(),
+        toml::Value::String(data_root.display().to_string()),
     );
 
-    let steps = map
-        .get_mut(serde_yaml::Value::String("steps".into()))
-        .and_then(|v| v.as_sequence_mut())
-        .expect("config must have a `steps:` sequence (DAG format)");
+    let steps = doc
+        .get_mut("steps")
+        .and_then(|v| v.as_array_mut())
+        .expect("config must have a `[[steps]]` array (DAG format)");
 
     let mut patched_slack = 0usize;
     for step in steps.iter_mut() {
-        let Some(m) = step.as_mapping_mut() else {
+        let Some(m) = step.as_table_mut() else {
             continue;
         };
         let command = m
-            .get(serde_yaml::Value::String("command".into()))
+            .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -1354,19 +1353,16 @@ fn rewrite_config(text: &str, data_root: &Path) -> String {
             continue;
         }
         let params = m
-            .entry(serde_yaml::Value::String("params".into()))
-            .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
-        let Some(params_map) = params.as_mapping_mut() else {
+            .entry("params")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let Some(params_map) = params.as_table_mut() else {
             continue;
         };
         let sync_entry = params_map
-            .entry(serde_yaml::Value::String("sync".into()))
-            .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
-        if let Some(sync_map) = sync_entry.as_mapping_mut() {
-            sync_map.insert(
-                serde_yaml::Value::String("refresh_window_days".into()),
-                serde_yaml::Value::Number(30.into()),
-            );
+            .entry("sync")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let Some(sync_map) = sync_entry.as_table_mut() {
+            sync_map.insert("refresh_window_days".into(), toml::Value::Integer(30));
             patched_slack += 1;
         }
     }
@@ -1382,7 +1378,7 @@ fn rewrite_config(text: &str, data_root: &Path) -> String {
         );
     }
 
-    serde_yaml::to_string(&doc).expect("serialize yaml")
+    toml::to_string(&doc).expect("serialize toml")
 }
 
 /// Replace `run-<timestamp>` segments in a path with `run-_` so per-run

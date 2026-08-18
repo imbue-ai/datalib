@@ -19,7 +19,7 @@ serde = { workspace = true }
 # transitively.
 shlex = "1"
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+toml = { workspace = true }
 thiserror = { workspace = true }
 # Workspace tokio lacks `process`/`sync`/`time`/`fs`; features are
 # additive so we add what the scheduler + subprocess runner need.

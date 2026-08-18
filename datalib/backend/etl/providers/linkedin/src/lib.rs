@@ -11,15 +11,15 @@
 //! `connections` table into first-class contacts via the shared contact
 //! renderer.
 //!
-//! Wired into the config-driven `sync` orchestrator as the `linkedin`
-//! source type:
+//! Wired into the pipeline as the `linkedin` source type:
 //!
-//! ```yaml
-//! - name: linkedin
-//!   source:
-//!     type: linkedin
-//!     common:
-//!       input_path: ~/backups/Basic_LinkedInDataExport_06-16-2026
+//! ```toml
+//! [[steps]]
+//! id = "linkedin.download"
+//! command = "datalib-step download linkedin"
+//! outputs = ["linkedin/raw"]
+//! [steps.params.common]
+//! input_path = "~/backups/Basic_LinkedInDataExport_06-16-2026"
 //! ```
 
 pub mod connections;

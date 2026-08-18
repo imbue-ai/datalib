@@ -2,13 +2,14 @@ use std::fs;
 use std::path::Path;
 
 /// Everything `bundle.resources` expects under `binaries/`, staged at
-/// `tauri build` time: the first three by the config's
+/// `tauri build` time: all but the last by the config's
 /// beforeBuildCommand (copied from Bazel output), the `latchkey`
 /// wrapper by stage-runtime.sh (installed from latchkey-wrapper.sh).
 const STAGED_BINARIES: &[&str] = &[
     "binaries/datalib-http",
     "binaries/datalib-dag",
     "binaries/datalib-step",
+    "binaries/datalib-migrate-config",
     "binaries/latchkey-curl-dispatch",
     "binaries/latchkey-curl-impersonate",
     "binaries/latchkey",

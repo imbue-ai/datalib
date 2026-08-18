@@ -70,9 +70,13 @@ filegroup(
         # `datalib-http <data_root>` is the user-facing invocation.
         "//datalib/backend/http:datalib_http_bin",
         # The DAG runner + step host, spawned by http's sync worker (and
-        # invocable standalone against a data root's config.yaml).
+        # invocable standalone against a data root's config.toml).
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
+        # One-shot converter from a pre-TOML `config.yaml`. Ships so an
+        # upgrading user can actually run it; nothing else invokes it,
+        # and it is the only shipped binary that links a YAML parser.
+        "//datalib/backend/migrate_config:datalib_migrate_config_bin",
     ],
     visibility = ["//visibility:public"],
 )

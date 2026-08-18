@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
             index_path.display()
         );
     }
-    eprintln!("config: {}", state.config_path.display());
+    eprintln!("config: {}", state.config_path().display());
 
     axum::serve(listener, router(state)).await?;
     Ok(())

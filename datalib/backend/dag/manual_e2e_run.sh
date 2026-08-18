@@ -8,7 +8,7 @@
 #   ./manual_e2e_run.sh --config   # validate the config only (offline, no creds)
 #
 # This script lives in the code repo (it's code). The test's *data* — the
-# dag.yaml, the file-based sources/, and the golden snapshots/ — lives in a
+# dag.toml, the file-based sources/, and the golden snapshots/ — lives in a
 # SEPARATE private repo (it's slightly sensitive, so it's never committed here),
 # located at $DATALIB_MANUAL_E2E_DIR. That dir defaults to the canonical
 # checkout below; export the var yourself to point at a different copy.
@@ -18,7 +18,7 @@
 # you — see the block below for why that is not optional.
 set -euo pipefail
 
-# External private data dir (dag.yaml + sources/ + snapshots/). Honor an
+# External private data dir (dag.toml + sources/ + snapshots/). Honor an
 # existing export; else use the canonical checkout location.
 #
 # One spelling only. The pre-rename FRANKWEILER_MANUAL_E2E_DIR is deliberately
@@ -37,9 +37,10 @@ if [[ ! -d "$DATALIB_MANUAL_E2E_DIR" ]]; then
   echo "       clone the private test-data repo there, or export the var to point at it." >&2
   exit 1
 fi
-if [[ ! -f "$DATALIB_MANUAL_E2E_DIR/dag.yaml" ]]; then
-  echo "error: no dag.yaml in $DATALIB_MANUAL_E2E_DIR" >&2
-  echo "       that dir must hold the DAG-format config (dag.yaml), sources/, and snapshots/." >&2
+if [[ ! -f "$DATALIB_MANUAL_E2E_DIR/dag.toml" ]]; then
+  echo "error: no dag.toml in $DATALIB_MANUAL_E2E_DIR" >&2
+  echo "       that dir must hold the DAG-format config (dag.toml), sources/, and snapshots/." >&2
+  echo "       Pre-TOML dir? Convert once: datalib-migrate-config \"$DATALIB_MANUAL_E2E_DIR/dag.yaml\" -o \"$DATALIB_MANUAL_E2E_DIR/dag.toml\"" >&2
   exit 1
 fi
 

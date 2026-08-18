@@ -1,37 +1,57 @@
-//! The DAG config file — the new-format replacement for the old
-//! stanza-based `config.yaml`. The user declares the steps directly;
-//! edges are still derived from artifact-path overlap, never written
-//! by hand.
+//! The DAG config file, `config.toml` — the format that replaced the
+//! old stanza-based `sources:` config. The user declares the steps
+//! directly; edges are still derived from artifact-path overlap, never
+//! written by hand.
 //!
-//! ```yaml
-//! data_root: ~/datalib-data     # default: the config file's dir
-//! binary_dir: /opt/datalib/bin  # optional: prepended to PATH
-//! steps:
-//!   - id: slack.download
-//!     command: datalib-step download slack_api
-//!     outputs: [slack/raw]
-//!     params:                       # the provider's own config subtree
-//!       sync: {channels: [chat-qi]}
-//!   - id: grid_index
-//!     command: datalib-step grid_index
-//!     inputs: ["**/rendered_md"]
-//!     outputs: [system/backend_index]
-//!   - id: custom
-//!     command: my-exporter --flag   # any executable on PATH
-//!     outputs: [custom/out]
+//! ```toml
+//! data_root = "~/datalib-data"     # default: the config file's dir
+//! binary_dir = "/opt/datalib/bin"  # optional: prepended to PATH
+//!
+//! [[steps]]
+//! id = "slack.download"
+//! command = "datalib-step download slack_api"
+//! outputs = ["slack/raw"]
+//! # `params` is the provider's own config subtree. As a sub-table it
+//! # must come after this step's plain keys — a TOML header ends the
+//! # table it appears in.
+//! [steps.params.sync]
+//! channels = ["chat-qi"]
+//!
+//! [[steps]]
+//! id = "grid_index"
+//! command = "datalib-step grid_index"
+//! inputs = ["**/rendered_md"]
+//! outputs = ["system/backend_index"]
+//!
+//! [[steps]]
+//! id = "custom"
+//! command = "my-exporter --flag"   # any executable on PATH
+//! outputs = ["custom/out"]
 //! ```
 //!
-//! A step body is a `command:` — a single string split shell-style
+//! Note that top-level `data_root` / `binary_dir` must be written
+//! *above* the first `[[steps]]`, since everything after a table
+//! header belongs to that table.
+//!
+//! A step body is a `command` — a single string split shell-style
 //! (quotes and backslash escapes, but no variable expansion or
 //! globbing; wrap in `sh -c '…'` for real shell). The declared
 //! `params` / `inputs` / `outputs` are appended to the argv as
 //! `--params JSON` / `--inputs JSON` / `--outputs JSON`, each only
-//! when present, so the command needs no YAML parser and the argv
+//! when present, so the command needs no TOML parser and the argv
 //! stays reproducible. Any executable that understands those flags
 //! (and optionally the NDJSON stdout protocol) can be a step — see
-//! docs/dev/step_protocol.md. YAML anchors (`&slack` / `*slack`)
-//! remain handy for sharing one params subtree between a download and
-//! render step pair.
+//! docs/dev/step_protocol.md.
+//!
+//! TOML has no anchors, so a params subtree shared between a download
+//! and a render step is written out twice. In practice the two halves
+//! want different knobs anyway, so this is rarely the duplication it
+//! looks like.
+//!
+//! This is the *only* config format the runner accepts. Data roots
+//! written before the TOML switch are converted once, out of band, by
+//! the separate `datalib-migrate-config` program — which is where every
+//! legacy schema and the last YAML parser live.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -77,18 +97,33 @@ pub struct StepEntry {
     /// Arbitrary step parameters, forwarded verbatim as JSON via
     /// `--params`.
     #[serde(default)]
-    pub params: Option<serde_yaml::Value>,
+    pub params: Option<toml::Value>,
     /// Extra environment for the child process.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+}
+
+/// The config file inside a data root: `<data_root>/config.toml`. The
+/// app reads and writes only this, which is what makes a data root
+/// self-contained.
+pub fn root_config_path(data_root: &Path) -> PathBuf {
+    data_root.join(CONFIG_FILE_NAME)
+}
+
+/// The canonical config filename.
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// Parse config text. Errors carry TOML's own line/column, which is
+/// what the UI surfaces in its editor.
+pub fn parse(text: &str) -> Result<DagConfig> {
+    toml::from_str(text).map_err(Into::into)
 }
 
 /// Load + resolve a config file. `data_root` defaults to the config
 /// file's directory and gets `~` expanded.
 pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let cfg: DagConfig =
-        serde_yaml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    let cfg = parse(&text).with_context(|| format!("parse {}", path.display()))?;
     let data_root = match &cfg.data_root {
         Some(p) => expand_tilde(p),
         None => {
@@ -118,10 +153,7 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
             bail!("step {:?}: empty command", e.id);
         }
         if let Some(params) = &e.params {
-            // YAML → canonical JSON. serde_yaml::Value serializes
-            // directly; non-string map keys (which JSON can't express)
-            // error out here rather than in the child.
-            let json = serde_json::to_string(params)
+            let json = serde_json::to_string(&params_to_json(params, &e.id)?)
                 .with_context(|| format!("step {:?}: params → JSON", e.id))?;
             argv.push("--params".to_string());
             argv.push(json);
@@ -152,6 +184,45 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
         specs.push(spec);
     }
     Ok(specs)
+}
+
+/// A step's `params` subtree as the JSON the child gets on `--params`.
+///
+/// Serializing `toml::Value` straight through serde would be wrong:
+/// TOML's date/time types have no JSON counterpart, and the `toml`
+/// crate smuggles them past a non-TOML serializer as a one-key map
+/// (`{"$__toml_private_datetime": …}`), which is what the step would
+/// then try to deserialize. So walk the tree and render every datetime
+/// as its RFC-3339-ish string — `since = 2026-06-15` and
+/// `since = "2026-06-15"` reach the step identically, which is what a
+/// user writing either one expects.
+fn params_to_json(v: &toml::Value, step: &str) -> Result<serde_json::Value> {
+    use serde_json::Value as J;
+    Ok(match v {
+        toml::Value::String(s) => J::String(s.clone()),
+        toml::Value::Integer(i) => J::from(*i),
+        toml::Value::Boolean(b) => J::Bool(*b),
+        toml::Value::Datetime(d) => J::String(d.to_string()),
+        toml::Value::Float(f) => match serde_json::Number::from_f64(*f) {
+            Some(n) => J::Number(n),
+            // TOML has nan/inf literals; JSON has no way to say them,
+            // so refuse here rather than hand the child a null it
+            // would read as "unset".
+            None => bail!(
+                "step {step:?}: params has a non-finite float ({f}), which JSON can't represent"
+            ),
+        },
+        toml::Value::Array(a) => J::Array(
+            a.iter()
+                .map(|x| params_to_json(x, step))
+                .collect::<Result<_>>()?,
+        ),
+        toml::Value::Table(t) => J::Object(
+            t.iter()
+                .map(|(k, x)| Ok((k.clone(), params_to_json(x, step)?)))
+                .collect::<Result<_>>()?,
+        ),
+    })
 }
 
 /// Locate the directory prepended to every step's `PATH`. Precedence:
@@ -203,23 +274,26 @@ mod tests {
 
     #[test]
     fn command_gets_declared_fields_as_json_flags() {
-        let cfg: DagConfig = serde_yaml::from_str(
+        let cfg: DagConfig = toml::from_str(
             r#"
-            steps:
-              - id: slack.download
-                outputs: [slack/raw]
-                command: datalib-step download slack_api
-                params: &slack
-                  sync: {media: true, channels: [chat-qi], since: "2026-06-15"}
-              - id: slack.render
-                inputs: [slack/raw]
-                outputs: [slack/rendered_md]
-                command: datalib-step render slack_api
-                params: *slack
-              - id: grid_index
-                inputs: ["**/rendered_md"]
-                outputs: [system/backend_index]
-                command: datalib-step grid_index
+            [[steps]]
+            id = "slack.download"
+            outputs = ["slack/raw"]
+            command = "datalib-step download slack_api"
+            params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
+
+            [[steps]]
+            id = "slack.render"
+            inputs = ["slack/raw"]
+            outputs = ["slack/rendered_md"]
+            command = "datalib-step render slack_api"
+            params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
+
+            [[steps]]
+            id = "grid_index"
+            inputs = ["**/rendered_md"]
+            outputs = ["system/backend_index"]
+            command = "datalib-step grid_index"
             "#,
         )
         .unwrap();
@@ -238,7 +312,8 @@ mod tests {
         // No inputs declared → no --inputs; outputs follow params.
         assert_eq!(&dl[5..], &["--outputs", r#"["slack/raw"]"#]);
 
-        // The YAML anchor shares the same params with the render step.
+        // TOML has no anchors, so the render step repeats the subtree —
+        // and must produce byte-identical JSON for it.
         let rn = argv(1);
         assert_eq!(rn[1], "render");
         assert_eq!(rn[4], dl[4]);
@@ -272,12 +347,12 @@ mod tests {
 
     #[test]
     fn command_splits_shell_style() {
-        let cfg: DagConfig = serde_yaml::from_str(
+        let cfg: DagConfig = toml::from_str(
             r#"
-            steps:
-              - id: custom
-                outputs: [custom/out]
-                command: sh -c 'echo "hi there" > custom/out/x.txt'
+            [[steps]]
+            id = "custom"
+            outputs = ["custom/out"]
+            command = """sh -c 'echo "hi there" > custom/out/x.txt'"""
             "#,
         )
         .unwrap();
@@ -296,30 +371,54 @@ mod tests {
 
     #[test]
     fn bad_commands_are_rejected() {
-        let cfg: DagConfig =
-            serde_yaml::from_str(r#"steps: [{id: x, outputs: [x/raw], command: "unbalanced '"}]"#)
-                .unwrap();
+        let cfg: DagConfig = toml::from_str(
+            r#"steps = [{id = "x", outputs = ["x/raw"], command = "unbalanced '"}]"#,
+        )
+        .unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("unbalanced quoting"), "{err}");
 
         let cfg: DagConfig =
-            serde_yaml::from_str(r#"steps: [{id: x, outputs: [x/raw], command: ""}]"#).unwrap();
+            toml::from_str(r#"steps = [{id = "x", outputs = ["x/raw"], command = ""}]"#).unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("empty command"), "{err}");
     }
 
     #[test]
     fn missing_command_is_rejected_at_parse() {
-        let err = serde_yaml::from_str::<DagConfig>("steps: [{id: x, outputs: [x/out]}]")
+        let err = toml::from_str::<DagConfig>(r#"steps = [{id = "x", outputs = ["x/out"]}]"#)
             .unwrap_err()
             .to_string();
         assert!(err.contains("command"), "{err}");
     }
 
+    /// TOML dates are a distinct scalar type with no JSON counterpart;
+    /// they must reach the step as the string the user typed, not as
+    /// the `toml` crate's internal `$__toml_private_datetime` wrapper.
+    #[test]
+    fn toml_datetimes_reach_the_step_as_strings() {
+        let cfg: DagConfig = toml::from_str(
+            r#"
+            [[steps]]
+            id = "x"
+            outputs = ["x/raw"]
+            command = "s"
+            params.sync = {since = 2026-06-15, at = 2026-06-15T10:30:00Z}
+            "#,
+        )
+        .unwrap();
+        let specs = to_specs(&cfg).unwrap();
+        let StepRun::Subprocess { argv, .. } = &specs[0].run else {
+            panic!("expected subprocess");
+        };
+        let params: serde_json::Value = serde_json::from_str(&argv[2]).unwrap();
+        assert_eq!(params["sync"]["since"], "2026-06-15");
+        assert_eq!(params["sync"]["at"], "2026-06-15T10:30:00Z");
+    }
+
     #[test]
     fn binary_dir_resolution_prefers_cli_then_config() {
-        let cfg: DagConfig =
-            serde_yaml::from_str("steps: []\nbinary_dir: /opt/datalib/bin").unwrap();
+        let cfg: DagConfig = toml::from_str(r#"binary_dir = "/opt/datalib/bin""#).unwrap();
         assert_eq!(
             resolve_binary_dir(&cfg, None),
             Some(PathBuf::from("/opt/datalib/bin"))
@@ -330,7 +429,7 @@ mod tests {
         assert_eq!(got, std::env::current_dir().unwrap().join("bazel-bin/x"));
 
         // No CLI/config → the runner executable's own directory.
-        let cfg: DagConfig = serde_yaml::from_str("steps: []").unwrap();
+        let cfg: DagConfig = toml::from_str("").unwrap();
         let got = resolve_binary_dir(&cfg, None).unwrap();
         assert_eq!(
             got,
@@ -342,15 +441,15 @@ mod tests {
     #[test]
     fn data_root_defaults_to_config_dir() {
         let td = tempfile::tempdir().unwrap();
-        let p = td.path().join("pipeline.yaml");
-        std::fs::write(&p, "steps: []\n").unwrap();
+        let p = td.path().join("pipeline.toml");
+        std::fs::write(&p, "steps = []\n").unwrap();
         let (_cfg, root) = load(&p).unwrap();
         assert_eq!(root, std::fs::canonicalize(td.path()).unwrap());
     }
 
     #[test]
     fn unknown_keys_are_rejected() {
-        let err = serde_yaml::from_str::<DagConfig>("steps: []\nstep_bin: /x\n")
+        let err = toml::from_str::<DagConfig>("step_bin = \"/x\"\n")
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown field"), "{err}");

@@ -363,8 +363,13 @@ rough dependency order:
   failed/blocked) rendered as one cell per task; `GET /api/dag` serves
   the derived graph via the runner's own load → specs → graph chain so
   the visualization can't drift from execution.
-* **Legacy configs migrate, not break**: old `sources:` files are
-  detected and converted server-side into step pairs for review.
+* **Legacy configs migrate out of band, not in the runner**: the two
+  pre-TOML `config.yaml` shapes — a YAML steps config, and the older
+  stanza-based `sources:` one — are converted once by the separate
+  `datalib-migrate-config` program. The runner and the server accept
+  exactly one format, so a shape we stopped writing can't widen what a
+  running pipeline loads; every legacy schema, and the last YAML
+  parser, lives in that one tool.
 * **The data-root layout is unchanged** (`<name>/raw`,
   `<name>/rendered_md`, `system/…`), so roots move freely between the
   old and new binaries; the only addition is `dag_state.json`.

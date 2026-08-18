@@ -1,17 +1,20 @@
 <script setup lang="ts">
 // The merged Setup + Sync tab: the sources table and the raw
-// config.yaml editor sit side by side (stacking when the window is
+// config.toml editor sit side by side (stacking when the window is
 // narrow) — not two tabs but two views of the same text. The editor is
 // the single source of truth; the table re-derives from it on every
-// keystroke. A row's "Locate config" button selects that stanza in the
-// editor; the chips append a template stanza and select it. Save PUTs
-// the text to the backend, which validates with the real config loader
-// before writing. Below all that, the recent-jobs table.
+// keystroke. A row's "Locate config" button selects that step's tables
+// in the editor; the chips append a template step pair and select it.
+// Save PUTs the text to the backend, which validates with the real
+// config loader before writing. Below all that, the recent-jobs table.
+//
+// TOML is the only format this edits. A data root written before the
+// switch is converted once, out of band, by `datalib-migrate-config`;
+// all this view does is notice the stray config.yaml and say so.
 import { computed, nextTick, ref, onMounted, onUnmounted } from "vue";
 import {
   fetchConfig,
   fetchConfigScaffold,
-  fetchMigratedConfig,
   saveConfig,
   fetchSyncSources,
   fetchAllJobs,
@@ -31,8 +34,8 @@ import { modifyConfigWithAgent } from "@/handoff";
 
 // --- Config state ----------------------------------------------------------
 
-// The whole config.yaml text — the single source of truth.
-const yamlText = ref("");
+// The whole config text — the single source of truth.
+const configText = ref("");
 const editorEl = ref<HTMLTextAreaElement | null>(null);
 
 const configPath = ref("");
@@ -45,11 +48,12 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 const saving = ref(false);
 const dirty = ref(false);
 const latchkeyCli = ref("npx -y latchkey");
-// True when the on-disk file is an old-style `sources:` config for the
-// retired sync binary; shows the migrate banner.
-const legacy = ref(false);
-const migrating = ref(false);
-const migrateError = ref<string | null>(null);
+// Set when this root still has a pre-TOML config.yaml and no
+// config.toml: the path of that file, and the exact command that
+// converts it (backend-resolved — in the packaged app the migrator
+// isn't on $PATH). Nothing here parses the file.
+const legacyYamlPath = ref<string | null>(null);
+const legacyMigrateCmd = ref<string | null>(null);
 
 // Table view of the text: re-derived on every edit. While the text
 // doesn't parse the last good rows stay up (grayed) with the parse
@@ -59,7 +63,7 @@ const parseError = ref<string | null>(null);
 
 function reparse() {
   try {
-    rows.value = listSources(yamlText.value);
+    rows.value = listSources(configText.value);
     parseError.value = null;
   } catch (e) {
     parseError.value = (e as Error).message;
@@ -84,7 +88,7 @@ const serverIds = computed(() => new Set(serverSources.value.map((s) => s.id)));
 // What's on disk server-side, as of the last fetch — the baseline the
 // auto-refresh poll compares against ("" while the file doesn't exist,
 // so the scaffold draft never reads as an on-disk change).
-const serverYaml = ref("");
+const serverText = ref("");
 // The file changed on disk while the editor held unsaved edits; we
 // won't clobber those, so surface a banner instead.
 const diskChanged = ref(false);
@@ -93,7 +97,7 @@ async function loadConfig() {
   loadError.value = null;
   try {
     let cfg = await fetchConfig();
-    serverYaml.value = cfg.exists ? cfg.yaml : "";
+    serverText.value = cfg.exists ? cfg.text : "";
     if (!cfg.exists) {
       // Fresh root — start from the server's scaffold so the user has a
       // valid base to add sources to.
@@ -103,8 +107,9 @@ async function loadConfig() {
     }
     configPath.value = cfg.path;
     if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
-    legacy.value = cfg.legacy;
-    yamlText.value = cfg.yaml;
+    legacyYamlPath.value = cfg.legacy_yaml_path;
+    legacyMigrateCmd.value = cfg.legacy_migrate_cmd;
+    configText.value = cfg.text;
     reparse();
   } catch (e) {
     loadError.value = (e as Error).message;
@@ -122,9 +127,9 @@ async function pollConfig() {
   if (saving.value) return;
   try {
     const cfg = await fetchConfig();
-    if ((cfg.exists ? cfg.yaml : "") === serverYaml.value) return;
+    if ((cfg.exists ? cfg.text : "") === serverText.value) return;
     if (dirty.value) {
-      serverYaml.value = cfg.exists ? cfg.yaml : "";
+      serverText.value = cfg.exists ? cfg.text : "";
       diskChanged.value = true;
       return;
     }
@@ -154,78 +159,57 @@ function selectRange(start: number, end: number) {
     el.focus();
     el.setSelectionRange(start, end);
     const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 16;
-    const line = yamlText.value.slice(0, start).split("\n").length - 1;
+    const line = configText.value.slice(0, start).split("\n").length - 1;
     el.scrollTop = Math.max(0, line * lineHeight - el.clientHeight / 3);
   });
 }
 
-// "Locate config" = jump to the stanza: select the row's slice of the text.
+// "Locate config" = jump to the step: select the row's slice of the
+// text. A zero range means the step has no tables of its own to select
+// (an inline `steps = [{…}]` entry), so leave the cursor alone.
 function selectSource(idx: number) {
   const r = rows.value[idx];
-  if (!r) return;
+  if (!r || r.end === 0) return;
   selectRange(r.start, r.end);
 }
 
 // Append a source's step pair (download + render) to the text and
-// select it. The scaffold already carries a `steps:` block (with the
-// shared index/qmd fan-in steps); create one only when the user
-// started from a blank file. Steps are appended at the end — the DAG
-// derives execution order from artifact paths, not file order.
+// select it. Always at the end: the DAG derives execution order from
+// artifact paths rather than file order, and in TOML the end is the
+// only safe insertion point — every key after a `[[steps]]` header
+// belongs to that table, so a mid-file splice would reparent whatever
+// followed it.
 function addSnippet(body: string) {
-  let text = yamlText.value;
-  if (/^steps:\s*\[\s*\]\s*$/m.test(text)) {
-    text = text.replace(/^steps:\s*\[\s*\]\s*$/m, "steps:");
-  } else if (!/^steps:/m.test(text)) {
-    text = text.replace(/\s*$/, "") + "\n\nsteps:";
-  }
-  // Blank line before the pair keeps sources visually separated.
-  const before = text.replace(/\s*$/, "") + "\n\n";
-  yamlText.value = before + body + "\n";
+  const before = configText.value.replace(/\s*$/, "") + "\n\n";
+  configText.value = before + body + "\n";
   onEdit();
-  selectRange(before.length, yamlText.value.length - 1);
+  selectRange(before.length, configText.value.length - 1);
 }
 
 async function onSave() {
   saving.value = true;
   saveStatus.value = null;
   try {
-    const res = await saveConfig(yamlText.value);
+    const res = await saveConfig(configText.value);
     saveStatus.value = { ok: res.ok, error: res.error, count: res.source_count };
     if (res.ok) {
       dirty.value = false;
       existed.value = true;
       // Saving is an explicit choice over whatever landed on disk
       // meanwhile — retire the banner and rebase the poll on our text.
-      serverYaml.value = yamlText.value;
+      serverText.value = configText.value;
       diskChanged.value = false;
+      // Re-read what we just wrote, so the legacy-config banner
+       // retires itself the moment config.toml exists. The poll below
+       // can't notice: it compares text, which now matches by
+       // construction.
+      await loadConfig();
       await loadSources();
     }
   } catch (e) {
     saveStatus.value = { ok: false, error: (e as Error).message, count: 0 };
   } finally {
     saving.value = false;
-  }
-}
-
-// Convert the on-disk legacy config to the DAG format and drop the
-// result into the editor as an unsaved draft — the user reviews and
-// hits Save explicitly. Nothing is written server-side by this call.
-async function onMigrate() {
-  migrating.value = true;
-  migrateError.value = null;
-  try {
-    const res = await fetchMigratedConfig();
-    if (!res.ok || !res.yaml) {
-      migrateError.value = res.error || "migration failed";
-      return;
-    }
-    yamlText.value = res.yaml;
-    legacy.value = false;
-    onEdit();
-  } catch (e) {
-    migrateError.value = (e as Error).message;
-  } finally {
-    migrating.value = false;
   }
 }
 
@@ -465,17 +449,13 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="legacy" class="migrate-banner">
+    <div v-if="legacyYamlPath" class="migrate-banner">
       <span>
-        This looks like an old-style <code>sources:</code> config for the
-        retired sync binary. Convert it to the new step-based format
-        (loads a draft into the editor for review; nothing is saved until
-        you hit Save).
+        This data root still has a pre-TOML config at
+        <code>{{ legacyYamlPath }}</code>, which datalib no longer reads.
+        Convert it with the migration tool, then reload:
+        <code>{{ legacyMigrateCmd }}</code>
       </span>
-      <button class="btn btn-primary" :disabled="migrating" @click="onMigrate">
-        {{ migrating ? "Converting…" : "Migrate config" }}
-      </button>
-      <span v-if="migrateError" class="status err">✗ {{ migrateError }}</span>
     </div>
 
     <!-- Raw config (left) and table side by side — two views of the
@@ -486,7 +466,7 @@ onUnmounted(() => {
       <div class="editor-col">
         <textarea
           ref="editorEl"
-          v-model="yamlText"
+          v-model="configText"
           class="editor"
           spellcheck="false"
           autocomplete="off"
@@ -504,7 +484,7 @@ onUnmounted(() => {
             </span>
             <template v-else>
               <span v-if="parseError" class="status err">
-                ✗ YAML error (table may be stale): {{ parseError }}
+                ✗ TOML error (table may be stale): {{ parseError }}
               </span>
               <span v-if="saveStatus && saveStatus.ok" class="status ok">
                 ✓ Saved — {{ saveStatus.count }} source(s) configured.

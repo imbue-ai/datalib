@@ -211,18 +211,23 @@ export function fetchChat(
 
 // --- Config / setup API ----------------------------------------------------
 //
-// The data root is self-contained: its `config.yaml` lives at
-// `<root>/config.yaml` and is read/written through these endpoints. A
+// The data root is self-contained: its config lives at
+// `<root>/config.toml` and is read/written through these endpoints. A
 // fresh root has no config (`exists: false`); the Setup view scaffolds
 // one, lets the user edit, and PUTs it back.
+//
+// TOML is the only format these endpoints handle. A data root written
+// before the switch is converted once, out of band, by the separate
+// `datalib-migrate-config` program; `legacy_yaml_path` below exists
+// only so the UI can say so instead of showing an empty setup screen.
 
 export type ConfigResponse = {
-  // Absolute path of `<root>/config.yaml`.
+  // Absolute path of `<root>/config.toml`.
   path: string;
   // Whether that file exists yet (false on a fresh data root).
   exists: boolean;
-  // Raw YAML text ("" when missing).
-  yaml: string;
+  // Raw config text ("" when missing).
+  text: string;
   // Whether the current bytes parse + validate.
   parsed_ok: boolean;
   // Loader error when parsed_ok is false.
@@ -233,18 +238,14 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
-  // True when the file is an old-style `sources:` config for the
-  // retired sync binary; the UI offers a one-click migration.
-  legacy: boolean;
-};
-
-// Response for GET /api/config/migrate: the legacy config converted to
-// the DAG step format. Nothing is written server-side — the UI drops
-// the YAML into the editor for review.
-export type MigrateResponse = {
-  ok: boolean;
-  yaml: string | null;
-  error: string | null;
+  // Absolute path of a pre-TOML config.yaml sitting in this root, when
+  // there is one and no config.toml yet. Purely a signpost: nothing
+  // server-side reads it.
+  legacy_yaml_path: string | null;
+  // The exact command that converts it, set whenever legacy_yaml_path
+  // is. Backend-resolved, because in the packaged desktop app the
+  // migrator lives inside the bundle rather than on $PATH.
+  legacy_migrate_cmd: string | null;
 };
 
 export type SaveConfigResponse = {
@@ -261,10 +262,6 @@ export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
 // config yet; the user fills in sources via the Setup tab's buttons.
 export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config/scaffold", signal);
-}
-
-export function fetchMigratedConfig(signal?: AbortSignal): Promise<MigrateResponse> {
-  return getJson<MigrateResponse>("/api/config/migrate", signal);
 }
 
 // One step of the config's derived DAG (GET /api/dag), in topological
@@ -288,17 +285,18 @@ export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {
   return getJson<DagResponse>("/api/dag", signal);
 }
 
-// PUT the edited YAML. The backend validates before persisting; a
-// validation failure comes back as `{ok:false, error}` (HTTP 200), not a
-// thrown error, so the caller can show it inline.
+// PUT the edited config text, which always lands in
+// `<root>/config.toml`. The backend validates before persisting; a
+// validation failure comes back as `{ok:false, error}` (HTTP 200), not
+// a thrown error, so the caller can show it inline.
 export async function saveConfig(
-  yaml: string,
+  text: string,
   signal?: AbortSignal,
 ): Promise<SaveConfigResponse> {
   const r = await fetch("/api/config", {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ yaml }),
+    body: JSON.stringify({ text }),
     signal,
   });
   if (!r.ok) {

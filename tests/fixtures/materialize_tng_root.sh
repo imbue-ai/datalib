@@ -10,7 +10,7 @@
 #   system/backend_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   system/qmd/index.sqlite            QMD index (from qmd-index.tar).
 #   system/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
-#   config.yaml                        { data_root } — backend reads via
+#   config.toml                        { data_root } — backend reads via
 #                                      DATALIB_CONFIG.
 #
 # Usage: materialize_tng_root.sh <out-root>
@@ -57,8 +57,8 @@ mkdir -p "$OUT_ROOT/system/backend_index"
 cp "$DB_FILE" "$OUT_ROOT/system/backend_index/db.doltlite_db"
 chmod u+w "$OUT_ROOT/system/backend_index/db.doltlite_db"
 
-cat > "$OUT_ROOT/config.yaml" <<EOF
-data_root: $OUT_ROOT
+cat > "$OUT_ROOT/config.toml" <<EOF
+data_root = "$OUT_ROOT"
 EOF
 
 # qmd models live once in ~/.cache/qmd/models (~1.6 GB) and every data

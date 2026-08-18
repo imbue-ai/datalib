@@ -6,7 +6,7 @@ disk so the sync pipeline can ingest it. This doc is just about
 the [first-time user guide](/docs/user/first_time_user.md).
 
 Conventions below: exports land under `~/backups/`. Adjust paths to taste
-and point the matching source stanza in your config at them.
+and point the matching source step in your config at them.
 
 ## Google Takeout
 

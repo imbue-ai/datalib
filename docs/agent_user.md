@@ -17,7 +17,7 @@ raw data) and a `<name>.render` step (raw → markdown +
 
 ```
 <data_root>/
-├── config.yaml                     # the pipeline config (steps format)
+├── config.toml                     # the pipeline config (steps format)
 ├── <name>/raw/                     # per-source raw stores
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.doltlite_db
@@ -28,25 +28,32 @@ raw data) and a `<name>.render` step (raw → markdown +
     └── state/dag_state.json          # scheduler state (per-step versions)
 ```
 
-Four binaries ship in a release: `datalib-dag` (the sync runner),
+Five binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
-server + web UI), and `latchkey-curl-impersonate` (Cloudflare-safe
-HTTP for downloaders). End-to-end setup walkthrough:
+server + web UI), `latchkey-curl-impersonate` (Cloudflare-safe HTTP
+for downloaders), and `datalib-migrate-config` (one-shot conversion of
+a pre-TOML `config.yaml`; see below). End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
 ## Configuring sources
 
-`<data_root>/config.yaml` declares the steps directly; edges are derived
-from input/output paths, never written by hand.
+`<data_root>/config.toml` is TOML: one `[[steps]]` table per step,
+declaring the steps directly; edges are derived from input/output
+paths, never written by hand. Top-level keys (`data_root`,
+`binary_dir`) go above the first `[[steps]]`, and a step's `params`
+sub-tables come after its plain keys — a `[…]` header ends the table it
+appears in.
 
 - **Complete commented example:**
-  [`configs/dag_example.yaml`](../configs/dag_example.yaml).
+  [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Per-source knobs and step pairs**:
-  [`docs/user/config_examples/all_sources.yaml`](user/config_examples/all_sources.yaml)
+  [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
   — one commented `<name>.download` + `<name>.render` step pair per
-  supported source, in the steps format, ready to copy. (Old-style
-  `sources:` configs still exist in the wild; the web UI detects them
-  and offers one-click migration.)
+  supported source, in the steps format, ready to copy. (Two pre-TOML
+  `config.yaml` formats still exist in the wild — a YAML steps config
+  and the older stanza-based `sources:` one. Neither is read by
+  anything any more: convert once with `datalib-migrate-config
+  <data_root>`, which is the only program that still knows them.)
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
   walkthroughs for getting cookies/tokens/exports:
@@ -62,8 +69,8 @@ from input/output paths, never written by hand.
 CLI:
 
 ```sh
-datalib-dag <data_root>/config.yaml            # everything
-datalib-dag <data_root>/config.yaml --sync slack.download   # one source
+datalib-dag <data_root>/config.toml            # everything
+datalib-dag <data_root>/config.toml --sync slack.download   # one source
 ```
 
 Useful flags: `--sync <step-id>` (repeatable; subset sync from selected
@@ -130,8 +137,8 @@ Pick the surface that fits the question:
 ## Extending datalib
 
 - **Custom step commands** — the headline extension point. Any
-  executable can be a pipeline step: declare it in `config.yaml` with
-  `command:`/`inputs:`/`outputs:`/`params:`, and the runner feeds it
+  executable can be a pipeline step: declare it in `config.toml` with
+  `command`/`inputs`/`outputs`/`params`, and the runner feeds it
   flags + env vars and (optionally) parses NDJSON progress/outcome
   events from its stdout. A plain shell script works; adopting more of
   the protocol buys incrementality, live progress, and retry
@@ -160,5 +167,6 @@ Pick the surface that fits the question:
 - **Wedged doltlite file** (`commit conflict` after a stray writer):
   recovery recipes in [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **A config the runner rejects**: `PUT /api/config` (or the Setup tab)
-  returns the loader error inline; legacy `sources:` files need the
-  one-click migration first.
+  returns the loader error inline. A data root still holding a
+  pre-TOML `config.yaml` reads as unconfigured — run
+  `datalib-migrate-config <data_root>` first.
