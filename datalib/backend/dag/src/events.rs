@@ -116,8 +116,31 @@ impl EventSink for NoopSink {
     fn emit(&self, _event: &Event) {}
 }
 
+/// One emitted line: the event, plus the wall-clock instant the sink saw it.
+///
+/// The timestamp lives here rather than on [`Event`] because it is a property
+/// of *observation*, not of the event: a step's own events are re-emitted by
+/// the runner when it reads them off the child's stdout, and the orchestrator's
+/// receive time is what you want when reconstructing a timeline across
+/// concurrent steps.
+///
+/// `flatten` keeps the wire shape flat — `{"ts":…,"event":"step_start",…}` —
+/// so existing consumers that match on `event` are unaffected.
+#[derive(Serialize)]
+struct Stamped<'a> {
+    ts: String,
+    #[serde(flatten)]
+    event: &'a Event,
+}
+
 /// Serializes each event as one JSON line. This is both the on-disk
 /// log format and the wire format a subprocess step writes on stdout.
+///
+/// Every line carries a `ts` (RFC3339, local offset). Without it the stream
+/// answers "what happened" but not "when" or "how long" — you cannot profile
+/// a run, and a step that stalls is indistinguishable from one doing work.
+/// `scripts/dag_profile.py` turns a captured stream into per-step durations
+/// and a list of suspicious gaps.
 pub struct NdjsonSink<W: Write + Send> {
     w: Mutex<W>,
 }
@@ -130,9 +153,13 @@ impl<W: Write + Send> NdjsonSink<W> {
 
 impl<W: Write + Send> EventSink for NdjsonSink<W> {
     fn emit(&self, event: &Event) {
+        let stamped = Stamped {
+            ts: datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339(),
+            event,
+        };
         let mut w = self.w.lock().unwrap();
         // Best-effort: progress is observability, never load-bearing.
-        if serde_json::to_writer(&mut *w, event).is_ok() {
+        if serde_json::to_writer(&mut *w, &stamped).is_ok() {
             let _ = w.write_all(b"\n");
             let _ = w.flush();
         }

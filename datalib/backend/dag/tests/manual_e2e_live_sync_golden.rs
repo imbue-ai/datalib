@@ -906,9 +906,28 @@ fn run_pipeline(
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-dag");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    // Persist the raw stream next to the run's data. We capture stderr
+    // rather than inheriting it (that's where the NDJSON run record is), so
+    // without this the whole event stream is discarded on a *successful*
+    // run and only the last 40 lines survive a failure — which is precisely
+    // when you want to ask "why did that take 18 minutes?".
+    //
+    //   scripts/dag_profile.py <run_root>/<now>.ndjson
+    let log = cfg_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(format!("{}.ndjson", now.replace(':', "-")));
+    if let Err(e) = std::fs::write(&log, &stderr) {
+        eprintln!("[test] WARNING: could not write {}: {e}", log.display());
+    } else {
+        eprintln!("[test] stream: {}", log.display());
+    }
+
     PipelineRun {
         status: out.status,
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        stderr,
     }
 }
 

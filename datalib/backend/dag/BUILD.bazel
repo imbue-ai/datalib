@@ -21,6 +21,10 @@ rust_library(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        # Only for stamping emitted events with a wall-clock `ts` (see
+        # events.rs). Keeps the timestamp format identical to the rest of
+        # the tree's logs; the binary already depended on it.
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:libc",
