@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
@@ -20,6 +21,10 @@ rust_library(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        # Only for stamping emitted events with a wall-clock `ts` (see
+        # events.rs). Keeps the timestamp format identical to the rest of
+        # the tree's logs; the binary already depended on it.
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:libc",
@@ -54,7 +59,7 @@ rust_binary(
     edition = "2021",
     # Must match [workspace.package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.26.0",
+    version = "0.27.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -69,4 +74,71 @@ rust_binary(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:tokio",
     ],
+)
+
+# Live end-to-end golden: drives the real pipeline (this runner +
+# //datalib/backend/datalib_step) against real provider APIs, and snapshots the
+# produced data tree. The config, the file-based source data, and the golden
+# `.snap` tree all live OUTSIDE this repo, in the private dir named by
+# `DATALIB_MANUAL_E2E_DIR` — they name real accounts. Never run on CI; only
+# Thad's host has the latchkey credentials.
+#
+# Don't invoke this target directly — `manual_e2e_run.sh` (next to this BUILD)
+# sets the env var and forwards the creds bazel's env-scrubbing would drop.
+#
+# The `data` deps are staged into runfiles and resolved by the test via
+# `runfiles::Runfiles` (NOT `$(rootpath)`-in-env — see the comment in the
+# test's `runfiles_binary`). `datalib_step` is there because the runner shells
+# out to it by name through PATH.
+rust_test(
+    name = "manual_e2e_live_sync_golden",
+    srcs = ["tests/manual_e2e_live_sync_golden.rs"],
+    crate_root = "tests/manual_e2e_live_sync_golden.rs",
+    data = [
+        ":datalib_dag_bin",
+        "//datalib/backend/datalib_step:datalib_step",
+    ],
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    # latchkey reads the host keyring and shells out to LATCHKEY_CURL; the
+    # providers need a real HOME/PATH/USER to find both.
+    env_inherit = [
+        "HOME",
+        "PATH",
+        "USER",
+    ],
+    tags = [
+        "external",  # talks to real provider APIs (slack, github, notion, …)
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        "@datalib_crates//:insta",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:toml",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:walkdir",
+    ],
+)
+
+# `bazel run //datalib/backend/dag:manual_e2e_live_sync_golden.update` re-runs
+# the live test with INSTA_UPDATE=always; the test writes the new `.snap`s
+# straight into `$DATALIB_MANUAL_E2E_DIR/snapshots` (an absolute host path), so
+# nothing lands in this repo's source tree.
+#
+# `extra_data` re-declares the binaries because bazel does NOT propagate a
+# rust_test's `data`/`env` to the sibling sh_binary this macro generates —
+# without it the runfiles lookup finds nothing under `bazel run`.
+insta_update(
+    name = "manual_e2e_live_sync_golden.update",
+    test = ":manual_e2e_live_sync_golden",
+    extra_data = [
+        ":datalib_dag_bin",
+        "//datalib/backend/datalib_step:datalib_step",
+    ],
+    test_args = ["--ignored"],
 )

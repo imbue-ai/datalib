@@ -1,4 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Public patches consumed by crate_universe annotations in MODULE.bazel.
 exports_files(
@@ -6,15 +7,81 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+# The pinned doltlite version, defined once. Both the library and the
+# CLI compile it in via -DDOLTLITE_VERSION, and `shell.c` prints it for
+# `--version`. Keeping it in one place means a version bump can't
+# update one target and miss the other.
+#
+# This must match the version in the `doltlite_amalgamation` /
+# `doltlite_autoconf` URLs in MODULE.bazel; `:cli_version_test` is what
+# actually enforces that, by running the built CLI and comparing.
+DOLTLITE_VERSION = "0.11.50"
+
+# Feature defines shared by the library and the CLI. Both compile
+# against the same amalgamation, so they must agree: `shell.c` has 12
+# `#ifdef DOLTLITE_PROLLY` blocks, and a shell built without it silently
+# loses the dolt dot-commands and reports stock SQLite's version instead
+# of DoltLite's. Compiling the two halves with different feature flags
+# is the bug this list exists to prevent.
+DOLTLITE_DEFINES = [
+    # The amalgamation self-defines DOLTLITE_PROLLY=1 and SQLITE_CORE
+    # at the top of doltlite.c, but we set them explicitly so the
+    # intent is visible at this layer too.
+    "-DDOLTLITE_PROLLY=1",
+    "-DDOLTLITE_VERSION=\\\"" + DOLTLITE_VERSION + "\\\"",
+    "-DSQLITE_CORE",
+    # SQLite vtable extensions doltlite enables by default; we
+    # repeat them here so the amalgamation's extension init code
+    # (statically compiled in) matches what sqlx-sqlite expects.
+    "-DSQLITE_ENABLE_BYTECODE_VTAB",
+    "-DSQLITE_ENABLE_DBPAGE_VTAB",
+    "-DSQLITE_ENABLE_DBSTAT_VTAB",
+    "-DSQLITE_ENABLE_FTS3",
+    "-DSQLITE_ENABLE_FTS4",
+    "-DSQLITE_ENABLE_FTS5",
+    "-DSQLITE_ENABLE_RTREE",
+    "-DSQLITE_ENABLE_STMTVTAB",
+    "-DSQLITE_ENABLE_JSON1",
+    "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
+    # sqlx-sqlite calls sqlite3_column_{database,origin,table}_name
+    # for nullability inference. They're only defined when SQLite
+    # is built with this flag.
+    "-DSQLITE_ENABLE_COLUMN_METADATA",
+    "-DSQLITE_THREADSAFE=1",
+    # NOTE: do NOT add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1` here.
+    # Empirically (see hack/slack_open_debug) that flag made
+    # `sqlite3_open_v2` on a multi-GB doltlite store take ~60s
+    # vs ~2s for the upstream CLI binary, which omits it. Callers
+    # that want FK enforcement (we do) should send
+    # `PRAGMA foreign_keys = ON` after connect — sqlx does this
+    # automatically.
+]
+
+# Silence the noisier doltlite/SQLite build warnings — they live in
+# upstream-shaped code we don't own. Shared for the same reason: both
+# targets compile generated C from the same upstream release.
+DOLTLITE_WARNING_SUPPRESSIONS = [
+    "-Wno-unused-but-set-variable",
+    "-Wno-unused-function",
+    "-Wno-unused-parameter",
+    "-Wno-unused-variable",
+    "-Wno-unused-but-set-parameter",
+    "-Wno-implicit-fallthrough",
+    "-Wno-sign-compare",
+    "-Wno-deprecated-non-prototype",
+]
+
 # `sqlite3` — a from-source doltlite build, compiled once by Bazel and
 # statically linked into every Rust binary that pulls in sqlx-sqlite
 # (transitively via `libsqlite3-sys`).
 #
-# Single-TU build from the doltlite amalgamation. As of v0.11.5 the
+# Single-TU build from the doltlite amalgamation. As of v0.11.50 the
 # amalgamation bundles the SQLite core, the prolly storage engine, the
 # `dolt_commit`/`dolt_log`/… version-control SQL surface, blake3 with
-# runtime SIMD dispatch, and the SQLite extensions (FTS3/4/5, RTree,
-# session, RBU, stmt vtable) all into one `doltlite.c`. We rename it
+# runtime SIMD dispatch, the `vec1` vector-search extension, the remote
+# *client* (push/fetch/pull/clone — no remote server), and the SQLite
+# extensions (FTS3/4/5, RTree, session, RBU, stmt vtable) all into one
+# `doltlite.c`. We rename it
 # to `sqlite3.{c,h}` so libsqlite3-sys's build script — which looks
 # for `sqlite3.h` on $SQLITE3_INCLUDE_DIR and a `libsqlite3.a` on
 # $SQLITE3_LIB_DIR — finds what it expects.
@@ -58,30 +125,7 @@ cc_library(
     srcs = ["sqlite3.c"],
     hdrs = ["sqlite3.h"],
     includes = ["."],
-    copts = [
-        # The amalgamation self-defines DOLTLITE_PROLLY=1 and SQLITE_CORE
-        # at the top of doltlite.c, but we set them explicitly so the
-        # intent is visible at this layer too.
-        "-DDOLTLITE_PROLLY=1",
-        "-DDOLTLITE_VERSION=\\\"0.11.13\\\"",
-        "-DSQLITE_CORE",
-        # SQLite vtable extensions doltlite enables by default; we
-        # repeat them here so the amalgamation's extension init code
-        # (statically compiled in) matches what sqlx-sqlite expects.
-        "-DSQLITE_ENABLE_BYTECODE_VTAB",
-        "-DSQLITE_ENABLE_DBPAGE_VTAB",
-        "-DSQLITE_ENABLE_DBSTAT_VTAB",
-        "-DSQLITE_ENABLE_FTS3",
-        "-DSQLITE_ENABLE_FTS4",
-        "-DSQLITE_ENABLE_FTS5",
-        "-DSQLITE_ENABLE_RTREE",
-        "-DSQLITE_ENABLE_STMTVTAB",
-        "-DSQLITE_ENABLE_JSON1",
-        "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
-        # sqlx-sqlite calls sqlite3_column_{database,origin,table}_name
-        # for nullability inference. They're only defined when SQLite
-        # is built with this flag.
-        "-DSQLITE_ENABLE_COLUMN_METADATA",
+    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
         # Force `-O2` regardless of bazel's compilation_mode. doltlite's
         # open path (prolly-chunk walk + blake3 hashing across every
         # page on the file's root tree) is unusually loop-bound: at
@@ -92,24 +136,6 @@ cc_library(
         # fastbuild is a strict win. See hack/slack_open_debug for the
         # A/B that established this.
         "-O2",
-        "-DSQLITE_THREADSAFE=1",
-        # NOTE: do NOT add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1` here.
-        # Empirically (see hack/slack_open_debug) that flag made
-        # `sqlite3_open_v2` on a multi-GB doltlite store take ~60s
-        # vs ~2s for the upstream CLI binary, which omits it. Callers
-        # that want FK enforcement (we do) should send
-        # `PRAGMA foreign_keys = ON` after connect — sqlx does this
-        # automatically.
-        # Silence the noisier doltlite/SQLite build warnings — they
-        # live in upstream-shaped code we don't own.
-        "-Wno-unused-but-set-variable",
-        "-Wno-unused-function",
-        "-Wno-unused-parameter",
-        "-Wno-unused-variable",
-        "-Wno-unused-but-set-parameter",
-        "-Wno-implicit-fallthrough",
-        "-Wno-sign-compare",
-        "-Wno-deprecated-non-prototype",
     ],
     linkopts = select({
         # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
@@ -125,4 +151,54 @@ cc_library(
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
+)
+
+# `doltlite` — the sqlite3-shell CLI, linked against the same
+# amalgamation the Rust binaries use.
+#
+# Why this exists: tests need to inspect doltlite raw stores directly
+# (row counts, `dolt_log` advancement, specific provider entities)
+# rather than grepping the orchestrator's tracing events out of stderr
+# — see //tests/fixtures:ingested_tng_test, which today can only
+# assert on stderr strings because it has no way to open the database
+# it just produced. The Python route (`pip install doltlite`) is a
+# dead end: that package's macOS bootstrap otool-inspects
+# `_sqlite3.__file__`, which doesn't exist on the
+# python-build-standalone interpreters both `uv` and `rules_python`
+# use, where `_sqlite3` is statically built in.
+#
+# `srcs` is the pre-generated `shell.c` from the autoconf tarball; the
+# amalgamation zip is library-only and has no `main()`. `deps` supplies
+# both `libsqlite3.a` and the `sqlite3.h` that `shell.c` includes —
+# `:sqlite3` sets `includes = ["."]`, so the generated header resolves
+# without extra copts here.
+cc_binary(
+    name = "doltlite",
+    srcs = ["@doltlite_autoconf//:ext/wasm/bld/doltlite-build/shell.c"],
+    # Same feature defines as the library — see DOLTLITE_DEFINES. Not
+    # optimized: the CLI is a test/debug utility, and its cost is
+    # dominated by doltlite's own (already -O2) open path.
+    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS,
+    visibility = ["//visibility:public"],
+    deps = [":sqlite3"],
+)
+
+# Fails the build if the two MODULE.bazel pins drift apart.
+#
+# `shell.c` comes from @doltlite_autoconf and the library from
+# @doltlite_amalgamation, so nothing in Bazel forces them to be the
+# same doltlite release — a version bump that updates one URL and
+# forgets the other would still build and still link, just producing a
+# CLI whose shell and engine disagree. This runs the real binary and
+# checks it reports DOLTLITE_VERSION, which is the cheapest end-to-end
+# assertion that both halves came from the same release.
+sh_test(
+    name = "cli_version_test",
+    size = "small",
+    srcs = ["cli_version_test.sh"],
+    args = [
+        "$(rootpath :doltlite)",
+        DOLTLITE_VERSION,
+    ],
+    data = [":doltlite"],
 )

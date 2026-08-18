@@ -96,8 +96,27 @@ pub struct FetchSummary {
     pub new_blobs: usize,
     pub skipped_blobs: usize,
     pub failed_blobs: usize,
+    /// Pages whose detail fetch failed. Recorded per page and otherwise
+    /// tolerated — one unreadable page shouldn't abort a BFS over
+    /// thousands — but see the all-failed check at the end of [`fetch`]:
+    /// when this is the ONLY thing that happened, the run fails.
+    pub failed_pages: usize,
     pub official_requests: u64,
     pub unofficial_requests: u64,
+}
+
+/// True when pages were attempted and not one of them worked out.
+///
+/// `mirror_page` records a failed page fetch and carries on, which is right
+/// when one page of many is unreadable. It is wrong when the failure is
+/// systemic — a bad credential fails identically on every page — because the
+/// run then reports success having stored nothing, and the render step
+/// dutifully emits no markdown from the empty raw store.
+///
+/// A *skipped* page counts as working: the skip only happens after we've
+/// confirmed our stored copy is current, which means the credential is fine.
+fn all_pages_failed(s: &FetchSummary) -> bool {
+    s.failed_pages > 0 && s.new_pages == 0 && s.upd_pages == 0 && s.skipped_pages == 0
 }
 
 /// Download the URL of an image block's underlying file. Notion stores
@@ -449,6 +468,10 @@ async fn mirror_page(
             let msg = format!("{e}");
             tracing::warn!(page = pid, error = %msg, "page fetch failed; recording");
             let _ = db.record_page_error(pid, &msg).await;
+            // Tolerated per page — one unreadable page must not abort a
+            // BFS over thousands — but counted, so `fetch` can tell the
+            // difference between "one page is broken" and "nothing worked".
+            summary.failed_pages += 1;
             return Ok(Vec::new());
         }
     };
@@ -840,8 +863,37 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         Ok(())
     };
 
-    let result = work.await;
+    let mut result = work.await;
     summary.official_requests = official.request_count();
+
+    // Per-page fetch errors are recorded and tolerated (see `mirror_page`),
+    // which is right when one page of many is unreadable — but wrong when
+    // it's every page. A misconfigured credential fails identically on all
+    // of them, and without this the run reports success having stored
+    // nothing: the DAG step goes green, the render step finds an empty raw
+    // store and emits no markdown, and the provider looks healthy while
+    // being completely dead. That is exactly how a missing `Notion-Version`
+    // header (latchkey injects it; the client deliberately doesn't) hid for
+    // two months.
+    //
+    // So: if pages were attempted and EVERY one failed, the run failed.
+    // Deliberately narrow — a single success anywhere means the credential
+    // works and the rest are genuine per-page problems worth tolerating.
+    if result.is_ok() && all_pages_failed(&summary) {
+        result = Err(anyhow::anyhow!(
+            "every page fetch failed ({} attempted, 0 succeeded) — the raw store \
+             is empty, so render will produce nothing. This is usually a \
+             credential problem rather than a per-page one: the `notion` \
+             latchkey service must inject BOTH the bearer token and the \
+             `Notion-Version` header, e.g.\n  \
+             latchkey auth set notion -H \"Authorization: Bearer <token>\" \
+             -H \"Notion-Version: 2022-06-28\"\n\
+             See the per-page `page fetch failed` warnings above for the \
+             underlying error.",
+            summary.failed_pages
+        ));
+    }
+
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -866,5 +918,57 @@ mod tests {
         );
         let already = "f9a3f309-bde5-4852-9440-42374cc01dc5";
         assert_eq!(format_uuid(already), already);
+    }
+
+    /// Nothing attempted is not a failure — an empty subtree/inbox config,
+    /// or a run where every page was already current, must stay green.
+    #[test]
+    fn all_pages_failed_is_false_when_nothing_failed() {
+        assert!(!all_pages_failed(&FetchSummary::default()));
+        assert!(!all_pages_failed(&FetchSummary {
+            new_pages: 3,
+            ..Default::default()
+        }));
+    }
+
+    /// The regression this guards: a systemic credential failure fails on
+    /// every page, and used to be reported as a successful run.
+    #[test]
+    fn all_pages_failed_is_true_when_every_page_failed() {
+        assert!(all_pages_failed(&FetchSummary {
+            failed_pages: 1,
+            ..Default::default()
+        }));
+        assert!(all_pages_failed(&FetchSummary {
+            failed_pages: 42,
+            ..Default::default()
+        }));
+    }
+
+    /// One bad page among working ones is tolerated — that's the case the
+    /// per-page record-and-continue exists for, and it must keep working.
+    #[test]
+    fn all_pages_failed_is_false_when_some_page_succeeded() {
+        for ok in [
+            FetchSummary {
+                failed_pages: 5,
+                new_pages: 1,
+                ..Default::default()
+            },
+            FetchSummary {
+                failed_pages: 5,
+                upd_pages: 1,
+                ..Default::default()
+            },
+            // A skip only happens after confirming the stored copy is
+            // current, which itself proves the credential works.
+            FetchSummary {
+                failed_pages: 5,
+                skipped_pages: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(!all_pages_failed(&ok), "{ok:?} should not be all-failed");
+        }
     }
 }

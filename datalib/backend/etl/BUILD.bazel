@@ -58,13 +58,13 @@ rust_binary(
     name = "latchkey_curl_impersonate",
     srcs = ["src/bin/latchkey_curl_impersonate.rs"],
     edition = "2021",
-    # Intentionally NOT stamped. The shim ships in the runfiles of
-    # `datalib_etl` (see `data = [":latchkey_curl_impersonate"]` above), so
-    # any consumer of that library — every etl/providers/* test — picks
-    # it up as a runfile. Stamping it makes every git commit invalidate
+    # Intentionally NOT stamped. The impersonating curl ships in the
+    # runfiles of `datalib_etl` (see `data = [":latchkey_curl_impersonate"]`
+    # above), so any consumer of that library — every etl/providers/* test —
+    # picks it up as a runfile. Stamping it makes every git commit invalidate
     # those test actions via the stable-status.txt input. Its `--version`
-    # is informational (the shim isn't a release artifact); the
-    # user-facing stamp lives on //datalib/backend/sync:datalib_sync_bin.
+    # is informational (it isn't a release artifact); the user-facing
+    # stamp lives on //datalib/backend/dag:datalib_dag_bin.
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "@datalib_crates//:tokio",

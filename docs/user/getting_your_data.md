@@ -115,6 +115,41 @@ npx -y latchkey auth set fastmail         -H "Authorization: Bearer $(pbpaste)"
 npx -y latchkey auth set fastmail-content -H "Authorization: Bearer $(pbpaste)"
 ```
 
+### If your account lives in a regional datacenter
+
+Fastmail's JMAP session discovery may hand back **region-prefixed** hosts
+rather than the plain ones above — e.g. `phl.api.fastmail.com` and
+`phl-www.fastmailusercontent.com` for an account homed in Philadelphia.
+Latchkey matches by URL prefix, so the two services registered above
+won't match those, and the download fails with:
+
+```
+No service matches URL: https://phl.api.fastmail.com/jmap/api/
+```
+
+The prefix reflects where your *account* lives, not where you are, so it
+is stable — you don't need to redo this when you travel. Check what your
+session actually returns:
+
+```sh
+npx -y latchkey curl "https://api.fastmail.com/jmap/session"
+```
+
+If `apiUrl` / `downloadUrl` carry a prefix, register those hosts too and
+attach the same token to each:
+
+```sh
+npx -y latchkey services register fastmail-phl \
+  --base-api-url="https://phl.api.fastmail.com/"
+npx -y latchkey services register fastmail-content-phl \
+  --base-api-url="https://phl-www.fastmailusercontent.com/"
+npx -y latchkey auth set fastmail-phl         -H "Authorization: Bearer $(pbpaste)"
+npx -y latchkey auth set fastmail-content-phl -H "Authorization: Bearer $(pbpaste)"
+```
+
+Register both — fixing only the API host gets you past session discovery
+and then fails on the first attachment, which comes from the content host.
+
 ## Signal
 
 Signal stores encrypted backups on the phone. Enable backups in the app
@@ -188,8 +223,53 @@ the source's `input_path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 
+## Notion
+
+Notion authenticates with an **internal integration** token. Create one
+at [notion.so/my-integrations](https://www.notion.so/my-integrations) →
+**New integration**, associate it with your workspace, give it read
+capabilities, and copy the **Internal Integration Secret**.
+
+Two things about Notion trip people up, and both fail in ways that don't
+look like credential problems:
+
+**1. The integration starts with access to nothing.** A token is not
+enough — Notion scopes access per page. In Notion, open each page (or
+top-level page of a subtree) you want mirrored, use the **⋯** menu →
+**Connections** → **Connect to**, and pick your integration. Access is
+inherited by child pages, so connecting the root of a subtree is enough.
+Skip this and the API returns `404 object_not_found` for a page you can
+plainly see in the app.
+
+**2. Every request needs a `Notion-Version` header.** The client
+deliberately sends neither the bearer token nor the version — latchkey
+injects both — so the credential must carry the version too. Set both
+headers in one `auth set` (`$(pbpaste)` keeps the live token out of your
+shell history):
+
+```sh
+npx -y latchkey auth set notion \
+  -H "Authorization: Bearer $(pbpaste)" \
+  -H "Notion-Version: 2022-06-28"
+```
+
+Omitting the version header gets every request rejected with
+`400 missing_version`. Verify the whole path — token, version header,
+and page access — in one call before running a sync:
+
+```sh
+npx -y latchkey curl "https://api.notion.com/v1/pages/<page-id>"
+```
+
+A `200` with a JSON page body means you're set. `400 missing_version`
+means the version header is missing from the credential;
+`404 object_not_found` means the page hasn't been connected to the
+integration.
+
+Point the source's `subtrees.pages` at the page URLs you connected.
+
 ## Other sources
 
 These are wired into the pipeline; acquisition is via `latchkey` or a
-provider export. Fill in details as we use them: GitHub, GitLab, Notion,
-Beeper, Contacts, generic email (JMAP).
+provider export. Fill in details as we use them: GitHub, GitLab, Beeper,
+Contacts, generic email (JMAP).

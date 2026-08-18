@@ -71,6 +71,45 @@ are relative to the repo root.
 point-in-time plans and audits (each with an "Archived" banner). Don't
 treat them as current reference.
 
+## Prose can be stale — verify claims against the tree
+
+The docs above, `TODO.md`, and this repo's commit messages are unusually
+detailed and well-argued. That is exactly what makes a wrong one
+dangerous: a well-reasoned paragraph reads as evidence, so an incorrect
+claim tends to get repeated rather than checked.
+
+**Before reporting any "we now do X" or "X still needs doing" claim as
+current fact, verify it against the tree or the diff.** The checks are
+cheap:
+
+```sh
+git show --stat <sha>                    # did that commit touch what its message says?
+git log --diff-filter=A -- <path>        # was this file ever actually added?
+grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
+```
+
+Two confirmed instances, both found 2026-08-17:
+
+- `TODO.md` led with "expunge the manual-e2e test data from git HISTORY"
+  as a pending pre-open-sourcing blocker. The purge had already been done.
+  `git filter-repo` preserves commit messages and the working tree, so the
+  instruction outlived its own completion — and `docs/dev/testing.md`
+  carried a second copy citing `TODO.md` as its source (#112, #120).
+- `b27039d0` states it gave a toothless slack test teeth with a "poison
+  fixture". Its diff touches 20 files, none of them the test file, and the
+  comment the message itself calls out as false is still there verbatim
+  (#123).
+
+**Test-quality claims are the highest-risk category**, because a false one
+is self-concealing: if a test cannot fail, nothing downstream will ever
+reveal that the claim was wrong. Treat "now covered by a test" as
+unverified until you have read the assertion — and for a test whose job is
+to catch a silent no-op, until you have watched it fail against the broken
+behavior.
+
+When prose and the tree disagree, the tree wins. Fix the prose in the same
+change.
+
 ## Repo layout
 
 ```
@@ -237,9 +276,54 @@ sees the commit immediately.
 
 Bazel stamps the binary with the git hash via
 `tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
-get the same value from `datalib/backend/core/build.rs`. Read-back
-of feedback rows is out of scope — query the doltlite_db directly with
-any SQLite-shaped client.
+get the same value from `datalib/backend/core/build.rs`. Read-back of
+feedback rows is out of scope — query the store directly with the CLI
+below.
+
+## Inspecting doltlite stores
+
+**Stock `sqlite3` cannot open these files.** doltlite's on-disk format
+is not sqlite-file-compatible; a `.doltlite_db` is a prolly-tree store
+that only a doltlite-linked binary can read. Reaching for the system
+`sqlite3` and concluding the database is corrupt is a well-worn dead
+end.
+
+Use the Bazel-built shell, which links the same amalgamation the Rust
+binaries do:
+
+```sh
+bazelisk build //third-party/doltlite:doltlite
+dl=bazel-bin/third-party/doltlite/doltlite
+
+$dl path/to/db.doltlite_db ".tables"
+$dl path/to/db.doltlite_db ".schema grid_rows"
+$dl path/to/db.doltlite_db "SELECT provider, COUNT(*) FROM grid_rows GROUP BY provider;"
+$dl path/to/db.doltlite_db "SELECT COUNT(*) FROM dolt_log;"   # commit history
+```
+
+It is a sqlite3-shell drop-in, so dot-commands, `-json`, `-csv` and an
+interactive REPL all work, plus the dolt SQL surface
+(`dolt_commit`, `dolt_log`, `dolt_diff`, …).
+
+Where the stores live under a data root:
+
+```
+<data_root>/<name>/raw/entities.doltlite_db   per-source entities + sync bookkeeping
+<data_root>/<name>/raw/blobs.doltlite_db      content-addressed blobs
+<data_root>/system/backend_index/db.doltlite_db   grid_rows / markdowns / edges
+```
+
+There is also a host `/usr/local/bin/doltlite` on some machines. Prefer
+the Bazel target: it is version-locked to `MODULE.bazel`'s pin, so it
+can't silently disagree with what the pipeline wrote.
+
+**From a test**, take it as a `data` dep and pass `$(rootpath ...)`
+rather than shelling out to a host binary — that keeps the test
+hermetic. `//tests/fixtures:ingested_tng_test` is the worked example:
+it opens the stores the pipeline just wrote and asserts row counts and
+per-provider coverage. Prefer that over grepping tracing events out of
+stderr; a log line tells you what the code *said*, the store tells you
+what it *did*.
 
 ## Git: prefer merges over rebases
 

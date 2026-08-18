@@ -29,7 +29,6 @@ members = [
     "etl/providers/yolink",
     "qmd_indexer",
     "signal-backup",
-    "tauri-backend",
     "whatsapp-backup",
     "etl/providers/whatsapp",
     "etl/chat-common",
@@ -44,7 +43,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.26.0"
+version = "0.27.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false

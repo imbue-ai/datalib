@@ -332,6 +332,58 @@ const IMPERSONATE_PROVIDERS: &[&str] = &[
 /// impersonation was not happening anyway.
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
+/// URL prefix that makes a request leave from the user's own machine rather
+/// than from the workspace's own egress, set by minds when (and only when) the
+/// two differ.
+///
+/// A remote minds workspace runs on a VPS and reaches third parties through a
+/// latchkey gateway on that same VPS, so its requests carry a datacenter IP.
+/// The providers that need TLS impersonation are the same ones that scrutinize
+/// the client hardest, and several of them (Cloudflare-fronted) block those IP
+/// ranges outright — a fingerprint fix does not help when the address is
+/// refused. Prefixing the target URL routes the request back through the
+/// gateway on the user's computer, which makes it from a residential
+/// connection.
+///
+/// minds sets this to `https://latchkey-self.invalid/via-desktop` for remote
+/// workspaces and to the empty string for local ones, whose gateway already
+/// runs on the user's machine. Concatenating an empty prefix leaves the URL
+/// untouched, so nothing here has to know which kind of workspace it is in;
+/// outside minds the variable is unset and this is inert.
+///
+/// Credentials are still injected, and the permission check still runs, at the
+/// gateway that terminates the request — so routing this way reaches nothing a
+/// direct request could not.
+///
+/// It is namespaced `MINDS_` rather than `LATCHKEY_` even though the value is a
+/// latchkey URL: a workspace's env names each var after the tool that *reads*
+/// it, and latchkey never reads this one — we hand it the concatenated result
+/// as a URL argument. minds is the authority that decides the value, since it
+/// follows from workspace topology.
+pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
+
+/// Prepend [`VIA_DESKTOP_URL_PREFIX_ENV`] to `url` when this request should
+/// leave from the user's machine.
+///
+/// Applied to exactly the providers that get [`IMPERSONATE_MARKER_HEADER`]:
+/// both exist for destinations that reject requests which do not look like a
+/// human's browser, and an IP block and a TLS-fingerprint block are the same
+/// problem seen from two angles. Keeping one list avoids a provider being
+/// fixed for one and not the other.
+///
+/// Skipped for `bypass_latchkey` requests: those run plain `curl`, with no
+/// gateway to interpret the prefix, so prepending it would produce a URL that
+/// resolves nowhere.
+fn maybe_via_desktop_url(url: &str, provider: &str, bypass_latchkey: bool) -> String {
+    if bypass_latchkey || !IMPERSONATE_PROVIDERS.contains(&provider) {
+        return url.to_string();
+    }
+    match std::env::var(VIA_DESKTOP_URL_PREFIX_ENV) {
+        Ok(prefix) if !prefix.is_empty() => format!("{prefix}/{url}"),
+        _ => url.to_string(),
+    }
+}
+
 pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
     latchkey_curl_classified(req, default_retryability).await
 }
@@ -466,7 +518,11 @@ mod live {
             cmd.arg("--data-binary").arg("@-");
             cmd.stdin(Stdio::piped());
         }
-        cmd.arg(&req.url);
+        cmd.arg(maybe_via_desktop_url(
+            &req.url,
+            req.provider,
+            req.bypass_latchkey,
+        ));
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -696,6 +752,85 @@ mod tests {
         let out = body.await;
         std::env::remove_var(PLAYBACK_ENV);
         out
+    }
+
+    /// Serializes the tests that set `VIA_DESKTOP_URL_PREFIX_ENV`, for the same
+    /// reason [`with_playback`] serializes its own: the variable is
+    /// process-global and Rust runs unit tests on parallel threads.
+    fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
+        match prefix {
+            Some(value) => std::env::set_var(VIA_DESKTOP_URL_PREFIX_ENV, value),
+            None => std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV),
+        }
+        let out = body();
+        std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV);
+        out
+    }
+
+    const TEST_VIA_DESKTOP_PREFIX: &str = "https://latchkey-self.invalid/via-desktop";
+
+    #[test]
+    fn via_desktop_prefix_wraps_impersonating_providers_when_minds_sets_one() {
+        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
+            assert_eq!(
+                maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", false),
+                "https://latchkey-self.invalid/via-desktop/https://slack.com/api/auth.test",
+            );
+        });
+    }
+
+    #[test]
+    fn via_desktop_prefix_leaves_the_url_alone_when_it_would_change_nothing() {
+        // A local workspace already egresses from the user's machine, so minds
+        // hands it an empty prefix; outside minds the variable is unset. Both
+        // must leave the URL byte-identical rather than producing a bare "/".
+        for prefix in [Some(""), None] {
+            with_via_desktop_prefix(prefix, || {
+                assert_eq!(
+                    maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", false),
+                    "https://slack.com/api/auth.test",
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
+        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
+            // A provider that does not need impersonation does not need the
+            // user's IP either, and pays no extra hop for it.
+            assert_eq!(
+                maybe_via_desktop_url("https://example.com/x", "linear", false),
+                "https://example.com/x",
+            );
+            // A bypass_latchkey request runs plain curl, with no gateway to
+            // unwrap the prefix, so a wrapped URL would resolve nowhere.
+            assert_eq!(
+                maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", true),
+                "https://slack.com/api/auth.test",
+            );
+        });
+    }
+
+    #[test]
+    fn via_desktop_prefix_preserves_the_target_url_verbatim() {
+        // The gateway slices the prefix back off the raw path, so anything that
+        // re-encoded or normalized the target here would change the request the
+        // provider actually receives.
+        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
+            for url in [
+                "https://slack.com/api/conversations.history?channel=C1&limit=100",
+                "https://slack.com/files/a%20b?u=x%2Fy",
+            ] {
+                let wrapped = maybe_via_desktop_url(url, "slack", false);
+                assert_eq!(
+                    wrapped.strip_prefix(&format!("{TEST_VIA_DESKTOP_PREFIX}/")),
+                    Some(url),
+                );
+            }
+        });
     }
 
     #[test]

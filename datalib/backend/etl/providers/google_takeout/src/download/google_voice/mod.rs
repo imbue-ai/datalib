@@ -591,6 +591,14 @@ fn normalize_ts(raw: &str) -> Option<String> {
 /// Resolve an HTML `src`/`href` to a sibling file. Audio `src` carries
 /// the full filename (exact match); MMS `img src` drops the extension,
 /// so fall back to a stem match.
+///
+/// NB: this deliberately does NOT use the truncation-tolerant prefix
+/// resolver (issue #64). Voice's MMS `src` is extension-less, and a
+/// prefix match there happily matches the conversation's own
+/// `<conversation>.html` transcript (whose stem is a prefix of the
+/// `src`), storing the HTML as a bogus "attachment". Voice truncation
+/// needs a media-extension-restricted matcher validated against real
+/// truncated Voice data; tracked as a follow-up on #64.
 fn resolve_sibling(html_path: &Path, src: &str) -> Option<PathBuf> {
     let dir = html_path.parent()?;
     let exact = dir.join(src);

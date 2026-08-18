@@ -36,25 +36,32 @@ tests tagged `manual` are the per-provider `*_live` tests, which hit
 real upstream APIs and require latchkey credentials from the host
 machine.
 
-### The live-golden e2e test (retired)
+### The live-golden e2e test
 
-The TNG fixtures catch code-level regressions; a **live-golden e2e**
-used to catch what happens against the actual world. The
-`//datalib/backend/sync:manual_e2e_live_sync_golden` target ran
+The TNG fixtures catch code-level regressions; the **live-golden e2e**
+catches what happens against the actual world. The
+`//datalib/backend/dag:manual_e2e_live_sync_golden` target runs
 the full pipeline, every source, against live upstreams using
-host-side latchkey credentials, snapshotting the run summary, a
-file-tree manifest of `raw/` + `rendered_md/`, and per-file content
+host-side latchkey credentials, snapshotting a file-tree manifest of
+each stanza's `raw/` + `rendered_md/` and per-file content
 snapshots into a private dir named by `$DATALIB_MANUAL_E2E_DIR`
 (kept outside the repo so the slightly sensitive source data isn't
-shared when the repo is open-sourced). It was the only test that
-caught **render-side drift against real payloads** — upstream shape
+shared when the repo is open-sourced). It is the only test that
+catches **render-side drift against real payloads** — upstream shape
 changes, schema-projection bugs, timestamp-fabrication bugs,
 attachment-handling gaps — with a human-reviewable diff, triaged
-per cluster as deliberate / accidental / noise. The target was
-retired along with the `datalib-sync` crate; **no in-tree runner
-exists today** (the machine-readable run record is now the
-`run_summary` NDJSON event emitted by `datalib-dag`). The practice
-is still worth reviving against the DAG runner.
+per cluster as deliberate / accidental / noise.
+
+It was retired along with the `datalib-sync` crate when the pipeline
+moved to the DAG runner, and ported back onto `datalib-dag` afterward.
+One thing changed shape in that port, and it is the interesting bit: the
+old aggregate `sync_summary_<now>.json` carried per-source counts, but
+`datalib-dag`'s `run_summary` NDJSON event deliberately does not —
+the orchestrator is storage-agnostic and doesn't know sources persist
+to doltlite. The counts live at the correct grain instead, in each
+source's own `sync_runs.summary` (`deltas` from `dolt_diff_<table>`,
+plus the `sync_scope_state` cursors that moved), which is where the
+test now reads them from. See [`/docs/dev/testing.md`](/docs/dev/testing.md).
 
 ## Adding new sources is meant to be easy
 

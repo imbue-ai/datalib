@@ -20,8 +20,10 @@ intentional about.
 
 How the allowlist works
 -----------------------
-The script greps every committed `BUILD.bazel` for `"no-sandbox"`,
-counts the targets by package, and compares against
+The script asks git for every `BUILD.bazel` in the repo (tracked, plus
+untracked-but-not-ignored so a staged new file still gets linted),
+greps each for `"no-sandbox"`, counts the targets by package, and
+compares against
 `ALLOWED_NO_SANDBOX` below. A new `no-sandbox` outside the allowlist
 fails the lint. A removal of an existing allowed entry also fails
 (forcing the allowlist to be updated when usage genuinely changes).
@@ -33,6 +35,7 @@ gets surfaced in the failure message if the entry is ever removed.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -63,6 +66,9 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     ),
     "datalib/backend/etl/providers/notion:notion_live": (
         "manual live test, latchkey needs host keychain"
+    ),
+    "datalib/backend/dag:manual_e2e_live_sync_golden": (
+        "manual live golden, latchkey needs host keychain"
     ),
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
@@ -96,12 +102,38 @@ def _find_enclosing_rule_name(lines: list[str], tag_lineno: int) -> str | None:
     return None
 
 
+def _build_files(root: Path) -> list[Path]:
+    """Every `BUILD.bazel` git knows about, as absolute paths.
+
+    Asking git rather than walking the filesystem is what keeps
+    gitignored trees out of the results. In particular `.claude/`
+    holds one full checkout per agent worktree, each with its own
+    copy of every BUILD file in the repo — walking picked those up
+    and reported ~8 phantom labels per stale worktree, none of
+    which can ever match the repo-relative allowlist keys.
+    """
+    out = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "*BUILD.bazel",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [root / p for p in out.split("\0") if p]
+
+
 def _scan(root: Path) -> set[str]:
     """Return the set of `<package>:<name>` tagged `no-sandbox`."""
     found: set[str] = set()
-    for build_file in root.rglob("BUILD.bazel"):
-        if "bazel-" in build_file.parts:
-            continue
+    for build_file in _build_files(root):
         text = build_file.read_text()
         if "no-sandbox" not in text:
             continue

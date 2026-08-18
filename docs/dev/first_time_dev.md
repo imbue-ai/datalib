@@ -80,8 +80,7 @@ there is no codegen step.
     │   ├── qmd_indexer/      qmd search index binary
     │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
     │   ├── datalib_step/     datalib-step built-in step commands
-    │   ├── http/             axum binary
-    │   └── tauri-backend/    Tauri command surface
+    │   └── http/             axum binary
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
     ├── tauri/                Tauri shell (out of Bazel)
     └── openhost/             Dockerfile + openhost.toml stubs
@@ -103,7 +102,7 @@ second invocation only re-executes what your changes actually touched.
 Skipping Bazel skips that cache.
 
 Runs:
-- Rust unit tests (`//datalib/backend/{schema,core,etl,http,tauri-backend}:*_unittests`)
+- Rust unit tests (`//datalib/backend/{schema,core,etl,http}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
 - Playwright e2e suite (`//datalib/ui:e2e_test`) — non-hermetic by
@@ -148,7 +147,8 @@ Data root resolution (the rendered Markdown feeds the search index, but
 
 The root is the *directory*, not the config file: `datalib-http` takes
 it as a required positional and reads `<root>/config.toml` from inside
-it (falling back to a pre-TOML `<root>/config.yaml`).
+it. That is the only config format it reads — a root still holding a
+pre-TOML `config.yaml` needs `datalib-migrate-config <root>` first.
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows.
