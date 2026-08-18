@@ -148,7 +148,9 @@ def main(argv: list[str]) -> int:
         print("  none — the stream never went quiet for that long.")
     else:
         for gap, at, step, after in sorted(gaps, reverse=True)[:TOP_N]:
-            print(f"  {fmt(gap)}  after {at.strftime('%H:%M:%S')}  {step:<34} (last: {after})")
+            print(
+                f"  {fmt(gap)}  after {at.strftime('%H:%M:%S')}  {step:<34} (last: {after})"
+            )
     print()
 
     # ── event mix, as a cheap sanity check on the stream itself ───────

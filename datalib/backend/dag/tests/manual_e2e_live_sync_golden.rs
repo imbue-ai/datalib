@@ -250,8 +250,12 @@ const VOLATILE_KEYS: &[&str] = &[
     "last_seen_at",
     // GitLab user object's `local_time` — the user's *current* local time
     // ("4:52 PM"), so it ticks every minute. Upstream content, but volatile by
-    // nature.
+    // nature. `last_activity_on` is the same class one granularity coarser:
+    // the date you last used GitLab, so it advances every day you do, and any
+    // two runs either side of midnight disagree. Genuine upstream data, but it
+    // tracks the observer rather than the observed.
     "local_time",
+    "last_activity_on",
     // Notion file blocks carry a pre-signed S3 link the API re-signs on every
     // fetch: `expiry_time` is its rotating expiry; the sibling `url`'s volatile
     // query string is collapsed by `scrub_presigned` (the base URL stays).
@@ -320,6 +324,23 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
     map.contains_key("full_name") && map.contains_key("default_branch")
 }
 
+/// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
+/// table. Applied in [`dump_doltlite_db`], which knows the table name for
+/// certain — no shape-sniffing required.
+///
+/// This exists because the wall-clock stamps that churn worst live in the
+/// shared bookkeeping tables (`SHARED_DDL`: `sync_runs`, `sync_scope_state`,
+/// `sync_scope_config`), where a globally-scoped redaction would be wrong.
+/// `updated_at` is a perfectly good *content* field elsewhere — a GitHub
+/// comment's edit time, a GitLab note's — so blanket-redacting it would mask
+/// real upstream change. Same reasoning as `REPO_VOLATILE_KEYS` being scoped
+/// to repo objects, but keyed on the table rather than guessed from the row.
+///
+/// `sync_scope_config.updated_at` is re-stamped on every run that satisfies
+/// its scope config, so without this every API-backed source contributes a
+/// spurious one-line diff to every single bake.
+const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updated_at"])];
+
 const REDACTED: &str = "[redacted]";
 
 /// Path components whose entire contents we deliberately omit. Slack's
@@ -345,7 +366,9 @@ const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "event
 /// silently working, which is how you end up with two documented spellings
 /// and no signal that one is wrong.
 fn e2e_dir() -> Option<PathBuf> {
-    std::env::var("DATALIB_MANUAL_E2E_DIR").ok().map(PathBuf::from)
+    std::env::var("DATALIB_MANUAL_E2E_DIR")
+        .ok()
+        .map(PathBuf::from)
 }
 
 /// Base directory for golden snapshots. Resolves to `<e2e_dir>/snapshots`
@@ -1564,6 +1587,19 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
                 obj.insert(name.to_string(), value);
             }
             row_vals.push(Value::Object(obj));
+        }
+        // Table-scoped redaction, applied here because this is the one place
+        // that knows the table name for certain (see `TABLE_VOLATILE_KEYS`).
+        if let Some((_, keys)) = TABLE_VOLATILE_KEYS.iter().find(|(name, _)| *name == t) {
+            for row in row_vals.iter_mut() {
+                if let Value::Object(map) = row {
+                    for k in *keys {
+                        if let Some(slot) = map.get_mut(*k) {
+                            *slot = Value::String(REDACTED.into());
+                        }
+                    }
+                }
+            }
         }
         out.insert(t, Value::Array(row_vals));
     }
