@@ -41,6 +41,15 @@ pub const DEFAULT_OVERLAP: usize = 3;
 const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
+/// How long a completed `/organizations` listing stays good. Matches
+/// slack's `MANIFEST_TTL`, and for the same reason: the org set is
+/// near-static, so re-listing it on every download is pure waste.
+///
+/// NOTE — this cache was added on a diagnosis that turned out to be wrong,
+/// and may not have been necessary. See the sweep comment in `fetch`.
+pub const ORGS_TTL: chrono::Duration = chrono::Duration::hours(6);
+const ORGS_SWEEP_KEY: &str = "orgs";
+
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
     /// Path to the doltlite database file. The entity db lives inside
@@ -151,11 +160,88 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // with setup instructions — instead of first emitting a
         // misleading account-fetch warning and then dying on a cryptic
         // curl error.
-        let orgs = client.list_orgs().await.map_err(credential_hint)?;
-        info!(event = "anthropic_orgs", count = orgs.len());
-        if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
-            warn!(event = "anthropic_orgs_upsert_failed", error = %e);
-        }
+        //
+        // But re-listing on every download is waste: the org set changes
+        // maybe once a year, and the manual-e2e golden runs the pipeline
+        // three times per invocation. So reuse the stored rows while a
+        // completed sweep is younger than ORGS_TTL, mirroring slack's
+        // `conversations.list` / `users.list` markers.
+        //
+        // ── Why this cache exists, and why it may not have needed to ──
+        //
+        // It was added 2026-08-17 to stop claude.ai returning HTTP 403 on
+        // this endpoint during golden runs, on the theory that we were being
+        // rate-limited for calling it too often. That theory was wrong.
+        //
+        // The 403 carries `cf-mitigated: challenge`, `server: cloudflare`,
+        // and a `Just a moment...` HTML body, with NO Retry-After and no
+        // x-ratelimit-* headers. It is Cloudflare's interactive bot
+        // challenge, not a quota — nothing expires, and no amount of backing
+        // off clears it. What clears it is looking like a browser: with
+        // LATCHKEY_CURL pointed at
+        // //datalib/backend/etl:latchkey_curl_impersonate the same request
+        // returns 200 immediately, and without it, it 403s no matter how few
+        // calls you have made. (The pre-existing note that disabled the
+        // anthropic stanza in the manual-e2e config two months earlier
+        // blamed "rate limiting" for the same 403 — quite possibly the same
+        // misdiagnosis.)
+        //
+        // The cache is kept because it is independently worth having —
+        // one listing per invocation instead of three, for data that is
+        // effectively static — but it should not be credited with fixing the
+        // 403s, and if it is ever in the way, removing it costs little.
+        // Don't let it become load-bearing in someone's mental model of why
+        // anthropic downloads work.
+        //
+        // The preflight survives where it matters: a cold store has no
+        // marker, so a first run — the one where a missing registration or
+        // dead sessionKey is actually likely — still calls upstream and
+        // still fails loudly. Only a warm store, which has already proven
+        // the credential once, skips.
+        let cached_orgs = match db.sweep_age(ORGS_SWEEP_KEY).await {
+            Ok(Some(age)) if age < ORGS_TTL => match db.load_orgs().await {
+                // An empty `orgs` table with a fresh marker shouldn't
+                // silently yield zero orgs (that would skip every
+                // conversation); fall through to the live call.
+                Ok(orgs) if !orgs.is_empty() => {
+                    info!(
+                        event = "anthropic_orgs_skipped",
+                        reason = "ttl",
+                        age_s = age.num_seconds().max(0),
+                        ttl_s = ORGS_TTL.num_seconds(),
+                        count = orgs.len(),
+                    );
+                    Some(orgs)
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    warn!(event = "anthropic_orgs_load_failed", error = %e);
+                    None
+                }
+            },
+            Ok(_) => None,
+            Err(e) => {
+                warn!(event = "anthropic_orgs_sweep_age_failed", error = %e);
+                None
+            }
+        };
+
+        let orgs = match cached_orgs {
+            Some(orgs) => orgs,
+            None => {
+                let orgs = client.list_orgs().await.map_err(credential_hint)?;
+                info!(event = "anthropic_orgs", count = orgs.len());
+                if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
+                    warn!(event = "anthropic_orgs_upsert_failed", error = %e);
+                } else if let Err(e) = db.record_sweep(ORGS_SWEEP_KEY).await {
+                    // Only stamp the marker once the rows are actually
+                    // stored — otherwise a failed upsert would leave a
+                    // fresh marker pointing at an empty table.
+                    warn!(event = "anthropic_orgs_sweep_record_failed", error = %e);
+                }
+                orgs
+            }
+        };
 
         // users.json from the bulk export carries the account.uuid we
         // need on every conversation. If the DB doesn't have any user

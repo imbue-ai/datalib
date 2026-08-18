@@ -35,16 +35,55 @@ Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
 § "Updating insta snapshots" for the full pattern, including how to declare a
 `.update` for a new test.
 
-## Manual e2e live-sync golden — retired
+## Manual e2e live-sync golden
 
-The `//datalib/backend/sync:manual_e2e_live_sync_golden` test was
-retired together with the `datalib-sync` binary when the pipeline moved
-to the DAG runner (`datalib-dag` — see
-[`/docs/dev/pipeline_dag_architecture.md`](/docs/dev/pipeline_dag_architecture.md)).
-Its config, file-based source data, and golden snapshots still live in the
-private `data_liberation_manual_e2e_test_data` directory (outside this repo
-— it holds slightly sensitive personal data), but nothing in-tree currently
-runs against it.
+`//datalib/backend/dag:manual_e2e_live_sync_golden` runs the whole pipeline
+against **real** provider APIs and snapshots what it produces. It is the only
+test that catches render-side drift against real payloads — upstream shape
+changes, schema-projection bugs, timestamp fabrication, attachment-handling
+gaps — with a human-reviewable diff.
+
+Manual and host-bound: it needs latchkey credentials for Thad's accounts, so
+only that host can run it. Never runs on CI (`manual` + `external` tags).
+
+Its config, file-based source data, and golden snapshots live in the private
+`data_liberation_manual_e2e_test_data` directory, outside this repo — it holds
+slightly sensitive personal data. Point `DATALIB_MANUAL_E2E_DIR` at it (the
+runner defaults to `~/data_liberation_manual_e2e_test_data`).
+
+```bash
+datalib/backend/dag/manual_e2e_run.sh --config   # validate config only: offline, no creds
+datalib/backend/dag/manual_e2e_run.sh            # run + diff against goldens
+datalib/backend/dag/manual_e2e_run.sh --update   # accept new goldens
+```
+
+Start with `--config`. It parses the config, builds the graph, and round-trips
+every step's params against the provider schemas in seconds, without touching
+the network. It is not a complete guard, though: render params are
+`deny_unknown_fields` and so are most download configs, but `email`, `fsindex`,
+`linkedin`, and `sms_backup_restore` are permissive, so a misplaced knob on
+those parses clean and only fails during the live run.
+
+The test makes three pipeline runs, each asserting something different:
+
+1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
+   manifest and the layout invariants.
+2. **Incremental** — re-runs against the now-populated `data_root` and
+   snapshots each source's `sync_runs.summary`, whose `deltas` prove the run
+   didn't re-fetch the world. A broken-incrementality regression shows up as
+   `deltas.<table>.added` back at first-run scale. Only the API-backed
+   providers stamp `sync_runs`; file-backed sources record an explicit
+   "no rows" marker, since there is no upstream to be incremental about.
+3. **`--reset-and-redownload`** — wipes and re-downloads everything, then
+   asserts the content tables come back byte-identical. This is what catches a
+   per-fetch field leaking into a content payload (it belongs in the
+   `volatile_payload` sidecar instead).
+
+This test was ported from the pre-DAG `frankweiler/backend/sync` crate, which
+was deleted in e905d252. The normalization machinery — roughly fifty volatile
+keys, each commented with why it's redacted — carried over verbatim, because it
+operates on the produced data tree and the DAG migration didn't change that
+layout. See the module header of the test for what genuinely had to change.
 
 ### Note: the old in-repo copies have been purged from history
 

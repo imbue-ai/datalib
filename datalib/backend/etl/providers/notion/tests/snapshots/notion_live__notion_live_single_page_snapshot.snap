@@ -1,11 +1,10 @@
 ---
-source: etl/providers/notion/tests/notion_live.rs
-assertion_line: 79
+source: datalib/backend/etl/providers/notion/tests/notion_live.rs
 expression: view
 ---
 {
   "archived": false,
-  "block_count": 11,
+  "block_count": 16,
   "block_kinds": [
     "bulleted_list_item",
     "child_page",

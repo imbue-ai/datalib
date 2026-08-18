@@ -452,8 +452,8 @@ plumbing delegated).
     Re-record once via
     `bazel run //datalib/backend/core:fixture_db_snapshot_test.update`.
 18. **`manual_e2e_live_sync_golden.snap`** + per-file snaps under
-    `datalib/backend/sync/tests/snapshots/raw/`: re-record once via
-    `bazel run //datalib/backend/sync:manual_e2e_live_sync_golden.update`
+    `$DATALIB_MANUAL_E2E_DIR/snapshots/<stanza>/raw/`: re-record once via
+    `bazel run //datalib/backend/dag:manual_e2e_live_sync_golden.update`
     (needs `LATCHKEY_CURL` set on the host — see AGENTS.md for the
     full incantation). Delete the now-orphan per-file `.snap`s that
     the new manifest doesn't reference.
@@ -541,7 +541,7 @@ insta_update(
    `cannot find module or crate \`tempfile\``.
 
 10. **Don't checked-in your fixture's `.doltlite_db`.** Run
-    `bazel run //datalib/backend/sync:manual_e2e_live_sync_golden.update`
+    `bazel run //datalib/backend/dag:manual_e2e_live_sync_golden.update`
     after your port to refresh the binary-blob marker snapshots.
     Those are `<binary N bytes>` markers, not the actual db
     contents — the golden test deliberately skips byte-identity on
@@ -565,7 +565,7 @@ bazelisk test //datalib/backend/etl/providers/<name>:<name>_playback_roundtrip
 # 3. Live golden (needs LATCHKEY_CURL set):
 bazelisk build //datalib/backend/etl:latchkey_curl_impersonate
 export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
-bazelisk run //datalib/backend/sync:manual_e2e_live_sync_golden.update
+bazelisk run //datalib/backend/dag:manual_e2e_live_sync_golden.update
 
 # 4. Full bazel verify — CANONICAL invocation, matches AGENTS.md:
 bazelisk test //...

@@ -35,3 +35,11 @@ datalib-time = { path = "../time" }
 
 [dev-dependencies]
 tempfile = "3"
+# The manual-e2e live golden (tests/manual_e2e_live_sync_golden.rs) is
+# BAZEL-ONLY — it needs `datalib-step`, which has no cargo target — but cargo
+# auto-discovers tests/*.rs, so these have to be declared or `cargo check`
+# breaks on the whole crate.
+insta = "1.41"
+runfiles = "0.2"
+sqlx = { workspace = true }
+walkdir = { workspace = true }
