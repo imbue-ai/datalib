@@ -340,14 +340,12 @@ const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "event
 /// (in the code repo) sets `DATALIB_MANUAL_E2E_DIR` and invokes this test.
 /// `None` when unset.
 ///
-/// `FRANKWEILER_MANUAL_E2E_DIR` is still honored as a fallback: the var
-/// predates the frankweiler→datalib rename and may well be exported from a
-/// shell profile somewhere.
+/// Exactly one name, deliberately. The pre-rename `FRANKWEILER_MANUAL_E2E_DIR`
+/// is NOT accepted: a fallback to a stale name keeps a stale shell profile
+/// silently working, which is how you end up with two documented spellings
+/// and no signal that one is wrong.
 fn e2e_dir() -> Option<PathBuf> {
-    std::env::var("DATALIB_MANUAL_E2E_DIR")
-        .or_else(|_| std::env::var("FRANKWEILER_MANUAL_E2E_DIR"))
-        .ok()
-        .map(PathBuf::from)
+    std::env::var("DATALIB_MANUAL_E2E_DIR").ok().map(PathBuf::from)
 }
 
 /// Base directory for golden snapshots. Resolves to `<e2e_dir>/snapshots`
@@ -1102,7 +1100,7 @@ fn content_tables(path: &Path) -> Value {
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
 /// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under
-/// `$FRANKWEILER_MANUAL_E2E_DIR/snapshots`), mirroring the data layout.
+/// `$DATALIB_MANUAL_E2E_DIR/snapshots`), mirroring the data layout.
 /// `manifest` collects the snapshot key (top + rel path)
 /// for the overall manifest assertion.
 fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {

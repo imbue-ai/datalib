@@ -19,10 +19,18 @@
 set -euo pipefail
 
 # External private data dir (dag.yaml + sources/ + snapshots/). Honor an
-# existing export; else fall back to the canonical checkout location.
-# FRANKWEILER_MANUAL_E2E_DIR is the pre-rename name, still honored so an old
-# shell profile keeps working.
-export DATALIB_MANUAL_E2E_DIR="${DATALIB_MANUAL_E2E_DIR:-${FRANKWEILER_MANUAL_E2E_DIR:-$HOME/data_liberation_manual_e2e_test_data}}"
+# existing export; else use the canonical checkout location.
+#
+# One spelling only. The pre-rename FRANKWEILER_MANUAL_E2E_DIR is deliberately
+# NOT honored — accepting it would let a stale shell profile keep working with
+# no indication it names something that no longer exists.
+export DATALIB_MANUAL_E2E_DIR="${DATALIB_MANUAL_E2E_DIR:-$HOME/data_liberation_manual_e2e_test_data}"
+
+if [[ -n "${FRANKWEILER_MANUAL_E2E_DIR:-}" ]]; then
+  echo "note: FRANKWEILER_MANUAL_E2E_DIR is set and is IGNORED — the variable is" >&2
+  echo "      now DATALIB_MANUAL_E2E_DIR. Update your shell profile." >&2
+  echo "      using: $DATALIB_MANUAL_E2E_DIR" >&2
+fi
 
 if [[ ! -d "$DATALIB_MANUAL_E2E_DIR" ]]; then
   echo "error: DATALIB_MANUAL_E2E_DIR does not exist: $DATALIB_MANUAL_E2E_DIR" >&2
