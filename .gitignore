@@ -36,3 +36,4 @@ test-results/
 
 # Tauri-build regenerated capability schemas (datalib/tauri/gen/schemas).
 datalib/tauri/gen/
+.DS_Store
