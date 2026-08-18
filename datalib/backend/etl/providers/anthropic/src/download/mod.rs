@@ -43,8 +43,10 @@ const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
 /// How long a completed `/organizations` listing stays good. Matches
 /// slack's `MANIFEST_TTL`, and for the same reason: the org set is
-/// near-static, while the endpoint is the first thing claude.ai
-/// rate-limits. See the sweep comment in `fetch`.
+/// near-static, so re-listing it on every download is pure waste.
+///
+/// NOTE — this cache was added on a diagnosis that turned out to be wrong,
+/// and may not have been necessary. See the sweep comment in `fetch`.
 pub const ORGS_TTL: chrono::Duration = chrono::Duration::hours(6);
 const ORGS_SWEEP_KEY: &str = "orgs";
 
@@ -159,12 +161,37 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // misleading account-fetch warning and then dying on a cryptic
         // curl error.
         //
-        // But `/organizations` is also the endpoint claude.ai rate-limits
-        // first: hammering it (three pipeline runs per manual-e2e
-        // invocation, each re-listing an org set that changes maybe once a
-        // year) earns a 403 that fails the whole run. So reuse the stored
-        // rows while a completed sweep is younger than ORGS_TTL, mirroring
-        // slack's `conversations.list` / `users.list` markers.
+        // But re-listing on every download is waste: the org set changes
+        // maybe once a year, and the manual-e2e golden runs the pipeline
+        // three times per invocation. So reuse the stored rows while a
+        // completed sweep is younger than ORGS_TTL, mirroring slack's
+        // `conversations.list` / `users.list` markers.
+        //
+        // ── Why this cache exists, and why it may not have needed to ──
+        //
+        // It was added 2026-08-17 to stop claude.ai returning HTTP 403 on
+        // this endpoint during golden runs, on the theory that we were being
+        // rate-limited for calling it too often. That theory was wrong.
+        //
+        // The 403 carries `cf-mitigated: challenge`, `server: cloudflare`,
+        // and a `Just a moment...` HTML body, with NO Retry-After and no
+        // x-ratelimit-* headers. It is Cloudflare's interactive bot
+        // challenge, not a quota — nothing expires, and no amount of backing
+        // off clears it. What clears it is looking like a browser: with
+        // LATCHKEY_CURL pointed at
+        // //datalib/backend/etl:latchkey_curl_impersonate the same request
+        // returns 200 immediately, and without it, it 403s no matter how few
+        // calls you have made. (The pre-existing note that disabled the
+        // anthropic stanza in the manual-e2e config two months earlier
+        // blamed "rate limiting" for the same 403 — quite possibly the same
+        // misdiagnosis.)
+        //
+        // The cache is kept because it is independently worth having —
+        // one listing per invocation instead of three, for data that is
+        // effectively static — but it should not be credited with fixing the
+        // 403s, and if it is ever in the way, removing it costs little.
+        // Don't let it become load-bearing in someone's mental model of why
+        // anthropic downloads work.
         //
         // The preflight survives where it matters: a cold store has no
         // marker, so a first run — the one where a missing registration or

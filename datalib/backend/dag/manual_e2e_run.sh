@@ -14,9 +14,8 @@
 # checkout below; export the var yourself to point at a different copy.
 #
 # Prereqs: latchkey creds configured for the API-backed sources
-# (`latchkey auth set …`). The Cloudflare-impersonating curl shim is
-# auto-resolved from the step binary's bazel runfiles; export LATCHKEY_CURL
-# yourself only if you want to override it.
+# (`latchkey auth set …`). This script builds and exports LATCHKEY_CURL for
+# you — see the block below for why that is not optional.
 set -euo pipefail
 
 # External private data dir (dag.yaml + sources/ + snapshots/). Honor an
@@ -41,6 +40,35 @@ fi
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 TARGET="//datalib/backend/dag:manual_e2e_live_sync_golden"
+
+# ── The Chrome-impersonating curl ───────────────────────────────────────
+#
+# claude.ai and chatgpt.com sit behind Cloudflare bot protection. Without a
+# browser-shaped TLS/HTTP fingerprint they return HTTP 403 with
+# `cf-mitigated: challenge` and a "Just a moment..." HTML body — no
+# Retry-After, no x-ratelimit-* headers, because it is a challenge and not a
+# rate limit. There is nothing to wait out: the same request returns 200
+# immediately once LATCHKEY_CURL points at the impersonator.
+#
+# This is worth automating rather than documenting. The 403 reads exactly
+# like throttling, which sent us chasing a non-existent rate limit for an
+# afternoon (and, two months earlier, got the anthropic source disabled in
+# the golden config for the same wrong reason).
+if [[ -z "${LATCHKEY_CURL:-}" ]]; then
+  IMPERSONATE_TARGET="//datalib/backend/etl:latchkey_curl_impersonate"
+  echo "[manual-e2e] building ${IMPERSONATE_TARGET} for LATCHKEY_CURL…" >&2
+  bazel build "$IMPERSONATE_TARGET" >&2
+  # `bazel info bazel-bin` rather than the convenience symlink: the symlink
+  # is absent on a fresh clone until something is built, and points at the
+  # wrong config when the last build used different flags.
+  LATCHKEY_CURL="$(bazel info bazel-bin)/datalib/backend/etl/latchkey_curl_impersonate"
+  if [[ ! -x "$LATCHKEY_CURL" ]]; then
+    echo "error: built the impersonator but it is not at $LATCHKEY_CURL" >&2
+    exit 1
+  fi
+  export LATCHKEY_CURL
+fi
+echo "[manual-e2e] LATCHKEY_CURL=$LATCHKEY_CURL" >&2
 
 case "${1:-}" in
   --config)
@@ -72,7 +100,7 @@ case "${1:-}" in
     exec bazel test "$TARGET" \
       --test_arg=--ignored \
       --test_env=DATALIB_MANUAL_E2E_DIR \
-      ${LATCHKEY_CURL:+--test_env=LATCHKEY_CURL} \
+      --test_env=LATCHKEY_CURL \
       --test_output=streamed \
       --nocache_test_results
     ;;

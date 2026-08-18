@@ -714,15 +714,142 @@ fn manual_e2e_live_sync_golden() {
 
     for (name, before_v) in &before {
         let after_v = content_tables(&data_root.join(name));
-        assert_eq!(
-            before_v, &after_v,
-            "{name}: content tables drifted across --reset-and-redownload. \
-             A per-fetch field is leaking into a content payload — declare it \
-             in that entity's *_VOLATILE_PATHS and route the upsert through \
+        // Report a PATH-LEVEL diff, not `assert_eq!` on the two whole Values.
+        // These are multi-megabyte structures; the stock assertion prints both
+        // in full, which is unreadable — and worse, actively misleading, since
+        // eyeballing two offset 2MB dumps invites you to "find" differences
+        // that are only misalignment. Say exactly which row and which JSON
+        // path moved.
+        let drifts = json_diff_paths(before_v, &after_v, DRIFT_REPORT_LIMIT);
+        assert!(
+            drifts.is_empty(),
+            "{name}: content tables drifted across --reset-and-redownload.\n\
+             Re-fetching an unchanged upstream object must land identical \
+             bytes, so a drifting field is per-fetch bookkeeping leaking into \
+             a content payload — declare it in that entity's \
+             *_VOLATILE_PATHS and route the upsert through \
              bulk_upsert_with_tape_split (see data_architecture_ingestion.md \
-             §\"Volatile-field split\")."
+             §\"Volatile-field split\").\n\n{}",
+            drifts.join("\n")
         );
     }
+}
+
+/// How many drifting paths to name before truncating. Enough to see whether
+/// the drift is one stray field or a systemic shape change; not so many that
+/// the message becomes the thing that hides the answer.
+const DRIFT_REPORT_LIMIT: usize = 40;
+
+/// Structural diff of two JSON values: returns human-readable
+/// `path: before=… after=…` lines for every leaf that differs.
+///
+/// Arrays of objects carrying an `id` are matched BY ID rather than by
+/// position, so one inserted row doesn't cascade into "everything after this
+/// differs". That cascade is exactly the failure mode that makes a naive diff
+/// of these dumps untrustworthy.
+fn json_diff_paths(a: &Value, b: &Value, limit: usize) -> Vec<String> {
+    fn short(v: &Value) -> String {
+        let s = match v {
+            Value::String(s) => format!("{s:?}"),
+            other => other.to_string(),
+        };
+        if s.chars().count() > 80 {
+            let head: String = s.chars().take(77).collect();
+            format!("{head}...")
+        } else {
+            s
+        }
+    }
+    fn row_id(v: &Value) -> Option<&str> {
+        v.get("id").and_then(Value::as_str)
+    }
+    fn walk(path: &str, a: &Value, b: &Value, out: &mut Vec<String>, limit: usize) {
+        if out.len() >= limit {
+            return;
+        }
+        match (a, b) {
+            (Value::Object(ma), Value::Object(mb)) => {
+                let mut keys: Vec<&String> = ma.keys().chain(mb.keys()).collect();
+                keys.sort_unstable();
+                keys.dedup();
+                for k in keys {
+                    let p = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    match (ma.get(k), mb.get(k)) {
+                        (Some(x), Some(y)) => walk(&p, x, y, out, limit),
+                        (Some(x), None) => {
+                            out.push(format!("  {p}: before={} after=<missing>", short(x)))
+                        }
+                        (None, Some(y)) => {
+                            out.push(format!("  {p}: before=<missing> after={}", short(y)))
+                        }
+                        (None, None) => {}
+                    }
+                    if out.len() >= limit {
+                        return;
+                    }
+                }
+            }
+            (Value::Array(xa), Value::Array(xb)) => {
+                // Match by `id` when every element has one; else positionally.
+                let ida: Option<Vec<&str>> = xa.iter().map(row_id).collect();
+                let idb: Option<Vec<&str>> = xb.iter().map(row_id).collect();
+                if let (Some(ia), Some(ib)) = (ida, idb) {
+                    let ma: std::collections::BTreeMap<&str, &Value> =
+                        ia.into_iter().zip(xa.iter()).collect();
+                    let mb: std::collections::BTreeMap<&str, &Value> =
+                        ib.into_iter().zip(xb.iter()).collect();
+                    let mut ids: Vec<&&str> = ma.keys().chain(mb.keys()).collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    for id in ids {
+                        let p = format!("{path}[id={id}]");
+                        match (ma.get(*id), mb.get(*id)) {
+                            (Some(x), Some(y)) => walk(&p, x, y, out, limit),
+                            (Some(_), None) => {
+                                out.push(format!("  {p}: row present before, gone after"))
+                            }
+                            (None, Some(_)) => {
+                                out.push(format!("  {p}: row absent before, present after"))
+                            }
+                            (None, None) => {}
+                        }
+                        if out.len() >= limit {
+                            return;
+                        }
+                    }
+                } else {
+                    if xa.len() != xb.len() {
+                        out.push(format!(
+                            "  {path}: array length {} -> {}",
+                            xa.len(),
+                            xb.len()
+                        ));
+                    }
+                    for (i, (x, y)) in xa.iter().zip(xb.iter()).enumerate() {
+                        walk(&format!("{path}[{i}]"), x, y, out, limit);
+                        if out.len() >= limit {
+                            return;
+                        }
+                    }
+                }
+            }
+            _ => {
+                if a != b {
+                    out.push(format!("  {path}: before={} after={}", short(a), short(b)));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk("", a, b, &mut out, limit);
+    if out.len() >= limit {
+        out.push(format!("  … truncated at {limit} differing paths"));
+    }
+    out
 }
 
 /// One invocation of `datalib-dag`, with its stderr captured.
@@ -797,9 +924,18 @@ fn assert_step_statuses_ok(summary: &Value) {
         .and_then(Value::as_array)
         .expect("run_summary.steps");
     assert!(!steps.is_empty(), "run_summary carried zero steps");
+    // `skipped_up_to_date` is a SUCCESS: the scheduler content-hashed the
+    // step's inputs, found them unchanged, and correctly did nothing. Runs 2
+    // and 3 are expected to be full of these — that is what incrementality
+    // looks like. Only `failed` and `blocked` are real problems.
+    const OK_STATUSES: &[&str] = &["succeeded", "skipped_up_to_date"];
     let bad: Vec<String> = steps
         .iter()
-        .filter(|s| s.get("status").and_then(Value::as_str) != Some("succeeded"))
+        .filter(|s| {
+            !s.get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|st| OK_STATUSES.contains(&st))
+        })
         .map(|s| {
             format!(
                 "  {} → {} {}",
@@ -909,18 +1045,29 @@ async fn latest_sync_run(path: &Path) -> Value {
     })
 }
 
+/// Whole-table bookkeeping that legitimately changes across a reset, so it
+/// is excluded from the content-stability comparison:
+///
+/// * `sync_runs` — the audit log; a reset adds a row by definition.
+/// * `sync_scope_state` — the resume cursor.
+/// * `sync_scope_config` — the recorded scope config, carrying a wall-clock
+///   `updated_at` that is re-stamped on every run. Missing from this list
+///   originally, which made the stability assertion fail on a pure
+///   timestamp — a false positive that looked like a real content leak.
+const NON_CONTENT_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
+
 /// Dump only the entity *content* tables of a doltlite DB for the
 /// --reset-and-redownload stability assertion: drops every
 /// `*_bookkeeping` sidecar (per-fetch stamps + the `volatile_payload`
-/// split-outs), plus `sync_runs` (audit log) and `sync_scope_state`
-/// (resume cursor) — all of which legitimately change across a reset.
+/// split-outs) plus [`NON_CONTENT_TABLES`].
+///
 /// Deliberately NOT volatile-redacted: the whole point is to catch a
 /// field that drifts on re-fetch, which `strip_volatile` would mask.
 fn content_tables(path: &Path) -> Value {
     let mut v = dump_doltlite_db(path);
     if let Value::Object(map) = &mut v {
         map.retain(|table, _| {
-            !table.ends_with("_bookkeeping") && table != "sync_runs" && table != "sync_scope_state"
+            !table.ends_with("_bookkeeping") && !NON_CONTENT_TABLES.contains(&table.as_str())
         });
     }
     v

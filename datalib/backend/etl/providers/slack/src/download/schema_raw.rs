@@ -133,7 +133,15 @@ pub struct ChannelRow {
 /// it in the content payload would make `dolt_diff_channels` report a
 /// change on every re-download — defeating incremental render and the
 /// `--reset-and-redownload` "nothing changed" guarantee.
-pub const CHANNEL_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
+///
+/// `num_members` belongs here for the same reason, and the manual-e2e
+/// live golden is what proved it: a channel went 37 -> 38 members between
+/// the cold run and the `--reset-and-redownload` run because somebody
+/// joined while the test was running. It is a live membership counter, not
+/// content — nobody re-renders a channel because its member count moved,
+/// and leaving it in the content payload means `dolt_diff_channels` reports
+/// a change every time anyone joins or leaves any mirrored channel.
+pub const CHANNEL_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"], &["num_members"]];
 
 /// `messages` — one row per Slack message (top-level or threaded
 /// reply).
