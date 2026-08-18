@@ -24,6 +24,18 @@ fastest parts. ~840s of it was a single provider step stalling on a degraded
 upstream, emitting nothing the whole time. Nothing in the stream said so —
 there were no timestamps at all — so answering it meant `ps` and `du`
 forensics against a live process. Hence this script, and the `ts` field.
+
+See issue #136 for where this is going. The interesting idea there: rank log
+lines by the silence that FOLLOWED them and use that as a bounded excerpt for
+a failure report, with a few lines of preceding context — complementary to
+"last N lines", which tells you how a run ended rather than where it wedged.
+It is self-limiting by construction (gaps >= X number at most T/X), and the
+budget scales with elapsed time rather than log volume, so a chatty healthy
+step and a silent stuck one get equal treatment. A healthy run emits nothing.
+
+Known blind spot, also tracked there: a stall that logs. A retry loop
+printing "attempt 3/50" every 20s shows no gap while making no progress, so
+this wants pairing with progress-flatline detection.
 """
 
 from __future__ import annotations

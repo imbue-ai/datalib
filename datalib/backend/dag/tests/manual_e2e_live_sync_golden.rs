@@ -876,6 +876,14 @@ impl PipelineRun {
 
     /// Last `n` stderr lines, for failure messages. The runner forwards every
     /// step's stderr here, so this is where the actual provider error is.
+    ///
+    /// A tail answers "how did this end", which is the wrong question for a
+    /// run that wedged in the middle: a 14-minute stall at minute 4 of 18
+    /// leaves a tail that looks perfectly healthy. Issue #136 tracks adding
+    /// the complementary view — the log lines followed by the longest
+    /// silences, with context — to this report. Until then, the run's full
+    /// stream is persisted next to the data (see [`run_pipeline`]) and
+    /// `scripts/dag_profile.py` will find the gaps.
     fn stderr_tail(&self, n: usize) -> String {
         let lines: Vec<&str> = self.stderr.lines().collect();
         lines[lines.len().saturating_sub(n)..].join("\n")

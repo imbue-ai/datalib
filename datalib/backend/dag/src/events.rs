@@ -141,6 +141,12 @@ struct Stamped<'a> {
 /// a run, and a step that stalls is indistinguishable from one doing work.
 /// `scripts/dag_profile.py` turns a captured stream into per-step durations
 /// and a list of suspicious gaps.
+///
+/// The `ts` is the raw material for more than that; see issue #136 for the
+/// planned work — gap-ranked log excerpting as a bounded failure report
+/// (complementary to "last N lines", which answers how a run ended rather
+/// than where it got stuck), progress-flatline detection, and per-step
+/// timings on [`StepSummary`] so a profile doesn't need the whole stream.
 pub struct NdjsonSink<W: Write + Send> {
     w: Mutex<W>,
 }
