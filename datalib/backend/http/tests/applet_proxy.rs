@@ -12,7 +12,6 @@ use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use datalib_http::applets::AppletRegistry;
-use datalib_http::sha256_hex;
 use datalib_http::{router, AppState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

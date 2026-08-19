@@ -97,9 +97,10 @@ ln -sf /path/to/my-fetcher ~/.datalib/bin/my-fetcher
 ```
 
 `~/.datalib/bin` is prepended to `PATH` whenever the UI runs the
-pipeline, so a bare `command = "my-fetcher --out ."` resolves. Keep step
-commands non-interactive; they run headless with their output captured
-into the job log.
+pipeline, so a bare `command = "my-fetcher --out ."` resolves. The same
+applies to an `[[applets]]` command, so one install location covers both
+kinds of entry. Keep step commands non-interactive; they run headless
+with their output captured into the job log.
 
 Steps run with the data root as their working directory, and their
 declared `outputs` are what downstream steps' `inputs` match against —

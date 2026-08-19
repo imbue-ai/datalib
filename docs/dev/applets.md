@@ -27,7 +27,10 @@ tree = "slack/rendered_md"
 ```
 
 `command` is split shell-style (the same `shlex` call the runner uses)
-and resolved through `binary_dir` then `PATH`, `params` is forwarded as
+and resolved through `binary_dir`, then `~/.datalib/bin`, then the
+inherited `PATH` — the same order a step's command resolves in, so a
+program installed in `~/.datalib/bin` works for either kind of entry.
+`params` is forwarded as
 `--params <json>`, the working directory is the data root, and `env` is
 merged into the child — all as for a step, so there is one set of
 rules.

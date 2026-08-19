@@ -166,18 +166,10 @@ fn base_command(
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     cmd.current_dir(data_root);
-    if let Some(dir) = binary_dir {
-        // `join_paths`, not a hardcoded ':', so this is correct on
-        // Windows and preserves non-UTF-8 path components — the same
-        // call the DAG runner makes for a step.
-        let mut paths = vec![dir.to_path_buf()];
-        if let Some(p) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&p));
-        }
-        let joined = std::env::join_paths(paths).map_err(|e| {
-            anyhow::anyhow!("applet {:?}: prepend binary_dir to PATH: {e}", entry.id)
-        })?;
-        cmd.env("PATH", joined);
+    if let Some(path) = child_path(binary_dir, crate::user_bin_dir())
+        .map_err(|e| anyhow::anyhow!("applet {:?}: build child PATH: {e}", entry.id))?
+    {
+        cmd.env("PATH", path);
     }
     // `DATALIB_DAG_DATA_ROOT` is the step protocol's established
     // spelling for this value, and reusing it keeps one name for one
@@ -262,6 +254,45 @@ pub fn discover_one_with_timeout(
         verify_module(&entry.id, store, c)?;
     }
     Ok(manifest)
+}
+
+/// The PATH an applet child sees: `binary_dir`, then `~/.datalib/bin`,
+/// then whatever this process inherited.
+///
+/// That order matches what a *step* gets, which is the point. A step's
+/// child sees `binary_dir` first (the DAG runner prepends it) over a
+/// PATH the sync worker has already prefixed with `~/.datalib/bin`, so
+/// an applet resolving its command differently from a step would make
+/// `/agent/config.md`'s "install it in ~/.datalib/bin" advice true for
+/// one kind of config entry and false for the other.
+///
+/// `join_paths`, not a hardcoded separator, so this is correct on
+/// Windows and preserves non-UTF-8 components. Returns `None` only when
+/// there is nothing to prepend and no PATH to inherit.
+fn child_path(
+    binary_dir: Option<&Path>,
+    user_bin: Option<PathBuf>,
+) -> Result<Option<std::ffi::OsString>, std::env::JoinPathsError> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = binary_dir {
+        paths.push(dir.to_path_buf());
+    }
+    if let Some(dir) = user_bin {
+        // Prepended even when the dir does not exist yet: an agent may
+        // create it between runs, and a missing PATH entry is harmless.
+        // Same reasoning as the worker's.
+        if Some(dir.as_path()) != binary_dir {
+            paths.push(dir);
+        }
+    }
+    let inherited = std::env::var_os("PATH");
+    if paths.is_empty() && inherited.is_none() {
+        return Ok(None);
+    }
+    if let Some(p) = &inherited {
+        paths.extend(std::env::split_paths(p));
+    }
+    std::env::join_paths(paths).map(Some)
 }
 
 /// Run a command to completion, killing and reaping it if it outlives
@@ -802,6 +833,46 @@ mod tests {
         assert!(err.to_string().contains("slack_work"), "{err}");
         let err = split_command("slack_work", "   ").unwrap_err();
         assert!(err.to_string().contains("empty command"), "{err}");
+    }
+
+    /// The order is the contract: an applet must resolve a bare command
+    /// the same way a step does, or the documented install location
+    /// only works for half the config file.
+    #[test]
+    fn child_path_prepends_binary_dir_then_the_user_bin_dir() {
+        let bin = PathBuf::from("/opt/datalib/bin");
+        let user = PathBuf::from("/home/u/.datalib/bin");
+        let joined = child_path(Some(&bin), Some(user.clone()))
+            .unwrap()
+            .expect("some path");
+        let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(parts[0], bin);
+        assert_eq!(parts[1], user);
+        // …and the inherited PATH still follows, so packaged binaries
+        // stay reachable.
+        assert!(parts.len() > 2, "inherited PATH was dropped: {parts:?}");
+    }
+
+    #[test]
+    fn child_path_does_not_repeat_a_dir() {
+        let dir = PathBuf::from("/home/u/.datalib/bin");
+        let joined = child_path(Some(&dir), Some(dir.clone()))
+            .unwrap()
+            .expect("some path");
+        let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(parts.iter().filter(|p| **p == dir).count(), 1, "{parts:?}");
+    }
+
+    /// With no config `binary_dir`, `~/.datalib/bin` still comes first —
+    /// this is the case the user's own config hits.
+    #[test]
+    fn child_path_works_without_a_binary_dir() {
+        let user = PathBuf::from("/home/u/.datalib/bin");
+        let joined = child_path(None, Some(user.clone()))
+            .unwrap()
+            .expect("some path");
+        let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(parts[0], user);
     }
 
     #[test]

@@ -178,6 +178,27 @@ pub struct FeedbackResponse {
     pub git_hash: &'static str,
 }
 
+/// `~/.datalib/bin` — the blessed drop spot for user- (and agent-)
+/// provided programs a config names by bare command.
+///
+/// Prepended to the child PATH by both things that run config
+/// commands: the sync worker, for step subprocesses
+/// ([`worker::run_job`]), and the applet gateway, for applet servers
+/// ([`applets`]). Those are the only two, and they must agree —
+/// `/agent/config.md` advertises this as *the* predictable install
+/// location without qualifying which kind of entry it works for, and a
+/// binary that resolves for a step but not for an applet is exactly the
+/// surprise that promise rules out.
+///
+/// `None` when no home directory is discoverable.
+pub fn user_bin_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE")?;
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".datalib").join("bin"))
+}
+
 pub fn router(state: AppState) -> Router {
     // Slack image attachments are symlinked into
     // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
