@@ -87,12 +87,9 @@ pub fn runtime_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
     let exe_dir = exe.parent()?;
-    for root in [exe_dir.parent()?.join("runtime"), exe_dir.join("runtime")] {
-        if root.join(NODE_REL).is_file() {
-            return Some(root);
-        }
-    }
-    None
+    [exe_dir.parent()?.join("runtime"), exe_dir.join("runtime")]
+        .into_iter()
+        .find(|root| root.join(NODE_REL).is_file())
 }
 
 /// `Command` running `entry_rel` (a path under the staged tree, e.g.
