@@ -287,6 +287,12 @@ struct Adjustments {
 }
 
 impl Adjustments {
+    /// Whether any adjustment is in play.
+    ///
+    /// `#[cfg(test)]` because only the tests below consult it — the
+    /// production path branches on the individual flags. Without the
+    /// gate, clippy's `dead_code` fails the non-test build.
+    #[cfg(test)]
     fn any(&self) -> bool {
         self.backfill_below_oldest || self.force_full_walk
     }

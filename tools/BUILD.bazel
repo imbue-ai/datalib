@@ -1,4 +1,13 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# This package's contribution to `//:python_sources` — see the comment
+# there for why each package with Python has to opt in by hand.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)
 
 exports_files([
     "check_cargo_lock_versions.sh",
@@ -44,4 +53,30 @@ sh_test(
         "//tests/fixtures:BUILD.bazel",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+# --- Hermetic Python lint -------------------------------------------
+#
+# ruff, from the hash-pinned `//:requirements.txt` via `pip.parse`, NOT
+# from a host `.venv` populated by `uv run` at test time. That is the
+# whole point: this target sandboxes, needs no network and no host
+# `$HOME`, and remote-caches. See tools/lint_python.py.
+py_test(
+    name = "ruff_test",
+    size = "small",
+    srcs = ["lint_python.py"],
+    args = [
+        "$(rootpath @py_pip//ruff:whl)",
+        "$(rootpath //:pyproject.toml)",
+        "$(rootpaths //:python_sources)",
+    ],
+    data = [
+        "//:pyproject.toml",
+        "//:python_sources",
+        # The wheel is only an anchor for locating `bin/ruff`; this is
+        # what materializes the executable itself. See lint_python.py.
+        "@py_pip//ruff:extracted_whl_files",
+        "@py_pip//ruff:whl",
+    ],
+    main = "lint_python.py",
 )

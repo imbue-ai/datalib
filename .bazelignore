@@ -1,4 +1,6 @@
 datalib/ui/node_modules
+tools/lint/node_modules
+third-party/qmd/runtime/node_modules
 datalib/ui/dist
 datalib/backend/target
 # Agent worktrees (Claude Code `isolation: worktree` / spawned tasks) live

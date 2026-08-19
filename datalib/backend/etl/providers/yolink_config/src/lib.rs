@@ -138,6 +138,10 @@ fn is_hex32(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type YolinkRenderConfig = datalib_source_common::BareRenderConfig;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,7 +212,3 @@ mod tests {
         assert!(cfg(vec![d2]).validate().is_err());
     }
 }
-
-/// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
-pub type YolinkRenderConfig = datalib_source_common::BareRenderConfig;

@@ -299,7 +299,7 @@ fn space_of_dir(dir: &str) -> String {
 /// (U+202F) before AM/PM; normalize it first. Returns 0 on any
 /// unexpected shape.
 fn parse_date_ms(s: &str) -> i64 {
-    let s = s.trim().replace('\u{202f}', " ").replace('\u{00a0}', " ");
+    let s = s.trim().replace(['\u{202f}', '\u{00a0}'], " ");
     chrono::NaiveDateTime::parse_from_str(&s, "%A, %B %d, %Y at %I:%M:%S %p UTC")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%A, %B %e, %Y at %I:%M:%S %p UTC"))
         .map(|dt| dt.and_utc().timestamp_millis())

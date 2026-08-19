@@ -1,0 +1,35 @@
+load("@npm_lint//:defs.bzl", "npm_link_all_packages")
+load("@npm_lint//tools/lint:pyright/package_json.bzl", pyright_bin = "bin")
+
+# Materializes the (two-package) lint dep graph from pnpm-lock.yaml.
+npm_link_all_packages(name = "node_modules")
+
+# Hermetic Python typecheck, replacing `uv run pyright` from
+# scripts/run_checks.sh.
+#
+# No `chdir`: pyright runs from the runfiles root, which is where
+# `//:pyproject.toml` lands, so it discovers `[tool.pyright]` exactly the
+# way the host invocation discovers it from the workspace root. The
+# `include` list there is what selects the files; `//:python_sources` is
+# what puts them in the sandbox.
+pyright_bin.pyright_test(
+    name = "pyright_test",
+    size = "small",
+    data = [
+        ":node_modules",
+        "//:pyproject.toml",
+        "//:python_sources",
+    ],
+    # rules_js copies every data file into bazel-out by default, on the
+    # assumption that inputs get linked into a JS program. These are
+    # read-only inputs to a typechecker instead, so the copy would just
+    # be a second, divergable duplicate of every Python file in the repo.
+    # Opting out leaves the runfiles entries as symlinks to the real
+    # sources. (Diagnostics still print the runfiles path, not a
+    # workspace-relative one — `no_copy_to_bin` avoids the duplication,
+    # it doesn't change how pyright renders paths.)
+    no_copy_to_bin = [
+        "//:pyproject.toml",
+        "//:python_sources",
+    ],
+)

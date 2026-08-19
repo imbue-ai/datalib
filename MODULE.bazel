@@ -381,6 +381,18 @@ bazel_dep(name = "aspect_rules_js", version = "3.1.2")
 # via `copy_to_bin` to stage Vite inputs into bazel-out.
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 
+# rules_nodejs is already in the graph transitively (via aspect_rules_js);
+# declared explicitly so we can `use_repo` the host Node toolchain repo.
+# `//tests/fixtures:ingested_tng_qmd` needs the node BINARY as a label —
+# it stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the qmd
+# package tree) so `datalib_core::node_runtime::bundled_command` resolves,
+# which is what takes `npx` out of the build. Version tracks what
+# aspect_rules_js 3.1.2 already resolves, so this adds no new fetch.
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+use_repo(node, "nodejs_host")
+
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
 npm.npm_translate_lock(
     name = "npm",
@@ -388,6 +400,153 @@ npm.npm_translate_lock(
     verify_node_modules_ignored = "//:.bazelignore",
 )
 use_repo(npm, "npm")
+
+# A second, deliberately tiny npm tree: the host-side lint tooling Bazel
+# runs hermetically (today just pyright). Separate from the UI lock so a
+# UI dependency bump can't churn the lint toolchain or vice versa, and so
+# `//tools/lint:pyright_test` doesn't have to link the UI's 246 packages
+# to typecheck Python.
+#
+# This is what replaces `uv run pyright`, which resolved pyright from
+# PyPI into the host `.venv` at test time and then had `nodeenv` fetch a
+# Node to run it under — two unpinned network fetches on the default
+# `bazel test //...` path. Here both the package and its integrity hash
+# come from the checked-in lockfile and Node comes from the rules_js
+# toolchain.
+npm.npm_translate_lock(
+    name = "npm_lint",
+    pnpm_lock = "//tools/lint:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm_lint")
+
+# The qmd CLI and its 277-package transitive tree, replacing the
+# `npx -y @tobilu/qmd@<v>` fetch that `//tests/fixtures:ingested_tng_qmd`
+# used to perform on every cache miss. `npx -y` resolves that tree from
+# the live registry with no lockfile and no integrity checking, and runs
+# every package's install scripts while doing it; this gets the identical
+# tree from a checked-in lockfile where every tarball carries a sha512,
+# with lifecycle hooks disabled outright.
+npm.npm_translate_lock(
+    name = "npm_qmd",
+    pnpm_lock = "//third-party/qmd/runtime:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm_qmd")
+
+# The upstream better-sqlite3 package, fetched independently of the qmd
+# lockfile so the replacement below isn't circular (a package cannot be
+# built out of the very repo whose contents it replaces). `integrity` is
+# the exact sha512 the lockfile records, so this is the same tarball
+# `npm_translate_lock` would have fetched, verified the same way.
+http_archive(
+    name = "better_sqlite3_src",
+    urls = ["https://registry.npmjs.org/better-sqlite3/-/better-sqlite3-12.10.0.tgz"],
+    integrity = "sha512-CyzaZRQKyHkB2ZInfTTl2nvT33EbDpjkLEbE8/Zck3Ll6O0qqvuGdrJ45HgtH+HykRg88ITY3AdreBGN70aBSQ==",
+    strip_prefix = "package",
+    build_file_content = """load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@aspect_rules_js//npm:defs.bzl", "npm_package")
+
+# Land the pinned prebuilt exactly where the `bindings` package looks.
+copy_file(
+    name = "binding",
+    src = "@@//third-party/qmd/runtime:better_sqlite3_binding",
+    out = "build/Release/better_sqlite3.node",
+)
+
+# Upstream contents + that binary, as a drop-in replacement for the
+# lockfile's better-sqlite3. Registered via `npm.npm_replace_package`
+# below, which is what lets the whole tree declare
+# `onlyBuiltDependencies: []`: with the binary already in the package,
+# nothing needs a postinstall to go fetch one.
+npm_package(
+    name = "pkg",
+    srcs = glob(["**"], exclude = ["BUILD.bazel"]) + [":binding"],
+    package = "better-sqlite3",
+    version = "12.10.0",
+    visibility = ["//visibility:public"],
+)
+""",
+)
+
+npm.npm_replace_package(
+    package = "better-sqlite3@12.10.0",
+    replacement = "@better_sqlite3_src//:pkg",
+)
+
+# --- better-sqlite3 prebuilt native bindings -------------------------
+#
+# The ONE package in the qmd tree that the lockfile alone cannot deliver.
+# Its published tarball ships `src/` + `binding.gyp` and no `.node`; the
+# binary normally arrives from a `prebuild-install` postinstall, which
+# downloads a GitHub release asset that appears in no lockfile and
+# carries no integrity hash. That single fetch was the entire remaining
+# unpinned surface of `npx -y @tobilu/qmd`.
+#
+# Pinning it here closes that hole and is what lets
+# `third-party/qmd/runtime/package.json` declare `onlyBuiltDependencies:
+# []` — with the binary supplied, no package in the tree needs to run an
+# install script at all. Every other native dep is already covered by the
+# lockfile: node-llama-cpp's platform binaries are integrity-pinned
+# optional deps, and the tree-sitter grammars ship `prebuilds/*.node`
+# inside their own tarballs (verified: `prebuilds/darwin-arm64/…` et al
+# are present in the linked tree).
+#
+# `node-v127` is Node's ABI version (NODE_MODULE_VERSION), not a package
+# version — it must match the Node that rules_js resolves, currently
+# v22.22.0. If rules_nodejs moves to a Node with a different ABI these
+# pins stop matching and `require()` fails loudly at qmd startup rather
+# than silently degrading; bump to the matching `node-v<abi>` assets from
+# the same release. `//third-party/qmd/runtime:node_abi_test` asserts the
+# two agree so the breakage is caught at test time instead.
+
+http_archive(
+    name = "better_sqlite3_prebuilt_darwin_arm64",
+    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-darwin-arm64.tar.gz"],
+    sha256 = "35533f9ada82cb3f33760c1dc2f128f77c2b34ec2b2ede722824cb64cd50a46a",
+    build_file_content = """filegroup(
+    name = "node_binding",
+    srcs = ["build/Release/better_sqlite3.node"],
+    visibility = ["//visibility:public"],
+)
+""",
+)
+
+http_archive(
+    name = "better_sqlite3_prebuilt_darwin_x64",
+    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-darwin-x64.tar.gz"],
+    sha256 = "8d2ef0eb7f880f88882f0a7a7362a15e2d210a077681f0672d0dfc8b919bd91b",
+    build_file_content = """filegroup(
+    name = "node_binding",
+    srcs = ["build/Release/better_sqlite3.node"],
+    visibility = ["//visibility:public"],
+)
+""",
+)
+
+http_archive(
+    name = "better_sqlite3_prebuilt_linux_x64",
+    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-linux-x64.tar.gz"],
+    sha256 = "899dcec7d0e4e2ec35db783a9155b878ae15754512585de7352bbd33cb1d6c48",
+    build_file_content = """filegroup(
+    name = "node_binding",
+    srcs = ["build/Release/better_sqlite3.node"],
+    visibility = ["//visibility:public"],
+)
+""",
+)
+
+http_archive(
+    name = "better_sqlite3_prebuilt_linux_arm64",
+    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-linux-arm64.tar.gz"],
+    sha256 = "efb625877ea517be6003c14dbabdb748d0ac172ab50bc4e5af08c2cb272b70c6",
+    build_file_content = """filegroup(
+    name = "node_binding",
+    srcs = ["build/Release/better_sqlite3.node"],
+    visibility = ["//visibility:public"],
+)
+""",
+)
 
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for

@@ -15,15 +15,22 @@ Why a script:
   2. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. The
      indexer binary pins XDG_CACHE_HOME at the data root, so we pull
      `qmd/` back out as a tar overlay.
-  3. qmd is invoked via `npx`, which needs `node` on PATH and writes to a
-     per-user cache. Bazel scrubs PATH and HOME for hermeticity, so we
-     re-add the common host install locations and point HOME at the sandbox.
+  3. qmd used to be invoked via `npx -y @tobilu/qmd@<version>`, which
+     resolved the whole package tree from the live npm registry on every
+     cache miss, with no lockfile and no integrity checking, and ran every
+     package's install scripts. We now stage a `DATALIB_RUNTIME_DIR` tree
+     from Bazel-managed inputs instead (see `_stage_runtime`), which
+     `datalib_core::node_runtime::bundled_command` picks up in preference
+     to npx. Nothing here touches a registry.
 
 Args (positional):
     1: path to the qmd_indexer rust_binary
     2: path to qmd.tar (the rendered markdown archive)
     3: output path for qmd-index.tar (Bazel-supplied overlay tar)
     4: qmd npm package version to pin (e.g. "2.1.0")
+    5: path to the Node binary (@nodejs_host//:node_bin)
+    6: path to the linked `@tobilu/qmd` package dir, used to locate the
+       root of the pnpm store it lives in
 """
 
 from __future__ import annotations
@@ -36,8 +43,43 @@ import tarfile
 from pathlib import Path
 
 
+def _stage_runtime(
+    work: Path, qmd_version: str, node_bin: Path, qmd_pkg_dir: Path
+) -> Path:
+    """Build a `DATALIB_RUNTIME_DIR` tree and return its root.
+
+    Layout is the one `datalib_core::node_runtime` resolves (and that
+    `datalib/tauri/stage-runtime.sh` produces for the packaged app):
+
+        runtime/node/bin/node
+        runtime/qmd/<version>/node_modules/@tobilu/qmd/dist/cli/qmd.js
+
+    Two symlinks, no copying. That works only because the package store
+    is already complete: better-sqlite3's native binding is baked into
+    the package by `npm.npm_replace_package` in MODULE.bazel, so nothing
+    here has to write into a read-only build output.
+    """
+    runtime = work / "runtime"
+
+    node_dir = runtime / "node" / "bin"
+    node_dir.mkdir(parents=True, exist_ok=True)
+    (node_dir / "node").symlink_to(node_bin.resolve())
+
+    # `$(execpath)` on the link target points INSIDE the pnpm virtual
+    # store (`<root>/node_modules/.aspect_rules_js/@tobilu+qmd@<v>/node_modules/@tobilu/qmd`),
+    # so cut at the FIRST `/node_modules/` to get the store root rather
+    # than qmd's own dependency directory.
+    store = Path(str(qmd_pkg_dir).split("/node_modules/")[0]) / "node_modules"
+    staged = runtime / "qmd" / qmd_version
+    staged.mkdir(parents=True, exist_ok=True)
+    (staged / "node_modules").symlink_to(store.resolve())
+
+    return runtime
+
+
 def main() -> int:
     indexer, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
+    node_bin, qmd_pkg_dir = (Path(p) for p in sys.argv[5:7])
     qmd_tar_path = Path(qmd_tar).resolve()
     out_tar_path = Path(out_tar).resolve()
     out_tar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,17 +110,14 @@ def main() -> int:
             tf.extract(member, work)
 
     env = os.environ.copy()
-    env["HOME"] = str(work)  # isolate npm/npx cache to the sandbox
-    extra_paths = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-    ]
-    parent_path = os.environ.get("CLAUDE_MIRROR_HOST_PATH") or os.environ.get(
-        "PATH", ""
+    env["HOME"] = str(work)  # nothing should be reaching for a real home
+    # Point the indexer at the Bazel-staged Node + qmd tree. With this
+    # set, `qmd_command()` resolves via `bundled_command` and the
+    # `npx -y @tobilu/qmd@<v>` fallback is never reached — so the build
+    # no longer needs `npx` (or any host Node) on PATH.
+    env["DATALIB_RUNTIME_DIR"] = str(
+        _stage_runtime(work, qmd_version, node_bin, qmd_pkg_dir)
     )
-    env["PATH"] = ":".join([p for p in extra_paths + parent_path.split(":") if p])
 
     cmd = [
         indexer,

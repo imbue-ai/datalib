@@ -451,7 +451,6 @@ fn message_grid_row(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn base_row(
     uuid: String,
     kind: String,
