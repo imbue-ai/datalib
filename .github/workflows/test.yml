@@ -168,7 +168,15 @@ jobs:
       # fully hermetic. Runs before the build because it is ~instant and
       # its failures are cheap to fix.
       - name: repo hygiene lints
-        run: python3 scripts/lint_repo.py
+        run: |
+          # This job runs in a container as root, while the checkout is
+          # owned by the runner's uid. git refuses to touch a repo it
+          # sees as someone else's ("detected dubious ownership"), and
+          # actions/checkout only records the workspace as safe in the
+          # RUNNER's git config, not the container's — so `git ls-files`
+          # inside lint_repo.py exits 128. Mark it safe here too.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 scripts/lint_repo.py
 
       # This step is the merge gate: a non-zero `bazel test` exit must
       # fail the job. It previously carried `continue-on-error: true` to

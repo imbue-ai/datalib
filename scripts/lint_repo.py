@@ -109,17 +109,28 @@ def _find_enclosing_rule_name(lines: list[str], tag_lineno: int) -> str | None:
     return None
 
 
-def _build_files(root: Path) -> list[Path]:
-    """Every `BUILD.bazel` git knows about, as absolute paths.
+def _git_ls_files(root: Path, pattern: str) -> list[str]:
+    """`git ls-files` for `pattern`, repo-relative, or die with the reason.
+
+    Tracked plus untracked-but-not-ignored, so a staged new file is
+    linted before it is committed.
 
     Asking git rather than walking the filesystem is what keeps
-    gitignored trees out of the results. In particular `.claude/`
-    holds one full checkout per agent worktree, each with its own
-    copy of every BUILD file in the repo — walking picked those up
-    and reported ~8 phantom labels per stale worktree, none of
-    which can ever match the repo-relative allowlist keys.
+    gitignored trees out of the results. In particular `.claude/` holds
+    one full checkout per agent worktree, each with its own copy of every
+    BUILD file in the repo — walking picked those up and reported ~8
+    phantom labels per stale worktree, none of which can ever match the
+    repo-relative allowlist keys.
+
+    Surfacing git's stderr matters more than it looks. This used to
+    `check=True` with the output captured and discarded, so when git
+    refused to read the repo at all the caller saw a bare
+    `CalledProcessError ... exit status 128` and nothing else — which is
+    exactly how it failed in CI, where the job runs in a container as
+    root against a checkout owned by the runner's uid and git reports
+    "detected dubious ownership".
     """
-    out = subprocess.run(
+    proc = subprocess.run(
         [
             "git",
             "ls-files",
@@ -127,14 +138,23 @@ def _build_files(root: Path) -> list[Path]:
             "--others",
             "--exclude-standard",
             "-z",
-            "*BUILD.bazel",
+            pattern,
         ],
         cwd=root,
         capture_output=True,
         text=True,
-        check=True,
-    ).stdout
-    return [root / p for p in out.split("\0") if p]
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"ERROR: `git ls-files {pattern}` failed in {root} "
+            f"(exit {proc.returncode}):\n{proc.stderr.strip()}"
+        )
+    return [p for p in proc.stdout.split("\0") if p]
+
+
+def _build_files(root: Path) -> list[Path]:
+    """Every `BUILD.bazel` git knows about, as absolute paths."""
+    return [root / p for p in _git_ls_files(root, "*BUILD.bazel")]
 
 
 def _scan(root: Path) -> set[str]:
@@ -187,14 +207,9 @@ VENDORED_PREFIXES: tuple[str, ...] = ("third-party/",)
 
 def _tracked_python_files(root: Path) -> list[str]:
     """Every git-tracked `*.py`, repo-relative, vendored trees removed."""
-    out = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "*.py"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    return [p for p in out.split("\0") if p and not p.startswith(VENDORED_PREFIXES)]
+    return [
+        p for p in _git_ls_files(root, "*.py") if not p.startswith(VENDORED_PREFIXES)
+    ]
 
 
 def _check_python_coverage(root: Path) -> int:
