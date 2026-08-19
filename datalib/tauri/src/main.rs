@@ -173,7 +173,11 @@ fn resolve_http_bin(app: &AppHandle) -> Option<PathBuf> {
         }
         eprintln!("$DATALIB_HTTP_BIN={} is not a file", p.display());
     }
-    let p = app.path().resource_dir().ok()?.join("binaries/datalib-http");
+    let p = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("binaries/datalib-http");
     p.is_file().then_some(p)
 }
 
@@ -224,6 +228,15 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
 
     let log = std::fs::File::create(&log_file)
         .map_err(|e| anyhow::anyhow!("create backend log {}: {e}", log_file.display()))?;
+    // The backend announces its launch URL — which carries the API
+    // token — on stderr, and that lands in this file, in a temp dir
+    // that is shared between users on Linux. Owner-only. (The url-file
+    // itself is tightened by the backend for the same reason.)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&log_file, std::fs::Permissions::from_mode(0o600));
+    }
     let log_err = log
         .try_clone()
         .map_err(|e| anyhow::anyhow!("clone backend log handle: {e}"))?;

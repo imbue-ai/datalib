@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
+import { fetchHealth } from "./api";
 
 function applyThemeMode(mode: "light" | "dark") {
   document.documentElement.dataset.theme = mode;
@@ -19,6 +20,13 @@ function setupSystemThemeSync() {
 }
 
 setupSystemThemeSync();
+
+// Warm the health snapshot at boot: the agent hand-off (handoff.ts) needs
+// the API token's path out of it and builds its text inside a synchronous
+// click handler, so the fetch has to have already happened. Fire and
+// forget — the one consumer degrades to a generic hint if it hasn't
+// landed yet.
+void fetchHealth().catch(() => {});
 
 const app = createApp(App);
 app.use(createPinia());

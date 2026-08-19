@@ -25,7 +25,7 @@
 import { ref, watch } from "vue";
 import { freshAliasName, noteAlias } from "@/cards/aliasRegistry";
 import { encodeColumns } from "@/router/columns";
-import { putLib } from "@/api";
+import { healthSnapshot, putLib } from "@/api";
 import { pushToast } from "@/toasts";
 import type { HostCommands } from "@/cards/types";
 
@@ -41,6 +41,26 @@ function seedSource(name: string): string {
 
 // ---- wayfinder text --------------------------------------------------------
 
+// Every wayfinder hands an agent a set of curl-able URLs, and the API
+// requires the server's per-process token (see
+// datalib/backend/http/src/auth.rs). The browser holds that token as an
+// HttpOnly cookie it can't read, and we wouldn't paste it into an agent
+// prompt anyway — a secret in a prompt ends up in transcripts and logs.
+// So point the agent at the file instead: it runs on this machine, as
+// this user, and can re-read it whenever it needs a fresh one.
+function authLines(): string[] {
+  const tokenFile =
+    healthSnapshot()?.token_file ?? "<data root>/system/state/api-token";
+  return [
+    `The API needs the server's token on every call. It changes each time`,
+    `the server restarts, so read it fresh:`,
+    `  TOKEN=$(cat ${JSON.stringify(tokenFile)})`,
+    `and send it on every request below:`,
+    `  -H "Authorization: Bearer $TOKEN"`,
+    ``,
+  ];
+}
+
 // The parts every wayfinder ends with: the source contract, the
 // live-reload/preview loop, and the lead-in for the user's own request.
 function wayfinderTail(cardUrl: string): string[] {
@@ -51,7 +71,8 @@ function wayfinderTail(cardUrl: string): string[] {
     `evaluated as \`return (<source>)\`.`,
     ``,
     `The card live-reloads on every PUT. Preview it headlessly with:`,
-    `  node datalib/ui/scripts/render.mjs '${cardUrl}' --out /tmp/card.png`,
+    `  node datalib/ui/scripts/render.mjs '${cardUrl}' --out /tmp/card.png \\`,
+    `    --token "$TOKEN"`,
     ``,
     `This is the user's request:`,
     ``,
@@ -69,8 +90,9 @@ export function createWayfinder(name: string): string {
   return [
     `Build a datalib card by defining the component \`${name}\`.`,
     ``,
-    `Read the guide first: ${origin}/agent/cards.md`,
+    `Read the guide first: ${origin}/agent/cards.md (no token needed)`,
     ``,
+    ...authLines(),
     `Save your factory with:`,
     `  PUT ${origin}/api/lib/${name}   (JSON body {"source": "<factory source>"})`,
     ``,
@@ -87,8 +109,9 @@ function modifyWayfinder(name: string, cardSource: string, state: string): strin
     `Modify the datalib component \`${name}\` — it renders a card the`,
     `user is looking at right now.`,
     ``,
-    `Read the guide first: ${origin}/agent/cards.md`,
+    `Read the guide first: ${origin}/agent/cards.md (no token needed)`,
     ``,
+    ...authLines(),
     `Fetch the current source:`,
     `  GET ${origin}/api/lib/${name}`,
     `Save the modified factory with:`,
@@ -104,10 +127,11 @@ function configWayfinder(configPath: string): string {
     `Modify the datalib data-source config — the user has its editor`,
     `open in the Manage tab right now.`,
     ``,
-    `Read the guide first: ${origin}/agent/config.md`,
+    `Read the guide first: ${origin}/agent/config.md (no token needed)`,
     ``,
     `The config is TOML — an array of [[steps]] tables.`,
     ``,
+    ...authLines(),
     `Fetch the current config:`,
     `  GET ${origin}/api/config   → {"text": "<current text>", …}`,
     `Save the modified config with:`,

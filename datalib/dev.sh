@@ -13,6 +13,8 @@
 #   DATALIB_BIND    Backend bind addr (default: 127.0.0.1:<ephemeral>)
 #   DATALIB_BACKEND Vite proxy target for /api (default: derived from
 #                       DATALIB_BIND)
+#   DATALIB_TOKEN   Backend API token, shared with the Vite proxy
+#                       (default: freshly minted per run)
 #
 # Both ports default to ephemeral so multiple concurrent agents/devs can
 # each `bazelisk run //datalib:dev` from their own checkouts without
@@ -83,6 +85,17 @@ export DATALIB_BIND
 # bound. Honor a caller-supplied DATALIB_BACKEND; otherwise derive
 # from DATALIB_BIND so a random backend port flows through.
 export DATALIB_BACKEND="${DATALIB_BACKEND:-http://$DATALIB_BIND}"
+# The backend requires its API token on every route
+# (datalib/backend/http/src/auth.rs). In this split-origin dev setup the
+# browser loads the app from Vite, so it never gets the backend's
+# session cookie — instead Vite's *server-side* /api proxy stamps the
+# token onto each forwarded request (see vite.config.ts). Both processes
+# therefore need the same token, so mint it here rather than letting the
+# binary pick its own.
+if [[ -z "${DATALIB_TOKEN:-}" ]]; then
+  DATALIB_TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
+fi
+export DATALIB_TOKEN
 echo "vite port:     $PORT"
 echo "backend bind:  $DATALIB_BIND"
 echo "vite → /api:   $DATALIB_BACKEND"

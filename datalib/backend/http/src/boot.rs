@@ -15,7 +15,7 @@ use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use datalib_core::repo::DynRepo;
 
-use crate::{worker, AppState};
+use crate::{auth::ApiToken, worker, AppState};
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the doltlite repo at
@@ -28,16 +28,27 @@ use crate::{worker, AppState};
 /// UI-triggered syncs fail fast with a clear message while reads and
 /// search still work. Presentation concerns (browser opening, the
 /// `--url-file` handshake) live in the binary's main, not here.
+///
+/// `api_token` is minted by the caller rather than here because the
+/// launch URL — announced through `--url-file` before this (slow)
+/// assembly runs — has to carry it. We publish it to the data root
+/// once the root exists, which is the first thing below.
 pub async fn build_state(
     root: PathBuf,
     dag_bin: Option<PathBuf>,
     binary_dir: Option<PathBuf>,
+    api_token: ApiToken,
 ) -> anyhow::Result<AppState> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
     }
     let root = Arc::new(root);
+
+    // Publish the token now that the root is on disk: anything running
+    // as this user (an agent the UI handed a wayfinder to, a curl in a
+    // terminal) reads it from here instead of scraping our stderr.
+    api_token.write_token_file()?;
 
     let db_path = datalib_core::layout::backend_index_db(&root);
     eprintln!("dolt db: {}", db_path.display());
@@ -79,6 +90,7 @@ pub async fn build_state(
         repo,
         qmd_daemon,
         progress_tx,
+        api_token,
     })
 }
 
@@ -93,7 +105,8 @@ mod tests {
     #[tokio::test]
     async fn build_state_opens_the_layout_db_path() {
         let root = tempfile::tempdir().unwrap();
-        let state = build_state(root.path().to_path_buf(), None, None)
+        let token = ApiToken::from_value("boot-test-token", root.path());
+        let state = build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
         let db_path = datalib_core::layout::backend_index_db(root.path());
@@ -103,5 +116,25 @@ mod tests {
             db_path.display()
         );
         assert_eq!(state.root.as_path(), root.path());
+    }
+
+    /// The token has to reach disk during boot — it is how an agent
+    /// (or a curl in a terminal) authenticates without scraping the
+    /// server's stderr. A silently-missing file would look like a
+    /// permissions problem much later, at the first 401.
+    #[tokio::test]
+    async fn build_state_publishes_the_api_token() {
+        let root = tempfile::tempdir().unwrap();
+        let token = ApiToken::from_value("published-token", root.path());
+        let state = build_state(root.path().to_path_buf(), None, None, token)
+            .await
+            .unwrap();
+        let path = state.api_token.token_file();
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "published-token",
+            "expected the token at {}",
+            path.display()
+        );
     }
 }

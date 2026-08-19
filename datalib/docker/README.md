@@ -84,8 +84,11 @@ docker run --rm \
     -v "$DATA_ROOT:/data" \
     "$IMG" datalib-sync
 
-# Serve the HTTP backend.
+# Serve the HTTP backend. Every route requires the API token; pin one
+# with DATALIB_TOKEN instead of letting the container mint a random one
+# (see docs/dev/docker.md).
 docker run --rm -p 8731:8731 \
+    -e DATALIB_TOKEN="$(openssl rand -hex 32)" \
     -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
     -v "$DATA_ROOT:/data" \
     "$IMG" datalib-http

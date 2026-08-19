@@ -12,10 +12,21 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
-use datalib_http::{router, AppState};
+use datalib_http::{router, ApiToken, AppState};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+/// Every route behind the token gate (see `datalib_http::auth`), so
+/// each request in this file has to carry it. Stamping the header
+/// here keeps the call sites about what they actually assert.
+const TEST_TOKEN: &str = "itest-token";
+
+async fn send(app: &axum::Router, mut req: Request<Body>) -> axum::http::Response<Body> {
+    req.headers_mut()
+        .insert("x-datalib-token", TEST_TOKEN.parse().unwrap());
+    app.clone().oneshot(req).await.unwrap()
+}
 
 fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-http-card-itest-")
@@ -31,11 +42,13 @@ async fn card_round_trip_and_error_paths() {
     let dolt = DoltRepo::open(&db_path, root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+    let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {
         root: root.clone(),
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        api_token,
     };
     let app = router(app_state.clone());
 
@@ -49,7 +62,7 @@ async fn card_round_trip_and_error_paths() {
             serde_json::to_vec(&serde_json::json!({"source": source})).unwrap(),
         ))
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await
@@ -67,7 +80,7 @@ async fn card_round_trip_and_error_paths() {
     let req = Request::get(format!("/api/card/{hash}"))
         .body(Body::empty())
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await
@@ -83,7 +96,7 @@ async fn card_round_trip_and_error_paths() {
             serde_json::to_vec(&serde_json::json!({"source": source})).unwrap(),
         ))
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await
         .unwrap();
@@ -100,7 +113,7 @@ async fn card_round_trip_and_error_paths() {
     let req = Request::get(format!("/api/card/{bogus}"))
         .body(Body::empty())
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // Malformed hash (wrong length, non-hex char including uppercase
@@ -114,7 +127,7 @@ async fn card_round_trip_and_error_paths() {
         let req = Request::get(format!("/api/card/{bad}"))
             .body(Body::empty())
             .unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
+        let resp = send(&app, req).await;
         assert_eq!(
             resp.status(),
             StatusCode::BAD_REQUEST,

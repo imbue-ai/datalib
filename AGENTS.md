@@ -129,6 +129,10 @@ datalib/
                    shipping programs accept only `config.toml`.
     core/          data-root layout, doltlite repo access, qmd, search.
     http/          `datalib-http`: API server + sync worker + UI host.
+                   Every route is behind a per-process API token
+                   (src/auth.rs) — read it from
+                   <root>/system/state/api-token and send
+                   `Authorization: Bearer <token>`.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
                    via #[derive(PortableTable)].
