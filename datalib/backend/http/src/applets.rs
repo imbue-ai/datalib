@@ -409,100 +409,142 @@ fn tail_lines(s: &str, n: usize) -> String {
 
 /// Everything the gateway knows about the configured applets.
 ///
-/// Built once, at server start. Nothing re-runs discovery when
-/// `config.toml` changes, so a new applet needs a restart today; the
-/// UI polls `/api/applets` and its change detection is in place for
-/// when that is wired to `PUT /api/config`. Holds no child processes
-/// itself — those live in [`Supervisor`].
+/// Rediscovered lazily when `config.toml` changes: every read path
+/// calls [`Self::refresh_if_config_changed`], which costs one `stat`
+/// and does nothing unless the file moved. Watching the mtime rather
+/// than hooking `PUT /api/config` means a config edited by hand — or by
+/// an agent writing the file directly — is picked up too, and the UI's
+/// existing poll of `/api/applets` turns that into a live update.
+///
+/// Holds no child processes itself; those live in [`Supervisor`].
 pub struct AppletRegistry {
     pub data_root: PathBuf,
-    pub binary_dir: Option<PathBuf>,
+    /// The CLI's `--binary-dir`, kept so a rediscovery can re-resolve
+    /// against a config whose own `binary_dir` may have changed.
+    binary_dir_override: Option<PathBuf>,
     pub store: PathBuf,
-    entries: Vec<AppletEntry>,
-    views: Vec<AppletView>,
+    state: std::sync::RwLock<RegistryState>,
     supervisor: Supervisor,
 }
 
+struct RegistryState {
+    entries: Vec<AppletEntry>,
+    views: Vec<AppletView>,
+    /// Size and mtime of `config.toml` as of the last discovery.
+    /// `None` when the file was absent, which is itself a state worth
+    /// remembering: creating the file has to count as a change.
+    stamp: Option<(u64, std::time::SystemTime)>,
+}
+
+/// What the config file looks like right now, for change detection.
+/// Size *and* mtime, because a same-size same-second rewrite is
+/// plausible for a small hand-edited file.
+fn config_stamp(data_root: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let path = datalib_dag::config::root_config_path(data_root);
+    let md = std::fs::metadata(path).ok()?;
+    Some((md.len(), md.modified().ok()?))
+}
+
 impl AppletRegistry {
-    /// Discover every configured applet. A failing applet does not
-    /// fail the boot: it lands in the registry carrying its error, so
-    /// the UI can say which one is broken and why.
+    /// Discover every configured applet. A failing applet does not fail
+    /// the boot: it lands in the registry carrying its error, so the UI
+    /// can say which one is broken and why.
     pub fn discover(
         entries: Vec<AppletEntry>,
         data_root: PathBuf,
         binary_dir: Option<PathBuf>,
     ) -> Self {
         let store = module_store_dir(&data_root);
-        let mut views = Vec::with_capacity(entries.len());
-        for e in &entries {
-            let view = match discover_one(e, &data_root, binary_dir.as_deref(), &store) {
-                Ok(m) => AppletView {
-                    id: e.id.clone(),
-                    title: e.display_title().to_string(),
-                    components: m
-                        .components
-                        .iter()
-                        .map(|c| (c.name.clone(), c.module.clone()))
-                        .collect(),
-                    gallery: m.gallery,
-                    error: None,
-                },
-                Err(err) => {
-                    eprintln!("applet {}: discovery failed: {err:#}", e.id);
-                    AppletView {
-                        id: e.id.clone(),
-                        title: e.display_title().to_string(),
-                        components: BTreeMap::new(),
-                        gallery: Vec::new(),
-                        error: Some(format!("{err:#}")),
-                    }
-                }
-            };
-            views.push(view);
-        }
+        let views = discover_all(&entries, &data_root, binary_dir.as_deref(), &store);
+        let stamp = config_stamp(&data_root);
         Self {
             data_root,
-            binary_dir,
+            binary_dir_override: binary_dir,
             store,
-            entries,
-            views,
+            state: std::sync::RwLock::new(RegistryState {
+                entries,
+                views,
+                stamp,
+            }),
             supervisor: Supervisor::default(),
         }
     }
 
-    /// Build the registry for a data root: read its `config.toml`,
-    /// resolve `binary_dir` the way the DAG runner does, validate, and
-    /// discover.
+    /// Read `config.toml` and discover from it.
     ///
-    /// The policy lives here rather than in `boot`: a missing config
-    /// is the normal state of a fresh data root and yields no applets,
-    /// and a config the validator rejects also yields none — a server
-    /// that refuses to start over a bad applet id would take search
-    /// and setup down with it, leaving no way to fix the file.
+    /// The policy lives here rather than in `boot`: a missing config is
+    /// the normal state of a fresh data root and yields no applets, and
+    /// a config the validator rejects also yields none — a server that
+    /// refused to start over a bad applet id would take search and
+    /// setup down with it, leaving no way to fix the file.
     pub fn from_data_root(data_root: &Path, binary_dir: Option<PathBuf>) -> Self {
-        let cfg_path = datalib_dag::config::root_config_path(data_root);
-        let (entries, bin_dir) = match datalib_dag::config::load(&cfg_path) {
-            Ok((cfg, _)) => {
-                let dir = datalib_dag::config::resolve_binary_dir(&cfg, binary_dir.as_deref());
-                match datalib_dag::config::validate_applets(&cfg) {
-                    Ok(()) => (cfg.applets, dir),
-                    Err(e) => {
-                        eprintln!("applets: config rejected, none will load: {e:#}");
-                        (Vec::new(), dir)
-                    }
-                }
+        let (entries, bin_dir) = load_entries(data_root, binary_dir.clone());
+        let _ = bin_dir;
+        Self::discover(entries, data_root.to_path_buf(), binary_dir)
+    }
+
+    /// Rediscover if `config.toml` has changed since the last pass.
+    ///
+    /// Blocking: it execs one child per applet. Callers on the async
+    /// side run it inside `spawn_blocking`. Cheap when nothing moved —
+    /// one `stat` and a read lock.
+    pub fn refresh_if_config_changed(&self) {
+        let current = config_stamp(&self.data_root);
+        {
+            let Ok(state) = self.state.read() else { return };
+            if state.stamp == current {
+                return;
             }
-            Err(_) => (Vec::new(), binary_dir),
+        }
+        let (entries, bin_dir) = load_entries(&self.data_root, self.binary_dir_override.clone());
+        let views = discover_all(&entries, &self.data_root, bin_dir.as_deref(), &self.store);
+
+        // Stop the servers whose config changed (or vanished) so the
+        // next request respawns them with the new params. Leaving them
+        // running would silently serve the old `tree` — a config edit
+        // that appears to take effect in the gallery but not in the
+        // data is worse than a restart.
+        let changed: Vec<String> = {
+            let Ok(state) = self.state.read() else { return };
+            entries
+                .iter()
+                .filter(|e| state.entries.iter().find(|p| p.id == e.id) != Some(e))
+                .map(|e| e.id.clone())
+                .chain(
+                    state
+                        .entries
+                        .iter()
+                        .filter(|p| !entries.iter().any(|e| e.id == p.id))
+                        .map(|p| p.id.clone()),
+                )
+                .collect()
         };
-        Self::discover(entries, data_root.to_path_buf(), bin_dir)
+        for id in &changed {
+            self.supervisor.stop(id);
+        }
+
+        if let Ok(mut state) = self.state.write() {
+            state.entries = entries;
+            state.views = views;
+            state.stamp = current;
+        }
     }
 
-    pub fn views(&self) -> &[AppletView] {
-        &self.views
+    pub fn views(&self) -> Vec<AppletView> {
+        self.state
+            .read()
+            .map(|s| s.views.clone())
+            .unwrap_or_default()
     }
 
-    pub fn entry(&self, id: &str) -> Option<&AppletEntry> {
-        self.entries.iter().find(|e| e.id == id)
+    fn entry(&self, id: &str) -> Option<AppletEntry> {
+        self.state
+            .read()
+            .ok()?
+            .entries
+            .iter()
+            .find(|e| e.id == id)
+            .cloned()
     }
 
     /// Read a module out of the store. `hash` is validated before it
@@ -514,8 +556,8 @@ impl AppletRegistry {
         std::fs::read(self.store.join(hash)).ok()
     }
 
-    /// Proxy one request to an applet, starting it if it is not
-    /// already running.
+    /// Proxy one request to an applet, starting it if it is not already
+    /// running.
     pub fn proxy(
         &self,
         id: &str,
@@ -525,11 +567,83 @@ impl AppletRegistry {
         body: &[u8],
     ) -> Result<ProxyResponse, String> {
         let entry = self.entry(id).ok_or_else(|| format!("no applet {id:?}"))?;
+        let binary_dir = self.binary_dir_for_spawn();
         let port = self
             .supervisor
-            .ensure(entry, &self.data_root, self.binary_dir.as_deref())?;
+            .ensure(&entry, &self.data_root, binary_dir.as_deref())?;
         forward(port, method, path_and_query, content_type, body)
     }
+
+    /// `binary_dir` as the current config resolves it.
+    fn binary_dir_for_spawn(&self) -> Option<PathBuf> {
+        let cfg_path = datalib_dag::config::root_config_path(&self.data_root);
+        match datalib_dag::config::load(&cfg_path) {
+            Ok((cfg, _)) => {
+                datalib_dag::config::resolve_binary_dir(&cfg, self.binary_dir_override.as_deref())
+            }
+            Err(_) => self.binary_dir_override.clone(),
+        }
+    }
+}
+
+/// Read and validate the applet list out of a data root's config.
+fn load_entries(
+    data_root: &Path,
+    binary_dir: Option<PathBuf>,
+) -> (Vec<AppletEntry>, Option<PathBuf>) {
+    let cfg_path = datalib_dag::config::root_config_path(data_root);
+    match datalib_dag::config::load(&cfg_path) {
+        Ok((cfg, _)) => {
+            // Resolve `binary_dir` exactly the way the DAG runner does,
+            // so `command = "datalib-view-slack"` finds the same binary
+            // whether a step or an applet names it.
+            let dir = datalib_dag::config::resolve_binary_dir(&cfg, binary_dir.as_deref());
+            match datalib_dag::config::validate_applets(&cfg) {
+                Ok(()) => (cfg.applets, dir),
+                Err(e) => {
+                    eprintln!("applets: config rejected, none will load: {e:#}");
+                    (Vec::new(), dir)
+                }
+            }
+        }
+        // No config yet is the normal state of a fresh data root; it is
+        // not an error and must not stop the server.
+        Err(_) => (Vec::new(), binary_dir),
+    }
+}
+
+fn discover_all(
+    entries: &[AppletEntry],
+    data_root: &Path,
+    binary_dir: Option<&Path>,
+    store: &Path,
+) -> Vec<AppletView> {
+    entries
+        .iter()
+        .map(|e| match discover_one(e, data_root, binary_dir, store) {
+            Ok(m) => AppletView {
+                id: e.id.clone(),
+                title: e.display_title().to_string(),
+                components: m
+                    .components
+                    .iter()
+                    .map(|c| (c.name.clone(), c.module.clone()))
+                    .collect(),
+                gallery: m.gallery,
+                error: None,
+            },
+            Err(err) => {
+                eprintln!("applet {}: discovery failed: {err:#}", e.id);
+                AppletView {
+                    id: e.id.clone(),
+                    title: e.display_title().to_string(),
+                    components: BTreeMap::new(),
+                    gallery: Vec::new(),
+                    error: Some(format!("{err:#}")),
+                }
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +773,25 @@ impl Supervisor {
         });
         map.insert(entry.id.clone(), running);
         Ok(port)
+    }
+}
+
+impl Supervisor {
+    /// Stop one applet if it is running, so the next request respawns
+    /// it. Used when its config entry changed under us.
+    fn stop(&self, id: &str) {
+        if let Ok(mut map) = self.running.lock() {
+            if let Some(mut r) = map.remove(id) {
+                let _ = r.child.kill();
+                // Reap: `kill` only signals, and an unwaited child stays
+                // a zombie until its parent exits.
+                let _ = r.child.wait();
+            }
+        }
+        // A previously-failed start is no longer authoritative either.
+        if let Ok(mut failed) = self.failed.lock() {
+            failed.remove(id);
+        }
     }
 }
 

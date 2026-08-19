@@ -12,24 +12,36 @@
 // value is a CardRender — `(root, ctx) => teardown` — which is the
 // same contract every builtin card view honors, so nothing about the
 // host had to change to host this.
+//
+// Two levels, because that is how the data is shaped: Slack renders one
+// document per *thread*, and every message in a thread carries that
+// thread's markdown_uuid. So a channel is a list of threads, and only a
+// thread maps to a document worth opening. Going straight from channel
+// to document would pick one arbitrary thread — which looks exactly
+// like a channel that holds a single message.
 
 export default function channels(appletId) {
   const base = `/v/${appletId}`;
 
   return (root, ctx) => {
     let cancelled = false;
+    // Restored on re-render so a card that was showing a channel's
+    // threads still is. The host round-trips this string opaquely.
+    let channel = ctx.initialState || null;
 
     const style = document.createElement("style");
     style.textContent = `
       .sv { font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--datalib-fg, inherit); }
-      .sv-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); display: flex; gap: 8px; }
+      .sv-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); display: flex; gap: 8px; align-items: baseline; }
+      .sv-back { cursor: pointer; text-decoration: underline; }
       .sv-row { padding: 7px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); display: flex; gap: 10px; align-items: baseline; }
       .sv-row:hover { background: var(--datalib-hover, rgba(127,127,127,.12)); }
       .sv-name { font-weight: 600; }
-      .sv-count { opacity: .55; font-variant-numeric: tabular-nums; margin-left: auto; }
+      .sv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sv-meta { opacity: .55; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; }
       .sv-empty, .sv-err { padding: 12px; opacity: .7; }
-      .sv-warn { padding: 7px 12px; font-size: 12px; opacity: .8; border-bottom: 1px solid var(--datalib-border, #8882); }
       .sv-err { white-space: pre-wrap; font: 11px/1.5 ui-monospace, Menlo, monospace; }
+      .sv-warn { padding: 7px 12px; font-size: 12px; opacity: .8; border-bottom: 1px solid var(--datalib-border, #8882); }
     `;
     root.appendChild(style);
 
@@ -37,27 +49,69 @@ export default function channels(appletId) {
     wrap.className = "sv";
     root.appendChild(wrap);
 
-    function show(node) {
-      if (cancelled) return;
-      wrap.replaceChildren(node);
+    function plural(n, one, many) {
+      return `${n} ${n === 1 ? one : many}`;
     }
 
-    function render(data) {
-      const frag = document.createDocumentFragment();
+    // Channel names already carry their '#' in the data, so prefixing
+    // one here produced '##cat-qi'. Add it only when it is missing.
+    function hash(name) {
+      return name.startsWith("#") ? name : `#${name}`;
+    }
+
+    function warnRow(warnings) {
+      if (!warnings || warnings.length === 0) return null;
+      const warn = document.createElement("div");
+      warn.className = "sv-warn";
+      warn.textContent = `${plural(warnings.length, "path", "paths")} could not be read; this list is incomplete.`;
+      warn.title = warnings.join("\n");
+      return warn;
+    }
+
+    function row(children, onPick) {
+      const el = document.createElement("div");
+      el.className = "sv-row";
+      el.append(...children);
+      el.addEventListener("click", onPick);
+      return el;
+    }
+
+    function show(nodes) {
+      if (cancelled) return;
+      wrap.replaceChildren(...nodes.filter(Boolean));
+    }
+
+    function fail(e) {
+      const err = document.createElement("div");
+      err.className = "sv-err";
+      // The gateway answers 502 with a JSON `error` when the applet
+      // will not start; showing it beats an empty list that reads as
+      // "no data".
+      err.textContent = `Could not reach applet "${appletId}":\n${e.message}`;
+      show([err]);
+    }
+
+    async function get(path) {
+      const r = await fetch(`${base}${path}`);
+      const body = await r.text();
+      if (!r.ok) throw new Error(body || `HTTP ${r.status}`);
+      return JSON.parse(body);
+    }
+
+    function loading(what) {
+      const el = document.createElement("div");
+      el.className = "sv-empty";
+      el.textContent = `Loading ${what}…`;
+      show([el]);
+    }
+
+    function showChannels(data) {
+      ctx.setTitle(data.workspace ? `Slack — ${data.workspace}` : "Slack");
       const head = document.createElement("div");
       head.className = "sv-head";
-      head.textContent = `${data.workspace || appletId} — ${data.channels.length} channels`;
-      frag.appendChild(head);
+      head.textContent = `${data.workspace || appletId} — ${plural(data.channels.length, "channel", "channels")}`;
 
-      // A partial listing must not read as a complete one.
-      if (data.warnings && data.warnings.length > 0) {
-        const warn = document.createElement("div");
-        warn.className = "sv-warn";
-        warn.textContent = `${data.warnings.length} path(s) could not be read; this list is incomplete.`;
-        warn.title = data.warnings.join("\n");
-        frag.appendChild(warn);
-      }
-
+      const nodes = [head, warnRow(data.warnings)];
       if (data.channels.length === 0) {
         const empty = document.createElement("div");
         empty.className = "sv-empty";
@@ -65,59 +119,81 @@ export default function channels(appletId) {
         // state on a fresh install, not an error.
         empty.textContent =
           "No channels rendered yet. Run a sync for this source and reopen the card.";
-        frag.appendChild(empty);
+        nodes.push(empty);
       }
-
       for (const ch of data.channels) {
-        const row = document.createElement("div");
-        row.className = "sv-row";
         const name = document.createElement("span");
         name.className = "sv-name";
-        name.textContent = `#${ch.name}`;
-        const count = document.createElement("span");
-        count.className = "sv-count";
-        count.textContent = `${ch.messages}`;
-        row.append(name, count);
-        row.addEventListener("click", () => {
-          // Opening a document is a host command, and the source it
-          // opens is a builtin view — an applet composes with the rest
-          // of the app through card source like anything else.
-          if (ch.markdown_uuid) {
-            ctx.host.openCards(`documentView(${JSON.stringify(ch.markdown_uuid)})`);
-          }
-        });
-        frag.appendChild(row);
+        name.textContent = hash(ch.name);
+        const meta = document.createElement("span");
+        meta.className = "sv-meta";
+        meta.textContent = `${plural(ch.threads, "thread", "threads")} · ${ch.messages}`;
+        nodes.push(row([name, meta], () => openChannel(ch.name)));
       }
-      const div = document.createElement("div");
-      div.appendChild(frag);
-      show(div);
+      show(nodes);
+    }
+
+    function showThreads(data) {
+      ctx.setTitle(`Slack — ${hash(data.channel)}`);
+      const head = document.createElement("div");
+      head.className = "sv-head";
+      const back = document.createElement("span");
+      back.className = "sv-back";
+      back.textContent = "← channels";
+      back.addEventListener("click", () => openChannels());
+      const label = document.createElement("span");
+      label.textContent = `${hash(data.channel)} — ${plural(data.threads.length, "thread", "threads")}`;
+      head.append(back, label);
+
+      const nodes = [head, warnRow(data.warnings)];
+      if (data.threads.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "sv-empty";
+        empty.textContent = "No threads in this channel.";
+        nodes.push(empty);
+      }
+      for (const t of data.threads) {
+        const title = document.createElement("span");
+        title.className = "sv-title";
+        title.textContent = t.title;
+        const meta = document.createElement("span");
+        meta.className = "sv-meta";
+        const day = (t.when_ts || "").slice(0, 10);
+        meta.textContent = `${day} · ${t.messages}`;
+        nodes.push(
+          row([title, meta], () => {
+            // Opening a document is a host command, and the source it
+            // opens is a builtin view — an applet composes with the
+            // rest of the app through card source like anything else.
+            ctx.host.openCards(`documentView(${JSON.stringify(t.markdown_uuid)})`);
+          }),
+        );
+      }
+      show(nodes);
+    }
+
+    function openChannels() {
+      channel = null;
+      ctx.host.setState("");
+      loading("channels");
+      get("/channels").then(showChannels).catch(fail);
+    }
+
+    function openChannel(name) {
+      channel = name;
+      ctx.host.setState(name);
+      loading(`threads in ${hash(name)}`);
+      get(`/threads?channel=${encodeURIComponent(name)}`)
+        .then(showThreads)
+        .catch(fail);
     }
 
     ctx.setTitle("Slack");
-    const loading = document.createElement("div");
-    loading.className = "sv-empty";
-    loading.textContent = "Loading channels…";
-    wrap.appendChild(loading);
-
-    fetch(`${base}/channels`)
-      .then(async (r) => {
-        const body = await r.text();
-        if (!r.ok) throw new Error(body || `HTTP ${r.status}`);
-        return JSON.parse(body);
-      })
-      .then((data) => {
-        ctx.setTitle(data.workspace ? `Slack — ${data.workspace}` : "Slack");
-        render(data);
-      })
-      .catch((e) => {
-        const err = document.createElement("div");
-        err.className = "sv-err";
-        // The gateway answers 502 with a JSON `error` when the applet
-        // will not start; showing it beats an empty list that reads as
-        // "no data".
-        err.textContent = `Could not reach applet "${appletId}":\n${e.message}`;
-        show(err);
-      });
+    if (channel) {
+      openChannel(channel);
+    } else {
+      openChannels();
+    }
 
     return () => {
       cancelled = true;

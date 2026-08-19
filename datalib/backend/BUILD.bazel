@@ -77,6 +77,13 @@ filegroup(
         # upgrading user can actually run it; nothing else invokes it,
         # and it is the only shipped binary that links a YAML parser.
         "//datalib/backend/migrate_config:datalib_migrate_config_bin",
+        # The reference applet. Ships for the same reason `datalib-step`
+        # does: a config can name it, and the http gateway resolves an
+        # applet's `command` against its own directory (then
+        # `~/.datalib/bin`, then PATH). Without it here, a
+        # `command = "datalib-view-slack"` entry would only work for a
+        # user who installed the binary by hand.
+        "//datalib/backend/applets/slack:datalib_view_slack",
     ],
     visibility = ["//visibility:public"],
 )

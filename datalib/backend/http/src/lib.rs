@@ -600,7 +600,13 @@ pub struct CreateCardResponse {
 /// `error` — a configured applet that silently vanished would look
 /// like a config that never saved.
 async fn list_applets(State(s): State<AppState>) -> Json<Vec<applets::AppletView>> {
-    Json(s.applets.views().to_vec())
+    // Pick up a config edit before answering. Cheap when nothing moved
+    // (one `stat`); blocking when it did, since rediscovery execs one
+    // child per applet — hence the blocking thread. The UI polls this
+    // endpoint, so a saved config becomes a live gallery update.
+    let registry = s.applets.clone();
+    let _ = tokio::task::spawn_blocking(move || registry.refresh_if_config_changed()).await;
+    Json(s.applets.views())
 }
 
 /// Serve one component module by content hash.
@@ -667,6 +673,10 @@ async fn proxy_impl(
     let target = format!("{path}{query}");
     let registry = s.applets.clone();
     let result = tokio::task::spawn_blocking(move || {
+        // A card may reference an applet added since boot, and an
+        // applet whose params changed must not keep serving the old
+        // ones — so the same refresh guards the data path.
+        registry.refresh_if_config_changed();
         registry.proxy(&id, &method, &target, content_type.as_deref(), &body)
     })
     .await;

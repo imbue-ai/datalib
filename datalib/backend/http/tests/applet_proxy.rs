@@ -60,14 +60,31 @@ fn slack_applet_bin() -> PathBuf {
     .expect("applet binary exists")
 }
 
-/// A rendered tree with one channel in it, so `/channels` has
-/// something to report.
-fn seed_tree(root: &Path, rel: &str) {
+/// A rendered tree shaped the way Slack renders: one document per
+/// thread, with the thread row and its messages all carrying that
+/// document's `markdown_uuid`.
+fn seed_tree(root: &Path, rel: &str, channel: &str) {
     let tree = root.join(rel);
     std::fs::create_dir_all(&tree).unwrap();
     std::fs::write(
-        tree.join("a.grid_rows.json"),
-        r#"{"rows":[{"channel":"eng","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1"}]}"#,
+        tree.join("md1.grid_rows.json"),
+        format!(
+            r#"{{"rows":[
+              {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":null,"text":"first thread"}},
+              {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":0,"text":"first thread"}},
+              {{"channel":"{channel}","when_ts":"2026-01-01T00:01:00Z","markdown_uuid":"md1","message_index":1,"text":"a reply"}}
+            ]}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        tree.join("md2.grid_rows.json"),
+        format!(
+            r#"{{"rows":[
+              {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":null,"text":"second thread"}},
+              {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":0,"text":"second thread"}}
+            ]}}"#
+        ),
     )
     .unwrap();
 }
@@ -77,7 +94,7 @@ fn seed_tree(root: &Path, rel: &str) {
 #[tokio::test]
 async fn the_reference_applet_round_trips_through_the_gateway() {
     let tmp = tempfile::tempdir().unwrap();
-    seed_tree(tmp.path(), "slack/rendered_md");
+    seed_tree(tmp.path(), "slack/rendered_md", "#eng");
     let cfg = format!(
         r#"
 [[applets]]
@@ -105,8 +122,28 @@ workspace = "Work"
     let (status, body) = get_json(&app, "/v/slack_work/channels").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["workspace"], "Work");
-    assert_eq!(body["channels"][0]["name"], "eng");
-    assert_eq!(body["channels"][0]["markdown_uuid"], "md1");
+    assert_eq!(body["channels"][0]["name"], "#eng");
+    // Two documents, three messages between them. Counting threads is
+    // the regression guard: an earlier version collapsed a channel to a
+    // single document, which made a busy channel look like one message.
+    assert_eq!(body["channels"][0]["threads"], 2);
+    assert_eq!(body["channels"][0]["messages"], 3);
+
+    // Drilling in lists the channel's threads, newest first, each with
+    // the document a click should open.
+    let (status, body) = get_json(&app, "/v/slack_work/threads?channel=%23eng").await;
+    assert_eq!(status, StatusCode::OK);
+    let threads = body["threads"].as_array().unwrap();
+    assert_eq!(threads.len(), 2);
+    assert_eq!(threads[0]["markdown_uuid"], "md2");
+    assert_eq!(threads[0]["title"], "second thread");
+    assert_eq!(threads[1]["markdown_uuid"], "md1");
+    assert_eq!(threads[1]["messages"], 2);
+
+    // The channel name carries a '#', which a URL would read as a
+    // fragment — so the encoding has to survive the proxy hop.
+    let (_, body) = get_json(&app, "/v/slack_work/threads?channel=%23nope").await;
+    assert!(body["threads"].as_array().unwrap().is_empty());
 
     // A 404 from the applet survives the proxy as a 404, not a 502.
     let (status, body) = get_json(&app, "/v/slack_work/nope").await;
@@ -119,13 +156,8 @@ workspace = "Work"
 #[tokio::test]
 async fn two_reference_instances_share_a_module_and_serve_their_own_data() {
     let tmp = tempfile::tempdir().unwrap();
-    seed_tree(tmp.path(), "work/rendered_md");
-    std::fs::create_dir_all(tmp.path().join("home/rendered_md")).unwrap();
-    std::fs::write(
-        tmp.path().join("home/rendered_md/b.grid_rows.json"),
-        r#"{"rows":[{"channel":"family","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md2"}]}"#,
-    )
-    .unwrap();
+    seed_tree(tmp.path(), "work/rendered_md", "#eng");
+    seed_tree(tmp.path(), "home/rendered_md", "#family");
     let bin = slack_applet_bin();
     let cfg = format!(
         r#"
@@ -165,8 +197,8 @@ workspace = "Home"
 
     let (_, a_body) = get_json(&app, "/v/a/channels").await;
     let (_, b_body) = get_json(&app, "/v/b/channels").await;
-    assert_eq!(a_body["channels"][0]["name"], "eng");
-    assert_eq!(b_body["channels"][0]["name"], "family");
+    assert_eq!(a_body["channels"][0]["name"], "#eng");
+    assert_eq!(b_body["channels"][0]["name"], "#family");
 }
 
 // The client half on its own, against a listener this test owns.

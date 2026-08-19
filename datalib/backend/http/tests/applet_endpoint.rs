@@ -352,3 +352,156 @@ async fn proxying_an_unknown_applet_reports_why() {
         "error should name the applet: {v}"
     );
 }
+
+/// A config edit must show up without a restart: the registry watches
+/// the file's stamp and rediscovers on the next read.
+#[tokio::test]
+async fn a_config_edit_is_picked_up_without_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = "export default (id) => (root, ctx) => () => {};";
+    let hash = sha256_hex(stored_bytes(body).as_bytes());
+    let script = write_fixture(tmp.path(), "fixture.sh", body, &hash, &hash);
+    let cfg_path = tmp.path().join("config.toml");
+
+    // Boot with one applet, written to the real config path so the
+    // registry reads and stamps it.
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "[[applets]]\nid = \"first\"\ncommand = \"sh {}\"\n",
+            script.display()
+        ),
+    )
+    .unwrap();
+    let db_path = tmp.path().join("backend_index.doltlite_db");
+    let root = Arc::new(tmp.path().to_path_buf());
+    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let app = router(AppState {
+        root: root.clone(),
+        repo: Arc::new(dolt),
+        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+        progress_tx: tokio::sync::broadcast::channel(16).0,
+        applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
+    });
+
+    let (_, applets) = get_json(&app, "/api/applets").await;
+    let ids: Vec<&str> = applets
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["first"]);
+
+    // Add a second applet. Nothing restarts.
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "[[applets]]\nid = \"first\"\ncommand = \"sh {p}\"\n\n[[applets]]\nid = \"second\"\ncommand = \"sh {p}\"\n",
+            p = script.display()
+        ),
+    )
+    .unwrap();
+
+    let (_, applets) = get_json(&app, "/api/applets").await;
+    let mut ids: Vec<&str> = applets
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec!["first", "second"], "the edit was not picked up");
+    // And the new one carries its own gallery snippet, built from its id.
+    let second = applets
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "second")
+        .unwrap();
+    assert_eq!(second["gallery"][0]["source"], r#"second.view("second")"#);
+
+    // Removing one takes it out again.
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "[[applets]]\nid = \"second\"\ncommand = \"sh {}\"\n",
+            script.display()
+        ),
+    )
+    .unwrap();
+    let (_, applets) = get_json(&app, "/api/applets").await;
+    let ids: Vec<&str> = applets
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["second"]);
+}
+
+/// The refresh must be free when nothing changed — it sits on a polled
+/// endpoint, so re-execing every applet each tick would be a treadmill.
+#[tokio::test]
+async fn an_unchanged_config_is_not_rediscovered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = "export default 1;";
+    let hash = sha256_hex(stored_bytes(body).as_bytes());
+    let script = write_fixture(tmp.path(), "counter.sh", body, &hash, &hash);
+    // The fixture appends a line per invocation, so the file's length
+    // counts how many times discovery ran.
+    let counter = tmp.path().join("runs.log");
+    let wrapper = tmp.path().join("wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho run >> {}\nexec sh {} \"$@\"\n",
+            counter.display(),
+            script.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        format!(
+            "[[applets]]\nid = \"a\"\ncommand = \"sh {}\"\n",
+            wrapper.display()
+        ),
+    )
+    .unwrap();
+
+    let db_path = tmp.path().join("backend_index.doltlite_db");
+    let root = Arc::new(tmp.path().to_path_buf());
+    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let app = router(AppState {
+        root: root.clone(),
+        repo: Arc::new(dolt),
+        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+        progress_tx: tokio::sync::broadcast::channel(16).0,
+        applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
+    });
+    let after_boot = std::fs::read_to_string(&counter)
+        .unwrap_or_default()
+        .lines()
+        .count();
+    assert_eq!(after_boot, 1, "boot should discover exactly once");
+
+    for _ in 0..5 {
+        let _ = get_json(&app, "/api/applets").await;
+    }
+    let after_polls = std::fs::read_to_string(&counter)
+        .unwrap_or_default()
+        .lines()
+        .count();
+    assert_eq!(
+        after_polls,
+        1,
+        "polling re-ran discovery {} times on an unchanged config",
+        after_polls - 1
+    );
+}

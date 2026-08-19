@@ -141,11 +141,21 @@ immutable cache headers. Consequences worth knowing:
 
 ## When discovery runs
 
-Once, at server start. Nothing re-runs it when `config.toml` changes,
-so adding an applet needs a restart today — the UI polls
-`/api/applets`, but the answer cannot change under it. Re-running
-discovery on `PUT /api/config` is the obvious next step and the polling
-is already in place for it.
+At server start, and again whenever `config.toml` changes. Every read
+path (`GET /api/applets`, and the `/v/` proxy) first compares the
+file's size and mtime against the last pass and rediscovers only if
+they moved, so the common case costs one `stat`.
+
+Watching the file rather than hooking `PUT /api/config` means a config
+edited by hand, or written directly by an agent, is picked up too. The
+UI already polls `/api/applets`, so a saved config becomes a live
+gallery update.
+
+An applet whose entry changed is stopped as part of the refresh, so the
+next request respawns it with the new `params`. Leaving it running
+would serve the old `tree` from a config that appears to have taken
+effect — an edit visible in the gallery but not in the data is worse
+than a restart.
 
 ## Failure
 
@@ -170,5 +180,16 @@ nothing logged.
 `datalib/backend/applets/slack` — `datalib-view-slack`. It reads the
 cross-provider `.grid_rows.json` sidecar contract as untyped JSON
 rather than linking the schema or provider crates, which keeps an
-applet a small program. The gateway side is
+applet a small program. It ships in `//datalib/backend:dist` alongside
+`datalib-step`, so a config can name it bare. The gateway side is
 `datalib/backend/http/src/applets.rs`.
+
+Its two-level shape is worth copying: Slack renders one document per
+*thread*, and every message in a thread carries that thread's
+`markdown_uuid`. So `/channels` lists channels with thread and message
+counts, `/threads?channel=…` lists one channel's threads, and only a
+thread maps to a document the card opens. An earlier version went
+straight from channel to document, which picked one arbitrary thread
+and made a 45-message channel look like it held a single message —
+the general lesson being to check what a `markdown_uuid` actually
+identifies before treating it as "the document for this thing".

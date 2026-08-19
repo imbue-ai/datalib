@@ -224,9 +224,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
 struct ChannelsResponse {
     workspace: String,
     channels: Vec<Channel>,
-    /// Paths that could not be read. Non-empty means the channel list
-    /// is partial, which the card says out loud rather than presenting
-    /// a truncated list as complete.
+    /// Paths that could not be read. Non-empty means the listing is
+    /// partial, which the card says out loud rather than presenting a
+    /// truncated list as complete.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -234,40 +234,72 @@ struct ChannelsResponse {
 #[derive(Serialize)]
 struct Channel {
     name: String,
+    /// Rendered documents in this channel. Slack renders one document
+    /// per thread, so this is the thread count.
+    threads: usize,
     messages: usize,
-    /// A document to open when the row is clicked — the newest one in
-    /// the channel, which is what a reader almost always wants.
-    markdown_uuid: Option<String>,
+}
+
+#[derive(Serialize, Default)]
+struct ThreadsResponse {
+    channel: String,
+    threads: Vec<Thread>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct Thread {
+    /// The document to open — `documentView("<markdown_uuid>")`.
+    markdown_uuid: String,
+    /// First line of the thread, for the row label.
+    title: String,
+    when_ts: String,
+    messages: usize,
+}
+
+#[derive(Default)]
+struct ThreadData {
+    title: String,
+    when: Option<chrono::DateTime<chrono::Utc>>,
+    when_raw: String,
+    messages: usize,
 }
 
 /// `when_ts` as a comparable instant.
 ///
 /// The field is offset-bearing RFC 3339, so string comparison is
 /// wrong: `…T10:00:00+05:00` sorts after `…T08:00:00+00:00` while
-/// actually being two hours earlier. Parsing to a fixed-offset
-/// datetime and comparing UTC instants is the only ordering that
-/// matches what a reader means by "newest". Unparseable stamps sort
-/// before everything, so a malformed row never displaces a good one.
+/// actually being two hours earlier. Unparseable stamps sort before
+/// everything, so a malformed row never displaces a good one.
 fn when_key(when_ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(when_ts)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-/// Walk the rendered tree and group its rows by channel.
+/// Walk the rendered tree, grouping documents by channel.
 ///
 /// Rows come from `.grid_rows.json` sidecars, read as untyped JSON so
-/// this applet does not link the schema crate: the three fields it
-/// needs (`channel`, `markdown_uuid`, `when_ts`) are part of the
-/// cross-provider contract and change far more slowly than the struct.
+/// this applet does not link the schema crate: the fields it needs
+/// (`channel`, `markdown_uuid`, `when_ts`, `message_index`, `text`) are
+/// part of the cross-provider contract and change far more slowly than
+/// the struct.
+///
+/// The grouping is two levels because that is how the data is shaped:
+/// Slack renders one document per thread, and every message in a thread
+/// carries that thread's `markdown_uuid`. Collapsing straight to "a
+/// document per channel" — which an earlier version did — picks one
+/// arbitrary thread and makes the card look like the channel holds a
+/// single message.
 ///
 /// Returns the channels it could read plus the paths it could not, so
-/// the caller can tell the user the list is partial. A silently
-/// truncated channel list reads as authoritative, which is the worse
-/// failure: an unreadable subdirectory would look like an empty one.
-fn scan_channels(tree: &Path) -> (Vec<Channel>, Vec<String>) {
-    type Newest = Option<(chrono::DateTime<chrono::Utc>, String)>;
-    let mut by_channel: BTreeMap<String, (usize, Newest)> = BTreeMap::new();
+/// the caller can say the listing is partial. A silently truncated list
+/// reads as authoritative, which is the worse failure.
+type Channels = BTreeMap<String, BTreeMap<String, ThreadData>>;
+
+fn scan(tree: &Path) -> (Channels, Vec<String>) {
+    let mut by_channel: Channels = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut stack = vec![tree.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -312,47 +344,163 @@ fn scan_channels(tree: &Path) -> (Vec<Channel>, Vec<String>) {
                     continue;
                 }
             };
-            let rows = match v.get("rows").and_then(|r| r.as_array()) {
-                Some(r) => r,
-                None => continue,
+            let Some(rows) = v.get("rows").and_then(|r| r.as_array()) else {
+                continue;
             };
             for row in rows {
                 let Some(channel) = row.get("channel").and_then(|c| c.as_str()) else {
                     continue;
                 };
-                let when = row.get("when_ts").and_then(|w| w.as_str()).unwrap_or("");
-                let md = row
-                    .get("markdown_uuid")
-                    .and_then(|m| m.as_str())
-                    .map(str::to_string);
-                let slot = by_channel.entry(channel.to_string()).or_insert((0, None));
-                slot.0 += 1;
-                if let (Some(md), Some(key)) = (md, when_key(when)) {
-                    // Keep the newest document per channel. Ties break
-                    // by markdown_uuid rather than by walk order: the
-                    // walk drains a LIFO stack over unordered
-                    // `read_dir`, so anything positional would differ
-                    // between runs over identical data.
-                    let better = match &slot.1 {
-                        None => true,
-                        Some((prev, prev_md)) => (key, &md) > (*prev, prev_md),
-                    };
-                    if better {
-                        slot.1 = Some((key, md));
+                let Some(md) = row.get("markdown_uuid").and_then(|m| m.as_str()) else {
+                    continue;
+                };
+                let when_raw = row.get("when_ts").and_then(|w| w.as_str()).unwrap_or("");
+                let thread = by_channel
+                    .entry(channel.to_string())
+                    .or_default()
+                    .entry(md.to_string())
+                    .or_default();
+
+                // `message_index` is absent on the row that *is* the
+                // document and present on each message inside it, so it
+                // is the discriminator — sturdier than matching the
+                // `kind` display string.
+                if row.get("message_index").map(|i| !i.is_null()) == Some(true) {
+                    thread.messages += 1;
+                }
+
+                // The document row carries the thread's own title and
+                // timestamp; take those in preference to a message's.
+                let is_doc = row.get("message_index").map(|i| i.is_null()) != Some(false);
+                let text_field = row.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                if is_doc || thread.title.is_empty() {
+                    if !text_field.is_empty() {
+                        thread.title = first_line(text_field);
                     }
+                }
+                let key = when_key(when_raw);
+                // Keep the thread's earliest stamp: that is when the
+                // conversation started, which is how a reader orders
+                // threads.
+                let take = match (&thread.when, &key) {
+                    (None, _) => true,
+                    (Some(_), None) => false,
+                    (Some(prev), Some(k)) => k < prev,
+                };
+                if take {
+                    thread.when = key;
+                    thread.when_raw = when_raw.to_string();
                 }
             }
         }
     }
+    (by_channel, warnings)
+}
+
+/// One line for a row label, trimmed so a long paste does not fill the
+/// card.
+fn first_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let mut out: String = line.chars().take(120).collect();
+    if line.chars().count() > 120 {
+        out.push('…');
+    }
+    out
+}
+
+fn channels_response(tree: &Path, workspace: &str) -> ChannelsResponse {
+    let (by_channel, warnings) = scan(tree);
     let channels = by_channel
         .into_iter()
-        .map(|(name, (messages, newest))| Channel {
+        .map(|(name, threads)| Channel {
             name,
-            messages,
-            markdown_uuid: newest.map(|(_, md)| md),
+            threads: threads.len(),
+            messages: threads.values().map(|t| t.messages).sum(),
         })
         .collect();
-    (channels, warnings)
+    ChannelsResponse {
+        workspace: workspace.to_string(),
+        channels,
+        warnings,
+    }
+}
+
+fn threads_response(tree: &Path, channel: &str) -> ThreadsResponse {
+    let (by_channel, warnings) = scan(tree);
+    let mut threads: Vec<Thread> = by_channel
+        .get(channel)
+        .map(|m| {
+            m.iter()
+                .map(|(md, t)| Thread {
+                    markdown_uuid: md.clone(),
+                    title: if t.title.is_empty() {
+                        "(no text)".to_string()
+                    } else {
+                        t.title.clone()
+                    },
+                    when_ts: t.when_raw.clone(),
+                    messages: t.messages,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Newest thread first, and ties broken on the uuid so the order is
+    // the same on every request over unchanged data (the walk itself is
+    // unordered).
+    threads.sort_by(|a, b| {
+        let ka = when_key(&a.when_ts);
+        let kb = when_key(&b.when_ts);
+        kb.cmp(&ka)
+            .then_with(|| a.markdown_uuid.cmp(&b.markdown_uuid))
+    });
+    ThreadsResponse {
+        channel: channel.to_string(),
+        threads,
+        warnings,
+    }
+}
+
+/// Percent-decode a query value. Channel names begin with `#`, which a
+/// URL would otherwise read as a fragment delimiter, so the caller
+/// encodes and this undoes it.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(v) => {
+                    out.push(v);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query_param(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then(|| percent_decode(v))
+    })
 }
 
 fn serve(port: u16, params: &Params) -> Result<()> {
@@ -387,28 +535,41 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
     let mut buf = [0u8; 8192];
     let n = stream.read(&mut buf)?;
     let head = String::from_utf8_lossy(&buf[..n]);
-    let path = head
+    let target = head
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/");
-    let path = path.split('?').next().unwrap_or("/");
+    let (path, query) = match target.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (target, ""),
+    };
 
     let (status, body) = match path {
         "/channels" => {
-            let (channels, warnings) = scan_channels(tree);
-            for w in &warnings {
+            let resp = channels_response(tree, workspace);
+            for w in &resp.warnings {
                 eprintln!("datalib-view-slack: unreadable: {w}");
             }
-            let resp = ChannelsResponse {
-                workspace: workspace.to_string(),
-                channels,
-                warnings,
-            };
             (200, serde_json::to_string(&resp)?)
         }
-        // A readiness probe the gateway may use once it wants
-        // something stronger than "the port accepts".
+        // One level down: the threads in one channel. Slack renders a
+        // document per thread, so this is the list a reader picks from.
+        "/threads" => match query_param(query, "channel") {
+            Some(channel) => {
+                let resp = threads_response(tree, &channel);
+                for w in &resp.warnings {
+                    eprintln!("datalib-view-slack: unreadable: {w}");
+                }
+                (200, serde_json::to_string(&resp)?)
+            }
+            None => (
+                400,
+                serde_json::json!({ "error": "/threads needs ?channel=<name>" }).to_string(),
+            ),
+        },
+        // A readiness probe the gateway may use once it wants something
+        // stronger than "the port accepts".
         "/health" => (200, r#"{"ok":true}"#.to_string()),
         _ => (
             404,
@@ -416,7 +577,11 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
         ),
     };
 
-    let reason = if status == 200 { "OK" } else { "Not Found" };
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        _ => "Not Found",
+    };
     let resp = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -449,8 +614,7 @@ mod tests {
     #[test]
     fn module_hash_is_a_function_of_the_bytes_only() {
         let a = sha256_hex(COMPONENT_JS.as_bytes());
-        let b = sha256_hex(COMPONENT_JS.as_bytes());
-        assert_eq!(a, b);
+        assert_eq!(a, sha256_hex(COMPONENT_JS.as_bytes()));
         assert_eq!(a.len(), 64);
         assert!(a
             .bytes()
@@ -459,110 +623,136 @@ mod tests {
 
     #[test]
     fn scanning_a_missing_tree_is_empty_and_silent() {
-        // A tree no step has written yet is the normal first-run
-        // state, so it must not produce a warning either.
-        let (channels, warnings) = scan_channels(Path::new("/definitely/not/here"));
+        // A tree no step has written yet is the normal first-run state,
+        // so it must not produce a warning either.
+        let (channels, warnings) = scan(Path::new("/definitely/not/here"));
         assert!(channels.is_empty());
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 
-    /// `when_ts` carries an offset, so string order is not time order.
-    #[test]
-    fn newest_is_by_instant_not_by_string() {
-        let dir = tempfile::tempdir().unwrap();
-        // 10:00+05:00 is 05:00Z — earlier than 08:00Z, though it sorts
-        // later as a string.
+    /// One sidecar per thread, with the thread row and its messages all
+    /// carrying the same markdown_uuid — the real Slack shape.
+    fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, texts: &[&str]) {
+        let mut rows = vec![serde_json::json!({
+            "uuid": md, "kind": "Slack Thread", "channel": channel,
+            "when_ts": when, "markdown_uuid": md, "message_index": null,
+            "text": texts.first().copied().unwrap_or(""),
+        })];
+        for (i, t) in texts.iter().enumerate() {
+            rows.push(serde_json::json!({
+                "uuid": format!("{md}-m{i}"), "kind": "Slack Message", "channel": channel,
+                "when_ts": when, "markdown_uuid": md, "message_index": i, "text": t,
+            }));
+        }
         std::fs::write(
-            dir.path().join("a.grid_rows.json"),
-            r#"{"rows":[
-                {"channel":"c","when_ts":"2026-01-01T08:00:00+00:00","markdown_uuid":"utc"},
-                {"channel":"c","when_ts":"2026-01-01T10:00:00+05:00","markdown_uuid":"offset"}
-            ]}"#,
+            dir.join(format!("{md}.grid_rows.json")),
+            serde_json::json!({ "header": { "markdown_uuid": md }, "rows": rows }).to_string(),
         )
         .unwrap();
-        let (channels, _) = scan_channels(dir.path());
-        assert_eq!(channels[0].markdown_uuid.as_deref(), Some("utc"));
     }
 
-    /// Ties must not depend on directory-walk order, which is not
-    /// stable across runs.
+    /// The regression this model exists for: a channel with several
+    /// threads must report all of them, not collapse to one document.
     #[test]
-    fn ties_break_deterministically() {
+    fn a_channel_reports_every_thread_and_every_message() {
+        let dir = tempfile::tempdir().unwrap();
+        write_thread(
+            dir.path(),
+            "t1",
+            "#cat-qi",
+            "2026-07-01T00:00:00Z",
+            &["hello", "there"],
+        );
+        write_thread(
+            dir.path(),
+            "t2",
+            "#cat-qi",
+            "2026-07-02T00:00:00Z",
+            &["joined"],
+        );
+        write_thread(
+            dir.path(),
+            "t3",
+            "#chat-qi",
+            "2026-07-03T00:00:00Z",
+            &["elsewhere"],
+        );
+
+        let resp = channels_response(dir.path(), "ws");
+        assert_eq!(resp.channels.len(), 2);
+        let cat = resp.channels.iter().find(|c| c.name == "#cat-qi").unwrap();
+        assert_eq!(cat.threads, 2, "both threads must be counted");
+        assert_eq!(cat.messages, 3);
+
+        let threads = threads_response(dir.path(), "#cat-qi");
+        assert_eq!(threads.threads.len(), 2);
+        // Newest first.
+        assert_eq!(threads.threads[0].markdown_uuid, "t2");
+        assert_eq!(threads.threads[1].markdown_uuid, "t1");
+        assert_eq!(threads.threads[1].title, "hello");
+        assert_eq!(threads.threads[1].messages, 2);
+    }
+
+    #[test]
+    fn threads_for_an_unknown_channel_is_empty_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write_thread(dir.path(), "t1", "#a", "2026-07-01T00:00:00Z", &["x"]);
+        assert!(threads_response(dir.path(), "#nope").threads.is_empty());
+    }
+
+    /// Thread order must not depend on the directory walk, which is a
+    /// LIFO stack over unordered `read_dir`.
+    #[test]
+    fn thread_order_is_stable_across_runs() {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..5 {
             let dir = tempfile::tempdir().unwrap();
-            for (i, name) in ["x", "y", "z"].iter().enumerate() {
-                std::fs::write(
-                    dir.path().join(format!("{i}.grid_rows.json")),
-                    format!(
-                        r#"{{"rows":[{{"channel":"c","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"{name}"}}]}}"#
-                    ),
-                )
-                .unwrap();
+            for md in ["a", "b", "c"] {
+                write_thread(dir.path(), md, "#c", "2026-07-01T00:00:00Z", &["x"]);
             }
-            let (channels, _) = scan_channels(dir.path());
-            seen.insert(channels[0].markdown_uuid.clone().unwrap());
+            let order: Vec<String> = threads_response(dir.path(), "#c")
+                .threads
+                .into_iter()
+                .map(|t| t.markdown_uuid)
+                .collect();
+            seen.insert(order);
         }
-        assert_eq!(seen.len(), 1, "tie-break varied across runs: {seen:?}");
+        assert_eq!(seen.len(), 1, "order varied across runs: {seen:?}");
+    }
+
+    /// A channel name starts with `#`, which a URL reads as a fragment
+    /// delimiter, so the round trip has to survive encoding.
+    #[test]
+    fn channel_names_survive_the_query_string() {
+        assert_eq!(
+            query_param("channel=%23cat-qi", "channel").unwrap(),
+            "#cat-qi"
+        );
+        assert_eq!(
+            query_param("x=1&channel=%23a%20b", "channel").unwrap(),
+            "#a b"
+        );
+        assert!(query_param("nope=1", "channel").is_none());
     }
 
     /// An unreadable file makes the listing partial, and the caller is
-    /// told so rather than being handed a short list that looks whole.
+    /// told so rather than handed a short list that looks whole.
     #[test]
     fn unreadable_input_is_reported_not_swallowed() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("bad.grid_rows.json"), "{not json").unwrap();
-        let (_, warnings) = scan_channels(dir.path());
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("bad.grid_rows.json"), "{warnings:?}");
+        write_thread(dir.path(), "ok", "#c", "2026-07-01T00:00:00Z", &["x"]);
+        let resp = channels_response(dir.path(), "ws");
+        assert_eq!(resp.channels.len(), 1);
+        assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
     }
 
     #[test]
-    fn groups_rows_by_channel_and_keeps_the_newest_doc() {
-        let dir = tempfile::tempdir().unwrap();
-        let sub = dir.path().join("nested");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(
-            sub.join("a.grid_rows.json"),
-            r#"{"header":{},"rows":[
-                {"channel":"general","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"old"},
-                {"channel":"general","when_ts":"2026-06-01T00:00:00Z","markdown_uuid":"new"},
-                {"channel":"random","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"r1"}
-            ]}"#,
-        )
-        .unwrap();
-        // A row with no channel belongs to no channel and is skipped.
-        std::fs::write(
-            dir.path().join("b.grid_rows.json"),
-            r#"{"rows":[{"when_ts":"2026-03-01T00:00:00Z","markdown_uuid":"x"}]}"#,
-        )
-        .unwrap();
-
-        let (channels, warnings) = scan_channels(dir.path());
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(channels.len(), 2);
-        let general = channels.iter().find(|c| c.name == "general").unwrap();
-        assert_eq!(general.messages, 2);
-        assert_eq!(general.markdown_uuid.as_deref(), Some("new"));
-        let random = channels.iter().find(|c| c.name == "random").unwrap();
-        assert_eq!(random.messages, 1);
-    }
-
-    /// Malformed sidecars are skipped rather than failing the scan: a
-    /// half-written file during a sync must not blank the card.
-    #[test]
-    fn skips_unparseable_sidecars() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("bad.grid_rows.json"), "{not json").unwrap();
-        std::fs::write(
-            dir.path().join("good.grid_rows.json"),
-            r#"{"rows":[{"channel":"ok","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"m"}]}"#,
-        )
-        .unwrap();
-        let (channels, warnings) = scan_channels(dir.path());
-        assert_eq!(channels.len(), 1);
-        assert_eq!(channels[0].name, "ok");
-        // The unparseable sibling is still reported.
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    fn long_titles_are_trimmed_to_one_line() {
+        assert_eq!(first_line("first\nsecond"), "first");
+        assert_eq!(first_line("   \n  real  \n"), "real");
+        let long = "x".repeat(200);
+        let out = first_line(&long);
+        assert!(out.chars().count() <= 121 && out.ends_with('…'), "{out}");
     }
 }

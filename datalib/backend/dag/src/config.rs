@@ -108,7 +108,7 @@ pub struct DagConfig {
 /// wrote. Everything else (`command` splitting, `params` as JSON,
 /// `env` merge, cwd = data root) follows the step's conventions so
 /// there is one set of rules to learn.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletEntry {
     /// Instance name. Doubles as the mount prefix (`/v/<id>/`) *and*
