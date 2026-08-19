@@ -151,12 +151,47 @@ it. That is the only config format it reads — a root still holding a
 pre-TOML `config.yaml` needs `datalib-migrate-config <root>` first.
 
 The backend starts even if the root is missing — `/api/health` reports
-`root_exists: false` and the search grid shows zero rows.
+`root_exists: false` and the search grid shows zero rows. (`/api/health`
+needs the API token like every other route; see below.)
 
 For a backend-only launch (no Vite), use `bazelisk run //datalib:serve`.
 Override the listen address with `DATALIB_BIND=127.0.0.1:<port>` (or set
 `DATALIB_URL=...` to point the browser at a different URL than the one
 being bound — useful behind a reverse proxy).
+
+### The API token
+
+Every backend route requires a per-process API token — Jupyter's scheme,
+and for Jupyter's reason: loopback does not keep a *web page* out, and
+`PUT /api/config` + `POST /api/sync/jobs` runs arbitrary `command:`
+strings (issue #138). See
+[`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs)
+for the design.
+
+Both launchers handle it for you:
+
+* `//datalib:serve` mints a token, exports `DATALIB_TOKEN` to the
+  backend, and opens `<url>?token=…`. The browser trades that for an
+  HttpOnly session cookie and is redirected to the clean URL.
+* `//datalib:dev` mints one and gives it to *both* processes. The
+  browser talks to Vite, not the backend, so it never gets a cookie —
+  instead Vite's server-side `/api` proxy stamps
+  `Authorization: Bearer …` on every forwarded request
+  ([`vite.config.ts`](/datalib/ui/vite.config.ts)). Starting Vite by
+  hand means exporting the same `DATALIB_TOKEN` the backend has, or
+  every `/api` call comes back 401.
+
+For curl, scripts, and coding agents, the running server publishes its
+token to `<root>/system/state/api-token` (mode 0600):
+
+```sh
+curl -H "Authorization: Bearer $(cat ~/datalib.thad/system/state/api-token)" \
+  http://127.0.0.1:<port>/api/health
+```
+
+It changes on every restart, so read the file rather than caching the
+value. `DATALIB_TOKEN=<value>` pins it. The `/agent/*.md` guides stay
+readable without a token — they're what tells an agent how to get one.
 
 ### Re-run ingestion
 

@@ -24,6 +24,7 @@ platform_transition_filegroup(
 rust_library(
     name = "datalib_http",
     srcs = [
+        "src/auth.rs",
         "src/boot.rs",
         "src/embed.rs",
         "src/lib.rs",
@@ -101,6 +102,24 @@ rust_test(
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# Regression guard for issue #138: the token gate that fronts every
+# route (`src/auth.rs`).
+rust_test(
+    name = "auth_endpoint_test",
+    srcs = ["tests/auth_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",

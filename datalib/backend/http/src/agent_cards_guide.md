@@ -6,6 +6,24 @@ asked you either to define it (a new component) or to modify an
 existing one. This doc tells you how. (If your wayfinder is about the
 data-source config instead, read `<origin>/agent/config.md`.)
 
+## Authentication (do this first)
+
+Every `/api/*` route requires the server's API token — the same scheme
+Jupyter uses, and for the same reason: without it any web page the user
+has open could drive this API. (This guide itself is public, so you can
+read it before you have the token.)
+
+The token is minted per server process and published to a file:
+
+```sh
+TOKEN=$(cat <data root>/system/state/api-token)
+curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
+```
+
+Your wayfinder names the exact path. **Read it fresh** rather than
+caching it: a 401 from any call below almost always means the server
+restarted and minted a new one.
+
 ## The model
 
 The UI is a stack of columns; each column is a **card** defined by a
@@ -53,6 +71,7 @@ you overwrite the alias, that card re-renders automatically.
 
    ```sh
    curl -X PUT "<origin>/api/lib/<aliasName>" \
+     -H "Authorization: Bearer $TOKEN" \
      -H 'content-type: application/json' \
      -d "$(jq -Rs '{source: .}' < factory.js)"
    ```
@@ -65,7 +84,8 @@ you overwrite the alias, that card re-renders automatically.
    wayfinder. Render it headlessly and inspect the screenshot:
 
    ```sh
-   node datalib/ui/scripts/render.mjs '<cardUrl>' --out /tmp/card.png
+   node datalib/ui/scripts/render.mjs '<cardUrl>' --out /tmp/card.png \
+     --token "$TOKEN"
    # prints JSON: { consoleErrors, cardErrors } — check these for failures
    ```
 
@@ -89,7 +109,9 @@ you overwrite the alias, that card re-renders automatically.
   always in scope.
 - **Data** comes from the backend HTTP API (same origin): e.g.
   `GET /api/search?q=…`, `GET /api/chat/{markdown_uuid}`. Fetch with
-  relative paths.
+  relative paths — and *don't* add an auth header in card code. The
+  browser holds the token as an HttpOnly session cookie it sends
+  automatically; the token is deliberately not reachable from page JS.
 
 ## Composing existing components
 
@@ -107,6 +129,7 @@ instead of the bare alias name — in the PUT body:
 
 ```sh
 curl -X PUT "<origin>/api/lib/<aliasName>" \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d "$(jq -Rs '{source: ., title: "Nice name", description: "One line on what this shows."}' < factory.js)"
 ```
@@ -124,6 +147,7 @@ the component works, rename it to something meaningful:
 
 ```sh
 curl -X POST "<origin>/api/lib/card_a1b2c3/rename" \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"new_name": "myNiceName"}'
 ```

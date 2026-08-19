@@ -72,10 +72,20 @@ docker run --rm \
 # 5. Serve the HTTP backend (UI bundle not included in this image — point
 #    a local Vite dev server or another openhost UI container at
 #    http://127.0.0.1:8731/api).
+#
+#    Every route needs the API token (see docs/dev/first_time_dev.md).
+#    Publishing 8731 makes the API reachable from outside the container,
+#    so pin a token you generated rather than letting the container mint
+#    a random one you'd have to read back out of the data root:
+TOKEN="$(openssl rand -hex 32)"
 docker run --rm -p 8731:8731 \
+    -e DATALIB_TOKEN="$TOKEN" \
     -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
     -v "$DATA_ROOT:/data" \
     "$IMG" datalib-http
+
+# …and give the same value to whatever talks to it:
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8731/api/health
 ```
 
 ## Bind-mount contract

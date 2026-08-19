@@ -50,13 +50,26 @@ if [[ -z "${DATALIB_BIND:-}" ]]; then
   DATALIB_BIND="127.0.0.1:$(free_port)"
 fi
 export DATALIB_BIND
+
+# Every route behind the backend requires the per-process API token
+# (datalib/backend/http/src/auth.rs). Pin one here so this wrapper can
+# probe /api/health and open a browser URL that carries it; without
+# DATALIB_TOKEN the binary would mint its own and we'd have to scrape
+# stderr for it.
+if [[ -z "${DATALIB_TOKEN:-}" ]]; then
+  DATALIB_TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
+fi
+export DATALIB_TOKEN
 echo "backend bind: $DATALIB_BIND"
 
 # DATALIB_URL still wins if the caller set it explicitly (legacy
 # override for "where should I open the browser / probe health?"). Otherwise
 # derive from DATALIB_BIND so the random port flows through.
 BASE_URL="${DATALIB_URL:-http://$DATALIB_BIND}"
-HEALTH_URL="$BASE_URL/api/health"
+HEALTH_URL="$BASE_URL/api/health?token=$DATALIB_TOKEN"
+# The browser trades ?token= for a session cookie on this first load and
+# is redirected to the clean URL; every later request rides the cookie.
+OPEN_URL="$BASE_URL/?token=$DATALIB_TOKEN"
 
 # Positional data-root arg required by the binary; default to
 # ~/Documents/datalib if not supplied (legacy default).
@@ -83,9 +96,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 case "$(uname -s)" in
-  Darwin) open "$BASE_URL" ;;
-  Linux)  xdg-open "$BASE_URL" >/dev/null 2>&1 || true ;;
-  *)      echo "open $BASE_URL in your browser" ;;
+  Darwin) open "$OPEN_URL" ;;
+  Linux)  xdg-open "$OPEN_URL" >/dev/null 2>&1 || true ;;
+  *)      echo "open $OPEN_URL in your browser" ;;
 esac
 
 wait "$BIN_PID"

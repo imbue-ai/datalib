@@ -20,6 +20,14 @@
 //! `--url-file <path>`; see the Args docs) and points its window at the
 //! announced URL.
 //!
+//! Authentication: every request needs the per-process API token (see
+//! [`datalib_http::auth`]). It rides in the announced URL as
+//! `?token=…`, which the browser trades for a session cookie on the
+//! first load; scripts and agents read it from
+//! `<data_root>/system/state/api-token` and send
+//! `Authorization: Bearer …`. Set `$DATALIB_TOKEN` to pin it (that's
+//! how `dev.sh` shares one token with the Vite proxy).
+//!
 //! Bind address: `$DATALIB_BIND` if set, else `127.0.0.1:8731`. The
 //! env override exists for the playwright e2e suite which needs an
 //! ephemeral port per run; users running the bundled release just get
@@ -30,7 +38,7 @@
 //! No subprocess, no TCP port to MySQL.
 
 use clap::Parser;
-use datalib_http::router;
+use datalib_http::{router, ApiToken};
 use std::path::PathBuf;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
@@ -75,9 +83,17 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("data root: {} (created)", root.display());
     }
 
+    // Minted before the announcement below because the announced URL
+    // carries it: the browser (and the Tauri webview) authenticate by
+    // loading `<url>?token=…` once, then ride the session cookie.
+    let api_token = ApiToken::mint(&root)?;
+
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    let url = format!("http://{}", listener.local_addr()?);
-    eprintln!("datalib-http listening on {url}");
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let url = format!("{base_url}/?token={}", api_token.value());
+    eprintln!("datalib-http listening on {base_url}");
+    eprintln!("open: {url}");
+    eprintln!("api token: {}", api_token.token_file().display());
 
     // Announce the bound URL to a waiting parent process as soon as it
     // is known — before the (potentially slow) backend assembly below,
@@ -86,6 +102,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(url_file) = &args.url_file {
         std::fs::write(url_file, &url)
             .map_err(|e| anyhow::anyhow!("write --url-file {}: {e}", url_file.display()))?;
+        // The URL now carries the API token, and this file usually
+        // lands in a shared /tmp. Same 0600 the token file gets.
+        datalib_http::auth::restrict_to_owner(url_file)?;
     }
 
     if !args.no_open {
@@ -104,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         root,
         datalib_http::worker::resolve_dag_bin(),
         datalib_http::worker::resolve_binary_dir(),
+        api_token,
     )
     .await?;
     let root = state.root.clone();

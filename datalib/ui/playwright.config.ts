@@ -69,6 +69,23 @@ const fixtureRoot = ensureFixtureRoot();
 const BACKEND_PORT = cachedPort("FW_E2E_BACKEND_PORT");
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
+// The backend requires its API token on every route (see
+// datalib/backend/http/src/auth.rs). Pin one via DATALIB_TOKEN rather
+// than letting the binary mint a random one we'd have to read back out
+// of the data root. `use.extraHTTPHeaders` then authenticates the
+// `request` fixture *and* every navigation and subresource the browser
+// context issues, so the specs stay unaware that auth exists. Cached in
+// env for the same reason the ports are: this config is re-imported in
+// each worker subprocess.
+function cachedToken(): string {
+  const existing = process.env.DATALIB_TOKEN;
+  if (existing) return existing;
+  const token = `e2e-${BACKEND_PORT}-${process.pid}`;
+  process.env.DATALIB_TOKEN = token;
+  return token;
+}
+const API_TOKEN = cachedToken();
+
 // Locate the bazel-built http binary. Built via:
 //   bazelisk build //datalib/backend/http:datalib_http_bin
 //
@@ -118,6 +135,7 @@ export default defineConfig({
     baseURL: BACKEND_URL,
     headless: true,
     trace: "retain-on-failure",
+    extraHTTPHeaders: { authorization: `Bearer ${API_TOKEN}` },
   },
   projects: [
     {
@@ -135,11 +153,14 @@ export default defineConfig({
       // drives chromium itself, we don't want a second tab fighting
       // for focus every test run.
       command: `${JSON.stringify(backendBin)} ${JSON.stringify(fixtureRoot)} --no-open`,
-      url: `${BACKEND_URL}/api/health`,
+      // Playwright's own readiness probe doesn't go through
+      // `use.extraHTTPHeaders`, so the token rides the query string here.
+      url: `${BACKEND_URL}/api/health?token=${API_TOKEN}`,
       reuseExistingServer: false,
       timeout: 30_000,
       env: {
         DATALIB_BIND: `127.0.0.1:${BACKEND_PORT}`,
+        DATALIB_TOKEN: API_TOKEN,
       },
     },
   ],

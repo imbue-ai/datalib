@@ -289,6 +289,15 @@ your default browser. The **Setup** tab scaffolds `config.toml` if you
 don't have one yet and lets you add sources; **Sync now** then runs the
 pipeline (`datalib-dag` under the hood).
 
+The URL it opens carries a one-time `?token=…`, the way a Jupyter
+notebook server's does — the local API is authenticated, so that no web
+page you happen to have open can reach it. Your browser trades the
+token for a session cookie on that first load and drops it from the
+address bar. If you want to open the app in a *different* browser (or
+you closed the tab and lost the URL), the line the server printed is
+still in your terminal, and the token is on disk at
+`<data_root>/system/state/api-token`.
+
 Prefer the terminal? Run the pipeline directly on your steps config:
 
 ```sh
@@ -385,6 +394,19 @@ It binds to `http://127.0.0.1:8731` by default and opens that URL in
 your default browser. Pass `--no-open` if you'd rather click in
 yourself, and set `DATALIB_BIND=127.0.0.1:<port>` to override the
 listen address.
+
+The API requires a token (see step 4). With `--no-open` you'll want the
+URL the server prints, which already has it; to reach the API from a
+script instead:
+
+```sh
+curl -H "Authorization: Bearer $(cat ./system/state/api-token)" \
+  http://127.0.0.1:8731/api/health
+```
+
+A fresh token is minted every time the server starts, so re-read that
+file rather than saving a copy. `DATALIB_TOKEN=<value>` pins one if you
+need it stable across restarts.
 
 ## 6. Re-syncing
 

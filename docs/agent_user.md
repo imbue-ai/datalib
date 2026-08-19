@@ -134,6 +134,22 @@ Pick the surface that fits the question:
   `GET /api/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
+  Every route needs the server's per-process API token — loopback does
+  not keep a *web page* out, and `PUT /api/config` runs arbitrary
+  `command` strings. Read it from the running server and send it as a
+  bearer token:
+
+  ```sh
+  TOKEN=$(cat <data_root>/system/state/api-token)
+  curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
+  ```
+
+  It is minted fresh on every start, so re-read the file rather than
+  caching the value; `DATALIB_TOKEN=<value>` pins it. The onboarding
+  guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
+  are readable without it. Design notes:
+  [`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs).
+
 ## Extending datalib
 
 - **Custom step commands** — the headline extension point. Any
