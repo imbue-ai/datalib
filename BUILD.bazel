@@ -1,10 +1,38 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files([
     ".bazelrc",  # read by //tools:qmd_model_cache_path_test
+    "MODULE.bazel",  # read by //third-party/qmd/runtime:node_abi_test
+    "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
     "requirements.txt",
 ])
+
+# Every first-party Python file in the repo, as a single filegroup the
+# hermetic lint tests consume.
+#
+# `third-party/` is deliberately absent for the same reason
+# `[tool.ruff] extend-exclude` lists it: vendored subtrees are
+# upstream-owned and get linted in their own repo.
+#
+# Why the split: `scripts/` is not a Bazel package, so the root package's
+# glob reaches into it. `tests/fixtures/` IS a package, and glob never
+# crosses a package boundary, so it contributes its own filegroup. A new
+# Python file inside a NEW package therefore needs a filegroup there plus
+# an entry here, or it silently goes unlinted.
+#
+# `scripts/lint_repo.py` catches that omission: it asks git for every
+# tracked first-party `*.py` and diffs against what these filegroups
+# actually reach. It can't run as a Bazel test — enumerating "every file
+# in the repo" is exactly what a sandbox denies — so it runs as a plain
+# step in `test.yml` and in `bazel run //:precommit`.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["scripts/**/*.py"]) + [
+        "//tests/fixtures:python_sources",
+        "//tools:python_sources",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 test_suite(
     name = "all_tests",
@@ -15,51 +43,43 @@ test_suite(
     ],
 )
 
-# Pre-commit checks exposed two ways from the same wrapper script,
-# matching the //datalib/ui:e2e pattern:
-#   bazelisk run  //:precommit       — interactive, uses BUILD_WORKSPACE_DIRECTORY
-#   bazelisk test //:precommit_test  — picked up by `bazel test //...`
+# Interactive pre-commit wrapper: `bazelisk run //:precommit`.
 #
-# The script is intentionally non-hermetic: it shells out to host
-# `uv`, `pnpm`, `cargo`, and runs against the source tree (not the
-# sandbox) so it can reuse .venv / node_modules / target. Goal here
-# is "bazel test //... catches lint/type problems early", not full
-# Bazel ownership of the toolchains.
-_PRECOMMIT_DATA = ["pyproject.toml"]
-
-_PRECOMMIT_DEPS = ["@bazel_tools//tools/bash/runfiles"]
-
+# There is deliberately no `precommit_test` sibling any more. It used to
+# exist so `bazel test //...` caught lint/fmt problems, but it carried
+# `no-sandbox` + `requires-network` + `env_inherit = ["PATH", "HOME"]`
+# and ran `scripts/run_checks.sh` against the real source tree — which
+# meant a plain `bazel test //...` executed host `uv`/`pnpm`/`npx`,
+# resolving ruff, pyright, and vue-tsc from PyPI and npm at test time
+# with the developer's actual `$HOME`. Any edit to the shell script
+# inherited that reach.
+#
+# The checks it gated are now three ordinary sandboxed Bazel tests, all
+# in the default `bazel test //...` set and all remote-cacheable:
+#
+#   //tools:ruff_test            ruff, from hash-pinned requirements.txt
+#   //tools/lint:pyright_test    pyright, from an integrity-pinned npm lock
+#   //datalib/ui:typecheck_test  vue-tsc, from the UI's pnpm lock
+#
+# So the gate got STRONGER, not weaker: the old comment here worried that
+# tagging it `external` would "silently let fmt regressions through", and
+# these targets can't be skipped that way because there is nothing
+# non-hermetic left to skip. What remains host-bound is the repo-hygiene
+# lint (`scripts/lint_repo.py`, which must enumerate the whole repo) and
+# clippy; both run from this wrapper and from CI.
 sh_binary(
     name = "precommit",
     srcs = ["scripts/run_checks.sh"],
-    data = _PRECOMMIT_DATA,
-    deps = _PRECOMMIT_DEPS,
+    data = ["pyproject.toml"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-sh_test(
-    name = "precommit_test",
-    srcs = ["scripts/run_checks.sh"],
-    data = _PRECOMMIT_DATA,
-    # Pyright + clippy + vue-tsc together can take a couple of minutes
-    # on a cold cache.
-    timeout = "long",
-    # Needs host uv / pnpm / cargo + network for first-time tool fetches,
-    # hence `no-sandbox` + `requires-network`. Do NOT re-add the
-    # `external` tag: this is the canonical lint/fmt/typecheck gate and
-    # must run on the default `bazel test //...` path (and CI's
-    # `--test_tag_filters=-manual,-external`). `requires-network`
-    # already gates it out of hermetic / offline environments; `external`
-    # would over-exclude and silently let fmt regressions through, which
-    # has happened before.
-    tags = [
-        "no-sandbox",
-        "requires-network",
+# The hermetic lint/typecheck gate, grouped for `bazelisk test //:lint`.
+test_suite(
+    name = "lint",
+    tests = [
+        "//datalib/ui:typecheck_test",
+        "//tools:ruff_test",
+        "//tools/lint:pyright_test",
     ],
-    # Inherit the user's PATH and HOME so the script can find uv / pnpm /
-    # cargo and reuse their caches. Bazel scrubs the test env otherwise.
-    env_inherit = [
-        "PATH",
-        "HOME",
-    ],
-    deps = _PRECOMMIT_DEPS,
 )

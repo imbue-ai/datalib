@@ -23,8 +23,11 @@ test --test_output=errors
 # (handy when running the sync binary directly outside bazel), but
 # bazel doesn't propagate it into the action graph.
 # Resolver:
-#   * NPX_BIN  — datalib_qmd_indexer::run_qmd
-#                and datalib_etl::latchkey::latchkey_command
+#   * NPX_BIN  — datalib_etl::latchkey::latchkey_command (the manual
+#                `*_live` tests). `datalib_qmd_indexer::run_qmd` no
+#                longer reaches npx under bazel: the fixture genrule
+#                stages a DATALIB_RUNTIME_DIR from Bazel-managed inputs,
+#                so `bundled_command` wins before the npx fallback.
 build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin

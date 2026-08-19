@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Read-only mirror of scripts/pre-commit, suitable for `bazel test`.
-# Same checks (ruff, pyright, vue-tsc, cargo fmt, cargo clippy) but
-# never mutates the working tree (no auto-format, no `git add`).
+# Read-only mirror of scripts/pre-commit, for `bazelisk run //:precommit`.
+# Same checks, but never mutates the working tree (no auto-format, no
+# `git add`).
 #
-# Two modes:
-#   * `bazel run  //:precommit`           — uses BUILD_WORKSPACE_DIRECTORY
-#   * `bazel test //:precommit_test`      — resolves the source repo via
-#                                           the pyproject.toml runfile
-#                                           (the script itself runs in
-#                                           the source tree, not the
-#                                           sandbox, so it can see
-#                                           .venv / node_modules / .git).
+# This script is NO LONGER a `bazel test`. It used to be exposed as
+# `//:precommit_test` so `bazel test //...` would catch lint problems,
+# which meant the default test path ran host `uv`/`pnpm`/`npx` against
+# the real source tree with the developer's `$HOME` — resolving ruff,
+# pyright and vue-tsc from PyPI and npm at test time. Those three now run
+# as sandboxed Bazel tests instead (`//:lint`), so this wrapper's only
+# job is to be a convenient single entry point that also covers the two
+# things Bazel genuinely cannot sandbox:
+#
+#   * scripts/lint_repo.py — has to enumerate every file in the repo
+#   * clippy               — needs the bazel server lock released, which
+#                            only the `bazel run` path does
 set -eo pipefail
 
 # --- bazel runfiles bootstrap ---
@@ -38,40 +42,18 @@ cd "$WORKSPACE"
 
 echo "Running pre-commit checks (read-only) in $WORKSPACE"
 
-# --- Bazel hygiene: prevent silent `no-sandbox` creep ---
-# `no-sandbox` actions persist their working dir across runs, which
-# leaks stale state (see scripts/lint_no_sandbox.py for the doltlite
-# WAL incident that motivated this lint). Every new use must be
-# explicitly allowlisted with a one-line rationale.
-echo "[bazel] no-sandbox allowlist"
-python3 scripts/lint_no_sandbox.py
+# --- Repo hygiene (not sandboxable: reads the whole repo via git) ---
+# Checks the `no-sandbox` allowlist and that no first-party Python file
+# has escaped the Bazel lint roots. See scripts/lint_repo.py.
+echo "[repo] hygiene lints"
+python3 scripts/lint_repo.py
 
-# --- Python (ruff + pyright via uv) ---
-echo "[python] ruff check"
-uv run ruff check .
-
-echo "[python] ruff format --check"
-uv run ruff format --check .
-
-echo "[python] pyright"
-uv run pyright
-
-# --- TypeScript (datalib/ui) ---
-if [ -d datalib/ui ]; then
-    echo "[ui] vue-tsc"
-    # pnpm pinned via datalib/ui/package.json's `packageManager`;
-    # provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
-    # shellcheck source=ensure_pnpm.sh
-    source scripts/ensure_pnpm.sh
-    (
-        cd datalib/ui
-        if [ ! -d node_modules ]; then
-            echo "  installing pnpm deps..."
-            pnpm install --frozen-lockfile
-        fi
-        npx vue-tsc --noEmit
-    )
-fi
+# --- Lint + typecheck, via bazel ---
+# ruff (python), pyright (python), vue-tsc (typescript). All three are
+# hermetic bazel tests now, so this is just a convenience alias — a plain
+# `bazelisk test //...` runs exactly the same targets.
+echo "[lint] bazelisk test //:lint"
+bazelisk test //:lint
 
 # --- Rust (datalib/backend) ---
 #
@@ -81,11 +63,10 @@ fi
 # so the enclosing `bazel test //...` already fails fast on any
 # misformatted crate — a redundant `cargo fmt --check` here would add
 # nothing. It would also break CI outright: the devcontainer image
-# `bazel test //:precommit_test` runs in deliberately ships no host
-# `cargo`/`rustc` (Rust is built entirely through rules_rust), so
-# shelling out to `cargo fmt` exited 127 ("cargo: command not found")
-# and reddened every run. Same reasoning that moved clippy off host
-# `cargo` and onto the bazel aspect, below.
+# deliberately ships no host `cargo`/`rustc` (Rust is built entirely
+# through rules_rust), so shelling out to `cargo fmt` exited 127
+# ("cargo: command not found"). Same reasoning that moved clippy off
+# host `cargo` and onto the bazel aspect, below.
 #
 # Clippy used to be skipped here entirely because `cargo clippy`
 # couldn't link against our bazel-built doltlite amalgamation. We now
@@ -94,28 +75,8 @@ fi
 # no cargo-side workaround needed. See .bazelrc's `--config=clippy`
 # block for flag wiring.
 if [ -d datalib/backend ]; then
-    # Clippy is run via bazel's `rust_clippy_aspect`. We only invoke
-    # it when this script is run interactively
-    # (`bazel run :precommit`), not as a `bazel test` fixture.
-    #
-    # Why: `bazel test :precommit_test` holds the bazel server lock
-    # for the duration of the test. If we shelled out to
-    # `bazelisk build --config=clippy //...` here, the inner
-    # bazelisk would block forever waiting for the same lock — the
-    # test would never finish. (Observed: "Testing
-    # //:precommit_test; 137s … local" hanging indefinitely.)
-    #
-    # `bazel run :precommit` releases the lock before exec'ing the
-    # script, so the interactive path runs clippy as expected.
-    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
-        echo "[rust] bazelisk build --config=clippy //..."
-        bazelisk build --config=clippy //...
-    else
-        echo "[rust] skipping bazelisk clippy under \`bazel test\`" \
-             "(would deadlock on the bazel server lock — run" \
-             "\`bazel run //:precommit\` or" \
-             "\`bazel build --config=clippy //...\` directly)"
-    fi
+    echo "[rust] bazelisk build --config=clippy //..."
+    bazelisk build --config=clippy //...
 fi
 
 echo "All pre-commit checks passed."

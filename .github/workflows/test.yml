@@ -162,14 +162,23 @@ jobs:
       # Matches the convention used by `release.yml`'s build + test
       # steps.
       #
+      # Repo-hygiene lints that cannot be Bazel tests: both have to
+      # enumerate every file in the repo via git, which is exactly what a
+      # sandbox denies. Kept as a plain step so `bazel test //...` stays
+      # fully hermetic. Runs before the build because it is ~instant and
+      # its failures are cheap to fix.
+      - name: repo hygiene lints
+        run: python3 scripts/lint_repo.py
+
       # This step is the merge gate: a non-zero `bazel test` exit must
       # fail the job. It previously carried `continue-on-error: true` to
       # hide a red cross while the CI-only failures were triaged — the
-      # two known causes (precommit_test shelling out to a host `cargo`
-      # the devcontainer doesn't ship, and exec-config bindgen missing
-      # `--host_action_env=LIBCLANG_PATH`) are now fixed at the source,
-      # so the suppression is removed and real failures gate merges
-      # again.
+      # two known causes (the old `precommit_test` shelling out to a host
+      # `cargo` the devcontainer doesn't ship, and exec-config bindgen
+      # missing `--host_action_env=LIBCLANG_PATH`) are now fixed at the
+      # source — the first by replacing that target with the hermetic
+      # `//:lint` suite — so the suppression is removed and real failures
+      # gate merges again.
       - name: bazel test //...
         run: |
           libdir="${{ steps.env.outputs.libclang-path }}"

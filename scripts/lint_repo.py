@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""Allowlist-check `no-sandbox` tags in BUILD.bazel files.
+"""Repo-hygiene lints that cannot run as Bazel tests.
 
-Why this exists
----------------
+Both checks here need to enumerate *every* file in the repo, which is
+exactly what a Bazel sandbox exists to prevent, so neither can be a
+`bazel test` target. They run instead from `bazel run //:precommit` and
+as a plain step in `.github/workflows/test.yml`.
+
+  1. `no-sandbox` tags in BUILD.bazel files must be allowlisted.
+  2. Every first-party Python file must be reachable by the Bazel lint
+     targets, so a new script can't silently escape ruff and pyright.
+
+Check 1: why it exists
+----------------------
 `no-sandbox` opts a Bazel action out of the sandbox, so it runs
 directly in `bazel-out/`. The action's working directory persists
 across runs, which means stale state can leak between invocations —
@@ -37,6 +46,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 # Mapping of `<package>:<target-name>` → one-line rationale.
@@ -73,9 +83,6 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
     # ms-playwright browser cache.
-    "//:precommit_test": (
-        "reads source tree (.venv, node_modules, target) deliberately"
-    ),
     "datalib/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
@@ -157,8 +164,91 @@ def _scan(root: Path) -> set[str]:
     return found
 
 
+# --- Check 2: Python lint coverage -----------------------------------
+#
+# `//:python_sources` is the filegroup `//tools:ruff_test` and
+# `//tools/lint:pyright_test` lint. Bazel's `glob` cannot cross a package
+# boundary, so that filegroup is assembled by hand from these roots — and
+# a `.py` added anywhere else would simply go unlinted, with both tests
+# still green. That is the same "gate that cannot fail" shape that let
+# pyright sit on a non-existent `schemas/` directory for months.
+#
+# Keep in sync with `//:python_sources` in BUILD.bazel and with
+# `[tool.pyright] include` in pyproject.toml. Adding a root means editing
+# all three; this check is what makes forgetting one an error.
+PYTHON_LINT_ROOTS: tuple[str, ...] = ("scripts", "tests/fixtures", "tools")
+
+# Vendored subtrees are upstream-owned — excluded from ruff via
+# `[tool.ruff] extend-exclude` and from pyright via `[tool.pyright]
+# exclude`, so they must be excluded here too or this check would demand
+# coverage the lint config deliberately declines to provide.
+VENDORED_PREFIXES: tuple[str, ...] = ("third-party/",)
+
+
+def _tracked_python_files(root: Path) -> list[str]:
+    """Every git-tracked `*.py`, repo-relative, vendored trees removed."""
+    out = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "*.py"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [p for p in out.split("\0") if p and not p.startswith(VENDORED_PREFIXES)]
+
+
+def _check_python_coverage(root: Path) -> int:
+    """Fail if any first-party `.py` sits outside PYTHON_LINT_ROOTS."""
+    stray = [
+        p
+        for p in _tracked_python_files(root)
+        if not p.startswith(tuple(f"{r}/" for r in PYTHON_LINT_ROOTS))
+    ]
+    if stray:
+        print("ERROR: Python file(s) outside the Bazel lint roots:", file=sys.stderr)
+        for path in sorted(stray):
+            print(f"  - {path}", file=sys.stderr)
+        print(
+            "\nThese are linted by neither //tools:ruff_test nor "
+            "//tools/lint:pyright_test.\nEither move them under one of "
+            f"{list(PYTHON_LINT_ROOTS)}, or add the new root in all three "
+            "places:\n"
+            "  - PYTHON_LINT_ROOTS in scripts/lint_repo.py\n"
+            "  - the `python_sources` filegroup in BUILD.bazel (plus a\n"
+            "    per-package filegroup if the new root is its own package)\n"
+            "  - `[tool.pyright] include` in pyproject.toml",
+            file=sys.stderr,
+        )
+        return 1
+
+    pyright_include = _pyright_include(root)
+    if pyright_include != list(PYTHON_LINT_ROOTS):
+        print(
+            "ERROR: `[tool.pyright] include` in pyproject.toml is "
+            f"{pyright_include}, but PYTHON_LINT_ROOTS is "
+            f"{list(PYTHON_LINT_ROOTS)}.\nThey must match, or `bazel test` "
+            "and `uv run pyright` check different files.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"OK: Python lint roots {list(PYTHON_LINT_ROOTS)} cover every tracked *.py.")
+    return 0
+
+
+def _pyright_include(root: Path) -> list[str]:
+    with (root / "pyproject.toml").open("rb") as fh:
+        return tomllib.load(fh).get("tool", {}).get("pyright", {}).get("include", [])
+
+
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
+    rc = _check_no_sandbox(root)
+    rc |= _check_python_coverage(root)
+    return rc
+
+
+def _check_no_sandbox(root: Path) -> int:
     actual = _scan(root)
     allowed = set(ALLOWED_NO_SANDBOX)
 
@@ -175,7 +265,7 @@ def main() -> int:
             print(f"  - {label}", file=sys.stderr)
         print(
             "\nIf this rule genuinely needs to run unsandboxed, add it to "
-            "ALLOWED_NO_SANDBOX in scripts/lint_no_sandbox.py with a one-"
+            "ALLOWED_NO_SANDBOX in scripts/lint_repo.py with a one-"
             "line rationale. If it doesn't, drop the `no-sandbox` tag.",
             file=sys.stderr,
         )
@@ -189,7 +279,7 @@ def main() -> int:
             print(f"  - {label}  ({rationale})", file=sys.stderr)
         print(
             "\nIf the rule was renamed or removed intentionally, update "
-            "ALLOWED_NO_SANDBOX in scripts/lint_no_sandbox.py to match.",
+            "ALLOWED_NO_SANDBOX in scripts/lint_repo.py to match.",
             file=sys.stderr,
         )
 

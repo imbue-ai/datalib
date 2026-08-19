@@ -573,9 +573,8 @@ bazelisk test //...
 
 Do NOT substitute `bazelisk test //... --test_tag_filters=-manual,-external`
 here. That filter exists in some legacy notes but it silently excludes
-`//:precommit_test` (cargo fmt / clippy / ruff / pyright / vue-tsc) and
-`//datalib/ui:e2e_test` (Playwright UI suite), letting fmt drift and
-UI regressions through. The canonical answer to "are tests green?" is
+`//datalib/ui:e2e_test` (the Playwright UI suite), letting UI regressions
+through. The canonical answer to "are tests green?" is
 the bare `bazelisk test //...` line — see the "Running tests" section
 of `AGENTS.md` at the repo root.
 

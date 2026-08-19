@@ -20,13 +20,14 @@ brew install bazel cmake
 #    own default, so a standalone `qmd` populates the same cache.
 mkdir -p ~/.cache/qmd/models
 
-# 3. Verify Bazel can resolve `npx` on the pinned PATH. Bazel actions
-#    inherit a fixed PATH from `.bazelrc`
-#    (`/opt/homebrew/bin:/usr/bin:/bin`) instead of your interactive
-#    shell's PATH — host `direnv` / `nvm` / shell-init pnpm aren't in
-#    scope. `qmd-indexer` shells out to `npx`, so it has to be findable
-#    here. Empty output = trouble; expect `/opt/homebrew/bin/npx`.
-PATH=/opt/homebrew/bin:/usr/bin:/bin command -v npx
+# 3. (Nothing to check here any more.) The build used to need host
+#    `npx` on Bazel's pinned PATH, because `qmd-indexer` shelled out to
+#    `npx -y @tobilu/qmd@<v>`. Node and the qmd package tree are now
+#    Bazel inputs (`//third-party/qmd/runtime`), staged into a
+#    `DATALIB_RUNTIME_DIR` layout by the fixture genrule — verified by
+#    building it with neither `node` nor `npx` on PATH. A host Node is
+#    still needed to RUN the shipped CLI (it shells out to latchkey and
+#    qmd at sync time), just not to build the repo.
 ```
 
 ### Linux iteration via devcontainer
@@ -175,7 +176,9 @@ DAG design.
 
 `datalib-step qmd_index` rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
-(`datalib/backend/qmd_indexer/`) shells out to `npx -y @tobilu/qmd@<version>`
+(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI — the
+app-bundled runtime when one is staged (the Tauri bundle and the Bazel
+fixture genrule both stage one), else `npx -y @tobilu/qmd@<version>` —
 with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/system/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/rendered_md/**/*.md` mask), alongside the per-stanza
 `<name>/rendered_md/` trees and `system/backend_index/db.doltlite_db`. This is what the search bar's hybrid / vector

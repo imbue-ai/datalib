@@ -25,7 +25,19 @@ dev = [
 extend-exclude = ["third-party"]
 
 [tool.pyright]
-include = ["schemas"]
+# `include` used to be ["schemas"], a directory that no longer exists —
+# schema codegen moved to Rust and took the tree with it. pyright printed
+# `File or directory "schemas" does not exist` and then exited 0, so the
+# typecheck gate passed vacuously on zero files while these six real
+# first-party scripts went unchecked. Pointing it at them is the fix.
+#
+# Keep in sync with `//:python_sources`, which is the Bazel-side list of
+# the same files; `scripts/lint_repo.py` fails if the two drift.
+include = [
+    "scripts",
+    "tests/fixtures",
+    "tools",
+]
 exclude = [
     "**/__pycache__",
     "**/.venv",
@@ -34,7 +46,11 @@ exclude = [
     "**/dist",
     "**/target",
     "datalib",
+    "third-party",
 ]
-venvPath = "."
-venv = ".venv"
+# No `venvPath` / `venv`. `[project] dependencies` is empty and every one
+# of these files imports stdlib only, so pyright needs nothing but its
+# bundled typeshed — and pointing it at `.venv` would break
+# `//tools/lint:pyright_test`, which runs in a sandbox that has no such
+# directory.
 pythonVersion = "3.13"

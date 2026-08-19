@@ -391,9 +391,11 @@ narrow the *bazel* invocation to the package you're touching
 
 **Do not add `--test_tag_filters=-manual,-external` to this invocation.**
 The canonical line is the bare `bazelisk test //...`. Filtering on
-`-external` silently drops `//:precommit_test` (cargo fmt / clippy /
-ruff / pyright / vue-tsc) and `//datalib/ui:e2e_test` (Playwright),
-which lets fmt and UI regressions through. If a test is host- or
+`-external` silently drops `//datalib/ui:e2e_test` (Playwright), which
+lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
+ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
+filter can drop it; clippy and fmt ride the always-on rustfmt aspect and
+`--config=clippy`.) If a test is host- or
 network-dependent it's tagged `requires-network` and/or `no-sandbox`,
 which Bazel respects on its own — `external` is reserved for tests
 that hit third-party services you don't want CI talking to. Prefer
