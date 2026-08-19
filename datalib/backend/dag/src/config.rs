@@ -27,7 +27,22 @@
 //! id = "custom"
 //! command = "my-exporter --flag"   # any executable on PATH
 //! outputs = ["custom/out"]
+//!
+//! [[applets]]
+//! id = "slack_view"                # a JS identifier: it reaches card
+//! title = "Slack"                  # source as a bare name
+//! command = "datalib-view-slack"
+//! [applets.params]
+//! tree = "slack/rendered_md"
 //! ```
+//!
+//! There are two kinds of entry. A **step** is scheduled: it reads and
+//! writes artifacts, and the DAG is derived from those. An **applet**
+//! is never scheduled — it is a long-lived server the http gateway
+//! spawns on demand, contributing frontend components plus the
+//! endpoints behind them, and it declares no inputs/outputs because it
+//! owns no artifacts. See `docs/dev/applets.md`. This module parses and
+//! validates both; only steps reach the scheduler.
 //!
 //! Note that top-level `data_root` / `binary_dir` must be written
 //! *above* the first `[[steps]]`, since everything after a table
@@ -78,6 +93,61 @@ pub struct DagConfig {
     /// `data_root:` file) is valid — it just runs nothing.
     #[serde(default)]
     pub steps: Vec<StepEntry>,
+    /// Long-lived servers that contribute the app's frontend and its
+    /// data endpoints. Unlike steps these are never scheduled: the
+    /// http gateway spawns one on demand when a request for its
+    /// prefix arrives. Empty is normal — a data root with no applets
+    /// still syncs and still serves the builtin UI.
+    #[serde(default)]
+    pub applets: Vec<AppletEntry>,
+}
+
+/// One applet instance. Deliberately a subset of [`StepEntry`]: an
+/// applet declares no `inputs`/`outputs` because it is not scheduled
+/// and owns no artifacts of its own — it reads what steps already
+/// wrote. Everything else (`command` splitting, `params` as JSON,
+/// `env` merge, cwd = data root) follows the step's conventions so
+/// there is one set of rules to learn.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletEntry {
+    /// Instance name. Doubles as the mount prefix (`/v/<id>/`) *and*
+    /// as an identifier injected into card-source scope, so it is
+    /// restricted to what JavaScript will accept as a variable name —
+    /// see [`validate_applets`].
+    pub id: String,
+    /// Human label for the component gallery. Falls back to `id`.
+    /// This is the field that makes two instances of one command
+    /// distinguishable to a reader ("Work Slack" vs "Personal
+    /// Slack"), so it earns its place in the schema.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The command to run, split shell-style into an argv, resolved
+    /// the same way a step's is (`binary_dir`, then `PATH`).
+    pub command: String,
+    /// Arbitrary applet parameters, forwarded verbatim as JSON via
+    /// `--params` — to both the manifest dump and the server.
+    #[serde(default)]
+    pub params: Option<toml::Value>,
+    /// Extra environment for the child process.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl AppletEntry {
+    /// The label to show a human. Config `title` when set, else the id.
+    pub fn display_title(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.id)
+    }
+
+    /// `params` as JSON, ready for `--params`. `None` when the entry
+    /// declared none.
+    pub fn params_json(&self) -> Result<Option<serde_json::Value>> {
+        match &self.params {
+            Some(v) => Ok(Some(params_to_json(v, &self.id)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,6 +338,100 @@ fn expand_tilde(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// Check the applet list before anything tries to use it.
+///
+/// Two rules, both load-bearing rather than stylistic:
+///
+///   * **Ids are JavaScript identifiers.** An applet id is injected
+///     into card-source scope as a bare name (`slack_work.channels()`),
+///     and card source is evaluated by `new Function`, so an id like
+///     `slack.work` or `2fa` would be a syntax error at the point a
+///     card renders — far from the config that caused it. Reject it
+///     here, where the message can name the file.
+///   * **Ids are unique.** They are the proxy prefix and the namespace;
+///     two entries claiming one id would make `/v/<id>/` ambiguous.
+///     TOML cannot enforce this for us since `[[applets]]` is an array.
+pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
+    let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
+    for a in &cfg.applets {
+        if !is_js_identifier(&a.id) {
+            bail!(
+                "applet {:?}: id must be a JavaScript identifier (letters, digits, _ or $, \
+                 not starting with a digit) because it is injected into card source as a \
+                 bare name",
+                a.id
+            );
+        }
+        if seen.insert(a.id.as_str(), ()).is_some() {
+            bail!("applet {:?}: duplicate id", a.id);
+        }
+        if a.command.trim().is_empty() {
+            bail!("applet {:?}: empty command", a.id);
+        }
+    }
+    Ok(())
+}
+
+/// Conservative subset of what JavaScript accepts: ASCII only. The
+/// language would allow plenty of Unicode, but an id is also a URL
+/// path segment and a directory-safe token elsewhere, so the narrow
+/// rule is the useful one.
+fn is_js_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => return false,
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+        Some(_) => return false,
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+        return false;
+    }
+    // Reserved words would parse as syntax, not as a binding.
+    !matches!(
+        s,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "let"
+            | "static"
+            | "yield"
+            | "await"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,5 +617,104 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown field"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod applet_tests {
+    use super::*;
+
+    fn cfg(text: &str) -> DagConfig {
+        parse(text).expect("parse")
+    }
+
+    #[test]
+    fn applets_default_to_empty() {
+        let c = cfg("data_root = \"/tmp/x\"\n");
+        assert!(c.applets.is_empty());
+        validate_applets(&c).expect("empty list is valid");
+    }
+
+    #[test]
+    fn parses_an_applet_with_params_and_title() {
+        let c = cfg(r#"
+[[applets]]
+id = "slack_work"
+title = "Work Slack"
+command = "datalib-view-slack"
+[applets.params]
+tree = "slack_work/rendered_md"
+"#);
+        assert_eq!(c.applets.len(), 1);
+        let a = &c.applets[0];
+        assert_eq!(a.id, "slack_work");
+        assert_eq!(a.display_title(), "Work Slack");
+        let params = a.params_json().unwrap().expect("params present");
+        assert_eq!(params["tree"], "slack_work/rendered_md");
+    }
+
+    #[test]
+    fn title_falls_back_to_id() {
+        let c = cfg("[[applets]]\nid = \"grid\"\ncommand = \"x\"\n");
+        assert_eq!(c.applets[0].display_title(), "grid");
+        assert!(c.applets[0].params_json().unwrap().is_none());
+    }
+
+    /// The id reaches card source as a bare identifier, so a dotted or
+    /// digit-leading id would blow up inside `new Function` at render
+    /// time rather than at config load.
+    #[test]
+    fn rejects_ids_that_are_not_js_identifiers() {
+        for bad in ["slack.work", "2fa", "has-dash", "", "with space", "class"] {
+            let c = cfg(&format!("[[applets]]\nid = \"{bad}\"\ncommand = \"x\"\n"));
+            assert!(
+                validate_applets(&c).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_ordinary_identifiers() {
+        for good in ["grid", "slack_work", "_priv", "$x", "a1"] {
+            let c = cfg(&format!("[[applets]]\nid = \"{good}\"\ncommand = \"x\"\n"));
+            validate_applets(&c).unwrap_or_else(|e| panic!("{good:?} rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_ids() {
+        let c = cfg(r#"
+[[applets]]
+id = "slack"
+command = "a"
+
+[[applets]]
+id = "slack"
+command = "b"
+"#);
+        let err = validate_applets(&c).expect_err("duplicate must fail");
+        assert!(err.to_string().contains("duplicate"), "{err}");
+    }
+
+    /// Two instances of one command is the case the whole design is
+    /// built around; it must parse without complaint.
+    #[test]
+    fn two_instances_of_one_command_are_fine() {
+        let c = cfg(r#"
+[[applets]]
+id = "a"
+command = "datalib-view-slack"
+[applets.params]
+tree = "a/rendered_md"
+
+[[applets]]
+id = "b"
+command = "datalib-view-slack"
+[applets.params]
+tree = "b/rendered_md"
+"#);
+        validate_applets(&c).expect("distinct ids, same command");
+        assert_eq!(c.applets.len(), 2);
     }
 }

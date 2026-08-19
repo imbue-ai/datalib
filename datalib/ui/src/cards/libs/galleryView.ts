@@ -18,6 +18,7 @@
 import { watch } from "vue";
 import type { CardRender } from "../types";
 import { aliasDescriptions, aliasTitles, ensureManifest } from "../aliasRegistry";
+import { appletGallery, ensureApplets } from "../appletRegistry";
 import { createComponentWithAgent } from "@/handoff";
 import { devMode } from "@/devMode";
 
@@ -87,9 +88,10 @@ export function galleryView(): CardRender {
     wrap.className = "gv";
     root.appendChild(wrap);
 
-    function paint([descs, titles, dev]: [
+    function paint([descs, titles, applets, dev]: [
       Map<string, string>,
       Map<string, string>,
+      GalleryEntry[],
       boolean,
     ]) {
       wrap.replaceChildren();
@@ -142,7 +144,13 @@ export function galleryView(): CardRender {
         wrap.appendChild(row);
       }
 
-      for (const entry of [...BUILTIN_GALLERY, ...aliasEntries]) {
+      // Applet entries arrive as finished card sources rather than
+      // names, so nothing here has to know how to call them. That is
+      // what lets one component list itself once per instance —
+      // `slack_work.channels("slack_work")` and
+      // `slack_personal.channels("slack_personal")` are two rows over
+      // one shared module, each already bound to its own workspace.
+      for (const entry of [...BUILTIN_GALLERY, ...applets, ...aliasEntries]) {
         addRow(entry.title, entry.description, entry.source, () =>
           ctx.host.setSource(entry.source),
         );
@@ -168,9 +176,12 @@ export function galleryView(): CardRender {
     }
 
     void ensureManifest();
-    const stop = watch([aliasDescriptions, aliasTitles, devMode], paint, {
-      immediate: true,
-    });
+    void ensureApplets();
+    const stop = watch(
+      [aliasDescriptions, aliasTitles, appletGallery, devMode],
+      paint,
+      { immediate: true },
+    );
     return () => stop();
   };
 }

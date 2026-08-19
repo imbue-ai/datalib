@@ -28,9 +28,15 @@ documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 
 `compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) wraps
 the expression in `new Function(...viewLibNames, "return (<source>)")`
-and calls it with the view factories as arguments — so the only names
-in scope are the factories in `ViewLibs`
-(`datalib/ui/src/cards/libs/index.ts`) plus JS globals. The
+and calls it with the view factories as arguments. Three kinds of name
+are in scope, plus JS globals: the builtin factories in `ViewLibs`
+(`datalib/ui/src/cards/libs/index.ts`), any user-defined alias the
+source mentions (see "Titles and dev mode" below), and one object per
+configured **applet**, named after the applet's id, whose properties
+are that applet's components — `slack_work.channels("slack_work")`
+(see `docs/dev/applets.md`). A component name is a member of its
+applet, never a global, which is what lets two instances of one applet
+both offer a `channels` without competing for the name. The
 expression must evaluate to a `CardRender`; anything else (or a parse
 error) renders as an error message in place of the card.
 
@@ -101,7 +107,11 @@ column, the tree layout's "+ card" button, the tiling layout's ＋ add
 areas), and it always creates a `galleryView()` card — the **new-card
 gallery** (`datalib/ui/src/cards/libs/galleryView.ts`): a list of
 every parameter-less component with a short description, builtins
-first (gridView leading), then any user-defined alias whose `/api/lib`
+first (gridView leading), then each configured applet's gallery
+entries — which arrive from the applet as finished card-source
+snippets rather than names, so one component appears once per instance
+(`slack_work.channels("slack_work")`, `slack_personal.channels(…)`) —
+then any user-defined alias whose `/api/lib`
 entry carries a `description` (listed under its stored `title` when it
 has one), then a "new component, built by an agent" entry that mints a
 fresh alias seeded with `agentSeedView` (the in-card hand-off

@@ -50,6 +50,12 @@ are relative to the repo root.
 - [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
   views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
   — the dactal view bridge.
+- [`docs/dev/applets.md`](docs/dev/applets.md) — **how to write an
+  applet**: the second kind of config entry, a server contributing card
+  components plus the endpoints behind them. Covers the
+  `--frontend-manifest` contract, the flat content-addressed module
+  store, and why two instances of one command share a module but not a
+  gallery entry.
 
 **Dev workflow**
 
@@ -128,7 +134,11 @@ datalib/
                    schema and the tree's last YAML parser, so the
                    shipping programs accept only `config.toml`.
     core/          data-root layout, doltlite repo access, qmd, search.
-    http/          `datalib-http`: API server + sync worker + UI host.
+    applets/       one crate per applet — a config-declared server
+                   contributing card components + their endpoints
+                   (applets/slack: `datalib-view-slack`).
+    http/          `datalib-http`: API server + sync worker + UI host +
+                   the applet gateway (src/applets.rs).
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
                    via #[derive(PortableTable)].
@@ -156,7 +166,10 @@ Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
 the only place their schemas — and the tree's last YAML parser — still
 live. Any executable
 speaking the step protocol can be a step — see
-`docs/dev/step_protocol.md`.
+`docs/dev/step_protocol.md`. The same config file also holds
+`[[applets]]`: servers the http gateway spawns on demand to serve the
+app's own components and endpoints, which the scheduler never sees
+(`docs/dev/applets.md`).
 
 ## Vendored upstream: `third-party/qmd`
 

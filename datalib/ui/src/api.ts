@@ -483,6 +483,32 @@ export type LibEntry = {
   renamed_to?: string;
 };
 
+// One applet as `GET /api/applets` reports it. `components` maps a
+// component name to the sha256 of its module in the flat store, which
+// is also its URL (`/modules/<hash>`); `gallery` carries ready-to-use
+// card sources the applet generated knowing its own id.
+export type AppletGalleryEntry = {
+  source: string;
+  title: string;
+  description: string;
+};
+
+export type AppletEntry = {
+  id: string;
+  title: string;
+  components: Record<string, string>;
+  gallery: AppletGalleryEntry[];
+  // Present when discovery failed. The applet is still listed so the
+  // UI can say which one is broken rather than quietly omitting it.
+  error?: string;
+};
+
+export async function fetchApplets(signal?: AbortSignal): Promise<AppletEntry[]> {
+  const r = await fetch("/api/applets", { signal });
+  if (!r.ok) throw new Error(`GET /api/applets → ${r.status}`);
+  return (await r.json()) as AppletEntry[];
+}
+
 export async function listLib(signal?: AbortSignal): Promise<LibEntry[]> {
   const r = await fetch("/api/lib", { signal });
   if (!r.ok) throw new Error(`GET /api/lib → ${r.status}`);

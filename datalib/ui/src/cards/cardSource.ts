@@ -10,6 +10,8 @@
 // touched — the host re-renders when any of them changes (see
 // aliasRegistry.ts and ShadowCard.vue).
 import { resolveScopeFor } from "./aliasRegistry";
+import { referencedIdentifiers } from "./identifiers";
+import { resolveAppletScope } from "./appletRegistry";
 import type { CardRender } from "./types";
 
 export type CompiledCard = {
@@ -19,6 +21,13 @@ export type CompiledCard = {
 
 export async function compileCardSource(source: string): Promise<CompiledCard> {
   const { scope, closure } = await resolveScopeFor(source);
+  // Applet namespaces join the same injected scope as the builtins and
+  // the user aliases. An applet id is a whole namespace object rather
+  // than a factory — `slack_work.channels(...)` — which is what keeps
+  // two instances of one command from competing for a name.
+  for (const [id, ns] of await resolveAppletScope(referencedIdentifiers(source))) {
+    scope.set(id, ns);
+  }
   const names = [...scope.keys()];
   // `new Function` (not eval) so the source only sees the names we pass
   // in — view libs and referenced aliases — plus globals.

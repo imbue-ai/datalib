@@ -24,6 +24,7 @@ platform_transition_filegroup(
 rust_library(
     name = "datalib_http",
     srcs = [
+        "src/applets.rs",
         "src/boot.rs",
         "src/embed.rs",
         "src/lib.rs",
@@ -71,6 +72,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
+        "@datalib_crates//:shlex",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower-http",
         "@datalib_crates//:uuid",
@@ -127,6 +129,50 @@ rust_test(
     name = "card_endpoint_test",
     srcs = ["tests/card_endpoint.rs"],
     edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+rust_test(
+    name = "applet_endpoint_test",
+    srcs = ["tests/applet_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# Binds loopback ports and runs programs from the ambient environment
+# (python3 for the fixture server), so it cannot be sandboxed — same
+# treatment as //datalib/ui:e2e_test. The hermetic half of the applet
+# coverage stays in :applet_endpoint_test.
+rust_test(
+    name = "applet_proxy_test",
+    srcs = ["tests/applet_proxy.rs"],
+    data = ["//datalib/backend/applets/slack:datalib_view_slack"],
+    edition = "2021",
+    env = {
+        "SLACK_APPLET_BIN": "$(rootpath //datalib/backend/applets/slack:datalib_view_slack)",
+    },
+    tags = [
+        "no-sandbox",
+        "requires-network",
+    ],
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",

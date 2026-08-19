@@ -7,10 +7,14 @@ alias instead, read `<origin>/agent/cards.md`.)
 
 ## The model
 
-The sync pipeline is driven by `<root>/config.toml`: an array of
-`[[steps]]` tables where each step has an `id`, a shell `command`, and
-declared `inputs` / `outputs` (artifact paths; wildcards allowed in
-inputs). The runner derives the execution DAG from input/output overlap
+The sync pipeline is driven by `<root>/config.toml`, which holds two
+kinds of entry. `[[steps]]` is the pipeline: each step has an `id`, a
+shell `command`, and declared `inputs` / `outputs` (artifact paths;
+wildcards allowed in inputs). `[[applets]]` is the app surface —
+long-lived servers that contribute card components and the endpoints
+behind them, declaring no inputs/outputs because they read what steps
+wrote. This guide is about steps; for applets see
+`docs/dev/applets.md`. The runner derives the execution DAG from input/output overlap
 — file order does not matter. A step with no `inputs` is a **source**
 (what a sync can target); every source's rendered markdown feeds the
 shared `grid_index` / `qmd_index` fan-in steps:

@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# `datalib-view-slack` — an applet (see datalib/backend/http/src/applets.rs).
+# Deliberately dependency-light: it reads the cross-provider
+# `.grid_rows.json` sidecar contract as untyped JSON rather than
+# linking the schema or provider crates, so an applet stays a small
+# program anyone can write.
+rust_binary(
+    name = "datalib_view_slack",
+    srcs = ["src/main.rs"],
+    compile_data = ["src/component.js"],
+    crate_name = "datalib_view_slack",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "view_slack_unittests",
+    size = "small",
+    crate = ":datalib_view_slack",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)

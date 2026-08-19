@@ -21,6 +21,11 @@
 import { ref, type Ref } from "vue";
 import { listLib, fetchLib } from "@/api";
 import { viewLibs } from "./libs";
+import { referencedIdentifiers, replaceIdentifier } from "./identifiers";
+
+// The lexical helpers are part of this module's surface even though
+// they live next door: callers reach for them alongside the manifest.
+export { referencedIdentifiers, replaceIdentifier };
 
 // name → sha256 of its current source. Reactive: cards watch this.
 export const aliasManifest: Ref<Map<string, string>> = ref(new Map());
@@ -161,34 +166,6 @@ async function getSource(name: string, hash: string): Promise<string> {
   return source;
 }
 
-// Identifiers a piece of source references "freely" — every identifier
-// token not immediately preceded by `.` (so `obj.foo` doesn't count as
-// a reference to `foo`). Intentionally over-approximate: it scans
-// across string/comment contents too, so it may flag a name that isn't
-// really used. That only ever causes an extra (harmless) re-render; the
-// dangerous direction — missing a real dependency — can't happen,
-// because every identifier token is considered.
-export function referencedIdentifiers(source: string): Set<string> {
-  const ids = new Set<string>();
-  const isStart = (c: string) => /[A-Za-z_$]/.test(c);
-  const isPart = (c: string) => /[A-Za-z0-9_$]/.test(c);
-  const n = source.length;
-  let i = 0;
-  while (i < n) {
-    if (isStart(source[i])) {
-      let j = i + 1;
-      while (j < n && isPart(source[j])) j++;
-      let k = i - 1;
-      while (k >= 0 && /\s/.test(source[k])) k--;
-      if (k < 0 || source[k] !== ".") ids.add(source.slice(i, j));
-      i = j;
-    } else {
-      i++;
-    }
-  }
-  return ids;
-}
-
 // Follow a rename chain (a→b→c) to its terminus; null when `name` was
 // never renamed. Guards against cycles — shouldn't happen, but the
 // tombstones live on disk and are hand-editable.
@@ -202,36 +179,6 @@ export function followRenames(name: string): string | null {
     cur = m.get(cur)!;
   }
   return cur;
-}
-
-// Replace whole-identifier occurrences of `from` with `to`, using the
-// same token scan as referencedIdentifiers — so `obj.from` member
-// accesses survive, but `from(`, `from ,` etc. are rewritten. Like the
-// scanner it is deliberately over-approximate about strings/comments;
-// for the rename use case that's the right bias (better to rewrite a
-// mention in a comment than to leave a live reference stale).
-export function replaceIdentifier(source: string, from: string, to: string): string {
-  const isStart = (c: string) => /[A-Za-z_$]/.test(c);
-  const isPart = (c: string) => /[A-Za-z0-9_$]/.test(c);
-  const n = source.length;
-  let out = "";
-  let i = 0;
-  while (i < n) {
-    if (isStart(source[i])) {
-      let j = i + 1;
-      while (j < n && isPart(source[j])) j++;
-      const token = source.slice(i, j);
-      let k = i - 1;
-      while (k >= 0 && /\s/.test(source[k])) k--;
-      const isMember = k >= 0 && source[k] === ".";
-      out += !isMember && token === from ? to : token;
-      i = j;
-    } else {
-      out += source[i];
-      i++;
-    }
-  }
-  return out;
 }
 
 // Direct alias dependencies of `source`: referenced identifiers that

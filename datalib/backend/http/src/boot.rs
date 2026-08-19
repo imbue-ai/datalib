@@ -66,7 +66,7 @@ pub async fn build_state(
     let worker_cfg = worker::WorkerConfig {
         root: root.clone(),
         dag_bin,
-        binary_dir,
+        binary_dir: binary_dir.clone(),
         progress_tx: progress_tx.clone(),
     };
     let worker_repo = repo.clone();
@@ -74,11 +74,25 @@ pub async fn build_state(
         worker::run(worker_repo, worker_cfg).await;
     });
 
+    // Applet discovery execs one child per configured applet, and
+    // `build_state` runs on the tokio runtime — so it goes to a
+    // blocking thread rather than stalling the executor while a slow
+    // binary starts. Config policy lives in `AppletRegistry`.
+    let data_root = (*root).clone();
+    let applets = tokio::task::spawn_blocking(move || {
+        Arc::new(crate::applets::AppletRegistry::from_data_root(
+            &data_root, binary_dir,
+        ))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("applet discovery panicked: {e}"))?;
+
     Ok(AppState {
         root,
         repo,
         qmd_daemon,
         progress_tx,
+        applets,
     })
 }
 

@@ -27,7 +27,7 @@ use axum::{
     http::{header, Response, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     response::Json,
-    routing::{get, post},
+    routing::{any, get, post},
     Router,
 };
 use datalib_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
@@ -42,6 +42,7 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+pub mod applets;
 pub mod boot;
 mod embed;
 pub mod worker;
@@ -69,6 +70,11 @@ pub struct AppState {
     /// `GET /api/sync/stream` subscribes and pushes them to the UI over
     /// SSE, so progress is realtime push, not poll.
     pub progress_tx: worker::ProgressTx,
+    /// The configured applets: their components, their gallery
+    /// entries, the module store behind `/modules/`, and the
+    /// supervisor behind `/v/`. Empty when the config declares none,
+    /// which is the state every data root starts in.
+    pub applets: Arc<applets::AppletRegistry>,
 }
 
 impl AppState {
@@ -215,6 +221,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
         .route("/api/sync/jobs/{id}/log", get(sync_job_log))
         .route("/api/sync/stream", get(sync_stream))
+        .route("/api/applets", get(list_applets))
+        // Content-addressed component modules. Flat: every applet's
+        // modules share this namespace, so two instances of one
+        // command resolve to one URL and the browser evaluates the
+        // module once. See applets.rs.
+        .route("/modules/{hash}", get(get_module))
+        // The applet proxy. `{*rest}` keeps the whole remaining path,
+        // which the applet sees verbatim.
+        .route("/v/{id}/{*rest}", any(proxy_applet))
+        .route("/v/{id}/", any(proxy_applet_root))
         .nest_service("/api/media", ServeDir::new(media_dir))
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths
@@ -553,6 +569,113 @@ pub struct CreateCardResponse {
     pub hash: String,
 }
 
+// ---------------------------------------------------------------------------
+// Applets
+// ---------------------------------------------------------------------------
+
+/// The applet registry as the UI consumes it: one entry per configured
+/// applet, each carrying its component→module map and its gallery
+/// snippets. Applets that failed discovery are included with an
+/// `error` — a configured applet that silently vanished would look
+/// like a config that never saved.
+async fn list_applets(State(s): State<AppState>) -> Json<Vec<applets::AppletView>> {
+    Json(s.applets.views().to_vec())
+}
+
+/// Serve one component module by content hash.
+///
+/// Immutable forever: the URL names the bytes, so a changed module is
+/// a different URL. This is also what makes the browser's one-module-
+/// per-URL rule do the deduplication for us across applet instances.
+async fn get_module(
+    State(s): State<AppState>,
+    Path(hash): Path<String>,
+) -> Result<Response<Body>, StatusCode> {
+    let bytes = s.applets.read_module(&hash).ok_or(StatusCode::NOT_FOUND)?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(Body::from(bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn proxy_applet(
+    State(s): State<AppState>,
+    Path((id, rest)): Path<(String, String)>,
+    req: axum::extract::Request,
+) -> Response<Body> {
+    proxy_impl(s, id, format!("/{rest}"), req).await
+}
+
+async fn proxy_applet_root(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    req: axum::extract::Request,
+) -> Response<Body> {
+    proxy_impl(s, id, "/".to_string(), req).await
+}
+
+/// Forward to the applet, spawning it if this is the first request.
+///
+/// Runs on a blocking thread because the proxy is synchronous socket
+/// I/O (see applets.rs for why there is no HTTP client crate here).
+async fn proxy_impl(
+    s: AppState,
+    id: String,
+    path: String,
+    req: axum::extract::Request,
+) -> Response<Body> {
+    let method = req.method().to_string();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    // Carry the caller's content type through. Inventing one would
+    // mislabel any non-JSON body, and this route accepts any method.
+    let content_type = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let body = match axum::body::to_bytes(req.into_body(), 8 * 1024 * 1024).await {
+        Ok(b) => b.to_vec(),
+        Err(e) => return applet_error(StatusCode::BAD_REQUEST, &format!("read body: {e}")),
+    };
+    let target = format!("{path}{query}");
+    let registry = s.applets.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        registry.proxy(&id, &method, &target, content_type.as_deref(), &body)
+    })
+    .await;
+    match result {
+        Ok(Ok(r)) => Response::builder()
+            .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
+            .header(header::CONTENT_TYPE, r.content_type)
+            .body(Body::from(r.body))
+            .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response")),
+        // The applet is configured but not answering. Hand the card
+        // the reason rather than an empty body it would render as "no
+        // data" — the same instinct as a failed step's last stderr
+        // lines becoming its error message.
+        Ok(Err(e)) => applet_error(StatusCode::BAD_GATEWAY, &e),
+        Err(e) => applet_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("proxy task: {e}"),
+        ),
+    }
+}
+
+fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
+    eprintln!("applet proxy: {msg}");
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({ "error": msg }).to_string()))
+        .expect("static response builds")
+}
+
 /// Content-addressed JS store under `<root>/.datalib/cards/<hash>.js`.
 /// Writes are idempotent: identical sources produce the same hash, and
 /// re-POSTing returns the same hash without touching the file.
@@ -560,13 +683,7 @@ async fn create_card(
     State(s): State<AppState>,
     Json(req): Json<CreateCardRequest>,
 ) -> Result<Json<CreateCardResponse>, StatusCode> {
-    let mut h = Sha256::new();
-    h.update(req.source.as_bytes());
-    let digest = h.finalize();
-    let mut hash = String::with_capacity(64);
-    for b in digest.iter() {
-        hash.push_str(&format!("{b:02x}"));
-    }
+    let hash = sha256_hex(req.source.as_bytes());
     let dir = s.root.join(".datalib/cards");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("create_card: mkdir {}: {e}", dir.display());
@@ -595,11 +712,9 @@ async fn get_card(
     ),
     StatusCode,
 > {
-    let valid = hash.len() == 64
-        && hash
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if !valid {
+    // Same guard the module store applies: validate the digest's
+    // shape before it is ever joined onto a directory.
+    if !applets::is_sha256_hex(&hash) {
         return Err(StatusCode::BAD_REQUEST);
     }
     let path = s.root.join(".datalib/cards").join(format!("{hash}.js"));
@@ -754,7 +869,10 @@ fn valid_lib_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+/// Lowercase hex sha256. The single definition in this crate: the card
+/// store, the component manifest, and the applet module store all name
+/// content the same way.
+pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     let digest = h.finalize();
@@ -1402,6 +1520,8 @@ outputs = [\"system/qmd\"]
 
 # Source steps go below. Anything you add above the first [[steps]]
 # is a top-level key (data_root, binary_dir), not part of a step.
+# `[[applets]]` is the other top-level array — servers that contribute
+# UI + endpoints rather than artifacts; see <origin>/agent/config.md.
 # ───────────────────────────────────────────────────────────────────────
 "
     .to_string()
