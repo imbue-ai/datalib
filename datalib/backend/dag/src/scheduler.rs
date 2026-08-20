@@ -970,12 +970,13 @@ mod tests {
         );
     }
 
-    /// Regression: subset-sync on a *fresh* data root. The skip at the
-    /// fringe must propagate downstream. `first_run` short-circuits the
-    /// dirty check, so an unselected chain's render was invoked with no
-    /// raw store underneath it — it failed with `Data`, and the failure
-    /// poisoned the fan-in, so the chain the user *did* select never
-    /// reached the index.
+    /// Regression: subset-sync on a *fresh* data root. Out-of-scope
+    /// steps must stay untouched even when nothing has ever run here.
+    /// A step with no recorded successful run counts as dirty, and that
+    /// check used to run ahead of the subset-sync skip, so an unselected
+    /// chain's render was invoked with no raw store underneath it — it
+    /// failed with `Data`, and the failure poisoned the fan-in, so the
+    /// chain the user *did* select never reached the index.
     #[tokio::test]
     async fn subset_sync_on_a_first_run_skips_unselected_chains() {
         let fx = Fixture::new();

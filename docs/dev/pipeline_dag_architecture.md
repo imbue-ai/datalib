@@ -377,8 +377,10 @@ rough dependency order:
   quietly do broad work.
 
   This was originally built as an "up to date" decree that stopped at
-  the download step, which left never-run downstream steps forced to
-  run by their `first_run` flag: on a fresh data root that rendered
+  the download step, which left never-run downstream steps dirty anyway:
+  the scheduler treats a step with no recorded successful run as dirty
+  (derived from `dag_state.json`, nothing anyone declares), and that
+  check ran ahead of the decree. On a fresh data root it rendered
   sources nobody had downloaded, failed `Data`, and blocked the shared
   fan-in for the chains that *were* selected (#152).
 * **Run-wide `--now`** is exported by the runner to every step as
