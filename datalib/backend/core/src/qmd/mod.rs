@@ -25,7 +25,7 @@ pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
 
 /// The ONE canonical qmd version pin. Every spawn site — the indexer
 /// (which re-exports this), the search runner, and the daemon — runs
-/// exactly this version, and `//tools:qmd_version_pins_test` asserts
+/// exactly this version, and `//tools:version_pins_test` asserts
 /// the fixture/Docker pins agree. `datalib/tauri/stage-runtime.sh`
 /// greps this constant to decide which qmd tree to bundle — keep the
 /// `DEFAULT_QMD_VERSION` name and string-literal shape.

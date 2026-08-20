@@ -1,6 +1,9 @@
 load("@npm_lint//:defs.bzl", "npm_link_all_packages")
 load("@npm_lint//tools/lint:pyright/package_json.bzl", pyright_bin = "bin")
 
+# The pyright pin, read by //tools:version_pins_test.
+exports_files(["package.json"])
+
 # Materializes the (two-package) lint dep graph from pnpm-lock.yaml.
 npm_link_all_packages(name = "node_modules")
 

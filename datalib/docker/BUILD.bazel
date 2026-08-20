@@ -1,5 +1,5 @@
 # Surface the Dockerfile + entrypoint as data targets so consistency
-# tests (e.g. //tools:qmd_version_pins_test) can read them at test time.
+# tests (e.g. //tools:version_pins_test) can read them at test time.
 # No build rules live here — the docker image is built by
 # `scripts/build_docker.sh` (locally) or the docker-publish job in
 # `.github/workflows/release.yml` (CI), not by Bazel.

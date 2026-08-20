@@ -3,7 +3,8 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Public patches consumed by crate_universe annotations in MODULE.bazel.
 exports_files(
-    glob(["*.patch"]),
+    # DOLTLITE_VERSION below is read by //tools:version_pins_test.
+    glob(["*.patch"]) + ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
