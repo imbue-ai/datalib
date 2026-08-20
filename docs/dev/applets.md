@@ -122,6 +122,25 @@ The case the design is built around:
   get different code, and stop sharing. That is correct rather than a
   special case, and nothing has to detect it.
 
+## Authentication
+
+Every route is behind the per-process API token (`datalib/backend/http/src/auth.rs`),
+and the applet routes are no exception: the gate is an outermost layer,
+so `/api/applets`, `/modules/<hash>` and `/v/<id>/…` all inherit it.
+
+Nothing in a component has to carry the token. The browser holds it as
+a same-origin cookie, which it attaches to the component's own
+`fetch("/v/<id>/…")` and to the `import("/modules/<hash>")` that loaded
+it. An applet author therefore writes no auth code — but the corollary
+is that a component may only reach the gateway from the page's own
+origin. Fetching a `/v/` URL from an iframe on another origin, or from
+outside the browser without a token, gets a `401`.
+
+The applet's own server needs no token logic either. It binds loopback
+and is reached only through the gateway, which is already past the
+gate; the `DATALIB_APPLET_TOKEN` it receives is a separate, much weaker
+guard against a stray local process (see the runtime contract above).
+
 ## The module store
 
 Modules live in one flat, content-addressed directory at

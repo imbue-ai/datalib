@@ -5,6 +5,24 @@ datalib UI's Manage tab. It asked you to modify the data-source
 config. This doc tells you how. (If your wayfinder named a component
 alias instead, read `<origin>/agent/cards.md`.)
 
+## Authentication (do this first)
+
+Every `/api/*` route requires the server's API token — the same scheme
+Jupyter uses, and for the same reason: without it any web page the user
+has open could rewrite this config and run the commands in it. (This
+guide itself is public, so you can read it before you have the token.)
+
+The token is minted per server process and published to a file:
+
+```sh
+TOKEN=$(cat <data root>/system/state/api-token)
+curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
+```
+
+Your wayfinder names the exact path. **Read it fresh** rather than
+caching it: a 401 from any call below almost always means the server
+restarted and minted a new one.
+
 ## The model
 
 The sync pipeline is driven by `<root>/config.toml`, which holds two
@@ -64,10 +82,11 @@ Work through the HTTP API, not the file:
 ```sh
 # read the current config
 # (JSON: {text, path, exists, parsed_ok, error, …})
-curl "<origin>/api/config"
+curl -H "Authorization: Bearer $TOKEN" "<origin>/api/config"
 
 # save a new version — send the FULL new text, not a diff
 curl -X PUT "<origin>/api/config" \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d "$(jq -Rs '{text: .}' < config.toml)"
 ```
@@ -111,7 +130,8 @@ a new source should ultimately produce rendered markdown under
 
 - On every successful PUT the user's config editor (the Manage tab)
   reloads automatically — there is nothing to refresh manually.
-- `GET <origin>/api/dag` returns the step DAG the saved config
+- `GET <origin>/api/dag` (with the `Authorization` header) returns the
+  step DAG the saved config
   produces (`{ok, error, steps: [{id, command, inputs, outputs,
   deps}]}`), in topological order — use it to confirm the wiring you
   intended.

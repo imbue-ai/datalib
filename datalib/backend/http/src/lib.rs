@@ -39,14 +39,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 pub mod applets;
+pub mod auth;
 pub mod boot;
 mod embed;
 pub mod worker;
 
+pub use auth::ApiToken;
 pub use boot::build_state;
 
 #[derive(Clone)]
@@ -75,6 +76,10 @@ pub struct AppState {
     /// supervisor behind `/v/`. Empty when the config declares none,
     /// which is the state every data root starts in.
     pub applets: Arc<applets::AppletRegistry>,
+    /// The per-process API token every request must carry. Minted at
+    /// startup and published to `<root>/system/state/api-token`; see
+    /// [`crate::auth`] for the scheme and why it exists.
+    pub api_token: ApiToken,
 }
 
 impl AppState {
@@ -95,6 +100,10 @@ pub struct Health {
     pub version: &'static str,
     pub root: String,
     pub root_exists: bool,
+    /// Where this server published its API token. Surfaced so the UI
+    /// can tell a coding agent where to read it (see `handoff.ts`);
+    /// reaching this response already required holding the token.
+    pub token_file: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,6 +219,8 @@ pub fn router(state: AppState) -> Router {
     // it's here (rather than in a pipeline step) because no step owns
     // the dir and the server is its one consumer.
     datalib_core::layout::mark_derived_cache(&media_dir);
+    // Cloned out before `state` is moved into `with_state` below.
+    let api_token = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
         .route("/api/search", get(search_handler))
@@ -258,7 +269,20 @@ pub fn router(state: AppState) -> Router {
         // into `index.html`.
         .fallback(embed::serve_ui)
         .with_state(state)
-        .layer(CorsLayer::permissive())
+        // Outermost, so it covers every route above plus the SPA
+        // fallback and the `/api/media` static mount. `CorsLayer::
+        // permissive()` used to sit here; it is gone deliberately.
+        // With the token gate in front, a cross-origin page cannot get
+        // a usable response anyway, and `Access-Control-Allow-Origin:
+        // *` on a 401 is just a misleading advertisement. Nothing
+        // in-tree needs cross-origin access: the browser UI is
+        // same-origin in every packaging, and `pnpm dev` reaches the
+        // API through Vite's *server-side* proxy, which no CORS policy
+        // applies to.
+        .layer(axum::middleware::from_fn_with_state(
+            api_token,
+            auth::require_token,
+        ))
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
@@ -279,6 +303,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         version: env!("CARGO_PKG_VERSION"),
         root: s.root.display().to_string(),
         root_exists: s.root.exists(),
+        token_file: s.api_token.token_file().display().to_string(),
     })
 }
 

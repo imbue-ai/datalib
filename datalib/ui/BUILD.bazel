@@ -2,11 +2,15 @@ load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//datalib/ui:vite/package_json.bzl", vite_bin = "bin")
+load("@npm//datalib/ui:vue-tsc/package_json.bzl", vue_tsc_bin = "bin")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Materializes the npm dep graph from pnpm-lock.yaml into a virtual
 # node_modules/ tree backing the js_run_binary action below.
+# Resolved @playwright/test version, read by //tools:version_pins_test.
+exports_files(["pnpm-lock.yaml"])
+
 npm_link_all_packages(name = "node_modules")
 
 # Vite binary exposed by the link target above. The `bin` symbol comes
@@ -140,5 +144,48 @@ sh_test(
     env_inherit = [
         "PATH",
         "HOME",
+    ],
+)
+
+# --- Hermetic TypeScript typecheck -----------------------------------
+#
+# Replaces `npx vue-tsc --noEmit` from scripts/run_checks.sh. That
+# invocation needed a host `pnpm install` (and `corepack enable pnpm`
+# before it) to have populated a source-tree node_modules; this one runs
+# vue-tsc straight out of the rules_js-linked `:node_modules`, built from
+# the integrity-pinned pnpm-lock.yaml. No host pnpm, no network, no
+# `$HOME` — so it sandboxes and remote-caches.
+#
+# Inputs are staged into bazel-out rather than read from the source tree,
+# matching `:vite_inputs`. tsconfig.json's `include` covers `src/**` and
+# `tests/**`, so both have to be here or vue-tsc silently checks less
+# than the `npx` version did. (aspect_bazel_lib memoizes the per-file
+# copy action, so sharing package.json / tsconfig.json with the other
+# `copy_to_bin` targets in this package is fine, not a conflict.)
+copy_to_bin(
+    name = "typecheck_inputs",
+    srcs = glob(
+        [
+            "src/**",
+            "tests/**",
+        ],
+        allow_empty = False,
+    ) + [
+        "package.json",
+        "tsconfig.json",
+    ],
+)
+
+vue_tsc_bin.vue_tsc_test(
+    name = "typecheck_test",
+    args = [
+        "--noEmit",
+        "-p",
+        "tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = [
+        ":node_modules",
+        ":typecheck_inputs",
     ],
 )

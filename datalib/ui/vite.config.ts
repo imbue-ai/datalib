@@ -4,6 +4,32 @@ import path from "node:path";
 
 const BACKEND = process.env.DATALIB_BACKEND ?? "http://127.0.0.1:8731";
 
+// The backend requires its per-process API token on every route (see
+// datalib/backend/http/src/auth.rs). In dev the browser loads the app
+// from *this* origin, so it never receives the backend's session
+// cookie; instead the proxy below — which runs in node, server-side,
+// where no page can reach it — stamps the token onto every forwarded
+// request. `datalib/dev.sh` mints one token and exports it to both
+// processes; if you start Vite by hand, export the same DATALIB_TOKEN
+// you gave the backend.
+const TOKEN = process.env.DATALIB_TOKEN;
+const proxyHeaders = TOKEN ? { authorization: `Bearer ${TOKEN}` } : undefined;
+
+// Warn once, and only when a dev server actually starts — `configure`
+// runs at proxy-creation time, so a plain `vite build` stays quiet.
+// vitest spins up its own vite server and would trip it too; it never
+// proxies anywhere, so skip it.
+let warned = false;
+function warnIfUnauthenticated() {
+  if (TOKEN || warned || process.env.VITEST) return;
+  warned = true;
+  console.warn(
+    "[datalib] DATALIB_TOKEN is unset — /api requests will come back 401.\n" +
+      "          Run the backend via `bazelisk run //datalib:dev`, or export\n" +
+      "          the same DATALIB_TOKEN for both processes.",
+  );
+}
+
 export default defineConfig({
   plugins: [vue()],
   resolve: {
@@ -33,6 +59,8 @@ export default defineConfig({
       "/api": {
         target: BACKEND,
         changeOrigin: false,
+        headers: proxyHeaders,
+        configure: warnIfUnauthenticated,
       },
       // The agent onboarding docs the wayfinder snippets reference —
       // served by the backend, so they resolve on the dev origin too.
@@ -41,6 +69,7 @@ export default defineConfig({
       "/agent": {
         target: BACKEND,
         changeOrigin: false,
+        headers: proxyHeaders,
       },
     },
   },

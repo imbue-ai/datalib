@@ -47,7 +47,7 @@ fn tz_abbrev_offset_minutes(abbr: &str) -> Option<i32> {
 /// format's literal space separator does not reliably match. No-op for
 /// the older all-ASCII strings.
 fn normalize_spaces(s: &str) -> String {
-    s.replace('\u{202f}', " ").replace('\u{00a0}', " ")
+    s.replace(['\u{202f}', '\u{00a0}'], " ")
 }
 
 /// Split a timestamp string like `"Jun 4, 2026, 11:48:37 AM PDT"`

@@ -92,11 +92,12 @@ fn has_marker(argv: &[String]) -> bool {
     let mut it = argv.iter();
     while let Some(tok) = it.next() {
         // Consume the value along with the flag, so a header value that
-        // happens to look like a flag is never read as one.
-        if tok == "-H" || tok == "--header" {
-            if it.next().is_some_and(|value| is_marker(value)) {
-                return true;
-            }
+        // happens to look like a flag is never read as one. `&&`
+        // short-circuits, so `it.next()` still runs only when the flag
+        // matched — the advance is identical to the nested-`if` form
+        // clippy asked us to collapse.
+        if (tok == "-H" || tok == "--header") && it.next().is_some_and(|v| is_marker(v)) {
+            return true;
         }
     }
     false

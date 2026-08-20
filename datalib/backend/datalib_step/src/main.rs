@@ -55,7 +55,7 @@ mod render;
 mod source;
 mod synth;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -234,7 +234,11 @@ async fn main() {
             for (i, cause) in e.chain().enumerate() {
                 let prefix = if i == 0 { "error" } else { "caused by" };
                 tracing::error!("{prefix}: {cause}");
-                eprintln!("{prefix}: {cause}");
+                // `status_line!`, not `eprintln!`: it suspends the
+                // progress bars across the write (and falls through to
+                // raw stderr when the draw target is hidden, e.g. when
+                // the http worker spawned us with stderr piped).
+                datalib_obs::status_line!("{prefix}: {cause}");
             }
             std::process::exit(1);
         }
@@ -251,7 +255,7 @@ struct StepIo {
 async fn run(
     cmd: Cmd,
     io: &StepIo,
-    data_root: &PathBuf,
+    data_root: &Path,
     now: &str,
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,

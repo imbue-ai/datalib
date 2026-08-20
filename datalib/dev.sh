@@ -13,6 +13,8 @@
 #   DATALIB_BIND    Backend bind addr (default: 127.0.0.1:<ephemeral>)
 #   DATALIB_BACKEND Vite proxy target for /api (default: derived from
 #                       DATALIB_BIND)
+#   DATALIB_TOKEN   Backend API token, shared with the Vite proxy
+#                       (default: freshly minted per run)
 #
 # Both ports default to ephemeral so multiple concurrent agents/devs can
 # each `bazelisk run //datalib:dev` from their own checkouts without
@@ -35,22 +37,15 @@ set -u
 BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-# Sync worker child binaries (see serve_dev.sh for the rationale;
-# short version: bazel names the step binary `datalib_step`, but step
-# commands look up `datalib-step` on PATH, so we stage a dash-named
-# symlink dir and hand it over as the binary dir).
-if [[ -z "${DATALIB_DAG_BIN:-}" ]]; then
-  DAG_BIN="$(rlocation _main/datalib/backend/dag/datalib_dag_bin || true)"
-  [[ -x "$DAG_BIN" ]] && export DATALIB_DAG_BIN="$DAG_BIN"
-fi
-BINDIR=""
-if [[ -z "${DATALIB_BINARY_DIR:-}" ]]; then
-  STEP_BIN="$(rlocation _main/datalib/backend/datalib_step/datalib_step || true)"
-  if [[ -x "$STEP_BIN" ]]; then
-    BINDIR="$(mktemp -d -t datalib-bindir.XXXXXX)"
-    ln -s "$STEP_BIN" "$BINDIR/datalib-step"
-    export DATALIB_BINARY_DIR="$BINDIR"
-  fi
+# Sync worker child binaries: //datalib/backend:bin stages every shipped
+# binary under its public dash-separated name in one directory, which is
+# both what the runner expects on PATH and the layout the installer
+# produces. Honor caller-supplied overrides.
+BIN_DIR="$(rlocation _main/datalib/backend/bin || true)"
+if [[ -d "$BIN_DIR" ]]; then
+  : "${DATALIB_DAG_BIN:=$BIN_DIR/datalib-dag}"
+  : "${DATALIB_BINARY_DIR:=$BIN_DIR}"
+  export DATALIB_DAG_BIN DATALIB_BINARY_DIR
 fi
 [[ -n "${DATALIB_DAG_BIN:-}" ]] && echo "dag bin: $DATALIB_DAG_BIN"
 
@@ -83,6 +78,17 @@ export DATALIB_BIND
 # bound. Honor a caller-supplied DATALIB_BACKEND; otherwise derive
 # from DATALIB_BIND so a random backend port flows through.
 export DATALIB_BACKEND="${DATALIB_BACKEND:-http://$DATALIB_BIND}"
+# The backend requires its API token on every route
+# (datalib/backend/http/src/auth.rs). In this split-origin dev setup the
+# browser loads the app from Vite, so it never gets the backend's
+# session cookie — instead Vite's *server-side* /api proxy stamps the
+# token onto each forwarded request (see vite.config.ts). Both processes
+# therefore need the same token, so mint it here rather than letting the
+# binary pick its own.
+if [[ -z "${DATALIB_TOKEN:-}" ]]; then
+  DATALIB_TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
+fi
+export DATALIB_TOKEN
 echo "vite port:     $PORT"
 echo "backend bind:  $DATALIB_BIND"
 echo "vite → /api:   $DATALIB_BACKEND"
@@ -135,7 +141,6 @@ VITE_PID=$!
 cleanup() {
   kill "$VITE_PID" 2>/dev/null || true
   kill "$BACKEND_PID" 2>/dev/null || true
-  [[ -n "$BINDIR" ]] && rm -rf "$BINDIR"
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM

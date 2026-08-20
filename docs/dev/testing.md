@@ -6,8 +6,8 @@ test surface.
 ## Source of truth: `bazelisk test //...`
 
 "Build green" means `bazelisk test //...` passes — nothing less. It runs the
-Rust unit + integration tests, the cross-language goldens, `//:precommit_test`
-(cargo fmt / clippy / ruff / pyright / vue-tsc), and the Playwright e2e suite,
+Rust unit + integration tests, the cross-language goldens, the `//:lint`
+gate (ruff / pyright / vue-tsc, all sandboxed), and the Playwright e2e suite,
 the same way CI does. Bazel's action cache makes re-runs cheap, so for a
 tight inner loop narrow the *bazel* invocation to what you're touching
 (e.g. `bazelisk test //datalib/backend/etl/...`). Bazel is the only

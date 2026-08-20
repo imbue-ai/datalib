@@ -88,6 +88,10 @@ fn default_true() -> bool {
     true
 }
 
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type NotionRenderConfig = datalib_source_common::BareRenderConfig;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,7 +168,3 @@ mod tests {
         assert!(cfg.validate().is_err());
     }
 }
-
-/// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
-pub type NotionRenderConfig = datalib_source_common::BareRenderConfig;

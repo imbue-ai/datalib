@@ -138,7 +138,7 @@ RUN arch="$(dpkg --print-architecture)" \
 # Pinned to the qmd version that the qmd step invokes via
 # `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
 # datalib/backend/core/src/qmd/mod.rs. The
-# //tools:qmd_version_pins_test asserts the values agree.
+# //tools:version_pins_test asserts the values agree.
 #
 # qmd 2.5.3 transitively depends on `tree-sitter-javascript`, which
 # tries to fetch a prebuilt linux binary via `prebuild-install`. There

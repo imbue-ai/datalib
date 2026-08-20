@@ -24,8 +24,8 @@ are relative to the repo root.
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete,
-  commented steps-format config, including the `--binary-dir` recipe for
-  running `datalib-dag` from a bazel build.
+  commented steps-format config, including the recipe for running
+  `datalib-dag` from a bazel build.
 
 **Data architecture**
 
@@ -123,6 +123,11 @@ datalib/
   backend/     Rust workspace.
     dag/           `datalib-dag`: the DAG runner (scheduler, step
                    contract, subprocess driver, NDJSON event stream).
+                   `//datalib/backend:bin` stages it plus every other
+                   shipped binary under their public `datalib-*` names
+                   in one directory (`:dist`, laid out as installed) —
+                   build that, not the individual targets, whenever you
+                   need to actually run a pipeline.
     datalib_step/  `datalib-step`: the built-in step commands —
                    download/render <source_type>, grid_index, qmd_index.
     etl/           shared ingest machinery (raw stores, blob CAS,
@@ -138,7 +143,10 @@ datalib/
                    contributing card components + their endpoints
                    (applets/slack: `datalib-view-slack`).
     http/          `datalib-http`: API server + sync worker + UI host +
-                   the applet gateway (src/applets.rs).
+                   the applet gateway (src/applets.rs). Every route is
+                   behind a per-process API token (src/auth.rs) — read
+                   it from <root>/system/state/api-token and send
+                   `Authorization: Bearer <token>`.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
                    via #[derive(PortableTable)].
@@ -409,9 +417,11 @@ narrow the *bazel* invocation to the package you're touching
 
 **Do not add `--test_tag_filters=-manual,-external` to this invocation.**
 The canonical line is the bare `bazelisk test //...`. Filtering on
-`-external` silently drops `//:precommit_test` (cargo fmt / clippy /
-ruff / pyright / vue-tsc) and `//datalib/ui:e2e_test` (Playwright),
-which lets fmt and UI regressions through. If a test is host- or
+`-external` silently drops `//datalib/ui:e2e_test` (Playwright), which
+lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
+ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
+filter can drop it; clippy and fmt ride the always-on rustfmt aspect and
+always-on clippy aspect.) If a test is host- or
 network-dependent it's tagged `requires-network` and/or `no-sandbox`,
 which Bazel respects on its own — `external` is reserved for tests
 that hit third-party services you don't want CI talking to. Prefer
@@ -489,6 +499,12 @@ bazelisk test //datalib/backend/...
 
 # Rebuild the fixture ingest (dump.sql + qmd.tar)
 bazelisk build //tests/fixtures:ingested_tng
+
+# Stage every shipped binary under its public dash-separated name, then
+# run a pipeline against a data root's config (no --binary-dir needed:
+# datalib-dag falls back to its own directory to find datalib-step)
+bazelisk build //datalib/backend:bin
+bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
 ## Provenance: `claude_api` vs `claude_export`

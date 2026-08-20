@@ -3,6 +3,15 @@
 // In dev (vite), `/api/*` is proxied to the Rust backend via vite.config.ts.
 // In Tauri/openhost packaging, the same relative paths are served by the
 // embedded backend.
+//
+// Authentication is deliberately absent from this file. The backend
+// requires its per-process API token on every route (see
+// datalib/backend/http/src/auth.rs), but the browser gets it as an
+// HttpOnly session cookie when it loads the app, and the dev-mode Vite
+// proxy stamps it on server-side — so `fetch`, `EventSource`, and
+// `<img src="/api/asset/…">` all authenticate without any call site
+// here knowing about it. That is the point of carrying it in a cookie:
+// there is no per-request token plumbing to forget.
 
 import type { FeedbackContext } from "./feedback/context";
 import { pushToast } from "./toasts";
@@ -132,7 +141,20 @@ export type Health = {
   version: string;
   root: string;
   root_exists: boolean;
+  // Absolute path of the file the running server published its API token
+  // to. Used to tell a coding agent where to read it (see handoff.ts) —
+  // the token itself never enters the UI.
+  token_file: string;
 };
+
+// Last successful /api/health payload. `fetchHealth` fills it; consumers
+// that need a fact from it but can't await (the wayfinder builders in
+// handoff.ts, which run inside sync click handlers) read it from here.
+let lastHealth: Health | null = null;
+
+export function healthSnapshot(): Health | null {
+  return lastHealth;
+}
 
 export type AccountInfo = {
   provider?: string;
@@ -172,8 +194,10 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return (await r.json()) as T;
 }
 
-export function fetchHealth(signal?: AbortSignal): Promise<Health> {
-  return getJson<Health>("/api/health", signal);
+export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
+  const h = await getJson<Health>("/api/health", signal);
+  lastHealth = h;
+  return h;
 }
 
 export async function fetchSearch(

@@ -20,13 +20,14 @@ brew install bazel cmake
 #    own default, so a standalone `qmd` populates the same cache.
 mkdir -p ~/.cache/qmd/models
 
-# 3. Verify Bazel can resolve `npx` on the pinned PATH. Bazel actions
-#    inherit a fixed PATH from `.bazelrc`
-#    (`/opt/homebrew/bin:/usr/bin:/bin`) instead of your interactive
-#    shell's PATH — host `direnv` / `nvm` / shell-init pnpm aren't in
-#    scope. `qmd-indexer` shells out to `npx`, so it has to be findable
-#    here. Empty output = trouble; expect `/opt/homebrew/bin/npx`.
-PATH=/opt/homebrew/bin:/usr/bin:/bin command -v npx
+# 3. (Nothing to check here any more.) The build used to need host
+#    `npx` on Bazel's pinned PATH, because `qmd-indexer` shelled out to
+#    `npx -y @tobilu/qmd@<v>`. Node and the qmd package tree are now
+#    Bazel inputs (`//third-party/qmd/runtime`), staged into a
+#    `DATALIB_RUNTIME_DIR` layout by the fixture genrule — verified by
+#    building it with neither `node` nor `npx` on PATH. A host Node is
+#    still needed to RUN the shipped CLI (it shells out to latchkey and
+#    qmd at sync time), just not to build the repo.
 ```
 
 ### Linux iteration via devcontainer
@@ -151,12 +152,47 @@ it. That is the only config format it reads — a root still holding a
 pre-TOML `config.yaml` needs `datalib-migrate-config <root>` first.
 
 The backend starts even if the root is missing — `/api/health` reports
-`root_exists: false` and the search grid shows zero rows.
+`root_exists: false` and the search grid shows zero rows. (`/api/health`
+needs the API token like every other route; see below.)
 
 For a backend-only launch (no Vite), use `bazelisk run //datalib:serve`.
 Override the listen address with `DATALIB_BIND=127.0.0.1:<port>` (or set
 `DATALIB_URL=...` to point the browser at a different URL than the one
 being bound — useful behind a reverse proxy).
+
+### The API token
+
+Every backend route requires a per-process API token — Jupyter's scheme,
+and for Jupyter's reason: loopback does not keep a *web page* out, and
+`PUT /api/config` + `POST /api/sync/jobs` runs arbitrary `command:`
+strings (issue #138). See
+[`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs)
+for the design.
+
+Both launchers handle it for you:
+
+* `//datalib:serve` mints a token, exports `DATALIB_TOKEN` to the
+  backend, and opens `<url>?token=…`. The browser trades that for an
+  HttpOnly session cookie and is redirected to the clean URL.
+* `//datalib:dev` mints one and gives it to *both* processes. The
+  browser talks to Vite, not the backend, so it never gets a cookie —
+  instead Vite's server-side `/api` proxy stamps
+  `Authorization: Bearer …` on every forwarded request
+  ([`vite.config.ts`](/datalib/ui/vite.config.ts)). Starting Vite by
+  hand means exporting the same `DATALIB_TOKEN` the backend has, or
+  every `/api` call comes back 401.
+
+For curl, scripts, and coding agents, the running server publishes its
+token to `<root>/system/state/api-token` (mode 0600):
+
+```sh
+curl -H "Authorization: Bearer $(cat ~/datalib.thad/system/state/api-token)" \
+  http://127.0.0.1:<port>/api/health
+```
+
+It changes on every restart, so read the file rather than caching the
+value. `DATALIB_TOKEN=<value>` pins it. The `/agent/*.md` guides stay
+readable without a token — they're what tells an agent how to get one.
 
 ### Re-run ingestion
 
@@ -174,11 +210,28 @@ and `grid_index` loads them into
 [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the
 DAG design.
 
+To run one by hand, build `//datalib/backend:bin` — it stages every
+shipped binary under its public dash-separated name in a single
+directory, the same layout `scripts/install.sh` produces on a user's
+machine:
+
+```sh
+bazelisk build //datalib/backend:bin
+bazel-bin/datalib/backend/bin/datalib-dag ~/datalib/config.toml
+```
+
+No `--binary-dir` is needed: `datalib-dag` resolves each step's
+`command` against PATH with its own directory as the fallback, so a
+bare `datalib-step` in the config finds the sibling binary. Add
+`--sync <step-id>[,<step-id>…]` to run a subset of the graph.
+
 ### QMD search index (default-on, incremental)
 
 `datalib-step qmd_index` rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
-(`datalib/backend/qmd_indexer/`) shells out to `npx -y @tobilu/qmd@<version>`
+(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI — the
+app-bundled runtime when one is staged (the Tauri bundle and the Bazel
+fixture genrule both stage one), else `npx -y @tobilu/qmd@<version>` —
 with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/system/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/rendered_md/**/*.md` mask), alongside the per-stanza
 `<name>/rendered_md/` trees and `system/backend_index/db.doltlite_db`. This is what the search bar's hybrid / vector

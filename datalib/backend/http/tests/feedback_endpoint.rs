@@ -8,11 +8,22 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
-use datalib_http::{router, AppState};
+use datalib_http::{router, ApiToken, AppState};
 use sqlx::Row;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+/// Every route behind the token gate (see `datalib_http::auth`), so
+/// each request in this file has to carry it. Stamping the header
+/// here keeps the call sites about what they actually assert.
+const TEST_TOKEN: &str = "itest-token";
+
+async fn send(app: &axum::Router, mut req: Request<Body>) -> axum::http::Response<Body> {
+    req.headers_mut()
+        .insert("x-datalib-token", TEST_TOKEN.parse().unwrap());
+    app.clone().oneshot(req).await.unwrap()
+}
 
 fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-http-fb-itest-")
@@ -30,6 +41,7 @@ async fn post_feedback_inserts_row() {
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let pool = dolt.pool().clone();
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
+    let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {
         root: root.clone(),
         repo: Arc::new(dolt),
@@ -42,6 +54,7 @@ async fn post_feedback_inserts_row() {
             (*root).clone(),
             None,
         )),
+        api_token,
     };
     let app = router(app_state.clone());
 
@@ -65,7 +78,7 @@ async fn post_feedback_inserts_row() {
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(
         resp.status(),
         StatusCode::OK,
@@ -115,7 +128,7 @@ async fn post_feedback_inserts_row() {
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&bad).unwrap()))
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     drop(app_state);

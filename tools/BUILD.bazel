@@ -1,9 +1,17 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# This package's contribution to `//:python_sources` — see the comment
+# there for why each package with Python has to opt in by hand.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)
 
 exports_files([
     "check_cargo_lock_versions.sh",
     "check_qmd_model_cache_path.sh",
-    "check_qmd_version_pins.sh",
     "check_version_consistency.sh",
     "insta_update.sh",
     "repin_cargo.sh",
@@ -28,20 +36,60 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-# Asserts that every qmd version pin in the workspace agrees with
-# `DEFAULT_QMD_VERSION` in core/src/qmd/mod.rs (the ONE Rust constant;
-# runner/daemon read it directly and qmd_indexer re-exports it).
-# Catches the case where the Dockerfile bakes one qmd version into the
-# image but datalib-sync runtime fetches a different one via
-# `npx -y @tobilu/qmd@<v>` — leaving the baked model layer unused.
-sh_test(
-    name = "qmd_version_pins_test",
+# --- Hermetic Python lint -------------------------------------------
+#
+# ruff, from the hash-pinned `//:requirements.txt` via `pip.parse`, NOT
+# from a host `.venv` populated by `uv run` at test time. That is the
+# whole point: this target sandboxes, needs no network and no host
+# `$HOME`, and remote-caches. See tools/lint_python.py.
+py_test(
+    name = "ruff_test",
     size = "small",
-    srcs = ["check_qmd_version_pins.sh"],
+    srcs = ["lint_python.py"],
+    args = [
+        "$(rootpath @py_pip//ruff:whl)",
+        "$(rootpath //:pyproject.toml)",
+        "$(rootpaths //:python_sources)",
+    ],
     data = [
+        "//:pyproject.toml",
+        "//:python_sources",
+        # The wheel is only an anchor for locating `bin/ruff`; this is
+        # what materializes the executable itself. See lint_python.py.
+        "@py_pip//ruff:extracted_whl_files",
+        "@py_pip//ruff:whl",
+    ],
+    main = "lint_python.py",
+)
+
+# --- Cross-file version pin consistency -----------------------------
+#
+# One declarative table covering every version that is written down in
+# more than one file. Replaces the per-family `check_*.sh` pattern, under
+# which adding a pin meant writing a script — so the pins nobody wrote a
+# script for (latchkey, the doltlite CLI, Playwright) went unchecked.
+# Adding a family is now four lines in the table.
+#
+# `data` is the pin sites themselves. A site that moves makes this test
+# fail with "does not exist" rather than silently stopping being checked.
+py_test(
+    name = "version_pins_test",
+    size = "small",
+    srcs = ["check_version_pins.py"],
+    data = [
+        "//tools/lint:package.json",
+        "//.devcontainer:Dockerfile",
+        "//:MODULE.bazel",
+        "//:requirements.txt",
+        "//datalib:tauri/stage-runtime.sh",
+        "//datalib/backend/core:src/node_runtime.rs",
         "//datalib/backend/core:src/qmd/mod.rs",
         "//datalib/docker:Dockerfile",
+        "//datalib/ui:pnpm-lock.yaml",
         "//tests/fixtures:BUILD.bazel",
+        "//third-party/doltlite:BUILD.bazel",
+        "//third-party/qmd:package.json",
+        "//third-party/qmd/runtime:package.json",
     ],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
+    main = "check_version_pins.py",
 )

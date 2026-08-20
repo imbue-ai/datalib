@@ -24,6 +24,16 @@
 //! hash, which is what lets the browser evaluate the component once
 //! and bind it twice.
 //!
+//! ## Printing
+//!
+//! The workspace bans `println!`/`eprintln!` because they bypass
+//! indicatif's bar suspension and corrupt a pipeline's progress
+//! display. An applet runs no bars: it is a standalone server, and in
+//! manifest mode its **stdout is the protocol** — the gateway parses
+//! exactly what this prints. stderr is its log, captured by the gateway
+//! and surfaced in a `502` when it fails to start. So the ban is lifted
+//! here for the same reason it is lifted in `datalib-http`.
+//!
 //! ## Why it reads sidecars rather than Slack
 //!
 //! The applet consumes `<tree>/**/*.grid_rows.json` — the
@@ -31,6 +41,7 @@
 //! `datalib/backend/etl/src/grid_index.rs`). That keeps it independent
 //! of the Slack provider crates and, incidentally, means the same code
 //! would work over any source's rendered tree.
+#![allow(clippy::disallowed_macros)]
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -373,10 +384,8 @@ fn scan(tree: &Path) -> (Channels, Vec<String>) {
                 // timestamp; take those in preference to a message's.
                 let is_doc = row.get("message_index").map(|i| i.is_null()) != Some(false);
                 let text_field = row.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                if is_doc || thread.title.is_empty() {
-                    if !text_field.is_empty() {
-                        thread.title = first_line(text_field);
-                    }
+                if (is_doc || thread.title.is_empty()) && !text_field.is_empty() {
+                    thread.title = first_line(text_field);
                 }
                 let key = when_key(when_raw);
                 // Keep the thread's earliest stamp: that is when the

@@ -1,3 +1,9 @@
+// Standalone one-shot CLI: the user runs it directly and its whole
+// interface is stdout/stderr. It never runs under the sync pipeline, so
+// there are no indicatif bars to corrupt — the case clippy.toml names as
+// a legitimate exception to the workspace-wide macro ban.
+#![allow(clippy::disallowed_macros)]
+
 //! `datalib-migrate-config` — convert a pre-TOML `config.yaml` into the
 //! `config.toml` the pipeline reads today.
 //!

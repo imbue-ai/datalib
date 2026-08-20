@@ -38,3 +38,5 @@ for one fully-commented step pair per source.
   on a user's behalf: config, sync, querying, custom steps.
 - [**First-time dev guide**](docs/dev/first_time_dev.md) — build and hack on
   datalib from source.
+- [**Contributor runbook**](AGENTS.md) — for humans and AI agents working *on*
+  datalib: the doc map, repo layout, testing rules, and conventions.

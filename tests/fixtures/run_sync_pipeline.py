@@ -109,7 +109,7 @@ def main() -> int:
     # stashed under the data_root. The pipeline lays out its own
     # `<name>/raw`, `<name>/rendered_md`, and `system/` directly under
     # data_root. The enclosing genrule is sandboxed (no `no-sandbox`
-    # tag; see scripts/lint_no_sandbox.py), so this dir is fresh per
+    # tag; see scripts/lint_repo.py), so this dir is fresh per
     # action — no need to clean it ourselves.
     workspace = data_root
     raw_root = data_root / "raw"
@@ -257,6 +257,20 @@ outputs = ["system/backend_index"]"""
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
     # it to the runner as --binary-dir.
+    #
+    # `//datalib/backend:bin` stages exactly this layout, and everywhere
+    # else that needed a bindir now depends on it instead of hand-rolling
+    # one. NOT here, deliberately: `bazelisk coverage` instruments
+    # datalib_dag / datalib_step through `ingested_tng_test`'s *direct*
+    # `data` deps on those two targets — see docs/dev/coverage.md, "Three
+    # things had to be true" #1, which names the
+    # `bazel-bin/datalib/backend/{dag/datalib_dag_bin,datalib_step/
+    # datalib_step}` paths specifically. Routing through a
+    # copy_to_directory would run copies at a different path, and if the
+    # coverage transition failed to survive the copy the failure is
+    # silent: coverage for the two most important binaries in the tree
+    # just reads zero, with nothing failing. Worth ~6 lines only if
+    # someone verifies a before/after `tools/run_coverage.sh` run.
     bindir = workspace / "bindir"
     bindir.mkdir(exist_ok=True)
     step_link = bindir / "datalib-step"
@@ -361,9 +375,15 @@ def _source_config(
         # `sources` here is the canonical-network list that filters
         # which rooms get ingested. `beeper_data_dir` points at the
         # materialized BeeperTexts fixture.
-        source["sync"] = {"sources": ["signal", "googlechat"]}
+        #
+        # Built as its own `dict[str, object]` before being attached:
+        # assigning the literal first would narrow `source["sync"]` to
+        # `dict[str, list[str]]`, and the `str` value below then fails
+        # to typecheck even though it is correct at runtime.
+        beeper_sync: dict[str, object] = {"sources": ["signal", "googlechat"]}
         if beeper_data_dir is not None:
-            source["sync"]["beeper_data_dir"] = str(beeper_data_dir)
+            beeper_sync["beeper_data_dir"] = str(beeper_data_dir)
+        source["sync"] = beeper_sync
     elif type_str == "carddav":
         # File-tree mode: no `sync:` block (otherwise we'd be in
         # CardDAV-server mode). Extract walks `input_path` for `.vcf`

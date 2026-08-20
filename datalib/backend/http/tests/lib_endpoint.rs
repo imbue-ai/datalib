@@ -13,10 +13,21 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
-use datalib_http::{router, AppState};
+use datalib_http::{router, ApiToken, AppState};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+/// Every route behind the token gate (see `datalib_http::auth`), so
+/// each request in this file has to carry it. Stamping the header
+/// here keeps the call sites about what they actually assert.
+const TEST_TOKEN: &str = "itest-token";
+
+async fn send(app: &axum::Router, mut req: Request<Body>) -> axum::http::Response<Body> {
+    req.headers_mut()
+        .insert("x-datalib-token", TEST_TOKEN.parse().unwrap());
+    app.clone().oneshot(req).await.unwrap()
+}
 
 fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-http-lib-itest-")
@@ -37,7 +48,7 @@ async fn json_req(
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(app, req).await;
     let status = resp.status();
     let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await
@@ -48,7 +59,7 @@ async fn json_req(
 
 async fn manifest(app: &axum::Router) -> Vec<serde_json::Value> {
     let req = Request::get("/api/lib").body(Body::empty()).unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await
@@ -67,6 +78,7 @@ async fn lib_metadata_and_rename() {
     let dolt = DoltRepo::open(&db_path, root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+    let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {
         root: root.clone(),
         repo: Arc::new(dolt),
@@ -79,6 +91,7 @@ async fn lib_metadata_and_rename() {
             (*root).clone(),
             None,
         )),
+        api_token,
     };
     let app = router(app_state.clone());
 
@@ -149,12 +162,12 @@ async fn lib_metadata_and_rename() {
     let req = Request::get("/api/lib/niceName")
         .body(Body::empty())
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let req = Request::get("/api/lib/card_abc")
         .body(Body::empty())
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = send(&app, req).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // Renaming onto a taken or builtin name fails; missing source 404s.

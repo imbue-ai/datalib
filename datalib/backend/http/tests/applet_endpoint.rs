@@ -14,10 +14,13 @@ use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use datalib_http::applets::AppletRegistry;
 use datalib_http::sha256_hex;
+use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
+
+const TEST_TOKEN: &str = "applet-test-token";
 
 /// A fixture applet: writes `module_body` into `--module-dir` under
 /// `file_name`, then prints a manifest claiming `claimed_hash`. The
@@ -80,6 +83,9 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // Every route is behind the per-process token; these tests
+        // send it on each request (see `get_json`).
+        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::discover(cfg.applets, (*root).clone(), None)),
     }
 }
@@ -87,7 +93,12 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
 async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let resp = app
         .clone()
-        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get(uri)
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
@@ -130,6 +141,7 @@ async fn discovers_an_applet_and_serves_its_module() {
         .clone()
         .oneshot(
             Request::get(format!("/modules/{hash}"))
+                .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -279,6 +291,7 @@ async fn module_paths_cannot_escape_the_store() {
             .clone()
             .oneshot(
                 Request::get(format!("/modules/{bad}"))
+                    .header("x-datalib-token", TEST_TOKEN)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -294,6 +307,7 @@ async fn module_paths_cannot_escape_the_store() {
     let resp = app
         .oneshot(
             Request::get("/modules/../../etc/passwd")
+                .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -337,6 +351,7 @@ async fn proxying_an_unknown_applet_reports_why() {
     let resp = app
         .oneshot(
             Request::get("/v/nope/channels")
+                .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -381,6 +396,9 @@ async fn a_config_edit_is_picked_up_without_a_restart() {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // Every route is behind the per-process token; these tests
+        // send it on each request (see `get_json`).
+        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
     });
 
@@ -483,6 +501,9 @@ async fn an_unchanged_config_is_not_rediscovered() {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // Every route is behind the per-process token; these tests
+        // send it on each request (see `get_json`).
+        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
     });
     let after_boot = std::fs::read_to_string(&counter)
@@ -504,4 +525,57 @@ async fn an_unchanged_config_is_not_rediscovered() {
         "polling re-ran discovery {} times on an unchanged config",
         after_polls - 1
     );
+}
+
+/// The applet routes are new since the token gate landed, so pin that
+/// they are behind it.
+///
+/// `/modules/<hash>` serves executable JavaScript and `/v/<id>/…`
+/// proxies to a program named by the config — exactly the surface the
+/// gate exists to protect (see `auth.rs`: a visited web page can
+/// `fetch()` loopback). The gate is an outermost layer, so this holds
+/// by construction today; the test is here so that adding a route
+/// *outside* it would fail loudly.
+#[tokio::test]
+async fn applet_routes_are_behind_the_token_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = "export default (id) => (root, ctx) => () => {};";
+    let hash = sha256_hex(stored_bytes(body).as_bytes());
+    let script = write_fixture(tmp.path(), "fixture.sh", body, &hash, &hash);
+    let cfg = format!(
+        "[[applets]]\nid = \"demo\"\ncommand = \"sh {}\"\n",
+        script.display()
+    );
+    let app = router(state_with(tmp.path(), &cfg).await);
+
+    for uri in [
+        "/api/applets".to_string(),
+        format!("/modules/{hash}"),
+        "/v/demo/anything".to_string(),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} answered without a token"
+        );
+    }
+
+    // …and the same requests succeed with one, so the gate is what
+    // rejected them rather than the route being missing.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/modules/{hash}"))
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }

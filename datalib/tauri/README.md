@@ -19,7 +19,13 @@ cached) and shipped under the
 `src/main.rs`. Port handshake: the child gets
 `DATALIB_BIND=127.0.0.1:0` and `--url-file <tmp>` and announces its
 bound URL there; the shell polls for the file, opens the window, and
-kills the child on exit.
+kills the child on exit. That announced URL carries the backend's
+per-process API token as `?token=…` (every route requires it — see
+`datalib/backend/http/src/auth.rs`); the webview trades it for an
+HttpOnly session cookie on the first load and is redirected to the
+clean URL, so nothing else in the shell has to know about auth. The
+url-file and the child's log both get mode 0600, since both end up
+holding that token in a shared temp dir.
 
 **Not owned by Bazel** — this crate is a standalone cargo workspace (see
 the `[workspace]` table in `Cargo.toml`) so that Bazel's crate_universe,

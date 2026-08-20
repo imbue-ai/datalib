@@ -12,10 +12,13 @@ use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use datalib_http::applets::AppletRegistry;
+use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
+
+const TEST_TOKEN: &str = "applet-test-token";
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     let db_path = root.join("backend_index.doltlite_db");
@@ -28,6 +31,9 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // Every route is behind the per-process token; these tests
+        // send it on each request (see `get_json`).
+        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::discover(cfg.applets, (*root).clone(), None)),
     }
 }
@@ -35,7 +41,12 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
 async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let resp = app
         .clone()
-        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get(uri)
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
