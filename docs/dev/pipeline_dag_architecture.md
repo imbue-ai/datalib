@@ -349,10 +349,40 @@ rough dependency order:
   the runner's only throughput knob); the scheduler dispatches as many
   ready steps as the bound allows, so independent source chains overlap
   naturally.
-* **Subset sync** (`--sync <fringe-id>…`): selected download steps run,
-  the rest are treated as up to date, downstream follows normal change
-  propagation. The UI's per-source / multi-select "Sync now" maps onto
-  it (`<name>.download` id convention), the whole selection as one run.
+* **Subset sync** (`--sync <fringe-id>…`) **runs a subgraph, and only
+  that subgraph.** Scope is the selected download steps plus their
+  transitive dependents; every other step is declared up to date and
+  does nothing. Inside the subgraph, ordinary change propagation
+  applies, so the shared fan-in still re-runs only if a selected chain
+  actually moved. The UI's per-source / multi-select "Sync now" maps
+  onto it (`<name>.download` id convention), the whole selection as one
+  run.
+
+  The rule is *reachability in the graph*, computed once before
+  anything runs — deliberately not a function of run-time state (what
+  succeeded before, whether an input exists, what ran earlier this
+  pass). Two reasons. **It makes the button mean what it says**: click
+  "sync yolink" and the set of steps that can move is readable straight
+  off the DAG, the same every time. If syncing yolink could also make
+  something happen for slack, that's spooky action at a distance — the
+  work done, and the time it takes, would depend on unrelated state the
+  user can't see. **And it's simpler**: one BFS over `dependents`
+  replaces per-step reasoning about first-runs and absent inputs, so
+  there's much less to get wrong.
+
+  The accepted cost: pending work in an unselected chain stays pending.
+  A source that downloaded yesterday but whose render failed is *not*
+  dragged along by an unrelated per-source sync — it comes back on the
+  next full run. We take that trade rather than have a narrow sync
+  quietly do broad work.
+
+  This was originally built as an "up to date" decree that stopped at
+  the download step, which left never-run downstream steps dirty anyway:
+  the scheduler treats a step with no recorded successful run as dirty
+  (derived from `dag_state.json`, nothing anyone declares), and that
+  check ran ahead of the decree. On a fresh data root it rendered
+  sources nobody had downloaded, failed `Data`, and blocked the shared
+  fan-in for the chains that *were* selected (#152).
 * **Run-wide `--now`** is exported by the runner to every step as
   `DATALIB_DAG_NOW` (sampled once when omitted) so all stamped
   outputs agree; reset controls (`--reset-and-redownload`,

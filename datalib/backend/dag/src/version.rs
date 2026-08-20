@@ -10,6 +10,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+/// The version of an artifact that does not exist on disk. Distinct
+/// from every real tree hash, so "not yet produced" never compares
+/// equal to a real version — and lets the scheduler tell "no data
+/// upstream" apart from "data that happens to be unchanged".
+pub const ABSENT: &str = "absent";
+
 /// Hash the tree (or single file) at `path`. Deterministic: files are
 /// visited in sorted path order; each contributes its root-relative
 /// path and content. A missing path hashes to a distinguished
@@ -17,7 +23,7 @@ use anyhow::{Context, Result};
 /// real tree.
 pub fn tree_version(path: &Path) -> Result<String> {
     if !path.exists() {
-        return Ok("absent".to_string());
+        return Ok(ABSENT.to_string());
     }
     let mut hasher = blake3::Hasher::new();
     if path.is_file() {
@@ -72,9 +78,9 @@ mod tests {
     fn absent_is_distinguished() {
         let td = tempfile::tempdir().unwrap();
         let missing = td.path().join("nope");
-        assert_eq!(tree_version(&missing).unwrap(), "absent");
+        assert_eq!(tree_version(&missing).unwrap(), ABSENT);
         std::fs::create_dir_all(&missing).unwrap();
         std::fs::write(missing.join("x"), "x").unwrap();
-        assert_ne!(tree_version(&missing).unwrap(), "absent");
+        assert_ne!(tree_version(&missing).unwrap(), ABSENT);
     }
 }

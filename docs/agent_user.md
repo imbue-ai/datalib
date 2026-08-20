@@ -73,8 +73,9 @@ datalib-dag <data_root>/config.toml            # everything
 datalib-dag <data_root>/config.toml --sync slack.download   # one source
 ```
 
-Useful flags: `--sync <step-id>` (repeatable; subset sync from selected
-fringe steps), `--parallelism N`, `--reset-and-redownload`,
+Useful flags: `--sync <step-id>` (repeatable; runs the named download
+steps and everything downstream of them, and nothing else — pending
+work in other sources waits for a full run), `--parallelism N`, `--reset-and-redownload`,
 `--refetch-blobs`, `--binary-dir DIR` (where bare `command:` names like
 `datalib-step` resolve; defaults to the directory `datalib-dag` itself
 is in).

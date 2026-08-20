@@ -364,7 +364,25 @@ plumbing delegated).
        if path.is_dir() {
            return parse_export_json_dir(path);  // legacy fallback
        }
-       bail!("source not found at {}", path.display())
+       // Never downloaded. NOT an error — see below.
+       Ok(Parsed::default())
+   }
+   ```
+
+   **The last branch returns empty, it does not `bail`.** A source with
+   no raw store has simply never been downloaded, which is the normal
+   state of every source in a freshly scaffolded config. Failing there
+   marks the step `data` (a human must look) and poisons the subtree,
+   blocking the shared `grid_index` / `qmd_index` fan-in for the sources
+   that *did* sync. A store that exists but can't be read still errors,
+   from the branch above. See `docs/dev/step_protocol.md`, "Rendering a
+   source with no data", and pin it with a test:
+
+   ```rust
+   #[test]
+   fn parse_missing_source_returns_empty_silently() {
+       let parsed = parse(Path::new("/this/does/not/exist")).unwrap();
+       assert!(parsed.conversations.is_empty());
    }
    ```
 
