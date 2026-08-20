@@ -86,6 +86,15 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "datalib/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
+    # Applet coverage starts real applet processes and proxies to them
+    # over loopback. The store semantics they sit on top of are unit
+    # tested hermetically in datalib/backend/http/src/frontend.rs.
+    "datalib/backend/http:applet_endpoint_test": (
+        "starts applet subprocesses and binds loopback ports"
+    ),
+    "datalib/backend/http:applet_proxy_test": (
+        "starts applet subprocesses and binds loopback ports"
+    ),
 }
 
 # Regex matching tag-list entries that include `no-sandbox`. The tag
