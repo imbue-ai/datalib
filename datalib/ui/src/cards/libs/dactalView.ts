@@ -9,9 +9,18 @@
 // `onclick=` handlers that resolve against the top-level window. Mounting
 // that into a ShadowRoot would (a) break the inline handlers and (b) cap
 // us at one DACTAL card per app (they'd share globals). So we mount it in
-// an iframe: each card gets its own window/engine/storage and full
-// isolation from the Vue app. The page lives in public/dactal/ and calls
-// the same /api/search the grid uses.
+// an iframe: each card gets its own window/engine/storage, isolating those
+// globals from the Vue app and from each other.
+//
+// That is isolation of JS *globals*, NOT a security boundary — the frame
+// has no `sandbox` attribute and is same-origin, so its scripts can call
+// /api/* directly with the session cookie. What actually constrains the
+// page is its own CSP (public/dactal/index.html) and the API token; see
+// docs/dev/dactal.md caveats 5 and 4. Sandboxing it for real needs the
+// postMessage bridge that would replace same-origin access.
+//
+// The page lives in public/dactal/ and calls the same /api/search the
+// grid uses.
 import type { CardCtx, CardRender } from "../types";
 
 // Served verbatim from ui/public/dactal/ in dev (vite) and prod (vite
