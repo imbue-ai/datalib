@@ -58,27 +58,21 @@ search and Setup down with it and leave no way to fix the file.
 
 ## What a command has to do
 
-**1. Print a frontend manifest.**
+**1. Write its frontend namespace.**
 
 ```
-<command> --frontend-manifest --applet-id <id> --module-dir <dir> [--params <json>]
+<command> --write-frontend-dir <root>/system/frontend/<id> [--params <json>]
 ```
 
-Write each component's ES module into `<dir>`, named after the sha256
-of its own bytes, then print on stdout:
+Write the files described in [the frontend store](#the-frontend-store)
+into that directory and exit. Nothing is read from stdout; stderr is
+the log, and its tail becomes the error message on a non-zero exit.
 
-```json
-{
-  "components": [{ "name": "channels", "module": "7ae808…" }],
-  "gallery": [{
-    "source": "slack_work.channels(\"slack_work\")",
-    "title": "Slack — Work",
-    "description": "Browse the channels mirrored into Work."
-  }]
-}
-```
-
-Exit 0. Nothing is served during this — it runs to completion.
+The directory's last segment is the namespace, and it is the only
+channel by which a command learns which instance it is. Two instances
+of one binary differ only in configuration, so the argument a gallery
+entry passes — usually the instance's own id — has to come from
+outside.
 
 **2. Serve on a port.** `-p <port>` binds `127.0.0.1:<port>`. The
 gateway proxies `/v/<id>/<path>` to `<path>` on that port.
@@ -87,46 +81,83 @@ That is the whole contract. There is no protocol version, no
 handshake, and no registration call, so a shell script is a viable
 applet.
 
-## Why the manifest is a flag rather than an endpoint
+## The frontend store
 
-Three things need it before any applet is worth running: the component
-gallery, the registry that resolves a name in card source, and the
-module URLs the browser imports from. A flag answers all three for one
-`exec`, so opening the app costs zero applet processes — a server
-starts only when a card actually asks one for data.
+Every custom component lives under `<root>/system/frontend/`, one
+directory per **namespace**:
 
-## Why the command is told its own id
+```
+system/frontend/
+  user/                    components a person or an agent wrote
+    9f2a1c….js             a component, named by the sha256 of its bytes
+    tetris.json            metadata: what `comp.user.tetris` is
+  slack_work/              written by the slack_work applet
+    7ae808….js
+    channels.json
+```
 
-Gallery entries are **full card-source snippets**, not names. Two
-instances of one command differ only in configuration, so a snippet
-that has to address its own instance
-(`slack_work.channels("slack_work")`) needs information the binary
-cannot know about itself.
+Two kinds of file, and that is all:
 
-This is also why component names are not global. The applet id is the
-namespace and the component name is a member of it, so a name only has
-to be unique inside one manifest — which one author controls. Two
-applets cannot collide, so nothing arbitrates a collision.
+| File | Meaning |
+| --- | --- |
+| `<sha256>.js` | An ES module whose default export is the component factory. The server re-hashes it and skips the file if the name does not match its contents. |
+| `<name>.json` | Either `{title, description, component_hash, component_args}` or `{renamed_to}`. |
 
-## Two instances of one command
+Each component document does two things: it defines
+`comp.<namespace>.<name>` in the app, resolved by loading the module at
+`component_hash`; and it registers a gallery entry whose card source is
+that qualified name called with `component_args` spelled as JSON
+literals — so `["slack_work"]` yields
+`comp.slack_work.channels("slack_work")`.
 
-The case the design is built around:
+**There is one mechanism.** Nothing that reads this store knows what an
+applet is. An applet's only privilege is being *called* to write a
+directory; the files it leaves are scanned, hash-validated and served
+exactly like ones a user dropped in by hand. Writing the two files
+yourself into `system/frontend/user/` defines a component with no
+applet and no config entry involved.
 
-- Both report the **same module hash**, because the bytes are the
-  same. The gateway stores one file; the browser keeps one module
-  instance per URL and therefore evaluates the component once and
-  binds it twice.
-- Both report **different gallery snippets**, each naming its own
-  instance.
-- If the two are on **drifted builds**, they report different hashes,
-  get different code, and stop sharing. That is correct rather than a
-  special case, and nothing has to detect it.
+### Why the name is a hash and the metadata is separate
+
+Addressing code by content buys two things. The browser keeps one
+module instance per resolved URL, so byte-identical components in two
+namespaces resolve to the same `/modules/<hash>` and are evaluated
+once. And editing a component becomes an ordinary write of a new file
+plus a one-line metadata update — the old bytes stay addressable for
+anything mid-render, and the URL changes, which is the only way a
+module registry that never evicts will re-evaluate anything.
+
+The `.js` therefore has to stay byte-identical to what the browser
+evaluates, which is why title, description and arguments live in a
+sibling `<name>.json` rather than as frontmatter.
+
+## Refresh is destructive, and `user` is reserved
+
+A refresh deletes every namespace directory except `user`, then asks
+each configured applet to write its own. That is what keeps the store
+honest: an applet removed from `config.toml` takes its components with
+it, and a component removed from an applet's output actually
+disappears.
+
+`user` is never touched, because nothing regenerates it — which is
+exactly why an applet may not take that id. The config loader rejects
+it (`datalib_dag::config::RESERVED_APPLET_ID`); an applet allowed to
+claim `user` would have the user's own work deleted on the next
+refresh.
+
+## Why the write is a flag rather than an endpoint
+
+Components have to be readable before any applet is worth running: the
+gallery lists them, card source resolves against them, and the browser
+imports their code. Making the write a flag means all of that comes off
+the filesystem, so opening the app costs zero applet processes — a
+server starts only when a card actually asks one for data.
 
 ## Authentication
 
 Every route is behind the per-process API token (`datalib/backend/http/src/auth.rs`),
 and the applet routes are no exception: the gate is an outermost layer,
-so `/api/applets`, `/modules/<hash>` and `/v/<id>/…` all inherit it.
+so `/api/frontend`, `/modules/<hash>` and `/v/<id>/…` all inherit it.
 
 Nothing in a component has to carry the token. The browser holds it as
 a same-origin cookie, which it attaches to the component's own
@@ -141,55 +172,54 @@ and is reached only through the gateway, which is already past the
 gate; the `DATALIB_APPLET_TOKEN` it receives is a separate, much weaker
 guard against a stray local process (see the runtime contract above).
 
-## The module store
+## Two instances of one command
 
-Modules live in one flat, content-addressed directory at
-`<root>/system/modules/<sha256>`, served at `/modules/<sha256>` with
-immutable cache headers. Consequences worth knowing:
+The case the design is built around:
 
-- **Relative imports do not work.** A flat store has no directory
-  structure, so `import "./util.js"` would resolve to
-  `/modules/util.js`. Ship each component as one self-contained
-  module, or rewrite its imports to `/modules/<hash>` at build time.
-- **The digest must move when the bytes move.** It is the cache key,
-  the URL, and the module identity at once; a stale digest serves old
-  code from an immutable URL that nothing can invalidate. The gateway
-  re-hashes every file a manifest points at and refuses a mismatch.
-- **The store is a derived cache.** It is marked as one for backups,
-  and it is safe to delete — the next boot rebuilds it.
+- Both write **byte-identical component code**, so the store holds one
+  address and the browser evaluates it once.
+- Both write **different `component_args`**, each naming its own
+  instance, so the gallery shows two rows that call the same component
+  with different arguments.
+- If the two are on **drifted builds**, they write different bytes,
+  get different hashes, and stop sharing. That is correct rather than a
+  special case, and nothing has to detect it.
 
-## When discovery runs
+## When the store is re-read
 
-At server start, and again whenever `config.toml` changes. Every read
-path (`GET /api/applets`, and the `/v/` proxy) first compares the
-file's size and mtime against the last pass and rediscovers only if
-they moved, so the common case costs one `stat`.
+At server start, and again whenever it changes. Two triggers, kept
+separate because they cost different amounts:
 
-Watching the file rather than hooking `PUT /api/config` means a config
-edited by hand, or written directly by an agent, is picked up too. The
-UI already polls `/api/applets`, so a saved config becomes a live
-gallery update.
+- **`config.toml` moved** → re-run every applet's write, then rescan.
+- **the store's own files moved** → rescan only.
 
-An applet whose entry changed is stopped as part of the refresh, so the
-next request respawns it with the new `params`. Leaving it running
-would serve the old `tree` from a config that appears to have taken
-effect — an edit visible in the gallery but not in the data is worse
-than a restart.
+Conflating them would make a `PUT /api/lib` wipe and rewrite every
+applet namespace. Both checks are `stat`-only when nothing changed, so
+they can sit on the endpoint the UI polls — which is what turns a saved
+config, or a file dropped in by hand, into a live gallery update
+without a restart.
+
+An applet whose config entry changed is also stopped as part of the
+refresh, so the next request respawns it with the new `params`.
 
 ## Failure
 
-An applet that fails discovery still appears in `/api/applets`,
-carrying its error and no components: a configured applet that
-silently vanished would look like a config that never saved. A request
+An applet whose write fails is named in `/api/frontend`'s
+`applet_errors`, with the child's stderr: its namespace is absent or
+stale, and a configured applet that silently vanished would look like a
+config that never saved. Files the store *could* read but not use — a
+`.js` whose name does not match its bytes, metadata naming a component
+that is not there — are reported per namespace in `problems`, for the
+same reason. A request
 to an applet that will not start answers `502` with a JSON `error`
 carrying the child's last stderr lines, so the card shows the reason
 instead of an empty state. That failure is remembered: without it,
 every subsequent request would pay the ten-second readiness timeout
 again and leave another dead child behind.
 
-A `--frontend-manifest` run is bounded at 30 seconds. The bound exists
-because a command that starts *serving* when asked to *describe* is an
-easy mistake for a binary that has both modes, and discovery happens
+A `--write-frontend-dir` run is bounded at 30 seconds. The bound exists
+because a command that starts *serving* when asked to *write* is an
+easy mistake for a binary that has both modes, and a refresh happens
 during boot after the listener is already bound — so without a timeout
 the symptom would be a browser tab whose requests queue forever with
 nothing logged.
@@ -200,8 +230,9 @@ nothing logged.
 cross-provider `.grid_rows.json` sidecar contract as untyped JSON
 rather than linking the schema or provider crates, which keeps an
 applet a small program. It ships in `//datalib/backend:dist` alongside
-`datalib-step`, so a config can name it bare. The gateway side is
-`datalib/backend/http/src/applets.rs`.
+`datalib-step`, so a config can name it bare. The store is
+`datalib/backend/http/src/frontend.rs` (which knows nothing about
+applets) and the calling side is `datalib/backend/http/src/applets.rs`.
 
 Its two-level shape is worth copying: Slack renders one document per
 *thread*, and every message in a thread carries that thread's

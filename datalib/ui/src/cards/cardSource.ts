@@ -1,36 +1,31 @@
-// Turns card source — the JS expression shown in a column's header,
-// like `gridView()` or `documentView("abcd…")` — into a runnable
-// CardRender. The expression is evaluated with the view factories
-// (ViewLibs) plus any user-defined component aliases it references in
-// scope, so card source is plain JS that calls them; it has no implicit
-// access to app internals beyond what those factories close over.
+// Turns card source — the JS expression shown in a card's header, like
+// `gridView()` or `comp.user.tetris()` — into a runnable CardRender.
 //
-// Resolving aliases means fetching their source, so compilation is
-// async. The returned `deps` is the transitive set of aliases the card
-// touched — the host re-renders when any of them changes (see
-// aliasRegistry.ts and ShadowCard.vue).
-import { resolveScopeFor } from "./aliasRegistry";
-import { referencedIdentifiers } from "./identifiers";
-import { resolveAppletScope } from "./appletRegistry";
+// The expression is evaluated with the builtin view factories in scope,
+// plus a single `comp` object holding every custom component namespace
+// the source refers to. Card source is plain JS that calls them; it has
+// no implicit access to app internals beyond what those close over.
+//
+// Resolving `comp` means importing component modules, so compilation is
+// async.
+import { viewLibs } from "./libs";
+import { resolveCompScope } from "./frontendRegistry";
 import type { CardRender } from "./types";
 
 export type CompiledCard = {
   render: CardRender;
-  deps: Set<string>;
 };
 
 export async function compileCardSource(source: string): Promise<CompiledCard> {
-  const { scope, closure } = await resolveScopeFor(source);
-  // Applet namespaces join the same injected scope as the builtins and
-  // the user aliases. An applet id is a whole namespace object rather
-  // than a factory — `slack_work.channels(...)` — which is what keeps
-  // two instances of one command from competing for a name.
-  for (const [id, ns] of await resolveAppletScope(referencedIdentifiers(source))) {
-    scope.set(id, ns);
-  }
+  const scope = new Map<string, unknown>(Object.entries(viewLibs));
+  // One name for every custom component, whoever wrote it:
+  // `comp.<namespace>.<name>`. Namespacing is what lets two applet
+  // instances both export `channels`, and what lets a user component be
+  // called `gridView` without shadowing the builtin.
+  scope.set("comp", await resolveCompScope(source));
   const names = [...scope.keys()];
   // `new Function` (not eval) so the source only sees the names we pass
-  // in — view libs and referenced aliases — plus globals.
+  // in — the view libs and `comp` — plus globals.
   const factory = new Function(...names, `"use strict"; return (${source});`);
   const render = factory(...names.map((n) => scope.get(n)));
   if (typeof render !== "function") {
@@ -38,5 +33,5 @@ export async function compileCardSource(source: string): Promise<CompiledCard> {
       `card source must evaluate to a render function, got ${typeof render}`,
     );
   }
-  return { render: render as CardRender, deps: closure };
+  return { render: render as CardRender };
 }

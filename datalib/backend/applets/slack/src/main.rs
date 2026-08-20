@@ -4,25 +4,35 @@
 //! Two modes, selected by flag:
 //!
 //! ```text
-//! datalib-view-slack --frontend-manifest --applet-id slack_work \
-//!                    --module-dir <store> --params '{"tree":"slack_work/rendered_md"}'
+//! datalib-view-slack --write-frontend-dir <root>/system/frontend/slack_work \
+//!                    --params '{"tree":"slack_work/rendered_md"}'
 //! datalib-view-slack -p 41xxx --params '{"tree":"slack_work/rendered_md"}'
 //! ```
 //!
-//! The first writes its component module into the store (named after
-//! the sha256 of its bytes) and prints a manifest; the second serves
-//! `/channels` over the rendered tree named in `params`.
+//! The first writes two files into the directory it is handed and
+//! exits; the second serves `/channels` over the rendered tree named in
+//! `params`.
 //!
-//! ## Why the manifest needs `--applet-id`
+//! ## What the write mode produces
 //!
-//! Gallery entries are full card-source snippets, not names. Two
-//! instances of this binary over two different Slack downloads must
-//! emit `slack_work.channels("slack_work")` and
-//! `slack_personal.channels("slack_personal")` — snippets that differ
-//! only by information the binary cannot know about itself. So the id
-//! is passed in, and both instances still register the *same* module
-//! hash, which is what lets the browser evaluate the component once
-//! and bind it twice.
+//! ```text
+//! <dir>/<sha256 of the component>.js
+//! <dir>/channels.json    { title, description, component_hash, component_args }
+//! ```
+//!
+//! Nothing about those files is applet-specific — the same two files
+//! written by hand into `system/frontend/user/` would define a
+//! component the same way. The directory *is* the interface.
+//!
+//! ## Why the id comes from the directory
+//!
+//! The gallery entry has to call `comp.<namespace>.channels` with this
+//! instance's own id as its argument, so the component knows which
+//! backend to talk to. The binary cannot know that id — two instances
+//! differ only in configuration — so it reads it off the last segment
+//! of the directory it was told to write. Both instances still emit
+//! byte-identical component code, which is what lets the browser
+//! evaluate it once and bind it twice.
 //!
 //! ## Printing
 //!
@@ -74,9 +84,9 @@ fn main() {
 }
 
 struct Args {
-    frontend_manifest: bool,
-    applet_id: Option<String>,
-    module_dir: Option<PathBuf>,
+    /// Where to write this instance's namespace. Its last segment is
+    /// the namespace name, which the gallery entry has to embed.
+    write_frontend_dir: Option<PathBuf>,
     port: Option<u16>,
     params: Params,
 }
@@ -93,9 +103,7 @@ struct Params {
 
 fn parse_args() -> Result<Args> {
     let mut a = Args {
-        frontend_manifest: false,
-        applet_id: None,
-        module_dir: None,
+        write_frontend_dir: None,
         port: None,
         params: Params::default(),
     };
@@ -110,9 +118,7 @@ fn parse_args() -> Result<Args> {
                 .ok_or_else(|| anyhow::anyhow!("{arg} needs a value"))
         };
         match arg {
-            "--frontend-manifest" => a.frontend_manifest = true,
-            "--applet-id" => a.applet_id = Some(next(&mut i)?),
-            "--module-dir" => a.module_dir = Some(PathBuf::from(next(&mut i)?)),
+            "--write-frontend-dir" => a.write_frontend_dir = Some(PathBuf::from(next(&mut i)?)),
             "-p" | "--port" => a.port = Some(next(&mut i)?.parse().context("port")?),
             "--params" => {
                 let json = next(&mut i)?;
@@ -133,12 +139,12 @@ fn parse_args() -> Result<Args> {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
-    if args.frontend_manifest {
-        return dump_manifest(&args);
+    if let Some(dir) = &args.write_frontend_dir {
+        return write_frontend(dir, &args.params);
     }
     match args.port {
         Some(p) => serve(p, &args.params),
-        None => anyhow::bail!("expected --frontend-manifest or -p <port>"),
+        None => anyhow::bail!("expected --write-frontend-dir <dir> or -p <port>"),
     }
 }
 
@@ -146,74 +152,61 @@ fn run() -> Result<()> {
 // Mode 1: the frontend manifest
 // ---------------------------------------------------------------------------
 
+/// A `<name>.json` in a namespace directory. The same document a
+/// person would write by hand into `system/frontend/user/`.
 #[derive(Serialize)]
-struct Manifest {
-    components: Vec<Component>,
-    gallery: Vec<Gallery>,
-}
-
-#[derive(Serialize)]
-struct Component {
-    name: String,
-    module: String,
-}
-
-#[derive(Serialize)]
-struct Gallery {
-    source: String,
+struct ComponentMeta {
     title: String,
     description: String,
+    component_hash: String,
+    component_args: Vec<String>,
 }
 
-fn dump_manifest(args: &Args) -> Result<()> {
-    let id = args.applet_id.as_deref().context(
-        "--frontend-manifest needs --applet-id: the gallery snippet has to name this instance",
-    )?;
-    let dir = args
-        .module_dir
-        .as_deref()
-        .context("--frontend-manifest needs --module-dir")?;
+/// Write this instance's namespace: the component, and the metadata
+/// naming it.
+fn write_frontend(dir: &Path, params: &Params) -> Result<()> {
+    // The namespace is the directory's own name. That is the only
+    // channel by which this binary learns which instance it is.
+    let namespace = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .context("--write-frontend-dir needs a path whose last segment is the namespace")?
+        .to_string();
 
-    // The module's own bytes name it. Every instance of this binary
-    // computes the same digest and writes the same file, so the write
-    // is idempotent across instances and the browser sees one URL.
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+
+    // The component's own bytes name it. Every instance of this binary
+    // computes the same digest, so two namespaces holding the same
+    // component resolve to one `/modules/<hash>` URL and the browser
+    // evaluates it once.
     let hash = sha256_hex(COMPONENT_JS.as_bytes());
-    std::fs::create_dir_all(dir).with_context(|| format!("create module dir {}", dir.display()))?;
-    let path = dir.join(&hash);
-    if !path.exists() {
-        // Write-then-rename so a reader never sees a half-written
-        // module under a name that promises complete content.
+    let js = dir.join(format!("{hash}.js"));
+    if !js.exists() {
+        // Write-then-rename so a reader never sees a half-written file
+        // under a name that promises complete content.
         let tmp = dir.join(format!(".{hash}.tmp"));
         std::fs::write(&tmp, COMPONENT_JS).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("rename into {}", path.display()))?;
+        std::fs::rename(&tmp, &js).with_context(|| format!("rename into {}", js.display()))?;
     }
 
-    let label = args
-        .params
+    let label = params
         .workspace
         .clone()
-        .unwrap_or_else(|| id.to_string());
-    let manifest = Manifest {
-        components: vec![Component {
-            name: COMPONENT_NAME.to_string(),
-            module: hash,
-        }],
-        gallery: vec![Gallery {
-            // The snippet, not the name. `id` selects which code (two
-            // instances may be on different builds); the argument
-            // tells that code which backend to call.
-            source: format!("{id}.{COMPONENT_NAME}({})", json_string(id)),
-            title: format!("Slack — {label}"),
-            description: format!("Browse the channels mirrored into {label}."),
-        }],
+        .unwrap_or_else(|| namespace.clone());
+    let meta = ComponentMeta {
+        title: format!("Slack — {label}"),
+        description: format!("Browse the channels mirrored into {label}."),
+        component_hash: hash,
+        // The gallery builds `comp.<namespace>.channels("<namespace>")`
+        // from this. The argument is what tells the component which
+        // backend prefix to call, and it is per-instance — which is the
+        // reason the namespace had to be discoverable at all.
+        component_args: vec![namespace],
     };
-    let out = serde_json::to_string_pretty(&manifest)?;
-    println!("{out}");
+    let meta_path = dir.join(format!("{COMPONENT_NAME}.json"));
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)
+        .with_context(|| format!("write {}", meta_path.display()))?;
     Ok(())
-}
-
-fn json_string(s: &str) -> String {
-    serde_json::to_string(s).expect("string → JSON")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -604,22 +597,68 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The gallery snippet has to name the instance, since that is the
-    /// only thing distinguishing two instances of this binary.
+    /// The namespace is read off the directory, and it lands in
+    /// `component_args` — which is how the gallery's constructed call
+    /// tells the component which backend prefix to use.
     #[test]
-    fn gallery_source_addresses_its_own_instance() {
-        assert_eq!(
-            format!(
-                "{}.{COMPONENT_NAME}({})",
-                "slack_work",
-                json_string("slack_work")
-            ),
-            r#"slack_work.channels("slack_work")"#
-        );
+    fn the_written_metadata_names_its_own_namespace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("slack_work");
+        write_frontend(&dir, &Params::default()).unwrap();
+
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("channels.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta["component_args"], serde_json::json!(["slack_work"]));
+        // …and the component it names is actually there, under a
+        // filename that is its own digest.
+        let hash = meta["component_hash"].as_str().unwrap();
+        let body = std::fs::read(dir.join(format!("{hash}.js"))).unwrap();
+        assert_eq!(sha256_hex(&body), hash);
     }
 
-    /// Both instances must report the same module hash — that is what
-    /// makes the browser evaluate the component once.
+    /// Two instances write byte-identical component code — that is what
+    /// makes the browser evaluate it once — and differ only in the
+    /// argument baked into their metadata.
+    #[test]
+    fn two_namespaces_share_the_component_and_differ_in_args() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hashes = std::collections::HashSet::new();
+        for ns in ["slack_work", "slack_personal"] {
+            let dir = tmp.path().join(ns);
+            write_frontend(&dir, &Params::default()).unwrap();
+            let meta: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("channels.json")).unwrap())
+                    .unwrap();
+            assert_eq!(meta["component_args"], serde_json::json!([ns]));
+            hashes.insert(meta["component_hash"].as_str().unwrap().to_string());
+        }
+        assert_eq!(hashes.len(), 1, "component code must be identical");
+    }
+
+    /// Re-running over an existing directory must be a no-op, since a
+    /// refresh does exactly that.
+    #[test]
+    fn writing_twice_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ns");
+        write_frontend(&dir, &Params::default()).unwrap();
+        let first: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        write_frontend(&dir, &Params::default()).unwrap();
+        let second: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first.len(), second.len());
+    }
+
+    /// The component's address is a pure function of its bytes.
     #[test]
     fn module_hash_is_a_function_of_the_bytes_only() {
         let a = sha256_hex(COMPONENT_JS.as_bytes());

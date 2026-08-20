@@ -1,45 +1,49 @@
-//! Applets: config-declared servers that contribute the app's frontend
-//! components and the endpoints behind them.
+//! Applets: config-declared servers that contribute endpoints, and
+//! that write their frontend components into the store.
 //!
 //! An applet is a sibling of a step in `config.toml` (see
 //! [`datalib_dag::config::AppletEntry`]). Where a step runs to
 //! completion during a sync and writes artifacts, an applet is a
 //! long-lived HTTP server this gateway spawns on demand. It owes the
-//! gateway three things:
+//! gateway two things:
 //!
-//! 1. `--frontend-manifest --applet-id <id> --module-dir <dir>` —
-//!    write its component modules into `<dir>` (each file named after
-//!    the sha256 of its own bytes) and print a manifest on stdout.
-//!    Runs to completion; no server involved.
-//! 2. `-p <port>` — bind `127.0.0.1:<port>` and serve its API.
-//! 3. Nothing else. There is no protocol version, no handshake, and no
-//!    registration call.
+//! ```text
+//! <command> --write-frontend-dir <root>/system/frontend/<id>   # then exit
+//! <command> -p <port>                                          # then serve
+//! ```
 //!
-//! ## Why the manifest is a flag and not an endpoint
+//! There is no protocol version, no handshake, and no registration
+//! call, so a shell script is a viable applet.
 //!
-//! Three things need the manifest before any applet is worth running:
-//! the component gallery, the registry that resolves a name in card
-//! source, and the module URLs the browser imports from. Making it a
-//! flag means opening the app costs zero applet processes — a server
-//! starts only when a card actually asks one for data.
+//! ## Applets are not a component mechanism
 //!
-//! ## Why the applet is told its own id
+//! Everything about *components* lives in [`crate::frontend`], which
+//! knows nothing about applets. An applet's only privilege is being
+//! **called** to write a directory; the files it leaves behind are
+//! scanned, hash-validated and served exactly like ones a user dropped
+//! in by hand. One mechanism, one code path, nothing for the two to
+//! disagree about.
 //!
-//! Gallery entries are *full card-source snippets*, not names, and a
-//! snippet has to address the instance it came from
-//! (`slack_work.channels("slack_work")`). Two instances of one command
-//! differ only in their config, so the id has to arrive from outside.
+//! That is why the write is a flag and not an endpoint: components have
+//! to be readable before any applet is worth running, so opening the
+//! app costs zero applet processes. A server starts only when a card
+//! actually asks one for data.
 //!
-//! ## The module store
+//! ## Why the applet is told its own directory
 //!
-//! Every applet's modules land in one flat, content-addressed
-//! directory served at `/modules/<sha256>`. Two instances of the same
-//! command write identical bytes to the same name, so the write is
-//! idempotent and needs no arbitration — and, because the browser
-//! keeps one module instance per resolved URL, the two instances share
-//! one evaluated module without the gateway doing anything. Drifted
-//! builds simply produce two hashes and stop sharing, which is correct
-//! rather than a special case.
+//! Two instances of one command differ only in their config. Passing
+//! the destination is what lets each write its own namespace — and
+//! what lets each bake its own id into the `component_args` of the
+//! gallery entry it registers, so the two appear as separate rows over
+//! one shared component.
+//!
+//! ## Refresh is destructive
+//!
+//! A refresh deletes every namespace directory except `user` and asks
+//! the applets to rewrite theirs. That is what keeps the store honest
+//! when an applet is removed from the config — its components go with
+//! it — and it is why `user` is refused as an applet id
+//! ([`datalib_dag::config::RESERVED_APPLET_ID`]).
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -50,9 +54,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::sha256_hex;
 use datalib_dag::config::AppletEntry;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// The applet's own id, as the gateway knows it. The reference applet
 /// uses it to label its data; anything building an absolute URL should
@@ -64,78 +67,14 @@ pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 
-/// How long an applet gets to print its manifest and exit. Without a
-/// bound, a command that starts serving instead of exiting would hang
-/// discovery — and with it the whole boot — forever.
-const MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Where an applet's modules are dropped and served from. A derived
-/// cache: everything in it is reproducible by re-running the manifest
-/// dump, so backups may skip it and a sweep may empty it.
-pub fn module_store_dir(data_root: &Path) -> PathBuf {
-    data_root.join("system").join("modules")
-}
-
-// ---------------------------------------------------------------------------
-// The manifest an applet prints
-// ---------------------------------------------------------------------------
-
-/// What `--frontend-manifest` prints on stdout.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct FrontendManifest {
-    /// Components this applet contributes, each naming a module in the
-    /// store. The name is a member of the applet's namespace, not a
-    /// global: `slack_work.channels`. It therefore only has to be
-    /// unique within this one manifest, which is why nothing here
-    /// arbitrates collisions between applets — they cannot occur.
-    #[serde(default)]
-    pub components: Vec<ComponentEntry>,
-    /// Ready-to-use card sources for the new-card gallery. Opaque to
-    /// the gateway and to the UI: whatever string is here is what a
-    /// picked entry writes into the card. Keeping it a snippet rather
-    /// than a name is what lets one component appear in the gallery
-    /// several times with different arguments.
-    #[serde(default)]
-    pub gallery: Vec<GalleryEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComponentEntry {
-    /// Member name inside the applet's namespace.
-    pub name: String,
-    /// sha256 of the module's bytes; the file's name in the store and
-    /// the last path segment of its `/modules/<hash>` URL.
-    pub module: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GalleryEntry {
-    /// Full card source, e.g. `slack_work.channels("slack_work")`.
-    pub source: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-}
-
-// ---------------------------------------------------------------------------
-// What the UI is told
-// ---------------------------------------------------------------------------
-
-/// One applet as `GET /api/applets` reports it.
-#[derive(Debug, Clone, Serialize)]
-pub struct AppletView {
-    pub id: String,
-    pub title: String,
-    /// component name → module hash. The UI turns each into an
-    /// `import("/modules/<hash>")` and hangs the result off `id`.
-    pub components: BTreeMap<String, String>,
-    pub gallery: Vec<GalleryEntry>,
-    /// Set when discovery failed. The applet still appears — a
-    /// configured-but-broken applet the user can see is better than a
-    /// silent omission that looks like a config that never saved.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
+/// How long an applet gets to write its namespace and exit.
+///
+/// Without a bound, a command that starts *serving* when asked to
+/// *write* — an easy mistake for a binary with both modes — would hang
+/// the refresh, and a refresh runs during boot after the listener is
+/// already bound. The symptom would be a browser tab whose requests
+/// queue forever with nothing logged.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Discovery
@@ -186,43 +125,33 @@ fn base_command(
     Ok(cmd)
 }
 
-/// Run `--frontend-manifest` for one applet and fold its modules into
-/// the store.
+/// Ask one applet to write its frontend namespace.
 ///
-/// The applet writes module files itself (it knows its own bytes); the
-/// gateway re-hashes every file the manifest points at before trusting
-/// the name. That turns "two applets disagree about a hash" from a
-/// race into an impossibility, and catches a build that forgot to
-/// re-hash after changing a module — which would otherwise serve stale
-/// code forever from an immutable URL.
-pub fn discover_one(
+/// The applet writes files; it prints nothing this function reads.
+/// Anything it does say goes to stderr and becomes the error message,
+/// the same convention a failed step follows.
+pub fn write_frontend_dir(
     entry: &AppletEntry,
     data_root: &Path,
     binary_dir: Option<&Path>,
-    store: &Path,
-) -> anyhow::Result<FrontendManifest> {
-    discover_one_with_timeout(entry, data_root, binary_dir, store, MANIFEST_TIMEOUT)
+    dir: &Path,
+) -> anyhow::Result<()> {
+    write_frontend_dir_with_timeout(entry, data_root, binary_dir, dir, WRITE_TIMEOUT)
 }
 
-/// [`discover_one`] with an explicit bound, so a test can prove the
-/// timeout exists without waiting out the production one.
-pub fn discover_one_with_timeout(
+/// [`write_frontend_dir`] with an explicit bound, so a test can prove
+/// the timeout exists without waiting out the production one.
+pub fn write_frontend_dir_with_timeout(
     entry: &AppletEntry,
     data_root: &Path,
     binary_dir: Option<&Path>,
-    store: &Path,
+    dir: &Path,
     timeout: Duration,
-) -> anyhow::Result<FrontendManifest> {
-    std::fs::create_dir_all(store)
-        .map_err(|e| anyhow::anyhow!("create module store {}: {e}", store.display()))?;
-    datalib_core::layout::mark_derived_cache(store);
+) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("create {}: {e}", dir.display()))?;
 
     let mut cmd = base_command(entry, data_root, binary_dir)?;
-    cmd.arg("--frontend-manifest")
-        .arg("--applet-id")
-        .arg(&entry.id)
-        .arg("--module-dir")
-        .arg(store);
+    cmd.arg("--write-frontend-dir").arg(dir);
     if let Some(params) = entry.params_json()? {
         cmd.arg("--params").arg(serde_json::to_string(&params)?);
     }
@@ -233,27 +162,64 @@ pub fn discover_one_with_timeout(
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         anyhow::bail!(
-            "applet {:?}: --frontend-manifest exited {}: {}",
+            "applet {:?}: --write-frontend-dir exited {}: {}",
             entry.id,
             out.status,
             tail_lines(&stderr, 20)
         );
     }
-    let manifest: FrontendManifest = serde_json::from_slice(&out.stdout).map_err(|e| {
-        anyhow::anyhow!(
-            "applet {:?}: manifest is not valid JSON: {e}; got {:?}",
-            entry.id,
-            String::from_utf8_lossy(&out.stdout)
-                .chars()
-                .take(200)
-                .collect::<String>()
-        )
-    })?;
+    Ok(())
+}
 
-    for c in &manifest.components {
-        verify_module(&entry.id, store, c)?;
+/// Rebuild every applet-owned namespace.
+///
+/// Deletes each namespace directory that is not `user`, then asks each
+/// configured applet to write its own. Deleting first is what makes the
+/// store track the config: an applet removed from `config.toml` leaves
+/// no orphaned components behind, and a component removed from an
+/// applet's output actually disappears. `user` is never touched, which
+/// is the whole reason that id is reserved.
+///
+/// Returns one message per applet that failed, so a broken applet is
+/// visible instead of just absent.
+pub fn refresh_frontend(
+    entries: &[AppletEntry],
+    data_root: &Path,
+    binary_dir: Option<&Path>,
+) -> Vec<(String, String)> {
+    let root = crate::frontend::frontend_dir(data_root);
+    if let Err(e) = std::fs::create_dir_all(&root) {
+        return vec![(String::new(), format!("create {}: {e}", root.display()))];
     }
-    Ok(manifest)
+    // Everything under here is reproducible by re-running the applets,
+    // so cache-aware backups may skip it — except `user`, which is not.
+    // Marking the parent is close enough: the tag is advisory.
+    datalib_core::layout::mark_derived_cache(&root);
+
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        for ent in rd.flatten() {
+            let path = ent.path();
+            if !path.is_dir() {
+                continue;
+            }
+            match path.file_name().and_then(|s| s.to_str()) {
+                Some(crate::frontend::USER_NAMESPACE) | None => continue,
+                Some(_) => {
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+        }
+    }
+
+    let mut errors = Vec::new();
+    for e in entries {
+        let dir = root.join(&e.id);
+        if let Err(err) = write_frontend_dir(e, data_root, binary_dir, &dir) {
+            eprintln!("applet {}: {err:#}", e.id);
+            errors.push((e.id.clone(), format!("{err:#}")));
+        }
+    }
+    errors
 }
 
 /// The PATH an applet child sees: `binary_dir`, then `~/.datalib/bin`,
@@ -301,7 +267,7 @@ fn child_path(
 /// `Command::output` waits forever, which is the wrong shape for a
 /// contract whose whole point is "print and exit": a command that
 /// starts serving instead — an easy mistake, since the same binary has
-/// a serving mode — would otherwise hang discovery, and discovery runs
+/// a serving mode — would otherwise hang the refresh, and a refresh runs
 /// during boot after the listener is already bound. The user would get
 /// a tab whose requests queue in the backlog with nothing logged.
 fn run_with_timeout(mut cmd: Command, timeout: Duration) -> anyhow::Result<std::process::Output> {
@@ -340,7 +306,7 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> anyhow::Result<std::
                     // for the gateway's lifetime.
                     let _ = child.wait();
                     anyhow::bail!(
-                        "--frontend-manifest did not exit within {:?} (a manifest dump must print \
+                        "--write-frontend-dir did not exit within {:?} (it must write its files \
                          and exit; is this the serving mode?)",
                         timeout
                     );
@@ -357,46 +323,6 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> anyhow::Result<std::
     })
 }
 
-/// A module named by a hash must actually hash to that name.
-fn verify_module(id: &str, store: &Path, c: &ComponentEntry) -> anyhow::Result<()> {
-    if !is_sha256_hex(&c.module) {
-        anyhow::bail!(
-            "applet {id:?}: component {:?} has module {:?}, which is not a sha256 hex digest",
-            c.name,
-            c.module
-        );
-    }
-    let path = store.join(&c.module);
-    let bytes = std::fs::read(&path).map_err(|e| {
-        anyhow::anyhow!(
-            "applet {id:?}: component {:?} names module {} but {} is unreadable: {e}",
-            c.name,
-            c.module,
-            path.display()
-        )
-    })?;
-    let actual = sha256_hex(&bytes);
-    if actual != c.module {
-        anyhow::bail!(
-            "applet {id:?}: component {:?} claims module {} but its bytes hash to {} — \
-             the build wrote a file under the wrong name",
-            c.name,
-            c.module,
-            actual
-        );
-    }
-    Ok(())
-}
-
-/// Guard before a hash is ever joined onto a directory, so a request
-/// path cannot traverse out of the store. Same shape check the card
-/// store applies on read.
-pub fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
 fn tail_lines(s: &str, n: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     let start = lines.len().saturating_sub(n);
@@ -407,70 +333,86 @@ fn tail_lines(s: &str, n: usize) -> String {
 // The registry
 // ---------------------------------------------------------------------------
 
-/// Everything the gateway knows about the configured applets.
+/// The applets from `config.toml`, the frontend store they write into,
+/// and the child processes behind `/v/`.
 ///
-/// Rediscovered lazily when `config.toml` changes: every read path
-/// calls [`Self::refresh_if_config_changed`], which costs one `stat`
-/// and does nothing unless the file moved. Watching the mtime rather
-/// than hooking `PUT /api/config` means a config edited by hand — or by
-/// an agent writing the file directly — is picked up too, and the UI's
-/// existing poll of `/api/applets` turns that into a live update.
+/// Rebuilt lazily when `config.toml` changes: every read path calls
+/// [`Self::refresh_if_config_changed`], which costs one `stat` and does
+/// nothing unless the file moved. Watching the mtime rather than
+/// hooking `PUT /api/config` means a config edited by hand — or by an
+/// agent writing the file directly — is picked up too, and the UI's
+/// poll of `/api/frontend` turns that into a live update.
 ///
-/// Holds no child processes itself; those live in [`Supervisor`].
+/// Note what this type does *not* do: it holds no component data of its
+/// own. Components come from [`crate::frontend::FrontendStore`], which
+/// reads the filesystem and cannot tell who wrote it.
 pub struct AppletRegistry {
     pub data_root: PathBuf,
-    /// The CLI's `--binary-dir`, kept so a rediscovery can re-resolve
+    /// The CLI's `--binary-dir`, kept so a rebuild can re-resolve
     /// against a config whose own `binary_dir` may have changed.
     binary_dir_override: Option<PathBuf>,
-    pub store: PathBuf,
     state: std::sync::RwLock<RegistryState>,
     supervisor: Supervisor,
 }
 
 struct RegistryState {
     entries: Vec<AppletEntry>,
-    views: Vec<AppletView>,
-    /// Size and mtime of `config.toml` as of the last discovery.
-    /// `None` when the file was absent, which is itself a state worth
-    /// remembering: creating the file has to count as a change.
-    stamp: Option<(u64, std::time::SystemTime)>,
+    store: crate::frontend::FrontendStore,
+    /// applet id → why its write failed, for the ones that did.
+    errors: BTreeMap<String, String>,
+    /// Size and mtime of `config.toml` as of the last rebuild. `None`
+    /// when the file was absent, which is itself worth remembering:
+    /// creating it has to count as a change.
+    config_stamp: Option<(u64, std::time::SystemTime)>,
+    /// Shape of the frontend tree as of the last scan. Separate from
+    /// the config stamp because the two trigger different work: a
+    /// config change re-runs every applet, while a file appearing in
+    /// the store only needs a rescan. Conflating them would make a
+    /// `PUT /api/lib` wipe and rewrite every applet namespace.
+    store_stamp: crate::frontend::StoreStamp,
 }
 
 /// What the config file looks like right now, for change detection.
 /// Size *and* mtime, because a same-size same-second rewrite is
 /// plausible for a small hand-edited file.
-fn config_stamp(data_root: &Path) -> Option<(u64, std::time::SystemTime)> {
+fn config_stamp_of(data_root: &Path) -> Option<(u64, std::time::SystemTime)> {
     let path = datalib_dag::config::root_config_path(data_root);
     let md = std::fs::metadata(path).ok()?;
     Some((md.len(), md.modified().ok()?))
 }
 
 impl AppletRegistry {
-    /// Discover every configured applet. A failing applet does not fail
-    /// the boot: it lands in the registry carrying its error, so the UI
-    /// can say which one is broken and why.
-    pub fn discover(
+    /// Run every applet's write, then scan the store.
+    ///
+    /// A failing applet does not fail the boot: its error is recorded
+    /// and everything else still loads. `user` is scanned either way,
+    /// since nothing regenerates it.
+    pub fn build(
         entries: Vec<AppletEntry>,
         data_root: PathBuf,
         binary_dir: Option<PathBuf>,
     ) -> Self {
-        let store = module_store_dir(&data_root);
-        let views = discover_all(&entries, &data_root, binary_dir.as_deref(), &store);
-        let stamp = config_stamp(&data_root);
+        let errors = refresh_frontend(&entries, &data_root, binary_dir.as_deref())
+            .into_iter()
+            .collect();
+        let store = crate::frontend::FrontendStore::scan(&data_root);
+        let config_stamp = config_stamp_of(&data_root);
+        let store_stamp = crate::frontend::StoreStamp::of(&data_root);
         Self {
             data_root,
             binary_dir_override: binary_dir,
-            store,
             state: std::sync::RwLock::new(RegistryState {
+                store_stamp,
                 entries,
-                views,
-                stamp,
+                store,
+                errors,
+                config_stamp,
             }),
             supervisor: Supervisor::default(),
         }
     }
 
-    /// Read `config.toml` and discover from it.
+    /// Read `config.toml` and build from it.
     ///
     /// The policy lives here rather than in `boot`: a missing config is
     /// the normal state of a fresh data root and yields no applets, and
@@ -478,30 +420,32 @@ impl AppletRegistry {
     /// refused to start over a bad applet id would take search and
     /// setup down with it, leaving no way to fix the file.
     pub fn from_data_root(data_root: &Path, binary_dir: Option<PathBuf>) -> Self {
-        let (entries, bin_dir) = load_entries(data_root, binary_dir.clone());
-        let _ = bin_dir;
-        Self::discover(entries, data_root.to_path_buf(), binary_dir)
+        let (entries, _) = load_entries(data_root, binary_dir.clone());
+        Self::build(entries, data_root.to_path_buf(), binary_dir)
     }
 
-    /// Rediscover if `config.toml` has changed since the last pass.
+    /// Rebuild if `config.toml` has changed since the last pass.
     ///
     /// Blocking: it execs one child per applet. Callers on the async
     /// side run it inside `spawn_blocking`. Cheap when nothing moved —
     /// one `stat` and a read lock.
     pub fn refresh_if_config_changed(&self) {
-        let current = config_stamp(&self.data_root);
+        let current = config_stamp_of(&self.data_root);
         {
             let Ok(state) = self.state.read() else { return };
-            if state.stamp == current {
+            if state.config_stamp == current {
+                // The config is unchanged, but the store may not be —
+                // a `PUT /api/lib`, or a file dropped in by hand.
+                drop(state);
+                self.rescan_if_store_changed();
                 return;
             }
         }
         let (entries, bin_dir) = load_entries(&self.data_root, self.binary_dir_override.clone());
-        let views = discover_all(&entries, &self.data_root, bin_dir.as_deref(), &self.store);
 
         // Stop the servers whose config changed (or vanished) so the
         // next request respawns them with the new params. Leaving them
-        // running would silently serve the old `tree` — a config edit
+        // running would silently serve the old `params` — a config edit
         // that appears to take effect in the gallery but not in the
         // data is worse than a restart.
         let changed: Vec<String> = {
@@ -523,18 +467,58 @@ impl AppletRegistry {
             self.supervisor.stop(id);
         }
 
+        let errors = refresh_frontend(&entries, &self.data_root, bin_dir.as_deref())
+            .into_iter()
+            .collect();
+        let store = crate::frontend::FrontendStore::scan(&self.data_root);
+
+        let store_stamp = crate::frontend::StoreStamp::of(&self.data_root);
         if let Ok(mut state) = self.state.write() {
             state.entries = entries;
-            state.views = views;
-            state.stamp = current;
+            state.store = store;
+            state.errors = errors;
+            state.config_stamp = current;
+            state.store_stamp = store_stamp;
         }
     }
 
-    pub fn views(&self) -> Vec<AppletView> {
-        self.state
-            .read()
-            .map(|s| s.views.clone())
-            .unwrap_or_default()
+    /// Rescan the frontend tree if anything in it moved.
+    ///
+    /// The store is the source of truth, so a component written by
+    /// `PUT /api/lib` — or a directory a person dropped in by hand —
+    /// has to show up without a config edit or a restart. This costs a
+    /// handful of `stat`s when nothing changed, and re-reads the tree
+    /// when it did; it never runs an applet.
+    pub fn rescan_if_store_changed(&self) {
+        let current = crate::frontend::StoreStamp::of(&self.data_root);
+        {
+            let Ok(state) = self.state.read() else { return };
+            if state.store_stamp == current {
+                return;
+            }
+        }
+        let store = crate::frontend::FrontendStore::scan(&self.data_root);
+        if let Ok(mut state) = self.state.write() {
+            state.store = store;
+            state.store_stamp = current;
+        }
+    }
+
+    /// The frontend as `GET /api/frontend` reports it: every namespace
+    /// the store found, plus the applets that failed to write theirs.
+    pub fn frontend_view(&self) -> FrontendView {
+        let Ok(state) = self.state.read() else {
+            return FrontendView::default();
+        };
+        FrontendView {
+            namespaces: state.store.view().clone(),
+            applet_errors: state.errors.clone(),
+        }
+    }
+
+    /// Read a component's bytes by content hash.
+    pub fn read_component(&self, hash: &str) -> Option<Vec<u8>> {
+        self.state.read().ok()?.store.read_component(hash)
     }
 
     fn entry(&self, id: &str) -> Option<AppletEntry> {
@@ -545,15 +529,6 @@ impl AppletRegistry {
             .iter()
             .find(|e| e.id == id)
             .cloned()
-    }
-
-    /// Read a module out of the store. `hash` is validated before it
-    /// touches the filesystem.
-    pub fn read_module(&self, hash: &str) -> Option<Vec<u8>> {
-        if !is_sha256_hex(hash) {
-            return None;
-        }
-        std::fs::read(self.store.join(hash)).ok()
     }
 
     /// Proxy one request to an applet, starting it if it is not already
@@ -586,6 +561,17 @@ impl AppletRegistry {
     }
 }
 
+/// The whole frontend, as one document.
+#[derive(Debug, Default, Serialize)]
+pub struct FrontendView {
+    /// namespace → its components and any files it could not use.
+    pub namespaces: BTreeMap<String, crate::frontend::NamespaceView>,
+    /// Applets whose `--write-frontend-dir` failed. Their namespace is
+    /// absent or stale; saying which one broke beats an empty gallery.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub applet_errors: BTreeMap<String, String>,
+}
+
 /// Read and validate the applet list out of a data root's config.
 fn load_entries(
     data_root: &Path,
@@ -610,40 +596,6 @@ fn load_entries(
         // not an error and must not stop the server.
         Err(_) => (Vec::new(), binary_dir),
     }
-}
-
-fn discover_all(
-    entries: &[AppletEntry],
-    data_root: &Path,
-    binary_dir: Option<&Path>,
-    store: &Path,
-) -> Vec<AppletView> {
-    entries
-        .iter()
-        .map(|e| match discover_one(e, data_root, binary_dir, store) {
-            Ok(m) => AppletView {
-                id: e.id.clone(),
-                title: e.display_title().to_string(),
-                components: m
-                    .components
-                    .iter()
-                    .map(|c| (c.name.clone(), c.module.clone()))
-                    .collect(),
-                gallery: m.gallery,
-                error: None,
-            },
-            Err(err) => {
-                eprintln!("applet {}: discovery failed: {err:#}", e.id);
-                AppletView {
-                    id: e.id.clone(),
-                    title: e.display_title().to_string(),
-                    components: BTreeMap::new(),
-                    gallery: Vec::new(),
-                    error: Some(format!("{err:#}")),
-                }
-            }
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,14 +958,6 @@ mod tests {
             .expect("some path");
         let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
         assert_eq!(parts[0], user);
-    }
-
-    #[test]
-    fn hash_shape_is_checked_before_a_path_join() {
-        assert!(is_sha256_hex(&"a".repeat(64)));
-        assert!(!is_sha256_hex(&"A".repeat(64)));
-        assert!(!is_sha256_hex("../etc/passwd"));
-        assert!(!is_sha256_hex(&"a".repeat(63)));
     }
 
     #[test]

@@ -104,19 +104,21 @@ outputs = ["system/qmd"]
 # component gallery shows, which is what makes two instances of one
 # command tellable apart.
 #
-# The entry below serves the `slack` source rendered above. Its gallery
-# entry is a whole card-source snippet that the applet built knowing
-# its own id:
-#
-#   slack_view.channels("slack_view")
+# The entry below serves the `slack` source rendered above. On a
+# refresh the gateway wipes `system/frontend/slack_view/` and asks this
+# command to rewrite it; what lands there — one `<sha256>.js` and one
+# `<name>.json` — is what defines `comp.slack_view.channels` and its
+# gallery row.
 #
 # A second Slack download (its own download + render steps) would get a
-# second applet entry over that tree. The two would report the *same*
-# component module — identical bytes, identical sha256, one file in
-# `system/modules/`, one evaluated module in the browser — and
-# different gallery snippets, each already bound to its own instance.
+# second applet entry over that tree. The two would write *identical*
+# component code — same bytes, same hash, one URL in the browser — and
+# differ only in the argument their metadata carries, so each row calls
+# the shared component against its own backend.
 #
-# See docs/dev/applets.md for the contract a command has to honor.
+# See docs/dev/applets.md for the contract a command has to honor. Note
+# that `user` is not available as an id: it names the namespace for
+# hand-written components, which a refresh never touches.
 [[applets]]
 id = "slack_view"
 title = "Slack"

@@ -43,7 +43,7 @@ async fn fetch(path: &str) -> (StatusCode, String) {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
-        applets: Arc::new(datalib_http::applets::AppletRegistry::discover(
+        applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),
             None,

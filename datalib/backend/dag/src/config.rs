@@ -338,9 +338,19 @@ fn expand_tilde(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// The one namespace an applet may not claim.
+///
+/// Frontend components all live under `system/frontend/<namespace>/`,
+/// and a refresh *deletes* every namespace directory before asking the
+/// applets to rewrite theirs. `user` holds hand- and agent-authored
+/// components, which nothing regenerates — so an applet allowed to take
+/// that id would have its directory wiped on the next refresh, taking
+/// the user's own work with it.
+pub const RESERVED_APPLET_ID: &str = "user";
+
 /// Check the applet list before anything tries to use it.
 ///
-/// Two rules, both load-bearing rather than stylistic:
+/// Three rules, all load-bearing rather than stylistic:
 ///
 ///   * **Ids are JavaScript identifiers.** An applet id is injected
 ///     into card-source scope as a bare name (`slack_work.channels()`),
@@ -351,6 +361,7 @@ fn expand_tilde(p: &Path) -> PathBuf {
 ///   * **Ids are unique.** They are the proxy prefix and the namespace;
 ///     two entries claiming one id would make `/v/<id>/` ambiguous.
 ///     TOML cannot enforce this for us since `[[applets]]` is an array.
+///   * **`user` is reserved.** See [`RESERVED_APPLET_ID`].
 pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
     let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
     for a in &cfg.applets {
@@ -360,6 +371,13 @@ pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
                  not starting with a digit) because it is injected into card source as a \
                  bare name",
                 a.id
+            );
+        }
+        if a.id == RESERVED_APPLET_ID {
+            bail!(
+                "applet id {RESERVED_APPLET_ID:?} is reserved: it names the namespace for \
+                 components the user (or an agent) authors, which the app owns and never \
+                 overwrites. Pick another id."
             );
         }
         if seen.insert(a.id.as_str(), ()).is_some() {
@@ -680,6 +698,16 @@ tree = "slack_work/rendered_md"
             let c = cfg(&format!("[[applets]]\nid = \"{good}\"\ncommand = \"x\"\n"));
             validate_applets(&c).unwrap_or_else(|e| panic!("{good:?} rejected: {e}"));
         }
+    }
+
+    /// `user` is where hand-authored components live and a refresh
+    /// wipes every applet namespace, so letting an applet claim it
+    /// would delete the user's own work.
+    #[test]
+    fn rejects_the_reserved_user_id() {
+        let c = cfg("[[applets]]\nid = \"user\"\ncommand = \"x\"\n");
+        let err = validate_applets(&c).expect_err("\"user\" must be refused");
+        assert!(err.to_string().contains("reserved"), "{err}");
     }
 
     #[test]

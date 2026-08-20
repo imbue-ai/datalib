@@ -12,6 +12,7 @@ use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use datalib_http::applets::AppletRegistry;
+use datalib_http::frontend::frontend_dir;
 use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
 use std::path::{Path, PathBuf};
@@ -34,7 +35,7 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
         // Every route is behind the per-process token; these tests
         // send it on each request (see `get_json`).
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::discover(cfg.applets, (*root).clone(), None)),
+        applets: Arc::new(AppletRegistry::build(cfg.applets, (*root).clone(), None)),
     }
 }
 
@@ -120,14 +121,12 @@ workspace = "Work"
     );
     let app = router(state_with(tmp.path(), &cfg).await);
 
-    // Discovery ran without starting a server.
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let a = &applets.as_array().unwrap()[0];
-    assert!(a.get("error").is_none(), "{a}");
-    assert_eq!(
-        a["gallery"][0]["source"],
-        r#"slack_work.channels("slack_work")"#
-    );
+    // The write ran without starting a server, and the namespace it
+    // produced carries its own id as the component's argument.
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(view["applet_errors"].is_null(), "{view}");
+    let entry = &view["namespaces"]["slack_work"]["entries"]["channels"];
+    assert_eq!(entry["component_args"], serde_json::json!(["slack_work"]));
 
     // Now the data call, which is what starts the process.
     let (status, body) = get_json(&app, "/v/slack_work/channels").await;
@@ -190,21 +189,23 @@ workspace = "Home"
     );
     let app = router(state_with(tmp.path(), &cfg).await);
 
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let list = applets.as_array().unwrap();
-    assert_eq!(
-        list[0]["components"]["channels"],
-        list[1]["components"]["channels"]
-    );
-    assert_eq!(list[0]["gallery"][0]["source"], r#"a.channels("a")"#);
-    assert_eq!(list[1]["gallery"][0]["source"], r#"b.channels("b")"#);
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    let a = &view["namespaces"]["a"]["entries"]["channels"];
+    let b = &view["namespaces"]["b"]["entries"]["channels"];
+    // Same component, different bound argument.
+    assert_eq!(a["component_hash"], b["component_hash"]);
+    assert_eq!(a["component_args"], serde_json::json!(["a"]));
+    assert_eq!(b["component_args"], serde_json::json!(["b"]));
 
-    let store: Vec<_> = std::fs::read_dir(datalib_http::applets::module_store_dir(tmp.path()))
-        .unwrap()
-        .flatten()
-        .filter(|e| e.file_name() != "CACHEDIR.TAG")
-        .collect();
-    assert_eq!(store.len(), 1, "expected one shared module");
+    // Each namespace holds its own copy on disk; they share an
+    // *address*, which is what makes them one URL in the browser.
+    let hash = a["component_hash"].as_str().unwrap();
+    for ns in ["a", "b"] {
+        assert!(frontend_dir(tmp.path())
+            .join(ns)
+            .join(format!("{hash}.js"))
+            .is_file());
+    }
 
     let (_, a_body) = get_json(&app, "/v/a/channels").await;
     let (_, b_body) = get_json(&app, "/v/b/channels").await;

@@ -1,18 +1,18 @@
-//! Integration test for the applet gateway: discovery via
-//! `--frontend-manifest`, the flat content-addressed module store, and
-//! the endpoints the UI reads (`GET /api/applets`, `GET
-//! /modules/{hash}`).
+//! Integration test for the frontend store and the applets that write
+//! into it: `--write-frontend-dir`, namespace scanning, and the
+//! endpoints the UI reads (`GET /api/frontend`, `GET /modules/{hash}`).
 //!
 //! The fixture applet is a `sh` script the test writes, which is the
-//! point: the contract is "any executable that takes the flags and
-//! prints the JSON", and a shell script is the cheapest possible proof
-//! that nothing Rust-specific leaked into it.
+//! point: an applet's whole obligation is to leave two kinds of file in
+//! a directory, and a shell script proves nothing Rust-specific leaked
+//! into that contract.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use datalib_http::applets::AppletRegistry;
+use datalib_http::frontend::{frontend_dir, FrontendStore};
 use datalib_http::sha256_hex;
 use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
@@ -20,43 +20,42 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "applet-test-token";
+const TEST_TOKEN: &str = "frontend-test-token";
 
-/// A fixture applet: writes `module_body` into `--module-dir` under
-/// `file_name`, then prints a manifest claiming `claimed_hash`. The
-/// two are separate parameters so a test can write bytes under a name
-/// that does not describe them and watch verification catch it.
-fn write_fixture(
-    dir: &Path,
-    name: &str,
-    module_body: &str,
-    file_name: &str,
-    claimed_hash: &str,
-) -> PathBuf {
-    let real = file_name;
+/// The component every fixture writes. Its bytes are the same for all
+/// of them, so two namespaces share one address.
+const COMPONENT: &str = "export default (id) => (root, ctx) => () => {};\n";
+
+fn component_hash() -> String {
+    sha256_hex(COMPONENT.as_bytes())
+}
+
+/// A fixture applet: writes `<hash>.js` plus `<name>.json` into
+/// whatever directory it is handed, taking the namespace from that
+/// directory's last segment — exactly what the reference applet does.
+fn write_fixture(dir: &Path, script_name: &str) -> PathBuf {
+    let hash = component_hash();
     let script = format!(
         r#"#!/bin/sh
 set -e
-moduledir=""
-appletid=""
+out=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --module-dir) moduledir="$2"; shift ;;
-    --applet-id) appletid="$2"; shift ;;
+    --write-frontend-dir) out="$2"; shift ;;
   esac
   shift
 done
-mkdir -p "$moduledir"
-cat > "$moduledir/{real}" <<'MODULE_EOF'
-{module_body}
-MODULE_EOF
-cat <<MANIFEST_EOF
-{{"components":[{{"name":"view","module":"{claimed_hash}"}}],
-  "gallery":[{{"source":"$appletid.view(\"$appletid\")","title":"Fixture $appletid","description":"d"}}]}}
-MANIFEST_EOF
+[ -n "$out" ] || exit 64
+ns=$(basename "$out")
+mkdir -p "$out"
+printf '%s' 'export default (id) => (root, ctx) => () => {{}};
+' > "$out/{hash}.js"
+cat > "$out/view.json" <<META
+{{"title":"Fixture $ns","description":"d","component_hash":"{hash}","component_args":["$ns"]}}
+META
 "#
     );
-    let path = dir.join(name);
+    let path = dir.join(script_name);
     std::fs::write(&path, script).unwrap();
     #[cfg(unix)]
     {
@@ -66,27 +65,18 @@ MANIFEST_EOF
     path
 }
 
-/// The heredoc above appends a trailing newline, so the bytes on disk
-/// are the body plus "\n" — hash what will actually be written.
-fn stored_bytes(body: &str) -> String {
-    format!("{body}\n")
-}
-
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
+    std::fs::write(root.join("config.toml"), config_toml).unwrap();
     let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
     let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
-    let cfg = datalib_dag::config::parse(config_toml).expect("fixture config parses");
-    datalib_dag::config::validate_applets(&cfg).expect("fixture config is valid");
     AppState {
         root: root.clone(),
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
-        // Every route is behind the per-process token; these tests
-        // send it on each request (see `get_json`).
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::discover(cfg.applets, (*root).clone(), None)),
+        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }
 }
 
@@ -111,36 +101,49 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Val
     )
 }
 
-#[tokio::test]
-async fn discovers_an_applet_and_serves_its_module() {
-    let tmp = tempfile::tempdir().unwrap();
-    let body = "export default (id) => (root, ctx) => () => {};";
-    let hash = sha256_hex(stored_bytes(body).as_bytes());
-    let script = write_fixture(tmp.path(), "fixture.sh", body, &hash, &hash);
+/// Write a component into the `user` namespace by hand — the same two
+/// files an applet writes, which is the property the whole design rests
+/// on.
+fn seed_user(root: &Path, name: &str, title: &str) -> String {
+    let dir = frontend_dir(root).join("user");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash = component_hash();
+    std::fs::write(dir.join(format!("{hash}.js")), COMPONENT).unwrap();
+    std::fs::write(
+        dir.join(format!("{name}.json")),
+        format!(
+            r#"{{"title":"{title}","description":"by hand","component_hash":"{hash}","component_args":[]}}"#
+        ),
+    )
+    .unwrap();
+    hash
+}
 
+#[tokio::test]
+async fn an_applet_writes_a_namespace_and_it_is_served() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = write_fixture(tmp.path(), "fixture.sh");
     let cfg = format!(
-        "[[applets]]\nid = \"demo\"\ntitle = \"Demo\"\ncommand = \"sh {}\"\n",
+        "[[applets]]\nid = \"demo\"\ncommand = \"sh {}\"\n",
         script.display()
     );
     let app = router(state_with(tmp.path(), &cfg).await);
 
-    let (status, applets) = get_json(&app, "/api/applets").await;
+    let (status, view) = get_json(&app, "/api/frontend").await;
     assert_eq!(status, StatusCode::OK);
-    let a = &applets.as_array().unwrap()[0];
-    assert_eq!(a["id"], "demo");
-    assert_eq!(a["title"], "Demo");
-    assert!(a.get("error").is_none(), "unexpected error: {a}");
-    assert_eq!(a["components"]["view"], hash);
-    // The gallery entry is a full snippet, and it names the instance
-    // it came from — that is what the applet needed --applet-id for.
-    assert_eq!(a["gallery"][0]["source"], r#"demo.view("demo")"#);
-    assert_eq!(a["gallery"][0]["title"], "Fixture demo");
+    let entry = &view["namespaces"]["demo"]["entries"]["view"];
+    assert_eq!(entry["title"], "Fixture demo");
+    assert_eq!(entry["component_hash"], component_hash());
+    // The argument the gallery will pass is the namespace itself — the
+    // only thing distinguishing two instances of one command.
+    assert_eq!(entry["component_args"], serde_json::json!(["demo"]));
+    assert!(view["namespaces"]["demo"]["problems"].is_null());
 
-    // And the module is served from the flat store at its hash.
+    // …and the component is served by content hash.
     let resp = app
         .clone()
         .oneshot(
-            Request::get(format!("/modules/{hash}"))
+            Request::get(format!("/modules/{}", component_hash()))
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -149,104 +152,127 @@ async fn discovers_an_applet_and_serves_its_module() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers().get("content-type").unwrap(),
-        "text/javascript; charset=utf-8"
-    );
-    // A content-addressed URL can never change meaning, so it is safe
-    // to cache forever — and that is what lets the browser share one
-    // module across instances without revalidating.
-    assert_eq!(
         resp.headers().get("cache-control").unwrap(),
         "public, max-age=31536000, immutable"
     );
     let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
         .unwrap();
-    assert_eq!(
-        String::from_utf8(bytes.to_vec()).unwrap(),
-        stored_bytes(body)
-    );
+    assert_eq!(bytes.as_ref(), COMPONENT.as_bytes());
 }
 
-/// The case the whole design exists for: two instances of one command
-/// share a module and differ only in their gallery snippets.
+/// A component written by hand and one written by an applet are read
+/// the same way. This is the whole claim of the design.
 #[tokio::test]
-async fn two_instances_share_one_module_and_own_their_snippets() {
+async fn a_hand_written_namespace_reads_like_an_applet_one() {
     let tmp = tempfile::tempdir().unwrap();
-    let body = "export default (id) => (root, ctx) => () => {};";
-    let hash = sha256_hex(stored_bytes(body).as_bytes());
-    let script = write_fixture(tmp.path(), "fixture.sh", body, &hash, &hash);
-
+    seed_user(tmp.path(), "tetris", "Tetris");
+    let script = write_fixture(tmp.path(), "fixture.sh");
     let cfg = format!(
-        r#"
-[[applets]]
-id = "a"
-command = "sh {p}"
-
-[[applets]]
-id = "b"
-command = "sh {p}"
-"#,
-        p = script.display()
-    );
-    let app = router(state_with(tmp.path(), &cfg).await);
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let list = applets.as_array().unwrap();
-    assert_eq!(list.len(), 2);
-
-    // Same code: one URL, which is what makes the browser evaluate the
-    // module once for both.
-    assert_eq!(list[0]["components"]["view"], list[1]["components"]["view"]);
-    // Distinct bindings: each snippet addresses its own instance.
-    assert_eq!(list[0]["gallery"][0]["source"], r#"a.view("a")"#);
-    assert_eq!(list[1]["gallery"][0]["source"], r#"b.view("b")"#);
-
-    // One file on disk, written twice with identical bytes.
-    let store: Vec<_> = std::fs::read_dir(datalib_http::applets::module_store_dir(tmp.path()))
-        .unwrap()
-        .flatten()
-        .filter(|e| e.file_name() != "CACHEDIR.TAG")
-        .collect();
-    assert_eq!(store.len(), 1, "expected exactly one shared module");
-    assert_eq!(store[0].file_name().to_string_lossy(), hash);
-}
-
-/// A manifest that names a hash its bytes do not produce is a build
-/// bug. Catching it at discovery beats serving stale code forever from
-/// an immutable URL, which is what would happen otherwise.
-#[tokio::test]
-async fn rejects_a_module_whose_bytes_do_not_match_its_name() {
-    let tmp = tempfile::tempdir().unwrap();
-    let body = "export default 1;";
-    // Write real bytes under a name that does not describe them: the
-    // file is present and readable, so only re-hashing catches it.
-    let lie = "0".repeat(64);
-    let script = write_fixture(tmp.path(), "liar.sh", body, &lie, &lie);
-
-    let cfg = format!(
-        "[[applets]]\nid = \"liar\"\ncommand = \"sh {}\"\n",
+        "[[applets]]\nid = \"demo\"\ncommand = \"sh {}\"\n",
         script.display()
     );
     let app = router(state_with(tmp.path(), &cfg).await);
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let a = &applets.as_array().unwrap()[0];
-    let err = a["error"].as_str().expect("expected a discovery error");
-    assert!(
-        err.contains("hash to"),
-        "expected a digest-mismatch error, got: {err}"
-    );
-    assert!(a["components"].as_object().unwrap().is_empty());
+
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    let user = &view["namespaces"]["user"]["entries"]["tetris"];
+    let demo = &view["namespaces"]["demo"]["entries"]["view"];
+    // Same shape, same fields, same content hash — one mechanism.
+    assert_eq!(user["component_hash"], demo["component_hash"]);
+    assert_eq!(user["title"], "Tetris");
+    assert_eq!(demo["title"], "Fixture demo");
 }
 
-/// A broken applet must not take the others down with it, and must
-/// stay visible — a configured applet that silently vanished would
-/// look like a config that never saved.
+/// Two instances of one command: one component address, two namespaces,
+/// each carrying its own argument.
+#[tokio::test]
+async fn two_instances_share_a_component_and_own_their_arguments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = write_fixture(tmp.path(), "fixture.sh");
+    let cfg = format!(
+        "[[applets]]\nid = \"a\"\ncommand = \"sh {p}\"\n\n[[applets]]\nid = \"b\"\ncommand = \"sh {p}\"\n",
+        p = script.display()
+    );
+    let app = router(state_with(tmp.path(), &cfg).await);
+    let (_, view) = get_json(&app, "/api/frontend").await;
+
+    let a = &view["namespaces"]["a"]["entries"]["view"];
+    let b = &view["namespaces"]["b"]["entries"]["view"];
+    assert_eq!(a["component_hash"], b["component_hash"]);
+    assert_eq!(a["component_args"], serde_json::json!(["a"]));
+    assert_eq!(b["component_args"], serde_json::json!(["b"]));
+}
+
+/// A refresh deletes applet namespaces so the store tracks the config —
+/// and must leave `user` alone, which is why that id is reserved.
+#[tokio::test]
+async fn a_refresh_rebuilds_applet_namespaces_and_spares_user() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_user(tmp.path(), "tetris", "Tetris");
+    let script = write_fixture(tmp.path(), "fixture.sh");
+    let cfg_path = tmp.path().join("config.toml");
+    let with_gone = format!(
+        "[[applets]]\nid = \"stays\"\ncommand = \"sh {p}\"\n\n[[applets]]\nid = \"goes\"\ncommand = \"sh {p}\"\n",
+        p = script.display()
+    );
+    let app = router(state_with(tmp.path(), &with_gone).await);
+
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(view["namespaces"]["goes"].is_object());
+
+    // Drop one applet from the config.
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "[[applets]]\nid = \"stays\"\ncommand = \"sh {}\"\n",
+            script.display()
+        ),
+    )
+    .unwrap();
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(
+        view["namespaces"]["goes"].is_null(),
+        "a removed applet must take its components with it"
+    );
+    assert!(view["namespaces"]["stays"].is_object());
+    // The hand-authored namespace is untouched by any of this.
+    assert_eq!(
+        view["namespaces"]["user"]["entries"]["tetris"]["title"],
+        "Tetris"
+    );
+    assert!(frontend_dir(tmp.path()).join("user").is_dir());
+}
+
+/// A filename is a claim about the bytes; an unchecked claim would
+/// serve stale code forever from a URL that promises immutability.
+#[tokio::test]
+async fn a_component_whose_name_lies_is_skipped_and_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = frontend_dir(tmp.path()).join("user");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lie = "0".repeat(64);
+    std::fs::write(dir.join(format!("{lie}.js")), "export default 1;").unwrap();
+    std::fs::write(
+        dir.join("x.json"),
+        format!(r#"{{"title":"X","component_hash":"{lie}"}}"#),
+    )
+    .unwrap();
+
+    let app = router(state_with(tmp.path(), "").await);
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    let user = &view["namespaces"]["user"];
+    assert!(user["entries"].as_object().unwrap().is_empty());
+    // Both the bad file and the metadata left dangling by it are said
+    // out loud — a component that silently fails to appear looks
+    // identical to one that was never written.
+    assert_eq!(user["problems"].as_array().unwrap().len(), 2);
+}
+
+/// A broken applet must not take the others down, and must be named.
 #[tokio::test]
 async fn a_failing_applet_is_reported_without_hiding_the_others() {
     let tmp = tempfile::tempdir().unwrap();
-    let body = "export default 2;";
-    let hash = sha256_hex(stored_bytes(body).as_bytes());
-    let good = write_fixture(tmp.path(), "good.sh", body, &hash, &hash);
+    let good = write_fixture(tmp.path(), "good.sh");
     let bad = tmp.path().join("bad.sh");
     std::fs::write(&bad, "#!/bin/sh\necho 'boom' >&2\nexit 3\n").unwrap();
     #[cfg(unix)]
@@ -254,38 +280,125 @@ async fn a_failing_applet_is_reported_without_hiding_the_others() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-
     let cfg = format!(
         "[[applets]]\nid = \"ok\"\ncommand = \"sh {}\"\n\n[[applets]]\nid = \"broken\"\ncommand = \"sh {}\"\n",
         good.display(),
         bad.display()
     );
     let app = router(state_with(tmp.path(), &cfg).await);
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let list = applets.as_array().unwrap();
+    let (_, view) = get_json(&app, "/api/frontend").await;
 
-    let ok = list.iter().find(|a| a["id"] == "ok").unwrap();
-    assert!(ok.get("error").is_none());
-    assert_eq!(ok["components"]["view"], hash);
-
-    let broken = list.iter().find(|a| a["id"] == "broken").unwrap();
-    let err = broken["error"].as_str().unwrap();
+    assert!(view["namespaces"]["ok"]["entries"]["view"].is_object());
+    let err = view["applet_errors"]["broken"].as_str().unwrap();
     // The child's stderr is what tells the user what to fix.
     assert!(err.contains("boom"), "stderr not surfaced: {err}");
 }
 
+/// A config edit shows up without a restart.
 #[tokio::test]
-async fn module_paths_cannot_escape_the_store() {
+async fn a_config_edit_is_picked_up_without_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = write_fixture(tmp.path(), "fixture.sh");
+    let cfg_path = tmp.path().join("config.toml");
+    let app = router(
+        state_with(
+            tmp.path(),
+            &format!(
+                "[[applets]]\nid = \"first\"\ncommand = \"sh {}\"\n",
+                script.display()
+            ),
+        )
+        .await,
+    );
+
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(view["namespaces"]["second"].is_null());
+
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "[[applets]]\nid = \"first\"\ncommand = \"sh {p}\"\n\n[[applets]]\nid = \"second\"\ncommand = \"sh {p}\"\n",
+            p = script.display()
+        ),
+    )
+    .unwrap();
+
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert_eq!(
+        view["namespaces"]["second"]["entries"]["view"]["component_args"],
+        serde_json::json!(["second"]),
+        "the edit was not picked up"
+    );
+}
+
+/// Refreshing sits on a polled endpoint, so an unchanged config must
+/// not re-exec every applet each tick.
+#[tokio::test]
+async fn an_unchanged_config_is_not_rebuilt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = write_fixture(tmp.path(), "inner.sh");
+    let counter = tmp.path().join("runs.log");
+    let wrapper = tmp.path().join("wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho run >> {}\nexec sh {} \"$@\"\n",
+            counter.display(),
+            inner.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let app = router(
+        state_with(
+            tmp.path(),
+            &format!(
+                "[[applets]]\nid = \"a\"\ncommand = \"sh {}\"\n",
+                wrapper.display()
+            ),
+        )
+        .await,
+    );
+    let runs = || {
+        std::fs::read_to_string(&counter)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    assert_eq!(runs(), 1, "boot should write exactly once");
+
+    for _ in 0..5 {
+        let _ = get_json(&app, "/api/frontend").await;
+    }
+    assert_eq!(
+        runs(),
+        1,
+        "polling re-ran the applets on an unchanged config"
+    );
+}
+
+#[tokio::test]
+async fn no_applets_and_no_store_is_an_empty_view() {
     let tmp = tempfile::tempdir().unwrap();
     let app = router(state_with(tmp.path(), "").await);
+    let (status, view) = get_json(&app, "/api/frontend").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["namespaces"], serde_json::json!({}));
+}
 
-    // Anything that is not a lowercase 64-hex digest is refused before
-    // the name is ever joined onto the store directory.
+#[tokio::test]
+async fn component_paths_cannot_escape_the_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = router(state_with(tmp.path(), "").await);
     for bad in [
         "not-a-hash".to_string(),
-        "A".repeat(64), // uppercase: outside the accepted alphabet
-        "a".repeat(63), // too short
-        "a".repeat(64), // well-formed but absent
+        "A".repeat(64),
+        "a".repeat(63),
+        "a".repeat(64),
     ] {
         let resp = app
             .clone()
@@ -299,258 +412,22 @@ async fn module_paths_cannot_escape_the_store() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND, "/modules/{bad}");
     }
-
-    // A path with separators does not match the single-segment route
-    // at all, so it lands on the SPA fallback. That answers 200 with
-    // index.html by design; what matters is that it is the app shell
-    // and not a file read off the disk.
-    let resp = app
-        .oneshot(
-            Request::get("/modules/../../etc/passwd")
-                .header("x-datalib-token", TEST_TOKEN)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let ctype = resp
-        .headers()
-        .get("content-type")
-        .map(|v| v.to_str().unwrap().to_string())
-        .unwrap_or_default();
-    assert!(
-        !ctype.starts_with("text/javascript"),
-        "traversal reached the module store: {ctype}"
-    );
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    let body = String::from_utf8_lossy(&bytes);
-    assert!(
-        !body.contains("root:"),
-        "served something off the filesystem"
-    );
 }
 
+/// These routes serve executable JavaScript and proxy to a
+/// config-named program — exactly the surface the token gate exists to
+/// protect. The gate is an outermost layer, so this holds by
+/// construction; the test is here so a route added outside it fails
+/// loudly.
 #[tokio::test]
-async fn no_applets_configured_is_an_empty_list() {
+async fn frontend_routes_are_behind_the_token_gate() {
     let tmp = tempfile::tempdir().unwrap();
+    seed_user(tmp.path(), "tetris", "Tetris");
     let app = router(state_with(tmp.path(), "").await);
-    let (status, applets) = get_json(&app, "/api/applets").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(applets, serde_json::json!([]));
-}
-
-/// A request for an applet that is not configured is a gateway error
-/// carrying a reason, not a hang and not a 404 the card would render
-/// as "no data".
-#[tokio::test]
-async fn proxying_an_unknown_applet_reports_why() {
-    let tmp = tempfile::tempdir().unwrap();
-    let app = router(state_with(tmp.path(), "").await);
-    let resp = app
-        .oneshot(
-            Request::get("/v/nope/channels")
-                .header("x-datalib-token", TEST_TOKEN)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
-        .await
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(
-        v["error"].as_str().unwrap().contains("nope"),
-        "error should name the applet: {v}"
-    );
-}
-
-/// A config edit must show up without a restart: the registry watches
-/// the file's stamp and rediscovers on the next read.
-#[tokio::test]
-async fn a_config_edit_is_picked_up_without_a_restart() {
-    let tmp = tempfile::tempdir().unwrap();
-    let body = "export default (id) => (root, ctx) => () => {};";
-    let hash = sha256_hex(stored_bytes(body).as_bytes());
-    let script = write_fixture(tmp.path(), "fixture.sh", body, &hash, &hash);
-    let cfg_path = tmp.path().join("config.toml");
-
-    // Boot with one applet, written to the real config path so the
-    // registry reads and stamps it.
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "[[applets]]\nid = \"first\"\ncommand = \"sh {}\"\n",
-            script.display()
-        ),
-    )
-    .unwrap();
-    let db_path = tmp.path().join("backend_index.doltlite_db");
-    let root = Arc::new(tmp.path().to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
-    let app = router(AppState {
-        root: root.clone(),
-        repo: Arc::new(dolt),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
-        progress_tx: tokio::sync::broadcast::channel(16).0,
-        // Every route is behind the per-process token; these tests
-        // send it on each request (see `get_json`).
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
-    });
-
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let ids: Vec<&str> = applets
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec!["first"]);
-
-    // Add a second applet. Nothing restarts.
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "[[applets]]\nid = \"first\"\ncommand = \"sh {p}\"\n\n[[applets]]\nid = \"second\"\ncommand = \"sh {p}\"\n",
-            p = script.display()
-        ),
-    )
-    .unwrap();
-
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let mut ids: Vec<&str> = applets
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    ids.sort();
-    assert_eq!(ids, vec!["first", "second"], "the edit was not picked up");
-    // And the new one carries its own gallery snippet, built from its id.
-    let second = applets
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["id"] == "second")
-        .unwrap();
-    assert_eq!(second["gallery"][0]["source"], r#"second.view("second")"#);
-
-    // Removing one takes it out again.
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "[[applets]]\nid = \"second\"\ncommand = \"sh {}\"\n",
-            script.display()
-        ),
-    )
-    .unwrap();
-    let (_, applets) = get_json(&app, "/api/applets").await;
-    let ids: Vec<&str> = applets
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec!["second"]);
-}
-
-/// The refresh must be free when nothing changed — it sits on a polled
-/// endpoint, so re-execing every applet each tick would be a treadmill.
-#[tokio::test]
-async fn an_unchanged_config_is_not_rediscovered() {
-    let tmp = tempfile::tempdir().unwrap();
-    let body = "export default 1;";
-    let hash = sha256_hex(stored_bytes(body).as_bytes());
-    let script = write_fixture(tmp.path(), "counter.sh", body, &hash, &hash);
-    // The fixture appends a line per invocation, so the file's length
-    // counts how many times discovery ran.
-    let counter = tmp.path().join("runs.log");
-    let wrapper = tmp.path().join("wrapper.sh");
-    std::fs::write(
-        &wrapper,
-        format!(
-            "#!/bin/sh\necho run >> {}\nexec sh {} \"$@\"\n",
-            counter.display(),
-            script.display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    std::fs::write(
-        tmp.path().join("config.toml"),
-        format!(
-            "[[applets]]\nid = \"a\"\ncommand = \"sh {}\"\n",
-            wrapper.display()
-        ),
-    )
-    .unwrap();
-
-    let db_path = tmp.path().join("backend_index.doltlite_db");
-    let root = Arc::new(tmp.path().to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
-    let app = router(AppState {
-        root: root.clone(),
-        repo: Arc::new(dolt),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
-        progress_tx: tokio::sync::broadcast::channel(16).0,
-        // Every route is behind the per-process token; these tests
-        // send it on each request (see `get_json`).
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
-    });
-    let after_boot = std::fs::read_to_string(&counter)
-        .unwrap_or_default()
-        .lines()
-        .count();
-    assert_eq!(after_boot, 1, "boot should discover exactly once");
-
-    for _ in 0..5 {
-        let _ = get_json(&app, "/api/applets").await;
-    }
-    let after_polls = std::fs::read_to_string(&counter)
-        .unwrap_or_default()
-        .lines()
-        .count();
-    assert_eq!(
-        after_polls,
-        1,
-        "polling re-ran discovery {} times on an unchanged config",
-        after_polls - 1
-    );
-}
-
-/// The applet routes are new since the token gate landed, so pin that
-/// they are behind it.
-///
-/// `/modules/<hash>` serves executable JavaScript and `/v/<id>/…`
-/// proxies to a program named by the config — exactly the surface the
-/// gate exists to protect (see `auth.rs`: a visited web page can
-/// `fetch()` loopback). The gate is an outermost layer, so this holds
-/// by construction today; the test is here so that adding a route
-/// *outside* it would fail loudly.
-#[tokio::test]
-async fn applet_routes_are_behind_the_token_gate() {
-    let tmp = tempfile::tempdir().unwrap();
-    let body = "export default (id) => (root, ctx) => () => {};";
-    let hash = sha256_hex(stored_bytes(body).as_bytes());
-    let script = write_fixture(tmp.path(), "fixture.sh", body, &hash, &hash);
-    let cfg = format!(
-        "[[applets]]\nid = \"demo\"\ncommand = \"sh {}\"\n",
-        script.display()
-    );
-    let app = router(state_with(tmp.path(), &cfg).await);
 
     for uri in [
-        "/api/applets".to_string(),
-        format!("/modules/{hash}"),
+        "/api/frontend".to_string(),
+        format!("/modules/{}", component_hash()),
         "/v/demo/anything".to_string(),
     ] {
         let resp = app
@@ -564,18 +441,57 @@ async fn applet_routes_are_behind_the_token_gate() {
             "{uri} answered without a token"
         );
     }
+}
 
-    // …and the same requests succeed with one, so the gate is what
-    // rejected them rather than the route being missing.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::get(format!("/modules/{hash}"))
-                .header("x-datalib-token", TEST_TOKEN)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+/// A `--write-frontend-dir` that never exits must not hang the boot:
+/// the refresh runs after the listener is already bound, so the symptom
+/// would be a tab whose requests queue with nothing logged.
+#[tokio::test]
+async fn a_write_that_never_exits_is_bounded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("hang.sh");
+    std::fs::write(&script, "#!/bin/sh\nsleep 600\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let cfg = datalib_dag::config::parse(&format!(
+        "[[applets]]\nid = \"hang\"\ncommand = \"sh {}\"\n",
+        script.display()
+    ))
+    .unwrap();
+
+    let started = std::time::Instant::now();
+    let err = datalib_http::applets::write_frontend_dir_with_timeout(
+        &cfg.applets[0],
+        tmp.path(),
+        None,
+        &frontend_dir(tmp.path()).join("hang"),
+        std::time::Duration::from_millis(400),
+    )
+    .expect_err("a hanging write must not succeed");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(err.to_string().contains("did not exit"), "unhelpful: {err}");
+}
+
+/// The store is just files: a directory dropped in by hand, with no
+/// applet and no config at all, is a namespace.
+#[tokio::test]
+async fn a_directory_alone_defines_a_namespace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = frontend_dir(tmp.path()).join("scratch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash = component_hash();
+    std::fs::write(dir.join(format!("{hash}.js")), COMPONENT).unwrap();
+    std::fs::write(
+        dir.join("thing.json"),
+        format!(r#"{{"title":"Thing","component_hash":"{hash}","component_args":[1,true]}}"#),
+    )
+    .unwrap();
+
+    let store = FrontendStore::scan(tmp.path());
+    let view = store.view();
+    assert!(view.contains_key("scratch"));
+    assert!(store.read_component(&hash).is_some());
 }

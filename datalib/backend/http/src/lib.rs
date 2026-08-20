@@ -45,6 +45,7 @@ pub mod applets;
 pub mod auth;
 pub mod boot;
 mod embed;
+pub mod frontend;
 pub mod worker;
 
 pub use auth::ApiToken;
@@ -235,7 +236,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/dag", get(get_dag))
-        .route("/api/lib", get(list_lib))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
         .route("/agent/cards.md", get(agent_cards_guide))
@@ -253,11 +253,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
         .route("/api/sync/jobs/{id}/log", get(sync_job_log))
         .route("/api/sync/stream", get(sync_stream))
-        .route("/api/applets", get(list_applets))
-        // Content-addressed component modules. Flat: every applet's
-        // modules share this namespace, so two instances of one
-        // command resolve to one URL and the browser evaluates the
-        // module once. See applets.rs.
+        .route("/api/frontend", get(get_frontend))
+        // Component code, addressed by content. Flat across every
+        // namespace, so byte-identical components resolve to one URL
+        // and the browser evaluates them once. See frontend.rs.
         .route("/modules/{hash}", get(get_module))
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
@@ -619,31 +618,34 @@ pub struct CreateCardResponse {
 // Applets
 // ---------------------------------------------------------------------------
 
-/// The applet registry as the UI consumes it: one entry per configured
-/// applet, each carrying its component→module map and its gallery
-/// snippets. Applets that failed discovery are included with an
-/// `error` — a configured applet that silently vanished would look
-/// like a config that never saved.
-async fn list_applets(State(s): State<AppState>) -> Json<Vec<applets::AppletView>> {
+/// The frontend as the UI consumes it: every namespace the store found
+/// — `user` plus one per applet — and the applets whose write failed.
+/// A broken applet is named rather than merely absent, since an empty
+/// gallery looks the same as a config that never saved.
+async fn get_frontend(State(s): State<AppState>) -> Json<applets::FrontendView> {
     // Pick up a config edit before answering. Cheap when nothing moved
-    // (one `stat`); blocking when it did, since rediscovery execs one
+    // (one `stat`); blocking when it did, since a rebuild execs one
     // child per applet — hence the blocking thread. The UI polls this
     // endpoint, so a saved config becomes a live gallery update.
     let registry = s.applets.clone();
     let _ = tokio::task::spawn_blocking(move || registry.refresh_if_config_changed()).await;
-    Json(s.applets.views())
+    Json(s.applets.frontend_view())
 }
 
-/// Serve one component module by content hash.
+/// Serve one component by content hash.
 ///
-/// Immutable forever: the URL names the bytes, so a changed module is
-/// a different URL. This is also what makes the browser's one-module-
-/// per-URL rule do the deduplication for us across applet instances.
+/// Immutable forever: the URL names the bytes, so changed code is a
+/// different URL. That is also what makes the browser's
+/// one-module-per-URL rule do the deduplication for us — across
+/// namespaces, not just across applet instances.
 async fn get_module(
     State(s): State<AppState>,
     Path(hash): Path<String>,
 ) -> Result<Response<Body>, StatusCode> {
-    let bytes = s.applets.read_module(&hash).ok_or(StatusCode::NOT_FOUND)?;
+    let bytes = s
+        .applets
+        .read_component(&hash)
+        .ok_or(StatusCode::NOT_FOUND)?;
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
@@ -770,7 +772,7 @@ async fn get_card(
 > {
     // Same guard the module store applies: validate the digest's
     // shape before it is ever joined onto a directory.
-    if !applets::is_sha256_hex(&hash) {
+    if !frontend::is_sha256_hex(&hash) {
         return Err(StatusCode::BAD_REQUEST);
     }
     let path = s.root.join(".datalib/cards").join(format!("{hash}.js"));
@@ -788,146 +790,56 @@ async fn get_card(
     }
 }
 
-// --- Component library (named, mutable card aliases) -----------------------
+// --- Authoring the `user` namespace ----------------------------------------
 //
-// `/api/lib` is the user-defined component library: named JS "view
-// factory" snippets that card source can invoke by bare name, exactly
-// like the builtin `gridView`/`documentView`. Unlike `/api/card` (which
-// is content-addressed and immutable), a lib entry is a MUTABLE name —
-// re-PUTting `foo` overwrites it, and any card whose source references
-// `foo()` re-renders. A coding agent is the expected author: it writes
-// (or compiles/minifies) a factory and PUTs it under a name the card
-// points at.
+// `/api/lib` is how a person or an agent puts a component into the
+// store. It is *only* a writer: everything read back — by the gallery,
+// by a card resolving `comp.user.foo` — comes from
+// `system/frontend/user/` through [`frontend::FrontendStore`], the same
+// scan that reads an applet's namespace. There is one component
+// mechanism, and this endpoint is a convenience for filling one corner
+// of it without a text editor.
 //
-// Stored one-file-per-name under `<root>/.datalib/lib/<name>.js`.
-// The name doubles as a JS identifier injected into card scope, so it
-// is constrained to a valid bare identifier (see `valid_lib_name`),
-// which also makes it path-safe (no `/`, `.`, traversal).
+// A PUT writes two files, which is the whole storage format:
+//
+//   system/frontend/user/<sha256>.js   the source, addressed by content
+//   system/frontend/user/<name>.json   { title, description,
+//                                        component_hash, component_args }
+//
+// Re-PUTting a name repoints its `.json` at new bytes. The old `.js`
+// is left in place — it is content-addressed, so it is still a correct
+// answer for anything mid-render, and a later refresh does not sweep
+// `user`.
 
 #[derive(Debug, Deserialize)]
 pub struct PutLibRequest {
     pub source: String,
-    /// Optional gallery metadata: a short human-readable description of
-    /// what the component shows. A component with a description appears
-    /// in the new-card gallery (it must therefore work with no
-    /// arguments). Omitted = keep the stored description (so a plain
-    /// source re-PUT doesn't wipe it); empty string = clear it.
+    /// Gallery description. Omitted = keep what is stored; empty
+    /// string = clear.
     #[serde(default)]
     pub description: Option<String>,
-    /// Optional human-readable display name, shown instead of the bare
-    /// component name wherever the component is listed (the new-card
-    /// gallery, the component-library view). Same keep/clear semantics
-    /// as `description`.
+    /// Human-readable display name, same keep/clear semantics.
     #[serde(default)]
     pub title: Option<String>,
+    /// Arguments the gallery entry should pass, as JSON values. This is
+    /// what lets an authored component appear in the gallery *with*
+    /// arguments — the thing the old name-only format could not express,
+    /// and the reason `documentPickerView` had to exist as a stand-in.
+    #[serde(default)]
+    pub component_args: Option<Vec<serde_json::Value>>,
 }
 
+/// What a write returns: the name, the content hash, and the metadata
+/// document as stored.
 #[derive(Debug, Serialize)]
 pub struct LibEntry {
     pub name: String,
-    /// sha256 of the source — the UI watches this to decide when a card
-    /// that depends on this alias needs re-rendering. Empty for rename
-    /// tombstones (entries that only carry `renamed_to`).
     pub hash: String,
-    /// Human-readable display name (see [`PutLibRequest::title`]).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Gallery description (see [`PutLibRequest::description`]); `None`
-    /// for components that don't advertise themselves in the gallery.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Set on rename tombstones: this name no longer holds a component;
-    /// it was renamed to the given name. The UI follows these to
-    /// repoint cards that still reference the old name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub renamed_to: Option<String>,
-}
-
-/// Sidecar shape stored at `<root>/.datalib/lib/<name>.meta.json`,
-/// holding the mutable non-source fields of a lib entry. A separate
-/// file (rather than frontmatter in the `.js`) keeps the stored source
-/// byte-identical to what evaluates, so hashes stay pure content
-/// hashes.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct LibMeta {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-}
-
-impl LibMeta {
-    fn is_empty(&self) -> bool {
-        self.title.is_none() && self.description.is_none()
-    }
-}
-
-fn lib_meta_path(dir: &std::path::Path, name: &str) -> PathBuf {
-    dir.join(format!("{name}.meta.json"))
-}
-
-fn read_lib_meta(dir: &std::path::Path, name: &str) -> LibMeta {
-    std::fs::read_to_string(lib_meta_path(dir, name))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-/// Rename tombstone stored at `<root>/.datalib/lib/<name>.renamed.json`
-/// after `<name>` is renamed away, so clients (and stale card URLs) can
-/// follow the move. Removed if the old name is ever re-created by a PUT.
-#[derive(Debug, Serialize, Deserialize)]
-struct LibRename {
-    renamed_to: String,
-}
-
-fn lib_rename_path(dir: &std::path::Path, name: &str) -> PathBuf {
-    dir.join(format!("{name}.renamed.json"))
-}
-
-/// Remove `name`'s rename tombstone if one exists ("already absent" is
-/// fine; only real I/O errors surface).
-fn clear_lib_rename(dir: &std::path::Path, name: &str) -> std::io::Result<()> {
-    match std::fs::remove_file(lib_rename_path(dir, name)) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        r => r,
-    }
-}
-
-/// Names of the builtin view factories injected into card scope
-/// (`datalib/ui/src/cards/types.ts` — keep in sync). A stored
-/// component may not take one of these names: an alias with a builtin's
-/// name would shadow the builtin when cards are compiled.
-const BUILTIN_VIEW_NAMES: &[&str] = &[
-    "gridView",
-    "documentView",
-    "documentPickerView",
-    "galleryView",
-    "agentSeedView",
-    "aliasView",
-    "dactalView",
-    "perseusView",
-    "sourceDagView",
-];
-
-/// A lib name is injected into card scope as a bare identifier and
-/// invoked as `name()`, so it must be a valid ASCII JS identifier. That
-/// also makes it path-safe: no `/`, `.`, or `..`, so it can't traverse
-/// out of the lib directory.
-fn valid_lib_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let first_ok =
-        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$');
-    first_ok
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+    pub meta: frontend::Meta,
 }
 
 /// Lowercase hex sha256. The single definition in this crate: the card
-/// store, the component manifest, and the applet module store all name
-/// content the same way.
+/// store and the frontend store name content the same way.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -939,64 +851,10 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hash
 }
 
-/// List every named component with its content hash, plus a tombstone
-/// entry (`renamed_to`, empty hash) for every renamed-away name.
-async fn list_lib(State(s): State<AppState>) -> Result<Json<Vec<LibEntry>>, StatusCode> {
-    let dir = s.root.join(".datalib/lib");
-    let mut out = Vec::new();
-    match std::fs::read_dir(&dir) {
-        Ok(rd) => {
-            for ent in rd.flatten() {
-                let path = ent.path();
-                let Some(fname) = path.file_name().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                if let Some(stem) = fname.strip_suffix(".js") {
-                    if !valid_lib_name(stem) {
-                        continue;
-                    }
-                    if let Ok(src) = std::fs::read_to_string(&path) {
-                        let meta = read_lib_meta(&dir, stem);
-                        out.push(LibEntry {
-                            name: stem.to_string(),
-                            hash: sha256_hex(src.as_bytes()),
-                            title: meta.title,
-                            description: meta.description,
-                            renamed_to: None,
-                        });
-                    }
-                } else if let Some(stem) = fname.strip_suffix(".renamed.json") {
-                    if !valid_lib_name(stem) {
-                        continue;
-                    }
-                    let Some(ren) = std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|s| serde_json::from_str::<LibRename>(&s).ok())
-                    else {
-                        continue;
-                    };
-                    out.push(LibEntry {
-                        name: stem.to_string(),
-                        hash: String::new(),
-                        title: None,
-                        description: None,
-                        renamed_to: Some(ren.renamed_to),
-                    });
-                }
-            }
-        }
-        // No lib dir yet just means an empty library.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            eprintln!("list_lib: read_dir {}: {e}", dir.display());
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(Json(out))
-}
-
-/// Serve a stored component's JS body as `text/javascript`.
+/// `GET /api/lib/{name}` — the source behind `comp.user.{name}`.
+///
+/// A convenience for an agent about to edit a component: the store
+/// addresses code by hash, and this resolves the name for you.
 async fn get_lib(
     State(s): State<AppState>,
     Path(name): Path<String>,
@@ -1008,83 +866,101 @@ async fn get_lib(
     ),
     StatusCode,
 > {
-    if !valid_lib_name(&name) {
+    if !frontend::valid_name(&name) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let path = s.root.join(".datalib/lib").join(format!("{name}.js"));
-    match std::fs::read_to_string(&path) {
-        Ok(body) => Ok((
-            StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/javascript; charset=utf-8",
-            )],
-            body,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
+    let store = frontend::FrontendStore::scan(&s.root);
+    let ns = store
+        .view()
+        .get(frontend::USER_NAMESPACE)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let hash = match ns.entries.get(&name) {
+        Some(frontend::Meta::Component { component_hash, .. }) => component_hash.clone(),
+        // A tombstone is not a component; the caller should follow it.
+        Some(frontend::Meta::Renamed { .. }) | None => return Err(StatusCode::NOT_FOUND),
+    };
+    let bytes = store.read_component(&hash).ok_or(StatusCode::NOT_FOUND)?;
+    let body = String::from_utf8(bytes).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/javascript; charset=utf-8",
+        )],
+        body,
+    ))
 }
 
-/// Create or overwrite a named component. Idempotent per content; the
-/// returned hash lets the caller confirm what landed.
+/// `PUT /api/lib/{name}` — write a component into the `user` namespace.
 async fn put_lib(
     State(s): State<AppState>,
     Path(name): Path<String>,
     Json(req): Json<PutLibRequest>,
 ) -> Result<Json<LibEntry>, StatusCode> {
-    if !valid_lib_name(&name) || BUILTIN_VIEW_NAMES.contains(&name.as_str()) {
+    if !frontend::valid_name(&name) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let dir = s.root.join(".datalib/lib");
+    let dir = frontend::frontend_dir(&s.root).join(frontend::USER_NAMESPACE);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("put_lib: mkdir {}: {e}", dir.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let path = dir.join(format!("{name}.js"));
-    if let Err(e) = std::fs::write(&path, req.source.as_bytes()) {
-        eprintln!("put_lib: write {}: {e}", path.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let hash = sha256_hex(req.source.as_bytes());
+    let js = dir.join(format!("{hash}.js"));
+    // Content-addressed: identical source is already the right file.
+    if !js.exists() {
+        if let Err(e) = std::fs::write(&js, req.source.as_bytes()) {
+            eprintln!("put_lib: write {}: {e}", js.display());
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
-    // The name holds a real component again — retire any tombstone left
-    // by an earlier rename away from it.
-    if let Err(e) = clear_lib_rename(&dir, &name) {
-        eprintln!("put_lib: clear rename {name}: {e}");
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    // Title/description semantics: absent = keep what's stored,
-    // "" = clear.
-    let stored = read_lib_meta(&dir, &name);
-    let merge = |req_field: Option<String>, stored_field: Option<String>| match req_field {
-        None => stored_field,
+
+    // Absent title/description keep whatever is stored (so a plain
+    // source re-PUT doesn't wipe them); an empty string clears.
+    let prior = read_user_meta(&dir, &name);
+    let merge = |req_field: Option<String>, stored: Option<String>| match req_field {
+        None => stored,
         Some(v) if v.trim().is_empty() => None,
         Some(v) => Some(v),
     };
-    let meta = LibMeta {
-        title: merge(req.title, stored.title),
-        description: merge(req.description, stored.description),
+    let (prior_title, prior_desc, prior_args) = match prior {
+        Some(frontend::Meta::Component {
+            title,
+            description,
+            component_args,
+            ..
+        }) => (Some(title), Some(description), Some(component_args)),
+        _ => (None, None, None),
     };
-    let meta_path = lib_meta_path(&dir, &name);
-    let write_res = if meta.is_empty() {
-        // No metadata → no sidecar; ignore "already absent".
-        match std::fs::remove_file(&meta_path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            r => r,
+    let meta = frontend::Meta::Component {
+        title: merge(req.title, prior_title).unwrap_or_default(),
+        description: merge(req.description, prior_desc).unwrap_or_default(),
+        component_hash: hash.clone(),
+        component_args: req.component_args.or(prior_args).unwrap_or_default(),
+    };
+    // Writing the metadata also retires any tombstone at this name: the
+    // name holds a real component again.
+    let meta_path = dir.join(format!("{name}.json"));
+    match serde_json::to_string_pretty(&meta) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(&meta_path, text) {
+                eprintln!("put_lib: meta {}: {e}", meta_path.display());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
         }
-    } else {
-        std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap())
-    };
-    if let Err(e) = write_res {
-        eprintln!("put_lib: meta {}: {e}", meta_path.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        Err(e) => {
+            eprintln!("put_lib: encode meta {name}: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
-    Ok(Json(LibEntry {
-        name,
-        hash: sha256_hex(req.source.as_bytes()),
-        title: meta.title,
-        description: meta.description,
-        renamed_to: None,
-    }))
+    Ok(Json(LibEntry { name, hash, meta }))
+}
+
+/// Read a `user` metadata document, if it parses.
+fn read_user_meta(dir: &std::path::Path, name: &str) -> Option<frontend::Meta> {
+    let text = std::fs::read_to_string(dir.join(format!("{name}.json"))).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1093,75 +969,72 @@ pub struct RenameLibRequest {
 }
 
 /// `POST /api/lib/{name}/rename` — move a component to a new name,
-/// leaving a tombstone behind so cards that still say `{name}()` can
-/// follow (the UI rewrites their source when it sees the tombstone in
-/// the manifest). This is how an agent gives the placeholder
-/// `card_xxxxx` alias its "formal" name once the component works.
+/// leaving `{"renamed_to": …}` behind so cards still saying
+/// `comp.user.{name}(…)` can follow. This is how an agent gives a
+/// placeholder its formal name once the component works.
 ///
-/// 404 when `name` doesn't exist, 409 when `new_name` is taken, 400
-/// when either name is invalid (including builtin view names).
+/// 404 when `name` holds no component, 409 when `new_name` is taken,
+/// 400 when either name is not an identifier.
 async fn rename_lib(
     State(s): State<AppState>,
     Path(name): Path<String>,
     Json(req): Json<RenameLibRequest>,
 ) -> Result<Json<LibEntry>, StatusCode> {
     let new_name = req.new_name;
-    if !valid_lib_name(&name)
-        || !valid_lib_name(&new_name)
-        || BUILTIN_VIEW_NAMES.contains(&new_name.as_str())
-        || new_name == name
-    {
+    if !frontend::valid_name(&name) || !frontend::valid_name(&new_name) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let dir = s.root.join(".datalib/lib");
-    let old_path = dir.join(format!("{name}.js"));
-    let new_path = dir.join(format!("{new_name}.js"));
-    if !old_path.is_file() {
-        return Err(StatusCode::NOT_FOUND);
+    if name == new_name {
+        return Err(StatusCode::BAD_REQUEST);
     }
-    if new_path.exists() {
+    let dir = frontend::frontend_dir(&s.root).join(frontend::USER_NAMESPACE);
+    let meta = match read_user_meta(&dir, &name) {
+        Some(m @ frontend::Meta::Component { .. }) => m,
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+    if read_user_meta(&dir, &new_name).is_some() {
         return Err(StatusCode::CONFLICT);
     }
-    let source = std::fs::read_to_string(&old_path).map_err(|e| {
-        eprintln!("rename_lib: read {}: {e}", old_path.display());
+
+    let target = dir.join(format!("{new_name}.json"));
+    let encoded = serde_json::to_string_pretty(&meta).map_err(|e| {
+        eprintln!("rename_lib: encode {new_name}: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let io = |what: &str, e: std::io::Error| {
-        eprintln!("rename_lib: {what}: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
-    std::fs::rename(&old_path, &new_path).map_err(|e| io("rename .js", e))?;
-    // Carry the sidecar metadata along ("already absent" is fine).
-    match std::fs::rename(lib_meta_path(&dir, &name), lib_meta_path(&dir, &new_name)) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        r => r.map_err(|e| io("rename meta", e))?,
+    if let Err(e) = std::fs::write(&target, encoded) {
+        eprintln!("rename_lib: write {}: {e}", target.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    // The new name is live again — drop any tombstone parked on it —
-    // and the old name becomes a tombstone pointing at the new one.
-    clear_lib_rename(&dir, &new_name).map_err(|e| io("clear rename", e))?;
-    let tomb = LibRename {
+    // The tombstone replaces the old document, so the old name resolves
+    // to a redirect rather than to code. `component_hash` is untouched:
+    // both names point at the same bytes until cards catch up.
+    let tomb = frontend::Meta::Renamed {
         renamed_to: new_name.clone(),
     };
-    std::fs::write(
-        lib_rename_path(&dir, &name),
-        serde_json::to_string(&tomb).unwrap(),
-    )
-    .map_err(|e| io("write tombstone", e))?;
-    let meta = read_lib_meta(&dir, &new_name);
+    let tomb_path = dir.join(format!("{name}.json"));
+    match serde_json::to_string_pretty(&tomb) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(&tomb_path, text) {
+                eprintln!("rename_lib: tombstone {}: {e}", tomb_path.display());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+        Err(e) => {
+            eprintln!("rename_lib: encode tombstone {name}: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    let hash = match &meta {
+        frontend::Meta::Component { component_hash, .. } => component_hash.clone(),
+        frontend::Meta::Renamed { .. } => String::new(),
+    };
     Ok(Json(LibEntry {
         name: new_name,
-        hash: sha256_hex(source.as_bytes()),
-        title: meta.title,
-        description: meta.description,
-        renamed_to: None,
+        hash,
+        meta,
     }))
 }
 
-/// Onboarding docs for a coding agent pointed at this instance. Served
-/// as markdown at stable, app-relative URLs so a wayfinder snippet can
-/// reference `<origin>/agent/cards.md` (cards) or
-/// `<origin>/agent/config.md` (the data-source config) without baking
-/// the content into the wayfinder itself.
 fn markdown_doc(
     body: &'static str,
 ) -> (
