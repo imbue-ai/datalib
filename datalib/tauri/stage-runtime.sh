@@ -25,7 +25,7 @@
 #                 (the ONE canonical latchkey pin; etl re-exports it)
 #   * qmd       — DEFAULT_QMD_VERSION in backend/core/src/qmd/mod.rs
 #                 (the ONE canonical qmd pin; indexer re-exports it,
-#                 //tools:qmd_version_pins_test guards the rest)
+#                 //tools:version_pins_test guards the rest)
 #
 # Build-host requirements: curl, tar, and (for qmd's native deps —
 # better-sqlite3, tree-sitter grammars) a C/C++ toolchain + python3.

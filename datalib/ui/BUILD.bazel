@@ -8,6 +8,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Materializes the npm dep graph from pnpm-lock.yaml into a virtual
 # node_modules/ tree backing the js_run_binary action below.
+# Resolved @playwright/test version, read by //tools:version_pins_test.
+exports_files(["pnpm-lock.yaml"])
+
 npm_link_all_packages(name = "node_modules")
 
 # Vite binary exposed by the link target above. The `bin` symbol comes
