@@ -28,11 +28,19 @@ documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 
 `compileCardSource` (`datalib/ui/src/cards/cardSource.ts`) wraps
 the expression in `new Function(...viewLibNames, "return (<source>)")`
-and calls it with the view factories as arguments — so the only names
-in scope are the factories in `ViewLibs`
-(`datalib/ui/src/cards/libs/index.ts`) plus JS globals. The
-expression must evaluate to a `CardRender`; anything else (or a parse
-error) renders as an error message in place of the card.
+and calls it with the view factories as arguments, plus one more name:
+`comp`. Two kinds of name are in scope, then, along with JS globals —
+the builtin factories in `ViewLibs`
+(`datalib/ui/src/cards/libs/index.ts`), and every custom component as
+`comp.<namespace>.<name>`.
+
+`comp` is namespaced because the components come from a store that is
+too: `system/frontend/user/` holds what a person or an agent wrote, and
+one directory per applet holds what that applet wrote (see
+`docs/dev/applets.md`). A component name is a member of its namespace,
+never a global — which is what lets two applet instances both offer
+`channels`, and what lets a user component be called `gridView` without
+shadowing the builtin.
 
 Because the source is plain JS, a user-authored card is just a bigger
 expression. An IIFE that composes the factories works today:
@@ -100,8 +108,14 @@ Card creation is the same gesture in both modes: every layout has an
 column, the tree layout's "+ card" button, the tiling layout's ＋ add
 areas), and it always creates a `galleryView()` card — the **new-card
 gallery** (`datalib/ui/src/cards/libs/galleryView.ts`): a list of
-every parameter-less component with a short description, builtins
-first (gridView leading), then any user-defined alias whose `/api/lib`
+every titled component with a short description, builtins first
+(gridView leading), then every component in the frontend store. A
+store entry's row expands to its qualified name called with its stored
+`component_args`, so one component appears once per namespace with its
+own arguments (`comp.slack_work.channels("slack_work")`,
+`comp.slack_personal.channels(…)`) — and a custom component may take
+arguments here, unlike a builtin, which still needs a
+parameter-less stand-in. Any user-defined component whose `/api/lib`
 entry carries a `description` (listed under its stored `title` when it
 has one), then a "new component, built by an agent" entry that mints a
 fresh alias seeded with `agentSeedView` (the in-card hand-off

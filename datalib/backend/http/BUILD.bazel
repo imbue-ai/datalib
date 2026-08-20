@@ -24,8 +24,10 @@ platform_transition_filegroup(
 rust_library(
     name = "datalib_http",
     srcs = [
+        "src/applets.rs",
         "src/auth.rs",
         "src/boot.rs",
+        "src/frontend.rs",
         "src/embed.rs",
         "src/lib.rs",
         "src/worker.rs",
@@ -72,6 +74,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
+        "@datalib_crates//:shlex",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower-http",
         "@datalib_crates//:uuid",
@@ -163,6 +166,61 @@ rust_test(
     name = "card_endpoint_test",
     srcs = ["tests/card_endpoint.rs"],
     edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# Starts real applet processes and binds loopback ports, so it cannot
+# be sandboxed — same treatment as //datalib/ui:e2e_test. Pure store
+# semantics stay hermetic as unit tests in src/frontend.rs.
+rust_test(
+    name = "applet_endpoint_test",
+    srcs = ["tests/applet_endpoint.rs"],
+    data = ["//datalib/backend/applets:datalib_applet"],
+    edition = "2021",
+    env = {
+        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
+    },
+    tags = [
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# Binds loopback ports and runs programs from the ambient environment
+# (python3 for the fixture server), so it cannot be sandboxed — same
+# treatment as //datalib/ui:e2e_test. The hermetic half of the applet
+# coverage stays in :applet_endpoint_test.
+rust_test(
+    name = "applet_proxy_test",
+    srcs = ["tests/applet_proxy.rs"],
+    data = ["//datalib/backend/applets:datalib_applet"],
+    edition = "2021",
+    env = {
+        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
+    },
+    tags = [
+        "no-sandbox",
+        "requires-network",
+    ],
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",

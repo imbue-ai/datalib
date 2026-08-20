@@ -482,35 +482,57 @@ export async function fetchCard(hash: string, signal?: AbortSignal): Promise<str
   return await r.text();
 }
 
-// --- Component library (named, mutable card aliases) -----------------------
+// --- Authoring the `user` namespace ----------------------------------------
 //
-// GET  /api/lib                 → [{name, hash, …}] manifest of every component
 // GET  /api/lib/{name}          → the component's JS source
-// PUT  /api/lib/{name}          → create/overwrite, body {source}, returns the entry
+// PUT  /api/lib/{name}          → create/overwrite, body {source, …}
 // POST /api/lib/{name}/rename   → move to {new_name}, leaving a tombstone
 //
-// `hash` is the sha256 of the source; the UI polls the manifest and
-// re-renders a card when an alias it depends on changes hash.
+// A writer only. Everything read back — the manifest, the gallery, what
+// `comp.user.x` resolves to — comes from /api/frontend, which reads the
+// filesystem and cannot tell a user-written component from an
+// applet-written one.
 
-// `title` is the component's human-readable display name (listings show
-// it instead of the bare name). `description` is the gallery blurb:
-// when present, the component appears in the new-card gallery
-// (galleryView), so it must work when invoked with no arguments.
-// `renamed_to` marks a tombstone: the name no longer holds a component
-// (hash is "") — it was renamed, and cards still referencing it should
-// follow (see aliasRegistry / ShadowCard).
+// What a write to the `user` namespace returns: the name, the content
+// hash of the source just stored, and the metadata document as written.
+// Everything read back comes from /api/frontend instead — this type is
+// only the acknowledgement of a PUT.
 export type LibEntry = {
   name: string;
   hash: string;
-  title?: string;
-  description?: string;
-  renamed_to?: string;
+  meta: Meta;
 };
 
-export async function listLib(signal?: AbortSignal): Promise<LibEntry[]> {
-  const r = await fetch("/api/lib", { signal });
-  if (!r.ok) throw new Error(`GET /api/lib → ${r.status}`);
-  return (await r.json()) as LibEntry[];
+// One `<name>.json` in a namespace directory, as the server read it.
+// Either a component or a rename tombstone — the same two shapes the
+// file on disk has.
+export type Meta =
+  | {
+      title: string;
+      description: string;
+      component_hash: string;
+      component_args: unknown[];
+    }
+  | { renamed_to: string };
+
+export type NamespaceView = {
+  entries: Record<string, Meta>;
+  // Files the namespace could not use, each with why.
+  problems?: string[];
+};
+
+export type FrontendView = {
+  // namespace → its components. `user` is the hand-authored one; the
+  // rest are named after applets, but nothing downstream cares which.
+  namespaces: Record<string, NamespaceView>;
+  // applet id → why its write failed.
+  applet_errors?: Record<string, string>;
+};
+
+export async function fetchFrontend(signal?: AbortSignal): Promise<FrontendView> {
+  const r = await fetch("/api/frontend", { signal });
+  if (!r.ok) throw new Error(`GET /api/frontend → ${r.status}`);
+  return (await r.json()) as FrontendView;
 }
 
 export async function fetchLib(name: string, signal?: AbortSignal): Promise<string> {

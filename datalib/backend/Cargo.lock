@@ -953,6 +953,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-applet"
+version = "0.27.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "datalib-core"
 version = "0.27.0"
 dependencies = [
@@ -1512,6 +1525,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shlex",
  "sqlx",
  "tempfile",
  "tokio",

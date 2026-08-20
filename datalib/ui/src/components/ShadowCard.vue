@@ -10,13 +10,11 @@ import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "v
 import { compileCardSource } from "@/cards/cardSource";
 import { devMode } from "@/devMode";
 import {
-  aliasManifest,
-  aliasRenames,
-  ensureManifest,
+  ensureFrontend,
   followRenames,
-  referencedIdentifiers,
-  replaceIdentifier,
-} from "@/cards/aliasRegistry";
+  frontendManifest,
+  referencedNamespaces,
+} from "@/cards/frontendRegistry";
 import type { CardCtx, Teardown } from "@/cards/types";
 
 const props = defineProps<{
@@ -28,13 +26,31 @@ const hostEl = useTemplateRef<HTMLDivElement>("hostEl");
 const shadow = shallowRef<ShadowRoot | null>(null);
 const teardown = shallowRef<Teardown | null>(null);
 
-// Alias names the current source mentions, and the manifest hashes they
-// had at last compile. The manifest watcher recompiles when any of
-// these names appears, changes, or disappears — so a card pointed at an
-// alias re-renders the moment an agent re-saves that alias (even if the
-// alias didn't exist yet at first compile).
+// The `comp.<ns>.<name>` references the current source makes, and the
+// component hashes they resolved to at last compile. The manifest
+// watcher recompiles when any of them appears, changes, or disappears —
+// so a card re-renders the moment an agent re-saves a component it uses
+// (even one that didn't exist yet at first compile).
 let watchedNames = new Set<string>();
 let watchedHashes = new Map<string, string | undefined>();
+
+// Every `comp.<ns>.<name>` in a piece of source, as "ns.name". The
+// namespace scan is over-approximate on purpose; pairing it with the
+// name here keeps the watch precise.
+function referencedComponents(source: string): Set<string> {
+  const out = new Set<string>();
+  const re = /\bcomp\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) out.add(`${m[1]}.${m[2]}`);
+  return out;
+}
+
+function componentHash(qualified: string): string | undefined {
+  const [ns, name] = qualified.split(".");
+  const meta = frontendManifest.value.get(ns)?.get(name);
+  if (!meta) return undefined;
+  return "renamed_to" in meta ? `renamed:${meta.renamed_to}` : meta.component_hash;
+}
 
 // Compilation is async (resolving aliases fetches their source); a
 // newer run must win. Bumped on every runCard; stale runs bail before
@@ -42,26 +58,34 @@ let watchedHashes = new Map<string, string | undefined>();
 let runToken = 0;
 
 function snapshotWatched(source: string) {
-  watchedNames = referencedIdentifiers(source);
+  watchedNames = referencedComponents(source);
   watchedHashes = new Map();
   for (const name of watchedNames) {
-    watchedHashes.set(name, aliasManifest.value.get(name));
+    watchedHashes.set(name, componentHash(name));
   }
 }
 
-// An alias this card references may have been renamed (an agent giving
-// its placeholder `card_xxxxx` a formal name — see the backend's
-// rename tombstones). Rewrite the source to the new name and repoint
-// the card through the host; returns whether a rewrite happened (the
-// setSource comes back as a source-prop change, which re-runs the
-// card). Renames are terminal in the store (the old name has no
-// source), so following them is the only way the card keeps working.
+// A component this card references may have been renamed (an agent
+// giving its placeholder a formal name — see the store's rename
+// tombstones). Rewrite the source to the new name and repoint the card
+// through the host; returns whether a rewrite happened (the setSource
+// comes back as a source-prop change, which re-runs the card). A
+// tombstone holds no component, so following it is the only way the
+// card keeps working.
+//
+// Renames stay inside one namespace, which is what makes the rewrite a
+// safe textual substitution: only the member after the namespace moves.
 function applyRenames(): boolean {
-  if (aliasRenames.value.size === 0) return false;
   let src = props.source;
-  for (const id of referencedIdentifiers(props.source)) {
-    const target = followRenames(id);
-    if (target && target !== id) src = replaceIdentifier(src, id, target);
+  for (const qualified of referencedComponents(props.source)) {
+    const [ns, name] = qualified.split(".");
+    const target = followRenames(ns, name);
+    if (target && target !== name) {
+      src = src.replace(
+        new RegExp(`\\bcomp\\s*\\.\\s*${ns}\\s*\\.\\s*${name}\\b`, "g"),
+        `comp.${ns}.${target}`,
+      );
+    }
   }
   if (src === props.source) return false;
   props.ctx.host.setSource(src);
@@ -133,23 +157,15 @@ async function runCard() {
     return;
   }
   try {
-    await ensureManifest();
+    await ensureFrontend();
     // A referenced alias may have been renamed while this card wasn't
     // mounted (an old URL, a layout toggle): rewrite before compiling
     // so the stale name never error-flashes. The setSource re-enters
     // runCard with the new source.
     if (applyRenames()) return;
-    const { render, deps } = await compileCardSource(props.source);
+    const { render } = await compileCardSource(props.source);
     // A newer run started while we were awaiting — drop this one.
     if (token !== runToken || shadow.value !== root) return;
-    // Watch the resolved transitive closure (plus whatever the source
-    // names) so a change to any dependency re-renders.
-    for (const name of deps) {
-      watchedNames.add(name);
-      if (!watchedHashes.has(name)) {
-        watchedHashes.set(name, aliasManifest.value.get(name));
-      }
-    }
     teardown.value = render(root, props.ctx);
   } catch (e) {
     if (token !== runToken || shadow.value !== root) return;
@@ -175,22 +191,25 @@ watch(
   () => void runCard(),
 );
 
-// Re-render when an alias this card depends on (or references by name)
-// changes hash, appears, or disappears in the library manifest.
-watch(aliasManifest, (m) => {
+// One watcher over the store manifest, handling both ways a card can
+// go stale.
+//
+// A rename has to be checked first: a tombstone carries no component
+// hash, so the recompile branch below would never fire for it, and the
+// card would sit pointed at a name that no longer resolves. Rewriting
+// the source repoints the card, which re-enters runCard through the
+// source-prop watcher above.
+watch(frontendManifest, () => {
+  if (applyRenames()) return;
+  // Re-render when a component this card references changes hash,
+  // appears, or disappears.
   for (const name of watchedNames) {
-    if (m.get(name) !== watchedHashes.get(name)) {
+    if (componentHash(name) !== watchedHashes.get(name)) {
       void runCard();
       return;
     }
   }
 });
-
-// Repoint the card the moment a rename tombstone for a referenced
-// alias lands in the manifest poll (the registry updates renames
-// before the manifest, so this fires before the compile-against-a-
-// vanished-name path can).
-watch(aliasRenames, () => void applyRenames());
 
 onBeforeUnmount(tearDownCard);
 </script>

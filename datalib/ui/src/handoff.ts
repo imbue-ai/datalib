@@ -23,7 +23,11 @@
 // ShadowCard's manifest watcher); the config editor polls the backend
 // and reloads the same way (SourcesView).
 import { ref, watch } from "vue";
-import { freshAliasName, noteAlias } from "@/cards/aliasRegistry";
+import {
+  freshUserName,
+  noteUserComponent,
+  USER_NAMESPACE,
+} from "@/cards/frontendRegistry";
 import { encodeColumns } from "@/router/columns";
 import { healthSnapshot, putLib } from "@/api";
 import { pushToast } from "@/toasts";
@@ -34,7 +38,7 @@ import type { HostCommands } from "@/cards/types";
 // hand-off instructions in the card body. A single expression so it
 // satisfies the alias contract. The alias' own name appears only inside
 // a string literal, which the dependency scanner deliberately tolerates
-// (see aliasRegistry.directAliasDeps' self exclusion).
+// (a component is never injected into its own scope).
 function seedSource(name: string): string {
   return `() => agentSeedView(${JSON.stringify(name)})`;
 }
@@ -211,19 +215,19 @@ export async function copyWayfinder(wayfinder: string): Promise<boolean> {
 // alias seeded with the in-card instructions and repoint the card at
 // it — the card body walks the user through the hand-off from there.
 export async function createComponentWithAgent(host: HostCommands): Promise<void> {
-  const name = freshAliasName();
+  const name = freshUserName();
   const source = seedSource(name);
-  let hash: string;
+  let entry;
   try {
-    hash = (await putLib(name, source)).hash;
+    entry = await putLib(name, source);
   } catch (e) {
     pushToast(`could not create component: ${(e as Error).message}`);
     return;
   }
-  // Register the new alias locally before repointing the card, so the
-  // first compile doesn't blank-flash waiting for the manifest poll.
-  noteAlias(name, hash, source);
-  host.setSource(`${name}()`);
+  // Register it locally before repointing the card, so the first
+  // compile doesn't blank-flash waiting for the manifest poll.
+  noteUserComponent(name, entry.meta);
+  host.setSource(`comp.${USER_NAMESPACE}.${name}()`);
 }
 
 // Shared modify-flavored entry: show the instructions, unless the
