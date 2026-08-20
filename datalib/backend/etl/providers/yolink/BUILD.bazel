@@ -2,6 +2,14 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# TNG-themed sensor history, expanded into a doltlite raw store by
+# `:yolink_make_fixture`. Consumed by `//tests/fixtures:ingested_tng`.
+filegroup(
+    name = "tng_fixture",
+    srcs = ["tests/fixtures/yolink_tng/tng.json"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_yolink",
     srcs = glob(
@@ -18,17 +26,22 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:csv",
         "@datalib_crates//:md-5",
+        "@datalib_crates//:once_cell",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
     ],
 )
 
@@ -65,5 +78,45 @@ rust_test(
     deps = [
         "@datalib_crates//:insta",
         "@datalib_crates//:tempfile",
+    ],
+)
+
+# End-to-end render over a doltlite store the test builds itself. Needs
+# the doltlite-linked sqlite (dolt_commit / dolt_log) that `rust_test`
+# picks up through the crate's own sqlx dependency, same as the other
+# providers' *_e2e tests.
+rust_test(
+    name = "yolink_render_e2e",
+    size = "small",
+    srcs = ["tests/render_e2e.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_etl_yolink",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Spec → doltlite raw store, for the fixture pipeline. YoLink's
+# downloader shells out to `curl` for signed-URL CSVs, so it has no
+# playback path; the fixture seeds the raw store directly and runs the
+# source render-only. Same role `signal_make_fixture` plays for signal.
+rust_binary(
+    name = "yolink_make_fixture",
+    srcs = ["src/bin/yolink_make_fixture.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":datalib_etl_yolink",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
     ],
 )

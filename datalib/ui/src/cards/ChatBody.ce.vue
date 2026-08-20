@@ -19,6 +19,7 @@ import { ref, computed, watch, nextTick, onMounted } from "vue";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
+import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
 
 const props = defineProps<{
   body: string;
@@ -85,11 +86,14 @@ const md = new MarkdownIt({
   highlight,
 });
 
-// Rewrite relative image srcs (`blobs/foo.png`, `./x.png`, `subdir/y.gif`)
-// to backend asset URLs. Absolute paths (`/...`) and full URLs
-// (`http://...`, `data:...`, `//cdn/...`) pass through unchanged.
-function isAbsoluteOrUrl(src: string): boolean {
-  return /^([a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(src);
+// Rewrite relative asset references (`blobs/foo.png`, `plots/x.html`) to
+// backend asset URLs. Absolute paths (`/...`) and full URLs
+// (`http://...`, `data:...`, `//cdn/...`) pass through unchanged. The
+// rules live in `./asset_urls` so they are unit-testable on their own.
+function envUuid(env: unknown): string | null {
+  return (
+    (env as { markdownUuid?: string | null } | undefined)?.markdownUuid ?? null
+  );
 }
 const defaultImageRender =
   md.renderer.rules.image ||
@@ -100,17 +104,25 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const srcIdx = token.attrIndex("src");
   if (srcIdx >= 0 && token.attrs) {
     const src = token.attrs[srcIdx][1];
-    const uuid = (env as { markdownUuid?: string | null } | undefined)
-      ?.markdownUuid;
+    const uuid = envUuid(env);
     if (uuid && src && !isAbsoluteOrUrl(src)) {
-      token.attrs[srcIdx][1] = `/api/asset/${encodeURIComponent(uuid)}/${src
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}`;
+      token.attrs[srcIdx][1] = assetUrl(uuid, src);
     }
   }
   return defaultImageRender(tokens, idx, options, env, self);
 };
+
+// Same rewrite for `<iframe src>`, which arrives as raw HTML rather than
+// as a parsed token — see `rewriteIframeSrcs`.
+for (const rule of ["html_block", "html_inline"] as const) {
+  const fallback = md.renderer.rules[rule];
+  md.renderer.rules[rule] = (tokens, idx, options, env, self) => {
+    const rendered = fallback
+      ? fallback(tokens, idx, options, env, self)
+      : tokens[idx].content;
+    return rewriteIframeSrcs(rendered, envUuid(env));
+  };
+}
 
 const html = computed(() =>
   md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),

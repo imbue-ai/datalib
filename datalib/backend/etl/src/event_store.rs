@@ -123,6 +123,29 @@ where
 /// keyed by `key_of`. `updated/` entries shadow `created/` entries for
 /// the same key.
 ///
+/// # Order is part of the contract
+///
+/// Returns a `Vec` in **first-seen order** — the order records appear in
+/// `created/`, with an `updated/` record replacing its predecessor *in
+/// place* rather than moving it to the end. For an append-only event
+/// stream that is document order, which is what a synthesizer replaying
+/// a listing endpoint has to reproduce.
+///
+/// This used to return a `HashMap`, and the ordering was silently
+/// whatever Rust's per-process hash seed produced. It cost the notion
+/// fixture its reproducibility: the synthesizer packs these records into
+/// `results` arrays, so the replayed `/children` listing came back
+/// shuffled, the downloader's BFS assigned different `blocks.page_order`
+/// values every run, and the rendered markdown emitted the same blocks
+/// in a different order each time — visible in the preview pane and in
+/// what qmd indexes. Found 2026-08-20 by diffing two fixture builds.
+///
+/// A `Vec` rather than a `BTreeMap` because sorting by key is *not* the
+/// same as document order and would silently reshape the page: in
+/// `tests/fixtures/notion_web` the block ids diverge from file order at
+/// index 34. Callers that want a lookup table should build one; callers
+/// that want a canonical order should sort explicitly.
+///
 /// # An unkeyable record is an error, not a skip
 ///
 /// Every `key_of` in this tree is built from `unwrap_or_default()` over
@@ -144,11 +167,14 @@ pub fn load_latest_by_key<F>(
     out_dir: &Path,
     entity: &str,
     mut key_of: F,
-) -> Result<HashMap<String, Value>>
+) -> Result<Vec<(String, Value)>>
 where
     F: FnMut(&Value) -> String,
 {
-    let mut latest: HashMap<String, Value> = HashMap::new();
+    // `latest` holds the records in first-seen order; `at` maps a key to
+    // its slot so an `updated/` record overwrites in place.
+    let mut latest: Vec<(String, Value)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     for stream in ["created", "updated"] {
         let path = events_path(out_dir, entity, stream);
         if !path.exists() {
@@ -179,7 +205,13 @@ where
                     lineno + 1,
                 );
             }
-            latest.insert(key, rec);
+            match at.get(&key) {
+                Some(&i) => latest[i].1 = rec,
+                None => {
+                    at.insert(key.clone(), latest.len());
+                    latest.push((key, rec));
+                }
+            }
         }
     }
     Ok(latest)
@@ -196,6 +228,14 @@ mod tests {
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string()
+    }
+
+    fn by_key<'a>(recs: &'a [(String, Value)], k: &str) -> &'a Value {
+        &recs
+            .iter()
+            .find(|(key, _)| key == k)
+            .expect("key present")
+            .1
     }
 
     #[test]
@@ -240,13 +280,94 @@ mod tests {
         assert_eq!(counts.updated, 1);
         // Walk back via load_latest_by_key — p2 must be the updated version.
         let latest = load_latest_by_key(out, "ent", key_id).unwrap();
-        assert_eq!(latest["p2"]["raw"]["title"], "b2");
-        assert_eq!(latest["p1"]["raw"]["title"], "a");
+        assert_eq!(by_key(&latest, "p2")["raw"]["title"], "b2");
+        assert_eq!(by_key(&latest, "p1")["raw"]["title"], "a");
+        // ...and the update must not have moved p2 behind p1.
+        assert_eq!(
+            latest.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            ["p1", "p2"],
+        );
         // created/ should have 2 lines (round 1 only), updated/ should have 3.
         let created = std::fs::read_to_string(events_path(out, "ent", "created")).unwrap();
         let updated = std::fs::read_to_string(events_path(out, "ent", "updated")).unwrap();
         assert_eq!(created.lines().count(), 2);
         assert_eq!(updated.lines().count(), 3);
+    }
+
+    /// `load_latest_by_key` must hand records back in the order the
+    /// stream recorded them.
+    ///
+    /// This is a regression test with a specific bug behind it. The
+    /// function returned a `HashMap`, so iteration order was whatever
+    /// Rust's per-process hash seed produced. notion's synthesizer packs
+    /// these records into `results` arrays, so its replayed `/children`
+    /// listing came back shuffled, the downloader's BFS wrote different
+    /// `blocks.page_order` values every run, and the rendered markdown
+    /// emitted the same blocks in a different order each time.
+    ///
+    /// Twenty keys, in an order that is neither sorted nor reverse
+    /// sorted: a `HashMap` reproducing this exact sequence by chance is
+    /// a 1-in-20! event. Note the bug is invisible *within* one process
+    /// — the seed is fixed per process, so a "render twice and compare"
+    /// test would have passed. Asserting the order explicitly is what
+    /// catches it.
+    #[test]
+    fn records_come_back_in_stream_order() {
+        let dir = tempdir().unwrap();
+        let out = dir.path();
+        let ids: Vec<String> = [
+            13, 7, 20, 1, 15, 4, 19, 8, 2, 11, 17, 5, 9, 14, 3, 18, 6, 12, 10, 16,
+        ]
+        .iter()
+        .map(|n| format!("blk-{n:02}"))
+        .collect();
+        let recs: Vec<Value> = ids
+            .iter()
+            .map(|id| {
+                let mut k = Map::new();
+                k.insert("id".into(), Value::String(id.clone()));
+                make_record(k, json!({"title": id}))
+            })
+            .collect();
+        append_jsonl(&events_path(out, "ent", "created"), &recs).unwrap();
+
+        let latest = load_latest_by_key(out, "ent", key_id).unwrap();
+        assert_eq!(
+            latest.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(),
+            ids,
+            "records must come back in the order the stream recorded them",
+        );
+    }
+
+    /// An `updated/` record replaces its predecessor **in place**.
+    ///
+    /// Appending it instead would reorder the document every time any
+    /// one block was edited — a subtler version of the same bug, and one
+    /// that only shows up on the second sync.
+    #[test]
+    fn an_update_does_not_move_its_record_to_the_end() {
+        let dir = tempdir().unwrap();
+        let out = dir.path();
+        let mk = |id: &str, title: &str| {
+            let mut k = Map::new();
+            k.insert("id".into(), Value::String(id.into()));
+            make_record(k, json!({"title": title}))
+        };
+        append_jsonl(
+            &events_path(out, "ent", "created"),
+            &[mk("a", "1"), mk("b", "1"), mk("c", "1")],
+        )
+        .unwrap();
+        // `a` is edited later, so it appears in the `updated/` stream.
+        append_jsonl(&events_path(out, "ent", "updated"), &[mk("a", "2")]).unwrap();
+
+        let latest = load_latest_by_key(out, "ent", key_id).unwrap();
+        assert_eq!(
+            latest.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"],
+            "an updated record must keep its original position",
+        );
+        assert_eq!(by_key(&latest, "a")["raw"]["title"], "2");
     }
 
     /// A record the key function can't identify must fail loudly. This
@@ -284,6 +405,6 @@ mod tests {
         append_jsonl(&events_path(out, "ent", "created"), &[rec]).unwrap();
 
         let latest = load_latest_by_key(out, "ent", key_id).unwrap();
-        assert_eq!(latest["p1"]["raw"]["title"], "a");
+        assert_eq!(by_key(&latest, "p1")["raw"]["title"], "a");
     }
 }

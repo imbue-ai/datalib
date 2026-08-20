@@ -80,6 +80,11 @@ EXPECTED_PROVIDERS = frozenset(
         "slack",
         "sms_backup_restore",
         "whatsapp",
+        # Render-only in the fixture: its raw store is seeded by
+        # `yolink-make-fixture` rather than downloaded, so there is no
+        # `yolink.download` step. Rows here prove the render step ran
+        # over that store — see run_sync_pipeline.py's RENDER_ONLY.
+        "yolink",
     }
 )
 
@@ -94,7 +99,9 @@ def _argv():
     [4]: whatsapp_make_fixture path
     [5]: doltlite CLI path
     [6]: --now stamp
-    [7..]: fixture paths
+    [7..]: fixture paths, forwarded verbatim as run_sync_pipeline.py's
+           args 7..22 (the last two being yolink-make-fixture + its
+           spec; see that script's docstring for why they're appended)
     """
     return sys.argv[1:]
 
