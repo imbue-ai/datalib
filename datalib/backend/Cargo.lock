@@ -1475,16 +1475,21 @@ dependencies = [
  "datalib-core",
  "datalib-etl",
  "datalib-etl-macros",
+ "datalib-index-lib",
+ "datalib-schema",
  "datalib-time",
  "insta",
  "md-5",
+ "once_cell",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

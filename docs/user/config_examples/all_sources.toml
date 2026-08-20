@@ -419,6 +419,15 @@ start = "2026-01-01"
 family_device_id = "0123456789abcdef0123456789abcdef"
 device_udid = "fedcba9876543210fedcba9876543210"
 
+# The whole store renders as ONE page — `yolink/rendered_md/index.md` —
+# carrying a per-device summary plus one interactive scatter per physical
+# quantity (temperature, humidity, liquid volume), every device a series,
+# all values converted to SI. The plots are standalone HTML under
+# `plots/`, iframed from the page; they load Plotly from cdn.plot.ly, so
+# viewing them needs network access (the data itself is inlined).
+#
+# Because there is one page, incrementality is just the raw store's HEAD:
+# if the download step appended nothing, the render is a no-op. No knobs.
 [[steps]]
 id = "yolink.render"
 command = "datalib-step render yolink"

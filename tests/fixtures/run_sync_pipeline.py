@@ -55,6 +55,19 @@ Args (positional):
     20: sms_fx        "SMS Backup & Restore" export dir (sms-*.xml /
                       calls-*.xml with inline base64 attachments).
                       File-backed; extract walks `input_path` directly.
+    21: yolink-make-fixture binary
+    22: yolink_tng    JSON spec for the TNG YoLink sensor history. We
+                      run `yolink-make-fixture` on it to seed the raw
+                      doltlite store; the source itself is render-only
+                      (see the seeding block in main()).
+
+Args 21-22 are appended rather than grouped with the other binaries
+(1-4) and fixture paths (7-20) deliberately: every index here is
+duplicated across two `tests/fixtures/BUILD.bazel` call sites (the
+`:ingested_tng` genrule and the `:ingested_tng_test` py_test), and a
+renumbering that lands in only one of them misaligns every argument
+after it. Appending can't disturb what already works. See the FIXME on
+the py_test's arg list.
 """
 
 from __future__ import annotations
@@ -78,6 +91,22 @@ FIXTURE_SIGNAL_AEP = "0" * 64
 # to this; we set the env var here so the extract path doesn't
 # need any special wiring.
 FIXTURE_WHATSAPP_KEY = "0" * 64
+
+# Sources that contribute a render step but no download step.
+#
+# `datalib-step download` treats "planned zero processors" as an error
+# (download.rs: "has no download work"), and rightly so — for every other
+# source that state means a misconfigured `sync:`. YoLink in the fixture
+# is the genuine exception: its raw store is seeded directly by
+# `yolink-make-fixture` because the real downloader shells out to `curl`
+# for signed-URL CSVs, so there is no playback tape to replay. Emitting
+# the step and letting it fail is not an option; emitting no step is the
+# honest description.
+#
+# The render step still declares `inputs = ["<name>/raw"]`, so the
+# scheduler hashes the seeded store and re-runs render when it changes —
+# it just has no producer edge to wait on.
+RENDER_ONLY = {"yolink"}
 
 
 def main() -> int:
@@ -103,6 +132,8 @@ def main() -> int:
         linkedin_fx,
         sms_fx,
     ) = (Path(p).resolve() for p in sys.argv[7:21])
+    yolink_make_fixture_bin = Path(sys.argv[21]).resolve()
+    yolink_spec = Path(sys.argv[22]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -152,6 +183,35 @@ def main() -> int:
     _run([str(whatsapp_make_fixture_bin), str(whatsapp_spec), str(whatsapp_root)])
     whatsapp_dir = whatsapp_root / "WhatsApp"
 
+    # YoLink: seed the raw doltlite store directly, then run the source
+    # render-only. Its downloader fetches signed-URL CSVs by shelling out
+    # to `curl` — neither hermetic nor routed through the HTTP transport
+    # that `datalib-step synthesize` records playback tapes for, so there
+    # is nothing to replay. The config below carries no `sync:`, which
+    # makes yolink's `plan_download` contribute zero processors; the
+    # download step is then a no-op over the store we just wrote.
+    #
+    # Skipped when the store already exists. The maker is a pure function
+    # of the spec, so regenerating would be harmless content-wise, but it
+    # would land a fresh `dolt_commit` and move HEAD — and yolink's render
+    # cursor IS the store's HEAD, so a workspace shared across pipeline
+    # runs (ingested_tng_test runs three) would re-render every time
+    # instead of exercising the skip.
+    yolink_raw = data_root / "yolink" / "raw"
+    if not (yolink_raw / "entities.doltlite_db").exists():
+        # `--now` is the same stamp the pipeline pins below, so the
+        # fixture's bookkeeping columns and its `dolt_commit` date read
+        # in fixture time rather than in build time.
+        _run(
+            [
+                str(yolink_make_fixture_bin),
+                str(yolink_spec),
+                str(yolink_raw),
+                "--now",
+                now,
+            ]
+        )
+
     # Every source: name → (source type, synth input fixture dir,
     # extract-phase input_path). The synth input is the checked-in
     # fixture tree the synthesizer reads; the extract input_path is
@@ -174,6 +234,10 @@ def main() -> int:
         "google-takeout": ("google_takeout", gtk_fx, gtk_fx),
         "linkedin": ("linkedin", linkedin_fx, linkedin_fx),
         "sms-backup-restore": ("sms_backup_restore", sms_fx, sms_fx),
+        # Render-only; its raw store was seeded above. `input_path` is
+        # unused by yolink (it reads `raw_path`), but every entry in this
+        # table declares one, so point it at the spec.
+        "yolink": ("yolink", yolink_spec, yolink_spec),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -229,14 +293,20 @@ def main() -> int:
         render_params_line = (
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
-        steps.append(
-            f"""[[steps]]
+        download_block = (
+            ""
+            if name in RENDER_ONLY
+            else f"""[[steps]]
 id = "{name}.download"
 command = "datalib-step download {type_str}"
 outputs = ["{name}/raw"]
 params = {params}
 
-[[steps]]
+"""
+        )
+        steps.append(
+            download_block
+            + f"""[[steps]]
 id = "{name}.render"
 command = "datalib-step render {type_str}"
 inputs = ["{name}/raw"]
@@ -436,6 +506,11 @@ def _source_config(
     elif type_str == "sms_backup_restore":
         # File-backed, no `sync:` field at all (deny_unknown_fields
         # would reject `sync: {}`). Extract walks `input_path`.
+        pass
+    elif type_str == "yolink":
+        # No `sync:` — that absence is what makes this source
+        # render-only. `sync: {}` would also fail validation outright:
+        # yolink requires at least one entry under `sync.devices`.
         pass
     else:
         source["sync"] = {}

@@ -607,6 +607,20 @@ expression: snapshot
       "updated_at": "2025-02-11T11:33:35+00:00"
     },
     {
+      "created_at": "2369-04-14T23:55:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "md_path": "yolink/rendered_md/index.md",
+      "provider": "yolink",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "b1ea9f61636d45908f8fae2baa01ae5f0a29cb66194bba93024a693e86b835d5",
+      "source_fingerprint": "9a92f606faf215c65fdd09660c9256cca68e9e1daec92dcf7f19463a57e9e667",
+      "source_name": "yolink",
+      "title": "YoLink sensors — yolink",
+      "updated_at": "2369-04-14T23:55:00+00:00"
+    },
+    {
       "created_at": "2024-04-10T19:00:00.000+00:00",
       "kind": "chat",
       "markdown_uuid": "eb85a327-9da4-5e46-87f2-b97cd29ccc9f",
@@ -654,7 +668,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_loaded=46 markdowns_skipped=0 rows_inserted=160"
+      "message": "datalib-step grid_index: markdowns_loaded=47 markdowns_skipped=0 rows_inserted=165"
     }
   ],
   "grid_rows": [
@@ -1159,6 +1173,31 @@ expression: snapshot
       "when_ts": "2369-05-28T15:20:00+00:00"
     },
     {
+      "account": "yolink",
+      "author": "sickbay_plasma_fridge",
+      "channel": "sickbay_plasma_fridge",
+      "conversation_name": "YoLink sensors — yolink",
+      "conversation_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "entire_chat": "/chat/ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "external_id": "temperature_humidity",
+      "git_sha": null,
+      "kind": "Sensor Device",
+      "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "yolink",
+      "qmd_path": "yolink/rendered_md/index.md",
+      "slack_link": null,
+      "source_label": "YoLink",
+      "source_url": null,
+      "text_len": 110,
+      "text_sha": "sha256:fc2e43ac43c1c7724a32326f0027afe4d6164ecf654391e49c059bef0cdab76d",
+      "uuid": "1b617cfb-791c-534f-920c-249e47baa096",
+      "when_ts": "2369-04-14T23:55:00+00:00"
+    },
+    {
       "account": null,
       "author": null,
       "channel": "Jean-Luc Picard",
@@ -1207,6 +1246,31 @@ expression: snapshot
       "text_sha": "sha256:8ca611df17f22bdf066929d8e63759fac41303b25d13cf1bf7434e906cf2d7e6",
       "uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
       "when_ts": "2370-02-11T00:00:00Z"
+    },
+    {
+      "account": "yolink",
+      "author": "stasis_unit_alpha",
+      "channel": "stasis_unit_alpha",
+      "conversation_name": "YoLink sensors — yolink",
+      "conversation_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "entire_chat": "/chat/ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "external_id": "temperature_humidity",
+      "git_sha": null,
+      "kind": "Sensor Device",
+      "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "message_index": 2,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "yolink",
+      "qmd_path": "yolink/rendered_md/index.md",
+      "slack_link": null,
+      "source_label": "YoLink",
+      "source_url": null,
+      "text_len": 106,
+      "text_sha": "sha256:937f45b86fb6315efe194f2263ef371e12cd639c6d493d8f70efaf52797b870e",
+      "uuid": "235526b4-b7c1-50e7-9103-8a7ece4d33dc",
+      "when_ts": "2369-04-14T23:55:00+00:00"
     },
     {
       "account": null,
@@ -1657,6 +1721,31 @@ expression: snapshot
       "text_sha": "sha256:34bad39ce0d91ea37adda083b5e3aec45dcd092a9745bb092a04ceb654f22cc8",
       "uuid": "46217fed-6442-5d1e-9f34-9bddf6b7f026",
       "when_ts": "2369-04-14T19:30:00+00:00"
+    },
+    {
+      "account": "yolink",
+      "author": "deck_12_water_main",
+      "channel": "deck_12_water_main",
+      "conversation_name": "YoLink sensors — yolink",
+      "conversation_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "entire_chat": "/chat/ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "external_id": "watermeter",
+      "git_sha": null,
+      "kind": "Sensor Device",
+      "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "yolink",
+      "qmd_path": "yolink/rendered_md/index.md",
+      "slack_link": null,
+      "source_label": "YoLink",
+      "source_url": null,
+      "text_len": 105,
+      "text_sha": "sha256:da71154986b9c3b9da762216ac2e80349d4614bc5c755398f5071781d7d00ae4",
+      "uuid": "4833834a-2c7b-5091-a7e3-ee5e363bc356",
+      "when_ts": "2369-04-14T23:55:00+00:00"
     },
     {
       "account": null,
@@ -4134,6 +4223,31 @@ expression: snapshot
       "when_ts": "2025-02-11T11:33:35+00:00"
     },
     {
+      "account": "yolink",
+      "author": null,
+      "channel": null,
+      "conversation_name": "YoLink sensors — yolink",
+      "conversation_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "entire_chat": "/chat/ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "external_id": null,
+      "git_sha": null,
+      "kind": "Sensor Timeseries",
+      "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "yolink",
+      "qmd_path": "yolink/rendered_md/index.md",
+      "slack_link": null,
+      "source_label": "YoLink",
+      "source_url": null,
+      "text_len": 92,
+      "text_sha": "sha256:b8d0002d0a1e385b77841a63a52839fb73a881105e20a551634bef2b63983084",
+      "uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "when_ts": "2369-04-14T23:55:00+00:00"
+    },
+    {
       "account": "local-signal_ba_TNG",
       "author": null,
       "channel": "tng-crusher-conv-uuid-0002",
@@ -4232,6 +4346,31 @@ expression: snapshot
       "text_sha": "sha256:030e41e1b64beab4afa41be7a6aea072671af13cef4d53496411b54fbd2d3d39",
       "uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
       "when_ts": "2026-01-07T09:00:00+00:00"
+    },
+    {
+      "account": "yolink",
+      "author": "ten_forward_cooler",
+      "channel": "ten_forward_cooler",
+      "conversation_name": "YoLink sensors — yolink",
+      "conversation_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "entire_chat": "/chat/ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "external_id": "temperature_humidity",
+      "git_sha": null,
+      "kind": "Sensor Device",
+      "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
+      "message_index": 3,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "yolink",
+      "qmd_path": "yolink/rendered_md/index.md",
+      "slack_link": null,
+      "source_label": "YoLink",
+      "source_url": null,
+      "text_len": 107,
+      "text_sha": "sha256:5189cd0bae04af62ed1df415f6f39b2fff47a46e529ecf097b14115835a1de25",
+      "uuid": "fd55728b-00bf-5462-b88f-01e5bc61025d",
+      "when_ts": "2369-04-14T23:55:00+00:00"
     },
     {
       "account": "T_NCC1701D",
@@ -4660,8 +4799,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 46,
+    "documents_count": 47,
     "dolt_log_count": 2,
-    "grid_rows_count": 160
+    "grid_rows_count": 165
   }
 }

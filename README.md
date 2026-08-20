@@ -20,7 +20,7 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | Contacts | `carddav` | CardDAV server (latchkey) **or** local `.vcf` files | Contacts |
 | Beeper | `beeper` | Local Beeper Texts data dir | Signal, Google Chat, etc. |
 | Perseus | `perseus` | Download | TEI editions from PerseusDL |
-| YoLink | `yolink` | Web API | Per-device sensor CSV history |
+| YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
 | Signal | `signal_backup` | Android backup file | Messages + media |
 | WhatsApp | `whatsapp_backup` | Android `crypt15` backup | Messages + media |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
