@@ -70,13 +70,20 @@ pub struct Runner {
     pub parallelism: usize,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
-    /// Subset-sync mode: when set, fringe steps (those with no
-    /// declared inputs — the download steps, whose real input is a
-    /// remote service) NOT in this set are treated as up to date
-    /// instead of being invoked. Downstream steps still follow normal
-    /// change propagation, so a shared fan-in (index/qmd) re-runs iff
-    /// one of the selected chains actually moved. `None` (the
-    /// default) invokes every fringe step.
+    /// Subset-sync mode: the fringe steps (those with no declared
+    /// inputs — the download steps, whose real input is a remote
+    /// service) the user asked to sync. This run touches those steps
+    /// and their transitive dependents; every other step is declared
+    /// up to date and does nothing at all. Inside that subgraph,
+    /// ordinary change propagation applies, so a shared fan-in
+    /// (index/qmd) still re-runs only if a selected chain moved.
+    /// `None` (the default) puts the whole graph in scope.
+    ///
+    /// "Sync yolink" means yolink. If clicking it made something
+    /// happen for slack, that's spooky action at a distance — the
+    /// button would no longer mean what it says, and its cost would
+    /// depend on unrelated state the user can't see. See
+    /// [`Runner::in_scope`].
     pub only_fringe: Option<std::collections::HashSet<String>>,
     /// Extra environment applied to every subprocess step — run-wide
     /// settings like `PATH` (with the binary dir prepended) and the
@@ -222,6 +229,7 @@ impl Runner {
         }
 
         let mut status: Vec<Option<StepStatus>> = vec![None; n];
+        let in_scope = self.in_scope(graph);
         let mut attempts_taken: Vec<u32> = vec![0; n];
         let mut errors: Vec<Option<String>> = vec![None; n];
         let mut remaining_deps: Vec<usize> = graph.deps.iter().map(|d| d.len()).collect();
@@ -235,7 +243,7 @@ impl Runner {
             // real work is spawned.
             while running < self.parallelism {
                 let Some(i) = ready.pop_front() else { break };
-                match self.decide(graph, &state, &status, &versions, i) {
+                match self.decide(graph, &state, &status, &in_scope, &versions, i) {
                     Decision::Skip => {
                         // Outputs keep their last-recorded versions.
                         let prev = state.steps.get(&graph.steps[i].id);
@@ -401,11 +409,54 @@ impl Runner {
         Ok(report)
     }
 
+    /// Which steps this run is allowed to touch. Everything, unless
+    /// subset-sync mode is on — then it's the selected download steps
+    /// plus their transitive dependents, i.e. exactly the subgraph the
+    /// user asked to sync.
+    ///
+    /// Scope is *reachability in the graph*, computed once up front. It
+    /// deliberately doesn't depend on run-time state — not on what
+    /// succeeded before, not on whether an input exists, not on what
+    /// happened to run earlier this pass. That's what makes "sync
+    /// yolink" mean the same thing every time you click it: the set of
+    /// steps that can move is a property of the config, readable
+    /// straight off the DAG, not something you have to reconstruct from
+    /// the state file to predict.
+    ///
+    /// The cost is that pending work elsewhere stays pending — a source
+    /// whose render failed yesterday isn't dragged along by an
+    /// unrelated sync. That's the intended trade: it comes back on the
+    /// next full run, and in exchange a per-source sync never does
+    /// surprising work on someone else's chain.
+    fn in_scope(&self, graph: &Graph) -> Vec<bool> {
+        let n = graph.steps.len();
+        let Some(only) = &self.only_fringe else {
+            return vec![true; n];
+        };
+        let mut scope = vec![false; n];
+        let mut queue: VecDeque<usize> = (0..n)
+            .filter(|&i| only.contains(&graph.steps[i].id))
+            .collect();
+        for &i in &queue {
+            scope[i] = true;
+        }
+        while let Some(i) = queue.pop_front() {
+            for &d in &graph.dependents[i] {
+                if !scope[d] {
+                    scope[d] = true;
+                    queue.push_back(d);
+                }
+            }
+        }
+        scope
+    }
+
     fn decide(
         &self,
         graph: &Graph,
         state: &DagState,
         status: &[Option<StepStatus>],
+        in_scope: &[bool],
         versions: &HashMap<String, String>,
         i: usize,
     ) -> Decision {
@@ -437,16 +488,15 @@ impl Runner {
             }
         }
 
-        // Subset-sync: a fringe step outside the selected set is
-        // declared up to date, even on a first run — the user asked
-        // for it not to be synced. Its outputs keep their recorded
-        // versions, so nothing downstream is spuriously dirtied.
-        if spec.inputs.is_empty() {
-            if let Some(only) = &self.only_fringe {
-                if !only.contains(&spec.id) {
-                    return Decision::Skip;
-                }
-            }
+        // Subset sync: anything out of scope is declared up to date,
+        // whatever its state. "Sync yolink" means run yolink and leave
+        // the rest of the graph alone — including work that is genuinely
+        // pending elsewhere (a source downloaded yesterday whose render
+        // failed). Skipped steps keep their recorded output versions, so
+        // nothing downstream is spuriously dirtied, and the next full
+        // run picks the pending work back up.
+        if !in_scope[i] {
+            return Decision::Skip;
         }
 
         // Fringe steps (no declared inputs) always run: their real
@@ -917,6 +967,199 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V2\nSLACK V2\n"
+        );
+    }
+
+    /// Regression: subset-sync on a *fresh* data root. The skip at the
+    /// fringe must propagate downstream. `first_run` short-circuits the
+    /// dirty check, so an unselected chain's render was invoked with no
+    /// raw store underneath it — it failed with `Data`, and the failure
+    /// poisoned the fan-in, so the chain the user *did* select never
+    /// reached the index.
+    #[tokio::test]
+    async fn subset_sync_on_a_first_run_skips_unselected_chains() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        // No prior run: nothing in this root has ever succeeded.
+        let r = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
+        let rep = r.run(&g).await.unwrap();
+
+        // The selected chain does its work.
+        assert_eq!(fx.run_count("slack.download"), 1);
+        assert_eq!(fx.run_count("slack.render"), 1);
+
+        // The unselected chain must not be touched at all — not the
+        // download (that part already worked), and not the render.
+        assert_eq!(
+            rep.step("email.download").status,
+            StepStatus::SkippedUpToDate
+        );
+        assert_eq!(
+            fx.run_count("email.render"),
+            0,
+            "render of an unselected chain must not be invoked: its raw \
+             store does not exist yet"
+        );
+        assert_eq!(rep.step("email.render").status, StepStatus::SkippedUpToDate);
+
+        // ...so nothing is poisoned, and the fan-in still indexes the
+        // chain the user asked to sync.
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(fx.run_count("index"), 1);
+        assert_eq!(
+            std::fs::read_to_string(fx.root.path().join("system/backend_index/index.txt")).unwrap(),
+            "SLACK V1\n"
+        );
+    }
+
+    /// Out of scope means out of scope, even for a step whose input is
+    /// external — staged by the user, no producer in the graph. "Sync
+    /// slack" doesn't reach `takeout.render`, so it doesn't run, and
+    /// the fan-in still indexes what slack produced.
+    #[tokio::test]
+    async fn subset_sync_skips_an_out_of_scope_step_with_an_external_input() {
+        let fx = Fixture::new();
+        let runs = Arc::new(AtomicU32::new(0));
+        let staged = fx.root.path().join("takeout/staged_zip");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("data.txt"), "takeout v1").unwrap();
+
+        let takeout = {
+            let runs = runs.clone();
+            StepSpec::new(
+                "takeout.render",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        let text =
+                            std::fs::read_to_string(ctx.path_str("takeout/staged_zip/data.txt"))
+                                .map_err(|e| StepError::new(FailureKind::Data, e))?;
+                        let dir = ctx.path_str("takeout/rendered_md");
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.md"), text.to_uppercase()).unwrap();
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("takeout/staged_zip")
+            .output("takeout/rendered_md")
+        };
+
+        let g = Graph::build(vec![
+            download(
+                "slack",
+                fx.slack_content.clone(),
+                fx.runs["slack.download"].clone(),
+            ),
+            render("slack", fx.runs["slack.render"].clone()),
+            download(
+                "email",
+                fx.email_content.clone(),
+                fx.runs["email.download"].clone(),
+            ),
+            render("email", fx.runs["email.render"].clone()),
+            takeout,
+            index(fx.runs["index"].clone(), fx.index_changed_inputs.clone()),
+        ])
+        .unwrap();
+        let ti = g
+            .steps
+            .iter()
+            .position(|s| s.id.as_str() == "takeout.render")
+            .unwrap();
+        assert!(
+            !g.external_inputs[ti].is_empty(),
+            "fixture must exercise the external-input path"
+        );
+
+        let r = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
+        let rep = r.run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            0,
+            "a step no selected download feeds is out of scope"
+        );
+        assert_eq!(
+            rep.step("takeout.render").status,
+            StepStatus::SkippedUpToDate
+        );
+        assert_eq!(fx.run_count("email.render"), 0);
+        assert_eq!(
+            std::fs::read_to_string(fx.root.path().join("system/backend_index/index.txt")).unwrap(),
+            "SLACK V1\n"
+        );
+    }
+
+    /// "Sync yolink" means yolink, not "yolink plus whatever else is
+    /// pending". Yesterday's email download landed but its render
+    /// failed; today's subset sync of a different source leaves that
+    /// alone rather than quietly dragging it along. The next full run
+    /// picks it up.
+    #[tokio::test]
+    async fn subset_sync_leaves_pending_work_in_other_chains_alone() {
+        let fx = Fixture::new();
+        let failing_email_render = StepSpec::new(
+            "email.render",
+            StepRun::in_process(|_ctx| async {
+                Err(StepError::new(
+                    FailureKind::Data,
+                    anyhow::anyhow!("boom: unparseable row"),
+                ))
+            }),
+        )
+        .input("email/raw")
+        .output("email/rendered_md");
+        let broken = Graph::build(vec![
+            download(
+                "slack",
+                fx.slack_content.clone(),
+                fx.runs["slack.download"].clone(),
+            ),
+            render("slack", fx.runs["slack.render"].clone()),
+            download(
+                "email",
+                fx.email_content.clone(),
+                fx.runs["email.download"].clone(),
+            ),
+            failing_email_render,
+            index(fx.runs["index"].clone(), fx.index_changed_inputs.clone()),
+        ])
+        .unwrap();
+
+        // Run 1 (full): email downloads fine, its render fails. Now
+        // `email/raw` is real but has never been rendered.
+        let rep1 = runner(fx.root.path()).run(&broken).await.unwrap();
+        assert!(!rep1.all_ok());
+        assert!(matches!(
+            rep1.step("email.render").status,
+            StepStatus::Failed { .. }
+        ));
+
+        // Run 2: sync slack only. The email chain is untouched — no
+        // poll, no retry — and slack still reaches the index.
+        let g = fx.graph();
+        let r2 = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
+        let rep2 = r2.run(&g).await.unwrap();
+        assert!(rep2.all_ok(), "{rep2:#?}");
+        assert_eq!(fx.run_count("email.download"), 1, "no poll");
+        assert_eq!(fx.run_count("email.render"), 0, "no retry");
+        assert_eq!(
+            rep2.step("email.render").status,
+            StepStatus::SkippedUpToDate
+        );
+        // The index was blocked in run 1 (email.render failed), so this
+        // is its first run: slack reaches it, email contributes nothing.
+        assert_eq!(fx.run_count("index"), 1);
+
+        // Run 3 (full): the pending render is picked back up.
+        let rep3 = runner(fx.root.path()).run(&g).await.unwrap();
+        assert!(rep3.all_ok(), "{rep3:#?}");
+        assert_eq!(fx.run_count("email.render"), 1, "full run recovers it");
+        assert_eq!(
+            std::fs::read_to_string(fx.root.path().join("system/backend_index/index.txt")).unwrap(),
+            "EMAIL V1\nSLACK V1\n"
         );
     }
 

@@ -10,10 +10,16 @@
 //! * `--binary-dir` is prepended to every step's `PATH`, so commands
 //!   can name step binaries bare (`datalib-step …`). Defaults to the
 //!   config `binary_dir`, then this executable's own directory.
-//! * `--sync` selects a subset of the download steps (the steps with
-//!   no inputs) to actually sync; the rest are treated as up to date,
-//!   so only the selected chains — plus any fan-in steps they dirty —
-//!   do work. This is the per-source "Sync now" mode.
+//! * `--sync` runs a subgraph and only that subgraph: the named
+//!   download steps (the steps with no inputs) plus everything
+//!   downstream of them. Every other step is declared up to date and
+//!   does nothing — including work pending elsewhere, like a source
+//!   that downloaded yesterday but failed to render. "Sync yolink"
+//!   means yolink; nothing happens for slack. Inside the subgraph the
+//!   usual change propagation applies, so a fan-in re-runs only if a
+//!   selected chain actually moved. This is the per-source "Sync now"
+//!   mode; a full run (no `--sync`) picks up whatever was left
+//!   pending.
 //! * `--now` pins the run timestamp, exported to every step as
 //!   `DATALIB_DAG_NOW` (downloads stamp it into raw bookkeeping,
 //!   index into `markdowns.rendered_at`); omitted, the local clock is
