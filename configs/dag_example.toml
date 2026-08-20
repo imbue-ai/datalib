@@ -30,15 +30,14 @@
 # in, so a step's plain keys come first and its params headers last;
 # likewise `data_root` below has to precede the first `[[steps]]`.
 #
-#   bazelisk build //datalib/backend/dag:datalib_dag_bin \
-#                  //datalib/backend/datalib_step:datalib_step
-#   bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/datalib/backend/datalib_step/datalib_step "$bindir"/datalib-step
-#   bazel-bin/datalib/backend/dag/datalib_dag_bin configs/dag_example.toml \
-#       --binary-dir "$bindir"
+#   bazelisk build //datalib/backend:bin
+#   bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
 #
-# (`--binary-dir` is prepended to every step's PATH so `command` can
-# say `datalib-step` bare; a packaged install lays `datalib-step` next
-# to `datalib-dag` and needs no flag at all.)
+# (`//datalib/backend:bin` stages every binary under its public
+# dash-separated name in one directory — the same layout the installer
+# produces. `datalib-dag` falls back to its own directory when looking
+# up a step's `command`, so `datalib-step` is found with no flag. Use
+# `--binary-dir DIR` only to point at binaries staged somewhere else.)
 #
 # data_root defaults to the directory this file lives in; set it
 # explicitly for a real run.

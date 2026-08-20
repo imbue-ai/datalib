@@ -210,6 +210,21 @@ and `grid_index` loads them into
 [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the
 DAG design.
 
+To run one by hand, build `//datalib/backend:bin` — it stages every
+shipped binary under its public dash-separated name in a single
+directory, the same layout `scripts/install.sh` produces on a user's
+machine:
+
+```sh
+bazelisk build //datalib/backend:bin
+bazel-bin/datalib/backend/bin/datalib-dag ~/datalib/config.toml
+```
+
+No `--binary-dir` is needed: `datalib-dag` resolves each step's
+`command` against PATH with its own directory as the fallback, so a
+bare `datalib-step` in the config finds the sibling binary. Add
+`--sync <step-id>[,<step-id>…]` to run a subset of the graph.
+
 ### QMD search index (default-on, incremental)
 
 `datalib-step qmd_index` rebuilds the qmd search index over `<root>`

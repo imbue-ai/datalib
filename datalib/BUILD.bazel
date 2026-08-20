@@ -6,11 +6,12 @@ sh_binary(
     srcs = ["serve_dev.sh"],
     data = [
         "//datalib/backend/http:datalib_http_bin",
-        # The HTTP backend's sync worker shells out to these; serve_dev.sh
-        # exports the runner's runfiles path as $DATALIB_DAG_BIN and a
-        # staged dash-named symlink dir as $DATALIB_BINARY_DIR.
-        "//datalib/backend/dag:datalib_dag_bin",
-        "//datalib/backend/datalib_step:datalib_step",
+        # The HTTP backend's sync worker shells out to the runner, which
+        # spawns step binaries off PATH. `:bin` is that whole set under
+        # their public dash-separated names in one directory; serve_dev.sh
+        # exports it as $DATALIB_BINARY_DIR and takes $DATALIB_DAG_BIN
+        # from inside it.
+        "//datalib/backend:bin",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
@@ -25,11 +26,10 @@ sh_binary(
     srcs = ["dev.sh"],
     data = [
         "//datalib/backend/http:datalib_http_bin",
-        # Sync worker children; dev.sh exports $DATALIB_DAG_BIN and a
-        # staged $DATALIB_BINARY_DIR so UI-triggered syncs run
-        # end-to-end.
-        "//datalib/backend/dag:datalib_dag_bin",
-        "//datalib/backend/datalib_step:datalib_step",
+        # Sync worker children, staged under their public names by
+        # `:bin`; dev.sh exports $DATALIB_DAG_BIN and $DATALIB_BINARY_DIR
+        # from it so UI-triggered syncs run end-to-end.
+        "//datalib/backend:bin",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
@@ -64,8 +64,7 @@ sh_binary(
     srcs = ["dev_perseus.sh"],
     data = [
         ":serve",
-        "//datalib/backend/dag:datalib_dag_bin",
-        "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend:bin",
         "//datalib/backend/etl/providers/perseus:tiny_fixture",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
