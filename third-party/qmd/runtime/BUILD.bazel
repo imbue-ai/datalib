@@ -1,6 +1,9 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@npm_qmd//:defs.bzl", "npm_link_all_packages")
 
+# The @tobilu/qmd pin, read by //tools:version_pins_test.
+exports_files(["package.json"])
+
 # The qmd CLI and its 277-package transitive tree, materialized from
 # pnpm-lock.yaml. Replaces `npx -y @tobilu/qmd@<v>`: same packages, but
 # every tarball is integrity-checked and no install script runs (see the

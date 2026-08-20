@@ -16,6 +16,14 @@ import { test, expect } from "@playwright/test";
 // The same value playwright.config.ts minted and handed to the backend
 // via DATALIB_TOKEN. Read from env because the config caches it there
 // for worker subprocesses.
+//
+// Declared locally rather than pulling in @types/node: tsconfig.json's
+// `types` is deliberately narrow (just vitest/globals), and specs are
+// inside its `include` globs — playwright.config.ts gets away with bare
+// `process` only because it sits outside them. One line beats a
+// dependency and a global type widening.
+declare const process: { env: Record<string, string | undefined> };
+
 const TOKEN = process.env.DATALIB_TOKEN;
 
 // No ambient Authorization header: this file is about the cookie.

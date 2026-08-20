@@ -25,7 +25,7 @@
 #                 (the ONE canonical latchkey pin; etl re-exports it)
 #   * qmd       — DEFAULT_QMD_VERSION in backend/core/src/qmd/mod.rs
 #                 (the ONE canonical qmd pin; indexer re-exports it,
-#                 //tools:qmd_version_pins_test guards the rest)
+#                 //tools:version_pins_test guards the rest)
 #
 # Build-host requirements: curl, tar, and (for qmd's native deps —
 # better-sqlite3, tree-sitter grammars) a C/C++ toolchain + python3.
@@ -47,6 +47,21 @@
 set -euo pipefail
 
 # Node LTS to bundle. qmd needs >=22, latchkey >=20.
+#
+# The sha256 of every dist we fetch is pinned in the platform `case`
+# below and verified before extraction. This is not a normal build
+# dependency: `node` is codesigned with the Developer ID further down
+# and ships inside Datalib.app, so an unverified download would go out to
+# users under our signature, notarized (issue #141).
+#
+# Pinned digests rather than a fetched SHASUMS256.txt on purpose — that
+# file comes from the same origin as the tarball, so it adds nothing
+# against a compromised origin. Same discipline as
+# `hack/doltlite_fork_bug/run.sh`.
+#
+# Bumping NODE_VERSION means re-pinning ALL FOUR digests. Get them with:
+#   curl -fsSL https://nodejs.org/dist/<version>/SHASUMS256.txt \
+#     | grep -E '(darwin-(arm64|x64)|linux-(arm64|x64))\.tar\.gz$'
 NODE_VERSION="v22.23.1"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,13 +97,40 @@ log "pins: node=$NODE_VERSION latchkey=$latchkey_version qmd=$qmd_version"
 # Platform → Node dist name.
 # ---------------------------------------------------------------------------
 
+# Platform -> (dist name, sha256 of that dist's tarball for
+# $NODE_VERSION). A `case` rather than an associative array so this keeps
+# working under the bash 3.2 that macOS still ships.
 case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64) node_platform="darwin-arm64" ;;
-    Darwin-x86_64) node_platform="darwin-x64" ;;
-    Linux-aarch64 | Linux-arm64) node_platform="linux-arm64" ;;
-    Linux-x86_64) node_platform="linux-x64" ;;
+    Darwin-arm64)
+        node_platform="darwin-arm64"
+        node_sha256="ef28d8fab2c0e4314522d4bb1b7173270aa3937e93b92cb7de79c112ac1fa953"
+        ;;
+    Darwin-x86_64)
+        node_platform="darwin-x64"
+        node_sha256="b8da981b8a0b1241b70249204916da76c63573ddf5814dbd2d1e41069105cb81"
+        ;;
+    Linux-aarch64 | Linux-arm64)
+        node_platform="linux-arm64"
+        node_sha256="543fa39e57d4c07855939459a323f4deb9a79dd1bb45e6e99458b0f2de10db8d"
+        ;;
+    Linux-x86_64)
+        node_platform="linux-x64"
+        node_sha256="7a8cb04b4a1df4eaf432125324b81b29a088e73570a23259a8de1c65d07fc129"
+        ;;
     *) fail "unsupported platform: $(uname -s)-$(uname -m)" ;;
 esac
+
+# sha256 of a file, via whichever tool this host has. macOS ships
+# `shasum`; most Linux images ship `sha256sum`; CI images vary.
+sha256_of() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        fail "neither shasum nor sha256sum found; cannot verify downloads"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Node dist: download once into the cache, keep npm there for installs,
@@ -102,6 +144,17 @@ if [[ ! -x "$node_dist_dir/bin/node" ]]; then
     tarball="$cache_dir/$node_dist.tar.gz"
     log "downloading $node_dist"
     curl -fsSL -o "$tarball" "https://nodejs.org/dist/$NODE_VERSION/$node_dist.tar.gz"
+
+    # Fail closed, and BEFORE extracting: this binary gets codesigned and
+    # shipped. Leave the tarball in place on mismatch so it can be
+    # inspected rather than silently re-downloaded on the next run.
+    got_sha256="$(sha256_of "$tarball")"
+    if [[ "$got_sha256" != "$node_sha256" ]]; then
+        fail "$(printf 'sha256 mismatch for %s\n  want: %s\n  got:  %s\nLeft at %s. Do NOT stage or sign this. If nodejs.org re-rolled the release in place, verify against SHASUMS256.txt and update the pin in this script.' \
+            "$node_dist.tar.gz" "$node_sha256" "$got_sha256" "$tarball")"
+    fi
+    log "verified $node_dist.tar.gz (sha256 $node_sha256)"
+
     tar -xzf "$tarball" -C "$cache_dir"
     rm -f "$tarball"
     [[ -x "$node_dist_dir/bin/node" ]] || fail "node dist extraction failed"

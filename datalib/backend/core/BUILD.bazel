@@ -3,7 +3,9 @@ load("//tools:insta.bzl", "insta_update")
 
 exports_files([
     "Cargo.toml",
-    "src/qmd/mod.rs",  # canonical DEFAULT_QMD_VERSION, read by //tools:qmd_version_pins_test
+    # Canonical version constants, read by //tools:version_pins_test.
+    "src/node_runtime.rs",  # LATCHKEY_VERSION
+    "src/qmd/mod.rs",  # DEFAULT_QMD_VERSION
 ])
 
 rust_library(
