@@ -68,7 +68,7 @@ impl Synthesizer for GitlabSynth {
                 .map(|n| n.to_string())
                 .unwrap_or_default()
         })?;
-        if let Some(latest) = selves.values().next() {
+        if let Some((_, latest)) = selves.first() {
             user_id = latest
                 .get("raw")
                 .and_then(|r| r.get("id"))
@@ -91,7 +91,7 @@ impl Synthesizer for GitlabSynth {
                 .unwrap_or_default()
         })?;
         let mut mr_by_key: BTreeMap<(String, u64), Value> = BTreeMap::new();
-        for rec in mrs.into_values() {
+        for (_, rec) in mrs {
             if let Some(k) = mr_proj_iid(&rec) {
                 if let Some(raw) = rec.get("raw").cloned() {
                     mr_by_key.insert(k, raw);
@@ -144,7 +144,7 @@ impl Synthesizer for GitlabSynth {
             discussion_pk_recipe(proj, iid as u32, id)
         })?;
         let mut disc_by_mr: BTreeMap<(String, u64), Vec<Value>> = BTreeMap::new();
-        for rec in discussions.into_values() {
+        for (_, rec) in discussions {
             let Some(proj) = rec.get("project_full_path").and_then(|v| v.as_str()) else {
                 continue;
             };

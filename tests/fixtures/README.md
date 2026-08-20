@@ -174,7 +174,7 @@ by luck, which is how the original claim survived:
 |---|---|
 | `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
 | `backend_index.doltlite_db` **file** | no |
-| rendered `.md` trees | yes, except notion + yolink (below) |
+| rendered `.md` trees | yes, except yolink's `index.md` (below) |
 | `_render_cursor.json` | no |
 
 **The table contents are the property worth relying on, and they hold.**
@@ -204,14 +204,17 @@ stable:
   HEAD-derived (see `render/render.rs::compute_fingerprint`), which is
   what keeps the `markdowns` row stable.
 
-Separately, and unrelated to any of the above: **notion's renderer emits
-its blocks in a nondeterministic order.** Two runs produce the same
-lines shuffled (`pages/b1d6e000-…-000000000001/index.md` and siblings).
-It does not reach `grid_rows` — those come out identical — but it does
-reach the markdown body the preview pane shows and qmd indexes, so
-semantic-search results can differ run to run. Looks like a hash-map
-iteration order leak. Not tracked anywhere else; noted here because it
-is the kind of thing the old blanket "(verified)" claim was hiding.
+Notion's rendered pages used to be nondeterministic too — two runs
+emitted the same blocks in a different order. That was
+`event_store::load_latest_by_key` returning a `HashMap`: the
+synthesizer packs its records into `results` arrays, so the replayed
+`/children` listing came back shuffled, the downloader's BFS wrote
+different `blocks.page_order` values every run, and render faithfully
+reproduced whichever order it was handed. It now returns a `Vec` in
+first-seen (document) order. Note the bug was invisible within a single
+process — Rust's hash seed is per-process, so "render twice and compare"
+would have passed; catching it needs either two processes or an explicit
+order assertion (`records_come_back_in_stream_order`).
 
 Bazel keys its action cache on *inputs*, so the residue costs
 reproducibility and cross-machine cache sharing, not day-to-day rebuild

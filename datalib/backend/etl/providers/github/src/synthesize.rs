@@ -76,7 +76,7 @@ impl Synthesizer for GithubSynth {
                 .map(|n| n.to_string())
                 .unwrap_or_default()
         })?;
-        if let Some(latest) = selves.values().next() {
+        if let Some((_, latest)) = selves.first() {
             let raw = latest.get("raw").cloned().unwrap_or(Value::Null);
             write_fixture(
                 out_root,
@@ -93,7 +93,7 @@ impl Synthesizer for GithubSynth {
                 .unwrap_or_default()
         })?;
         let mut pr_by_key: BTreeMap<(String, u64), Value> = BTreeMap::new();
-        for rec in prs.into_values() {
+        for (_, rec) in prs {
             if let Some(k) = pr_repo_num(&rec) {
                 if let Some(raw) = rec.get("raw").cloned() {
                     pr_by_key.insert(k, raw);
@@ -143,7 +143,7 @@ impl Synthesizer for GithubSynth {
                 format!("{repo}#{num}#{id}")
             })?;
             let mut grouped: BTreeMap<(String, u64), Vec<Value>> = BTreeMap::new();
-            for rec in recs.into_values() {
+            for (_, rec) in recs {
                 let Some(repo) = rec.get("repo_full_name").and_then(|v| v.as_str()) else {
                     continue;
                 };
