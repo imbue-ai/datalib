@@ -10,28 +10,25 @@
 //! command = "datalib-applet slack"
 //! ```
 //!
-//! and the gateway appends the mode flags. There are two modes, and an
-//! applet must implement both:
+//! and the gateway appends the rest:
 //!
 //! ```text
-//! datalib-applet <name> --write-frontend-dir <dir> [--params <json>]   # write, then exit
-//! datalib-applet <name> -p <port> [--params <json>]                    # bind, then serve
+//! datalib-applet <name> -p <port> --frontend-dir <dir> [--params <json>]
 //! ```
 //!
-//! One binary rather than one per applet for the same reason
-//! `datalib-step` is one binary: the shared machinery (arg surface,
-//! the two-mode contract, the sidecar reading most applets will want)
-//! lives in one place, and packaging ships one file instead of a
-//! growing list. Adding an applet is a variant here plus a module, not
-//! a new crate, a new BUILD target, and five packaging edits.
+//! One invocation, one process. The applet **writes its frontend
+//! directory, then binds the port** — in that order, because the
+//! gateway takes "the port accepts" as its signal that the write
+//! finished and the store is safe to scan. An applet that bound first
+//! would race the scan and intermittently come up with no components.
 //!
 //! ## What an applet owes
 //!
-//! Nothing beyond the two modes. Write mode leaves files in the
-//! directory it is handed — a `<sha256>.js` and a `<name>.json` per
-//! component, described in `docs/dev/applets.md` — and serve mode
-//! answers HTTP on the port. Nothing is read from stdout; stderr is the
-//! log, and its tail becomes the error message on a non-zero exit.
+//! Two things, in order: leave files in the directory it is handed — a
+//! `<sha256>.js` and a `<name>.json` per component, described in
+//! `docs/dev/applets.md` — and then answer HTTP on the port. Nothing is
+//! read from stdout; stderr is the log, and the gateway surfaces its
+//! tail when an applet fails to come up.
 //!
 //! ## Printing
 //!
@@ -54,12 +51,15 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     applet: Which,
-    /// Where to write this instance's frontend namespace. The last
-    /// segment is the namespace name, which is the only channel by
-    /// which an applet learns which instance it is — two instances of
-    /// one command differ solely in configuration.
+    /// Where to write this instance's frontend namespace, before
+    /// serving. The last segment is the namespace name, which is the
+    /// only channel by which an applet learns which instance it is —
+    /// two instances of one command differ solely in configuration.
+    ///
+    /// Optional so an applet that contributes no components can be run
+    /// without one; the gateway always passes it.
     #[arg(long, global = true)]
-    write_frontend_dir: Option<PathBuf>,
+    frontend_dir: Option<PathBuf>,
     /// Port to serve on. Loopback only; the gateway picks it.
     #[arg(short = 'p', long, global = true)]
     port: Option<u16>,
@@ -88,15 +88,16 @@ fn run() -> Result<()> {
         Some(json) => serde_json::from_str(json).context("--params is not valid JSON")?,
         None => serde_json::Value::Null,
     };
+    // Write, then serve. The order is the contract: the gateway waits
+    // for the port and then scans the store, so binding early would
+    // race the scan.
     match cli.applet {
         Which::Slack => {
-            if let Some(dir) = &cli.write_frontend_dir {
-                return slack::write_frontend(dir, &params);
+            if let Some(dir) = &cli.frontend_dir {
+                slack::write_frontend(dir, &params)?;
             }
-            match cli.port {
-                Some(p) => slack::serve(p, &params),
-                None => anyhow::bail!("expected --write-frontend-dir <dir> or -p <port>"),
-            }
+            let port = cli.port.context("-p <port> is required")?;
+            slack::serve(port, &params)
         }
     }
 }

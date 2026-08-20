@@ -69,7 +69,7 @@ pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
     let namespace = dir
         .file_name()
         .and_then(|s| s.to_str())
-        .context("--write-frontend-dir needs a path whose last segment is the namespace")?
+        .context("--frontend-dir needs a path whose last segment is the namespace")?
         .to_string();
 
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;

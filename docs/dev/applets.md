@@ -58,15 +58,17 @@ search and Setup down with it and leave no way to fix the file.
 
 ## What a command has to do
 
-**1. Write its frontend namespace.**
+One invocation, one process:
 
 ```
-<command> --write-frontend-dir <root>/system/frontend/<id> [--params <json>]
+<command> -p <port> --frontend-dir <root>/system/frontend/<id> [--params <json>]
 ```
 
-Write the files described in [the frontend store](#the-frontend-store)
-into that directory and exit. Nothing is read from stdout; stderr is
-the log, and its tail becomes the error message on a non-zero exit.
+**Write the directory, then bind the port** — in that order. The
+gateway waits for the port and then scans the store, so "the port
+accepts" is its signal that the write finished. An applet that bound
+first would race the scan and intermittently come up with no
+components.
 
 The directory's last segment is the namespace, and it is the only
 channel by which a command learns which instance it is. Two instances
@@ -74,12 +76,30 @@ of one binary differ only in configuration, so the argument a gallery
 entry passes — usually the instance's own id — has to come from
 outside.
 
-**2. Serve on a port.** `-p <port>` binds `127.0.0.1:<port>`. The
-gateway proxies `/applet/<id>/<path>` to `<path>` on that port.
+Nothing is read from stdout. stderr is the log: the gateway forwards it
+line by line and keeps the tail, which becomes the error message if the
+applet never binds.
 
-That is the whole contract. There is no protocol version, no
-handshake, and no registration call, so a shell script is a viable
-applet.
+That is the whole contract. There is no protocol version, no handshake,
+and no registration call.
+
+## Applets are started eagerly and kept running
+
+Every configured applet starts at boot and stays up. Starting one on
+its first request cannot work now that the write and the serve are one
+invocation: components would only exist once something had already
+opened a card that used them, which is what the gallery needs them for.
+
+So a data root with twelve applets runs twelve processes. Idle shutdown
+would trade some of that back and is not built; if it arrives, a
+restarted applet simply rewrites the same files, since the write is
+idempotent.
+
+Starts run in parallel, so boot is bounded by the slowest applet rather
+than their sum, and each is capped at 20 seconds. The cap matters
+because this happens after the HTTP listener is already accepting:
+without it, one hanging applet would leave a browser tab whose requests
+queue forever with nothing logged.
 
 ## The frontend store
 
@@ -131,10 +151,10 @@ The `.js` therefore has to stay byte-identical to what the browser
 evaluates, which is why title, description and arguments live in a
 sibling `<name>.json` rather than as frontmatter.
 
-## Refresh is destructive, and `user` is reserved
+## Restart is destructive, and `user` is reserved
 
-A refresh deletes every namespace directory except `user`, then asks
-each configured applet to write its own. That is what keeps the store
+Restarting deletes every namespace directory except `user` and lets the
+applets rewrite theirs as they come up. That is what keeps the store
 honest: an applet removed from `config.toml` takes its components with
 it, and a component removed from an applet's output actually
 disappears.
@@ -145,13 +165,13 @@ it (`datalib_dag::config::RESERVED_APPLET_ID`); an applet allowed to
 claim `user` would have the user's own work deleted on the next
 refresh.
 
-## Why the write is a flag rather than an endpoint
+## Why components come from a directory, not an endpoint
 
-Components have to be readable before any applet is worth running: the
-gallery lists them, card source resolves against them, and the browser
-imports their code. Making the write a flag means all of that comes off
-the filesystem, so opening the app costs zero applet processes — a
-server starts only when a card actually asks one for data.
+The gallery lists components, card source resolves against them, and
+the browser imports their code — all of which has to work before
+anything knows to ask a particular applet for anything. Reading them
+off the filesystem is what makes that possible; an endpoint would mean
+you could not list a component until something had already opened it.
 
 ## Authentication
 
@@ -190,17 +210,17 @@ The case the design is built around:
 At server start, and again whenever it changes. Two triggers, kept
 separate because they cost different amounts:
 
-- **`config.toml` moved** → re-run every applet's write, then rescan.
+- **`config.toml` moved** → stop every applet, wipe their namespaces,
+  start them again, rescan.
 - **the store's own files moved** → rescan only.
 
-Conflating them would make a `PUT /api/lib` wipe and rewrite every
-applet namespace. Both checks are `stat`-only when nothing changed, so
+Conflating them would make a `PUT /api/lib` restart every applet. The
+config path restarts everything rather than diffing, because an
+applet's components are written as it starts, so anything that might
+have changed its output has to restart it anyway. Both checks are `stat`-only when nothing changed, so
 they can sit on the endpoint the UI polls — which is what turns a saved
 config, or a file dropped in by hand, into a live gallery update
 without a restart.
-
-An applet whose config entry changed is also stopped as part of the
-refresh, so the next request respawns it with the new `params`.
 
 ## Failure
 
@@ -210,19 +230,17 @@ stale, and a configured applet that silently vanished would look like a
 config that never saved. Files the store *could* read but not use — a
 `.js` whose name does not match its bytes, metadata naming a component
 that is not there — are reported per namespace in `problems`, for the
-same reason. A request
-to an applet that will not start answers `502` with a JSON `error`
-carrying the child's last stderr lines, so the card shows the reason
-instead of an empty state. That failure is remembered: without it,
-every subsequent request would pay the ten-second readiness timeout
-again and leave another dead child behind.
+same reason.
 
-A `--write-frontend-dir` run is bounded at 30 seconds. The bound exists
-because a command that starts *serving* when asked to *write* is an
-easy mistake for a binary that has both modes, and a refresh happens
-during boot after the listener is already bound — so without a timeout
-the symptom would be a browser tab whose requests queue forever with
-nothing logged.
+A request to an applet that is configured but not running answers
+`502` with a JSON `error` naming it — a different message from one
+that is not configured at all, since the two want different fixes.
+
+The gateway forwards an applet's stderr line by line as it arrives and
+keeps the tail, rather than reading the pipe to EOF when the applet
+fails. That matters because the pipe is held by the child *and* by
+anything it spawned: a wrapper script whose own child is still alive
+would otherwise block the start path until that grandchild exited.
 
 ## Reference implementation
 

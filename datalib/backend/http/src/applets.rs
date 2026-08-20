@@ -4,16 +4,20 @@
 //! An applet is a sibling of a step in `config.toml` (see
 //! [`datalib_dag::config::AppletEntry`]). Where a step runs to
 //! completion during a sync and writes artifacts, an applet is a
-//! long-lived HTTP server this gateway spawns on demand. It owes the
-//! gateway two things:
+//! long-lived HTTP server this gateway starts. It is run once:
 //!
 //! ```text
-//! <command> --write-frontend-dir <root>/system/frontend/<id>   # then exit
-//! <command> -p <port>                                          # then serve
+//! <command> -p <port> --frontend-dir <root>/system/frontend/<id> [--params <json>]
 //! ```
 //!
+//! and owes two things, in order: write its components into that
+//! directory, then bind the port. The gateway waits for the port and
+//! then scans the store, so **"the port accepts" is the signal that
+//! the write finished** — an applet that bound first would race the
+//! scan and intermittently come up with no components.
+//!
 //! There is no protocol version, no handshake, and no registration
-//! call, so a shell script is a viable applet.
+//! call.
 //!
 //! ## Applets are not a component mechanism
 //!
@@ -24,10 +28,10 @@
 //! in by hand. One mechanism, one code path, nothing for the two to
 //! disagree about.
 //!
-//! That is why the write is a flag and not an endpoint: components have
-//! to be readable before any applet is worth running, so opening the
-//! app costs zero applet processes. A server starts only when a card
-//! actually asks one for data.
+//! That is why the components come from a directory rather than an
+//! endpoint: reading them must not require asking an applet anything,
+//! or the gallery could not list a component until something already
+//! knew to open it.
 //!
 //! ## Why the applet is told its own directory
 //!
@@ -37,21 +41,33 @@
 //! gallery entry it registers, so the two appear as separate rows over
 //! one shared component.
 //!
-//! ## Refresh is destructive
+//! ## Applets are started eagerly and kept running
 //!
-//! A refresh deletes every namespace directory except `user` and asks
-//! the applets to rewrite theirs. That is what keeps the store honest
-//! when an applet is removed from the config — its components go with
-//! it — and it is why `user` is refused as an applet id
+//! Every configured applet is started at boot and stays up. The
+//! alternative — starting one on its first request — cannot work now
+//! that the write and the serve are one invocation: components would
+//! only exist once something had already opened a card that used them,
+//! which is the thing the gallery needs them for.
+//!
+//! So a data root with twelve applets runs twelve processes. Idle
+//! shutdown would trade some of that back and is not built; if it
+//! arrives, a restarted applet simply rewrites the same files, since
+//! the write is idempotent.
+//!
+//! ## Restart is destructive
+//!
+//! Restarting deletes every namespace directory except `user` and lets
+//! the applets rewrite theirs. That is what keeps the store honest when
+//! an applet is removed from the config — its components go with it —
+//! and it is why `user` is refused as an applet id
 //! ([`datalib_dag::config::RESERVED_APPLET_ID`]).
 
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::io::Write;
+use std::io::{BufRead, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use datalib_dag::config::AppletEntry;
@@ -67,14 +83,13 @@ pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 
-/// How long an applet gets to write its namespace and exit.
+/// How long an applet gets to write its components and bind its port.
 ///
-/// Without a bound, a command that starts *serving* when asked to
-/// *write* — an easy mistake for a binary with both modes — would hang
-/// the refresh, and a refresh runs during boot after the listener is
-/// already bound. The symptom would be a browser tab whose requests
-/// queue forever with nothing logged.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// A bound is required because this runs during boot, after the
+/// listener is already accepting: without one, a single applet that
+/// hangs would leave a browser tab whose requests queue forever with
+/// nothing logged.
+const START_TIMEOUT: Duration = Duration::from_secs(20);
 
 // ---------------------------------------------------------------------------
 // Discovery
@@ -125,73 +140,18 @@ fn base_command(
     Ok(cmd)
 }
 
-/// Ask one applet to write its frontend namespace.
+/// Wipe every applet-owned namespace directory.
 ///
-/// The applet writes files; it prints nothing this function reads.
-/// Anything it does say goes to stderr and becomes the error message,
-/// the same convention a failed step follows.
-pub fn write_frontend_dir(
-    entry: &AppletEntry,
-    data_root: &Path,
-    binary_dir: Option<&Path>,
-    dir: &Path,
-) -> anyhow::Result<()> {
-    write_frontend_dir_with_timeout(entry, data_root, binary_dir, dir, WRITE_TIMEOUT)
-}
-
-/// [`write_frontend_dir`] with an explicit bound, so a test can prove
-/// the timeout exists without waiting out the production one.
-pub fn write_frontend_dir_with_timeout(
-    entry: &AppletEntry,
-    data_root: &Path,
-    binary_dir: Option<&Path>,
-    dir: &Path,
-    timeout: Duration,
-) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("create {}: {e}", dir.display()))?;
-
-    let mut cmd = base_command(entry, data_root, binary_dir)?;
-    cmd.arg("--write-frontend-dir").arg(dir);
-    if let Some(params) = entry.params_json()? {
-        cmd.arg("--params").arg(serde_json::to_string(&params)?);
-    }
-    cmd.stdin(Stdio::null());
-
-    let out = run_with_timeout(cmd, timeout)
-        .map_err(|e| anyhow::anyhow!("applet {:?}: {:?}: {e}", entry.id, entry.command))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        anyhow::bail!(
-            "applet {:?}: --write-frontend-dir exited {}: {}",
-            entry.id,
-            out.status,
-            tail_lines(&stderr, 20)
-        );
-    }
-    Ok(())
-}
-
-/// Rebuild every applet-owned namespace.
-///
-/// Deletes each namespace directory that is not `user`, then asks each
-/// configured applet to write its own. Deleting first is what makes the
-/// store track the config: an applet removed from `config.toml` leaves
-/// no orphaned components behind, and a component removed from an
-/// applet's output actually disappears. `user` is never touched, which
-/// is the whole reason that id is reserved.
-///
-/// Returns one message per applet that failed, so a broken applet is
-/// visible instead of just absent.
-pub fn refresh_frontend(
-    entries: &[AppletEntry],
-    data_root: &Path,
-    binary_dir: Option<&Path>,
-) -> Vec<(String, String)> {
+/// Deleting before a restart is what makes the store track the config:
+/// an applet removed from `config.toml` leaves no orphaned components
+/// behind, and a component removed from an applet's output actually
+/// disappears. `user` is never touched, which is the whole reason that
+/// id is reserved.
+fn clear_applet_namespaces(data_root: &Path) -> anyhow::Result<PathBuf> {
     let root = crate::frontend::frontend_dir(data_root);
-    if let Err(e) = std::fs::create_dir_all(&root) {
-        return vec![(String::new(), format!("create {}: {e}", root.display()))];
-    }
-    // Everything under here is reproducible by re-running the applets,
+    std::fs::create_dir_all(&root)
+        .map_err(|e| anyhow::anyhow!("create {}: {e}", root.display()))?;
+    // Everything under here is reproducible by restarting the applets,
     // so cache-aware backups may skip it — except `user`, which is not.
     // Marking the parent is close enough: the tag is advisory.
     datalib_core::layout::mark_derived_cache(&root);
@@ -210,16 +170,7 @@ pub fn refresh_frontend(
             }
         }
     }
-
-    let mut errors = Vec::new();
-    for e in entries {
-        let dir = root.join(&e.id);
-        if let Err(err) = write_frontend_dir(e, data_root, binary_dir, &dir) {
-            eprintln!("applet {}: {err:#}", e.id);
-            errors.push((e.id.clone(), format!("{err:#}")));
-        }
-    }
-    errors
+    Ok(root)
 }
 
 /// The PATH an applet child sees: `binary_dir`, then `~/.datalib/bin`,
@@ -259,68 +210,6 @@ fn child_path(
         paths.extend(std::env::split_paths(p));
     }
     std::env::join_paths(paths).map(Some)
-}
-
-/// Run a command to completion, killing and reaping it if it outlives
-/// `timeout`.
-///
-/// `Command::output` waits forever, which is the wrong shape for a
-/// contract whose whole point is "print and exit": a command that
-/// starts serving instead — an easy mistake, since the same binary has
-/// a serving mode — would otherwise hang the refresh, and a refresh runs
-/// during boot after the listener is already bound. The user would get
-/// a tab whose requests queue in the backlog with nothing logged.
-fn run_with_timeout(mut cmd: Command, timeout: Duration) -> anyhow::Result<std::process::Output> {
-    // Pipe both streams: the manifest arrives on stdout and the
-    // failure explanation on stderr.
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!("spawn: {e}"))?;
-
-    // Drain the pipes on threads. Reading inline would deadlock the
-    // moment a chatty command fills a pipe buffer while we wait.
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    let out_h = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(s) = stdout.as_mut() {
-            let _ = s.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let err_h = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(s) = stderr.as_mut() {
-            let _ = s.read_to_end(&mut buf);
-        }
-        buf
-    });
-
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    // Reap, so the corpse does not linger as a zombie
-                    // for the gateway's lifetime.
-                    let _ = child.wait();
-                    anyhow::bail!(
-                        "--write-frontend-dir did not exit within {:?} (it must write its files \
-                         and exit; is this the serving mode?)",
-                        timeout
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => anyhow::bail!("wait: {e}"),
-        }
-    };
-    Ok(std::process::Output {
-        status,
-        stdout: out_h.join().unwrap_or_default(),
-        stderr: err_h.join().unwrap_or_default(),
-    })
 }
 
 fn tail_lines(s: &str, n: usize) -> String {
@@ -392,9 +281,8 @@ impl AppletRegistry {
         data_root: PathBuf,
         binary_dir: Option<PathBuf>,
     ) -> Self {
-        let errors = refresh_frontend(&entries, &data_root, binary_dir.as_deref())
-            .into_iter()
-            .collect();
+        let supervisor = Supervisor::default();
+        let errors = start_all(&supervisor, &entries, &data_root, binary_dir.as_deref());
         let store = crate::frontend::FrontendStore::scan(&data_root);
         let config_stamp = config_stamp_of(&data_root);
         let store_stamp = crate::frontend::StoreStamp::of(&data_root);
@@ -408,7 +296,7 @@ impl AppletRegistry {
                 errors,
                 config_stamp,
             }),
-            supervisor: Supervisor::default(),
+            supervisor,
         }
     }
 
@@ -443,33 +331,18 @@ impl AppletRegistry {
         }
         let (entries, bin_dir) = load_entries(&self.data_root, self.binary_dir_override.clone());
 
-        // Stop the servers whose config changed (or vanished) so the
-        // next request respawns them with the new params. Leaving them
-        // running would silently serve the old `params` — a config edit
-        // that appears to take effect in the gallery but not in the
-        // data is worse than a restart.
-        let changed: Vec<String> = {
-            let Ok(state) = self.state.read() else { return };
-            entries
-                .iter()
-                .filter(|e| state.entries.iter().find(|p| p.id == e.id) != Some(e))
-                .map(|e| e.id.clone())
-                .chain(
-                    state
-                        .entries
-                        .iter()
-                        .filter(|p| !entries.iter().any(|e| e.id == p.id))
-                        .map(|p| p.id.clone()),
-                )
-                .collect()
-        };
-        for id in &changed {
-            self.supervisor.stop(id);
-        }
-
-        let errors = refresh_frontend(&entries, &self.data_root, bin_dir.as_deref())
-            .into_iter()
-            .collect();
+        // Stop everything and start it again, rather than diffing the
+        // config. An applet's components are written as it starts, so
+        // anything that might have changed its output has to restart it
+        // anyway; and applets are few and config edits rare, so the
+        // simpler rule is worth more than the saved restarts.
+        self.supervisor.stop_all();
+        let errors = start_all(
+            &self.supervisor,
+            &entries,
+            &self.data_root,
+            bin_dir.as_deref(),
+        );
         let store = crate::frontend::FrontendStore::scan(&self.data_root);
 
         let store_stamp = crate::frontend::StoreStamp::of(&self.data_root);
@@ -541,23 +414,22 @@ impl AppletRegistry {
         content_type: Option<&str>,
         body: &[u8],
     ) -> Result<ProxyResponse, String> {
-        let entry = self.entry(id).ok_or_else(|| format!("no applet {id:?}"))?;
-        let binary_dir = self.binary_dir_for_spawn();
-        let port = self
-            .supervisor
-            .ensure(&entry, &self.data_root, binary_dir.as_deref())?;
-        forward(port, method, path_and_query, content_type, body)
-    }
-
-    /// `binary_dir` as the current config resolves it.
-    fn binary_dir_for_spawn(&self) -> Option<PathBuf> {
-        let cfg_path = datalib_dag::config::root_config_path(&self.data_root);
-        match datalib_dag::config::load(&cfg_path) {
-            Ok((cfg, _)) => {
-                datalib_dag::config::resolve_binary_dir(&cfg, self.binary_dir_override.as_deref())
+        // Configured but not running is a different failure from not
+        // configured at all, and the message says which.
+        let port = match self.supervisor.port(id) {
+            Some(p) => p,
+            None if self.entry(id).is_some() => {
+                let why = self
+                    .state
+                    .read()
+                    .ok()
+                    .and_then(|s| s.errors.get(id).cloned())
+                    .unwrap_or_else(|| "it is not running".to_string());
+                return Err(format!("applet {id:?}: {why}"));
             }
-            Err(_) => self.binary_dir_override.clone(),
-        }
+            None => return Err(format!("no applet {id:?}")),
+        };
+        forward(port, method, path_and_query, content_type, body)
     }
 }
 
@@ -566,10 +438,60 @@ impl AppletRegistry {
 pub struct FrontendView {
     /// namespace → its components and any files it could not use.
     pub namespaces: BTreeMap<String, crate::frontend::NamespaceView>,
-    /// Applets whose `--write-frontend-dir` failed. Their namespace is
-    /// absent or stale; saying which one broke beats an empty gallery.
+    /// Applets that failed to start. Their namespace is absent, since
+    /// an applet writes it as it comes up; saying which one broke beats
+    /// an empty gallery.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub applet_errors: BTreeMap<String, String>,
+}
+
+/// Clear the applet namespaces, then start every applet.
+///
+/// Starts run on threads so boot is bounded by the slowest applet
+/// rather than their sum: a broken one costs the readiness timeout
+/// once, not once per applet ahead of it in the list.
+///
+/// Returns one message per applet that failed, so a broken applet is
+/// visible instead of just absent.
+fn start_all(
+    supervisor: &Supervisor,
+    entries: &[AppletEntry],
+    data_root: &Path,
+    binary_dir: Option<&Path>,
+) -> BTreeMap<String, String> {
+    let root = match clear_applet_namespaces(data_root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("applets: {e:#}");
+            return entries
+                .iter()
+                .map(|e2| (e2.id.clone(), format!("{e:#}")))
+                .collect();
+        }
+    };
+
+    let mut errors = BTreeMap::new();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = entries
+            .iter()
+            .map(|entry| {
+                let dir = root.join(&entry.id);
+                scope.spawn(move || {
+                    (
+                        entry.id.clone(),
+                        supervisor.start(entry, data_root, binary_dir, &dir),
+                    )
+                })
+            })
+            .collect();
+        for h in handles {
+            if let Ok((id, Err(e))) = h.join() {
+                eprintln!("applet {id}: {e}");
+                errors.insert(id, e);
+            }
+        }
+    });
+    errors
 }
 
 /// Read and validate the applet list out of a data root's config.
@@ -607,61 +529,37 @@ struct Running {
     child: Child,
 }
 
-/// Lazily-spawned applet servers, one per id.
+/// The applet servers, all of them, started at boot and kept running.
 ///
-/// Deliberately simple: spawn on first use, keep alive, and let the
-/// process die with the server. Idle shutdown and restart-with-backoff
-/// are the obvious next increments; neither changes the interface.
+/// There is no lazy start: an applet writes its components as it comes
+/// up, so deferring the start until something requested the applet
+/// would mean its components did not exist until something already knew
+/// to ask for them.
 #[derive(Default)]
 pub struct Supervisor {
     running: Mutex<BTreeMap<String, Running>>,
-    /// Applets whose last start attempt failed, with the reason.
-    ///
-    /// Without this, `ensure` retries on every single request: each
-    /// one spawns a child, waits out the readiness timeout, and kills
-    /// it. A card that polls would turn a broken applet into a stream
-    /// of ten-second requests and one corpse apiece. Remembering the
-    /// failure makes the second request fail immediately with the
-    /// first one's reason.
-    failed: Mutex<BTreeMap<String, String>>,
 }
 
 impl Supervisor {
-    /// Return the port this applet is listening on, spawning it first
-    /// if needed.
-    fn ensure(
+    /// Start one applet and wait for it to bind.
+    ///
+    /// Returns the port. The wait is what makes the caller's subsequent
+    /// store scan safe: the applet writes its directory before binding,
+    /// so a live port means the files are there.
+    fn start(
         &self,
         entry: &AppletEntry,
         data_root: &Path,
         binary_dir: Option<&Path>,
+        frontend_dir: &Path,
     ) -> Result<u16, String> {
-        let mut map = self
-            .running
-            .lock()
-            .map_err(|_| "supervisor poisoned".to_string())?;
-        if let Some(r) = map.get_mut(&entry.id) {
-            // A child that exited leaves a stale port that would
-            // connection-refuse on every request; reap it and respawn.
-            match r.child.try_wait() {
-                Ok(None) => return Ok(r.port),
-                _ => {
-                    if let Some(mut dead) = map.remove(&entry.id) {
-                        let _ = dead.child.wait();
-                    }
-                }
-            }
-        }
-        // A previous start failed. Report that rather than paying the
-        // readiness timeout again on every request.
-        if let Ok(failed) = self.failed.lock() {
-            if let Some(why) = failed.get(&entry.id) {
-                return Err(format!("{why} (cached; restart datalib-http to retry)"));
-            }
-        }
         let port = free_port().map_err(|e| format!("applet {:?}: no free port: {e}", entry.id))?;
         let mut cmd = base_command(entry, data_root, binary_dir)
             .map_err(|e| format!("applet {:?}: {e:#}", entry.id))?;
-        cmd.arg("-p").arg(port.to_string());
+        cmd.arg("-p")
+            .arg(port.to_string())
+            .arg("--frontend-dir")
+            .arg(frontend_dir);
         if let Some(params) = entry
             .params_json()
             .map_err(|e| format!("applet {:?}: params: {e:#}", entry.id))?
@@ -674,96 +572,104 @@ impl Supervisor {
         cmd.stdin(Stdio::null());
         // Capture stderr so a server that dies on startup can say why.
         // Without this the only symptom is a readiness timeout, which
-        // names the port and nothing about the cause — the same
-        // dead-end the step protocol avoids by making a failed step's
-        // last stderr lines its error message.
+        // names the port and nothing about the cause.
         cmd.stderr(Stdio::piped());
+
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("applet {:?}: spawn {:?}: {e}", entry.id, entry.command))?;
-        let stderr = child.stderr.take();
-        let err_h = std::thread::spawn(move || {
-            let mut buf = String::new();
-            if let Some(mut s) = stderr {
-                let _ = s.read_to_string(&mut buf);
-            }
-            buf
-        });
-        let mut running = Running { port, child };
-        if let Err(e) = wait_ready(port, Duration::from_secs(10)) {
+
+        // Drain stderr on a detached thread that both forwards each
+        // line and keeps the tail in a shared buffer.
+        //
+        // Detached, and read without joining, on purpose: the pipe is
+        // held by the child *and every process it spawned*, so killing
+        // a failed applet does not necessarily close it. A `sh` wrapper
+        // whose own child is still alive would otherwise block the
+        // reader — and with it this whole function — until that
+        // grandchild exited.
+        let tail = Arc::new(Mutex::new(Vec::<String>::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let tail = tail.clone();
+            let id = entry.id.clone();
+            std::thread::spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("applet {id}: {line}");
+                    if let Ok(mut t) = tail.lock() {
+                        t.push(line);
+                        // Bounded: this lives as long as the applet.
+                        if t.len() > 40 {
+                            t.drain(..20);
+                        }
+                    }
+                }
+            });
+        }
+
+        if let Err(e) = wait_ready(port, START_TIMEOUT) {
             // Kill *and reap*: `std::process::Child` has no reaping
             // Drop, so a bare `kill` leaves a zombie for the gateway's
             // lifetime.
-            let _ = running.child.kill();
-            let _ = running.child.wait();
-            // The pipe closes when the child dies, so the reader
-            // thread finishes and the tail is available now.
-            let stderr = err_h.join().unwrap_or_default();
-            let detail = if stderr.trim().is_empty() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let collected = tail.lock().map(|t| t.join("\n")).unwrap_or_default();
+            let detail = if collected.trim().is_empty() {
                 String::new()
             } else {
-                format!("; stderr: {}", tail_lines(&stderr, 20))
+                format!("; stderr: {}", tail_lines(&collected, 20))
             };
-            let why = format!(
+            return Err(format!(
                 "applet {:?}: did not start listening on {port}: {e}{detail}",
                 entry.id
-            );
-            if let Ok(mut failed) = self.failed.lock() {
-                failed.insert(entry.id.clone(), why.clone());
-            }
-            return Err(why);
+            ));
         }
-        // The applet came up. Its stderr keeps draining on that
-        // thread; forward it so an applet's logs are not swallowed for
-        // the life of the process.
-        let id_for_log = entry.id.clone();
-        std::thread::spawn(move || {
-            let text = err_h.join().unwrap_or_default();
-            for line in text.lines() {
-                eprintln!("applet {id_for_log}: {line}");
-            }
-        });
-        map.insert(entry.id.clone(), running);
+
+        if let Ok(mut map) = self.running.lock() {
+            map.insert(entry.id.clone(), Running { port, child });
+        }
         Ok(port)
     }
-}
 
-impl Supervisor {
-    /// Stop one applet if it is running, so the next request respawns
-    /// it. Used when its config entry changed under us.
-    fn stop(&self, id: &str) {
+    /// The port an applet is listening on, if it is running.
+    fn port(&self, id: &str) -> Option<u16> {
+        let mut map = self.running.lock().ok()?;
+        let r = map.get_mut(id)?;
+        // A child that exited leaves a stale port that would
+        // connection-refuse on every request; reap it and report gone.
+        match r.child.try_wait() {
+            Ok(None) => Some(r.port),
+            _ => {
+                if let Some(mut dead) = map.remove(id) {
+                    let _ = dead.child.wait();
+                }
+                None
+            }
+        }
+    }
+
+    /// Stop every applet, reaping as it goes.
+    fn stop_all(&self) {
         if let Ok(mut map) = self.running.lock() {
-            if let Some(mut r) = map.remove(id) {
+            for (_, mut r) in std::mem::take(&mut *map) {
                 let _ = r.child.kill();
                 // Reap: `kill` only signals, and an unwaited child stays
                 // a zombie until its parent exits.
                 let _ = r.child.wait();
             }
         }
-        // A previously-failed start is no longer authoritative either.
-        if let Ok(mut failed) = self.failed.lock() {
-            failed.remove(id);
-        }
     }
 }
 
 impl Drop for Supervisor {
     fn drop(&mut self) {
-        if let Ok(mut map) = self.running.lock() {
-            for (_, mut r) in std::mem::take(&mut *map) {
-                let _ = r.child.kill();
-                // Reap: kill only signals, and an unwaited child stays
-                // a zombie until its parent exits.
-                let _ = r.child.wait();
-            }
-        }
+        self.stop_all();
     }
 }
 
 // NOTE: `Drop` runs on an orderly shutdown, not when the gateway is
 // SIGKILLed — in that case the applet children are re-parented to init
-// and keep running until their idle logic (which does not exist yet)
-// would stop them. Putting each child in its own process group and
+// and keep running. Putting each child in its own process group and
 // signalling the group is the fix; it is not done here because idle
 // shutdown will need the same plumbing.
 

@@ -178,10 +178,21 @@ rust_test(
     ],
 )
 
+# Starts real applet processes and binds loopback ports, so it cannot
+# be sandboxed — same treatment as //datalib/ui:e2e_test. Pure store
+# semantics stay hermetic as unit tests in src/frontend.rs.
 rust_test(
     name = "applet_endpoint_test",
     srcs = ["tests/applet_endpoint.rs"],
+    data = ["//datalib/backend/applets:datalib_applet"],
     edition = "2021",
+    env = {
+        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
+    },
+    tags = [
+        "no-sandbox",
+        "requires-network",
+    ],
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
