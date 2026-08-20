@@ -395,7 +395,7 @@ The canonical line is the bare `bazelisk test //...`. Filtering on
 lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
 ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
 filter can drop it; clippy and fmt ride the always-on rustfmt aspect and
-`--config=clippy`.) If a test is host- or
+always-on clippy aspect.) If a test is host- or
 network-dependent it's tagged `requires-network` and/or `no-sandbox`,
 which Bazel respects on its own — `external` is reserved for tests
 that hit third-party services you don't want CI talking to. Prefer
