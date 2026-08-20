@@ -48,7 +48,7 @@ async fn json_req(
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
-    let resp = send(&app, req).await;
+    let resp = send(app, req).await;
     let status = resp.status();
     let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await
@@ -59,7 +59,7 @@ async fn json_req(
 
 async fn manifest(app: &axum::Router) -> Vec<serde_json::Value> {
     let req = Request::get("/api/lib").body(Body::empty()).unwrap();
-    let resp = send(&app, req).await;
+    let resp = send(app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
         .await

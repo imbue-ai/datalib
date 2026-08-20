@@ -281,33 +281,52 @@ build:linux --host_linkopt=-Wl,--as-needed
 build --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
 build --output_groups=+rustfmt_checks
 
-# `--config=clippy` — run rules_rust's clippy aspect across the build
-# graph. Replaces `cargo clippy --all-targets --all-features --
+# Clippy, like rustfmt above, is **always on** for every bazel
+# build/test. Replaces `cargo clippy --all-targets --all-features --
 # -D warnings` in scripts/pre-commit because the cargo invocation has
 # its own incremental cache (separate from bazel's) and went cold
 # after every bazel build, eating 1–2 minutes per commit. The aspect
-# shares bazel's action cache + BuildBuddy remote cache, so a warm
-# `bazelisk build --config=clippy //...` is sub-second.
-# Clippy aspect activation lives on `build:clippy` — only here do
-# we ask bazel to actually run the lint aspect and surface its
-# outputs. (Unlike rustfmt above, clippy is opt-in because warnings
-# can be noisier and we wanted the gate to be commit-time, not
-# every-test-time.)
-build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+# shares bazel's action cache + BuildBuddy remote cache.
+#
+# It used to be opt-in via `--config=clippy`, on the theory that clippy
+# is noisier than rustfmt and belonged at commit time rather than every
+# test run. That backfired twice over:
+#
+#   * Nothing on the default path ran it, so findings accumulated
+#     silently. By the time anyone looked there were 21 across 32
+#     targets, dating back to July, and `bazel run //:precommit` had
+#     been red for months (see the commit that cleared them).
+#   * Opt-in means ALTERNATING, and alternating is what actually costs.
+#     Flipping between `--config=clippy` and a bare build changes the
+#     configuration and discards the analysis cache each way. Measured
+#     on this repo: a warm no-op `bazel build //...` right after a
+#     clippy build took 2.4s (re-analysis) versus 0.5s once the
+#     configuration stopped flipping.
+#
+# The aspect itself is close to free on an incremental build — clippy
+# actions run alongside the rustc compiles rather than extending the
+# critical path. Measured on a leaf-crate edit rebuilding `//...`:
+# 14.5s without the aspect, 12.6s with it. The real cost is a cold
+# cache on a first build, which BuildBuddy shares across everyone.
+#
+# `--config=clippy` is kept below as a no-op alias so existing
+# invocations, scripts and docs keep working.
+build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build --output_groups=+clippy_checks
+
+# Back-compat alias. Deliberately does NOT re-add `--aspects`: bazel
+# would then apply the same aspect twice. Re-stating the output group is
+# harmless (they dedupe), and keeps `--config=clippy` a valid config
+# name — bazel errors on a `--config` that no .bazelrc line defines.
 build:clippy --output_groups=+clippy_checks
 
-# Clippy *configuration* (the .toml file + flags) is set on plain
-# `build` so it has the same constant value on every command. These
-# are Starlark build settings that ride with the analysis cache;
-# leaving them only under `build:clippy` made every alternation
-# between `bazel build --config=clippy //...` (pre-commit hook)
-# and a bare `bazel test //...` flip the values and discard the
-# analysis cache.
-#
-# Setting them globally is a no-op for non-clippy actions: without
-# the aspect activation above, the clippy aspect never runs, so no
-# action reads these settings. The compile actions for rust_library
-# / rust_binary don't depend on them.
+# Clippy *configuration* (the .toml file + flags), also on plain
+# `build`. These are Starlark build settings that ride with the
+# analysis cache, so they have to hold the same value on every command;
+# when they lived under `build:clippy` alone, every alternation between
+# a clippy build and a bare `bazel test //...` flipped them and
+# discarded the analysis cache. That reasoning is what eventually
+# argued for moving the aspect activation itself to plain `build` too.
 #
 # Auto-discover via the workspace clippy.toml. clippy is picky about
 # the filename (must be `clippy.toml` or `.clippy.toml`); ours lives

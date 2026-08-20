@@ -72,11 +72,15 @@ bazelisk test //:lint
 # couldn't link against our bazel-built doltlite amalgamation. We now
 # run clippy through bazel's `rust_clippy_aspect` instead, which
 # inherits the same doltlite linkage as a normal `bazelisk build` —
-# no cargo-side workaround needed. See .bazelrc's `--config=clippy`
-# block for flag wiring.
+# no cargo-side workaround needed.
+#
+# No `--config=clippy`: the aspect is always-on now (see .bazelrc), so a
+# plain build runs it. This step remains because it sweeps the WHOLE
+# graph — `bazelisk test //:lint` above only builds three targets — and
+# because a plain `bazelisk test //...` is not part of this wrapper.
 if [ -d datalib/backend ]; then
-    echo "[rust] bazelisk build --config=clippy //..."
-    bazelisk build --config=clippy //...
+    echo "[rust] bazelisk build //... (clippy aspect is always-on)"
+    bazelisk build //...
 fi
 
 echo "All pre-commit checks passed."
