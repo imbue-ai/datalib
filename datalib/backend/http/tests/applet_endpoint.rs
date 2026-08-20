@@ -428,7 +428,7 @@ async fn frontend_routes_are_behind_the_token_gate() {
     for uri in [
         "/api/frontend".to_string(),
         format!("/modules/{}", component_hash()),
-        "/v/demo/anything".to_string(),
+        "/applet/demo/anything".to_string(),
     ] {
         let resp = app
             .clone()

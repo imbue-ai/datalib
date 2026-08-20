@@ -41,10 +41,10 @@ The child also gets three variables:
 | --- | --- |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (also the cwd) — the step protocol's spelling, reused deliberately |
 | `DATALIB_APPLET_ID` | this instance's config id, the same value `--applet-id` carries |
-| `DATALIB_APPLET_BASE` | `/v/<id>/`, the prefix the gateway proxies here. An applet that emits absolute URLs must build them from this rather than assuming the mount layout |
+| `DATALIB_APPLET_BASE` | `/applet/<id>/`, the prefix the gateway proxies here. An applet that emits absolute URLs must build them from this rather than assuming the mount layout |
 
 `id` must be a valid JavaScript identifier. It is both the mount
-prefix (`/v/<id>/`) and a name injected into card source, and card
+prefix (`/applet/<id>/`) and a name injected into card source, and card
 source is evaluated with `new Function`, so a dotted or digit-leading
 id would be a syntax error at render time rather than at config load.
 
@@ -75,7 +75,7 @@ entry passes — usually the instance's own id — has to come from
 outside.
 
 **2. Serve on a port.** `-p <port>` binds `127.0.0.1:<port>`. The
-gateway proxies `/v/<id>/<path>` to `<path>` on that port.
+gateway proxies `/applet/<id>/<path>` to `<path>` on that port.
 
 That is the whole contract. There is no protocol version, no
 handshake, and no registration call, so a shell script is a viable
@@ -157,14 +157,14 @@ server starts only when a card actually asks one for data.
 
 Every route is behind the per-process API token (`datalib/backend/http/src/auth.rs`),
 and the applet routes are no exception: the gate is an outermost layer,
-so `/api/frontend`, `/modules/<hash>` and `/v/<id>/…` all inherit it.
+so `/api/frontend`, `/modules/<hash>` and `/applet/<id>/…` all inherit it.
 
 Nothing in a component has to carry the token. The browser holds it as
 a same-origin cookie, which it attaches to the component's own
-`fetch("/v/<id>/…")` and to the `import("/modules/<hash>")` that loaded
+`fetch("/applet/<id>/…")` and to the `import("/modules/<hash>")` that loaded
 it. An applet author therefore writes no auth code — but the corollary
 is that a component may only reach the gateway from the page's own
-origin. Fetching a `/v/` URL from an iframe on another origin, or from
+origin. Fetching a `/applet/` URL from an iframe on another origin, or from
 outside the browser without a token, gets a `401`.
 
 The applet's own server needs no token logic either. It binds loopback

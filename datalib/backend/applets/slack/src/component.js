@@ -21,7 +21,7 @@
 // like a channel that holds a single message.
 
 export default function channels(appletId) {
-  const base = `/v/${appletId}`;
+  const base = `/applet/${appletId}`;
 
   return (root, ctx) => {
     let cancelled = false;

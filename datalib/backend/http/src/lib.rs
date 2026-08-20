@@ -74,7 +74,7 @@ pub struct AppState {
     pub progress_tx: worker::ProgressTx,
     /// The configured applets: their components, their gallery
     /// entries, the module store behind `/modules/`, and the
-    /// supervisor behind `/v/`. Empty when the config declares none,
+    /// supervisor behind `/applet/`. Empty when the config declares none,
     /// which is the state every data root starts in.
     pub applets: Arc<applets::AppletRegistry>,
     /// The per-process API token every request must carry. Minted at
@@ -260,8 +260,8 @@ pub fn router(state: AppState) -> Router {
         .route("/modules/{hash}", get(get_module))
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
-        .route("/v/{id}/{*rest}", any(proxy_applet))
-        .route("/v/{id}/", any(proxy_applet_root))
+        .route("/applet/{id}/{*rest}", any(proxy_applet))
+        .route("/applet/{id}/", any(proxy_applet_root))
         .nest_service("/api/media", ServeDir::new(media_dir))
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths

@@ -111,7 +111,7 @@ pub struct DagConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletEntry {
-    /// Instance name. Doubles as the mount prefix (`/v/<id>/`) *and*
+    /// Instance name. Doubles as the mount prefix (`/applet/<id>/`) *and*
     /// as an identifier injected into card-source scope, so it is
     /// restricted to what JavaScript will accept as a variable name —
     /// see [`validate_applets`].
@@ -359,7 +359,7 @@ pub const RESERVED_APPLET_ID: &str = "user";
 ///     card renders — far from the config that caused it. Reject it
 ///     here, where the message can name the file.
 ///   * **Ids are unique.** They are the proxy prefix and the namespace;
-///     two entries claiming one id would make `/v/<id>/` ambiguous.
+///     two entries claiming one id would make `/applet/<id>/` ambiguous.
 ///     TOML cannot enforce this for us since `[[applets]]` is an array.
 ///   * **`user` is reserved.** See [`RESERVED_APPLET_ID`].
 pub fn validate_applets(cfg: &DagConfig) -> Result<()> {

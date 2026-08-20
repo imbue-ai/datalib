@@ -129,7 +129,7 @@ workspace = "Work"
     assert_eq!(entry["component_args"], serde_json::json!(["slack_work"]));
 
     // Now the data call, which is what starts the process.
-    let (status, body) = get_json(&app, "/v/slack_work/channels").await;
+    let (status, body) = get_json(&app, "/applet/slack_work/channels").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["workspace"], "Work");
     assert_eq!(body["channels"][0]["name"], "#eng");
@@ -141,7 +141,7 @@ workspace = "Work"
 
     // Drilling in lists the channel's threads, newest first, each with
     // the document a click should open.
-    let (status, body) = get_json(&app, "/v/slack_work/threads?channel=%23eng").await;
+    let (status, body) = get_json(&app, "/applet/slack_work/threads?channel=%23eng").await;
     assert_eq!(status, StatusCode::OK);
     let threads = body["threads"].as_array().unwrap();
     assert_eq!(threads.len(), 2);
@@ -152,11 +152,11 @@ workspace = "Work"
 
     // The channel name carries a '#', which a URL would read as a
     // fragment — so the encoding has to survive the proxy hop.
-    let (_, body) = get_json(&app, "/v/slack_work/threads?channel=%23nope").await;
+    let (_, body) = get_json(&app, "/applet/slack_work/threads?channel=%23nope").await;
     assert!(body["threads"].as_array().unwrap().is_empty());
 
     // A 404 from the applet survives the proxy as a 404, not a 502.
-    let (status, body) = get_json(&app, "/v/slack_work/nope").await;
+    let (status, body) = get_json(&app, "/applet/slack_work/nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["error"].as_str().unwrap().contains("/nope"), "{body}");
 }
@@ -207,8 +207,8 @@ workspace = "Home"
             .is_file());
     }
 
-    let (_, a_body) = get_json(&app, "/v/a/channels").await;
-    let (_, b_body) = get_json(&app, "/v/b/channels").await;
+    let (_, a_body) = get_json(&app, "/applet/a/channels").await;
+    let (_, b_body) = get_json(&app, "/applet/b/channels").await;
     assert_eq!(a_body["channels"][0]["name"], "#eng");
     assert_eq!(b_body["channels"][0]["name"], "#family");
 }

@@ -62,7 +62,7 @@ use serde::Serialize;
 /// prefer [`ENV_APPLET_BASE`].
 pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
 
-/// The prefix the gateway proxies to this applet (`/v/<id>/`). An
+/// The prefix the gateway proxies to this applet (`/applet/<id>/`). An
 /// applet that emits absolute URLs must build them from this rather
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
@@ -118,7 +118,7 @@ fn base_command(
     // mechanisms.
     cmd.env(datalib_dag::subprocess::ENV_DATA_ROOT, data_root);
     cmd.env(ENV_APPLET_ID, &entry.id);
-    cmd.env(ENV_APPLET_BASE, format!("/v/{}/", entry.id));
+    cmd.env(ENV_APPLET_BASE, format!("/applet/{}/", entry.id));
     for (k, v) in &entry.env {
         cmd.env(k, v);
     }
@@ -334,7 +334,7 @@ fn tail_lines(s: &str, n: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// The applets from `config.toml`, the frontend store they write into,
-/// and the child processes behind `/v/`.
+/// and the child processes behind `/applet/`.
 ///
 /// Rebuilt lazily when `config.toml` changes: every read path calls
 /// [`Self::refresh_if_config_changed`], which costs one `stat` and does
