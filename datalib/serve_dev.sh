@@ -18,23 +18,15 @@ BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
 # The backend's sync worker shells out to the datalib-dag runner (which
-# spawns datalib-step via PATH). Hand it the runfiles paths so
-# UI-triggered "Sync" runs the real pipeline. Honor caller-supplied
-# overrides. Bazel names the step binary `datalib_step`, but step
-# commands look up `datalib-step` on PATH — so stage a dir with a
-# dash-named symlink and hand that over as the binary dir.
-if [[ -z "${DATALIB_DAG_BIN:-}" ]]; then
-  DAG_BIN="$(rlocation _main/datalib/backend/dag/datalib_dag_bin || true)"
-  [[ -x "$DAG_BIN" ]] && export DATALIB_DAG_BIN="$DAG_BIN"
-fi
-BINDIR=""
-if [[ -z "${DATALIB_BINARY_DIR:-}" ]]; then
-  STEP_BIN="$(rlocation _main/datalib/backend/datalib_step/datalib_step || true)"
-  if [[ -x "$STEP_BIN" ]]; then
-    BINDIR="$(mktemp -d -t datalib-bindir.XXXXXX)"
-    ln -s "$STEP_BIN" "$BINDIR/datalib-step"
-    export DATALIB_BINARY_DIR="$BINDIR"
-  fi
+# spawns datalib-step via PATH). Hand it //datalib/backend:bin, which
+# stages every shipped binary under its public dash-separated name in
+# one directory, so UI-triggered "Sync" runs the real pipeline. Honor
+# caller-supplied overrides.
+BIN_DIR="$(rlocation _main/datalib/backend/bin || true)"
+if [[ -d "$BIN_DIR" ]]; then
+  : "${DATALIB_DAG_BIN:=$BIN_DIR/datalib-dag}"
+  : "${DATALIB_BINARY_DIR:=$BIN_DIR}"
+  export DATALIB_DAG_BIN DATALIB_BINARY_DIR
 fi
 [[ -n "${DATALIB_DAG_BIN:-}" ]] && echo "dag bin: $DATALIB_DAG_BIN"
 
@@ -88,7 +80,7 @@ echo "data root: $ROOT_ARG"
 # waiting for the health endpoint to come up.
 "$BIN" "$ROOT_ARG" --no-open &
 BIN_PID=$!
-trap 'kill "$BIN_PID" 2>/dev/null || true; [[ -n "$BINDIR" ]] && rm -rf "$BINDIR"' EXIT INT TERM
+trap 'kill "$BIN_PID" 2>/dev/null || true' EXIT INT TERM
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then break; fi

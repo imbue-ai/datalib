@@ -34,9 +34,9 @@
 //!   * **Invocation.** `datalib-dag <config> [--now] [--reset-and-redownload]`,
 //!     with the config as a POSITIONAL arg (there is no `--config`). The runner
 //!     resolves step commands like `datalib-step download slack_api` purely
-//!     through the child `PATH`, and bazel names that binary `datalib_step`
-//!     with an underscore — so we stage a dir holding a dash-named symlink and
-//!     pass `--binary-dir`. See [`stage_bindir`].
+//!     through the child `PATH`, falling back to its own directory — so we run
+//!     it out of `//datalib/backend:bin`, which stages every binary under its
+//!     public dash-separated name, and pass no `--binary-dir`. See [`bin_dir`].
 //!   * **Where the run record comes from.** The old binary wrote an aggregate
 //!     `sync_summary_<now>.json` carrying per-source `stats`. `datalib-dag`
 //!     emits a `run_summary` NDJSON event on stderr instead, and it is
@@ -388,63 +388,28 @@ fn snap_base() -> PathBuf {
 /// root under every bazel config — the same trap documented at length in
 /// `datalib/backend/core/tests/fixture_db_snapshot.rs`. The env override is
 /// kept as an escape hatch for running against a hand-built binary.
-fn runfiles_binary(env_override: &str, rel: &str) -> PathBuf {
-    if let Ok(p) = std::env::var(env_override) {
+fn bin_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("DATALIB_BINARY_DIR") {
         return PathBuf::from(p);
     }
+    const REL: &str = "_main/datalib/backend/bin";
     let r = runfiles::Runfiles::create().unwrap_or_else(|e| {
         panic!(
-            "no runfiles tree ({e}); run this through bazel, or set {env_override} \
-             to the binary path"
+            "no runfiles tree ({e}); run this through bazel, or set \
+             DATALIB_BINARY_DIR to a directory holding datalib-dag + datalib-step"
         )
     });
-    let path = r
-        .rlocation(rel)
-        .unwrap_or_else(|| panic!("rlocation failed for {rel}"));
-    assert!(
-        path.exists(),
-        "binary missing from runfiles: {rel} (resolved to {})",
-        path.display()
-    );
-    path
-}
-
-fn dag_binary() -> PathBuf {
-    runfiles_binary(
-        "DATALIB_DAG_BIN",
-        "_main/datalib/backend/dag/datalib_dag_bin",
-    )
-}
-
-fn step_binary() -> PathBuf {
-    runfiles_binary(
-        "DATALIB_STEP_BIN",
-        "_main/datalib/backend/datalib_step/datalib_step",
-    )
-}
-
-/// Stage a directory holding a `datalib-step` symlink and return it, for
-/// `--binary-dir`.
-///
-/// The runner resolves a step's `command:` (`datalib-step download slack_api`)
-/// by plain `execvp` against the child's `PATH`, to which it prepends
-/// `--binary-dir`. Bazel emits the target as `datalib_step` (underscore) while
-/// every config says `datalib-step` (dash), so the symlink is what bridges the
-/// two. Same trick as `tests/fixtures/run_sync_pipeline.py`.
-fn stage_bindir(run_root: &Path) -> PathBuf {
-    let bindir = run_root.join("bindir");
-    std::fs::create_dir_all(&bindir).expect("create bindir");
-    let link = bindir.join("datalib-step");
-    if !link.exists() {
-        // Canonicalize: runfiles entries are themselves symlinks, and a
-        // symlink-to-a-symlink resolved from a different cwd is a good way to
-        // get a confusing ENOENT out of execvp.
-        let target = step_binary()
-            .canonicalize()
-            .expect("canonicalize datalib-step");
-        std::os::unix::fs::symlink(&target, &link).expect("symlink datalib-step");
+    let dir = r
+        .rlocation(REL)
+        .unwrap_or_else(|| panic!("rlocation failed for {REL}"));
+    for name in ["datalib-dag", "datalib-step"] {
+        assert!(
+            dir.join(name).exists(),
+            "{name} missing from the staged binary dir ({})",
+            dir.display()
+        );
     }
-    bindir
+    dir
 }
 
 /// Root for this run's `data_root`, persisted pytest-`tmp_path`-style: each
@@ -534,14 +499,15 @@ fn manual_e2e_live_sync_golden() {
     let cfg_path = run_root.join("config.toml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
-    let bin = dag_binary();
-    let bindir = stage_bindir(&run_root);
+    // `//datalib/backend:bin` stages datalib-dag and datalib-step side by
+    // side under their public names, so the runner finds the step binary via
+    // its own-directory fallback — no `--binary-dir` needed.
+    let bin = bin_dir().join("datalib-dag");
     eprintln!("[test] dag bin = {}", bin.display());
-    eprintln!("[test] bindir  = {}", bindir.display());
     eprintln!("[test] data_root = {}", data_root.display());
 
     let now = "2026-05-21T18:00:00Z";
-    let run1 = run_pipeline(&bin, &bindir, &cfg_path, now, &[]);
+    let run1 = run_pipeline(&bin, &cfg_path, now, &[]);
     assert!(
         run1.status.success(),
         "pipeline run 1 failed (exit {:?}). Last stderr:\n{}",
@@ -662,7 +628,7 @@ fn manual_e2e_live_sync_golden() {
     // [redacted], but per-source `stats` counts are PRESERVED — those
     // are precisely the numbers that prove (or break) incrementality.
     let now2 = "2026-05-21T18:05:00Z";
-    let run2 = run_pipeline(&bin, &bindir, &cfg_path, now2, &[]);
+    let run2 = run_pipeline(&bin, &cfg_path, now2, &[]);
     assert!(
         run2.status.success(),
         "pipeline run 2 failed (exit {:?}). Last stderr:\n{}",
@@ -724,7 +690,7 @@ fn manual_e2e_live_sync_golden() {
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
-    let run3 = run_pipeline(&bin, &bindir, &cfg_path, now3, &["--reset-and-redownload"]);
+    let run3 = run_pipeline(&bin, &cfg_path, now3, &["--reset-and-redownload"]);
     assert!(
         run3.status.success(),
         "pipeline run 3 (reset) failed (exit {:?}). Last stderr:\n{}",
@@ -911,24 +877,16 @@ impl PipelineRun {
     }
 }
 
-/// Spawn `datalib-dag <config> --binary-dir <bindir> --now <now> [extra…]`.
+/// Spawn `datalib-dag <config> --now <now> [extra…]`.
 ///
 /// The config is a POSITIONAL arg — there is no `--config` flag. stderr is
 /// captured (not inherited) because that is where the NDJSON run record goes;
 /// it is echoed on failure via [`PipelineRun::stderr_tail`], and in full when
 /// `--nocapture` is in play and the test fails.
-fn run_pipeline(
-    bin: &Path,
-    bindir: &Path,
-    cfg_path: &Path,
-    now: &str,
-    extra_args: &[&str],
-) -> PipelineRun {
+fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> PipelineRun {
     eprintln!("[test] run: {} --now {now} {extra_args:?}", bin.display());
     let out = Command::new(bin)
         .arg(cfg_path)
-        .arg("--binary-dir")
-        .arg(bindir)
         .arg("--now")
         .arg(now)
         .args(extra_args)

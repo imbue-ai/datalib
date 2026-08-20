@@ -94,10 +94,10 @@ rust_test(
     name = "manual_e2e_live_sync_golden",
     srcs = ["tests/manual_e2e_live_sync_golden.rs"],
     crate_root = "tests/manual_e2e_live_sync_golden.rs",
-    data = [
-        ":datalib_dag_bin",
-        "//datalib/backend/datalib_step:datalib_step",
-    ],
+    # The staged binary dir, not the two targets: it holds datalib-dag and
+    # datalib-step side by side under their public names, which is what lets
+    # the runner find the step binary without `--binary-dir`.
+    data = ["//datalib/backend:bin"],
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
@@ -130,15 +130,12 @@ rust_test(
 # straight into `$DATALIB_MANUAL_E2E_DIR/snapshots` (an absolute host path), so
 # nothing lands in this repo's source tree.
 #
-# `extra_data` re-declares the binaries because bazel does NOT propagate a
+# `extra_data` re-declares the binary dir because bazel does NOT propagate a
 # rust_test's `data`/`env` to the sibling sh_binary this macro generates —
 # without it the runfiles lookup finds nothing under `bazel run`.
 insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
-    extra_data = [
-        ":datalib_dag_bin",
-        "//datalib/backend/datalib_step:datalib_step",
-    ],
+    extra_data = ["//datalib/backend:bin"],
     test_args = ["--ignored"],
 )

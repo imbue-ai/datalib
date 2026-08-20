@@ -7,16 +7,20 @@ from artifact paths. See the header comment of `dag_example.toml` and
 
 ## Running a config
 
-Build the DAG runner and the step binary, symlink the step binary
-under its `datalib-step` name, and point the runner at a config:
+Build the binary directory and point the runner at a config:
 
 ```sh
-bazelisk build //datalib/backend/dag:datalib_dag_bin \
-               //datalib/backend/datalib_step:datalib_step
-bindir=$(mktemp -d) && ln -s "$PWD"/bazel-bin/datalib/backend/datalib_step/datalib_step "$bindir"/datalib-step
-bazel-bin/datalib/backend/dag/datalib_dag_bin configs/dag_example.toml \
-    --binary-dir "$bindir"
+bazelisk build //datalib/backend:bin
+bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
 ```
+
+`//datalib/backend:bin` stages every shipped binary under its public
+dash-separated name (`datalib-dag`, `datalib-step`, `datalib-http`, …)
+in one directory — the same layout `scripts/install.sh` produces. That
+matters because `datalib-dag` resolves a step's `command` against PATH
+with its own directory as the fallback, so `datalib-step` is found with
+no flag. Pass `--binary-dir DIR` only when the binaries live somewhere
+else.
 
 ## Tiny run
 

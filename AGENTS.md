@@ -24,8 +24,8 @@ are relative to the repo root.
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete,
-  commented steps-format config, including the `--binary-dir` recipe for
-  running `datalib-dag` from a bazel build.
+  commented steps-format config, including the recipe for running
+  `datalib-dag` from a bazel build.
 
 **Data architecture**
 
@@ -117,6 +117,11 @@ datalib/
   backend/     Rust workspace.
     dag/           `datalib-dag`: the DAG runner (scheduler, step
                    contract, subprocess driver, NDJSON event stream).
+                   `//datalib/backend:bin` stages it plus every other
+                   shipped binary under their public `datalib-*` names
+                   in one directory (`:dist`, laid out as installed) —
+                   build that, not the individual targets, whenever you
+                   need to actually run a pipeline.
     datalib_step/  `datalib-step`: the built-in step commands —
                    download/render <source_type>, grid_index, qmd_index.
     etl/           shared ingest machinery (raw stores, blob CAS,
@@ -482,6 +487,12 @@ bazelisk test //datalib/backend/...
 
 # Rebuild the fixture ingest (dump.sql + qmd.tar)
 bazelisk build //tests/fixtures:ingested_tng
+
+# Stage every shipped binary under its public dash-separated name, then
+# run a pipeline against a data root's config (no --binary-dir needed:
+# datalib-dag falls back to its own directory to find datalib-step)
+bazelisk build //datalib/backend:bin
+bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
 ## Provenance: `claude_api` vs `claude_export`

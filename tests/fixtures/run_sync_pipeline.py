@@ -257,6 +257,20 @@ outputs = ["system/backend_index"]"""
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
     # it to the runner as --binary-dir.
+    #
+    # `//datalib/backend:bin` stages exactly this layout, and everywhere
+    # else that needed a bindir now depends on it instead of hand-rolling
+    # one. NOT here, deliberately: `bazelisk coverage` instruments
+    # datalib_dag / datalib_step through `ingested_tng_test`'s *direct*
+    # `data` deps on those two targets — see docs/dev/coverage.md, "Three
+    # things had to be true" #1, which names the
+    # `bazel-bin/datalib/backend/{dag/datalib_dag_bin,datalib_step/
+    # datalib_step}` paths specifically. Routing through a
+    # copy_to_directory would run copies at a different path, and if the
+    # coverage transition failed to survive the copy the failure is
+    # silent: coverage for the two most important binaries in the tree
+    # just reads zero, with nothing failing. Worth ~6 lines only if
+    # someone verifies a before/after `tools/run_coverage.sh` run.
     bindir = workspace / "bindir"
     bindir.mkdir(exist_ok=True)
     step_link = bindir / "datalib-step"

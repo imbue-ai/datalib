@@ -23,14 +23,14 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
-DAG_BIN="$(rlocation _main/datalib/backend/dag/datalib_dag_bin)"
-STEP_BIN="$(rlocation _main/datalib/backend/datalib_step/datalib_step)"
+BIN_DIR="$(rlocation _main/datalib/backend/bin)"
+DAG_BIN="$BIN_DIR/datalib-dag"
 SERVE_SH="$(rlocation _main/datalib/serve_dev.sh)"
 # `:tiny_fixture` ships the two TEI XMLs at this runfiles path.
 # rlocation gives us one file's path; the dir is its parent.
 GRC_XML="$(rlocation _main/datalib/backend/etl/providers/perseus/tests/fixtures/perseus_tiny/tlg0003.tlg001.perseus-grc2.xml)"
-[[ -x "$DAG_BIN" ]]   || { echo "ERROR: datalib_dag not found at $DAG_BIN" >&2; exit 1; }
-[[ -x "$STEP_BIN" ]]  || { echo "ERROR: datalib_step not found at $STEP_BIN" >&2; exit 1; }
+[[ -x "$DAG_BIN" ]]              || { echo "ERROR: datalib-dag not found at $DAG_BIN" >&2; exit 1; }
+[[ -x "$BIN_DIR/datalib-step" ]] || { echo "ERROR: datalib-step not found in $BIN_DIR" >&2; exit 1; }
 [[ -x "$SERVE_SH" ]]  || { echo "ERROR: serve_dev.sh not found at $SERVE_SH" >&2; exit 1; }
 [[ -f "$GRC_XML" ]]   || { echo "ERROR: perseus tiny fixture not found at $GRC_XML" >&2; exit 1; }
 PERSEUS_FIXTURE_DIR="$(dirname "$GRC_XML")"
@@ -68,12 +68,6 @@ inputs = ["**/rendered_md"]
 outputs = ["system/qmd"]
 EOF
 
-# Step commands find `datalib-step` via PATH; bazel names the binary
-# `datalib_step`, so stage a dash-named symlink dir for --binary-dir.
-BINDIR="$ROOT/.bindir"
-mkdir -p "$BINDIR"
-ln -s "$STEP_BIN" "$BINDIR/datalib-step"
-
 # Mirror the model-cache symlink that materialize_tng_root.sh sets up,
 # so qmd-indexer can find the GGUF weights without re-downloading them
 # on every launch. Path matches qmd's own default; the cache itself is
@@ -89,6 +83,8 @@ fi
 # launches. Value matches `:dev_tng`'s style — far-future date so
 # it sorts last in any timestamp comparison.
 echo "[dev_perseus] running render+index against $PERSEUS_FIXTURE_DIR" >&2
-"$DAG_BIN" "$ROOT/config.toml" --binary-dir "$BINDIR" --now '2369-04-15T00:00:00+00:00'
+# No --binary-dir: the runner falls back to its own directory to find
+# `datalib-step`, and //datalib/backend:bin puts them side by side.
+"$DAG_BIN" "$ROOT/config.toml" --now '2369-04-15T00:00:00+00:00'
 
 exec "$SERVE_SH" "$ROOT"

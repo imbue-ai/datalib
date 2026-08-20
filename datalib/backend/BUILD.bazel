@@ -1,3 +1,4 @@
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files([
@@ -94,5 +95,43 @@ filegroup(
         "//datalib/backend/etl:latchkey_curl_dispatch",
         "//datalib/backend/etl:latchkey_curl_impersonate",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# The `:dist` binaries laid out the way they are actually installed: one
+# directory, every binary under its public `datalib-<name>` / `latchkey-*`
+# name. This is the layout `scripts/install.sh` produces on a user's
+# machine, and the one three separate lookups assume:
+#
+#   * `datalib-dag` resolves a step's `command:` (`datalib-step download
+#     slack_api`) against PATH, falling back to its own directory when no
+#     `--binary-dir` flag or config `binary_dir` is given
+#     (`resolve_binary_dir` in dag/src/config.rs).
+#   * `datalib-step` finds the dispatch curl as a sibling of itself
+#     (`datalib_etl::latchkey::ensure_curl_dispatch`).
+#   * the dispatch curl finds the impersonator the same way.
+#
+# Bazel names each output after its target (`datalib_step`,
+# `datalib_dag_bin`), so without the rename every caller has to stage a
+# dash-named symlink dir by hand before it can run a pipeline. Depend on
+# this instead:
+#
+#   bazelisk build //datalib/backend:bin
+#   bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
+#
+# Keep the name mapping in sync with release.yml's stage step, which
+# performs the same rename when building the release tarball.
+copy_to_directory(
+    name = "bin",
+    srcs = [":dist"],
+    replace_prefixes = {
+        "dag/datalib_dag_bin": "datalib-dag",
+        "datalib_step/datalib_step": "datalib-step",
+        "http/datalib_http_bin": "datalib-http",
+        "migrate_config/datalib_migrate_config_bin": "datalib-migrate-config",
+        "etl/latchkey_curl_dispatch": "latchkey-curl-dispatch",
+        "etl/latchkey_curl_impersonate": "latchkey-curl-impersonate",
+    },
+    root_paths = ["datalib/backend"],
     visibility = ["//visibility:public"],
 )
