@@ -75,7 +75,11 @@ dactalView() card ─► iframe ─► /dactal/index.html
   - `index.html` — the explorer page loaded in the iframe. Two inputs: a
     Datalib search (pulls a working set into the browser) and a DACTAL query
     over it. Reuses DACTAL's engine + renderer but not its host page (no
-    saved-query store / AI assist / adapters).
+    saved-query store / AI assist / adapters). Also carries the CSP — see
+    caveat 5.
+  - `main.js` — that page's own logic (query bar, render loop, the globals
+    the vendored renderer expects). Split out of `index.html` so the CSP
+    can forbid inline script.
   - `vendor/` — the three pinned DACTAL scripts.
 
 `public/**` is already in `datalib/ui/BUILD.bazel`'s `vite_inputs`, so the
@@ -87,8 +91,15 @@ DACTAL ships as classic scripts that attach to `window` globals, assume a single
 engine instance per page, and emit inline `onclick=` handlers that resolve
 against the top-level window. Mounting that into a card's Shadow DOM would break
 the inline handlers and cap us at one DACTAL card per app (shared globals). The
-iframe gives each card its own window/engine/IndexedDB and full isolation from
-the Vue app. The iframe `src` is the explicit `/dactal/index.html`, not the bare
+iframe gives each card its own window/engine/IndexedDB, which is what that
+reasoning was about. It is **not a security boundary**: the frame has no
+`sandbox` attribute and is served from the app's own origin, so its scripts can
+reach `/api/*` directly, same-origin, with the session cookie attached — CORS
+never enters into it. What constrains that page is the CSP (caveat 5: what it
+may load) and the API token (what may reach the API at all), not the frame.
+Giving it a real boundary means `sandbox` without `allow-same-origin`, which
+needs the `postMessage` bridge in caveat 4 first.
+The iframe `src` is the explicit `/dactal/index.html`, not the bare
 `/dactal/` — a directory request misses the static file and hits the SPA
 fallback, which serves the main app instead.
 
@@ -106,10 +117,36 @@ fallback, which serves the main app instead.
 4. **Drill-down stays inside DACTAL** — clicking a row re-runs a DACTAL query, it
    does not open a Datalib document card. Wiring "open the chat" needs a
    `postMessage` bridge from the iframe to `ctx.host.openCard(...)` (not yet done).
-5. **Provenance & licensing.** Single-author project, static JS from dactal.org;
-   **no license is stated** in the files or on the site. A pinned snapshot is
-   vendored under `public/dactal/vendor/` — **resolve licensing with the author
-   before shipping a distributed build.** See `vendor/PROVENANCE.md`.
+5. **The vendored snapshot phones home — and is pinned shut by a CSP.**
+   Three functions in `vendor/dactal_utils.js` load code from `dactal.org`
+   at *runtime*: `dactal_ai_init()` (:325) and `loadscript()` (:381) inject
+   `<script src="https://dactal.org/…">`, and `loadscript_namespaced()`
+   (:393) fetches from there and runs the text through `new Function`.
+
+   Nothing in Datalib calls them — they are **dormant, not active**
+   (`dactal_ai_init` is defined and never invoked, and we never write the
+   `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` localStorage keys it gates on;
+   the two `loadscript` variants are reached only from inside
+   `dactal_utils.js`, on dataset-declared connectors, which our host page
+   does not use). But they are one call away, and a future dataset — or a
+   refresh of the snapshot — could wake them. Fetching at runtime also
+   quietly defeats the point of pinning: you would get whatever
+   dactal.org serves *today*, with no SRI and no version pin.
+
+   So `public/dactal/index.html` carries a CSP — `script-src 'self'
+   'unsafe-eval'; connect-src 'self'` — which makes all three fail closed
+   permanently. It lives in the host page rather than in `vendor/`, which
+   keeps the "unmodified pinned copies" property `vendor/PROVENANCE.md`
+   depends on. `'unsafe-eval'` has to stay: the query language evaluates
+   expressions through `eval` (`dactal.js:2052`) and `new Function`. The
+   page's own script is in `main.js`, not inline, precisely so that
+   `script-src` need not allow `'unsafe-inline'` — **do not move it back
+   inline.** Issue #138, mitigation 4.
+
+6. **Licensing.** Single-author project, static JS from dactal.org; no
+   license is stated in the files or on the site. Settled for our
+   purposes — DACTAL is Imbue's — so this is a provenance-tracking
+   question, not a trust-the-author one. See `vendor/PROVENANCE.md`.
 
 ### What it adds
 Grouping, annotators (count/total/average/median…), heatmaps, and tag-clouds over
