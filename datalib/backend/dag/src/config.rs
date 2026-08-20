@@ -31,7 +31,7 @@
 //! [[applets]]
 //! id = "slack_view"                # a JS identifier: it reaches card
 //! title = "Slack"                  # source as a bare name
-//! command = "datalib-view-slack"
+//! command = "datalib-applet slack"
 //! [applets.params]
 //! tree = "slack/rendered_md"
 //! ```
@@ -659,7 +659,7 @@ mod applet_tests {
 [[applets]]
 id = "slack_work"
 title = "Work Slack"
-command = "datalib-view-slack"
+command = "datalib-applet slack"
 [applets.params]
 tree = "slack_work/rendered_md"
 "#);
@@ -732,13 +732,13 @@ command = "b"
         let c = cfg(r#"
 [[applets]]
 id = "a"
-command = "datalib-view-slack"
+command = "datalib-applet slack"
 [applets.params]
 tree = "a/rendered_md"
 
 [[applets]]
 id = "b"
-command = "datalib-view-slack"
+command = "datalib-applet slack"
 [applets.params]
 tree = "b/rendered_md"
 "#);

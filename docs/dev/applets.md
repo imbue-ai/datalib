@@ -21,7 +21,7 @@ scheduled and owns no artifacts: it reads what steps already wrote.
 [[applets]]
 id = "slack_work"
 title = "Work Slack"
-command = "datalib-view-slack"
+command = "datalib-applet slack"
 [applets.params]
 tree = "slack/rendered_md"
 ```
@@ -226,7 +226,13 @@ nothing logged.
 
 ## Reference implementation
 
-`datalib/backend/applets/slack` — `datalib-view-slack`. It reads the
+`datalib/backend/applets` — `datalib-applet`, one subcommand per
+applet (today just `slack`), the same shape as `datalib-step`. One
+binary rather than one per applet keeps the shared machinery in one
+place and ships one file instead of a growing list; adding an applet is
+a subcommand plus a module, not a new crate and five packaging edits.
+
+The Slack applet reads the
 cross-provider `.grid_rows.json` sidecar contract as untyped JSON
 rather than linking the schema or provider crates, which keeps an
 applet a small program. It ships in `//datalib/backend:dist` alongside
@@ -234,12 +240,24 @@ applet a small program. It ships in `//datalib/backend:dist` alongside
 `datalib/backend/http/src/frontend.rs` (which knows nothing about
 applets) and the calling side is `datalib/backend/http/src/applets.rs`.
 
-Its two-level shape is worth copying: Slack renders one document per
-*thread*, and every message in a thread carries that thread's
-`markdown_uuid`. So `/channels` lists channels with thread and message
-counts, `/threads?channel=…` lists one channel's threads, and only a
-thread maps to a document the card opens. An earlier version went
-straight from channel to document, which picked one arbitrary thread
-and made a 45-message channel look like it held a single message —
-the general lesson being to check what a `markdown_uuid` actually
-identifies before treating it as "the document for this thing".
+Its three-level shape mirrors the Slack app, and follows from how the
+data is rendered: one document per *thread*, with every message in it
+carrying that thread's `markdown_uuid` and a `message_index`.
+
+| Level | Where it lives | What it shows |
+| --- | --- | --- |
+| channels | `/channels` | every channel, with thread and message counts |
+| one channel | `/channel?name=…` | each thread's **opening message** (index 0), replies collapsed behind a "N replies" link |
+| one thread | `documentView` | the whole conversation |
+
+The third level is deliberately not an endpoint. The thread document is
+real rendered markdown with formatting, media and edges, so the card
+opens it with the builtin document view rather than reimplementing all
+of that badly. The first two navigate in place, so a workspace never
+costs more than one column until you open a thread.
+
+An earlier version went straight from channel to document, which picked
+one arbitrary thread and made a 45-message channel look like it held a
+single message — the general lesson being to check what a
+`markdown_uuid` actually identifies before treating it as "the document
+for this thing".

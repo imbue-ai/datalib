@@ -581,7 +581,7 @@ fn load_entries(
     match datalib_dag::config::load(&cfg_path) {
         Ok((cfg, _)) => {
             // Resolve `binary_dir` exactly the way the DAG runner does,
-            // so `command = "datalib-view-slack"` finds the same binary
+            // so `command = "datalib-applet slack"` finds the same binary
             // whether a step or an applet names it.
             let dir = datalib_dag::config::resolve_binary_dir(&cfg, binary_dir.as_deref());
             match datalib_dag::config::validate_applets(&cfg) {

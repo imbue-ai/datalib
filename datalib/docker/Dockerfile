@@ -1,7 +1,7 @@
 # Datalib — production runtime image.
 #
 # Ships the release binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
-# `datalib-migrate-config`, `datalib-view-slack`,
+# `datalib-migrate-config`, `datalib-applet`,
 # `latchkey-curl-impersonate`) plus Node + `latchkey` so users can
 # register services and run syncs from a single container.
 #
@@ -208,7 +208,7 @@ RUN set -eux; \
     install -m 0755 "$staged/datalib-dag"                       /usr/local/bin/datalib-dag; \
     install -m 0755 "$staged/datalib-migrate-config"            /usr/local/bin/datalib-migrate-config; \
     install -m 0755 "$staged/datalib-step"                      /usr/local/bin/datalib-step; \
-    install -m 0755 "$staged/datalib-view-slack"                /usr/local/bin/datalib-view-slack; \
+    install -m 0755 "$staged/datalib-applet"                    /usr/local/bin/datalib-applet; \
     install -m 0755 "$staged/datalib-http"                  /usr/local/bin/datalib-http; \
     install -m 0755 "$staged/latchkey-curl-dispatch"            /usr/local/bin/latchkey-curl-dispatch; \
     install -m 0755 "$staged/latchkey-curl-impersonate"         /usr/local/bin/latchkey-curl-impersonate; \
@@ -218,7 +218,7 @@ RUN set -eux; \
     # anything else, so we can't use it the same way here.
     datalib-dag --version; \
     test -x /usr/local/bin/datalib-step; \
-    test -x /usr/local/bin/datalib-view-slack; \
+    test -x /usr/local/bin/datalib-applet; \
     test -x /usr/local/bin/datalib-http; \
     test -x /usr/local/bin/latchkey-curl-dispatch; \
     test -x /usr/local/bin/latchkey-curl-impersonate

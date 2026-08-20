@@ -139,9 +139,9 @@ datalib/
                    schema and the tree's last YAML parser, so the
                    shipping programs accept only `config.toml`.
     core/          data-root layout, doltlite repo access, qmd, search.
-    applets/       one crate per applet — a config-declared server
-                   contributing card components + their endpoints
-                   (applets/slack: `datalib-view-slack`).
+    applets/       `datalib-applet`: the applet host, one subcommand
+                   per applet (today: slack). An applet contributes
+                   card components + the endpoints behind them.
     http/          `datalib-http`: API server + sync worker + UI host +
                    the applet gateway (src/applets.rs). Every route is
                    behind a per-process API token (src/auth.rs) — read

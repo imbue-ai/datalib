@@ -122,7 +122,7 @@ outputs = ["system/qmd"]
 [[applets]]
 id = "slack_view"
 title = "Slack"
-command = "datalib-view-slack"
+command = "datalib-applet slack"
 [applets.params]
 tree = "slack/rendered_md"
 workspace = "Slack"

@@ -201,10 +201,10 @@ rust_test(
 rust_test(
     name = "applet_proxy_test",
     srcs = ["tests/applet_proxy.rs"],
-    data = ["//datalib/backend/applets/slack:datalib_view_slack"],
+    data = ["//datalib/backend/applets:datalib_applet"],
     edition = "2021",
     env = {
-        "SLACK_APPLET_BIN": "$(rootpath //datalib/backend/applets/slack:datalib_view_slack)",
+        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
     },
     tags = [
         "no-sandbox",

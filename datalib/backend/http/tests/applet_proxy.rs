@@ -60,16 +60,17 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Val
     )
 }
 
-/// The real reference applet, built by Bazel and handed over in `env`.
-/// Using it rather than only a fixture is the point of this file: it
-/// is the one test where the applet's hand-written HTTP responses and
-/// the gateway's hand-written parser actually meet.
-fn slack_applet_bin() -> PathBuf {
-    PathBuf::from(
-        std::env::var("SLACK_APPLET_BIN").expect("SLACK_APPLET_BIN set by the BUILD rule"),
-    )
-    .canonicalize()
-    .expect("applet binary exists")
+/// The real applet host, built by Bazel and handed over in `env`,
+/// spelled the way a config would: binary plus subcommand.
+///
+/// Using it rather than only a fixture is the point of this file: it is
+/// the one test where an applet's hand-written HTTP responses and the
+/// gateway's hand-written parser actually meet.
+fn applet_command() -> String {
+    let bin = PathBuf::from(std::env::var("APPLET_BIN").expect("APPLET_BIN set by the BUILD rule"))
+        .canonicalize()
+        .expect("applet binary exists");
+    format!("{} slack", bin.display())
 }
 
 /// A rendered tree shaped the way Slack renders: one document per
@@ -83,8 +84,8 @@ fn seed_tree(root: &Path, rel: &str, channel: &str) {
         format!(
             r#"{{"rows":[
               {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":null,"text":"first thread"}},
-              {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":0,"text":"first thread"}},
-              {{"channel":"{channel}","when_ts":"2026-01-01T00:01:00Z","markdown_uuid":"md1","message_index":1,"text":"a reply"}}
+              {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":0,"author":"ann","text":"first thread"}},
+              {{"channel":"{channel}","when_ts":"2026-01-01T00:01:00Z","markdown_uuid":"md1","message_index":1,"author":"bob","text":"a reply"}}
             ]}}"#
         ),
     )
@@ -94,7 +95,7 @@ fn seed_tree(root: &Path, rel: &str, channel: &str) {
         format!(
             r#"{{"rows":[
               {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":null,"text":"second thread"}},
-              {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":0,"text":"second thread"}}
+              {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":0,"author":"cid","text":"second thread"}}
             ]}}"#
         ),
     )
@@ -117,7 +118,7 @@ command = "{bin}"
 tree = "slack/rendered_md"
 workspace = "Work"
 "#,
-        bin = slack_applet_bin().display()
+        bin = applet_command()
     );
     let app = router(state_with(tmp.path(), &cfg).await);
 
@@ -139,20 +140,28 @@ workspace = "Work"
     assert_eq!(body["channels"][0]["threads"], 2);
     assert_eq!(body["channels"][0]["messages"], 3);
 
-    // Drilling in lists the channel's threads, newest first, each with
-    // the document a click should open.
-    let (status, body) = get_json(&app, "/applet/slack_work/threads?channel=%23eng").await;
+    // Level 2 lists the channel's threads, each showing its opening
+    // message with the rest counted as replies — the shape the Slack
+    // app has.
+    let (status, body) = get_json(&app, "/applet/slack_work/channel?name=%23eng").await;
     assert_eq!(status, StatusCode::OK);
     let threads = body["threads"].as_array().unwrap();
     assert_eq!(threads.len(), 2);
-    assert_eq!(threads[0]["markdown_uuid"], "md2");
-    assert_eq!(threads[0]["title"], "second thread");
-    assert_eq!(threads[1]["markdown_uuid"], "md1");
-    assert_eq!(threads[1]["messages"], 2);
+    // Oldest first, the way a channel reads.
+    assert_eq!(threads[0]["markdown_uuid"], "md1");
+    assert_eq!(threads[0]["author"], "ann");
+    assert_eq!(threads[0]["text"], "first thread");
+    assert_eq!(
+        threads[0]["replies"], 1,
+        "everything after the opening message"
+    );
+    // A thread whose opening message is all there is has nothing to
+    // expand, which is what the card keys its link on.
+    assert_eq!(threads[1]["replies"], 0);
 
     // The channel name carries a '#', which a URL would read as a
     // fragment — so the encoding has to survive the proxy hop.
-    let (_, body) = get_json(&app, "/applet/slack_work/threads?channel=%23nope").await;
+    let (_, body) = get_json(&app, "/applet/slack_work/channel?name=%23nope").await;
     assert!(body["threads"].as_array().unwrap().is_empty());
 
     // A 404 from the applet survives the proxy as a 404, not a 502.
@@ -168,7 +177,7 @@ async fn two_reference_instances_share_a_module_and_serve_their_own_data() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path(), "work/rendered_md", "#eng");
     seed_tree(tmp.path(), "home/rendered_md", "#family");
-    let bin = slack_applet_bin();
+    let bin = applet_command();
     let cfg = format!(
         r#"
 [[applets]]
@@ -185,7 +194,7 @@ command = "{bin}"
 tree = "home/rendered_md"
 workspace = "Home"
 "#,
-        bin = bin.display()
+        bin = bin
     );
     let app = router(state_with(tmp.path(), &cfg).await);
 
