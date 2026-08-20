@@ -43,13 +43,23 @@ fixtures/
 │   `position.new_path`/`new_line`) and free-form discussions
 │   (`individual_note: true`) so consumers see both shapes.
 │
-└── notion_web/                event-store JSONL written by `download/notion_web.py`.
+├── notion_web/                event-store JSONL written by `download/notion_web.py`.
     └── <entity>/{created,updated}/events.jsonl
     Mirrors Notion's native recordMap tables 1:1 (one entity per
     `KNOWN_TABLES` entry in `notion_web.py`). Workspace:
     "USS Enterprise-D Operations". Covers all 14 Notion tables and
     every block `type` the downloader emits — see the variation table
     below.
+│
+└── (yolink lives with its provider:
+    datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json)
+    A *spec*, not a capture: `yolink-make-fixture` expands it into a
+    doltlite raw store, and the pipeline runs the source render-only.
+    YoLink's downloader shells out to `curl` for signed-URL CSVs, so it
+    has no playback tape to replay — see `run_sync_pipeline.py`'s
+    `RENDER_ONLY`. Four Enterprise-D sensors, 288 five-minute samples
+    each over 2369-04-14, deterministic values (sine + hash jitter, no
+    RNG).
 ```
 
 None of github_api / gitlab_api / notion_web is wired into the ingest
@@ -96,6 +106,11 @@ Aim: at least one example of every shape we've seen in real backups.
 | Activity type `commented`      | `ac710001-...0001`                                |
 | Activity type `edited-block-value` (before/after) | `ac710001-...0002`             |
 | Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
+| Render-only source (no download step) | `yolink` — raw store seeded by `yolink-make-fixture` |
+| Timeseries render (one page of plots) | `yolink/rendered_md/index.md` + `plots/*.html` |
+| Non-SI unit converted at render | `sickbay_plasma_fridge` reports `temperature_f`; plots in °C |
+| Two metrics of one quantity on split axes | `deck_12_water_main` — per-sample litres left, totalizer right |
+| Relative `<iframe src>` in a rendered body | yolink plot embeds (rewritten to `/api/asset/…` by the UI) |
 
 ## Star Trek: TNG dramatis personae
 
@@ -114,6 +129,24 @@ Aim: at least one example of every shape we've seen in real backups.
 UUIDs follow the pattern `XXXXXXXX-1701-4d00-8000-...` so they sort
 predictably and scream "test data" in any debugger output.
 
+YoLink's fixture names compartments rather than people:
+
+| Device                  | Kind                   | Reports                                   |
+|-------------------------|------------------------|-------------------------------------------|
+| `ten_forward_cooler`    | `temperature_humidity` | ~3 °C drinks chiller                       |
+| `stasis_unit_alpha`     | `temperature_humidity` | ~-18.5 °C sample freezer                   |
+| `sickbay_plasma_fridge` | `temperature_humidity` | ~44.6 **°F** — the unit-conversion case    |
+| `deck_12_water_main`    | `watermeter`           | gallons, per-sample + lifetime totalizer   |
+
+`sickbay_plasma_fridge` is the one fixture device that could not exist
+upstream today: `download/mod.rs` pins each device kind to a fixed CSV
+header and rejects a ℉ value under a ℃ header, so nothing writes a
+`temperature_f` row. The fixture writes it directly, deliberately, so
+the render side's ℉ → ℃ conversion has end-to-end coverage and the
+"two devices, two units, one axis" case has a real example. Its
+`fake_device_id` is likewise a stand-in — the real column holds half of
+a per-device read credential, which never belongs in a fixture.
+
 ## Cached "ingested" artifact
 
 These source JSONs are also fed through the full ingest+render+dump
@@ -129,10 +162,63 @@ bazelisk build //tests/fixtures:ingested_tng
 
 **Determinism**: the genrule pins `--now` to a fixed TNG-era timestamp,
 the orchestrator inserts rows in primary-key order, and the tar
-normalizes mtime/uid/gid. A clean rebuild produces byte-identical
-outputs (verified). The trailing per-run `dolt_commit` lands a single
-deterministic entry in `dolt_log` whose hash is stable given identical
-inputs.
+normalizes mtime/uid/gid.
+
+This section used to claim a clean rebuild produces byte-identical
+outputs, "(verified)". That is too strong. Measured 2026-08-20 by
+running the full pipeline into two fresh roots more than a clock second
+apart — do it that way, since two runs inside the same second can agree
+by luck, which is how the original claim survived:
+
+| | byte-stable? |
+|---|---|
+| `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
+| `backend_index.doltlite_db` **file** | no |
+| rendered `.md` trees | yes, except yolink's `index.md` (below) |
+| `_render_cursor.json` | no |
+
+**The table contents are the property worth relying on, and they hold.**
+Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
+runs agree byte for byte. `//datalib/backend/core:fixture_db_snapshot_test`
+is an insta snapshot of exactly that, which is why it can exist at all.
+
+The **file** cannot be byte-stable, and no amount of `--now` pinning will
+change that: doltlite's own "Initialize data repository" commit and the
+shared layer's "schema: apply DDL" (`doltlite_raw::open`) both take the
+wall clock, and commit hashes chain, so every later hash moves with them.
+A source can pin its own commit — `yolink-make-fixture` passes
+`--now` through to `dolt_commit --date` — but not those two. This is a
+property of the store format, not a bug to fix here.
+
+Two things leak that instability into files that otherwise would be
+stable:
+
+* **`_render_cursor.json`**, for every stanza: it records
+  `last_render_at` from the local clock and `last_rendered_hash` from
+  the store, both of which move. It is pipeline state that happens to
+  live inside `rendered_md/`, so `tar_qmd.py` sweeps it into `qmd.tar`.
+* **`yolink/rendered_md/index.md`**, in its "Store" section only: the
+  page reports the store's HEAD and commit log, which *is* the content —
+  a page describing a store legitimately changes when the store's
+  identity does. Its `source_fingerprint` is deliberately **not**
+  HEAD-derived (see `render/render.rs::compute_fingerprint`), which is
+  what keeps the `markdowns` row stable.
+
+Notion's rendered pages used to be nondeterministic too — two runs
+emitted the same blocks in a different order. That was
+`event_store::load_latest_by_key` returning a `HashMap`: the
+synthesizer packs its records into `results` arrays, so the replayed
+`/children` listing came back shuffled, the downloader's BFS wrote
+different `blocks.page_order` values every run, and render faithfully
+reproduced whichever order it was handed. It now returns a `Vec` in
+first-seen (document) order. Note the bug was invisible within a single
+process — Rust's hash seed is per-process, so "render twice and compare"
+would have passed; catching it needs either two processes or an explicit
+order assertion (`records_come_back_in_stream_order`).
+
+Bazel keys its action cache on *inputs*, so the residue costs
+reproducibility and cross-machine cache sharing, not day-to-day rebuild
+churn.
 
 **Reading the doltlite_db.** It's a SQLite-shaped file. Consumers that
 link doltlite (via `//third-party/doltlite:sqlite3`) get the full
@@ -168,21 +254,17 @@ any provider parser or `schemas/grid_rows.schema.json`:
    with whatever the HTTP backend (`datalib/backend/http`) returns
    on the matching route.
 
-**Golden snapshots.** `tests/test_snapshots.py` writes
-plain-text goldens under `tests/__snapshots__/test_snapshots/`: one
-`.sql` per table (the `CREATE TABLE` + sorted `INSERT`s for that
-table), and one `.md` per rendered conversation. Custom syrupy
-extensions in `tests/snapshot_extensions.py` make these viewable
-on their own (no `.ambr` framing) — the `.md` files render as
-real Markdown in any previewer. After an intentional fixture or
-schema change:
+**Golden snapshots.** There are none, despite what this section used to
+describe. `tests/test_snapshots.py`, `tests/snapshot_extensions.py`, and
+`tests/__snapshots__/` do not exist in the tree (checked 2026-08-20);
+`tests/` contains only `fixtures/`, and `bazelisk query //tests/...`
+lists no snapshot target. `AGENTS.md` carries a second copy of the same
+instruction, telling you to run `bazelisk test //tests:test_snapshots`.
 
-```
-bazelisk build //tests/fixtures:ingested_tng
-uv run pytest tests/test_snapshots.py --snapshot-update
-```
-
-Review the diff under `tests/__snapshots__/` before committing.
+What does assert on the fixture today: `:ingested_tng_test` (row counts,
+per-provider coverage, three-run idempotence), each provider's own insta
+snapshots under `datalib/backend/etl/providers/*/`, and
+`//datalib/ui:e2e_test` against a materialized root.
 
 There is no codegen / regen script for the source JSON — those
 fixtures are not derived from anything. The trade-off is per-layer flexibility (e.g. the UI

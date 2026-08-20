@@ -108,7 +108,7 @@ impl Synthesizer for NotionSynth {
         for pid in &page_ids {
             children_by_parent.entry(pid.clone()).or_default();
         }
-        for rec in blocks.values() {
+        for (_, rec) in &blocks {
             let raw = match rec.get("raw") {
                 Some(r) => r.clone(),
                 None => continue,
@@ -135,7 +135,7 @@ impl Synthesizer for NotionSynth {
         for pid in &page_ids {
             comments_by_page.entry(pid.clone()).or_default();
         }
-        for rec in comments.values() {
+        for (_, rec) in &comments {
             let Some(page_id) = rec.get("page_id").and_then(|v| v.as_str()) else {
                 continue;
             };

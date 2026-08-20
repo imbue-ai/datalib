@@ -262,10 +262,17 @@ The render step emits QMD markdown files for human/Quarto consumption.
 The backend serves those files **verbatim** (frontmatter stripped) at
 `/api/chat/{uuid}` — it never parses them back. Structured fields
 (name, account, project, channel, created_at, source_label) come from
-`grid_rows` in Dolt. Per-message anchors used by the UI
-(scroll-to-message, highlight) come from `<div id="m-{uuid}"
-data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
-emits in the body. If you find yourself writing a QMD parser in the
+`grid_rows` in Dolt. Per-section anchors used by the UI
+(scroll-to-message, highlight, per-section feedback, copy-id) come from
+`<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg
+msg--{provider}">` wrappers the renderer emits in the body. The UI walks
+`id^="m-"` **and** `data-section-uuid` together
+(`ui/src/feedback/context.ts::messageAncestor`) — those two are the
+load-bearing attributes. `data-msg-index` is vestigial on the consumer
+side: `DocCard.ce.vue` passes a hardcoded `0` where the feedback schema
+still requires an index. Signal's renderer is the only one that still
+emits the attribute. A new renderer needs the id + `data-section-uuid`
+pair and nothing else. If you find yourself writing a QMD parser in the
 backend, stop — add the field to `grid_rows` instead.
 
 ## Feedback persistence (doltlite)
@@ -428,14 +435,19 @@ which Bazel respects on its own — `external` is reserved for tests
 that hit third-party services you don't want CI talking to. Prefer
 `bazelisk` over `bazel` so the workspace's pinned Bazel version wins.
 
-**Beware running snapshot tests outside Bazel**: those tests load
-`bazel-bin/tests/fixtures/ingested/{dump.sql,qmd.tar}`, which is a Bazel
-genrule output. Tools outside Bazel don't know how to rebuild it, so if
-you change any download/render/schema code and re-run outside Bazel,
-you'll diff fresh snapshots against a stale artifact and chase phantom
-failures. Always run snapshot tests via `bazelisk test //tests:test_snapshots`
-(or `//...`); Bazel rebuilds `//tests/fixtures:ingested_tng` first. Same
-caveat applies to anything else that consumes a cached Bazel output.
+**Beware consuming Bazel outputs from outside Bazel**: anything that
+reads `bazel-bin/tests/fixtures/ingested/*` is reading a genrule output.
+Tools outside Bazel don't know how to rebuild it, so if you change any
+download/render/schema code and re-run outside Bazel, you'll compare
+fresh results against a stale artifact and chase phantom failures. Go
+through bazel (`bazelisk test //tests/fixtures:ingested_tng_test`, or
+`//...`) so the fixture is rebuilt first.
+
+There is no `//tests:test_snapshots` target — this paragraph used to
+send you to one, and to a `dump.sql` that the fixture stopped producing.
+`tests/` holds only `fixtures/` (checked 2026-08-20). Provider-level
+insta snapshots are the golden tests that do exist; see the
+`.update` targets below.
 
 ### Updating insta snapshots (`.update` targets)
 

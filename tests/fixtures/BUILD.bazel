@@ -62,6 +62,7 @@ filegroup(
         "//datalib/backend/etl/providers/google_takeout:tng_fixture",
         "//datalib/backend/etl/providers/linkedin:tng_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
+        "//datalib/backend/etl/providers/yolink:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -95,6 +96,10 @@ genrule(
         # plaintext Media/. Root key defaults to 64 zeros, like the
         # signal fixture AEP.
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
+        # Spec → seeded doltlite raw store. YoLink has no playback path
+        # (its downloader shells out to `curl`), so the fixture pipeline
+        # runs it render-only over a store this binary writes.
+        "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "run_sync_pipeline.py",
         "tar_qmd.py",
     ],
@@ -144,6 +149,10 @@ genrule(
             # inline base64 image/audio attachments). Texts + calls
             # render as one chat per phone number.
             "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+            # YoLink (args 21-22, appended — see run_sync_pipeline.py's
+            # docstring for why these two aren't grouped with the rest).
+            "$(execpath //datalib/backend/etl/providers/yolink:yolink_make_fixture)",
+            "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It now lives under the reserved `system/` dir (see core::layout).
@@ -203,6 +212,9 @@ py_test(
         "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
         "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
         "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+        # YoLink (args 21-22, appended — see run_sync_pipeline.py).
+        "$(rootpath //datalib/backend/etl/providers/yolink:yolink_make_fixture)",
+        "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -211,6 +223,7 @@ py_test(
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/signal-backup:signal_make_fixture",
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
+        "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
     ],
 )

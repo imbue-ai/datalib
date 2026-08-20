@@ -103,7 +103,12 @@ pub struct ParsedGitlabApi {
 pub fn parse_api_dir(path: &Path) -> Result<ParsedGitlabApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
-        anyhow::bail!("gitlab source not found at {}", db_path.display());
+        // No store: this source has never been downloaded. That is
+        // the normal state of every source in a freshly scaffolded
+        // config, not an error — render nothing and succeed. A store
+        // that exists but can't be read still fails, below. See
+        // docs/dev/step_protocol.md, "Rendering a source with no data".
+        return Ok(ParsedGitlabApi::default());
     }
     let raw = block_on_load_all(&db_path)
         .with_context(|| format!("load gitlab db {}", db_path.display()))?;
@@ -277,4 +282,21 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
     }
 
     out
+}
+
+#[cfg(test)]
+mod no_data_tests {
+    use super::*;
+
+    /// A source that has never been downloaded renders as empty, not
+    /// as a failure: that is the normal state of every source in a
+    /// freshly scaffolded config. See docs/dev/step_protocol.md,
+    /// "Rendering a source with no data".
+    #[test]
+    fn parse_missing_source_returns_empty_silently() {
+        let parsed = parse_api_dir(Path::new("/this/does/not/exist")).unwrap();
+        assert!(parsed.merge_requests.is_empty());
+        assert!(parsed.notes.is_empty());
+        assert!(parsed.self_identity.is_none());
+    }
 }
