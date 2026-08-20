@@ -164,25 +164,58 @@ bazelisk build //tests/fixtures:ingested_tng
 the orchestrator inserts rows in primary-key order, and the tar
 normalizes mtime/uid/gid.
 
-A clean rebuild does **not** produce byte-identical outputs, despite
-all that. This paragraph used to claim it did, "(verified)"; it was
-measured on 2026-08-20 and is false in two independent ways:
+This section used to claim a clean rebuild produces byte-identical
+outputs, "(verified)". That is too strong. Measured 2026-08-20 by
+running the full pipeline into two fresh roots more than a clock second
+apart — do it that way, since two runs inside the same second can agree
+by luck, which is how the original claim survived:
 
-* Every doltlite store carries wall-clock commit timestamps. doltlite's
-  own "Initialize data repository" commit and the shared layer's
-  "schema: apply DDL" (`doltlite_raw::open`) both take the clock, and
-  commit hashes chain, so every later hash moves with them. A source
-  can pin its own commit (`dolt_commit … --date`, which
-  `yolink-make-fixture` does) but not those two. Two runs a second
-  apart can still match, which is how the original claim survived —
-  check across a clock second before believing a comparison here.
-* `qmd.tar` contains each stanza's `_render_cursor.json`, and those
-  record `last_render_at` from the local clock.
+| | byte-stable? |
+|---|---|
+| `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
+| `backend_index.doltlite_db` **file** | no |
+| rendered `.md` trees | yes, except notion + yolink (below) |
+| `_render_cursor.json` | no |
 
-Bazel keys its action cache on *inputs*, so this costs reproducibility
-and cross-machine cache sharing, not day-to-day rebuild churn — which
-is presumably why it went unnoticed. Nothing currently asserts
-byte-stability.
+**The table contents are the property worth relying on, and they hold.**
+Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
+runs agree byte for byte. `//datalib/backend/core:fixture_db_snapshot_test`
+is an insta snapshot of exactly that, which is why it can exist at all.
+
+The **file** cannot be byte-stable, and no amount of `--now` pinning will
+change that: doltlite's own "Initialize data repository" commit and the
+shared layer's "schema: apply DDL" (`doltlite_raw::open`) both take the
+wall clock, and commit hashes chain, so every later hash moves with them.
+A source can pin its own commit — `yolink-make-fixture` passes
+`--now` through to `dolt_commit --date` — but not those two. This is a
+property of the store format, not a bug to fix here.
+
+Two things leak that instability into files that otherwise would be
+stable:
+
+* **`_render_cursor.json`**, for every stanza: it records
+  `last_render_at` from the local clock and `last_rendered_hash` from
+  the store, both of which move. It is pipeline state that happens to
+  live inside `rendered_md/`, so `tar_qmd.py` sweeps it into `qmd.tar`.
+* **`yolink/rendered_md/index.md`**, in its "Store" section only: the
+  page reports the store's HEAD and commit log, which *is* the content —
+  a page describing a store legitimately changes when the store's
+  identity does. Its `source_fingerprint` is deliberately **not**
+  HEAD-derived (see `render/render.rs::compute_fingerprint`), which is
+  what keeps the `markdowns` row stable.
+
+Separately, and unrelated to any of the above: **notion's renderer emits
+its blocks in a nondeterministic order.** Two runs produce the same
+lines shuffled (`pages/b1d6e000-…-000000000001/index.md` and siblings).
+It does not reach `grid_rows` — those come out identical — but it does
+reach the markdown body the preview pane shows and qmd indexes, so
+semantic-search results can differ run to run. Looks like a hash-map
+iteration order leak. Not tracked anywhere else; noted here because it
+is the kind of thing the old blanket "(verified)" claim was hiding.
+
+Bazel keys its action cache on *inputs*, so the residue costs
+reproducibility and cross-machine cache sharing, not day-to-day rebuild
+churn.
 
 **Reading the doltlite_db.** It's a SQLite-shaped file. Consumers that
 link doltlite (via `//third-party/doltlite:sqlite3`) get the full

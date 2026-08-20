@@ -255,16 +255,32 @@ fn metric_spec(metric: &str) -> Result<&'static units::MetricSpec> {
     })
 }
 
-/// The sidecar's `source_fingerprint`. HEAD alone would do — we only
-/// reach here when it moved — but folding in the render version and the
-/// per-series shape means a hand-edited store or a re-render under new
-/// code still produces a different fingerprint, so the Load step can't
-/// skip a document that genuinely changed.
+/// The sidecar's `source_fingerprint` — a hash of the readings this
+/// document was built from, plus the render version.
+///
+/// Deliberately **not** the store's HEAD, though HEAD is right there and
+/// we only get here because it moved. Two reasons:
+///
+/// 1. The cross-provider contract (`datalib_index_lib::SidecarHeader`)
+///    is that this hashes *the upstream payload that produced the
+///    document*. A commit hash is a property of the store, not of the
+///    content: two stores holding identical readings would disagree, and
+///    a commit that changed nothing this page renders would look like a
+///    change.
+/// 2. It is the difference between a reproducible `markdowns` row and
+///    one that moves every time the store is rebuilt from scratch. The
+///    doltlite *file* can't be byte-stable — doltlite's own bootstrap
+///    commit and `doltlite_raw::open`'s "schema: apply DDL" both take
+///    the wall clock, and hashes chain — but the table contents can, and
+///    this was the only field standing in the way.
+///
+/// Hashing every sample rather than just the per-series shape is
+/// deliberate: yolink re-fetches overlapping windows, and a corrected
+/// historical value changes no count and no timestamp. A shape-only
+/// hash would let the Load step skip a document that genuinely changed.
 fn compute_fingerprint(parsed: &ParsedYolink) -> String {
     let mut h = Sha256::new();
     h.update(RENDER_VERSION.to_be_bytes());
-    h.update(b"|head:");
-    h.update(parsed.head.as_deref().unwrap_or("").as_bytes());
     h.update(b"|readings:");
     h.update(parsed.reading_count.to_be_bytes());
     for s in &parsed.series {
@@ -274,8 +290,10 @@ fn compute_fingerprint(parsed: &ParsedYolink) -> String {
         h.update(s.metric.as_bytes());
         h.update(b"=");
         h.update((s.len() as u64).to_be_bytes());
-        h.update(b"@");
-        h.update(s.ts_ms.last().copied().unwrap_or(0).to_be_bytes());
+        for (ts, v) in s.ts_ms.iter().zip(&s.values) {
+            h.update(ts.to_be_bytes());
+            h.update(v.to_be_bytes());
+        }
     }
     format!("{:x}", h.finalize())
 }
