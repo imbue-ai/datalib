@@ -858,6 +858,51 @@ async fn source_dropping_a_column_is_mirrored() -> Result<()> {
 }
 
 #[tokio::test]
+async fn a_table_the_source_dropped_is_dropped_from_the_mirror() -> Result<()> {
+    // The counterpart to discovery, and the case the rebuild loop alone
+    // does NOT cover: that loop only visits tables the source still has,
+    // so a table the catalog dropped would otherwise sit frozen at HEAD
+    // forever. `drop_stale_tables` is the separate pass that catches it.
+    //
+    // Distinct from `a_table_dropped_from_the_selection_*`, which
+    // exercises the same pass via the `exclude_tables` filter: this one
+    // drops the table from the catalog itself, which is what actually
+    // happens on a Lightroom upgrade.
+    let f = Fixture::new();
+    let (before, _) = f.ingest().await?;
+    let first = f.ingest().await?;
+    assert_eq!(first.1, None, "sanity: the second ingest is a no-op");
+
+    f.edit_catalog(&["DROP TABLE AgOzSpaceIds"]).await?;
+
+    let (after, commit) = f.ingest().await?;
+    assert_eq!(after.tables, before.tables - 1);
+    assert_eq!(
+        after.stale_tables_dropped, 1,
+        "the table the catalog dropped must be dropped from the mirror too"
+    );
+    assert!(commit.is_some());
+
+    let pool = f.mirror_pool().await?;
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'AgOzSpaceIds'"
+        )
+        .await,
+        0,
+        "HEAD reflects the catalog as it is now"
+    );
+    // Every other table is untouched — dropping one must not disturb the rest.
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM Adobe_images").await,
+        4
+    );
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_table_the_source_gained_is_discovered_and_mirrored() -> Result<()> {
     // The other half of "handles evolving schemas": a Lightroom upgrade
     // adds tables as well as columns. Discovery is per-run and

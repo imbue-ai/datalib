@@ -16,15 +16,23 @@ prior state still queryable.
 ## The model
 
 ```text
-for each table:  DELETE FROM main.t;  INSERT INTO main.t SELECT … FROM src.t;
+for each SOURCE table:  DROP TABLE main.t;  CREATE TABLE main.t (…);
+                        INSERT INTO main.t SELECT … FROM src.t;
+
+for each MIRROR table not in the source:   DROP TABLE main.t;
+
 dolt_commit
 ```
 
-That's the whole thing. It looks wasteful and isn't: doltlite stores a
-table as a content-addressed prolly tree, so a row written back
-byte-identical to the row already at HEAD produces the same chunk and
-lands in the same place. Delete all 419 rows of a table and reinsert the
-same 419 rows and `dolt_status` comes back **clean**.
+That's the whole thing. Both loops matter: the first only visits tables
+the source still has, so without the second a table the catalog dropped
+would sit frozen at HEAD forever, indistinguishable from a live one.
+
+It looks wasteful and isn't: doltlite stores a table as a content-
+addressed prolly tree, so a `CREATE TABLE` identical to the one at HEAD
+is not a change, and a row written back byte-identical produces the same
+chunk and lands in the same place. Drop a table, recreate it, refill it
+with the same 419 rows, and `dolt_status` comes back **clean**.
 
 Which means an ingest of an unchanged catalog produces **no commit at
 all** — verified against a real catalog and asserted by
@@ -43,7 +51,7 @@ doltlite's amalgamation reads *and writes* ordinary SQLite files as well
 as `.doltlite_db` ones, so the mirror `ATTACH`es the catalog and moves
 rows with `INSERT … SELECT`. No value crosses into Rust.
 
-That is much faster (a 3.3 MB, 133-table catalog mirrors in ~230 ms), but
+That is much faster (a 3.3 MB, 133-table catalog mirrors in ~220 ms), but
 the reason it's the right design is fidelity: SQLite's dynamic typing
 survives the hop. A Lightroom column with no declared type holds an
 integer in one row and a blob in the next, and both arrive intact.
@@ -222,16 +230,6 @@ python3 datalib/backend/etl/providers/lightroom/tests/doltlite_blob_bug_repro.py
   bazel-bin/third-party/doltlite/doltlite
 ```
 
-One subtlety, learned the hard way from a real catalog: SQLite only
-implies NOT NULL for an `INTEGER PRIMARY KEY` rowid alias. A `version
-TEXT PRIMARY KEY` column reports `notnull = 0` in SQLite but reads back
-`notnull = 1` from dolt, which makes PK columns NOT NULL. Ten of a stock
-catalog's 133 tables are shaped this way, and the asymmetry made every
-one of them recreate on *every* run — a correct mirror, silently churning
-its schema forever. `build_spec` normalises it, and
-`unchanged_source_produces_no_commit` now asserts
-`tables_recreated == 0`.
-
 ## Reading a live catalog
 
 Lightroom holds its catalog open, in WAL mode, while running. So by
@@ -272,8 +270,8 @@ stacked store is smaller than the four catalogs side by side.
 
 These catalogs are also a **second Lightroom schema version** — 115
 `sqlite_master` tables against the 133 of the catalog the design was
-first checked on — and `tables_recreated == 0` / `columns_added == 0`
-holds across all four.
+first checked on — and `stale_tables_dropped == 0` holds across all
+four, since no table disappears between them.
 
 ## Store size and `gc`
 
@@ -374,9 +372,11 @@ SQL
 
 ## Scaling caveat
 
-Each table is copied inside its own transaction, so peak memory scales
-with the largest single table rather than the whole catalog — but the
-dolt commit at the end covers the entire run. A multi-hundred-GB database
+Each table is rebuilt inside its own transaction — DDL included, which
+doltlite rolls back like anything else — so a failure leaves every table
+either fully rebuilt or untouched, and peak memory scales with the
+largest single table rather than the whole catalog. The dolt commit at
+the end covers the entire run. A multi-hundred-GB database
 would want the copy chunked by primary-key range. A Lightroom catalog
 (tens of MB, low hundreds of thousands of rows) is nowhere near that.
 

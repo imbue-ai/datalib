@@ -1,13 +1,24 @@
 //! The SQLite→doltlite mirror engine.
 //!
-//! Every run drops every mirrored table and rebuilds it from the source,
-//! then commits. That is the whole model:
+//! Every run rebuilds every mirrored table from the source and drops
+//! whatever the source no longer has, then commits. That is the whole
+//! model:
 //!
 //! ```text
-//! for each source table:  DROP TABLE main.t;  CREATE TABLE main.t (…);
+//! for each SOURCE table:  DROP TABLE main.t;  CREATE TABLE main.t (…);
 //!                         INSERT INTO main.t SELECT … FROM src.t;
+//!
+//! for each MIRROR table not in the source:   DROP TABLE main.t;
+//!
 //! dolt_commit
 //! ```
+//!
+//! Both loops are load-bearing. The first only visits tables the source
+//! still has, so without the second a table the source dropped would sit
+//! frozen at HEAD forever, indistinguishable from a live one.
+//! [`drop_stale_tables`] is that second loop;
+//! `a_table_the_source_dropped_is_dropped_from_the_mirror` fails without
+//! it.
 //!
 //! ## Why rebuilding from scratch is free
 //!
