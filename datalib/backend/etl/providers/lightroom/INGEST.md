@@ -16,17 +16,17 @@ prior state still queryable.
 ## The model
 
 ```text
-for each SOURCE table:  DROP TABLE main.t;  CREATE TABLE main.t (…);
+drop EVERY table in the mirror
+for each SOURCE table:  CREATE TABLE main.t (…);
                         INSERT INTO main.t SELECT … FROM src.t;
-
-for each MIRROR table not in the source:   DROP TABLE main.t;
-
 dolt_commit
 ```
 
-That's the whole thing. Both loops matter: the first only visits tables
-the source still has, so without the second a table the catalog dropped
-would sit frozen at HEAD forever, indistinguishable from a live one.
+That's the whole thing. The drop is unconditional — every mirror table,
+not just the ones the source still has. That is what makes a table the
+catalog *removed* disappear from HEAD instead of sitting there frozen and
+indistinguishable from a live one, and it leaves no "is this one stale?"
+question to compute or get wrong.
 
 It looks wasteful and isn't: doltlite stores a table as a content-
 addressed prolly tree, so a `CREATE TABLE` identical to the one at HEAD
@@ -372,11 +372,16 @@ SQL
 
 ## Scaling caveat
 
-Each table is rebuilt inside its own transaction — DDL included, which
-doltlite rolls back like anything else — so a failure leaves every table
-either fully rebuilt or untouched, and peak memory scales with the
-largest single table rather than the whole catalog. The dolt commit at
-the end covers the entire run. A multi-hundred-GB database
+Each table is filled inside its own transaction, so peak memory scales
+with the largest single table rather than the whole catalog. That split
+is not stylistic: doltlite holds a transaction's writes in memory at
+roughly 3–4× the data size, so wrapping a whole run in one transaction
+costs ~510 MB peak RSS for 150 MB of rows — fine at that size, ~15 GB for
+a 4–5 GB catalog, which is not.
+
+The run is still atomic *as history*: the dolt commit only happens at the
+end, so a crash mid-run leaves HEAD untouched and a dirty working tree,
+which `doltlite_raw::open` seals into its own rescue commit next time. A multi-hundred-GB database
 would want the copy chunked by primary-key range. A Lightroom catalog
 (tens of MB, low hundreds of thousands of rows) is nowhere near that.
 
