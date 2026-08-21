@@ -11,7 +11,7 @@
 import { computed, ref, watch } from "vue";
 import { encodeColumns } from "@/router/columns";
 import { modifyComponentWithAgent } from "@/handoff";
-import { aliasManifest, ensureManifest } from "@/cards/aliasRegistry";
+import { ensureFrontend, frontendManifest } from "@/cards/frontendRegistry";
 import type { CardCtx } from "@/cards/types";
 
 const props = defineProps<{
@@ -21,16 +21,20 @@ const props = defineProps<{
 
 // ---- agent hand-off (🤖) ----
 //
-// Shown only when the card is a call to a user-defined component —
-// that's the thing an agent can modify (builtins live in the app
-// bundle, not behind /api/lib). Detected from the source's leading
-// callee against the reactive alias manifest, so the button appears
-// the moment the manifest loads (idempotent kick below) and follows
-// renames/deletes. Builtins never match: they aren't in the manifest.
-void ensureManifest();
+// Shown only for a card calling a component in the `user` namespace.
+// That is the only namespace an agent can usefully edit: an applet's
+// namespace is deleted and rewritten on every refresh, so an edit there
+// would vanish the next time the config is touched. Builtins never
+// match either — they live in the app bundle, not in the store.
+//
+// Detected from the source's leading `comp.user.<name>(` against the
+// reactive manifest, so the button appears the moment the store loads
+// (idempotent kick below) and follows renames and deletes.
+void ensureFrontend();
 const aliasName = computed(() => {
-  const m = props.source.match(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
-  return m && aliasManifest.value.has(m[1]) ? m[1] : null;
+  const m = props.source.match(/^\s*comp\s*\.\s*user\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
+  if (!m) return null;
+  return frontendManifest.value.get("user")?.has(m[1]) ? m[1] : null;
 });
 
 function handOff() {

@@ -47,6 +47,11 @@ async fn app() -> (axum::Router, ApiToken) {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        applets: Arc::new(datalib_http::applets::AppletRegistry::build(
+            Vec::new(),
+            (*root).clone(),
+            None,
+        )),
         api_token: api_token.clone(),
     };
     (router(state), api_token)

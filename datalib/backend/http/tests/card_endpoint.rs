@@ -48,6 +48,13 @@ async fn card_round_trip_and_error_paths() {
         repo: Arc::new(dolt),
         qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // These endpoints must keep working in a data root that
+        // declares no applets, which is every data root by default.
+        applets: Arc::new(datalib_http::applets::AppletRegistry::build(
+            Vec::new(),
+            (*root).clone(),
+            None,
+        )),
         api_token,
     };
     let app = router(app_state.clone());

@@ -96,10 +96,13 @@ pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack>
     if path.is_dir() {
         return parse_raw_json_dir(path);
     }
-    anyhow::bail!(
-        "slack source not found at {} (no .doltlite_db, no JSONL tree)",
-        path.display()
-    )
+    // No store and no legacy tree: this source has never been
+    // downloaded. That is the normal state of every source in a
+    // freshly scaffolded config, not an error — render nothing and
+    // succeed. A store that exists but can't be read still fails
+    // above. See docs/dev/step_protocol.md, "Rendering a source with
+    // no data".
+    Ok(ParsedSlack::default())
 }
 
 fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack> {
@@ -712,4 +715,21 @@ fn array_field<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 #[allow(dead_code)] // exists so the dead-code linter doesn't flag the import
 fn _dummy_use() -> HashMap<(), ()> {
     HashMap::new()
+}
+
+#[cfg(test)]
+mod no_data_tests {
+    use super::*;
+
+    /// A source that has never been downloaded renders as empty, not
+    /// as a failure: that is the normal state of every source in a
+    /// freshly scaffolded config. See docs/dev/step_protocol.md,
+    /// "Rendering a source with no data".
+    #[test]
+    fn parse_missing_source_returns_empty_silently() {
+        let parsed = parse(Path::new("/this/does/not/exist"), None).unwrap();
+        assert!(parsed.threads.is_empty());
+        assert!(parsed.channels.is_empty());
+        assert!(parsed.workspace.is_none());
+    }
 }

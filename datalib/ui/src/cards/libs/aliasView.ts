@@ -1,14 +1,20 @@
-// Builtin view: a live listing of the user-defined component library
-// (the `/api/lib` alias store). Each row shows a component's name and a
-// short content hash; clicking opens a column that renders that
-// component (`name()`), so you can eyeball any stored component.
+// Builtin view: a live listing of every custom component the frontend
+// store holds — `user` and each applet namespace together, since the
+// store draws no distinction. Each row shows the qualified name
+// (`comp.<ns>.<name>`) and a short content hash; clicking opens a card
+// rendering it with its own stored arguments.
 //
 // Plain-DOM (no Vue): it just paints a list and re-paints when the
 // reactive manifest changes. `vue`'s `watch` works fine outside a
 // component as long as we dispose it in the teardown.
 import { watch } from "vue";
 import type { CardRender } from "../types";
-import { aliasManifest, aliasTitles, ensureManifest } from "../aliasRegistry";
+import {
+  ensureFrontend,
+  frontendManifest,
+  gallerySource,
+} from "../frontendRegistry";
+import type { Meta } from "@/api";
 
 export function aliasView(): CardRender {
   return (root, ctx) => {
@@ -30,14 +36,26 @@ export function aliasView(): CardRender {
     wrap.className = "av";
     root.appendChild(wrap);
 
-    function paint([m, titles]: [Map<string, string>, Map<string, string>]) {
+    function paint([manifest]: [Map<string, Map<string, Meta>>]) {
       wrap.replaceChildren();
+      // Flatten every namespace into one list, qualified. The store is
+      // namespaced but this view is a directory of what exists, and a
+      // reader wants to see `slack_work.channels` next to `user.tetris`
+      // rather than hunting through per-namespace sections.
+      const rows: { ns: string; name: string; meta: Meta }[] = [];
+      for (const [ns, entries] of manifest) {
+        for (const [name, meta] of entries) rows.push({ ns, name, meta });
+      }
+      rows.sort((a, b) =>
+        `${a.ns}.${a.name}`.localeCompare(`${b.ns}.${b.name}`),
+      );
+
       const head = document.createElement("div");
       head.className = "av-head";
-      head.textContent = `components (${m.size})`;
+      head.textContent = `components (${rows.length})`;
       wrap.appendChild(head);
 
-      if (m.size === 0) {
+      if (rows.length === 0) {
         const empty = document.createElement("div");
         empty.className = "av-empty";
         empty.textContent =
@@ -46,36 +64,46 @@ export function aliasView(): CardRender {
         return;
       }
 
-      for (const [name, hash] of [...m.entries()].sort((a, b) =>
-        a[0].localeCompare(b[0]),
-      )) {
+      for (const { ns, name, meta } of rows) {
         const row = document.createElement("div");
         row.className = "av-row";
-        row.title = `open ${name}()`;
-        row.addEventListener("click", () => ctx.host.openCards(`${name}()`));
+        const qualified = `comp.${ns}.${name}`;
 
         const nm = document.createElement("span");
         nm.className = "av-name";
-        nm.textContent = name;
+        nm.textContent = qualified;
         row.appendChild(nm);
-        // Stored display title, when the component carries one.
-        const title = titles.get(name);
-        if (title) {
+
+        if ("renamed_to" in meta) {
+          // A tombstone is not openable; say where it went instead.
           const tl = document.createElement("span");
           tl.className = "av-title";
-          tl.textContent = title;
+          tl.textContent = `→ comp.${ns}.${meta.renamed_to}`;
+          row.appendChild(tl);
+          row.title = `renamed to ${meta.renamed_to}`;
+          wrap.appendChild(row);
+          continue;
+        }
+
+        const source = gallerySource(ns, name, meta.component_args);
+        row.title = `open ${source}`;
+        row.addEventListener("click", () => ctx.host.openCards(source));
+        if (meta.title) {
+          const tl = document.createElement("span");
+          tl.className = "av-title";
+          tl.textContent = meta.title;
           row.appendChild(tl);
         }
         const hs = document.createElement("span");
         hs.className = "av-hash";
-        hs.textContent = hash.slice(0, 8);
+        hs.textContent = meta.component_hash.slice(0, 8);
         row.appendChild(hs);
         wrap.appendChild(row);
       }
     }
 
-    void ensureManifest();
-    const stop = watch([aliasManifest, aliasTitles], paint, { immediate: true });
+    void ensureFrontend();
+    const stop = watch([frontendManifest], paint, { immediate: true });
     return () => stop();
   };
 }

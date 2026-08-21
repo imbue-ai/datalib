@@ -114,7 +114,7 @@
 //! minutes — run the offline sibling instead:
 //!
 //! ```sh
-//! bazel test //datalib/backend/ingest_config:config_examples_test \
+//! bazel test //datalib/backend/migrate_config:config_examples_test \
 //!     --test_arg=--ignored --test_env=DATALIB_MANUAL_E2E_DIR
 //! ```
 

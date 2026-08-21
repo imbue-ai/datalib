@@ -76,6 +76,7 @@ pub const SOURCE_TYPES: &[&str] = &[
     "github_api",
     "gitlab_api",
     "google_takeout",
+    "lightroom",
     "linkedin",
     "notion_api",
     "perseus",
@@ -247,6 +248,12 @@ pub fn plan(
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig,
             datalib_etl_sms_backup_restore,
             "sms_backup_restore"
+        ),
+        "lightroom" => arm!(
+            datalib_etl_lightroom_config::LightroomConfig,
+            datalib_etl_lightroom_config::LightroomRenderConfig,
+            datalib_etl_lightroom,
+            "lightroom"
         ),
         "fsindex" => arm!(
             datalib_etl_fsindex_config::FsindexConfig,

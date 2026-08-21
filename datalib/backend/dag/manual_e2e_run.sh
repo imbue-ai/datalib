@@ -89,7 +89,7 @@ case "${1:-}" in
     # deny_unknown_fields and so are most download configs, but `email`,
     # `fsindex`, `linkedin` and `sms_backup_restore` are permissive — a
     # misplaced knob on those parses clean here and fails during the live run.
-    exec bazel test //datalib/backend/ingest_config:config_examples_test \
+    exec bazel test //datalib/backend/migrate_config:config_examples_test \
       --test_arg=--ignored \
       --test_env=DATALIB_MANUAL_E2E_DIR \
       --test_output=all \

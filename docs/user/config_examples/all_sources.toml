@@ -583,3 +583,54 @@ outputs = ["fsindex-home/raw"]
 # stamp = false   # default; true → write UUID breadcrumbs into the tree
 [steps.params.common]
 input_path = "~/Documents"
+
+# --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
+
+# File-backed: point `common.input_path` at a `.lrcat`, which is an ordinary
+# SQLite database. Every table is mirrored into the source's doltlite raw
+# store, and doltlite's content-addressed storage does the deduplication —
+# so re-running after a day of editing stores only the rows that changed,
+# while every prior state stays queryable via `dolt_log`,
+# `dolt_history_<table>` and `dolt_diff_<table>`. A run over an unchanged
+# catalog produces no commit at all.
+#
+# DOWNLOAD-ONLY: it renders nothing yet (a photo isn't chat-shaped), so
+# there is no render step — query the raw store directly. See
+# datalib/backend/etl/providers/lightroom/INGEST.md.
+#
+# The engine is not Lightroom-specific: any app whose data format is a
+# SQLite file (Quicken for Mac, Apple Photos, …) works with the same step,
+# minus the `id_global` default below.
+[[steps]]
+id = "lightroom.download"
+command = "datalib-step download lightroom"
+outputs = ["lightroom/raw"]
+[steps.params]
+# Drop the per-image XMP packet and the flattened search indexes. They are
+# the bulkiest columns in a catalog and are wholly derived from columns
+# that stay. Off by default — a backup should be a faithful mirror unless
+# you say otherwise.
+# skip_xmp = false
+#
+# Lightroom keys its tables on `id_local`, a rowid alias it may renumber on
+# a catalog upgrade. `id_global` is the stable UUID beside it, so the mirror
+# keys on that instead: a renumbering then reads as one modified column per
+# row rather than as every row deleted and re-added. Set to [] to mirror
+# each table's declared key verbatim.
+# stable_key_columns = ["id_global"]
+#
+# Table / column filters. Globs, `*` and `?` only.
+# include_tables = ["*"]
+# exclude_tables = ["Ag*Oz*"]     # e.g. skip the cloud-sync bookkeeping
+# exclude_columns = ["Adobe_AdditionalMetadata.xmp"]
+#
+# Take a `VACUUM INTO` snapshot before reading, so a catalog that Lightroom
+# has open can't be read half-written. On by default.
+# snapshot = true
+#
+# Collect unreachable chunks each run. Much smaller store (5.2 MB -> 1.3 MB
+# on a 3.3 MB catalog with two versions of history), history unaffected,
+# but it rewrites the whole chunk store every time.
+# gc = false
+[steps.params.common]
+input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"

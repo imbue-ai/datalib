@@ -26,6 +26,7 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 | Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3) — download-only, no rendered markdown |
+| Photos | `lightroom` | Adobe Lightroom Classic catalog (`.lrcat`) | A deduplicated, versioned mirror of every table — an incremental backup with full history; download-only, no rendered markdown |
 
 See [`docs/user/config_examples/all_sources.toml`](docs/user/config_examples/all_sources.toml)
 for one fully-commented step pair per source.

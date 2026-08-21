@@ -159,6 +159,48 @@ kind* of failure this is, which drives retry policy:
 commit — the scheduler records those versions so the next run resumes
 from them, while dependents stay blocked this run.
 
+### Rendering a source with no data
+
+**A source that has never been downloaded is not a failure.** If your
+render step finds no raw store and no legacy tree, emit nothing and
+exit 0 — an empty output tree, not `failure: data`.
+
+This is the normal state of every source in a freshly scaffolded
+config: the user adds ten sources, authenticates one, and syncs it.
+Failing there is wrong twice over. `data` means "a human must look at
+this", and it poisons the subtree — the shared `grid_index` / `qmd_index`
+fan-in depends on *every* source's `rendered_md`, so one un-downloaded
+source blocks the index for the sources that did sync.
+
+An empty render is safe for the index: `grid_index` deletes per
+document (`DELETE FROM grid_rows WHERE markdown_uuid = ?`), driven by
+the markdown files actually present, so rendering nothing contributes
+nothing rather than dropping another source's rows.
+
+Keep failing, loudly, when the data is *there but wrong*: a store that
+exists and can't be opened, a schema missing tables it should have, a
+row that won't parse. The distinction is **absent vs. malformed**, and
+only the second one is a `data` failure. In practice that falls out of
+the ordinary shape — return empty on the "nothing exists" branch and
+let every error below it propagate:
+
+```rust
+pub fn parse(path: &Path) -> Result<Parsed> {
+    let db_path = db_path_for(path);
+    if db_path.exists() {
+        return parse_doltlite(&db_path);   // a broken store still errors
+    }
+    if path.is_dir() {
+        return parse_json_dir(path);       // legacy tree
+    }
+    Ok(Parsed::default())                  // never downloaded — not an error
+}
+```
+
+The scheduler models the same distinction: an artifact that doesn't
+exist hashes to the distinguished version `absent`
+(`datalib_dag::version::ABSENT`) rather than being an error state.
+
 ## stderr: logging
 
 stderr is yours for humans: every line is captured into the event

@@ -180,10 +180,13 @@ pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport
     if path.is_dir() {
         return parse_export_json_dir(path);
     }
-    Err(anyhow!(
-        "anthropic source not found at {} (no .doltlite_db, no JSON tree)",
-        path.display()
-    ))
+    // No store and no legacy tree: this source has never been
+    // downloaded. That is the normal state of every source in a
+    // freshly scaffolded config, not an error — render nothing and
+    // succeed. A store that exists but can't be read still fails
+    // above. See docs/dev/step_protocol.md, "Rendering a source with
+    // no data".
+    Ok(ParsedExport::default())
 }
 
 fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
@@ -644,5 +647,22 @@ pub fn shred(c: &AnthropicConversation) -> ShreddedConversation {
         messages,
         content_blocks,
         attachments,
+    }
+}
+
+#[cfg(test)]
+mod no_data_tests {
+    use super::*;
+
+    /// A source that has never been downloaded renders as empty, not
+    /// as a failure: that is the normal state of every source in a
+    /// freshly scaffolded config. See docs/dev/step_protocol.md,
+    /// "Rendering a source with no data".
+    #[test]
+    fn parse_missing_source_returns_empty_silently() {
+        let parsed = parse(Path::new("/this/does/not/exist"), None).unwrap();
+        assert!(parsed.conversations.is_empty());
+        assert!(parsed.accounts.is_empty());
+        assert!(parsed.projects.is_empty());
     }
 }
