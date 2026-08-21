@@ -613,9 +613,9 @@ expression: snapshot
       "md_path": "yolink/rendered_md/index.md",
       "provider": "yolink",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "b1ea9f61636d45908f8fae2baa01ae5f0a29cb66194bba93024a693e86b835d5",
-      "source_fingerprint": "746389f3c08ba7a0538e5ce5e68a8a6a032275c1555be318989f8d44f8023173",
+      "source_fingerprint": "af2a562ccd70806d678c5df10da6e9e09d63270861c1c5b39dd2d611465febea",
       "source_name": "yolink",
       "title": "YoLink sensors — yolink",
       "updated_at": "2369-04-14T23:55:00+00:00"
