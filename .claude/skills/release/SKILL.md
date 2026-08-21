@@ -97,9 +97,8 @@ published from a local machine — the tag is the trigger.
     stable/un-versioned on purpose — the install script fetches
     `releases/latest/download/<name>`.
 12. Bump the pin in the published inspiration repo,
-    `qi-imbue/datalib-inspiration` (local clone: `~/on/datalib-inspiration`).
-    Only after step 11 — every pin there is a tag-relative URL that has
-    to resolve for a fresh mind to boot.
+    `qi-imbue/datalib-inspiration`. Only after step 11 — every pin there
+    is a tag-relative URL that has to resolve for a fresh mind to boot.
 
 ## Updating the inspiration repo
 
@@ -109,7 +108,14 @@ fully-static musl binaries from a pinned tag and sends the agent to that
 same tag's `docs/agent_user.md` — deliberately, so the tools an agent has
 and the guide it reads can't drift apart.
 
-1. `git -C ~/on/datalib-inspiration checkout main && git pull`.
+1. Get a current clone. Don't assume one is already on the machine —
+   this step used to name `~/on/datalib-inspiration`, a path that
+   existed only for whoever wrote it (#166):
+
+   ```sh
+   gh repo clone qi-imbue/datalib-inspiration   # or, in an existing clone:
+   git checkout main && git pull
+   ```
 2. Replace every `v<old>` datalib pin with `vX.Y.Z` in exactly three
    files — `.agents/skills/datalib/SKILL.md`, `README.md`, and
    `inspiration-datalib.md`. That covers the `install.sh` raw URL, the
