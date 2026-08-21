@@ -78,6 +78,13 @@ filegroup(
         # upgrading user can actually run it; nothing else invokes it,
         # and it is the only shipped binary that links a YAML parser.
         "//datalib/backend/migrate_config:datalib_migrate_config_bin",
+        # The applet host. Ships for the same reason `datalib-step`
+        # does: a config can name it, and the http gateway resolves an
+        # applet's `command` against its own directory (then
+        # `~/.datalib/bin`, then PATH). Without it here, a
+        # `command = "datalib-applet slack"` entry would only work for
+        # a user who installed the binary by hand.
+        "//datalib/backend/applets:datalib_applet",
     ],
     visibility = ["//visibility:public"],
 )
@@ -127,6 +134,7 @@ copy_to_directory(
     replace_prefixes = {
         "dag/datalib_dag_bin": "datalib-dag",
         "datalib_step/datalib_step": "datalib-step",
+        "applets/datalib_applet": "datalib-applet",
         "http/datalib_http_bin": "datalib-http",
         "migrate_config/datalib_migrate_config_bin": "datalib-migrate-config",
         "etl/latchkey_curl_dispatch": "latchkey-curl-dispatch",

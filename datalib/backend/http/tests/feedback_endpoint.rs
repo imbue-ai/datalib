@@ -43,10 +43,17 @@ async fn post_feedback_inserts_row() {
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
     let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {
-        root,
+        root: root.clone(),
         repo: Arc::new(dolt),
         qmd_daemon,
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // These endpoints must keep working in a data root that
+        // declares no applets, which is every data root by default.
+        applets: Arc::new(datalib_http::applets::AppletRegistry::build(
+            Vec::new(),
+            (*root).clone(),
+            None,
+        )),
         api_token,
     };
     let app = router(app_state.clone());

@@ -25,10 +25,14 @@ restarted and minted a new one.
 
 ## The model
 
-The sync pipeline is driven by `<root>/config.toml`: an array of
-`[[steps]]` tables where each step has an `id`, a shell `command`, and
-declared `inputs` / `outputs` (artifact paths; wildcards allowed in
-inputs). The runner derives the execution DAG from input/output overlap
+The sync pipeline is driven by `<root>/config.toml`, which holds two
+kinds of entry. `[[steps]]` is the pipeline: each step has an `id`, a
+shell `command`, and declared `inputs` / `outputs` (artifact paths;
+wildcards allowed in inputs). `[[applets]]` is the app surface —
+long-lived servers that contribute card components and the endpoints
+behind them, declaring no inputs/outputs because they read what steps
+wrote. This guide is about steps; for applets see
+`docs/dev/applets.md`. The runner derives the execution DAG from input/output overlap
 — file order does not matter. A step with no `inputs` is a **source**
 (what a sync can target); every source's rendered markdown feeds the
 shared `grid_index` / `qmd_index` fan-in steps:
@@ -112,9 +116,10 @@ ln -sf /path/to/my-fetcher ~/.datalib/bin/my-fetcher
 ```
 
 `~/.datalib/bin` is prepended to `PATH` whenever the UI runs the
-pipeline, so a bare `command = "my-fetcher --out ."` resolves. Keep step
-commands non-interactive; they run headless with their output captured
-into the job log.
+pipeline, so a bare `command = "my-fetcher --out ."` resolves. The same
+applies to an `[[applets]]` command, so one install location covers both
+kinds of entry. Keep step commands non-interactive; they run headless
+with their output captured into the job log.
 
 Steps run with the data root as their working directory, and their
 declared `outputs` are what downstream steps' `inputs` match against —

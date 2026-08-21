@@ -50,6 +50,13 @@ are relative to the repo root.
 - [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
   views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
   — the dactal view bridge.
+- [`docs/dev/applets.md`](docs/dev/applets.md) — **how to write an
+  applet**: the second kind of config entry, a server contributing card
+  components plus the endpoints behind them. Covers the
+  one-invocation contract (`-p` + `--frontend-dir`: write, then bind),
+  the `system/frontend/<namespace>/` store that any program (or person)
+  can write into, and why two instances of one command share a
+  component but not its arguments.
 
 **Dev workflow**
 
@@ -133,10 +140,13 @@ datalib/
                    schema and the tree's last YAML parser, so the
                    shipping programs accept only `config.toml`.
     core/          data-root layout, doltlite repo access, qmd, search.
-    http/          `datalib-http`: API server + sync worker + UI host.
-                   Every route is behind a per-process API token
-                   (src/auth.rs) — read it from
-                   <root>/system/state/api-token and send
+    applets/       `datalib-applet`: the applet host, one subcommand
+                   per applet (today: slack). An applet contributes
+                   card components + the endpoints behind them.
+    http/          `datalib-http`: API server + sync worker + UI host +
+                   the applet gateway (src/applets.rs). Every route is
+                   behind a per-process API token (src/auth.rs) — read
+                   it from <root>/system/state/api-token and send
                    `Authorization: Bearer <token>`.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
@@ -165,7 +175,10 @@ Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
 the only place their schemas — and the tree's last YAML parser — still
 live. Any executable
 speaking the step protocol can be a step — see
-`docs/dev/step_protocol.md`.
+`docs/dev/step_protocol.md`. The same config file also holds
+`[[applets]]`: servers the http gateway spawns on demand to serve the
+app's own components and endpoints, which the scheduler never sees
+(`docs/dev/applets.md`).
 
 ## Vendored upstream: `third-party/qmd`
 

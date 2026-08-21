@@ -1,0 +1,36 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# `datalib-applet` — the applet host (see docs/dev/applets.md), one
+# subcommand per applet, the same shape as `datalib-step`.
+#
+# Deliberately dependency-light: applets read the cross-provider
+# `.grid_rows.json` sidecar contract as untyped JSON rather than
+# linking the schema or provider crates, so writing one stays a small
+# job.
+rust_binary(
+    name = "datalib_applet",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(["src/**/*.js"]),
+    crate_name = "datalib_applet",
+    crate_root = "src/main.rs",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "applet_unittests",
+    size = "small",
+    crate = ":datalib_applet",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
