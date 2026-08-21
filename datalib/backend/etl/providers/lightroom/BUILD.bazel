@@ -7,13 +7,19 @@ exports_files(["Cargo.toml"])
 # because every Rust binary in this tree links doltlite as its `sqlite3`:
 # doltlite reads and writes ordinary SQLite files transparently, but any
 # file it creates is in doltlite's own prolly-tree format. Python's
-# stdlib `sqlite3` is the only thing here that can mint a plain `.lrcat`.
-# See tests/make_catalog_fixture.py.
+# stdlib `sqlite3` is the only thing here that can mint a plain `.lrcat`:
+# `libsqlite3-sys` is routed at doltlite for the whole workspace (see
+# MODULE.bazel), so no Rust target in this tree can produce one either.
+#
+# The generator lives in //tests/fixtures rather than beside this provider
+# because that is one of the repo's three PYTHON_LINT_ROOTS (see
+# scripts/lint_repo.py), and because AGENTS.md scopes Python here to
+# exactly this: fixture / test-pipeline tooling.
 genrule(
     name = "tng_catalog",
-    srcs = ["tests/make_catalog_fixture.py"],
+    srcs = ["//tests/fixtures:make_lightroom_catalog.py"],
     outs = ["tng_catalog/TngCatalog.lrcat"],
-    cmd = "python3 $(execpath tests/make_catalog_fixture.py) $@",
+    cmd = "python3 $(execpath //tests/fixtures:make_lightroom_catalog.py) $@",
     visibility = ["//datalib:__subpackages__"],
 )
 

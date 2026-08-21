@@ -27,7 +27,8 @@
 //! writes plain SQLite files transparently — which is why these tests can
 //! mutate the catalog with `sqlx` — but any file it *creates* is in
 //! doltlite's own format. So the plain-SQLite catalog is minted by
-//! `make_catalog_fixture.py` in a genrule and staged as test data.
+//! `//tests/fixtures:make_lightroom_catalog.py` in a genrule and staged
+//! as test data.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

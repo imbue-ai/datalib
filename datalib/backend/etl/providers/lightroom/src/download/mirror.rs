@@ -536,13 +536,11 @@ const STAGE_TABLE: &str = "datalib_mirror_stage";
 ///
 /// Remove the detour once the upstream fix lands and `MODULE.bazel`'s
 /// doltlite pin moves past it — the test will keep it honest.
-/// `tests/doltlite_blob_bug_repro.py` re-checks the upstream behaviour
+/// `hack/doltlite_blob_bug/run.sh` re-checks the upstream behaviour
 /// directly, without going through this crate:
 ///
 /// ```sh
-/// bazelisk build //third-party/doltlite:doltlite
-/// python3 datalib/backend/etl/providers/lightroom/tests/doltlite_blob_bug_repro.py \
-///   bazel-bin/third-party/doltlite/doltlite
+/// hack/doltlite_blob_bug/run.sh
 /// ```
 async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u64> {
     let mut tx = conn

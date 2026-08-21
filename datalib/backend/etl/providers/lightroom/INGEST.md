@@ -60,7 +60,7 @@ Marshalling through Rust would force a decision about what such a column
 
 The one thing doltlite *cannot* do is create a plain SQLite file: a
 database it creates is always in its own format. That's why the test
-fixture is minted by `tests/make_catalog_fixture.py` in a genrule rather
+fixture is minted by `//tests/fixtures:make_lightroom_catalog.py` in a genrule rather
 than by Rust.
 
 ## What gets mirrored
@@ -225,10 +225,12 @@ doltlite pin moves past it; the test will keep it honest. To re-check the
 upstream behaviour directly, without going through this crate:
 
 ```sh
-bazelisk build //third-party/doltlite:doltlite
-python3 datalib/backend/etl/providers/lightroom/tests/doltlite_blob_bug_repro.py \
-  bazel-bin/third-party/doltlite/doltlite
+hack/doltlite_blob_bug/run.sh
 ```
+
+That script is standalone — it fetches the official doltlite CLI, builds a
+plain SQLite file with the system `sqlite3`, and needs nothing from this
+repo. `DOLTLITE_BIN=… run.sh` points it at a local build instead.
 
 ## Reading a live catalog
 

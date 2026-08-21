@@ -193,9 +193,9 @@ def xmp_packet(subject: str) -> bytes:
     head = (
         '<?xpacket begin="﻿"?>'
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
-        f"<rdf:Description dc:subject=\"{subject}\"/>"
+        f'<rdf:Description dc:subject="{subject}"/>'
     )
-    tail = "</x:xmpmeta><?xpacket end=\"w\"?>"
+    tail = '</x:xmpmeta><?xpacket end="w"?>'
     # Distinct per subject and incompressible enough to be a real
     # comparison, without needing a PRNG the fixture would have to seed.
     filler = hashlib.sha256(subject.encode()).hexdigest()
@@ -259,7 +259,10 @@ def main(out_path: str) -> None:
         )
         con.executemany(
             "INSERT INTO AgOzSpaceIds (ozCatalogId, ozSpaceId, isPublic) VALUES (?,?,?)",
-            [("catalog-ncc-1701-d", "space-alpha", 1), ("catalog-ncc-1701-d", "space-beta", 0)],
+            [
+                ("catalog-ncc-1701-d", "space-alpha", 1),
+                ("catalog-ncc-1701-d", "space-beta", 0),
+            ],
         )
         con.commit()
     finally:
