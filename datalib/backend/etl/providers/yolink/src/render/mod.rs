@@ -48,4 +48,6 @@ pub mod units;
 /// invalidates the "HEAD unchanged → skip" fast path too.
 ///
 /// v1 — initial timeseries renderer.
-pub const RENDER_VERSION: u32 = 1;
+/// v2 — samples are joined by a line (`lines+markers`) instead of
+///      standing alone as markers.
+pub const RENDER_VERSION: u32 = 2;

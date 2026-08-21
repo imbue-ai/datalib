@@ -52,6 +52,27 @@ pub const OFFLINE_NOTICE: &str = "This plot draws with Plotly, loaded from cdn.p
      the data itself is inlined in this file and is not lost.";
 
 /// One device-and-metric series, already converted to SI.
+///
+/// # Why the line is not broken across gaps
+///
+/// A connected line spanning a stretch with no readings looks like it is
+/// asserting data nobody measured, so breaking it across outages is a
+/// tempting addition. It was tried and removed, because these series
+/// have no outages to detect — only long tails.
+///
+/// Measured against the live store (2026-08-21): every series' interval
+/// distribution runs from a 1.9–60 minute median out to a 2–5 hour
+/// maximum, with nothing bimodal in between. The water meter is the
+/// clearest case — median 1.9 min, p95 45 min — because it reports on
+/// activity rather than on a clock. A "gap longer than 10x the median"
+/// rule flagged 11% of its perfectly normal intervals as outages and
+/// shattered its line into ~1400 pieces. Any threshold that leaves that
+/// series intact is high enough to fire on nothing else.
+///
+/// What makes this safe is the markers: `lines+markers` draws a dot at
+/// every real sample, so a long bare segment with no dots on it reads as
+/// "nothing was recorded here" on sight. Keep the markers, and the line
+/// cannot lie about density.
 pub struct Trace {
     /// Legend label.
     pub name: String,
@@ -142,11 +163,17 @@ fn trace_json(t: &Trace) -> Value {
     // and humidity plots carry tens of thousands of points each, where
     // an SVG trace turns panning and zooming into a slideshow.
     m.insert("type".into(), json!("scattergl"));
-    m.insert("mode".into(), json!("markers"));
+    // Markers plus the connecting line: the markers say where the
+    // samples actually are (which matters when the sampling interval
+    // varies), the line carries the shape between them.
+    m.insert("mode".into(), json!("lines+markers"));
     m.insert("name".into(), json!(t.name));
     m.insert("x".into(), json!(t.x_ms));
     m.insert("y".into(), json!(t.y));
     m.insert("marker".into(), json!({"size": 3}));
+    // Thin: at tens of thousands of points a default-width line fills
+    // in solid and hides the markers under it.
+    m.insert("line".into(), json!({"width": 1}));
     m.insert(
         "hovertemplate".into(),
         // `<extra>` holds the series name in the hover box's side panel.
@@ -287,6 +314,32 @@ mod tests {
             "epoch ms should be inlined as a number"
         );
         assert!(html.contains(r#""type":"date""#) || html.contains(r#"\"type\":\"date\""#));
+    }
+
+    #[test]
+    fn samples_are_joined_by_a_thin_line() {
+        let html = standalone_html(&TEMPERATURE, "sub", &[trace("d", Axis::Left)]).unwrap();
+        assert!(html.contains(r#""mode":"lines+markers""#), "{html}");
+        assert!(html.contains(r#""line":{"width":1}"#), "{html}");
+    }
+
+    #[test]
+    fn every_sample_is_plotted_and_the_line_is_never_broken() {
+        // The counterpart to `Trace`'s docs on gaps: no nulls in the y
+        // array, and `connectgaps` left unset. If someone reintroduces
+        // gap-breaking, this fails and sends them to the measurement
+        // that says why it was removed.
+        let mut t = trace("d", Axis::Left);
+        t.x_ms = vec![1, 2, 3];
+        t.y = vec![1.0, 2.0, 3.0];
+        let html = standalone_html(&TEMPERATURE, "sub", &[t]).unwrap();
+        let body = html.split_once(r#"type="application/json">"#).unwrap().1;
+        let figure = body.split_once("</script>").unwrap().0;
+        let parsed: serde_json::Value = serde_json::from_str(figure).unwrap();
+        let ys = parsed["data"][0]["y"].as_array().unwrap();
+        assert_eq!(ys.len(), 3);
+        assert!(ys.iter().all(|v| v.is_number()), "{ys:?}");
+        assert!(!html.contains("connectgaps"), "{html}");
     }
 
     #[test]
