@@ -37,6 +37,7 @@ use datalib_etl_fsindex_config::FsindexConfig;
 use datalib_etl_github_config::GithubConfig;
 use datalib_etl_gitlab_config::GitlabConfig;
 use datalib_etl_google_takeout_config::GoogleTakeoutConfig;
+use datalib_etl_lightroom_config::LightroomConfig;
 use datalib_etl_linkedin_config::LinkedinConfig;
 use datalib_etl_notion_config::NotionConfig;
 use datalib_etl_perseus_config::PerseusConfig;
@@ -165,6 +166,10 @@ pub enum SourceConfig {
     /// **download-only** — it indexes the tree at `input_path` into a raw store
     /// and renders nothing.
     Fsindex(FsindexConfig),
+    /// Adobe Lightroom Classic catalog mirror. File-backed and
+    /// **download-only** — it mirrors every table of the `.lrcat` at
+    /// `input_path` into a raw store and renders nothing.
+    Lightroom(LightroomConfig),
 }
 
 /// Dispatch an expression over the payload of any variant, binding it to `$c`.
@@ -190,6 +195,7 @@ macro_rules! over_payload {
             SourceConfig::WhatsAppBackup($c) => $e,
             SourceConfig::SmsBackupRestore($c) => $e,
             SourceConfig::Fsindex($c) => $e,
+            SourceConfig::Lightroom($c) => $e,
         }
     };
 }
@@ -231,6 +237,7 @@ impl SourceConfig {
             SourceConfig::WhatsAppBackup(_) => "whatsapp_backup",
             SourceConfig::SmsBackupRestore(_) => "sms_backup_restore",
             SourceConfig::Fsindex(_) => "fsindex",
+            SourceConfig::Lightroom(_) => "lightroom",
         }
     }
 
@@ -262,6 +269,8 @@ impl SourceConfig {
             SourceConfig::SmsBackupRestore(c) => c.common.input_path.is_some(),
             // File-backed only: managed iff an `input_path:` scan root is set.
             SourceConfig::Fsindex(c) => c.common.input_path.is_some(),
+            // File-backed only: managed iff an `input_path:` catalog is set.
+            SourceConfig::Lightroom(c) => c.common.input_path.is_some(),
         }
     }
 }

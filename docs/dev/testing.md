@@ -35,6 +35,28 @@ Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
 § "Updating insta snapshots" for the full pattern, including how to declare a
 `.update` for a new test.
 
+## Bazel-fetched test data (`lightroom`)
+
+`//datalib/backend/etl/providers/lightroom:real_catalogs` ingests four real
+Lightroom catalogs and asserts the incremental diffs between them. The
+catalogs are **fetched, not vendored**: `http_file` entries in
+`MODULE.bazel`, pinned by upstream commit sha *and* sha256, sourced from
+[`thadd3us/lightroom_db_diff`](https://github.com/thadd3us/lightroom_db_diff).
+~7 MB that would otherwise sit in this repo's history forever.
+
+This is the pattern to copy when a test needs real binary input that is
+too big to check in: Bazel's repository cache makes the download one-time
+per machine per pin, so it stays an ordinary `bazelisk test //...` target
+rather than a manual script. Tag it `requires-network` — once fetched the
+test is hermetic, but a cold cache has to reach the network, and the tag
+is what makes that honest.
+
+Regenerate the checksums after a re-pin with:
+
+```bash
+curl -sL <url> | shasum -a 256
+```
+
 ## Manual e2e live-sync golden
 
 `//datalib/backend/dag:manual_e2e_live_sync_golden` runs the whole pipeline

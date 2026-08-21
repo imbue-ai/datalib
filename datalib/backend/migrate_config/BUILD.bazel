@@ -33,6 +33,7 @@ rust_library(
         "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
         "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
         "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
+        "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
         "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
         "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
         "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
