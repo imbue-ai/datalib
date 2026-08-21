@@ -5,20 +5,19 @@
 //! model:
 //!
 //! ```text
-//! for each SOURCE table:  DROP TABLE main.t;  CREATE TABLE main.t (…);
+//! drop EVERY table in the mirror
+//! for each SOURCE table:  CREATE TABLE main.t (…);
 //!                         INSERT INTO main.t SELECT … FROM src.t;
-//!
-//! for each MIRROR table not in the source:   DROP TABLE main.t;
-//!
 //! dolt_commit
 //! ```
 //!
-//! Both loops are load-bearing. The first only visits tables the source
-//! still has, so without the second a table the source dropped would sit
-//! frozen at HEAD forever, indistinguishable from a live one.
-//! [`drop_stale_tables`] is that second loop;
-//! `a_table_the_source_dropped_is_dropped_from_the_mirror` fails without
-//! it.
+//! The drop is unconditional — every mirror table, not just the ones the
+//! source still has. That is what makes a table the source *removed*
+//! disappear from HEAD instead of sitting there frozen and
+//! indistinguishable from a live one, and it means there is no "is this
+//! one stale?" question to get wrong.
+//! `a_table_the_source_dropped_is_dropped_from_the_mirror` fails if the
+//! drop is narrowed to the source's tables.
 //!
 //! ## Why rebuilding from scratch is free
 //!
@@ -67,15 +66,20 @@
 //!
 //! ## Scaling caveat
 //!
-//! Each table is rebuilt inside its own transaction — DDL included,
-//! which doltlite rolls back like anything else — so a failure leaves
-//! every table either fully rebuilt or untouched, and peak memory scales
-//! with the largest single table rather than the whole catalog. The dolt
-//! commit at the end still covers the whole run. A multi-hundred-GB
-//! database would want the copy chunked by primary-key range; a
-//! Lightroom catalog (tens of MB, low hundreds of thousands of rows) is
-//! nowhere near that, and a 3.3 MB / 133-table catalog mirrors in well
-//! under a second.
+//! Each table is filled inside its own transaction, so peak memory
+//! scales with the largest single table rather than the whole catalog.
+//! That split is not stylistic: doltlite holds a transaction's writes in
+//! memory at roughly 3–4x the data size, so wrapping a whole run in one
+//! transaction costs ~510 MB peak RSS for 150 MB of rows — fine here,
+//! ~15 GB for a 4–5 GB catalog, which is not. The dolt commit at the end
+//! still covers the whole run, so the run is still atomic *as history*:
+//! a crash mid-run leaves HEAD untouched and a dirty working tree, which
+//! `doltlite_raw::open` seals into its own rescue commit next time.
+//!
+//! A multi-hundred-GB database would want the copy chunked by
+//! primary-key range too; a Lightroom catalog (tens of MB, low hundreds
+//! of thousands of rows) is nowhere near that, and a 3.3 MB / 133-table
+//! catalog mirrors in ~220 ms.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -98,12 +102,7 @@ const SRC_SCHEMA: &str = "datalib_mirror_src";
 /// bookkeeping, created by `doltlite_raw::open`. A source table with one
 /// of these names is a hard error rather than a silent clobber of the
 /// store's own metadata.
-const RESERVED_TABLES: &[&str] = &[
-    "sync_runs",
-    "sync_scope_state",
-    "sync_scope_config",
-    STAGE_TABLE,
-];
+const RESERVED_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
 
 /// Everything the engine needs. Built from `LightroomConfig` by the
 /// processor, or from flags by the standalone CLI.
@@ -356,12 +355,27 @@ async fn mirror_attached(
     };
 
     progress.set_length(Some(specs.len() as u64));
+
+    // Empty the mirror, then refill it from the source. Everything goes,
+    // including tables the source no longer has — see
+    // [`drop_all_mirror_tables`].
+    progress.set_message("clearing");
+    let dropped = drop_all_mirror_tables(&mut *conn).await?;
+    let wanted: BTreeSet<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+    // For the run summary only. The drop above doesn't care whether a
+    // table is stale, but "the catalog lost a table since last run" is
+    // worth telling the user about.
+    stats.stale_tables_dropped = dropped
+        .iter()
+        .filter(|n| !wanted.contains(n.as_str()))
+        .inspect(|n| tracing::info!(table = %n, "lightroom: table gone from source"))
+        .count();
+
     for spec in &specs {
         progress.set_message(&spec.name);
         stats.rows += rebuild_table(&mut *conn, spec).await?;
         progress.inc(1);
     }
-    stats.stale_tables_dropped = drop_stale_tables(&mut *conn, &specs).await?;
     progress.finish_and_clear();
     Ok(stats)
 }
@@ -535,21 +549,6 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .begin()
         .await
         .with_context(|| format!("begin rebuild tx for {}", spec.name))?;
-    for sql in [
-        format!(
-            "DROP TABLE IF EXISTS main.{}",
-            plan::quote_ident(&spec.name)
-        ),
-        format!(
-            "DROP TABLE IF EXISTS main.{}",
-            plan::quote_ident(STAGE_TABLE)
-        ),
-    ] {
-        sqlx::query(&sql)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| sql.clone())?;
-    }
     sqlx::query(&spec.create_ddl())
         .execute(&mut *tx)
         .await
@@ -612,31 +611,40 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     Ok(n as u64)
 }
 
-/// Drop mirror tables the source no longer has — either because the
-/// catalog dropped them or because a widened exclude list stopped
-/// selecting them. Returns how many went.
+/// Drop every table in the mirror. Returns the names dropped.
 ///
-/// Leaving them would freeze a stale copy at HEAD forever, which is
-/// worse than dropping: the rows stay recoverable either way (branch at
-/// the commit before the drop), and only the drop keeps HEAD meaning
-/// "the catalog as it is now".
-async fn drop_stale_tables(conn: &mut SqliteConnection, specs: &[TableSpec]) -> Result<usize> {
-    let wanted: BTreeSet<&str> = specs.iter().map(|s| s.name.as_str()).collect();
-    let mut dropped = 0;
-    for existing in plan::table_names(&mut *conn, "main").await? {
-        if wanted.contains(existing.as_str()) || RESERVED_TABLES.contains(&existing.as_str()) {
+/// Unconditional, and that is the point: narrowing this to "tables the
+/// source still has" would leave a table the source *removed* frozen at
+/// HEAD forever, indistinguishable from a live one. Dropping everything
+/// and rebuilding from the source means HEAD always means "the catalog
+/// as it is now", with no notion of staleness to compute or get wrong.
+/// It also reaps a [`STAGE_TABLE`] left behind by a crashed run.
+///
+/// Cheap, because dropping a table and recreating it identically is not
+/// a change to doltlite — see this module's header. The rows stay
+/// recoverable from history either way (branch at an earlier commit).
+///
+/// Runs in its own transaction, before any rebuild. The raw store's own
+/// bookkeeping ([`RESERVED_TABLES`]) is excluded, as is anything
+/// `sqlite_%` (filtered out by [`plan::table_names`]).
+async fn drop_all_mirror_tables(conn: &mut SqliteConnection) -> Result<Vec<String>> {
+    let existing = plan::table_names(&mut *conn, "main").await?;
+    let mut tx = conn.begin().await.context("begin drop-all tx")?;
+    let mut dropped = Vec::new();
+    for name in existing {
+        if RESERVED_TABLES.contains(&name.as_str()) {
             continue;
         }
-        tracing::info!(table = %existing, "lightroom: table gone from source; dropping from mirror");
         sqlx::query(&format!(
-            "DROP TABLE IF EXISTS {}",
-            plan::quote_ident(&existing)
+            "DROP TABLE IF EXISTS main.{}",
+            plan::quote_ident(&name)
         ))
-        .execute(&mut *conn)
+        .execute(&mut *tx)
         .await
-        .with_context(|| format!("drop stale mirror table {existing}"))?;
-        dropped += 1;
+        .with_context(|| format!("drop mirror table {name}"))?;
+        dropped.push(name);
     }
+    tx.commit().await.context("commit drop-all tx")?;
     Ok(dropped)
 }
 
