@@ -3,7 +3,16 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 # Surface this BUILD file as a data target so //tools:version_pins_test
 # can read the QMD_VERSION constant out of it at test time.
-exports_files(["BUILD.bazel"])
+# `make_lightroom_catalog.py` is exported so the lightroom provider's
+# `:tng_catalog` genrule can reach it across the package boundary. It
+# lives here rather than beside that provider because `tests/fixtures`
+# is one of the three PYTHON_LINT_ROOTS (see scripts/lint_repo.py) —
+# and because AGENTS.md scopes Python in this repo to exactly this:
+# fixture / test-pipeline tooling.
+exports_files([
+    "BUILD.bazel",
+    "make_lightroom_catalog.py",
+])
 
 # This package's contribution to `//:python_sources` — glob can't cross a
 # package boundary, so the root filegroup can't reach these itself. See

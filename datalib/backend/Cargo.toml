@@ -21,6 +21,7 @@ members = [
     "etl/providers/email",
     "etl/providers/linkedin",
     "etl/providers/fsindex",
+    "etl/providers/lightroom",
     "etl/providers/notion",
     "etl/providers/perseus",
     "etl/providers/signal",

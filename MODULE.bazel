@@ -76,6 +76,61 @@ http_archive(
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
+# Lightroom test catalogs — four real `.lrcat` files from
+# github.com/thadd3us/lightroom_db_diff, captured as a chronological
+# progression of one library: fresh, then GPS/captions/collections/
+# keywords, then two more photos plus edits, then more face tags and a
+# GPS edit. ~1.7 MB each.
+#
+# Fetched rather than vendored: they are ~7 MB of binary that would
+# otherwise sit in this repo's history forever, and Bazel's repository
+# cache means the download happens once per machine per pin. Pinned to a
+# commit sha (not `master`) so the content can't move under the
+# checksums, and each has a sha256 so a moved file fails loudly.
+#
+# Consumed by `//datalib/backend/etl/providers/lightroom:real_catalogs`,
+# which ingests all four into one store and asserts the incremental
+# diffs. That test is tagged `requires-network` — once fetched it is
+# hermetic, but a cold cache needs to reach github.com.
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+LIGHTROOM_DB_DIFF_COMMIT = "733187a5216ccf631a92969a8fc147a4885353df"
+
+[
+    http_file(
+        name = "lightroom_test_catalog_%s" % idx,
+        urls = ["https://raw.githubusercontent.com/thadd3us/lightroom_db_diff/%s/testdata/test_catalogs/test_catalog_%s/%s" % (
+            LIGHTROOM_DB_DIFF_COMMIT,
+            idx,
+            basename,
+        )],
+        sha256 = sha,
+        downloaded_file_path = basename,
+    )
+    for idx, basename, sha in [
+        (
+            "00",
+            "test_catalog_fresh.lrcat",
+            "975a79e5a065091cd56862fd7635ca162187d45944b34000abd26a5a9a604952",
+        ),
+        (
+            "01",
+            "test_catalog_gps_captions_collections_keywords.lrcat",
+            "3ce192a4fa6f743955cbebbc3c96c23684eb28cc90b66c4780223f8d95cafba0",
+        ),
+        (
+            "02",
+            "test_catalog_two_more_photos_and_edits.lrcat",
+            "823a4b0e60d2d2d82ae6e1c750e3ee5a026986c61c13cdc2acfad608eca56e04",
+        ),
+        (
+            "03",
+            "test_catalog_more_face_tags_gps_edit.lrcat",
+            "0882371980749f84f00d471dbc01bfdfb5ca23d98e3c995409f798e04a787088",
+        ),
+    ]
+]
+
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.0.0")
 
