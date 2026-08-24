@@ -86,6 +86,7 @@ pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
     ocr_page_count           INTEGER NOT NULL,
     has_encoding_issues      INTEGER NOT NULL,
     title                    TEXT NULL,
+    author                   TEXT NULL,
     doc_created_at           TEXT NULL,
     doc_modified_at          TEXT NULL,
     pdf_id_permanent         TEXT NULL,
@@ -198,6 +199,9 @@ pub struct PdfDocumentRow {
     pub ocr_page_count: i64,
     pub has_encoding_issues: bool,
     pub title: Option<String>,
+    /// Info `/Author` or XMP `dc:creator`. Usually NULL — see
+    /// [`super::identity::DocIdentity::author`].
+    pub author: Option<String>,
     pub doc_created_at: Option<String>,
     pub doc_modified_at: Option<String>,
     pub pdf_id_permanent: Option<String>,
@@ -222,6 +226,7 @@ impl BulkUpsertable for PdfDocumentRow {
         "ocr_page_count",
         "has_encoding_issues",
         "title",
+        "author",
         "doc_created_at",
         "doc_modified_at",
         "pdf_id_permanent",
@@ -249,6 +254,7 @@ impl BulkUpsertable for PdfDocumentRow {
             .bind(self.ocr_page_count)
             .bind(i64::from(self.has_encoding_issues))
             .bind(self.title.as_deref())
+            .bind(self.author.as_deref())
             .bind(self.doc_created_at.as_deref())
             .bind(self.doc_modified_at.as_deref())
             .bind(self.pdf_id_permanent.as_deref())

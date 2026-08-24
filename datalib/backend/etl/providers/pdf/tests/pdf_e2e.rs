@@ -152,7 +152,7 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     let db = h.db().await;
 
     let r = sqlx::query(
-        "SELECT d.title, d.pdf_id_permanent, d.xmp_document_id, d.doc_created_at
+        "SELECT d.title, d.author, d.pdf_id_permanent, d.xmp_document_id, d.doc_created_at
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
           WHERE p.id = 'captains_log.pdf'",
     )
@@ -161,6 +161,11 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     assert_eq!(
         r.get::<Option<String>, _>("title").as_deref(),
         Some("Captain's Log")
+    );
+    // From the Info dict's /Author.
+    assert_eq!(
+        r.get::<Option<String>, _>("author").as_deref(),
+        Some("Jean-Luc Picard")
     );
     assert_eq!(
         r.get::<Option<String>, _>("pdf_id_permanent").as_deref(),
@@ -183,7 +188,7 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     // largest text, and that inferred value is a better grid label than
     // nothing.
     let u = sqlx::query(
-        "SELECT d.pdf_id_permanent, d.xmp_document_id
+        "SELECT d.author, d.pdf_id_permanent, d.xmp_document_id
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
           WHERE p.id = 'engineering/warp_core_manual.pdf'",
     )
@@ -191,6 +196,12 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     .await?;
     assert!(u.get::<Option<String>, _>("pdf_id_permanent").is_none());
     assert!(u.get::<Option<String>, _>("xmp_document_id").is_none());
+    // This one has NO Info /Author, only XMP `dc:creator` — so a value
+    // here proves the fallback path, not just the Info-dict path.
+    assert_eq!(
+        u.get::<Option<String>, _>("author").as_deref(),
+        Some("Geordi La Forge")
+    );
     Ok(())
 }
 

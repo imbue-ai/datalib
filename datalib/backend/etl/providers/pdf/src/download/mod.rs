@@ -247,6 +247,7 @@ fn identify(path: &Path, size: i64, now: &str) -> Result<PdfDocumentRow> {
         // Prefer the PDF's own Info-dict title; fall back to whatever
         // the extractor inferred from the page.
         title: ident.title.clone().or(det.title),
+        author: ident.author,
         doc_created_at: ident.created_at,
         doc_modified_at: ident.modified_at,
         pdf_id_permanent: ident.pdf_id_permanent,

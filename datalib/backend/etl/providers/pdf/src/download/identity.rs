@@ -24,6 +24,10 @@ pub struct DocIdentity {
     /// `xmpMM:OriginalDocumentID` — the ancestor this was derived from.
     pub xmp_original_document_id: Option<String>,
     pub title: Option<String>,
+    /// Info-dict `/Author`, falling back to XMP `dc:creator`. Frequently
+    /// absent — most producers never set it — so callers must treat
+    /// `None` as the normal case, not a failure.
+    pub author: Option<String>,
     /// ISO-8601 with the source offset preserved (per AGENTS.md).
     pub created_at: Option<String>,
     pub modified_at: Option<String>,
@@ -64,6 +68,7 @@ pub fn extract(bytes: &[u8]) -> DocIdentity {
         };
         if let Some(info) = info {
             out.title = info.get(b"Title").ok().and_then(text_of);
+            out.author = info.get(b"Author").ok().and_then(text_of);
             out.created_at = info
                 .get(b"CreationDate")
                 .ok()
@@ -80,9 +85,16 @@ pub fn extract(bytes: &[u8]) -> DocIdentity {
     // ── XMP metadata stream ──────────────────────────────────────────
     if let Some(xmp) = xmp_bytes(&doc) {
         let xmp = String::from_utf8_lossy(&xmp);
-        out.xmp_document_id = xmp_field(&xmp, "DocumentID");
-        out.xmp_instance_id = xmp_field(&xmp, "InstanceID");
-        out.xmp_original_document_id = xmp_field(&xmp, "OriginalDocumentID");
+        out.xmp_document_id = xmp_field(&xmp, "xmpMM:DocumentID");
+        out.xmp_instance_id = xmp_field(&xmp, "xmpMM:InstanceID");
+        out.xmp_original_document_id = xmp_field(&xmp, "xmpMM:OriginalDocumentID");
+        // Only as a fallback: the Info dict is the more commonly
+        // populated of the two, and when both exist they agree.
+        if out.author.is_none() {
+            out.author = xmp_field(&xmp, "dc:creator")
+                .as_deref()
+                .and_then(first_rdf_item);
+        }
     }
 
     out
@@ -106,23 +118,23 @@ fn xmp_bytes(doc: &Document) -> Option<Vec<u8>> {
         .or_else(|| Some(stream.content.clone()))
 }
 
-/// Pull one `xmpMM:<name>` value. XMP is RDF/XML and can encode a
-/// property either as an attribute (`xmpMM:DocumentID="uuid:…"`) or as
-/// an element (`<xmpMM:DocumentID>uuid:…</xmpMM:DocumentID>`); real
-/// files use both, so we try each rather than pulling in an XML parser
-/// for three fields.
-fn xmp_field(xmp: &str, name: &str) -> Option<String> {
-    let elem_open = format!("<xmpMM:{name}>");
+/// Pull one XMP property by qualified name (`xmpMM:DocumentID`,
+/// `dc:creator`). XMP is RDF/XML and can encode a property either as an
+/// attribute (`xmpMM:DocumentID="uuid:…"`) or as an element
+/// (`<xmpMM:DocumentID>uuid:…</xmpMM:DocumentID>`); real files use both,
+/// so we try each rather than pulling in an XML parser for four fields.
+fn xmp_field(xmp: &str, qname: &str) -> Option<String> {
+    let elem_open = format!("<{qname}>");
     if let Some(start) = xmp.find(&elem_open) {
         let rest = &xmp[start + elem_open.len()..];
-        if let Some(end) = rest.find(&format!("</xmpMM:{name}>")) {
+        if let Some(end) = rest.find(&format!("</{qname}>")) {
             let v = rest[..end].trim();
             if !v.is_empty() {
                 return Some(v.to_string());
             }
         }
     }
-    let attr = format!("xmpMM:{name}=");
+    let attr = format!("{qname}=");
     let start = xmp.find(&attr)? + attr.len();
     let rest = &xmp[start..];
     let quote = rest.chars().next()?;
@@ -133,6 +145,25 @@ fn xmp_field(xmp: &str, name: &str) -> Option<String> {
     let end = rest.find(quote)?;
     let v = rest[..end].trim();
     (!v.is_empty()).then(|| v.to_string())
+}
+
+/// `dc:creator` is an ordered array, not a scalar: XMP wraps it as
+/// `<rdf:Seq><rdf:li>Name</rdf:li>…</rdf:Seq>`. Take the first entry —
+/// `grid_rows.author` is one column, and the first listed creator is
+/// the primary one by RDF convention. A bare (non-array) value passes
+/// through unchanged, since some writers emit that instead.
+fn first_rdf_item(inner: &str) -> Option<String> {
+    let inner = inner.trim();
+    if let Some(start) = inner.find("<rdf:li") {
+        // Skip any attributes on the <rdf:li ...> tag itself.
+        let after_tag = inner[start..].find('>')? + start + 1;
+        let rest = &inner[after_tag..];
+        let end = rest.find("</rdf:li>")?;
+        let v = rest[..end].trim();
+        return (!v.is_empty()).then(|| v.to_string());
+    }
+    // No array wrapper, and nothing that looks like leftover markup.
+    (!inner.is_empty() && !inner.contains('<')).then(|| inner.to_string())
 }
 
 /// Decode a PDF text-string object to a Rust `String`, handling the
@@ -265,19 +296,59 @@ mod tests {
     #[test]
     fn xmp_element_form_is_found() {
         let x = r#"<rdf:Description><xmpMM:DocumentID>uuid:abc-123</xmpMM:DocumentID></rdf:Description>"#;
-        assert_eq!(xmp_field(x, "DocumentID").as_deref(), Some("uuid:abc-123"));
+        assert_eq!(
+            xmp_field(x, "xmpMM:DocumentID").as_deref(),
+            Some("uuid:abc-123")
+        );
     }
 
     #[test]
     fn xmp_attribute_form_is_found() {
         let x = r#"<rdf:Description xmpMM:InstanceID="uuid:def-456" xmpMM:DocumentID="uuid:abc"/>"#;
-        assert_eq!(xmp_field(x, "InstanceID").as_deref(), Some("uuid:def-456"));
-        assert_eq!(xmp_field(x, "DocumentID").as_deref(), Some("uuid:abc"));
+        assert_eq!(
+            xmp_field(x, "xmpMM:InstanceID").as_deref(),
+            Some("uuid:def-456")
+        );
+        assert_eq!(
+            xmp_field(x, "xmpMM:DocumentID").as_deref(),
+            Some("uuid:abc")
+        );
     }
 
     #[test]
     fn xmp_missing_field_is_none() {
-        assert_eq!(xmp_field("<rdf:Description/>", "DocumentID"), None);
+        assert_eq!(xmp_field("<rdf:Description/>", "xmpMM:DocumentID"), None);
+    }
+
+    #[test]
+    fn dc_creator_seq_yields_the_first_entry() {
+        let x = "<dc:creator><rdf:Seq><rdf:li>Jean-Luc Picard</rdf:li>\
+                 <rdf:li>William Riker</rdf:li></rdf:Seq></dc:creator>";
+        let raw = xmp_field(x, "dc:creator").unwrap();
+        assert_eq!(first_rdf_item(&raw).as_deref(), Some("Jean-Luc Picard"));
+    }
+
+    #[test]
+    fn dc_creator_scalar_passes_through() {
+        assert_eq!(
+            first_rdf_item("Geordi La Forge").as_deref(),
+            Some("Geordi La Forge")
+        );
+    }
+
+    #[test]
+    fn rdf_li_with_attributes_is_handled() {
+        assert_eq!(
+            first_rdf_item(r#"<rdf:Seq><rdf:li xml:lang="x-default">Data</rdf:li></rdf:Seq>"#)
+                .as_deref(),
+            Some("Data")
+        );
+    }
+
+    #[test]
+    fn leftover_markup_is_not_mistaken_for_a_name() {
+        // An empty Seq must yield None rather than a chunk of RDF.
+        assert_eq!(first_rdf_item("<rdf:Seq></rdf:Seq>"), None);
     }
 
     #[test]

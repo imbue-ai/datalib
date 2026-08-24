@@ -38,7 +38,7 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
 endobj
 8 0 obj
-<< /Title (Captain's Log) /CreationDate (D:23640413084500-07'00') >>
+<< /Title (Captain's Log) /Author (Jean-Luc Picard) /CreationDate (D:23640413084500-07'00') >>
 endobj
 9 0 obj
 << /Length 404 /Type /Metadata /Subtype /XML >>
@@ -57,9 +57,9 @@ xref
 0000000657 00000 n 
 0000000921 00000 n 
 0000000991 00000 n 
-0000001075 00000 n 
+0000001101 00000 n 
 trailer
 << /Size 10 /Root 1 0 R /Info 8 0 R /ID [<0123456789abcdef0123456789abcdef> <0123456789abcdef0123456789abcdef>] >>
 startxref
-1560
+1586
 %%EOF

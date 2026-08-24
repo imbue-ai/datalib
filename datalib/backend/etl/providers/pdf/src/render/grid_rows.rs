@@ -49,6 +49,8 @@ pub fn page_uuid(blake3: &str, page: u32) -> String {
 pub struct DocumentMeta<'a> {
     pub blake3: &'a str,
     pub title: Option<&'a str>,
+    /// Info `/Author` or XMP `dc:creator`. Usually `None`.
+    pub author: Option<&'a str>,
     /// Representative root-relative path, for display.
     pub rel_path: &'a str,
     /// How many paths currently hold these bytes.
@@ -73,11 +75,46 @@ pub fn display_title(title: Option<&str>, rel_path: &str) -> String {
     }
 }
 
+/// Hard ceiling from `grid_rows.author`'s `VARCHAR(255)`. We stay well
+/// under it — see [`display_author`].
+const AUTHOR_MAX: usize = 120;
+
+/// Shorten a PDF's author string for the grid.
+///
+/// The full value stays in `pdf_documents.author` and in the markdown
+/// frontmatter; this is only the grid projection. Two real shapes from
+/// a 20-document sample drove it:
+///
+/// * A 14-author physics paper produced a 165-character semicolon-
+///   separated list. That fits `VARCHAR(255)` today but a 30-author
+///   paper would not, and as a grid cell it is unreadable either way.
+///   Semicolon-separated lists collapse to `First Author et al.`
+/// * Everything else is short and passes through. We do NOT split on
+///   commas: `Lo, Kyle` is one person, and guessing wrong turns a name
+///   into a surname.
+///
+/// Anything still over the limit is truncated on a character boundary.
+pub fn display_author(author: Option<&str>) -> Option<String> {
+    let a = author.map(str::trim).filter(|s| !s.is_empty())?;
+    if let Some((first, _rest)) = a.split_once(';') {
+        let first = first.trim();
+        if !first.is_empty() {
+            return Some(format!("{first} et al."));
+        }
+    }
+    if a.chars().count() > AUTHOR_MAX {
+        let short: String = a.chars().take(AUTHOR_MAX - 1).collect();
+        return Some(format!("{short}…"));
+    }
+    Some(a.to_string())
+}
+
 /// Build the row set for one document: the document row followed by one
 /// row per page, in page order.
 pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Vec<GridRow> {
     let doc_uuid = document_uuid(meta.blake3);
     let title = display_title(meta.title, meta.rel_path);
+    let author = display_author(meta.author);
     // Prefer the authored creation date; fall back to modification.
     // Never fall back to "now" — an ingest timestamp masquerading as an
     // authored one would sort the whole corpus to today.
@@ -91,7 +128,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         kind: KIND_DOCUMENT.into(),
         source_label: SOURCE_LABEL.into(),
         when_ts: when.map(str::to_string),
-        author: None,
+        author: meta.author.map(str::to_string),
         account: Some(meta.source_name.to_string()),
         project: None,
         org_uuid: None,
@@ -128,7 +165,10 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             kind: KIND_PAGE.into(),
             source_label: SOURCE_LABEL.into(),
             when_ts: when.map(str::to_string),
-            author: None,
+            // Denormalized onto the page rows too, matching how every
+            // chat provider stamps the author on each message row so
+            // the grid can filter without a join.
+            author: author.clone(),
             account: Some(meta.source_name.to_string()),
             project: None,
             org_uuid: None,
@@ -160,6 +200,7 @@ mod tests {
         DocumentMeta {
             blake3: "abc123",
             title,
+            author: Some("Jean-Luc Picard"),
             rel_path: rel,
             copy_count: 1,
             created_at: Some("2024-01-15T10:30:00-08:00"),
@@ -211,6 +252,74 @@ mod tests {
         assert_eq!(display_title(Some("   "), "a/b.pdf"), "b.pdf");
         // LaTeX and Word both emit paths as titles surprisingly often.
         assert_eq!(display_title(Some("/tmp/x/final.tex"), "a/b.pdf"), "b.pdf");
+    }
+
+    #[test]
+    fn multi_author_lists_collapse_to_et_al() {
+        // Real shape from an arXiv paper: 14 names, 165 characters.
+        assert_eq!(
+            display_author(Some("Cheng Cui; Yubo Zhang; Ting Sun")).as_deref(),
+            Some("Cheng Cui et al.")
+        );
+    }
+
+    #[test]
+    fn a_single_name_passes_through_untouched() {
+        assert_eq!(
+            display_author(Some("Jean-Luc Picard")).as_deref(),
+            Some("Jean-Luc Picard")
+        );
+    }
+
+    #[test]
+    fn commas_are_not_treated_as_separators() {
+        // `Lo, Kyle` is one person; splitting here would yield "Lo".
+        assert_eq!(
+            display_author(Some("Lo, Kyle")).as_deref(),
+            Some("Lo, Kyle")
+        );
+    }
+
+    #[test]
+    fn blank_and_missing_authors_are_none() {
+        assert_eq!(display_author(None), None);
+        assert_eq!(display_author(Some("   ")), None);
+    }
+
+    #[test]
+    fn overlong_single_author_is_truncated_within_the_column() {
+        let long = "A".repeat(400);
+        let got = display_author(Some(&long)).unwrap();
+        assert!(got.chars().count() <= AUTHOR_MAX, "{}", got.chars().count());
+        assert!(got.ends_with('…'));
+    }
+
+    #[test]
+    fn truncation_does_not_split_a_multibyte_character() {
+        // Char-boundary truncation, not byte slicing — a panic here
+        // would take down the whole render on one CJK-authored PDF.
+        let long = "日".repeat(400);
+        let got = display_author(Some(&long)).unwrap();
+        assert!(got.chars().count() <= AUTHOR_MAX);
+    }
+
+    #[test]
+    fn author_lands_on_both_document_and_page_rows() {
+        let rows = rows_for_document(&meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
+        assert!(rows
+            .iter()
+            .all(|r| r.author.as_deref() == Some("Jean-Luc Picard")));
+    }
+
+    #[test]
+    fn absent_author_is_none_not_empty_string() {
+        // An empty string would render as a blank-but-present author
+        // chip in the grid; None is the honest encoding of "unknown",
+        // and most PDFs never set /Author at all.
+        let mut m = meta(None, "a/b.pdf");
+        m.author = None;
+        let rows = rows_for_document(&m, &[(1, "x".into())]);
+        assert!(rows.iter().all(|r| r.author.is_none()));
     }
 
     #[test]

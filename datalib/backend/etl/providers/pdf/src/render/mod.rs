@@ -155,6 +155,9 @@ fn render_one(
     body.push_str("provider: pdf\n");
     body.push_str(&format!("blake3: {}\n", yaml_str(&t.blake3)));
     body.push_str(&format!("title: {}\n", yaml_str(&title)));
+    if let Some(a) = &t.author {
+        body.push_str(&format!("author: {}\n", yaml_str(a)));
+    }
     body.push_str(&format!("page_count: {}\n", t.page_count));
     body.push_str(&format!("pdf_type: {}\n", yaml_str(&t.pdf_type)));
     body.push_str(&format!("source_path: {}\n", yaml_str(&t.rel_path)));
@@ -193,6 +196,7 @@ fn render_one(
     let meta = grid_rows::DocumentMeta {
         blake3: &t.blake3,
         title: t.title.as_deref(),
+        author: t.author.as_deref(),
         rel_path: &t.rel_path,
         copy_count: t.copy_count,
         created_at: t.doc_created_at.as_deref(),

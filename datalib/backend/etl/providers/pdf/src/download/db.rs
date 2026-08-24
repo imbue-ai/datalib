@@ -145,6 +145,7 @@ impl RawDb {
         let rows = sqlx::query(
             "SELECT d.blake3      AS blake3,
                     d.title       AS title,
+                    d.author      AS author,
                     d.page_count  AS page_count,
                     d.pdf_type    AS pdf_type,
                     d.doc_created_at  AS doc_created_at,
@@ -168,6 +169,7 @@ impl RawDb {
                 RenderTarget {
                     blake3: r.get("blake3"),
                     title: r.get("title"),
+                    author: r.get("author"),
                     page_count: r.get("page_count"),
                     pdf_type: r.get("pdf_type"),
                     doc_created_at: r.get("doc_created_at"),
@@ -186,6 +188,7 @@ impl RawDb {
 pub struct RenderTarget {
     pub blake3: String,
     pub title: Option<String>,
+    pub author: Option<String>,
     pub page_count: i64,
     pub pdf_type: String,
     pub doc_created_at: Option<String>,

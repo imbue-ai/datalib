@@ -80,6 +80,33 @@ The seam for that work is `render::convert::RENDER_VERSION`, which
 participates in the render cache key: bumping it re-renders every
 affected document with no migration.
 
+## What the metadata is actually worth
+
+Measured over a 20-document real corpus (arXiv papers, IRS forms,
+browser print-to-PDF, UN translations):
+
+| Column | Populated | Notes |
+|---|---|---|
+| `title` | 15/20 | Usually good; a few are producer boilerplate. |
+| `pdf_id_permanent` | 13/20 | Trailer `/ID[0]`. |
+| `author` | 10/20 | See the caveat below. |
+| `xmp_document_id` | 3/20 | The reason lineage is a hint, not a key. |
+
+**`author` is populated more often than it is meaningful.** Of the 10
+values found: two were real author lists (arXiv papers), five were the
+same producer username repeated across unrelated UN documents, and two
+were IRS internal routing codes (`W:CAR:MP:FP`). We store what the file
+says and do not try to filter the junk — the only way to tell a routing
+code from a surname is a heuristic that will eventually discard a real
+name, which is the same trade we declined for print-header stripping.
+Treat the column as a hint, and expect to see noise in the grid.
+
+Multi-author lists are stored in full but collapse to
+`First Author et al.` in `grid_rows.author` — a 14-author paper produced
+a 165-character string, which fits `VARCHAR(255)` only by luck and is
+unreadable as a grid cell either way. The full value stays in
+`pdf_documents.author` and in the markdown frontmatter.
+
 ## Known limitations
 
 - **Browser print chrome is only partly removed.** `render::convert`

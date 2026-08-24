@@ -67,10 +67,12 @@ def simple_doc(
     pages: list[list[str]],
     *,
     title: str | None = None,
+    author: str | None = None,
     created: str | None = None,
     doc_id: str | None = None,
     xmp_document_id: str | None = None,
     xmp_instance_id: str | None = None,
+    dc_creator: str | None = None,
 ) -> bytes:
     """A text PDF with `len(pages)` pages and optional metadata."""
     objs: list[bytes] = []
@@ -82,8 +84,10 @@ def simple_doc(
     info_id = font_id + 1
     xmp_id = info_id + 1
 
+    has_xmp = bool(xmp_document_id or xmp_instance_id or dc_creator)
+
     catalog = b"<< /Type /Catalog /Pages 2 0 R"
-    if xmp_document_id or xmp_instance_id:
+    if has_xmp:
         catalog += f" /Metadata {xmp_id} 0 R".encode()
     catalog += b" >>"
     objs.append(catalog)
@@ -106,17 +110,26 @@ def simple_doc(
     info = b"<< "
     if title:
         info += b"/Title (" + title.encode("latin-1", "replace") + b") "
+    if author:
+        info += b"/Author (" + author.encode("latin-1", "replace") + b") "
     if created:
         info += b"/CreationDate (" + created.encode() + b") "
     info += b">>"
     objs.append(info)
 
-    if xmp_document_id or xmp_instance_id:
+    if has_xmp:
         fields = ""
         if xmp_document_id:
             fields += f"<xmpMM:DocumentID>{xmp_document_id}</xmpMM:DocumentID>"
         if xmp_instance_id:
             fields += f"<xmpMM:InstanceID>{xmp_instance_id}</xmpMM:InstanceID>"
+        if dc_creator:
+            # The real shape: an ordered array, not a scalar.
+            fields += (
+                "<dc:creator><rdf:Seq>"
+                f"<rdf:li>{dc_creator}</rdf:li>"
+                "</rdf:Seq></dc:creator>"
+            )
         xmp = (
             '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
             '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
@@ -182,6 +195,7 @@ def main() -> int:
             ],
         ],
         title="Captain's Log",
+        author="Jean-Luc Picard",
         created="D:23640413084500-07'00'",
         doc_id="0123456789abcdef0123456789abcdef",
         xmp_document_id="uuid:enterprise-ncc-1701-d",
@@ -210,17 +224,19 @@ def main() -> int:
             ],
         ],
         title="Captain's Log",
+        author="Jean-Luc Picard",
         created="D:23640413084500-07'00'",
         doc_id="0123456789abcdef0123456789abcdef",
         xmp_document_id="uuid:enterprise-ncc-1701-d",
         xmp_instance_id="uuid:instance-0002",
     )
 
-    # (3) No Info dict, no /ID, no XMP: every identity column must come
-    # back NULL without the scan failing, and the title must fall back
-    # to the filename. Carries the distinctive technical vocabulary the
-    # pipeline test searches for, so one document covers both the
-    # missing-metadata path and the end-to-end search path.
+    # (3) No Info title, no /ID: the title must fall back to the
+    # filename and the lineage columns must come back NULL without the
+    # scan failing. It carries `dc:creator` and NO Info `/Author`, which
+    # is the fallback path — the two author sources are exercised
+    # separately (the logs above use the Info dict). Also carries the
+    # distinctive technical vocabulary the pipeline test searches for.
     FIXTURES["engineering/warp_core_manual.pdf"] = simple_doc(
         [
             [
@@ -229,7 +245,8 @@ def main() -> int:
                 "four hundred hours of continuous warp operation.",
                 "Misalignment induces antimatter containment cascade.",
             ],
-        ]
+        ],
+        dc_creator="Geordi La Forge",
     )
 
     # Image-only: classified `scanned`, recorded with needs_ocr, and NOT
