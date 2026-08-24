@@ -4,7 +4,7 @@ exports_files(["Cargo.toml"])
 
 # Tiny synthetic PDF corpus. Generated rather than checked in as
 # binaries so the inputs are readable in review and reproducible: see
-# tools/make_fixture_pdfs.py for what each one is testing.
+# //tests/fixtures/make_pdf_fixtures.py for what each one is testing.
 filegroup(
     name = "pdf_fixture",
     srcs = glob(

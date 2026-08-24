@@ -7,9 +7,14 @@ deterministic (so the fixture's blake3s — which are the provider's
 primary keys — never drift), and we can place trailer `/ID` and XMP
 packets exactly where the identity tests need them.
 
-Regenerate with:
+Output is checked in; this script exists to regenerate it:
 
-    uv run python datalib/backend/etl/providers/pdf/tools/make_fixture_pdfs.py
+    uv run python tests/fixtures/make_pdf_fixtures.py
+
+It lives here rather than beside the provider for the same reason
+`make_lightroom_catalog.py` does: `tests/fixtures` is one of the three
+PYTHON_LINT_ROOTS (see scripts/lint_repo.py), so a generator parked in
+a provider directory would be linted by nothing.
 
 TNG-themed, per the repo's fixture convention.
 """
@@ -19,7 +24,19 @@ from __future__ import annotations
 import pathlib
 import sys
 
-OUT = pathlib.Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "pdf_tng"
+# Written into the provider's own tree — the corpus is co-located with
+# the code under test even though this generator cannot be.
+OUT = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "datalib"
+    / "backend"
+    / "etl"
+    / "providers"
+    / "pdf"
+    / "tests"
+    / "fixtures"
+    / "pdf_tng"
+)
 
 
 def build(objects: list[bytes], trailer_extra: bytes = b"") -> bytes:
@@ -42,7 +59,13 @@ def build(objects: list[bytes], trailer_extra: bytes = b"") -> bytes:
     out += b"0000000000 65535 f \n"
     for off in offsets[1:]:
         out += f"{off:010d} 00000 n \n".encode()
-    out += b"trailer\n<< /Size " + str(n).encode() + b" /Root 1 0 R" + trailer_extra + b" >>\n"
+    out += (
+        b"trailer\n<< /Size "
+        + str(n).encode()
+        + b" /Root 1 0 R"
+        + trailer_extra
+        + b" >>\n"
+    )
     out += b"startxref\n" + str(xref_at).encode() + b"\n%%EOF\n"
     return bytes(out)
 
@@ -60,7 +83,9 @@ def text_stream(lines: list[str], y_start: int = 720) -> bytes:
 
 
 def stream_obj(data: bytes, extra: str = "") -> bytes:
-    return f"<< /Length {len(data)}{extra} >>\nstream\n".encode() + data + b"\nendstream"
+    return (
+        f"<< /Length {len(data)}{extra} >>\nstream\n".encode() + data + b"\nendstream"
+    )
 
 
 def simple_doc(
@@ -137,7 +162,7 @@ def simple_doc(
             '<rdf:Description rdf:about="" '
             'xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/">'
             f"{fields}"
-            "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>"
+            '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
         ).encode()
         objs.append(stream_obj(xmp, " /Type /Metadata /Subtype /XML"))
     else:
