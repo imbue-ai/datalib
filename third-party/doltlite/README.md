@@ -82,8 +82,8 @@ A version lives in **four** places and they must all move together:
 hand.** `:cli_version_test` reads like it does this, and its comments
 say so, but the check is circular: the CLI prints the version it was
 compiled with (`-DDOLTLITE_VERSION`, from #3), and the test compares
-that against #3 again. Setting `DOLTLITE_VERSION = "0.11.49"` while
-both archives are on 0.11.50 passes. What the test *does* genuinely
+that against #3 again. Setting `DOLTLITE_VERSION = "0.11.52"` while
+both archives are on 0.11.53 passes. What the test *does* genuinely
 catch is worth keeping — that the CLI links and runs at all, and that
 its dolt-SQL surface is real (it exercises `dolt_commit` and
 `dolt_log`, so a shell accidentally linked against stock SQLite fails).
@@ -129,8 +129,16 @@ Before bumping, check whether the chunk-store format moved: grep
 hard-rejects any mismatch (`SQLITE_NOTADB`, "written by an incompatible
 doltlite version") with no migration path, so a bump there orphans every
 existing `.doltlite_db` on disk rather than merely needing a rebuild.
-It has been `12` from 0.11.13 through 0.11.50; 0.11.40 froze 12 as the
+It has been `12` from 0.11.13 through 0.11.53; 0.11.40 froze 12 as the
 beta compatibility boundary.
+
+Also worth a moment: a bump can move the *SQL surface's* semantics
+without touching the storage format, and the tests that notice are the
+ones asserting exact counts. 0.11.52 changed `dolt_diff.data_change` to
+report `0` for a newly created **empty** table (it had been `1` through
+0.11.51) — correct, but it moved a lightroom assertion from 113 tables
+to the 38 that actually hold rows. If a bump fails a count assertion,
+check whether upstream got *more* right before assuming a regression.
 
 No code or wiring changes needed unless the doltlite public API shifts
 (it's a SQLite fork, so it shouldn't).

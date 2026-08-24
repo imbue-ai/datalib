@@ -175,9 +175,9 @@ KEYWORD_IMAGES = [
 
 # Each fixture XMP packet is padded past this. A real catalog's packets
 # run to tens of KB, and size is load-bearing for the tests: doltlite
-# v0.11.50 silently corrupts values over 4054 bytes on the write path the
-# mirror uses, so a fixture with only short packets would let that
-# through. See `mirror::rebuild_table` §"The staging hop" and
+# used to silently corrupt values over 4057 bytes on the write path the
+# mirror uses (dolthub/doltlite#2327, fixed in v0.11.53), so a fixture
+# with only short packets would let a regression through. See
 # `mirror_roundtrip.rs::large_values_round_trip_byte_for_byte`.
 MIN_XMP_BYTES = 20_000
 

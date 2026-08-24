@@ -288,11 +288,12 @@ async fn dynamic_types_survive_the_copy() -> Result<()> {
 
 #[tokio::test]
 async fn large_values_round_trip_byte_for_byte() -> Result<()> {
-    // The regression test for a doltlite v0.11.50 bug that this provider
-    // walked straight into: `INSERT … SELECT` from an ATTACHed database
-    // into a table whose primary key is not a rowid alias silently
-    // corrupts every value over 4054 bytes, giving each row after the
-    // first the *first* row's bytes truncated to its own length.
+    // The regression test for a doltlite bug that this provider walked
+    // straight into (dolthub/doltlite#2327, fixed upstream in v0.11.53):
+    // `INSERT … SELECT` from an ATTACHed plain SQLite file into a table
+    // whose primary key is not a rowid alias silently corrupted every
+    // value over ~4 KB, giving each row after the first the *first*
+    // row's bytes truncated to its own length.
     //
     // Every ingredient matters, which is why it went unnoticed at first:
     // `Adobe_AdditionalMetadata` is keyed on `id_global` (a UUID, not a
@@ -301,8 +302,9 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
     // lengths, and `typeof()` all still come out right — only the bytes
     // are wrong — so nothing else in this file catches it.
     //
-    // `mirror::rebuild_table` routes such tables through a keyless
-    // staging table. Delete that detour and this test fails.
+    // We carried a keyless-staging-table detour until the fix landed;
+    // this test is what let us delete it, and what would catch the
+    // shape coming back.
     let f = Fixture::new();
     f.ingest().await?;
 
@@ -328,8 +330,8 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
     .collect();
 
     assert!(
-        want.iter().all(|(_, h)| h.len() / 2 > 4054),
-        "the fixture's packets must exceed doltlite's 4054-byte corruption \
+        want.iter().all(|(_, h)| h.len() / 2 > 4057),
+        "the fixture's packets must exceed the 4057-byte corruption \
          threshold or this test proves nothing (largest: {} bytes)",
         want.iter().map(|(_, h)| h.len() / 2).max().unwrap_or(0)
     );
@@ -345,18 +347,6 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
             "photo {iw}'s XMP packet does not match the source byte for byte"
         );
     }
-
-    // The staging table must not survive into the mirror.
-    assert_eq!(
-        scalar_i64(
-            &pool,
-            "SELECT COUNT(*) FROM sqlite_master \
-             WHERE type = 'table' AND name LIKE 'datalib_mirror_stage%'"
-        )
-        .await,
-        0,
-        "the staging table is dropped inside the same transaction"
-    );
     pool.close().await;
     Ok(())
 }

@@ -16,7 +16,7 @@ exports_files(
 # This must match the version in the `doltlite_amalgamation` /
 # `doltlite_autoconf` URLs in MODULE.bazel; `:cli_version_test` is what
 # actually enforces that, by running the built CLI and comparing.
-DOLTLITE_VERSION = "0.11.50"
+DOLTLITE_VERSION = "0.11.53"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12
@@ -76,7 +76,7 @@ DOLTLITE_WARNING_SUPPRESSIONS = [
 # statically linked into every Rust binary that pulls in sqlx-sqlite
 # (transitively via `libsqlite3-sys`).
 #
-# Single-TU build from the doltlite amalgamation. As of v0.11.50 the
+# Single-TU build from the doltlite amalgamation. As of v0.11.53 the
 # amalgamation bundles the SQLite core, the prolly storage engine, the
 # `dolt_commit`/`dolt_log`/… version-control SQL surface, blake3 with
 # runtime SIMD dispatch, the `vec1` vector-search extension, the remote

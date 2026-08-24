@@ -129,45 +129,18 @@ impl TableSpec {
             .join(", ")
     }
 
-    /// `INSERT INTO main."dest" ("a","b") SELECT "a","b" FROM <schema>."t"`.
+    /// `INSERT INTO main."t" ("a","b") SELECT "a","b" FROM <schema>."t"`.
     ///
     /// The column list is explicit on both sides so a dropped column (or
     /// a source that gained one we're not mirroring yet) can't shift the
     /// positional mapping.
-    pub fn copy_sql(&self, from_schema: &str, into: &str) -> String {
+    pub fn copy_sql(&self, from_schema: &str) -> String {
         let list = self.column_list();
         format!(
-            "INSERT INTO main.{d} ({list}) SELECT {list} FROM {s}.{t}",
-            d = quote_ident(into),
+            "INSERT INTO main.{t} ({list}) SELECT {list} FROM {s}.{t}",
             t = quote_ident(&self.name),
             s = quote_ident(from_schema),
         )
-    }
-
-    /// A keyless copy of this table's columns, under `name`.
-    ///
-    /// Used as a staging table to route around a doltlite bug — see
-    /// [`super::mirror::rebuild_table`]. Keyless and typeless on purpose:
-    /// it holds the rows for the length of one statement, and the fewer
-    /// constraints it carries the fewer ways it can reject a value the
-    /// source happily held.
-    pub fn staging_ddl(&self, name: &str) -> String {
-        let cols: Vec<String> = self.columns.iter().map(|c| quote_ident(&c.name)).collect();
-        format!("CREATE TABLE {} ({})", quote_ident(name), cols.join(", "))
-    }
-
-    /// Whether the mirror's key is a single `INTEGER` column — a SQLite
-    /// rowid alias. Only that shape (and keyless) is safe to write into
-    /// directly from an ATTACHed database; see
-    /// [`super::mirror::rebuild_table`].
-    pub fn key_is_rowid_alias(&self) -> bool {
-        match self.pk.as_slice() {
-            [only] => self
-                .columns
-                .iter()
-                .any(|c| &c.name == only && c.decl_type.eq_ignore_ascii_case("INTEGER")),
-            _ => false,
-        }
     }
 }
 
@@ -348,36 +321,9 @@ mod tests {
     fn copy_sql_names_columns_on_both_sides() {
         let s = spec(vec![col("a", ""), col("b", "")], vec!["a"]);
         assert_eq!(
-            s.copy_sql("src", "t"),
+            s.copy_sql("src"),
             r#"INSERT INTO main."t" ("a", "b") SELECT "a", "b" FROM "src"."t""#
         );
-        // Staging: same rows, different destination table.
-        assert_eq!(
-            s.copy_sql("src", "stage"),
-            r#"INSERT INTO main."stage" ("a", "b") SELECT "a", "b" FROM "src"."t""#
-        );
-    }
-
-    #[test]
-    fn staging_table_is_keyless_and_typeless() {
-        let s = spec(vec![col("a", "INTEGER"), col("b", "")], vec!["a"]);
-        assert_eq!(s.staging_ddl("stage"), r#"CREATE TABLE "stage" ("a", "b")"#);
-    }
-
-    #[test]
-    fn rowid_alias_detection() {
-        // The one key shape doltlite can be written into directly.
-        assert!(spec(vec![col("id_local", "INTEGER")], vec!["id_local"]).key_is_rowid_alias());
-        // A text key is not.
-        assert!(!spec(vec![col("id_global", "")], vec!["id_global"]).key_is_rowid_alias());
-        // Neither is a composite, even one that starts with an INTEGER.
-        assert!(!spec(
-            vec![col("id_local", "INTEGER"), col("id_global", "")],
-            vec!["id_local", "id_global"]
-        )
-        .key_is_rowid_alias());
-        // Keyless is handled separately (it is safe, but not an alias).
-        assert!(!spec(vec![col("a", "")], vec![]).key_is_rowid_alias());
     }
 
     #[test]
