@@ -487,9 +487,6 @@ pub fn build_spec(
     })
 }
 
-/// Name of the per-table staging table. See [`rebuild_table`].
-const STAGE_TABLE: &str = "datalib_mirror_stage";
-
 /// Rebuild one table: drop it, recreate it from the source's current
 /// shape, refill it. Returns the row count written.
 ///
@@ -504,44 +501,22 @@ const STAGE_TABLE: &str = "datalib_mirror_stage";
 /// function be the *entire* schema story — no comparison against the
 /// mirror's current shape, and so no way for the two to disagree.
 ///
-/// # The staging hop
-///
-/// Rows normally go straight from the ATTACHed source into the mirror
-/// table. When the mirror's key is anything other than a single
-/// `INTEGER` column, they take a detour through a keyless staging table
-/// first, because of a **doltlite bug**
-/// ([dolthub/doltlite#2327](https://github.com/dolthub/doltlite/issues/2327)) —
-/// present in our pinned v0.11.50, in v0.11.52 (the latest release as of
-/// 2026-08-21, checked against the official prebuilt CLI), and in a May
-/// build, so it is long-standing rather than a recent regression:
-///
-/// > `INSERT … SELECT` reading from an ATTACHed database into a table
-/// > whose PRIMARY KEY is not a rowid alias silently corrupts every
-/// > value longer than 4054 bytes. Each row after the first receives the
-/// > *first* row's bytes, truncated to its own correct length. Lengths
-/// > are right, `typeof()` is right, no error is raised, and the damage
-/// > survives `dolt_commit`.
-///
-/// It bit this provider precisely because of the `id_global` key
-/// rewrite: keying on the source's own `id_local INTEGER` is the shape
-/// that happens to be safe, so nothing went wrong until the mirror was
-/// keyed on a UUID. Six of a real catalog's 50 XMP packets came out
-/// holding another photo's bytes.
-///
-/// Writing into a keyless table is safe, and so is the second hop
-/// (doltlite → doltlite, no ATTACH involved), so the staging table
-/// restores correctness at the cost of one extra write per affected
-/// table. `mirror_roundtrip.rs::large_values_round_trip_byte_for_byte`
-/// is the regression test; it fails without this detour.
-///
-/// Remove the detour once the upstream fix lands and `MODULE.bazel`'s
-/// doltlite pin moves past it — the test will keep it honest.
+/// The refill is one `INSERT … SELECT` from the `ATTACH`ed source. It
+/// used to detour through a keyless staging table whenever the
+/// destination's key was not a rowid alias, to route around a doltlite
+/// bug ([dolthub/doltlite#2327]) that silently gave every row after the
+/// first the *first* row's bytes for values past the source file's
+/// local-payload limit — lengths and `typeof()` still right, no error,
+/// and the damage survived `dolt_commit`. Fixed upstream in v0.11.53
+/// ([dolthub/doltlite#2329]), which is what `MODULE.bazel` now pins, so
+/// the detour is gone. The regression test that caught it guards its
+/// absence: `large_values_round_trip_byte_for_byte` in
+/// `mirror_roundtrip.rs` fails against the old pin without the detour.
 /// `hack/doltlite_blob_bug/run.sh` re-checks the upstream behaviour
-/// directly, without going through this crate:
+/// directly, without going through this crate.
 ///
-/// ```sh
-/// hack/doltlite_blob_bug/run.sh
-/// ```
+/// [dolthub/doltlite#2327]: https://github.com/dolthub/doltlite/issues/2327
+/// [dolthub/doltlite#2329]: https://github.com/dolthub/doltlite/pull/2329
 async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u64> {
     let mut tx = conn
         .begin()
@@ -552,45 +527,10 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .await
         .with_context(|| format!("create mirror table {}", spec.name))?;
 
-    // Keyless and single-INTEGER-key destinations are safe to write into
-    // straight from the attached source; everything else goes via
-    // staging. See the doc comment above.
-    if spec.pk.is_empty() || spec.key_is_rowid_alias() {
-        sqlx::query(&spec.copy_sql(SRC_SCHEMA, &spec.name))
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("copy rows into {}", spec.name))?;
-    } else {
-        sqlx::query(&spec.staging_ddl(STAGE_TABLE))
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("create staging table for {}", spec.name))?;
-        sqlx::query(&spec.copy_sql(SRC_SCHEMA, STAGE_TABLE))
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("stage rows for {}", spec.name))?;
-        sqlx::query(&format!(
-            "INSERT INTO main.{d} ({list}) SELECT {list} FROM main.{s}",
-            d = plan::quote_ident(&spec.name),
-            s = plan::quote_ident(STAGE_TABLE),
-            list = spec
-                .columns
-                .iter()
-                .map(|c| plan::quote_ident(&c.name))
-                .collect::<Vec<_>>()
-                .join(", "),
-        ))
+    sqlx::query(&spec.copy_sql(SRC_SCHEMA))
         .execute(&mut *tx)
         .await
-        .with_context(|| format!("copy staged rows into {}", spec.name))?;
-        sqlx::query(&format!(
-            "DROP TABLE main.{}",
-            plan::quote_ident(STAGE_TABLE)
-        ))
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("drop staging table for {}", spec.name))?;
-    }
+        .with_context(|| format!("copy rows into {}", spec.name))?;
 
     // Count from the table rather than trusting `rows_affected` on an
     // `INSERT … SELECT`: it is the number the summary reports and the
@@ -616,7 +556,6 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
 /// HEAD forever, indistinguishable from a live one. Dropping everything
 /// and rebuilding from the source means HEAD always means "the catalog
 /// as it is now", with no notion of staleness to compute or get wrong.
-/// It also reaps a [`STAGE_TABLE`] left behind by a crashed run.
 ///
 /// Cheap, because dropping a table and recreating it identically is not
 /// a change to doltlite — see this module's header. The rows stay
@@ -792,7 +731,7 @@ mod tests {
         assert!(!s.columns.iter().any(|c| c.name == "xmp"));
         assert_eq!(s.dropped_columns, vec!["xmp".to_string()]);
         assert!(!s.create_ddl().contains("xmp"));
-        assert!(!s.copy_sql("src", "T").contains("xmp"));
+        assert!(!s.copy_sql("src").contains("xmp"));
     }
 
     #[test]

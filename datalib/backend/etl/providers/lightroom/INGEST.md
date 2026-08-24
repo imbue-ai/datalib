@@ -191,41 +191,48 @@ Both halves — the absence from `dolt_history_`, and the recovery via a
 branch — are pinned by
 `a_dropped_columns_values_survive_at_their_commit`.
 
-## Working around a doltlite blob bug
+## A doltlite blob bug this provider found (fixed upstream)
 
-**doltlite silently corrupts large values read out of an ordinary SQLite
-file** — [dolthub/doltlite#2327](https://github.com/dolthub/doltlite/issues/2327).
-Confirmed in our pinned v0.11.50, in v0.11.52 (the latest release as of
-2026-08-21), and in an older May build, so don't expect a pin bump alone
-to fix it — re-run the reproducer below and check the issue. Any value over 4057 bytes is backed by a buffer
-that is reused across rows, so any consumer holding more than one row's
-value at a time — `DISTINCT`, `GROUP BY`, a materialised subquery, or an
-`INSERT … SELECT` into a table whose primary key is not a rowid alias —
-sees every value collapse onto the first row's bytes, truncated to each
-row's own correct length. Row counts, lengths and `typeof()` all still
-look right; no error is raised; the damage survives `dolt_commit`. A
-plain row-at-a-time scan is unaffected, and doltlite's own tables are
-unaffected.
+**doltlite used to silently corrupt large values read out of an ordinary
+SQLite file** — [dolthub/doltlite#2327](https://github.com/dolthub/doltlite/issues/2327),
+fixed in **v0.11.53** by
+[dolthub/doltlite#2329](https://github.com/dolthub/doltlite/pull/2329),
+which is what `MODULE.bazel` pins. It is written up here because the
+failure mode is worth recognising, not because the mirror still has to
+dodge it.
+
+Any value that spilled past the source file's local payload limit (4057
+bytes at the usual 4096-byte `page_size`; the cutover moved with
+`page_size`) was backed by a buffer reused across rows, so any consumer
+holding more than one row's value at a time — `DISTINCT`, `GROUP BY`, a
+materialised subquery, or an `INSERT … SELECT` into a table whose primary
+key is not a rowid alias — saw every value collapse onto the first row's
+bytes, truncated to each row's own correct length. Row counts, lengths
+and `typeof()` all still looked right; no error was raised; the damage
+survived `dolt_commit`. A plain row-at-a-time scan was unaffected, as
+were doltlite's own tables.
 
 This provider walked straight into it, and only because of the
 `id_global` key rewrite: keying on the source's `id_local INTEGER` is the
-shape that happens to be safe. Six of a real catalog's 50 XMP packets
-came out holding another photo's bytes.
+shape that happened to be safe. Six of a real catalog's 50 XMP packets
+came out holding another photo's bytes. Every cheap check passed — it
+surfaced only on a byte-for-byte comparison against the source, and the
+first version of *that* check was an `EXCEPT` query against the ATTACHed
+catalog, which hit the same bug and lied.
 
-The workaround, in [`mirror::rebuild_table`](src/download/mirror.rs): when
-the mirror's key is not a single `INTEGER` column, rows land first in a
-keyless staging table (safe), and the second hop is doltlite → doltlite
-(also safe). One extra write per affected table.
-`large_values_round_trip_byte_for_byte` is the regression test — it
-compares every XMP packet against the source byte for byte, and fails
-without the detour.
+Until the fix landed, [`mirror::rebuild_table`](src/download/mirror.rs)
+routed rows through a keyless staging table whenever the mirror's key was
+not a single `INTEGER` column. That detour is gone;
+`large_values_round_trip_byte_for_byte` is the regression test that
+justified it and now guards its absence, comparing every XMP packet
+against the source byte for byte.
 
-Remove the detour once the upstream fix lands and `MODULE.bazel`'s
-doltlite pin moves past it; the test will keep it honest. To re-check the
-upstream behaviour directly, without going through this crate:
+To re-check the upstream behaviour directly, without going through this
+crate:
 
 ```sh
-hack/doltlite_blob_bug/run.sh
+hack/doltlite_blob_bug/run.sh                    # the pinned-fix version
+DOLTLITE_VERSION=0.11.52 hack/doltlite_blob_bug/run.sh   # the last broken one
 ```
 
 That script is standalone — it fetches the official doltlite CLI, builds a
@@ -260,7 +267,7 @@ touches, out of 113 tables:
 
 | Catalog | Tables changed | The diff, in words |
 | --- | --- | --- |
-| `fresh` | 113 | first ingest |
+| `fresh` | 38 | first ingest — the tables that have rows (Lightroom creates all 113 up front; the rest are empty, and an empty table is no data change) |
 | `gps_captions_collections_keywords` | 32 | +4 keywords, +2/−1 collections, 2 photos' EXIF modified (the GPS), **0 photos added** |
 | `two_more_photos_and_edits` | 46 | **+2 photos**, with their EXIF and IPTC rows |
 | `more_face_tags_gps_edit` | 23 | +4 face tags, 3 EXIF rows modified, **0 photos added or removed** |

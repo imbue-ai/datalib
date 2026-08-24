@@ -42,6 +42,18 @@ use datalib_etl_lightroom::download::{self, mirror, FetchOptions, MirrorOptions,
 /// which the mirror skips along with everything else `sqlite_%`.
 const CATALOG_TABLES: usize = 113;
 
+/// How many of those 113 tables hold rows in catalog 00. Lightroom
+/// creates the whole schema up front and most of it stays empty in a
+/// small library (38, 46, 43, 45 non-empty across the four catalogs), so
+/// the first commit's *schema* diff covers all 113 tables while its
+/// *data* diff covers only these.
+///
+/// doltlite reported `data_change = 1` for a newly created empty table
+/// through v0.11.51 and 0 from v0.11.52 on. 0 is the right answer —
+/// there is no data to have changed — which is why this is 38 and not
+/// [`CATALOG_TABLES`].
+const CATALOG_TABLES_WITH_ROWS: i64 = 38;
+
 /// The four catalogs in the order the author edited them. Bazel stages
 /// each one and passes its path in the matching env var.
 const SEQUENCE: &[(&str, &str)] = &[
@@ -179,13 +191,13 @@ async fn four_catalogs_stack_into_one_store_with_incremental_commits() -> Result
     let commits = ingest_sequence(&store).await?;
     let pool = store.pool().await?;
 
-    // The first ingest necessarily touches everything. Every later one
-    // touches only what the author actually changed — this is the whole
-    // claim, measured against a real editing session rather than a
-    // fixture.
+    // The first ingest necessarily touches every table that has anything
+    // in it. Every later one touches only what the author actually
+    // changed — this is the whole claim, measured against a real editing
+    // session rather than a fixture.
     assert_eq!(
         tables_changed(&pool, &commits[0]).await,
-        CATALOG_TABLES as i64
+        CATALOG_TABLES_WITH_ROWS
     );
     let incremental: Vec<i64> = vec![
         tables_changed(&pool, &commits[1]).await,

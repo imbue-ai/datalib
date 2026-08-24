@@ -45,12 +45,22 @@ bazel_dep(name = "platforms", version = "1.0.0")
 # history of //third-party/doltlite/amalgamation.BUILD for the
 # ~300-line file-curation that took). v0.11.4 fixed the amalgamation
 # pipeline, so we're back to the trivial single-file build.
+#
+# v0.11.53 is a deliberate exception to the 7-day burn-in above: it
+# carries dolthub/doltlite#2329, the fix for the silent large-value
+# corruption we hit building the lightroom mirror
+# (dolthub/doltlite#2327 — every value past the source file's local
+# payload limit collapsed onto the first row's bytes when read out of
+# a plain SQLite file). Waiting a week meant either keeping the
+# staging-table workaround or shipping known data corruption.
+# `hack/doltlite_blob_bug/run.sh` is the check: it reports 1 distinct
+# blob against the v0.11.52 release CLI and 3 against v0.11.53.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.50/doltlite-amalgamation-0.11.50.zip"],
-    sha256 = "c44011a1149b55d7eafe1f345315d09f0af430e5c91f9534901337c465373dab",
-    strip_prefix = "doltlite-amalgamation-0.11.50",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.53/doltlite-amalgamation-0.11.53.zip"],
+    sha256 = "a16565665b7857b7e1788b7463a023cdf4026d88e3b33fcecd0de5e5890d7412",
+    strip_prefix = "doltlite-amalgamation-0.11.53",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
@@ -70,9 +80,9 @@ http_archive(
 # fails the build if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.50/doltlite-autoconf-0.11.50.tar.gz"],
-    sha256 = "4a33e89cd9e68a872ccdae15b6ff4f9d05aa9dbbf8414101ecda863935549380",
-    strip_prefix = "doltlite-autoconf-0.11.50",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.53/doltlite-autoconf-0.11.53.tar.gz"],
+    sha256 = "a8cf0120c4f2c19ee61246b24c9fed4fa19b48251941aa7e2055c4b955e52ee3",
+    strip_prefix = "doltlite-autoconf-0.11.53",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
