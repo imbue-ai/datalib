@@ -357,6 +357,11 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         "GitLab MR" => "mr",
         "Notion Page" | "Notion Database" => "page",
         "Notion Comment Thread" => "thread",
+        // A PDF is a document, not a conversation. It reaches the same
+        // grid and preview surfaces as everything else, but the sync
+        // page shows this string, and calling a scanned manual a "chat"
+        // is just wrong.
+        "PDF Document" => "document",
         _ => "chat",
     }
 }

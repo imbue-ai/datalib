@@ -1,13 +1,13 @@
 %PDF-1.7
 %‚„œ”
 1 0 obj
-<< /Type /Catalog /Pages 2 0 R /Metadata 9 0 R >>
+<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Count 2 /Kids [3 0 R 5 0 R] >>
+<< /Type /Pages /Count 1 /Kids [3 0 R] >>
 endobj
 3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
 << /Length 211 >>
@@ -21,44 +21,29 @@ ET
 endstream
 endobj
 5 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>
-endobj
-6 0 obj
-<< /Length 137 >>
-stream
-BT
-/F1 12 Tf
-1 0 0 1 72 720 Tm (Captain's Log, supplemental.) Tj
-1 0 0 1 72 702 Tm (The alien entity known as Q has confronted us.) Tj
-ET
-endstream
-endobj
-7 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
 endobj
-8 0 obj
+6 0 obj
 << /Title (Captain's Log) /CreationDate (D:23640413084500-07'00') >>
 endobj
-9 0 obj
+7 0 obj
 << /Length 404 /Type /Metadata /Subtype /XML >>
 stream
 <?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"><xmpMM:DocumentID>uuid:enterprise-ncc-1701-d</xmpMM:DocumentID><xmpMM:InstanceID>uuid:instance-0001</xmpMM:InstanceID></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>
 endstream
 endobj
 xref
-0 10
+0 8
 0000000000 65535 f 
 0000000015 00000 n 
 0000000080 00000 n 
-0000000143 00000 n 
-0000000269 00000 n 
-0000000531 00000 n 
-0000000657 00000 n 
-0000000845 00000 n 
-0000000915 00000 n 
-0000000999 00000 n 
+0000000137 00000 n 
+0000000263 00000 n 
+0000000525 00000 n 
+0000000595 00000 n 
+0000000679 00000 n 
 trailer
-<< /Size 10 /Root 1 0 R /Info 8 0 R /ID [<0123456789abcdef0123456789abcdef> <0123456789abcdef0123456789abcdef>] >>
+<< /Size 8 /Root 1 0 R /Info 6 0 R /ID [<0123456789abcdef0123456789abcdef> <0123456789abcdef0123456789abcdef>] >>
 startxref
-1484
+1164
 %%EOF

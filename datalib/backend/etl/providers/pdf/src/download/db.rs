@@ -11,7 +11,7 @@ use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::fswalk::{StampCursor, StampKind};
 
-use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, DATA_TABLES};
+use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
 
 /// Conventional filename of this provider's entity store under
 /// `<name>/raw/`.
@@ -101,6 +101,27 @@ impl RawDb {
         }
         tx.commit().await.context("commit truncate tx")?;
         Ok(())
+    }
+
+    /// Record where this scan ran, so the render step does not have to
+    /// be told again. See [`super::schema_raw::PDF_SCAN_META_DDL`].
+    pub async fn write_scan_meta(&self, row: &PdfScanMetaRow) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
+        bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row))
+            .await
+            .context("upsert pdf_scan_meta")?;
+        tx.commit().await.context("commit scan_meta tx")?;
+        Ok(())
+    }
+
+    /// The absolute scan root recorded by the last download. `None`
+    /// when no scan has run yet.
+    pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
+        let row = sqlx::query("SELECT abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await
+            .context("read pdf_scan_meta")?;
+        Ok(row.map(|r| PathBuf::from(r.get::<String, _>("abs_root"))))
     }
 
     pub async fn write_batch(&self, docs: &[PdfDocumentRow], paths: &[PdfPathRow]) -> Result<()> {

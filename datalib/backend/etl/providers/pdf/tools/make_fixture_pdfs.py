@@ -165,18 +165,20 @@ FIXTURES: dict[str, bytes] = {}
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
 
-    # A normal text document, fully identified: Info title + date,
-    # trailer /ID, and an XMP DocumentID/InstanceID pair.
+    # The corpus is deliberately tiny: 3 renderable documents totalling
+    # 4 pages. It feeds the shared TNG fixture pipeline, where every
+    # rendered page is embedded by the qmd indexer — so pages here cost
+    # real wall-clock on every full fixture build. Each document earns
+    # its place by covering a behavior nothing else does.
+
+    # (1) A fully-identified document: Info title + date, trailer /ID,
+    # and an XMP DocumentID/InstanceID pair. One page.
     captains_log = simple_doc(
         [
             [
                 "Captain's Log, Stardate 41153.7",
                 "Our destination is planet Deneb IV, beyond which",
                 "lies the great unexplored mass of the galaxy.",
-            ],
-            [
-                "Captain's Log, supplemental.",
-                "The alien entity known as Q has confronted us.",
             ],
         ],
         title="Captain's Log",
@@ -187,13 +189,13 @@ def main() -> int:
     )
     FIXTURES["captains_log.pdf"] = captains_log
 
-    # Same document, second location. Byte-identical, so it must collapse
-    # to ONE `pdf_documents` row with two `pdf_paths` rows.
+    # Same bytes, second location. Must collapse to ONE `pdf_documents`
+    # row with two `pdf_paths` rows, and render exactly once.
     FIXTURES["archive/captains_log_copy.pdf"] = captains_log
 
-    # A later revision: different bytes (new page), but the SAME
-    # xmpMM:DocumentID. This is the Ship-of-Theseus case — two content
-    # identities linked by one lineage id.
+    # (2) A later revision: different bytes, SAME xmpMM:DocumentID, new
+    # InstanceID. The Ship-of-Theseus case — two content identities that
+    # are one conceptual document. Two pages.
     FIXTURES["captains_log_v2.pdf"] = simple_doc(
         [
             [
@@ -202,36 +204,43 @@ def main() -> int:
                 "lies the great unexplored mass of the galaxy.",
             ],
             [
-                "Captain's Log, supplemental.",
-                "The alien entity known as Q has confronted us.",
-            ],
-            [
                 "Captain's Log, Stardate 41986.0",
                 "Addendum filed after review by Starfleet Command.",
+                "The alien entity known as Q has confronted us.",
             ],
         ],
         title="Captain's Log",
         created="D:23640413084500-07'00'",
         doc_id="0123456789abcdef0123456789abcdef",
         xmp_document_id="uuid:enterprise-ncc-1701-d",
-        # A new save gets a new InstanceID; DocumentID is unchanged.
         xmp_instance_id="uuid:instance-0002",
     )
 
-    # No Info dict, no /ID, no XMP. Every identity column must come back
-    # NULL without the scan failing.
-    FIXTURES["engineering/unlabeled_schematic.pdf"] = simple_doc(
-        [["Warp core intermix ratio nominal.", "Dilithium chamber aligned."]]
+    # (3) No Info dict, no /ID, no XMP: every identity column must come
+    # back NULL without the scan failing, and the title must fall back
+    # to the filename. Carries the distinctive technical vocabulary the
+    # pipeline test searches for, so one document covers both the
+    # missing-metadata path and the end-to-end search path.
+    FIXTURES["engineering/warp_core_manual.pdf"] = simple_doc(
+        [
+            [
+                "Warp Core Maintenance, Galaxy Class",
+                "Recalibrate the dilithium articulation frame every",
+                "four hundred hours of continuous warp operation.",
+                "Misalignment induces antimatter containment cascade.",
+            ],
+        ]
     )
 
-    # Image-only: classified `scanned`, recorded, and NOT converted.
+    # Image-only: classified `scanned`, recorded with needs_ocr, and NOT
+    # rendered — so it costs the qmd indexer nothing.
     FIXTURES["holodeck/scanned_blueprint.pdf"] = scanned_doc()
 
-    # Not a PDF despite the extension. Must be counted as an error and
-    # skipped, not abort the scan.
+    # Not a PDF despite the extension. Counted as an error and skipped,
+    # not fatal to the scan.
     FIXTURES["holodeck/corrupt.pdf"] = b"%PDF-1.7\nthis file is truncated garbage\n"
 
-    # A non-PDF file that the walk must ignore entirely.
+    # A non-PDF the walk must ignore entirely.
     (OUT / "readme.txt").write_bytes(b"Not a PDF. The walker must skip this.\n")
 
     for rel, data in FIXTURES.items():

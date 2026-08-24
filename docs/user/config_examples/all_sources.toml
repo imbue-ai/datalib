@@ -612,13 +612,14 @@ outputs = ["pdfs/raw"]
 [steps.params.common]
 input_path = "~/Documents"
 
+# The render step needs no params: it reads the scan root back out of
+# the raw store (`pdf_scan_meta`), so it always converts exactly the
+# tree the download step walked.
 [[steps]]
 id = "pdfs.render"
 command = "datalib-step render pdf"
 inputs = ["pdfs/raw"]
 outputs = ["pdfs/rendered_md"]
-[steps.params.common]
-input_path = "~/Documents"
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 

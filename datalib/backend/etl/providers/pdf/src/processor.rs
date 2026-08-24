@@ -37,7 +37,6 @@ pub fn plan_render(
     Ok(vec![Box::new(PdfRender {
         id: format!("pdf/{name}/render"),
         raw_path: config.common.raw_path().to_path_buf(),
-        root: config.common.input_or_raw_path().to_path_buf(),
     })])
 }
 
@@ -61,6 +60,7 @@ impl DataProcessor for PdfDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db,
+            source_name: ctx.name.to_string(),
             root: self.root.clone(),
             ignore: self.ignore.clone(),
             max_bytes: self.max_bytes,
@@ -80,7 +80,6 @@ impl DataProcessor for PdfDownload {
 struct PdfRender {
     id: String,
     raw_path: PathBuf,
-    root: PathBuf,
 }
 
 #[async_trait]
@@ -93,7 +92,7 @@ impl DataProcessor for PdfRender {
         let out_dir = datalib_etl::layout::rendered_md_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
-        let targets = render::load_targets(&self.raw_path, &self.root)
+        let targets = render::load_targets(&self.raw_path)
             .await
             .context("pdf load render targets")?;
         let mut on_doc = |md| ctx.emit_doc(md);

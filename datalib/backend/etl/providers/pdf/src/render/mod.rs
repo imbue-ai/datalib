@@ -41,13 +41,21 @@ pub struct RenderSummary {
 /// database work finishes before the non-`Send` document sink enters
 /// scope — otherwise the whole render future is non-`Send` and cannot
 /// be driven by the `#[async_trait]` processor.
-pub async fn load_targets(raw_dir: &Path, scan_root: &Path) -> Result<Vec<RenderTarget>> {
+///
+/// The scan root comes from `pdf_scan_meta`, not from render config:
+/// render converts exactly the tree the download step walked, and the
+/// two cannot drift.
+pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
     let db_path = crate::download::db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(Vec::new());
     }
     let db = RawDb::open(&db_path).await?;
-    db.convertible_documents(scan_root).await
+    let Some(root) = db.scan_root().await? else {
+        // No scan has run against this store yet.
+        return Ok(Vec::new());
+    };
+    db.convertible_documents(&root).await
 }
 
 /// Convert every target and emit it. Synchronous: conversion is
@@ -109,14 +117,13 @@ pub fn render_targets(
 /// caller that does not need the two phases apart.
 pub async fn render(
     raw_dir: &Path,
-    scan_root: &Path,
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let targets = load_targets(raw_dir, scan_root).await?;
+    let targets = load_targets(raw_dir).await?;
     render_targets(
         &targets,
         out_dir,

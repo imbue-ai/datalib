@@ -57,6 +57,7 @@ impl Harness {
         let db = RawDb::open(&download::db_path_for(&self.raw_dir)).await?;
         download::fetch(download::FetchOptions {
             db,
+            source_name: "logs".to_string(),
             root: self.root.clone(),
             ignore: vec![],
             max_bytes: None,
@@ -81,7 +82,6 @@ impl Harness {
         };
         let s = render::render(
             &self.raw_dir,
-            &self.root,
             &self.out_dir,
             "logs",
             &datalib_etl::progress::Progress::noop(),
@@ -108,8 +108,9 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     assert_eq!(s.pdfs_seen, 6, "walker should find exactly the .pdf files");
 
     // captains_log.pdf and archive/captains_log_copy.pdf are byte-identical,
-    // so 6 paths collapse to 5 documents — minus the corrupt one, which
-    // fails to identify. 4 real documents.
+    // so the 6 paths collapse to 5 distinct contents — minus the corrupt
+    // one, which fails to identify. 4 real documents, 3 of them
+    // convertible (the scanned blueprint is not).
     let db = h.db().await;
     let n_docs: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents")
         .fetch_one(db.pool())
@@ -175,15 +176,19 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
         Some("2364-04-13T08:45:00-07:00")
     );
 
-    // The unlabeled document must come back all-NULL, not error.
+    // The document with no Info dict, no /ID and no XMP: every
+    // *identity* column must come back NULL rather than the scan
+    // failing. `title` is deliberately not asserted NULL here — with no
+    // Info title, pdf-inspector may still infer one from the page's
+    // largest text, and that inferred value is a better grid label than
+    // nothing.
     let u = sqlx::query(
-        "SELECT d.title, d.pdf_id_permanent, d.xmp_document_id
+        "SELECT d.pdf_id_permanent, d.xmp_document_id
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
-          WHERE p.id = 'engineering/unlabeled_schematic.pdf'",
+          WHERE p.id = 'engineering/warp_core_manual.pdf'",
     )
     .fetch_one(db.pool())
     .await?;
-    assert!(u.get::<Option<String>, _>("title").is_none());
     assert!(u.get::<Option<String>, _>("pdf_id_permanent").is_none());
     assert!(u.get::<Option<String>, _>("xmp_document_id").is_none());
     Ok(())
@@ -262,8 +267,17 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     h.scan().await?;
     let (s, emitted) = h.render(&HashMap::new()).await?;
 
-    assert!(s.converted >= 3, "converted={}", s.converted);
+    // Exactly the three renderable documents, and 4 pages between
+    // them. Pinned rather than bounded: every page here is embedded by
+    // the qmd indexer on every full fixture build, so growth should be
+    // a deliberate edit, not a silent drift.
+    assert_eq!(s.converted, 3, "three renderable documents");
     assert_eq!(s.failed, 0);
+    let total_pages: usize = emitted
+        .iter()
+        .map(|m| m.rows.iter().filter(|r| r.kind == "PDF Page").count())
+        .sum();
+    assert_eq!(total_pages, 4, "the corpus is budgeted at 4 rendered pages");
 
     // The load-bearing invariant, checked across every document: each
     // page row's uuid must appear as a section anchor in its markdown,
@@ -285,17 +299,31 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
         assert!(m.md_path.with_extension("grid_rows.json").exists());
     }
 
-    // The two-page v1 log specifically: two page rows and real text.
-    // Selected by page count because v2 shares its title.
-    let v1 = emitted
+    // The two-page v2 log specifically: it is the revision, so it has
+    // the addendum that v1 does not. Selected by page count, since the
+    // two revisions share a title.
+    let v2 = emitted
         .iter()
         .find(|m| m.rows.iter().filter(|r| r.kind == "PDF Page").count() == 2)
-        .expect("the two-page captains log should have rendered");
-    let body = std::fs::read_to_string(&v1.md_path)?;
+        .expect("the two-page captains log revision should have rendered");
+    let body = std::fs::read_to_string(&v2.md_path)?;
     assert!(body.contains("Deneb IV"), "body text missing");
+    assert!(body.contains("Addendum filed"), "v2's second page missing");
+
+    // ...and the one-page v1 must NOT have it.
+    let v1 = emitted
+        .iter()
+        .find(|m| {
+            m.rows.iter().filter(|r| r.kind == "PDF Page").count() == 1
+                && m.rows
+                    .iter()
+                    .any(|r| r.conversation_name.as_deref() == Some("Captain's Log"))
+        })
+        .expect("the one-page captains log should have rendered");
+    let body1 = std::fs::read_to_string(&v1.md_path)?;
     assert!(
-        !body.contains("Addendum filed"),
-        "v1 must not contain v2's third page"
+        !body1.contains("Addendum filed"),
+        "v1 must not carry v2 content"
     );
     Ok(())
 }

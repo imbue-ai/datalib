@@ -1,13 +1,13 @@
 %PDF-1.7
 %‚„œ”
 1 0 obj
-<< /Type /Catalog /Pages 2 0 R /Metadata 11 0 R >>
+<< /Type /Catalog /Pages 2 0 R /Metadata 9 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Count 3 /Kids [3 0 R 5 0 R 7 0 R] >>
+<< /Type /Pages /Count 2 /Kids [3 0 R 5 0 R] >>
 endobj
 3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
 << /Length 211 >>
@@ -21,59 +21,45 @@ ET
 endstream
 endobj
 5 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>
 endobj
 6 0 obj
-<< /Length 137 >>
-stream
-BT
-/F1 12 Tf
-1 0 0 1 72 720 Tm (Captain's Log, supplemental.) Tj
-1 0 0 1 72 702 Tm (The alien entity known as Q has confronted us.) Tj
-ET
-endstream
-endobj
-7 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>
-endobj
-8 0 obj
-<< /Length 143 >>
+<< /Length 213 >>
 stream
 BT
 /F1 12 Tf
 1 0 0 1 72 720 Tm (Captain's Log, Stardate 41986.0) Tj
 1 0 0 1 72 702 Tm (Addendum filed after review by Starfleet Command.) Tj
+1 0 0 1 72 684 Tm (The alien entity known as Q has confronted us.) Tj
 ET
 endstream
 endobj
-9 0 obj
+7 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
 endobj
-10 0 obj
+8 0 obj
 << /Title (Captain's Log) /CreationDate (D:23640413084500-07'00') >>
 endobj
-11 0 obj
+9 0 obj
 << /Length 404 /Type /Metadata /Subtype /XML >>
 stream
 <?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"><xmpMM:DocumentID>uuid:enterprise-ncc-1701-d</xmpMM:DocumentID><xmpMM:InstanceID>uuid:instance-0002</xmpMM:InstanceID></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>
 endstream
 endobj
 xref
-0 12
+0 10
 0000000000 65535 f 
 0000000015 00000 n 
-0000000081 00000 n 
-0000000150 00000 n 
-0000000276 00000 n 
-0000000538 00000 n 
-0000000664 00000 n 
-0000000852 00000 n 
-0000000978 00000 n 
-0000001172 00000 n 
-0000001242 00000 n 
-0000001327 00000 n 
+0000000080 00000 n 
+0000000143 00000 n 
+0000000269 00000 n 
+0000000531 00000 n 
+0000000657 00000 n 
+0000000921 00000 n 
+0000000991 00000 n 
+0000001075 00000 n 
 trailer
-<< /Size 12 /Root 1 0 R /Info 10 0 R /ID [<0123456789abcdef0123456789abcdef> <0123456789abcdef0123456789abcdef>] >>
+<< /Size 10 /Root 1 0 R /Info 8 0 R /ID [<0123456789abcdef0123456789abcdef> <0123456789abcdef0123456789abcdef>] >>
 startxref
-1813
+1560
 %%EOF

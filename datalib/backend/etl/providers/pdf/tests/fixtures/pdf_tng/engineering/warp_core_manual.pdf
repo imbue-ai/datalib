@@ -10,12 +10,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
-<< /Length 122 >>
+<< /Length 296 >>
 stream
 BT
 /F1 12 Tf
-1 0 0 1 72 720 Tm (Warp core intermix ratio nominal.) Tj
-1 0 0 1 72 702 Tm (Dilithium chamber aligned.) Tj
+1 0 0 1 72 720 Tm (Warp Core Maintenance, Galaxy Class) Tj
+1 0 0 1 72 702 Tm (Recalibrate the dilithium articulation frame every) Tj
+1 0 0 1 72 684 Tm (four hundred hours of continuous warp operation.) Tj
+1 0 0 1 72 666 Tm (Misalignment induces antimatter containment cascade.) Tj
 ET
 endstream
 endobj
@@ -35,11 +37,11 @@ xref
 0000000064 00000 n 
 0000000121 00000 n 
 0000000247 00000 n 
-0000000420 00000 n 
-0000000490 00000 n 
-0000000511 00000 n 
+0000000594 00000 n 
+0000000664 00000 n 
+0000000685 00000 n 
 trailer
 << /Size 8 /Root 1 0 R /Info 6 0 R >>
 startxref
-532
+706
 %%EOF

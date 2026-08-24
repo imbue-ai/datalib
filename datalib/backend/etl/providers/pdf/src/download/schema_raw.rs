@@ -74,7 +74,7 @@ use datalib_etl::fswalk::StampKind;
 pub const DATA_TABLES: &[&str] = &["pdf_paths"];
 
 /// All tables, for DDL.
-pub const ALL_TABLES: &[&str] = &["pdf_documents", "pdf_paths"];
+pub const ALL_TABLES: &[&str] = &["pdf_documents", "pdf_paths", "pdf_scan_meta"];
 
 pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
     blake3                   TEXT PRIMARY KEY,
@@ -117,6 +117,23 @@ pub const PDF_PATHS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_paths (
     last_seen_at TEXT NOT NULL
 )";
 
+/// Where the scan actually ran.
+///
+/// `pdf_paths.id` is root-relative — that is what keeps a moved data
+/// root from rewriting every row — so *something* has to remember the
+/// absolute root, or the render step cannot open the files. Recording
+/// it here rather than re-reading `input_path` from the render step's
+/// config means the two can never disagree: render converts exactly
+/// the tree that was scanned, even if the config was edited in between.
+/// Same reasoning as fsindex's `scan_meta`, and keyed the same way — on
+/// the source name from config, not the path, so the row survives a
+/// move of the root.
+pub const PDF_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_scan_meta (
+    id           TEXT PRIMARY KEY,
+    abs_root     TEXT NOT NULL,
+    scanned_at   TEXT NOT NULL
+)";
+
 pub const PDF_PATHS_INDEXES: &[&str] = &[
     // The render side walks documents and needs their paths; the grid
     // row's `source_url` wants one representative location per doc.
@@ -124,7 +141,11 @@ pub const PDF_PATHS_INDEXES: &[&str] = &[
 ];
 
 pub fn full_ddl() -> Vec<String> {
-    let mut out = vec![PDF_DOCUMENTS_DDL.to_string(), PDF_PATHS_DDL.to_string()];
+    let mut out = vec![
+        PDF_DOCUMENTS_DDL.to_string(),
+        PDF_PATHS_DDL.to_string(),
+        PDF_SCAN_META_DDL.to_string(),
+    ];
     out.extend(PDF_DOCUMENTS_INDEXES.iter().map(|s| s.to_string()));
     out.extend(PDF_PATHS_INDEXES.iter().map(|s| s.to_string()));
     out
@@ -286,6 +307,32 @@ impl BulkUpsertable for PdfPathRow {
     }
 }
 
+/// One row in [`PDF_SCAN_META_DDL`].
+#[derive(Debug, Clone)]
+pub struct PdfScanMetaRow {
+    /// The source name from config (`tng_pdfs`), not the path.
+    pub id: String,
+    pub abs_root: String,
+    pub scanned_at: String,
+}
+
+impl BulkUpsertable for PdfScanMetaRow {
+    const TABLE: &'static str = "pdf_scan_meta";
+    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root", "scanned_at"];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id).bind(&self.abs_root).bind(&self.scanned_at)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +371,7 @@ mod tests {
         assert_eq!(doc_cols, PDF_DOCUMENTS_DDL.matches(',').count() + 1);
         let path_cols = PdfPathRow::TYPED_COLUMNS.len() + 1;
         assert_eq!(path_cols, PDF_PATHS_DDL.matches(',').count() + 1);
+        let meta_cols = PdfScanMetaRow::TYPED_COLUMNS.len() + 1;
+        assert_eq!(meta_cols, PDF_SCAN_META_DDL.matches(',').count() + 1);
     }
 }
