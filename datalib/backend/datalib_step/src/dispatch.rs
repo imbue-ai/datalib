@@ -79,6 +79,7 @@ pub const SOURCE_TYPES: &[&str] = &[
     "lightroom",
     "linkedin",
     "notion_api",
+    "pdf",
     "perseus",
     "signal_backup",
     "slack_api",
@@ -218,6 +219,12 @@ pub fn plan(
             datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig,
             datalib_etl_google_takeout,
             "google_takeout"
+        ),
+        "pdf" => arm!(
+            datalib_etl_pdf_config::PdfConfig,
+            datalib_etl_pdf_config::PdfRenderConfig,
+            datalib_etl_pdf,
+            "pdf"
         ),
         "perseus" => arm!(
             datalib_etl_perseus_config::PerseusConfig,

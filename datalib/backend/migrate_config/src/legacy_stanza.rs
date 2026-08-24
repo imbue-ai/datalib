@@ -40,6 +40,7 @@ use datalib_etl_google_takeout_config::GoogleTakeoutConfig;
 use datalib_etl_lightroom_config::LightroomConfig;
 use datalib_etl_linkedin_config::LinkedinConfig;
 use datalib_etl_notion_config::NotionConfig;
+use datalib_etl_pdf_config::PdfConfig;
 use datalib_etl_perseus_config::PerseusConfig;
 use datalib_etl_signal_config::SignalConfig;
 use datalib_etl_slack_config::SlackConfig;
@@ -170,6 +171,10 @@ pub enum SourceConfig {
     /// **download-only** — it mirrors every table of the `.lrcat` at
     /// `input_path` into a raw store and renders nothing.
     Lightroom(LightroomConfig),
+    /// Local PDF corpus. File-backed, and unlike the two above it does
+    /// render: readable PDFs become markdown. Scanned ones are recorded
+    /// and skipped until an OCR engine lands.
+    Pdf(PdfConfig),
 }
 
 /// Dispatch an expression over the payload of any variant, binding it to `$c`.
@@ -196,6 +201,7 @@ macro_rules! over_payload {
             SourceConfig::SmsBackupRestore($c) => $e,
             SourceConfig::Fsindex($c) => $e,
             SourceConfig::Lightroom($c) => $e,
+            SourceConfig::Pdf($c) => $e,
         }
     };
 }
@@ -238,6 +244,7 @@ impl SourceConfig {
             SourceConfig::SmsBackupRestore(_) => "sms_backup_restore",
             SourceConfig::Fsindex(_) => "fsindex",
             SourceConfig::Lightroom(_) => "lightroom",
+            SourceConfig::Pdf(_) => "pdf",
         }
     }
 
@@ -271,6 +278,8 @@ impl SourceConfig {
             SourceConfig::Fsindex(c) => c.common.input_path.is_some(),
             // File-backed only: managed iff an `input_path:` catalog is set.
             SourceConfig::Lightroom(c) => c.common.input_path.is_some(),
+            // File-backed only: managed iff an `input_path:` scan root is set.
+            SourceConfig::Pdf(c) => c.common.input_path.is_some(),
         }
     }
 }

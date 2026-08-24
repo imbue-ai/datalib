@@ -1,52 +1,47 @@
 //! Reuse-vs-rehash decision for a single previously-scanned entry.
 //!
-//! Pure functions, no I/O. Mirrors Unison's `dataClearlyUnchanged`
-//! logic from `/Users/thad/src/unison/src/fpcache.ml:243` — see
-//! [`EXTRACT.md`](../../EXTRACT.md) §"The fast-rescan trick" for the
-//! framework-side description of why we encode the cursor this way.
+//! The rule itself — Unison's `dataClearlyUnchanged`, plus the
+//! `nostamp` / `rescan` special cases — now lives in
+//! [`datalib_etl::fswalk`], because the `pdf` provider needs the same
+//! fast-rescan behavior and a second copy would drift. This module is
+//! the fsindex-side adapter: it maps our
+//! [`FileStatsRow`](super::schema_raw::FileStatsRow) cursor onto the
+//! shared [`fswalk::StampCursor`] and delegates.
 //!
-//! The decision compares the previously-stored
-//! [`FileStatsRow`](super::schema_raw::FileStatsRow) against a fresh
-//! stat. It does NOT depend on what `stamp_kind` the walker would
-//! assign to the new row — the new row's `stamp_kind` is a platform
-//! decision made by the walker; reuse-vs-rehash compares only against
-//! whatever was stored last time.
+//! See [`DOWNLOAD.md`](../../DOWNLOAD.md) §"The fast-rescan trick" for
+//! why the cursor is encoded the way it is.
+
+use datalib_etl::fswalk;
 
 use super::schema_raw::{FileStatsRow, StampKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StampDecision {
-    ReuseHash,
-    Rehash,
+pub use datalib_etl::fswalk::{FreshStat, StampDecision};
+
+/// Map fsindex's stored stamp discriminator onto the shared one. The
+/// two enums are deliberately separate: `schema_raw::StampKind` is part
+/// of fsindex's on-disk row shape, and shouldn't move just because the
+/// comparison logic did.
+fn shared_kind(k: StampKind) -> fswalk::StampKind {
+    match k {
+        StampKind::Inode => fswalk::StampKind::Inode,
+        StampKind::NoStamp => fswalk::StampKind::NoStamp,
+        StampKind::Rescan => fswalk::StampKind::Rescan,
+    }
 }
 
-/// Fresh stat result for one entry. Filled in by the walker from
-/// `std::fs::Metadata` + platform-specific syscall bits.
-#[derive(Debug, Clone, Copy)]
-pub struct FreshStat {
-    pub mtime_ns: i64,
-    pub size: i64,
-    pub inode: Option<i64>,
-    pub dev: Option<i64>,
-    pub ctime_ns: Option<i64>,
+fn cursor_of(prev: &FileStatsRow) -> fswalk::StampCursor {
+    fswalk::StampCursor {
+        mtime_ns: prev.mtime_ns,
+        size: prev.size,
+        stamp_kind: shared_kind(prev.stamp_kind),
+        inode: prev.inode,
+        dev: prev.dev,
+    }
 }
 
 pub fn decide(prev: Option<&FileStatsRow>, fresh: &FreshStat) -> StampDecision {
-    let Some(prev) = prev else {
-        return StampDecision::Rehash;
-    };
-    if matches!(prev.stamp_kind, StampKind::Rescan) {
-        return StampDecision::Rehash;
-    }
-    if prev.mtime_ns != fresh.mtime_ns || prev.size != fresh.size {
-        return StampDecision::Rehash;
-    }
-    if matches!(prev.stamp_kind, StampKind::Inode)
-        && (prev.inode != fresh.inode || prev.dev != fresh.dev)
-    {
-        return StampDecision::Rehash;
-    }
-    StampDecision::ReuseHash
+    let cursor = prev.map(cursor_of);
+    fswalk::decide(cursor.as_ref(), fresh)
 }
 
 #[cfg(test)]

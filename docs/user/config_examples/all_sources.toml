@@ -584,6 +584,42 @@ outputs = ["fsindex-home/raw"]
 [steps.params.common]
 input_path = "~/Documents"
 
+# --- pdf (local PDF corpus → markdown) ----------------------------------
+
+# File-backed: point `common.input_path` at a directory tree. Every `*.pdf`
+# under it is hashed, classified (text-based vs scanned), and — when it
+# carries real text — converted to markdown and indexed like any other
+# source, so PDFs show up in the grid and in qmd search.
+#
+# Documents are keyed on **content hash**, not path. Two copies of the same
+# paper convert once and share one row; renaming or moving a PDF costs
+# nothing and preserves its identity (and its feedback history).
+#
+# NO OCR YET. A scanned, image-only PDF is recorded with `needs_ocr = 1` in
+# the source's `pdf_documents` table and produces no markdown. Find them
+# with:
+#   doltlite <root>/pdfs/raw/entities.doltlite_db \
+#     "SELECT COUNT(*) FROM pdf_documents WHERE needs_ocr = 1;"
+[[steps]]
+id = "pdfs.download"
+command = "datalib-step download pdf"
+outputs = ["pdfs/raw"]
+[steps.params]
+# Gitignore-shaped patterns, on top of any .gitignore files in the tree.
+# ignore = ["node_modules/**", "**/.Trash/**"]
+# Skip anything larger than this (default 512 MiB).
+# max_bytes = 536870912
+[steps.params.common]
+input_path = "~/Documents"
+
+[[steps]]
+id = "pdfs.render"
+command = "datalib-step render pdf"
+inputs = ["pdfs/raw"]
+outputs = ["pdfs/rendered_md"]
+[steps.params.common]
+input_path = "~/Documents"
+
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
 # File-backed: point `common.input_path` at a `.lrcat`, which is an ordinary

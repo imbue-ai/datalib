@@ -91,6 +91,7 @@ fn validate_render_params(file: &str, id: &str, ty: &str, params: &toml::Value) 
         "beeper" => check!(datalib_etl_beeper_config::BeeperRenderConfig),
         "signal_backup" => check!(datalib_etl_signal_config::SignalRenderConfig),
         "perseus" => check!(datalib_etl_perseus_config::PerseusRenderConfig),
+        "pdf" => check!(datalib_etl_pdf_config::PdfRenderConfig),
         other => panic!(
             "{file}: step {id}: render params present for type {other} — \
              add a match arm (and BUILD dep) in config_examples.rs"
