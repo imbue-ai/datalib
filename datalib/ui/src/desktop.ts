@@ -6,21 +6,26 @@
  * may assume Tauri is present — every export degrades to "not
  * available" in a plain browser.
  *
- * ## Why the raw IPC call rather than `@tauri-apps/plugin-opener`
+ * ## The split with `@tauri-apps/plugin-opener`
  *
- * The npm package is a thin wrapper over exactly the `invoke` below.
- * Taking it as a dependency would add a *second* version pin (the JS
- * package) that has to stay in lockstep with the Rust plugin pin in
- * `datalib/tauri/Cargo.toml`. This repo has already been bitten by that
- * shape of drift once — see the history note on `DEFAULT_QMD_VERSION`
- * in `datalib/backend/core/src/qmd/mod.rs`, where two copies of one
- * version constant disagreed for six weeks.
+ * The plugin package owns the part that can drift upstream: the IPC
+ * command name (`plugin:opener|reveal_item_in_dir`) and its argument
+ * shape. A Tauri major that renames either is then a `pnpm update`
+ * rather than a silent no-op — hand-rolling the `invoke` looked
+ * appealing (the package is four lines deep over
+ * `window.__TAURI_INTERNALS__.invoke`) but left exactly that hole.
  *
- * The coupling that remains is the command name and its argument
- * shape, both asserted in `desktop.spec.ts`. If Tauri renames them, the
- * reveal silently no-ops rather than breaking anything else — and the
- * menu item only appears in the app, where a maintainer will notice.
+ * This module owns the part the package cannot help with: knowing
+ * whether we are in the app at all. The package's own `isTauri()`
+ * checks `globalThis.isTauri`, a *different* global from the
+ * `__TAURI_INTERNALS__` its `invoke` then calls through; detecting on
+ * the object we actually use keeps the check and the call in
+ * agreement. That matters here more than in a normal Tauri app,
+ * because this bundle is genuinely served to plain browsers, where
+ * `invoke` throws a bare `TypeError` rather than degrading.
  */
+
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** Tauri's IPC bridge, injected only into windows it trusts. */
 interface TauriInternals {
@@ -56,15 +61,19 @@ export function isDesktopApp(): boolean {
  * treat false as "tell the user", not "throw".
  */
 export async function revealInFileManager(path: string): Promise<boolean> {
-  const t = internals();
-  if (!t) return false;
+  // Guard before calling: in a browser the plugin's `invoke` reaches
+  // for `window.__TAURI_INTERNALS__.invoke` and throws a bare
+  // TypeError, which is not a useful thing to surface from a menu
+  // click.
+  if (!isDesktopApp()) return false;
   try {
-    // `paths` is plural and an array — the singular form is silently
-    // ignored by the plugin, which looks exactly like a no-op.
-    await t.invoke("plugin:opener|reveal_item_in_dir", { paths: [path] });
+    await revealItemInDir(path);
     return true;
   } catch (e) {
-    console.warn("reveal_item_in_dir failed", e);
+    // Reachable with the bridge present but the command unauthorized —
+    // a capability whose URL patterns stopped matching, say — or a
+    // path that has since moved.
+    console.warn("revealItemInDir failed", e);
     return false;
   }
 }

@@ -43,15 +43,21 @@ describe("revealInFileManager", () => {
     await expect(revealInFileManager("/tmp/x.pdf")).resolves.toBe(false);
   });
 
-  it("calls the opener plugin with a paths ARRAY", async () => {
-    // The plugin's argument is `paths` (plural, array). The singular
-    // form is accepted by the IPC layer and then silently ignored,
-    // which is indistinguishable from a no-op at the UI.
+  it("reaches the opener plugin's reveal command with a paths ARRAY", async () => {
+    // This asserts through `@tauri-apps/plugin-opener`, not around it:
+    // the package builds the command name and normalizes the argument,
+    // and its `invoke` bottoms out on the same `__TAURI_INTERNALS__`
+    // this mock replaces. So if a Tauri upgrade renames the command or
+    // the argument, THIS TEST GOES RED — which is the whole reason to
+    // depend on the package rather than hand-rolling the invoke.
+    //
+    // (`paths` is plural and an array; the singular form is accepted by
+    // the IPC layer and then ignored, which looks exactly like a no-op.)
     const invoke = fakeTauri();
     await expect(revealInFileManager("/tmp/x.pdf")).resolves.toBe(true);
-    expect(invoke).toHaveBeenCalledWith("plugin:opener|reveal_item_in_dir", {
-      paths: ["/tmp/x.pdf"],
-    });
+    const [cmd, args] = invoke.mock.calls[0];
+    expect(cmd).toBe("plugin:opener|reveal_item_in_dir");
+    expect(args).toEqual({ paths: ["/tmp/x.pdf"] });
   });
 
   it("returns false when the IPC call rejects", async () => {
