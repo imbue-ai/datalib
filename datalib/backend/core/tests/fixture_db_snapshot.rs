@@ -120,6 +120,27 @@ impl<'a> std::fmt::LowerHex for BytesAsHex<'a> {
     }
 }
 
+/// Snapshot-stable rendering of `grid_rows.source_url`.
+///
+/// Web URLs pass through unchanged. `file://` URLs do NOT: a local
+/// corpus is addressed by absolute path, so under Bazel the value
+/// embeds the sandbox root — a username, a workspace hash, and a
+/// per-run sandbox number. Snapshotting that verbatim passes on the
+/// machine that generated it and fails on every other one, CI
+/// included.
+///
+/// We keep the scheme and the final path segment, which is what the
+/// assertion is actually about (this row points at *that document*, as
+/// a file URL) and drop the part that is a property of the machine.
+fn stable_source_url(v: Option<String>) -> Option<String> {
+    let u = v?;
+    let Some(rest) = u.strip_prefix("file://") else {
+        return Some(u);
+    };
+    let tail = rest.rsplit('/').next().unwrap_or(rest);
+    Some(format!("file://…/{tail}"))
+}
+
 #[tokio::test]
 async fn snapshot_grid_rows_and_documents() {
     let db = fixture_db_path();
@@ -161,7 +182,9 @@ async fn snapshot_grid_rows_and_documents() {
                 "entire_chat": entire_chat,
                 "slack_link": r.try_get::<Option<String>, _>("slack_link").ok().flatten(),
                 "qmd_path": r.try_get::<Option<String>, _>("qmd_path").ok().flatten(),
-                "source_url": r.try_get::<Option<String>, _>("source_url").ok().flatten(),
+                "source_url": stable_source_url(
+                    r.try_get::<Option<String>, _>("source_url").ok().flatten(),
+                ),
                 "git_sha": r.try_get::<Option<String>, _>("git_sha").ok().flatten(),
                 "external_id": r.try_get::<Option<String>, _>("external_id").ok().flatten(),
                 "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
