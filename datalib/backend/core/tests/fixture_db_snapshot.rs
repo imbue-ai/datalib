@@ -141,6 +141,32 @@ fn stable_source_url(v: Option<String>) -> Option<String> {
     Some(format!("file://…/{tail}"))
 }
 
+/// Snapshot-stable rendering of `markdowns.row_set_hash`.
+///
+/// The hash is a SHA-256 over the document's grid rows. For a local
+/// corpus one of those fields is `source_url`, an ABSOLUTE `file://`
+/// URL — so under Bazel the hash folds in the sandbox root and differs
+/// on every machine. Normalizing the displayed `source_url` (see
+/// [`stable_source_url`]) is not enough: the hash is computed from the
+/// real value, which is how CI caught this after the display fix looked
+/// like it had solved it.
+///
+/// Redacting costs very little coverage here, because `row_set_hash` is
+/// derived entirely from rows this same snapshot already records
+/// field-by-field — uuid, kind, author, text_sha, and the rest. What is
+/// lost is only the absolute path prefix, which is a property of the
+/// machine rather than of the code.
+///
+/// Keyed on provider rather than on the hash's shape, so a second
+/// local-file source has to opt in deliberately instead of silently
+/// inheriting a redaction.
+fn stable_row_set_hash(provider: Option<&str>, v: Option<String>) -> Option<String> {
+    match provider {
+        Some("pdf") => Some("<machine-specific: rows embed an absolute path>".to_string()),
+        _ => v,
+    }
+}
+
 #[tokio::test]
 async fn snapshot_grid_rows_and_documents() {
     let db = fixture_db_path();
@@ -220,7 +246,10 @@ async fn snapshot_grid_rows_and_documents() {
                 "updated_at": r.try_get::<Option<String>, _>("updated_at").ok().flatten(),
                 "md_path": r.try_get::<Option<String>, _>("md_path").ok().flatten(),
                 "source_fingerprint": r.try_get::<Option<String>, _>("source_fingerprint").ok().flatten(),
-                "row_set_hash": r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
+                "row_set_hash": stable_row_set_hash(
+                    r.try_get::<String, _>("provider").ok().as_deref(),
+                    r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
+                ),
                 "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
                 "rendered_at": r.try_get::<Option<String>, _>("rendered_at").ok().flatten(),
             })
