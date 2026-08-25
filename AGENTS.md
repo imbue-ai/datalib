@@ -396,6 +396,28 @@ target's tests) is fine for inner-loop iteration, but don't call the tree
 green based on one of those. If you report "build green" without having run
 `bazelisk test //...`, say what you actually ran instead.
 
+**But `bazelisk test //...` is not the whole CI gate.** The `bazel test`
+job runs a **repo hygiene lint step first** and skips the tests entirely
+if it fails — so a tree can be green by the paragraph above and still get
+a red cross, with the test results never printed. That step is
+deliberately not a Bazel target: `scripts/lint_repo.py` has to enumerate
+every tracked file via `git ls-files`, which is exactly what a sandbox
+exists to prevent. Its two checks are that every `no-sandbox` tag is
+allowlisted, and that every first-party `*.py` sits under a Python lint
+root so ruff and pyright actually see it.
+
+The intended local wrapper is `bazelisk run //:precommit` (hygiene lints
++ clippy). **On macOS it currently fails** — `scripts/run_checks.sh`
+invokes a bare `python3`, and `lint_repo.py` needs `tomllib`, so the
+system 3.9 dies with `ModuleNotFoundError` in a way that reads like a
+broken script rather than a stale interpreter. CI is unaffected (its
+container ships a newer Python). Until that is fixed, the complete local
+gate is:
+
+```bash
+uv run python scripts/lint_repo.py && bazelisk test //...
+```
+
 **Bazel is the only supported build/test driver — don't shell out to
 `cargo test` / `cargo build` / `pnpm test` for the inner loop.** They
 bypass Bazel's action cache (so they neither use nor warm it) and its
