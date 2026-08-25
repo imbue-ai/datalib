@@ -42,15 +42,29 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-/// Bumped when conversion output changes in a way that should
-/// invalidate previously-rendered documents. Feeds
-/// `markdowns.renderer_version` via `RenderedMarkdown::render_version`.
+/// Bumped when render output changes in a way that should invalidate
+/// previously-rendered documents — the markdown itself, or the shape of
+/// the `grid_rows` projected from it.
 ///
-/// Because it participates in the render cache key, this is also the
-/// hook that makes an OCR engine swappable later: turning OCR on, or
-/// changing engines, bumps this and every affected document re-renders
+/// It genuinely participates in the cache key, via
+/// [`render_fingerprint`](super::render_fingerprint). That indirection
+/// is necessary: the framework stores this in
+/// `markdowns.renderer_version` and that column's doc comment claims a
+/// bump "invalidates every cache entry at once", but `load_fingerprints`
+/// selects only `(markdown_uuid, source_fingerprint)` and never reads
+/// the version back. Relying on the documented behavior would mean an
+/// existing install silently keeps stale output forever, since a
+/// document's content hash does not change when our renderer does.
+///
+/// This is also the hook that makes an OCR engine swappable later:
+/// turning OCR on bumps this, and every affected document re-renders
 /// with no migration.
-pub const RENDER_VERSION: u32 = 1;
+///
+/// History:
+///   1 — initial.
+///   2 — `grid_rows.source_url` became a `file://` URL instead of a
+///       root-relative path.
+pub const RENDER_VERSION: u32 = 2;
 
 /// One page of converted text.
 pub struct Page {

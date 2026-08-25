@@ -16,6 +16,8 @@
 //! all work with no UI change — the page `uuid` is byte-equal to the
 //! `data-section-uuid` the renderer emits.
 
+use std::path::Path;
+
 use datalib_schema::grid_rows::GridRow;
 use uuid::Uuid;
 
@@ -48,6 +50,9 @@ pub fn page_uuid(blake3: &str, page: u32) -> String {
 
 pub struct DocumentMeta<'a> {
     pub blake3: &'a str,
+    /// Absolute path of a representative copy on disk. Becomes the row's
+    /// `source_url` as a `file://` URL — see [`file_url`].
+    pub abs_path: &'a Path,
     pub title: Option<&'a str>,
     /// Info `/Author` or XMP `dc:creator`. Usually `None`.
     pub author: Option<&'a str>,
@@ -73,6 +78,29 @@ pub fn display_title(title: Option<&str>, rel_path: &str) -> String {
         Some(t) if !t.contains('/') && !t.contains('\\') => t.to_string(),
         _ => filename.to_string(),
     }
+}
+
+/// Absolute path → `file://` URL for `grid_rows.source_url`.
+///
+/// `source_url` is documented as "canonical URL pointing back to the
+/// original source"; for a local corpus that source is a file, and
+/// `file://` is the URL form of one. Keeping the column a real URL —
+/// rather than smuggling a bare path into it — is what lets the UI
+/// branch on **scheme** instead of provider, so any future local-file
+/// source inherits the same "reveal in the file manager" behavior.
+///
+/// Built with `Url::from_file_path` rather than string concatenation.
+/// Percent-encoding is not optional here: a real filename in the corpus
+/// this was tested against is
+/// `Imbue Mail - 7-Eleven SpeakOut_ New Order # 101445654.pdf`, and a
+/// raw `#` would truncate the URL at the fragment. Spaces, non-ASCII,
+/// and Windows drive letters have the same problem.
+///
+/// Returns `None` for a non-absolute path, which `Url::from_file_path`
+/// rejects — the caller then leaves `source_url` NULL rather than
+/// emitting something unusable.
+pub fn file_url(abs: &Path) -> Option<String> {
+    url::Url::from_file_path(abs).ok().map(|u| u.to_string())
 }
 
 /// Hard ceiling from `grid_rows.author`'s `VARCHAR(255)`. We stay well
@@ -115,6 +143,9 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
     let doc_uuid = document_uuid(meta.blake3);
     let title = display_title(meta.title, meta.rel_path);
     let author = display_author(meta.author);
+    // NULL rather than a bare path when the URL can't be formed; a
+    // half-valid link is worse than an absent one.
+    let source_url = file_url(meta.abs_path);
     // Prefer the authored creation date; fall back to modification.
     // Never fall back to "now" — an ingest timestamp masquerading as an
     // authored one would sort the whole corpus to today.
@@ -149,7 +180,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         },
         slack_link: None,
         qmd_path: meta.qmd_path.map(str::to_string),
-        source_url: Some(meta.rel_path.to_string()),
+        source_url: source_url.clone(),
         git_sha: None,
         external_id: Some(meta.blake3.to_string()),
         notion_page_uuid: None,
@@ -181,7 +212,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             text: text.clone(),
             slack_link: None,
             qmd_path: meta.qmd_path.map(str::to_string),
-            source_url: Some(meta.rel_path.to_string()),
+            source_url: source_url.clone(),
             git_sha: None,
             external_id: Some(format!("{}#{number}", meta.blake3)),
             notion_page_uuid: None,
@@ -199,6 +230,7 @@ mod tests {
     fn meta<'a>(title: Option<&'a str>, rel: &'a str) -> DocumentMeta<'a> {
         DocumentMeta {
             blake3: "abc123",
+            abs_path: Path::new("/corpus/a/b.pdf"),
             title,
             author: Some("Jean-Luc Picard"),
             rel_path: rel,
@@ -252,6 +284,44 @@ mod tests {
         assert_eq!(display_title(Some("   "), "a/b.pdf"), "b.pdf");
         // LaTeX and Word both emit paths as titles surprisingly often.
         assert_eq!(display_title(Some("/tmp/x/final.tex"), "a/b.pdf"), "b.pdf");
+    }
+
+    #[test]
+    fn source_url_is_a_file_url_not_a_bare_path() {
+        // Every other provider puts an absolute URL here and the UI
+        // calls window.open on it; a relative path navigates the app to
+        // nowhere.
+        let rows = rows_for_document(&meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
+        assert_eq!(
+            rows[0].source_url.as_deref(),
+            Some("file:///corpus/a/b.pdf")
+        );
+    }
+
+    #[test]
+    fn hash_in_a_filename_is_percent_encoded() {
+        // Real filename from the corpus this was tested against. A raw
+        // `#` truncates the URL at the fragment, silently losing the
+        // extension and everything before it.
+        let p = Path::new("/c/Imbue Mail - New Order # 101445654.pdf");
+        let u = file_url(p).unwrap();
+        assert!(u.contains("%23"), "{u}");
+        assert!(u.ends_with(".pdf"), "{u}");
+        // And it round-trips back to the exact path.
+        assert_eq!(url::Url::parse(&u).unwrap().to_file_path().unwrap(), p);
+    }
+
+    #[test]
+    fn spaces_and_non_ascii_round_trip() {
+        let p = Path::new("/c/日本 の 文書.pdf");
+        let u = file_url(p).unwrap();
+        assert!(!u.contains(' '), "{u}");
+        assert_eq!(url::Url::parse(&u).unwrap().to_file_path().unwrap(), p);
+    }
+
+    #[test]
+    fn a_relative_path_yields_no_url_rather_than_a_broken_one() {
+        assert_eq!(file_url(Path::new("relative/x.pdf")), None);
     }
 
     #[test]

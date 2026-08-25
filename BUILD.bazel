@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
@@ -67,10 +68,31 @@ test_suite(
 # non-hermetic left to skip. What remains host-bound is the repo-hygiene
 # lint (`scripts/lint_repo.py`, which must enumerate the whole repo) and
 # clippy; both run from this wrapper and from CI.
+# The hygiene lint, run under Bazel's pinned interpreter rather than
+# whatever `python3` the host happens to have. It needs `tomllib`, i.e.
+# Python >= 3.11, and macOS still ships 3.9 as `python3` — so invoking
+# it directly made `bazel run //:precommit` fail with a bare
+# `ModuleNotFoundError` on every Mac, which reads like a broken script
+# rather than a stale interpreter.
+#
+# Still not a `bazel test`: it enumerates the whole repo via
+# `git ls-files`, which is what a sandbox exists to prevent. This target
+# only fixes *which Python* runs it.
+py_binary(
+    name = "lint_repo",
+    srcs = ["scripts/lint_repo.py"],
+    data = ["pyproject.toml"],
+    main = "scripts/lint_repo.py",
+    visibility = ["//visibility:public"],
+)
+
 sh_binary(
     name = "precommit",
     srcs = ["scripts/run_checks.sh"],
-    data = ["pyproject.toml"],
+    data = [
+        "pyproject.toml",
+        ":lint_repo",
+    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
