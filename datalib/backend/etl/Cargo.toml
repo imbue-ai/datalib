@@ -29,14 +29,6 @@ path = "src/bin/latchkey_curl_impersonate.rs"
 name = "latchkey-curl-dispatch"
 path = "src/bin/latchkey_curl_dispatch.rs"
 
-# Curl stand-in that captures the credential latchkey injected and makes
-# NO request, so a non-HTTP transport (IMAP) can read a username/password
-# or OAuth token out of latchkey as values. Point `LATCHKEY_CURL` at it;
-# see `latchkey::extract_credential`. std-only, like the dispatcher.
-[[bin]]
-name = "latchkey-cred-extract"
-path = "src/bin/latchkey_cred_extract.rs"
-
 [dependencies]
 datalib-core = { path = "../core" }
 datalib-obs = { path = "../obs" }

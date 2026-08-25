@@ -85,7 +85,7 @@ impl RawDb {
         // Every live mode's cursor namespace. A reset that cleared only
         // one would leave a stale cursor pointing into a store that no
         // longer has the rows it names.
-        for prefix in ["jmap:%", "gmail:%", "imap:%"] {
+        for prefix in ["jmap:%", "gmail:%"] {
             sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE ?")
                 .bind(prefix)
                 .execute(&mut *tx)
@@ -114,8 +114,8 @@ impl RawDb {
     /// Read a cursor under a caller-supplied scope key.
     ///
     /// [`load_state`](Self::load_state) hard-codes the `jmap:` prefix;
-    /// the other live modes own their own namespaces (`gmail:`, `imap:`)
-    /// so several accounts and several transports can share one raw store
+    /// the other live modes own their own namespaces (`gmail:`) so
+    /// several accounts and several transports can share one raw store
     /// without stepping on each other's cursors.
     pub async fn load_scope(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")

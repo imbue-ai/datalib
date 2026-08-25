@@ -9,9 +9,11 @@ name = "datalib_etl_email"
 path = "src/lib.rs"
 
 # JMAP-specific extract entry point. Lives inside the broader email
-# crate because we expect to add IMAP (and possibly POP/EWS) under
-# the same roof; each transport gets its own `*-download` bin while
-# sharing the translate + render code path.
+# crate because every transport shares the translate + render code path;
+# the crate now holds three (JMAP, the Gmail REST API, and mbox), and
+# they agree on one raw schema by construction — see
+# `docs/dev/email_download_modes.md`. Only JMAP has a standalone
+# `*-download` bin; the others are reached through `datalib-step`.
 [[bin]]
 name = "jmap-download"
 path = "src/bin/jmap_download.rs"
@@ -44,14 +46,6 @@ sha2 = "0.10"
 # Gmail calendar invites.
 htmd = "0.5"
 tempfile = "3"
-# IMAP transport for the third download mode. Driven on tokio with a
-# caller-supplied `tokio-rustls` stream — see `download/imap/conn.rs`
-# and the workspace dep comment for why neither default feature is used.
-async-imap = { workspace = true }
-tokio-rustls = { workspace = true }
-webpki-roots = { workspace = true }
-futures = { workspace = true }
-
 # mbox / RFC 5322 parser used by `translate::mbox` to ingest Google
 # Takeout exports (the "All mail Including Spam and Trash.mbox" file)
 # without a JMAP server. Maintained by Stalwart Mail; handles MIME

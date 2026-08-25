@@ -1,24 +1,17 @@
-//! Gmail REST API downloader — the fourth mode of `type: email`.
+//! Gmail REST API downloader — the third mode of `type: email`.
 //!
-//! The preferred path for a Gmail account. It writes the same raw schema
-//! as JMAP, IMAP, and mbox, so render is unchanged and a mailbox already
-//! mirrored from a Google Takeout export dedupes against it rather than
-//! doubling (see [`super::labels`] and [`super::envelope`] for the two
-//! places that property is actually enforced).
+//! The path for a Gmail account. It writes the same raw schema as JMAP
+//! and mbox, so render is unchanged and a mailbox already mirrored from a
+//! Google Takeout export dedupes against it rather than doubling (see
+//! [`super::labels`] and [`super::envelope`] for the two places that
+//! property is actually enforced).
 //!
-//! ## Why this and not IMAP, for Gmail
+//! ## What it costs to set up: nothing
 //!
-//! * **No credential configuration.** latchkey's built-in `google-gmail`
-//!   service routes by URL host, so the ordinary `latchkey curl` path
-//!   injects and refreshes the token. One `latchkey auth browser
-//!   google-gmail` and the config needs nothing but an empty stanza.
-//! * **Deletions are reported.** `users.history.list` emits
-//!   `messagesDeleted` explicitly. Gmail's IMAP advertises CONDSTORE but
-//!   not QRESYNC, so there is no `VANISHED` there and deletions can only
-//!   be found by re-listing every UID.
-//! * **~13× the throughput.** IMAP is capped at 2500 MB/day of downloads;
-//!   this is capped on quota units per minute — ~300 messages/minute
-//!   regardless of size.
+//! latchkey's built-in `google-gmail` service routes by URL host, so the
+//! ordinary `latchkey curl` path injects and refreshes the token. One
+//! `latchkey auth browser google-gmail` and the config needs nothing but
+//! an empty stanza.
 //!
 //! ## Sync
 //!
@@ -31,7 +24,8 @@
 //! * a cursor → `history.list`. `messagesAdded` and the relabeled ids are
 //!   fetched; `messagesDeleted` hard-deletes the row (doltlite history
 //!   retains the prior state), matching what the JMAP path does with
-//!   `Email/changes` destroyed ids.
+//!   `Email/changes` destroyed ids. Deletions arriving as explicit events
+//!   is the main reason this mode is pleasant to run incrementally.
 //! * `history.list` 404 means the cursor aged out of Google's retention
 //!   window ("typically at least one week"). That is not an error — it is
 //!   the documented signal to fall back to a full sync, exactly like

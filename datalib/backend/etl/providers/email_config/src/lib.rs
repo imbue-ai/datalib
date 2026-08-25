@@ -22,16 +22,15 @@ use serde::{Deserialize, Serialize};
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
 ///
-/// Four download modes, at most one of which may be selected:
+/// Three download modes, at most one of which may be selected:
 ///
 /// * `sync:` → JMAP server (Fastmail / any RFC 8620+8621 server);
-/// * `imap:` → live IMAP server (Gmail, iCloud, Dovecot, …);
-/// * `gmail_api:` → Gmail REST API (the preferred path for Gmail);
-/// * none of those, plus an `.mbox` at `common.input_path` → file-backed
-///   mbox mode (e.g. a Google Takeout export).
+/// * `gmail_api:` → Gmail REST API (the path for a Gmail account);
+/// * neither, plus an `.mbox` at `common.input_path` → file-backed mbox
+///   mode (e.g. a Google Takeout export).
 ///
 /// Setting more than one live block is a config error — see
-/// [`EmailConfig::live_mode`]. All four paths live in `datalib_etl_email`
+/// [`EmailConfig::live_mode`]. All three paths live in `datalib_etl_email`
 /// and write the same raw schema, so render is mode-agnostic and the same
 /// mailbox ingested two ways dedupes rather than doubling.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -42,10 +41,6 @@ pub struct EmailConfig {
     /// JMAP sync knobs. `Some` selects the JMAP live-server download path.
     #[serde(default)]
     pub sync: Option<EmailSync>,
-    /// IMAP sync knobs. `Some` selects the IMAP live-server download path.
-    /// Mutually exclusive with [`sync`](Self::sync).
-    #[serde(default)]
-    pub imap: Option<EmailImap>,
     /// Gmail REST API knobs. `Some` selects the Gmail API download path.
     /// Mutually exclusive with the other two.
     #[serde(default)]
@@ -105,7 +100,6 @@ pub struct EmailRenderConfig {
 #[derive(Debug, Clone)]
 pub enum EmailLiveMode<'a> {
     Jmap(&'a EmailSync),
-    Imap(&'a EmailImap),
     GmailApi(&'a EmailGmailApi),
 }
 
@@ -121,9 +115,6 @@ impl EmailConfig {
         let mut selected: Vec<(&str, EmailLiveMode<'_>)> = Vec::new();
         if let Some(s) = &self.sync {
             selected.push(("sync (JMAP)", EmailLiveMode::Jmap(s)));
-        }
-        if let Some(i) = &self.imap {
-            selected.push(("imap", EmailLiveMode::Imap(i)));
         }
         if let Some(g) = &self.gmail_api {
             selected.push(("gmail_api", EmailLiveMode::GmailApi(g)));
@@ -150,7 +141,6 @@ impl EmailConfig {
     /// fields hang together.
     pub fn validate(&self) -> anyhow::Result<()> {
         match self.live_mode()? {
-            Some(EmailLiveMode::Imap(imap)) => imap.validate(),
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
         }
@@ -208,139 +198,25 @@ pub enum EmailOutlink {
     Fastmail,
 }
 
-/// IMAP sync tunables. Mirrors the `imap:` sub-stanza of a `type: email`
-/// source.
-///
-/// The transport is generic RFC 3501 + whatever extensions the server
-/// advertises; Gmail is the first target but nothing here is Gmail-only.
-/// Gmail-shaped behavior (the `\All` folder holding one copy of every
-/// message, `X-GM-LABELS` carrying label membership) is selected at
-/// runtime off the `X-GM-EXT-1` capability, not from config.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EmailImap {
-    /// IMAP server hostname, e.g. `imap.gmail.com`, `imap.mail.me.com`.
-    pub host: String,
-    /// Implicit-TLS port. Defaults to 993; there is no STARTTLS-on-143
-    /// path, because every server worth mirroring offers 993 and
-    /// negotiating up from cleartext is a downgrade surface we don't need.
-    #[serde(default)]
-    pub port: Option<u16>,
-    /// Name of the **latchkey service** holding this account's
-    /// credential — not the credential itself. The password never appears
-    /// in this file.
-    ///
-    /// ```sh
-    /// latchkey services register gmail-imap --base-api-url="https://imap.gmail.com/"
-    /// latchkey auth set gmail-imap -u "you@gmail.com:$(pbpaste)"
-    /// ```
-    ///
-    /// A `-u user:pass` credential authenticates with SASL PLAIN; an
-    /// `Authorization: Bearer` one authenticates with XOAUTH2. See
-    /// `datalib_etl::latchkey::extract_credential`.
-    pub latchkey_service: String,
-    /// Stable id for the synthesized `accounts` row. Defaults to the
-    /// credential's username (which for Gmail is the address).
-    #[serde(default)]
-    pub account_id: Option<String>,
-    /// Display name for the `accounts` row. Defaults to `account_id`.
-    #[serde(default)]
-    pub display_name: Option<String>,
-    /// Canonical address for the `accounts` row. Defaults to the
-    /// credential's username.
-    #[serde(default)]
-    pub email_address: Option<String>,
-    /// Folder holding the canonical single copy of every message.
-    /// Normally left unset: we discover it from the RFC 6154 `\All`
-    /// special-use flag, which is locale-safe (Gmail localizes the
-    /// display name of `[Gmail]/All Mail`). Set it only for a server that
-    /// has such a folder but doesn't flag it.
-    #[serde(default)]
-    pub all_mail_folder: Option<String>,
-    /// Folders to mirror when the server has no `\All` folder. Empty =
-    /// every folder the server lists. Ignored when an all-mail folder is
-    /// in play, since that one already contains everything.
-    #[serde(default)]
-    pub folders: Vec<String>,
-    /// Discard the stored UID/MODSEQ cursors and re-enumerate. Applies to
-    /// this run only; the next run resumes incrementally from the
-    /// post-resync state.
-    #[serde(default)]
-    pub full_resync: bool,
-    /// How many IMAP connections to keep open. `None` uses the built-in
-    /// default. Kept deliberately small: IMAP connections are expensive
-    /// to establish and servers count them (Gmail allows 15 simultaneous
-    /// per account, shared with every other client the user is running).
-    #[serde(default)]
-    pub connection_concurrency: Option<usize>,
-    /// Stop fetching message bodies once this many bytes have been pulled
-    /// in one run, commit the cursor, and exit **successfully** with a
-    /// partial result.
-    ///
-    /// This exists because Gmail caps IMAP at 2500 MB of downloads per
-    /// day and throttles the account past that rather than failing
-    /// cleanly. A large mailbox is therefore a multi-day backfill no
-    /// matter what, and the honest way to model that is a run that stops
-    /// early and says so — not one that fails and poisons the DAG
-    /// subtree. `None` uses the built-in default.
-    #[serde(default)]
-    pub daily_download_budget_bytes: Option<u64>,
-}
-
-/// Default implicit-TLS IMAP port (RFC 8314).
-pub const DEFAULT_IMAP_PORT: u16 = 993;
-
-impl EmailImap {
-    pub fn port(&self) -> u16 {
-        self.port.unwrap_or(DEFAULT_IMAP_PORT)
-    }
-
-    /// Schema-local checks. Both fields are `String` rather than
-    /// `Option<String>`, so serde already rejects a missing one; what's
-    /// left is rejecting a present-but-empty one, which serde won't.
-    pub fn validate(&self) -> anyhow::Result<()> {
-        if self.host.trim().is_empty() {
-            anyhow::bail!("email `imap.host` is required (e.g. \"imap.gmail.com\")");
-        }
-        if self.latchkey_service.trim().is_empty() {
-            anyhow::bail!(
-                "email `imap.latchkey_service` is required — it names the latchkey \
-                 service holding this account's credential, e.g. \"gmail-imap\""
-            );
-        }
-        // A URL here means someone pasted the latchkey `--base-api-url`
-        // into the wrong field; it would fail much later with a DNS error.
-        if self.host.contains("://") || self.host.contains('/') {
-            anyhow::bail!(
-                "email `imap.host` should be a bare hostname, not a URL (got {:?})",
-                self.host
-            );
-        }
-        Ok(())
-    }
-}
-
 /// Gmail REST API tunables. Mirrors the `gmail_api:` sub-stanza.
 ///
-/// The preferred mode for a Gmail account. Compared with IMAP against the
-/// same mailbox:
+/// The mode for a Gmail account.
 ///
 /// * **Credentials need no configuration at all.** latchkey ships a
 ///   built-in `google-gmail` service and routes to it by URL host, so
-///   there is no service name to name and no credential extraction — the
-///   ordinary `latchkey curl` path every other HTTP provider in this tree
-///   uses just works. Set it up once with
+///   there is no service name to name — the ordinary `latchkey curl` path
+///   every other HTTP provider in this tree uses just works, refresh
+///   included. Set it up once with
 ///   `latchkey auth browser google-gmail`.
-/// * **Incremental sync is better.** `users.history.list` reports
-///   `messagesAdded` / `messagesDeleted` / `labelsAdded` / `labelsRemoved`
-///   explicitly. IMAP's CONDSTORE reports changed flags but Gmail does not
-///   advertise QRESYNC, so deletions there need a full UID sweep to find.
-/// * **Throughput is ~13× higher.** IMAP is capped at 2500 MB/day of
-///   downloads; the API is capped on quota units per minute, which works
-///   out to roughly 300 messages/minute regardless of their size.
+/// * **Incremental sync is explicit.** `users.history.list` reports
+///   `messagesAdded` / `messagesDeleted` / `labelsAdded` /
+///   `labelsRemoved`, so deletions arrive as events rather than having to
+///   be inferred by re-enumeration.
+/// * **Throughput is quota-limited, not byte-limited**: ~300
+///   messages/minute regardless of message size.
 ///
-/// What IMAP still buys is every non-Gmail account, which is why both
-/// modes exist.
+/// For a non-Gmail account, use the JMAP mode or a file export. See
+/// `docs/dev/email_download_modes.md` for why IMAP was tried and dropped.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
@@ -441,51 +317,17 @@ impl EmailGmailApi {
 mod tests {
     use super::*;
 
-    fn imap(host: &str) -> EmailImap {
-        EmailImap {
-            host: host.to_string(),
-            latchkey_service: "gmail-imap".to_string(),
-            ..Default::default()
-        }
-    }
-
     /// The whole reason mode selection became explicit: with more than
     /// one mode, inferring from `sync:` alone would silently pick one.
     #[test]
     fn rejects_more_than_one_live_mode() {
-        let pairs: [(&str, EmailConfig); 3] = [
-            (
-                "sync+imap",
-                EmailConfig {
-                    sync: Some(EmailSync::default()),
-                    imap: Some(imap("imap.gmail.com")),
-                    ..Default::default()
-                },
-            ),
-            (
-                "imap+gmail_api",
-                EmailConfig {
-                    imap: Some(imap("imap.gmail.com")),
-                    gmail_api: Some(EmailGmailApi::default()),
-                    ..Default::default()
-                },
-            ),
-            (
-                "sync+gmail_api",
-                EmailConfig {
-                    sync: Some(EmailSync::default()),
-                    gmail_api: Some(EmailGmailApi::default()),
-                    ..Default::default()
-                },
-            ),
-        ];
-        for (label, cfg) in pairs {
-            let err = cfg.validate().unwrap_err().to_string();
-            assert!(
-                err.contains("more than one"),
-                "{label}: unhelpful message: {err}"
-            );
-        }
+        let cfg = EmailConfig {
+            sync: Some(EmailSync::default()),
+            gmail_api: Some(EmailGmailApi::default()),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("more than one"), "unhelpful message: {err}");
     }
 
     /// The message has to name *which* modes collided, or the user has to
@@ -568,13 +410,13 @@ mod tests {
             Some(EmailLiveMode::Jmap(_))
         ));
 
-        let im = EmailConfig {
-            imap: Some(imap("imap.gmail.com")),
+        let gmail = EmailConfig {
+            gmail_api: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         assert!(matches!(
-            im.live_mode().unwrap(),
-            Some(EmailLiveMode::Imap(_))
+            gmail.live_mode().unwrap(),
+            Some(EmailLiveMode::GmailApi(_))
         ));
     }
 
@@ -584,77 +426,5 @@ mod tests {
     fn no_live_block_is_not_an_error() {
         assert!(EmailConfig::default().live_mode().unwrap().is_none());
         assert!(EmailConfig::default().validate().is_ok());
-    }
-
-    #[test]
-    fn defaults_to_the_implicit_tls_port() {
-        assert_eq!(imap("imap.gmail.com").port(), 993);
-        assert_eq!(
-            EmailImap {
-                port: Some(1993),
-                ..imap("localhost")
-            }
-            .port(),
-            1993
-        );
-    }
-
-    /// A pasted `--base-api-url` in `host` would otherwise surface as a
-    /// DNS failure deep inside the connect path.
-    #[test]
-    fn rejects_a_url_in_the_host_field() {
-        for bad in ["https://imap.gmail.com/", "imap.gmail.com/"] {
-            let err = imap(bad).validate().unwrap_err().to_string();
-            assert!(err.contains("bare hostname"), "for {bad:?}: {err}");
-        }
-    }
-
-    #[test]
-    fn requires_a_latchkey_service_name() {
-        let cfg = EmailImap {
-            latchkey_service: "  ".to_string(),
-            ..imap("imap.gmail.com")
-        };
-        assert!(cfg
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("latchkey_service"));
-    }
-
-    /// `deny_unknown_fields` is what turns a typo'd knob into an error at
-    /// config load instead of a silently ignored setting.
-    #[test]
-    fn rejects_unknown_imap_keys() {
-        let err = serde_json::from_value::<EmailImap>(serde_json::json!({
-            "host": "imap.gmail.com",
-            "latchkey_service": "gmail-imap",
-            "full_resynk": true,
-        }))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("full_resynk"), "{err}");
-    }
-
-    /// The `imap` block has to survive the same serde round-trip the step
-    /// planner puts it through (`--params` JSON → EmailConfig).
-    #[test]
-    fn parses_from_a_step_params_payload() {
-        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "imap": {
-                "host": "imap.gmail.com",
-                "latchkey_service": "gmail-imap",
-                "daily_download_budget_bytes": 2_000_000_000u64,
-            },
-            "only_extract_labels": ["Inbox"],
-        }))
-        .unwrap();
-        cfg.validate().unwrap();
-        let Some(EmailLiveMode::Imap(i)) = cfg.live_mode().unwrap() else {
-            panic!("expected imap mode");
-        };
-        assert_eq!(i.host, "imap.gmail.com");
-        assert_eq!(i.daily_download_budget_bytes, Some(2_000_000_000));
-        assert_eq!(cfg.only_extract_labels, vec!["Inbox".to_string()]);
     }
 }

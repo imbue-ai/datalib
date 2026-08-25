@@ -7,12 +7,11 @@
 //! written by exactly one code path.
 //!
 //! The JMAP downloader gets that shape from the server. Every other mode
-//! has to build it: mbox parses a Google Takeout export, the Gmail API
-//! mode parses `messages.get?format=RAW`, and IMAP parses a
-//! `BODY.PEEK[]` fetch. All three end up holding the same two things —
-//! the message bytes, and some per-message facts the *transport* supplied
-//! (which labels, which thread, which keywords) that are not derivable
-//! from the bytes. This module is where those meet.
+//! has to build it: mbox parses a Google Takeout export, and the Gmail
+//! API mode parses `messages.get?format=RAW`. Both end up holding the
+//! same two things — the message bytes, and some per-message facts the
+//! *transport* supplied (which labels, which thread, which keywords) that
+//! are not derivable from the bytes. This module is where those meet.
 //!
 //! Extracting it is what makes "the same mailbox ingested two ways
 //! dedupes rather than doubles" a property of the code rather than of
@@ -25,9 +24,8 @@ use serde_json::{json, Value};
 /// The per-message facts a transport knows and the bytes do not.
 ///
 /// A Takeout mbox carries labels in an `X-Gmail-Labels` header; the Gmail
-/// API returns them as `labelIds`; IMAP returns them as `X-GM-LABELS`.
-/// By the time we get here they have all been resolved to the same
-/// mailbox ids and JMAP keywords.
+/// API returns them as `labelIds`. By the time we get here they have both
+/// been resolved to the same mailbox ids and JMAP keywords.
 #[derive(Debug, Clone)]
 pub struct TransportFacts {
     /// Stable email id — the `Message-ID` header, or the content hash
@@ -114,10 +112,9 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
 /// back to the content hash when it has none.
 ///
 /// Every mode must derive this the same way. Using a transport-native id
-/// instead (Gmail's hex `id`, an IMAP UID, JMAP's `Email.id`) would fork
-/// the id space per transport, so the same mailbox ingested from a
-/// Takeout export and then from a live sync would double rather than
-/// dedupe.
+/// instead (Gmail's hex `id`, JMAP's `Email.id`) would fork the id space
+/// per transport, so the same mailbox ingested from a Takeout export and
+/// then from a live sync would double rather than dedupe.
 pub fn email_id(msg: &Message<'_>, content_hash: &str) -> String {
     match msg.message_id() {
         Some(mid) => strip_angle(mid).to_string(),

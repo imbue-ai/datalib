@@ -3,17 +3,17 @@
 //! Gmail hands us the same label under three different spellings
 //! depending on how we ask:
 //!
-//! | concept | Takeout `X-Gmail-Labels` | IMAP `X-GM-LABELS` | Gmail API `labels.list` |
-//! |---------|--------------------------|--------------------|--------------------------|
-//! | inbox   | `Inbox`                  | `\Inbox`           | `INBOX`                  |
-//! | sent    | `Sent`                   | `\Sent`            | `SENT`                   |
-//! | starred | `Starred`                | `\Starred`         | `STARRED`                |
-//! | promos  | `Category Promotions`    | `Category Promotions` | `CATEGORY_PROMOTIONS` |
+//! | concept | Takeout `X-Gmail-Labels` | Gmail API `labels.list` |
+//! |---------|--------------------------|--------------------------|
+//! | inbox   | `Inbox`                  | `INBOX`                  |
+//! | sent    | `Sent`                   | `SENT`                   |
+//! | starred | `Starred`                | `STARRED`                |
+//! | promos  | `Category Promotions`    | `CATEGORY_PROMOTIONS`    |
 //!
-//! Left alone, those three produce three different `mailboxes` rows and
-//! three different `mailbox_id`s for one Gmail label — so a user who
-//! ingested a Takeout export and then switched to a live mode would see
-//! their Inbox twice in the grid. [`canonical_name`] collapses them onto
+//! Left alone, those produce two different `mailboxes` rows and two
+//! different `mailbox_id`s for one Gmail label — so a user who ingested a
+//! Takeout export and then switched to the API would see their Inbox
+//! twice in the grid. [`canonical_name`] collapses them onto
 //! Takeout's spelling (chosen because it is what the existing mbox raw
 //! stores already contain, so nothing already on disk has to migrate),
 //! and [`mailbox_id`] keys off that canonical name.
@@ -106,10 +106,12 @@ impl LabelKind {
     }
 }
 
-/// Reduce a label to the key the [`SYSTEM`] table is indexed by: no
-/// leading backslash, lowercase, and `_` treated as a space so the Gmail
-/// API's `CATEGORY_PROMOTIONS` lands on the same entry as Takeout's
-/// `Category Promotions`.
+/// Reduce a label to the key the [`SYSTEM`] table is indexed by:
+/// lowercase, `_` treated as a space so the Gmail API's
+/// `CATEGORY_PROMOTIONS` lands on the same entry as Takeout's
+/// `Category Promotions`, and a leading backslash stripped — Google spells
+/// system labels that way on some surfaces, and normalization is the right
+/// place to be liberal about it.
 fn lookup_key(label: &str) -> String {
     label
         .trim()
@@ -144,19 +146,6 @@ pub fn map_label(label: &str) -> LabelMap {
     match system_entry(label) {
         Some((_, kind)) => kind.into_map(),
         None => LabelMap::Mailbox { role: None },
-    }
-}
-
-/// Map an IMAP `\Seen`-style message flag to a JMAP keyword. `None` for
-/// flags with no JMAP counterpart (`\Recent`, server-specific keywords).
-pub fn map_flag(flag: &str) -> Option<&'static str> {
-    match lookup_key(flag).as_str() {
-        "seen" => Some("$seen"),
-        "answered" => Some("$answered"),
-        "flagged" => Some("$flagged"),
-        "draft" => Some("$draft"),
-        "deleted" => Some("$deleted"),
-        _ => None,
     }
 }
 
@@ -224,11 +213,11 @@ pub fn split_gmail_labels(value: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The property the whole module exists for: the three spellings of
-    /// one Gmail label must produce one mailbox row with one id.
+    /// The property the whole module exists for: every spelling of one
+    /// Gmail label must produce one mailbox row with one id.
     #[test]
-    fn all_three_spellings_of_a_system_label_agree() {
-        for (takeout, imap, api) in [
+    fn all_spellings_of_a_system_label_agree() {
+        for (takeout, backslashed, api) in [
             ("Inbox", "\\Inbox", "INBOX"),
             ("Sent", "\\Sent", "SENT"),
             ("Trash", "\\Trash", "TRASH"),
@@ -241,9 +230,13 @@ mod tests {
                 "CATEGORY_PROMOTIONS",
             ),
         ] {
-            assert_eq!(canonical_name(takeout), canonical_name(imap), "{takeout}");
+            assert_eq!(
+                canonical_name(takeout),
+                canonical_name(backslashed),
+                "{takeout}"
+            );
             assert_eq!(canonical_name(takeout), canonical_name(api), "{takeout}");
-            assert_eq!(map_label(takeout), map_label(imap), "{takeout}");
+            assert_eq!(map_label(takeout), map_label(backslashed), "{takeout}");
             assert_eq!(map_label(takeout), map_label(api), "{takeout}");
             // Canonicalize first — that is the documented contract of
             // `mailbox_id`, and the step every mode performs for a label
@@ -307,15 +300,6 @@ mod tests {
         // Nesting under a system-sounding word is still a user label.
         assert_eq!(canonical_name("Archive/Inbox"), "Archive/Inbox");
         assert_eq!(map_label("Archive/Inbox"), LabelMap::Mailbox { role: None });
-    }
-
-    #[test]
-    fn maps_imap_flags_to_jmap_keywords() {
-        assert_eq!(map_flag("\\Seen"), Some("$seen"));
-        assert_eq!(map_flag("\\Flagged"), Some("$flagged"));
-        // A session artifact, not state worth storing.
-        assert_eq!(map_flag("\\Recent"), None);
-        assert_eq!(map_flag("$label1"), None);
     }
 
     /// Different accounts must not share mailbox ids, or two mirrors in

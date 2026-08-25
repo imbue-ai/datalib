@@ -23,7 +23,6 @@ pub mod api;
 pub mod db;
 pub mod envelope;
 pub mod gmail_api;
-pub mod imap;
 pub mod labels;
 pub mod mbox;
 pub mod schema_raw;

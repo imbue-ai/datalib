@@ -149,10 +149,10 @@ pub enum SourceConfig {
     GithubApi(GithubConfig),
     GitlabApi(GitlabConfig),
     NotionApi(NotionConfig),
-    /// Boxed because `EmailConfig` carries three mutually-exclusive
-    /// download-mode blocks (`sync`, `imap`, `mbox`) and is by some margin
-    /// the largest variant — inlining it would make every `SourceConfig`
-    /// the size of the biggest one.
+    /// Boxed because `EmailConfig` carries a block per download mode and
+    /// is by some margin the largest variant — inlined, it would make
+    /// every `SourceConfig` the size of the biggest one. (Checked: still
+    /// over clippy's threshold without the IMAP block.)
     Email(Box<EmailConfig>),
     Beeper(BeeperConfig),
     Carddav(CarddavConfig),

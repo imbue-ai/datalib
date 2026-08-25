@@ -6,8 +6,7 @@
 //! `https://gmail.googleapis.com/`, and it routes by URL host — so the
 //! ordinary [`latchkey_curl`] path every other HTTP provider in this tree
 //! uses injects the bearer token, and refreshes it when it has expired.
-//! Contrast the IMAP mode, which is not HTTP and needs the credential
-//! extracted as values first.
+//! That is the whole auth story for this mode.
 
 use std::time::Duration;
 
@@ -249,9 +248,8 @@ pub async fn list_messages(
 /// RFC 5322 source.
 ///
 /// `format=RAW` is what makes this mode line up with every other one: the
-/// `raw` field is the same `.eml` the mbox and IMAP paths store, so all
-/// of them share one envelope-synthesis path and one CAS entry per
-/// message.
+/// `raw` field is byte-identical to what the mbox path stores, so the two
+/// share one envelope-synthesis path and one CAS entry per message.
 pub async fn get_message_raw(
     user_id: &str,
     account: Option<&str>,
@@ -322,10 +320,9 @@ pub struct HistoryPage {
 
 /// `users.history.list` — the incremental cursor.
 ///
-/// Strictly better than IMAP's CONDSTORE for this job: deletions are
-/// reported explicitly, where Gmail's IMAP advertises CONDSTORE but not
-/// QRESYNC and so has no `VANISHED` — deletions there can only be found
-/// by re-listing every UID.
+/// Deletions are reported explicitly, which is what makes an incremental
+/// run cheap: there is no need to re-enumerate the mailbox to discover
+/// what went away.
 ///
 /// Returns [`GmailApiError::HistoryTooOld`] when `start_history_id` has
 /// aged out; the caller must fall back to a full sync.

@@ -1,7 +1,7 @@
 //! Program A `DataProcessor`s for the email source.
 //!
-//! Email contributes an **download** processor ([`EmailDownload`] — JMAP live
-//! sync or file-backed mbox, chosen by config) and a **render** processor
+//! Email contributes an **download** processor ([`EmailDownload`] — JMAP or
+//! Gmail-API live sync, or file-backed mbox, chosen by config) and a **render** processor
 //! ([`EmailRender`]). [`plan_download`] / [`plan_render`] build the per-wave
 //! processors the orchestrator drives, owning every email-specific decision
 //! (which download mode, whether
@@ -23,13 +23,14 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use datalib_etl_email_config::EmailRenderConfig;
 use datalib_etl_email_config::{
-    EmailConfig, EmailGmailApi, EmailImap, EmailLiveMode, EmailOutlink, EmailSync, MboxSync,
+    EmailConfig, EmailGmailApi, EmailLiveMode, EmailOutlink, EmailSync, MboxSync,
 };
 
 use crate::download;
 use crate::render::render::OutlinkFormat;
 
-/// Download wave: present iff managed — `sync:` → JMAP; else an
+/// Download wave: present iff managed — a live block (`sync:` for JMAP,
+/// `gmail_api:` for the Gmail REST API) selects a server mode; else an
 /// `.mbox` under input_path → mbox mode.
 pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
@@ -49,7 +50,6 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
     // isn't a `live_mode` variant.
     let mode = match config.live_mode()? {
         Some(EmailLiveMode::Jmap(sync)) => Some(ExtractMode::Jmap(sync.clone())),
-        Some(EmailLiveMode::Imap(imap)) => Some(ExtractMode::Imap(imap.clone())),
         Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi(gmail.clone())),
         None => {
             if is_mbox_input(&input_path) {
@@ -64,8 +64,7 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
                 // orchestrator path.
                 return Err(anyhow!(
                     "email source {name} declares no download mode (`sync` for JMAP, \
-                     `imap` for IMAP, `gmail_api` for the Gmail REST API) and no .mbox \
-                     was found under {}",
+                     `gmail_api` for the Gmail REST API) and no .mbox was found under {}",
                     input_path.display()
                 ));
             } else {
@@ -115,8 +114,6 @@ fn outlink_format(f: EmailOutlink) -> OutlinkFormat {
 enum ExtractMode {
     /// Live JMAP server sync.
     Jmap(EmailSync),
-    /// Live IMAP server sync.
-    Imap(EmailImap),
     /// Gmail REST API sync.
     GmailApi(EmailGmailApi),
     /// File-backed `.mbox` ingest (e.g. a Google Takeout export).
@@ -202,30 +199,6 @@ impl DataProcessor for EmailDownload {
                     s.messages_filtered,
                     s.quota_units_spent,
                     s.full_sync,
-                    s.budget_exhausted,
-                )
-            }
-            ExtractMode::Imap(imap) => {
-                let s = download::imap::fetch(download::imap::FetchOptions {
-                    db_path: self.raw_path.clone(),
-                    db: Some(db),
-                    config: imap.clone(),
-                    only_labels: self.only_extract_labels.clone(),
-                    blob_size_limit_bytes: self.blob_size_limit_bytes,
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "folders={} emails={} destroyed={} blobs(stored={} skipped={} oversize={}) \
-                     bytes={} budget_exhausted={}",
-                    s.folders_upserted,
-                    s.emails_upserted,
-                    s.emails_destroyed,
-                    s.blobs_stored,
-                    s.blobs_skipped,
-                    s.blobs_oversize,
-                    s.bytes_downloaded,
                     s.budget_exhausted,
                 )
             }
