@@ -149,7 +149,11 @@ pub enum SourceConfig {
     GithubApi(GithubConfig),
     GitlabApi(GitlabConfig),
     NotionApi(NotionConfig),
-    Email(EmailConfig),
+    /// Boxed because `EmailConfig` carries three mutually-exclusive
+    /// download-mode blocks (`sync`, `imap`, `mbox`) and is by some margin
+    /// the largest variant — inlining it would make every `SourceConfig`
+    /// the size of the biggest one.
+    Email(Box<EmailConfig>),
     Beeper(BeeperConfig),
     Carddav(CarddavConfig),
     Linkedin(LinkedinConfig),

@@ -44,6 +44,14 @@ sha2 = "0.10"
 # Gmail calendar invites.
 htmd = "0.5"
 tempfile = "3"
+# IMAP transport for the third download mode. Driven on tokio with a
+# caller-supplied `tokio-rustls` stream — see `download/imap/conn.rs`
+# and the workspace dep comment for why neither default feature is used.
+async-imap = { workspace = true }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
+futures = { workspace = true }
+
 # mbox / RFC 5322 parser used by `translate::mbox` to ingest Google
 # Takeout exports (the "All mail Including Spam and Trash.mbox" file)
 # without a JMAP server. Maintained by Stalwart Mail; handles MIME

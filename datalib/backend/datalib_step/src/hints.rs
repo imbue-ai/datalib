@@ -198,7 +198,23 @@ Email source: JMAP (Fastmail / generic) auth missing or expired.
        {LK} curl -sSL https://api.fastmail.com/.well-known/jmap \\
            | jq .primaryAccounts
 
-See datalib/backend/etl/providers/jmap/DOWNLOAD.md for details."
+For a live IMAP account (Gmail, iCloud, Dovecot) the source uses an
+`imap` block instead, and the credential is looked up by service name:
+
+  1. Create an app password (Gmail: https://myaccount.google.com/apppasswords —
+     needs 2-Step Verification, and a Workspace admin can disable these).
+  2. Register the host and attach the credential:
+       {LK} services register gmail-imap \\
+           --base-api-url=\"https://imap.gmail.com/\"
+       {LK} auth set gmail-imap -u \"you@gmail.com:$(pbpaste)\"
+     The URL is only a routing key for latchkey's host-based lookup;
+     nothing makes an HTTP request to it.
+  3. Point the source at it:
+       [steps.params.imap]
+       host = \"imap.gmail.com\"
+       latchkey_service = \"gmail-imap\"
+
+See datalib/backend/etl/providers/email/DOWNLOAD.md for details."
         }
         "beeper" => {
             "\

@@ -43,8 +43,10 @@ rust_library(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:async-imap",
         "@datalib_crates//:chrono",
         "@datalib_crates//:clap",
+        "@datalib_crates//:futures",
         "@datalib_crates//:htmd",
         "@datalib_crates//:mail-parser",
         "@datalib_crates//:serde",
@@ -54,8 +56,10 @@ rust_library(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:tokio-rustls",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
+        "@datalib_crates//:webpki-roots",
     ],
 )
 

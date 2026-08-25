@@ -19,6 +19,7 @@ rust_library(
     # a sibling); `latchkey::ensure_curl_dispatch` resolves the dispatch curl
     # via the bazel runfiles lookup in `resolve()`.
     data = [
+        ":latchkey_cred_extract",
         ":latchkey_curl_dispatch",
         ":latchkey_curl_impersonate",
     ],
@@ -97,6 +98,23 @@ rust_test(
     name = "latchkey_curl_dispatch_test",
     size = "small",
     crate = ":latchkey_curl_dispatch",
+    edition = "2021",
+)
+
+# Curl stand-in that captures latchkey's injected credential arguments to
+# a file and makes no request — the seam that lets a non-HTTP transport
+# (IMAP) read a credential out of latchkey. std-only, no deps.
+rust_binary(
+    name = "latchkey_cred_extract",
+    srcs = ["src/bin/latchkey_cred_extract.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "latchkey_cred_extract_test",
+    size = "small",
+    crate = ":latchkey_cred_extract",
     edition = "2021",
 )
 
