@@ -36,6 +36,7 @@ rust_library(
         "@datalib_crates//:blake3",
         "@datalib_crates//:chrono",
         "@datalib_crates//:clap",
+        "@datalib_crates//:ignore",
         "@datalib_crates//:indicatif",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde",

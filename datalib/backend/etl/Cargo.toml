@@ -45,12 +45,15 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
 sqlx = { workspace = true }
 sha2 = "0.10"
-blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+blake3 = { version = "1", default-features = false, features = ["std", "pure", "mmap"] }
 tempfile = "3"
 # Bazel runfiles lookup, so the shared `latchkey::ensure_curl_dispatch`
 # resolver can find our Chrome-impersonating curl shim under
 # `bazel run` / `bazel test`. Falls through cleanly outside Bazel.
 runfiles = "0.2"
+# Gitignore-shaped matcher for `fswalk::walk_files`. Same crate ripgrep
+# uses; correct gitignore semantics out of the box.
+ignore = { workspace = true }
 
 # Observability — the heavy stack (tracing-subscriber, indicatif,
 # OTLP) lives in `datalib-obs`. We keep `tracing` here for the

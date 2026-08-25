@@ -5,6 +5,20 @@ expression: snapshot
 {
   "documents": [
     {
+      "created_at": "2364-04-13T08:45:00-07:00",
+      "kind": "document",
+      "markdown_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "md_path": "tng_pdfs/rendered_md/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
+      "provider": "pdf",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "fef4ce7a562414bc3e19a5cb0534cdc9140680ae2867fd6c3eb24491d4d2711d",
+      "source_fingerprint": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4",
+      "source_name": "tng_pdfs",
+      "title": "Captain's Log",
+      "updated_at": "2364-04-13T08:45:00-07:00"
+    },
+    {
       "created_at": "2370-08-22T00:00:00Z",
       "kind": "chat",
       "markdown_uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
@@ -115,6 +129,20 @@ expression: snapshot
       "source_name": "google-takeout",
       "title": "+15550900",
       "updated_at": "2364-03-04T20:00:00+00:00"
+    },
+    {
+      "created_at": null,
+      "kind": "document",
+      "markdown_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "md_path": "tng_pdfs/rendered_md/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
+      "provider": "pdf",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "bffa67c0c8d5a5c0843766332117506c17e16799a84c82a15bd81ed8eb7d7c96",
+      "source_fingerprint": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf",
+      "source_name": "tng_pdfs",
+      "title": "warp_core_manual.pdf",
+      "updated_at": null
     },
     {
       "created_at": "2369-04-14T19:30:00+00:00",
@@ -311,6 +339,20 @@ expression: snapshot
       "source_name": "linkedin",
       "title": "Connections",
       "updated_at": "2369-04-10T00:00:00+00:00"
+    },
+    {
+      "created_at": "2364-04-13T08:45:00-07:00",
+      "kind": "document",
+      "markdown_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "md_path": "tng_pdfs/rendered_md/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "provider": "pdf",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "1bc99764fdf923e0bc41099e1c51d87b04e4fd2aa3c6ccf1e89692d81b2d8311",
+      "source_fingerprint": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545",
+      "source_name": "tng_pdfs",
+      "title": "Captain's Log",
+      "updated_at": "2364-04-13T08:45:00-07:00"
     },
     {
       "created_at": "2369-05-28T15:16:40+00:00",
@@ -668,7 +710,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_loaded=47 markdowns_skipped=0 rows_inserted=165"
+      "message": "datalib-step grid_index: markdowns_loaded=50 markdowns_skipped=0 rows_inserted=172"
     }
   ],
   "grid_rows": [
@@ -973,6 +1015,31 @@ expression: snapshot
       "when_ts": "2369-04-15T14:00:00.000Z"
     },
     {
+      "account": "tng_pdfs",
+      "author": "Jean-Luc Picard",
+      "channel": null,
+      "conversation_name": "Captain's Log",
+      "conversation_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "entire_chat": "/chat/0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "external_id": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4",
+      "git_sha": null,
+      "kind": "PDF Document",
+      "markdown_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "archive/captains_log_copy.pdf",
+      "text_len": 24,
+      "text_sha": "sha256:1677f24f34f0288fedeefc953af5ebf37fe921d5f3b23b4d843697de61d8adf0",
+      "uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "when_ts": "2364-04-13T08:45:00-07:00"
+    },
+    {
       "account": null,
       "author": "Me",
       "channel": "Jean-Luc Picard",
@@ -1071,6 +1138,31 @@ expression: snapshot
       "text_sha": "sha256:c57a13a7586d7f23deba234561676e374c9fde194fe14a894e4fec1f4a1120fd",
       "uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
       "when_ts": "2370-08-22T00:00:00Z"
+    },
+    {
+      "account": "tng_pdfs",
+      "author": "Jean-Luc Picard",
+      "channel": null,
+      "conversation_name": "Captain's Log",
+      "conversation_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "entire_chat": "/chat/9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "external_id": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545#2",
+      "git_sha": null,
+      "kind": "PDF Page",
+      "markdown_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "message_index": 2,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "captains_log_v2.pdf",
+      "text_len": 128,
+      "text_sha": "sha256:6418498a67f5387b6999f7c664cf53a2cce964d8d2b284c6c29634e82e9c159f",
+      "uuid": "14f67751-2d0c-56bf-9a56-a0de97c7079a",
+      "when_ts": "2364-04-13T08:45:00-07:00"
     },
     {
       "account": "tng_contacts",
@@ -1196,6 +1288,31 @@ expression: snapshot
       "text_sha": "sha256:fc2e43ac43c1c7724a32326f0027afe4d6164ecf654391e49c059bef0cdab76d",
       "uuid": "1b617cfb-791c-534f-920c-249e47baa096",
       "when_ts": "2369-04-14T23:55:00+00:00"
+    },
+    {
+      "account": "tng_pdfs",
+      "author": "Jean-Luc Picard",
+      "channel": null,
+      "conversation_name": "Captain's Log",
+      "conversation_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "entire_chat": "/chat/9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "external_id": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545#1",
+      "git_sha": null,
+      "kind": "PDF Page",
+      "markdown_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "captains_log_v2.pdf",
+      "text_len": 126,
+      "text_sha": "sha256:e8c6ce3b745899462b2c6ee4343cdcdfede6f7cbf02e4b44dbb57035d9707915",
+      "uuid": "1d49a35a-b955-56e4-9d21-000ea7acb469",
+      "when_ts": "2364-04-13T08:45:00-07:00"
     },
     {
       "account": null,
@@ -1521,6 +1638,31 @@ expression: snapshot
       "text_sha": "sha256:60b690e950ff8493a847727fcea9c9d870de9df8bcbb358964c72ae0533752c0",
       "uuid": "31dbdc1d-ddd3-5f51-bf9f-e7a7f3443e4f",
       "when_ts": "2024-04-02T23:20:00.000+00:00"
+    },
+    {
+      "account": "tng_pdfs",
+      "author": "Geordi La Forge",
+      "channel": null,
+      "conversation_name": "warp_core_manual.pdf",
+      "conversation_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "entire_chat": "/chat/32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "external_id": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf",
+      "git_sha": null,
+      "kind": "PDF Document",
+      "markdown_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "engineering/warp_core_manual.pdf",
+      "text_len": 20,
+      "text_sha": "sha256:6a5b577e66271a3d5816a21b1809bf69d542ce348a58fd901a1ef077c542ae85",
+      "uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "when_ts": ""
     },
     {
       "account": null,
@@ -2021,6 +2163,31 @@ expression: snapshot
       "text_sha": "sha256:6a25d46103e58ba3ec17c850c19173f4579c11d2f545b5bcc36274440748f499",
       "uuid": "5a86b1a7-e9a1-55d5-b8ac-bed6ff071995",
       "when_ts": "2364-04-11T00:01:00+00:00"
+    },
+    {
+      "account": "tng_pdfs",
+      "author": "Geordi La Forge",
+      "channel": null,
+      "conversation_name": "warp_core_manual.pdf",
+      "conversation_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "entire_chat": "/chat/32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "external_id": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf#1",
+      "git_sha": null,
+      "kind": "PDF Page",
+      "markdown_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "engineering/warp_core_manual.pdf",
+      "text_len": 188,
+      "text_sha": "sha256:16496e1e3fbaf156cbb0f5e9ae22d7005dd9343836bf8750b39cc256077fc100",
+      "uuid": "5c88d55d-f88f-5a0b-9c2d-8a90667c3a38",
+      "when_ts": ""
     },
     {
       "account": null,
@@ -2996,6 +3163,31 @@ expression: snapshot
       "text_sha": "sha256:e60cdf571ea0ba84a34bfa466560bcb7c0c23faade89bf66f7a576533aa77ac9",
       "uuid": "92525485-57cc-55ba-be9e-49ce420fff6f",
       "when_ts": "2364-04-11T00:09:00+00:00"
+    },
+    {
+      "account": "tng_pdfs",
+      "author": "Jean-Luc Picard",
+      "channel": null,
+      "conversation_name": "Captain's Log",
+      "conversation_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "entire_chat": "/chat/9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "external_id": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545",
+      "git_sha": null,
+      "kind": "PDF Document",
+      "markdown_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "captains_log_v2.pdf",
+      "text_len": 13,
+      "text_sha": "sha256:3e5aa96aa0b4983eb15cb12ed0a2def9b926e16c40c82ae99c732cba881d6d14",
+      "uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
+      "when_ts": "2364-04-13T08:45:00-07:00"
     },
     {
       "account": null,
@@ -4273,6 +4465,31 @@ expression: snapshot
       "when_ts": "2024-04-10T19:00:00.000+00:00"
     },
     {
+      "account": "tng_pdfs",
+      "author": "Jean-Luc Picard",
+      "channel": null,
+      "conversation_name": "Captain's Log",
+      "conversation_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "entire_chat": "/chat/0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "external_id": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4#1",
+      "git_sha": null,
+      "kind": "PDF Page",
+      "markdown_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "archive/captains_log_copy.pdf",
+      "text_len": 126,
+      "text_sha": "sha256:e8c6ce3b745899462b2c6ee4343cdcdfede6f7cbf02e4b44dbb57035d9707915",
+      "uuid": "ecd63b8b-3231-5224-bd85-a565eeeec01f",
+      "when_ts": "2364-04-13T08:45:00-07:00"
+    },
+    {
       "account": null,
       "author": "jlpicard",
       "channel": null,
@@ -4799,8 +5016,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 47,
+    "documents_count": 50,
     "dolt_log_count": 2,
-    "grid_rows_count": 165
+    "grid_rows_count": 172
   }
 }

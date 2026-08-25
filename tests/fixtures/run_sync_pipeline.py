@@ -61,7 +61,15 @@ Args (positional):
                       doltlite store; the source itself is render-only
                       (see the seeding block in main()).
 
-Args 21-22 are appended rather than grouped with the other binaries
+    23: pdf_tng       TNG-themed PDF corpus (Captain's logs, a warp-core
+                      manual, a scanned blueprint). File-backed; the
+                      scanner walks `input_path` directly. Unlike
+                      fsindex this source RENDERS, so its markdown
+                      reaches grid_index and the qmd index like any
+                      chat source — which is the whole point of
+                      including it here.
+
+Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
 duplicated across two `tests/fixtures/BUILD.bazel` call sites (the
 `:ingested_tng` genrule and the `:ingested_tng_test` py_test), and a
@@ -134,6 +142,7 @@ def main() -> int:
     ) = (Path(p).resolve() for p in sys.argv[7:21])
     yolink_make_fixture_bin = Path(sys.argv[21]).resolve()
     yolink_spec = Path(sys.argv[22]).resolve()
+    pdf_fx = Path(sys.argv[23]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -238,6 +247,9 @@ def main() -> int:
         # unused by yolink (it reads `raw_path`), but every entry in this
         # table declares one, so point it at the spec.
         "yolink": ("yolink", yolink_spec, yolink_spec),
+        # File-backed and rendering: PDFs under this tree become
+        # markdown + grid_rows, so the fan-in steps index them.
+        "tng_pdfs": ("pdf", pdf_fx, pdf_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -511,6 +523,12 @@ def _source_config(
         # No `sync:` — that absence is what makes this source
         # render-only. `sync: {}` would also fail validation outright:
         # yolink requires at least one entry under `sync.devices`.
+        pass
+    elif type_str == "pdf":
+        # File-backed, no `sync:` field at all (deny_unknown_fields
+        # would reject `sync: {}`). The scanner walks `input_path`, and
+        # the render step reads the root back from `pdf_scan_meta`, so
+        # it needs no params of its own.
         pass
     else:
         source["sync"] = {}

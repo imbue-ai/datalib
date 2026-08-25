@@ -23,6 +23,7 @@ members = [
     "etl/providers/fsindex",
     "etl/providers/lightroom",
     "etl/providers/notion",
+    "etl/providers/pdf",
     "etl/providers/perseus",
     "etl/providers/signal",
     "etl/providers/slack",
@@ -110,6 +111,17 @@ uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 # ripgrep and watchexec rely on; correct gitignore semantics out of
 # the box.
 ignore = "0.4"
+
+# PDF → Markdown for the `pdf` provider. MIT, pure Rust in the default
+# feature set (the `ocr` feature, which we do NOT enable, is what pulls
+# PDFium + ONNX Runtime). Benchmarks best-in-class among local non-model
+# parsers on reading order and tables.
+pdf-inspector = { version = "1.17", default-features = false }
+
+# Low-level PDF object access for the `pdf` provider's identity columns
+# (trailer `/ID`, the XMP metadata stream). pdf-inspector exposes
+# neither.
+lopdf = { version = "0.44", default-features = false }
 async-trait = "0.1"
 # Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
 # (see //tools/prost_toolchain), so we don't depend on `prost-build`

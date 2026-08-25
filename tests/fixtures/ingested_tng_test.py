@@ -76,6 +76,10 @@ EXPECTED_PROVIDERS = frozenset(
         "linkedin",
         "notion",
         "openai",
+        # The only file-backed source in this fixture that renders.
+        # fsindex and lightroom scan trees too but produce no rows;
+        # `pdf` converts what it scans, so it must show up here.
+        "pdf",
         "signal",
         "slack",
         "sms_backup_restore",
@@ -171,6 +175,26 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._query(self._index_db, "SELECT DISTINCT provider FROM grid_rows;")
         )
 
+    def _pdf_shape(self) -> dict[str, int]:
+        """The `pdf` source's contribution, by grid_rows kind.
+
+        Pinned rather than merely non-empty because this source is the
+        one whose output feeds the qmd index by *page*: silent growth
+        here shows up as a slower fixture build for everyone, and a
+        silent drop to zero would mean PDFs stopped being searchable
+        without any test going red.
+        """
+        rows = self._query(
+            self._index_db,
+            "SELECT kind, COUNT(*) FROM grid_rows WHERE provider = 'pdf' "
+            "GROUP BY kind ORDER BY kind;",
+        )
+        out: dict[str, int] = {}
+        for r in rows:
+            kind, n = r.rsplit("|", 1)
+            out[kind] = int(n)
+        return out
+
     def _signal_cursor(self) -> list[str]:
         """Signal's `ingested_backups` rows as `<snapshot_dir>|<blake3>`."""
         return self._query(
@@ -235,6 +259,27 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._providers(),
             EXPECTED_PROVIDERS,
             "grid_rows providers after a full run",
+        )
+
+        # PDFs specifically: 3 renderable documents, 4 pages between
+        # them (the scanned blueprint is recorded but not rendered, and
+        # the corrupt file is skipped). Every page row must carry a
+        # `qmd_path`, since that column is what lets a qmd hit resolve
+        # back to a grid row — a page indexed without one is findable
+        # by search but unreachable from the UI.
+        self.assertEqual(
+            self._pdf_shape(),
+            {"PDF Document": 3, "PDF Page": 4},
+            "pdf grid_rows shape",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                "SELECT COUNT(*) FROM grid_rows "
+                "WHERE provider = 'pdf' AND qmd_path IS NULL;",
+            ),
+            "0",
+            "every pdf row needs a qmd_path to be reachable from search",
         )
         # The index is committed, so its version history is non-empty.
         self.assertGreater(

@@ -1,0 +1,70 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Tiny synthetic PDF corpus. Generated rather than checked in as
+# binaries so the inputs are readable in review and reproducible: see
+# //tests/fixtures/make_pdf_fixtures.py for what each one is testing.
+filegroup(
+    name = "pdf_fixture",
+    srcs = glob(
+        ["tests/fixtures/pdf_tng/**/*.pdf"],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_pdf",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_pdf",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:hex",
+        "@datalib_crates//:lopdf",
+        "@datalib_crates//:pdf-inspector",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "pdf_unittests",
+    size = "small",
+    crate = ":datalib_etl_pdf",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# End-to-end: scan the fixture corpus, then render it, asserting on the
+# store contents and the emitted markdown rather than on log lines.
+rust_test(
+    name = "pdf_e2e",
+    size = "medium",
+    srcs = ["tests/pdf_e2e.rs"],
+    data = [":pdf_fixture"],
+    edition = "2021",
+    env = {"PDF_FIXTURE_DIR": "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng"},
+    deps = [
+        ":datalib_etl_pdf",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
