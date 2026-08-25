@@ -1,9 +1,13 @@
 # IMAP as a third mode of the `email` source
 
 **Status:** partially implemented. Written 2026-08-25.
-Steps 1–2 of §11 are done and green under `bazelisk test //...`; step 3
-is in progress — connect / auth / capability detection / folder discovery
-land, the message pass does not. See §11 for what remains.
+
+* **Gmail REST API mode: complete.** Added after this document was
+  written, and now the recommended mode for Gmail — see §14.
+* **IMAP mode: connect half done.** Auth, capability detection, and
+  folder discovery land; the message pass does not. §11 step 3.
+
+Green under `bazelisk test //...` (111/111).
 
 Adds live IMAP sync to the existing `email` source type, alongside the
 JMAP and `.mbox` modes it already has. Gmail is the first target; the
@@ -40,20 +44,13 @@ different-looking email mirrors in the grid for the same protocol
 family. The one real cost of staying under `email` is mode selection —
 see §3.
 
-### The Gmail-specific caveat, stated once
+### The Gmail-specific caveat — since resolved by building both
 
-For **Gmail alone**, the Gmail REST API is arguably the better
-transport: latchkey supports it natively (`google-gmail`), its quota is
-effectively unbounded where IMAP is capped at 2500 MB/day of downloads
-(§7), and `users.history.list` is a cleaner incremental cursor than
-CONDSTORE. `messages.get?format=RAW` returns the same RFC 5322 bytes we
-store as the `.eml`, so it would drop into this same schema as a fourth
-mode later.
-
-IMAP is still the right thing to build first: it is the *generic* one,
-and it covers every account Gmail's API does not. This spec builds
-IMAP; a `gmail_api` mode remains open as a follow-up that reuses
-everything below except §5.
+For **Gmail alone**, the Gmail REST API is the better transport. That
+was flagged here as a caveat and has since been built as a fourth mode;
+see §14 for what it turned out to be. IMAP remains the right thing to
+have, because it is the *generic* one — it covers every account Gmail's
+API does not.
 
 ## 2. Auth
 
@@ -490,3 +487,119 @@ are both correct as of this writing; only the trailing pointers are wrong.
    right.
 3. **Gmail REST API as a fourth mode** — worth scheduling now, or park
    it until IMAP's bandwidth cap actually bites?
+
+
+## 14. The Gmail REST API mode (built)
+
+Added after §1's caveat, and now the recommended mode for a Gmail
+account. Same raw schema, so §8 (render needs no changes) holds
+unchanged.
+
+### What it cost, versus what §1 guessed
+
+Less than expected, in one specific way: **it needs no credential
+machinery at all.** latchkey ships a built-in `google-gmail` service and
+routes by URL host, so `datalib_etl::http::latchkey_curl` — the same
+path every other HTTP provider uses — injects and refreshes the token.
+The whole config is an empty `[steps.params.gmail_api]` table. Compare
+IMAP, which needed `latchkey-cred-extract` before it could authenticate
+at all.
+
+The one thing that did have to be added to the shared HTTP layer is
+`HttpRequest::latchkey_account` (`latchkey --account <acct> curl …`).
+latchkey keys credentials by (service, account) and *requires* the flag
+once a service holds two — which is the normal case for Gmail, where
+work and personal live under one `google-gmail`. It is deliberately not
+part of `fixture_key`: which identity fetched a response doesn't change
+the response's shape.
+
+### Sync
+
+Better than IMAP's, on the axis that matters most:
+
+| | Gmail API | Gmail over IMAP |
+|---|---|---|
+| cursor | `historyId` | `UIDVALIDITY` + UID + `HIGHESTMODSEQ` |
+| new mail | `messagesAdded` | `UID FETCH <last+1>:*` |
+| flag/label change | `labelsAdded` / `labelsRemoved` | `(CHANGEDSINCE n)` |
+| **deletions** | **`messagesDeleted`** | **not reported** — Gmail advertises CONDSTORE but not QRESYNC, so there is no `VANISHED` and the only way to find a deletion is to re-list every UID |
+| cursor expiry | 404 → full sync | `UIDVALIDITY` change → re-enumerate |
+
+Google retains history "typically at least one week"; past that
+`history.list` returns 404, which is the documented signal to fall back
+to a full sync — structurally the same as JMAP's
+`cannotCalculateChanges`, and handled the same way.
+
+### Throughput
+
+Quota-limited, not byte-limited, which is the more forgiving shape:
+
+- 6000 quota units per user per minute; `messages.get` costs 20 ⇒ **~300
+  messages/minute**, regardless of message size.
+- IMAP's cap is 2500 MB/day. At ~75 KB/message that is ~33k messages/day
+  against the API's ~432k — roughly **13×**.
+- The daily project ceiling (80M units) is not the binding constraint:
+  the per-minute cap holds us to ~8.6M units/day. Worth knowing anyway,
+  since as of 2026-05-01 Google bills for usage past the daily threshold.
+
+`QuotaThrottle` is a leaky bucket priced in units rather than requests,
+so a mixed workload is metered accurately. **Batching was considered and
+skipped**: Gmail's batch endpoint saves round trips, not quota units, and
+quota is what binds — so it would add multipart encoding for no
+throughput.
+
+### The part that took the most care: making the modes agree
+
+Four modes writing one schema is only worth it if the same mailbox
+ingested two ways *dedupes*. Three things had to be pulled out to make
+that a property of the code rather than a coincidence:
+
+1. **`download/envelope.rs`** — envelope synthesis, previously inline in
+   `mbox.rs`. The `Message-ID`-or-content-hash id rule now has one
+   implementation.
+2. **`download/labels.rs`** — the label vocabulary. Gmail spells one
+   label three ways depending on how you ask (`Inbox` in Takeout,
+   `\Inbox` over IMAP, `INBOX` over the API); left alone that is three
+   `mailboxes` rows and three ids for one label. `canonical_name`
+   collapses them onto Takeout's spelling, chosen because it is what
+   existing raw stores already contain, so nothing on disk migrates.
+3. **Thread ids.** Gmail's API `threadId` is hex; Takeout's `X-GM-THRID`
+   header is the same 64-bit number in decimal. Normalizing to decimal
+   is what keeps one conversation from becoming two.
+
+A bug worth recording, because the fix is counterintuitive:
+`mailbox_id` must **not** canonicalize internally. Google lets a user
+create a label literally named `INBOX`, and canonicalizing behind the
+caller's back merged it with the system inbox. Only the caller knows
+whether Google marked a label `type: system`, so canonicalization is the
+caller's job. A test pins it.
+
+### Deletions
+
+`messagesDeleted` gives Gmail's own message id, but our rows are keyed
+by `Message-ID`, so the mapping is not local. Ingest stamps
+`_source: { via, gmailMessageId, gmailThreadId }` into the envelope
+payload (the same provenance pattern
+`datalib_etl_anthropic`'s `normalize_to_export_shape` uses), and the
+delete matches on it. Hard delete, matching the JMAP path — doltlite's
+history retains the prior state.
+
+### Cursor namespacing — a bug this caught
+
+`RawDb::load_state` hard-codes a `jmap:` scope prefix, so the first
+version of this mode stored its `historyId` under a `jmap:` key. Added
+`load_scope` / `save_scope` taking the full key, gave each mode its own
+namespace (`gmail:`, `imap:`), and widened `RawDb::reset` to clear all
+three — it had only ever cleared `jmap:%`, so a reset would have left a
+stale cursor pointing into a store that no longer had the rows it named.
+
+### Still open
+
+- **A playback fixture.** The provider still has no checked-in wire
+  fixtures (`DOWNLOAD.md`, "Sample data"), so the API surface is covered
+  by unit tests over canned JSON, not by a replayed conversation. That
+  gap predates this mode but this mode makes it worth closing.
+- **Threads are grouped, not fetched.** `threads.get` costs 40 units
+  against `messages.get`'s 20, and grouping by `threadId` gives the same
+  membership for free. If we ever want Gmail's own thread metadata, that
+  is where the cost lands.

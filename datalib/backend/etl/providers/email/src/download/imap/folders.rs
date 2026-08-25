@@ -29,73 +29,6 @@
 
 use async_imap::imap_proto::NameAttribute;
 
-/// How one label maps into the raw schema.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LabelMap {
-    /// A mailbox row, with an optional JMAP role.
-    Mailbox { role: Option<&'static str> },
-    /// A JMAP keyword on the email, not a mailbox.
-    Keyword(&'static str),
-    /// Explicitly *not* seen — the absence of `$seen`.
-    Unread,
-    /// Carries no information we store.
-    Drop,
-}
-
-/// Map one `X-GM-LABELS` entry.
-///
-/// Kept deliberately parallel to the mbox path's Takeout-header mapping:
-/// the two vocabularies differ (`\Inbox` vs `Inbox`, `\Starred` vs
-/// `Starred`, `\Draft` vs `Drafts`) but must agree on the outcome.
-pub fn map_gmail_label(label: &str) -> LabelMap {
-    // System labels are backslash-prefixed; user labels never are.
-    let bare = label.strip_prefix('\\').unwrap_or(label);
-    match bare.to_ascii_lowercase().as_str() {
-        "inbox" => LabelMap::Mailbox {
-            role: Some("inbox"),
-        },
-        "sent" => LabelMap::Mailbox { role: Some("sent") },
-        "draft" | "drafts" => LabelMap::Mailbox {
-            role: Some("drafts"),
-        },
-        "trash" => LabelMap::Mailbox {
-            role: Some("trash"),
-        },
-        "spam" | "junk" => LabelMap::Mailbox { role: Some("junk") },
-        "all mail" => LabelMap::Mailbox {
-            role: Some("archive"),
-        },
-        "starred" | "flagged" => LabelMap::Keyword("$flagged"),
-        "important" => LabelMap::Keyword("$important"),
-        "opened" | "read" => LabelMap::Keyword("$seen"),
-        "unread" => LabelMap::Unread,
-        // Gmail's `\Muted` has no JMAP equivalent, and `Archived` is the
-        // absence of `\Inbox` rather than a label of its own.
-        "muted" | "archived" => LabelMap::Drop,
-        _ => LabelMap::Mailbox { role: None },
-    }
-}
-
-/// Map an IMAP `\Seen`-style message flag to a JMAP keyword.
-///
-/// Returns `None` for flags with no JMAP counterpart (`\Recent`, and any
-/// server-specific keyword we don't model).
-pub fn map_flag(flag: &str) -> Option<&'static str> {
-    match flag
-        .strip_prefix('\\')
-        .unwrap_or(flag)
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "seen" => Some("$seen"),
-        "answered" => Some("$answered"),
-        "flagged" => Some("$flagged"),
-        "draft" => Some("$draft"),
-        "deleted" => Some("$deleted"),
-        _ => None,
-    }
-}
-
 /// One folder as the server described it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Folder {
@@ -182,64 +115,6 @@ pub fn all_mail<'a>(folders: &'a [Folder], configured: Option<&str>) -> Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The two Gmail vocabularies — IMAP's `X-GM-LABELS` (backslashed)
-    /// and Takeout's `X-Gmail-Labels` (UI words) — must land on the same
-    /// mapping, or one account ingested both ways grows two mailbox trees.
-    #[test]
-    fn agrees_with_the_takeout_vocabulary() {
-        for (imap, takeout) in [
-            ("\\Inbox", "Inbox"),
-            ("\\Sent", "Sent"),
-            ("\\Draft", "Drafts"),
-            ("\\Trash", "Trash"),
-            ("\\Spam", "Spam"),
-            ("\\Starred", "Starred"),
-            ("\\Important", "Important"),
-        ] {
-            assert_eq!(
-                map_gmail_label(imap),
-                map_gmail_label(takeout),
-                "{imap} and {takeout} disagree",
-            );
-        }
-    }
-
-    #[test]
-    fn maps_system_labels_to_roles_and_keywords() {
-        assert_eq!(
-            map_gmail_label("\\Inbox"),
-            LabelMap::Mailbox {
-                role: Some("inbox")
-            }
-        );
-        assert_eq!(map_gmail_label("\\Starred"), LabelMap::Keyword("$flagged"));
-        assert_eq!(map_gmail_label("\\Unread"), LabelMap::Unread);
-        assert_eq!(map_gmail_label("\\Muted"), LabelMap::Drop);
-    }
-
-    /// A user label keeps its name and gets no role — including one that
-    /// happens to collide with a system word once nesting is involved.
-    #[test]
-    fn keeps_user_labels_as_plain_mailboxes() {
-        assert_eq!(
-            map_gmail_label("Work/Projects"),
-            LabelMap::Mailbox { role: None }
-        );
-        assert_eq!(
-            map_gmail_label("Archive/Inbox"),
-            LabelMap::Mailbox { role: None }
-        );
-    }
-
-    #[test]
-    fn maps_imap_flags_to_jmap_keywords() {
-        assert_eq!(map_flag("\\Seen"), Some("$seen"));
-        assert_eq!(map_flag("\\Flagged"), Some("$flagged"));
-        // `\Recent` is a session artifact, not state worth storing.
-        assert_eq!(map_flag("\\Recent"), None);
-        assert_eq!(map_flag("$label1"), None);
-    }
 
     /// Gmail already uses `/`, so paths pass through untouched.
     #[test]

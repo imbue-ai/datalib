@@ -28,7 +28,7 @@
 # below has to precede the first `[[steps]]` entirely.
 #
 # Sources that support more than one input mode include a step pair for
-# each: `email` (JMAP server vs. live IMAP vs. Google Takeout .mbox) and `carddav`
+# each: `email` (JMAP vs. Gmail API vs. IMAP vs. Takeout .mbox) and `carddav`
 # contacts (CardDAV server vs. local .vcf files).
 #
 # There is no global `defaults` block in the steps format —
@@ -281,45 +281,47 @@ outlink_format = "fastmail"
 #   only_render_labels = ["Inbox", "Work/Projects"]
 only_render_labels = []
 
-# Mode B — live IMAP server (Gmail, iCloud, Dovecot, …). The presence of
-# an `imap` block selects it; `sync` and `imap` are mutually exclusive.
+# Mode B — Gmail REST API. The preferred mode for a Gmail account, and
+# the one that needs the least setup: latchkey has a built-in
+# `google-gmail` service and routes to it by URL host, so there is no
+# service name to configure and no credential in this file.
 #
-# The credential is NOT in this file: `latchkey_service` names a latchkey
-# service that holds it. One-time setup for Gmail (needs 2-Step
-# Verification on the account; note that a Workspace admin can disable
-# app passwords org-wide):
+#   latchkey auth browser google-gmail    # one-time; opens a browser
 #
-#   # https://myaccount.google.com/apppasswords -> create one, copy it
-#   latchkey services register gmail-imap \
-#       --base-api-url="https://imap.gmail.com/"
-#   latchkey auth set gmail-imap -u "you@gmail.com:$(pbpaste)"
-#
-# The URL is a routing key for latchkey's host-based credential lookup;
-# nothing ever makes an HTTP request to it.
+# Compared with IMAP against the same mailbox: incremental sync reports
+# deletions explicitly (Gmail's IMAP advertises CONDSTORE but not QRESYNC,
+# so deletions there need a full UID sweep), and throughput is ~13x higher
+# (IMAP is capped at 2500 MB/day; this is capped at ~300 messages/minute
+# regardless of message size).
 [[steps]]
 id = "gmail.download"
 command = "datalib-step download email"
 outputs = ["gmail/raw"]
 
 [steps.params]
-# Same exact-match label paths as the other two modes. On Gmail these
-# match X-GM-LABELS entries, which are already `Parent/Child` for nested
-# labels. Empty = everything.
+# Same exact-match label paths as every other mode. System labels are
+# normalized to Takeout's spelling ("Inbox", not "INBOX") so one Gmail
+# account ingested via Takeout and via the API shares its mailbox rows
+# instead of doubling them.
 only_extract_labels = []
 
-[steps.params.imap]
-host = "imap.gmail.com"           # bare hostname, not a URL
-latchkey_service = "gmail-imap"   # the credential lives in latchkey
-# port = 993                      # implicit TLS; there is no STARTTLS path
-# email_address = "you@gmail.com" # required only for OAuth (XOAUTH2) creds
-# all_mail_folder = "[Gmail]/All Mail"  # normally discovered via `\All`
-# folders = []                    # servers with no all-mail folder: which to mirror
+[steps.params.gmail_api]
+# Everything here is optional; an empty `[steps.params.gmail_api]` table
+# is a complete, working configuration.
+#
+# account = "you@gmail.com"     # required only if `google-gmail` holds
+#                               # more than one credential (work +
+#                               # personal); latchkey demands it then.
 # full_resync = false
-# connection_concurrency = 4      # Gmail allows 15 simultaneous connections
-# Gmail caps IMAP at 2500 MB of downloads per day and throttles past it,
-# so a big mailbox backfills over several runs. When this budget is spent
-# the run commits its cursor and exits SUCCESSFULLY with a partial result.
-# daily_download_budget_bytes = 2_000_000_000
+# request_concurrency = 8
+# Google's per-user ceiling is 6000 quota units/minute and messages.get
+# costs 20, so ~300 messages/minute. The default stays under 6000 to
+# leave headroom for retries.
+# quota_units_per_minute = 5000
+# Stop after this many messages, commit the cursor, exit SUCCESSFULLY
+# with a partial result. A 100k-message mailbox is ~6 hours of backfill,
+# so a first pass is naturally spread over several runs.
+# message_budget = 20000
 
 [[steps]]
 id = "gmail.render"
@@ -330,7 +332,60 @@ outputs = ["gmail/rendered_md"]
 outlink_format = "gmail"
 only_render_labels = []
 
-# Mode C — Google Takeout .mbox on disk. No `sync` and no `imap` block →
+# Mode C — live IMAP server: the generic one. Use it for any account
+# Mode B can't reach — iCloud, Fastmail-over-IMAP, Dovecot, Proton
+# Bridge, corporate Exchange. It works against Gmail too, but Mode B is
+# better there (deletions, and 13x the throughput).
+#
+# The credential is NOT in this file: `latchkey_service` names a latchkey
+# service that holds it. One-time setup, using an app password from the
+# provider (for iCloud: appleid.apple.com -> Sign-In and Security ->
+# App-Specific Passwords):
+#
+#   latchkey services register icloud-mail \
+#       --base-api-url="https://imap.mail.me.com/"
+#   latchkey auth set icloud-mail -u "you@icloud.com:$(pbpaste)"
+#
+# The URL is only a routing key for latchkey's host-based credential
+# lookup; nothing ever makes an HTTP request to it. For Gmail here you
+# would register imap.gmail.com the same way, with an app password from
+# https://myaccount.google.com/apppasswords (needs 2-Step Verification,
+# and a Workspace admin can disable app passwords org-wide).
+[[steps]]
+id = "icloud-mail.download"
+command = "datalib-step download email"
+outputs = ["icloud-mail/raw"]
+
+[steps.params]
+# Same exact-match label paths as every other mode: folder paths with
+# the server's hierarchy delimiter rewritten to `/`. Empty = everything.
+only_extract_labels = []
+
+[steps.params.imap]
+host = "imap.mail.me.com"          # bare hostname, not a URL
+latchkey_service = "icloud-mail"   # the credential lives in latchkey
+# port = 993                      # implicit TLS; there is no STARTTLS path
+# email_address = "you@icloud.com" # required only for OAuth (XOAUTH2) creds
+# all_mail_folder = "Archive"     # normally discovered via the `\All` flag
+# folders = []                    # servers with no all-mail folder: which to mirror
+# full_resync = false
+# connection_concurrency = 4      # servers cap concurrent connections
+# Servers meter IMAP by bytes downloaded (Gmail: 2500 MB/day, then it
+# throttles rather than failing cleanly), so a big mailbox backfills over
+# several runs. When this budget is spent the run commits its cursor and
+# exits SUCCESSFULLY with a partial result.
+# daily_download_budget_bytes = 2_000_000_000
+
+[[steps]]
+id = "icloud-mail.render"
+command = "datalib-step render email"
+inputs = ["icloud-mail/raw"]
+outputs = ["icloud-mail/rendered_md"]
+[steps.params]
+# No outlink_format: only gmail and fastmail have one.
+only_render_labels = []
+
+# Mode D — Google Takeout .mbox on disk. No live block at all →
 # file-backed mbox mode, reading the file at `common.input_path`. The
 # `mbox` block just labels the synthesized account row.
 [[steps]]

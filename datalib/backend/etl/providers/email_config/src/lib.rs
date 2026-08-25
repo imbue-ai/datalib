@@ -22,16 +22,18 @@ use serde::{Deserialize, Serialize};
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
 ///
-/// Three download modes, at most one of which may be selected:
+/// Four download modes, at most one of which may be selected:
 ///
 /// * `sync:` → JMAP server (Fastmail / any RFC 8620+8621 server);
 /// * `imap:` → live IMAP server (Gmail, iCloud, Dovecot, …);
-/// * neither, plus an `.mbox` at `common.input_path` → file-backed mbox
-///   mode (e.g. a Google Takeout export).
+/// * `gmail_api:` → Gmail REST API (the preferred path for Gmail);
+/// * none of those, plus an `.mbox` at `common.input_path` → file-backed
+///   mbox mode (e.g. a Google Takeout export).
 ///
-/// Setting both `sync:` and `imap:` is a config error — see
-/// [`EmailConfig::live_mode`]. All three paths live in `datalib_etl_email`
-/// and write the same raw schema, so render is mode-agnostic.
+/// Setting more than one live block is a config error — see
+/// [`EmailConfig::live_mode`]. All four paths live in `datalib_etl_email`
+/// and write the same raw schema, so render is mode-agnostic and the same
+/// mailbox ingested two ways dedupes rather than doubling.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
@@ -44,6 +46,10 @@ pub struct EmailConfig {
     /// Mutually exclusive with [`sync`](Self::sync).
     #[serde(default)]
     pub imap: Option<EmailImap>,
+    /// Gmail REST API knobs. `Some` selects the Gmail API download path.
+    /// Mutually exclusive with the other two.
+    #[serde(default)]
+    pub gmail_api: Option<EmailGmailApi>,
     /// Account-row config for the mbox path (display name, address,
     /// is_personal). Ignored when `sync:` is present (JMAP carries that
     /// info itself).
@@ -100,6 +106,7 @@ pub struct EmailRenderConfig {
 pub enum EmailLiveMode<'a> {
     Jmap(&'a EmailSync),
     Imap(&'a EmailImap),
+    GmailApi(&'a EmailGmailApi),
 }
 
 impl EmailConfig {
@@ -111,14 +118,28 @@ impl EmailConfig {
     /// explicit, and silently preferring one over the other would mirror
     /// a mailbox the user didn't ask for.
     pub fn live_mode(&self) -> anyhow::Result<Option<EmailLiveMode<'_>>> {
-        match (&self.sync, &self.imap) {
-            (Some(_), Some(_)) => anyhow::bail!(
-                "email source sets both `sync` (JMAP) and `imap` — pick one. \
-                 To mirror the same account over both, declare two sources."
+        let mut selected: Vec<(&str, EmailLiveMode<'_>)> = Vec::new();
+        if let Some(s) = &self.sync {
+            selected.push(("sync (JMAP)", EmailLiveMode::Jmap(s)));
+        }
+        if let Some(i) = &self.imap {
+            selected.push(("imap", EmailLiveMode::Imap(i)));
+        }
+        if let Some(g) = &self.gmail_api {
+            selected.push(("gmail_api", EmailLiveMode::GmailApi(g)));
+        }
+        match selected.len() {
+            0 => Ok(None),
+            1 => Ok(Some(selected.pop().expect("len checked").1)),
+            _ => anyhow::bail!(
+                "email source sets more than one download mode ({}) — pick one. \
+                 To mirror the same account two ways, declare two sources.",
+                selected
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ),
-            (Some(s), None) => Ok(Some(EmailLiveMode::Jmap(s))),
-            (None, Some(i)) => Ok(Some(EmailLiveMode::Imap(i))),
-            (None, None) => Ok(None),
         }
     }
 
@@ -128,10 +149,11 @@ impl EmailConfig {
     /// at most one download mode is selected and that each one's own
     /// fields hang together.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if let Some(EmailLiveMode::Imap(imap)) = self.live_mode()? {
-            imap.validate()?;
+        match self.live_mode()? {
+            Some(EmailLiveMode::Imap(imap)) => imap.validate(),
+            Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
+            _ => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -298,6 +320,123 @@ impl EmailImap {
     }
 }
 
+/// Gmail REST API tunables. Mirrors the `gmail_api:` sub-stanza.
+///
+/// The preferred mode for a Gmail account. Compared with IMAP against the
+/// same mailbox:
+///
+/// * **Credentials need no configuration at all.** latchkey ships a
+///   built-in `google-gmail` service and routes to it by URL host, so
+///   there is no service name to name and no credential extraction — the
+///   ordinary `latchkey curl` path every other HTTP provider in this tree
+///   uses just works. Set it up once with
+///   `latchkey auth browser google-gmail`.
+/// * **Incremental sync is better.** `users.history.list` reports
+///   `messagesAdded` / `messagesDeleted` / `labelsAdded` / `labelsRemoved`
+///   explicitly. IMAP's CONDSTORE reports changed flags but Gmail does not
+///   advertise QRESYNC, so deletions there need a full UID sweep to find.
+/// * **Throughput is ~13× higher.** IMAP is capped at 2500 MB/day of
+///   downloads; the API is capped on quota units per minute, which works
+///   out to roughly 300 messages/minute regardless of their size.
+///
+/// What IMAP still buys is every non-Gmail account, which is why both
+/// modes exist.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmailGmailApi {
+    /// Which stored latchkey account to use, when `google-gmail` holds
+    /// more than one (work + personal is the normal case). latchkey
+    /// *requires* this once a service has two credentials. Omit when
+    /// there is only one.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// Gmail `userId` path segment. `me` (the default) is the
+    /// authenticated user and is almost always right; a literal address
+    /// only differs under domain-wide delegation.
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Stable id for the synthesized `accounts` row. Defaults to the
+    /// address reported by `users.getProfile`.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Display name for the `accounts` row. Defaults to `account_id`.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Canonical address for the `accounts` row. Defaults to the address
+    /// reported by `users.getProfile`.
+    #[serde(default)]
+    pub email_address: Option<String>,
+    /// Discard the stored `historyId` cursor and re-enumerate every
+    /// message. Applies to this run only.
+    #[serde(default)]
+    pub full_resync: bool,
+    /// How many `messages.get` requests to keep in flight. `None` uses
+    /// the built-in default. Raising it does not raise throughput past
+    /// the quota ceiling below — it only helps hide per-request latency.
+    #[serde(default)]
+    pub request_concurrency: Option<usize>,
+    /// Client-side ceiling on Gmail API quota units spent per minute.
+    ///
+    /// Google's per-user limit is 6000 units/minute and `messages.get`
+    /// costs 20, so the ceiling is ~300 messages/minute. The default sits
+    /// below 6000 to leave headroom for retries; raising it past 6000
+    /// just moves the failure from our throttle to Google's 429.
+    #[serde(default)]
+    pub quota_units_per_minute: Option<u32>,
+    /// Stop after fetching this many message bodies in one run, commit
+    /// the cursor, and exit **successfully** with a partial result.
+    ///
+    /// A large mailbox is a multi-run backfill: at ~300 messages/minute a
+    /// 100k-message account takes about six hours. The honest way to model
+    /// that is a run that stops and says how far it got, not one that
+    /// fails and poisons the DAG subtree. `None` = no limit.
+    #[serde(default)]
+    pub message_budget: Option<usize>,
+}
+
+/// Gmail's per-user quota is 6000 units/minute. Default below it so
+/// retries and a little clock skew don't push us into 429s.
+pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
+/// Quota cost of one `users.messages.get`, per Google's quota table.
+/// The dominant cost of any backfill.
+pub const GMAIL_UNITS_MESSAGES_GET: u32 = 20;
+/// Enough in flight to hide per-request latency; the quota throttle, not
+/// this, is what actually bounds throughput.
+pub const DEFAULT_GMAIL_CONCURRENCY: usize = 8;
+
+impl EmailGmailApi {
+    pub fn user_id(&self) -> &str {
+        self.user_id.as_deref().unwrap_or("me")
+    }
+
+    pub fn quota_units_per_minute(&self) -> u32 {
+        self.quota_units_per_minute
+            .unwrap_or(DEFAULT_QUOTA_UNITS_PER_MINUTE)
+    }
+
+    pub fn request_concurrency(&self) -> usize {
+        self.request_concurrency
+            .unwrap_or(DEFAULT_GMAIL_CONCURRENCY)
+            .max(1)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.quota_units_per_minute.is_some_and(|q| q == 0) {
+            anyhow::bail!(
+                "email `gmail_api.quota_units_per_minute` must be > 0 (omit it for the default \
+                 of {DEFAULT_QUOTA_UNITS_PER_MINUTE})"
+            );
+        }
+        if self.account.as_ref().is_some_and(|a| a.trim().is_empty()) {
+            anyhow::bail!(
+                "email `gmail_api.account` names a stored latchkey account; omit it entirely \
+                 if `google-gmail` holds only one"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,17 +449,112 @@ mod tests {
         }
     }
 
-    /// The whole reason mode selection became explicit: with three modes,
-    /// inferring from `sync:` alone would silently pick one.
+    /// The whole reason mode selection became explicit: with more than
+    /// one mode, inferring from `sync:` alone would silently pick one.
     #[test]
-    fn rejects_both_live_modes_at_once() {
+    fn rejects_more_than_one_live_mode() {
+        let pairs: [(&str, EmailConfig); 3] = [
+            (
+                "sync+imap",
+                EmailConfig {
+                    sync: Some(EmailSync::default()),
+                    imap: Some(imap("imap.gmail.com")),
+                    ..Default::default()
+                },
+            ),
+            (
+                "imap+gmail_api",
+                EmailConfig {
+                    imap: Some(imap("imap.gmail.com")),
+                    gmail_api: Some(EmailGmailApi::default()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "sync+gmail_api",
+                EmailConfig {
+                    sync: Some(EmailSync::default()),
+                    gmail_api: Some(EmailGmailApi::default()),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (label, cfg) in pairs {
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(
+                err.contains("more than one"),
+                "{label}: unhelpful message: {err}"
+            );
+        }
+    }
+
+    /// The message has to name *which* modes collided, or the user has to
+    /// go re-read their own config to find out.
+    #[test]
+    fn names_the_colliding_modes() {
         let cfg = EmailConfig {
             sync: Some(EmailSync::default()),
-            imap: Some(imap("imap.gmail.com")),
+            gmail_api: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
-        assert!(err.contains("both"), "unhelpful message: {err}");
+        assert!(err.contains("sync (JMAP)"), "{err}");
+        assert!(err.contains("gmail_api"), "{err}");
+    }
+
+    #[test]
+    fn gmail_api_defaults_match_googles_documented_limits() {
+        let g = EmailGmailApi::default();
+        // `me` is the authenticated user; a literal address only differs
+        // under domain-wide delegation.
+        assert_eq!(g.user_id(), "me");
+        // Google's per-user ceiling is 6000 units/min; stay under it.
+        assert!(g.quota_units_per_minute() < 6_000);
+        assert!(g.request_concurrency() >= 1);
+    }
+
+    /// A zero ceiling would wedge the run forever rather than failing.
+    #[test]
+    fn rejects_a_zero_quota_ceiling() {
+        let g = EmailGmailApi {
+            quota_units_per_minute: Some(0),
+            ..Default::default()
+        };
+        assert!(g.validate().unwrap_err().to_string().contains("> 0"));
+    }
+
+    /// Concurrency is clamped, not trusted: 0 would deadlock the fan-out.
+    #[test]
+    fn clamps_zero_concurrency_up_to_one() {
+        let g = EmailGmailApi {
+            request_concurrency: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(g.request_concurrency(), 1);
+    }
+
+    #[test]
+    fn parses_a_gmail_api_step_params_payload() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail_api": { "account": "thad@imbue.com", "message_budget": 5000 },
+        }))
+        .unwrap();
+        cfg.validate().unwrap();
+        let Some(EmailLiveMode::GmailApi(g)) = cfg.live_mode().unwrap() else {
+            panic!("expected gmail_api mode");
+        };
+        assert_eq!(g.account.as_deref(), Some("thad@imbue.com"));
+        assert_eq!(g.message_budget, Some(5000));
+    }
+
+    #[test]
+    fn rejects_unknown_gmail_api_keys() {
+        let err = serde_json::from_value::<EmailGmailApi>(serde_json::json!({
+            "full_resynk": true,
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("full_resynk"), "{err}");
     }
 
     #[test]

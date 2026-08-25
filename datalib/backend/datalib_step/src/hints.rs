@@ -198,7 +198,26 @@ Email source: JMAP (Fastmail / generic) auth missing or expired.
        {LK} curl -sSL https://api.fastmail.com/.well-known/jmap \\
            | jq .primaryAccounts
 
-For a live IMAP account (Gmail, iCloud, Dovecot) the source uses an
+For a **Gmail** account, prefer the REST API mode — it needs no service
+registration at all, because latchkey has a built-in `google-gmail`
+service and routes to it by URL host:
+
+  1. {LK} auth browser google-gmail
+     (If it reports no OAuth client, run
+      `{LK} auth browser-prepare google-gmail` first and wait a few
+      minutes for Google to finish creating it.)
+  2. Smoke-test:
+       {LK} curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile
+  3. Point the source at it — an empty table is a complete config:
+       [steps.params.gmail_api]
+     Add `account = \"you@gmail.com\"` only if `google-gmail` holds more
+     than one credential; latchkey requires the flag once it does.
+
+  ACCESS_TOKEN_SCOPE_INSUFFICIENT means some scopes were not approved at
+  consent time — run `{LK} auth browser google-gmail` again and approve
+  all of them.
+
+For a live IMAP account (iCloud, Dovecot, Proton Bridge) the source uses an
 `imap` block instead, and the credential is looked up by service name:
 
   1. Create an app password (Gmail: https://myaccount.google.com/apppasswords —
