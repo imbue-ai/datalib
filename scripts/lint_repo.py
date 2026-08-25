@@ -43,6 +43,7 @@ gets surfaced in the failure message if the entry is ever removed.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -265,8 +266,23 @@ def _pyright_include(root: Path) -> list[str]:
         return tomllib.load(fh).get("tool", {}).get("pyright", {}).get("include", [])
 
 
+def _repo_root() -> Path:
+    """The source tree to lint.
+
+    Under `bazel run` this script executes out of a runfiles tree, so
+    `__file__` points at a symlink farm rather than the checkout and
+    `git ls-files` would find nothing. Bazel sets
+    `BUILD_WORKSPACE_DIRECTORY` to the real workspace for exactly this
+    case; prefer it, and fall back to the `__file__` walk so a direct
+    `python3 scripts/lint_repo.py` still works.
+    """
+    if ws := os.environ.get("BUILD_WORKSPACE_DIRECTORY"):
+        return Path(ws)
+    return Path(__file__).resolve().parent.parent
+
+
 def main() -> int:
-    root = Path(__file__).resolve().parent.parent
+    root = _repo_root()
     rc = _check_no_sandbox(root)
     rc |= _check_python_coverage(root)
     return rc

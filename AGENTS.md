@@ -399,24 +399,25 @@ green based on one of those. If you report "build green" without having run
 **But `bazelisk test //...` is not the whole CI gate.** The `bazel test`
 job runs a **repo hygiene lint step first** and skips the tests entirely
 if it fails — so a tree can be green by the paragraph above and still get
-a red cross, with the test results never printed. That step is
-deliberately not a Bazel target: `scripts/lint_repo.py` has to enumerate
-every tracked file via `git ls-files`, which is exactly what a sandbox
-exists to prevent. Its two checks are that every `no-sandbox` tag is
+a red cross, with the test results never printed. It cannot be a Bazel
+*test*: `scripts/lint_repo.py` has to enumerate every tracked file via
+`git ls-files`, which is exactly what a sandbox exists to prevent. Its two checks are that every `no-sandbox` tag is
 allowlisted, and that every first-party `*.py` sits under a Python lint
 root so ruff and pyright actually see it.
 
-The intended local wrapper is `bazelisk run //:precommit` (hygiene lints
-+ clippy). **On macOS it currently fails** — `scripts/run_checks.sh`
-invokes a bare `python3`, and `lint_repo.py` needs `tomllib`, so the
-system 3.9 dies with `ModuleNotFoundError` in a way that reads like a
-broken script rather than a stale interpreter. CI is unaffected (its
-container ships a newer Python). Until that is fixed, the complete local
-gate is:
+So the complete local gate is the hygiene lint **and** the test suite:
 
 ```bash
-uv run python scripts/lint_repo.py && bazelisk test //...
+bazelisk run //:lint_repo && bazelisk test //...
 ```
+
+`bazelisk run //:precommit` runs the same lint plus clippy, and is the
+friendlier wrapper if you want everything. Both go through
+[`//:lint_repo`](BUILD.bazel), a `py_binary` — deliberately, so the
+script runs on Bazel's pinned Python rather than the host's. It needs
+`tomllib` (Python ≥3.11) and macOS still ships 3.9 as `python3`, which
+used to make `//:precommit` die with a bare `ModuleNotFoundError` on
+every Mac.
 
 **Bazel is the only supported build/test driver — don't shell out to
 `cargo test` / `cargo build` / `pnpm test` for the inner loop.** They
