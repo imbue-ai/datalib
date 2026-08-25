@@ -34,11 +34,12 @@
 pub mod api;
 pub mod ingest;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
+use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
@@ -49,7 +50,7 @@ use tracing::{info, warn};
 use datalib_etl_email_config::EmailGmailApi;
 
 use super::db::RawDb;
-use super::schema_raw::{EmlBlobRow, ThreadRow};
+use super::schema_raw::{EmlBlobRow, GmailMessageRow, ThreadRow};
 use api::QuotaThrottle;
 use ingest::LabelIndex;
 
@@ -97,6 +98,9 @@ pub struct FetchSummary {
     pub blobs_skipped: usize,
     pub blobs_oversize: usize,
     pub messages_filtered: usize,
+    /// Ids `history.list` or `messages.list` named that we already had —
+    /// skipped before spending any quota on them.
+    pub messages_already_had: usize,
     /// Gmail quota units spent, against the per-minute ceiling.
     pub quota_units_spent: u64,
     /// True when the run stopped at `message_budget` with more to fetch.
@@ -171,6 +175,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     super::upsert_mailboxes(&db, &now, &account_id, &mailbox_payloads).await?;
     summary.mailboxes_upserted = mailbox_payloads.len();
 
+    // Turn `only_extract_labels` into Gmail label ids so the enumeration
+    // is narrowed server-side. Doing it client-side would mean paying
+    // `messages.get`'s 20 quota units for every message in the account
+    // to keep a handful — see `api::list_messages`.
+    let filter_label_ids = index.ids_for_names(&opts.only_labels)?;
+    if !opts.only_labels.is_empty() {
+        info!(
+            event = "gmail_label_filter",
+            labels = ?opts.only_labels,
+            ids = ?filter_label_ids,
+            "restricting enumeration server-side",
+        );
+    }
+
     // ── decide full vs partial ──────────────────────────────────────
     let stored = if cfg.full_resync {
         None
@@ -197,6 +215,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     // ── fetch ───────────────────────────────────────────────────────
+    // Loaded once per run, not once per page: both are whole-table reads
+    // and `fetch_ids` is called per `messages.list` page.
+    let known_blobs = db.loaded_blob_ids().await?;
+    let known_gmail_ids = load_known_gmail_ids(&db).await?;
+
     let mut state = RunState {
         db: &db,
         index: &index,
@@ -208,20 +231,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         blob_size_limit_bytes: opts.blob_size_limit_bytes,
         budget: opts.config.message_budget,
         fetched: 0,
-        threads: BTreeMap::new(),
+        known_blobs,
+        known_gmail_ids,
+        threads: BTreeSet::new(),
         pending: Pending::default(),
+    };
+
+    // The cursor to store *if* the run gets through its work. Sampled
+    // before enumeration on a full sync, so anything that changed while
+    // it ran is replayed next run rather than missed.
+    let next_cursor: Option<String> = match &plan {
+        Plan::Full => profile.history_id.clone(),
+        Plan::Partial(changes) => changes.history_id.clone(),
     };
 
     match plan {
         Plan::Full => {
             summary.full_sync = true;
-            full_sync(&mut state, &mut throttle, &opts, &mut summary).await?;
-            // A full sync's cursor is the mailbox historyId sampled
-            // *before* the enumeration, so anything that changed while it
-            // ran is replayed next run rather than missed.
-            if let Some(h) = &profile.history_id {
-                db.save_scope(&state_scope(&account_id), h).await?;
-            }
+            full_sync(
+                &mut state,
+                &mut throttle,
+                &opts,
+                &filter_label_ids,
+                &mut summary,
+            )
+            .await?;
         }
         Plan::Partial(changes) => {
             summary.emails_destroyed = destroy(&db, &changes.deleted).await?;
@@ -239,14 +273,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 "history since stored cursor",
             );
             fetch_ids(&mut state, &mut throttle, &ids, &opts, &mut summary).await?;
-            if let Some(h) = &changes.history_id {
-                db.save_scope(&state_scope(&account_id), h).await?;
-            }
         }
     }
 
     flush(&mut state, &mut summary).await?;
     flush_threads(&mut state, &mut summary).await?;
+
+    // Only advance the cursor when the run drained its work. A run that
+    // stopped at `message_budget` has messages it never fetched; storing
+    // the cursor would tell the next run "you are caught up", and the
+    // remainder of the mailbox would never be downloaded. Leaving the
+    // cursor put means the next run re-enumerates — cheap, because
+    // `messages.list` is 5 units a page and every id already fetched is
+    // skipped before spending `messages.get`'s 20.
+    if summary.budget_exhausted {
+        info!(
+            event = "gmail_cursor_held",
+            fetched = summary.emails_upserted,
+            "budget exhausted; leaving the cursor so the next run resumes",
+        );
+    } else if let Some(h) = &next_cursor {
+        db.save_scope(&state_scope(&account_id), h).await?;
+    }
+
     summary.quota_units_spent = throttle.spent_total();
     Ok(summary)
 }
@@ -314,17 +363,31 @@ struct RunState<'a> {
     user_id: &'a str,
     account: Option<&'a str>,
     now: &'a str,
+    /// Belt-and-braces client-side label check. The enumeration is
+    /// already narrowed server-side; this catches the case where a
+    /// configured label name matched no Gmail label at all, so the
+    /// server-side filter was empty and would otherwise mean "everything".
     only_labels: BTreeSet<String>,
     blob_size_limit_bytes: Option<u64>,
     budget: Option<usize>,
     fetched: usize,
-    threads: BTreeMap<String, Vec<(String, String)>>,
+    /// CAS keys already on disk, loaded once per run.
+    known_blobs: std::collections::HashMap<String, String>,
+    /// Gmail ids already mirrored, loaded once per run. Skipping these
+    /// before spending `messages.get` is what makes a budget-limited
+    /// backfill make progress across runs instead of re-fetching the
+    /// same prefix forever.
+    known_gmail_ids: BTreeSet<String>,
+    /// Thread ids touched this run; membership is rebuilt from the
+    /// `emails` table at the end, not from what this run happened to see.
+    threads: BTreeSet<String>,
     pending: Pending,
 }
 
 #[derive(Default)]
 struct Pending {
     emails: Vec<super::schema_raw::EmailRow>,
+    gmail_ids: Vec<GmailMessageRow>,
     cas: CasEdgeAccumulator,
     seen_blob_ids: BTreeSet<String>,
 }
@@ -333,6 +396,7 @@ async fn full_sync(
     state: &mut RunState<'_>,
     throttle: &mut QuotaThrottle,
     opts: &FetchOptions,
+    label_ids: &[String],
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let mut token: Option<String> = None;
@@ -343,6 +407,7 @@ async fn full_sync(
             state.account,
             token.as_deref(),
             LIST_PAGE_SIZE,
+            label_ids,
         )
         .await?;
         fetch_ids(state, throttle, &page.ids, opts, summary).await?;
@@ -363,8 +428,14 @@ async fn fetch_ids(
     opts: &FetchOptions,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let known = state.db.loaded_blob_ids().await?;
     for id in ids {
+        // Already mirrored: skip before spending 20 quota units on it.
+        // This is what lets successive budget-limited runs walk forward
+        // through a large mailbox instead of re-fetching the same prefix.
+        if state.known_gmail_ids.contains(id) {
+            summary.messages_already_had += 1;
+            continue;
+        }
         if state.budget.is_some_and(|b| state.fetched >= b) {
             summary.budget_exhausted = true;
             info!(
@@ -412,7 +483,7 @@ async fn fetch_ids(
             .is_some_and(|cap| ingested.raw.len() as u64 > cap);
         if oversize {
             summary.blobs_oversize += 1;
-        } else if known.contains_key(&ingested.blob_id)
+        } else if state.known_blobs.contains_key(&ingested.blob_id)
             || state.pending.seen_blob_ids.contains(&ingested.blob_id)
         {
             summary.blobs_skipped += 1;
@@ -428,11 +499,13 @@ async fn fetch_ids(
             summary.blobs_stored += 1;
         }
 
-        state
-            .threads
-            .entry(ingested.thread_id.clone())
-            .or_default()
-            .push((ingested.email_id.clone(), ingested.received_at.clone()));
+        state.threads.insert(ingested.thread_id.clone());
+        state.known_gmail_ids.insert(msg.id.clone());
+        state.pending.gmail_ids.push(GmailMessageRow {
+            gmail_id: msg.id.clone(),
+            email_id: ingested.email_id.clone(),
+            thread_id: ingested.thread_id.clone(),
+        });
         state.pending.emails.push(ingested.row);
 
         if state.pending.emails.len() >= FLUSH_BATCH {
@@ -452,6 +525,20 @@ async fn flush(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<(
     let rows = std::mem::take(&mut state.pending.emails);
     summary.emails_upserted += rows.len();
     super::upsert_emails(state.db, state.now, &rows).await?;
+
+    // The Gmail-id → row mapping, in the same run so a crash between the
+    // two can only ever lose the mapping (recovered by re-fetching), not
+    // strand a row that nothing can find.
+    let ids = std::mem::take(&mut state.pending.gmail_ids);
+    if !ids.is_empty() {
+        let mut tx = state.db.pool().begin().await.context("begin gmail id tx")?;
+        // `_entity_in_tx`, not `bulk_upsert_in_tx`: this table has no
+        // bookkeeping sidecar. It is derived bookkeeping itself, with no
+        // upstream payload to retry or diff — and pairing it with a
+        // sidecar would double its row count for nothing.
+        bulk_upsert_entity_in_tx(&mut tx, &ids).await?;
+        tx.commit().await.context("commit gmail id tx")?;
+    }
     let cas = std::mem::take(&mut state.pending.cas);
     // CAS bytes + `email_blobs` edges + edge bookkeeping, through the
     // same shared primitive every other provider's blob pass uses.
@@ -469,16 +556,41 @@ async fn flush(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<(
     Ok(())
 }
 
-/// One `threads` row per conversation, ordered by receipt time so render
-/// gets a stable root message.
+/// One `threads` row per conversation touched this run, with membership
+/// read back out of the `emails` table.
+///
+/// Reading it back is the point. An incremental run only fetches the
+/// messages that changed, so building the row from *this run's* messages
+/// would rewrite a ten-message thread to contain the one message that
+/// got relabeled — silently discarding the other nine from the thread
+/// the UI groups by. The emails table already holds the full membership
+/// (and `thread_id` is a promoted column), so ask it.
 async fn flush_threads(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<()> {
     let threads = std::mem::take(&mut state.threads);
     if threads.is_empty() {
         return Ok(());
     }
     let mut rows = Vec::with_capacity(threads.len());
-    for (thread_id, mut members) in threads {
-        members.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    for thread_id in threads {
+        let members: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT id, received_at FROM emails WHERE thread_id = ? AND account_id = ?",
+        )
+        .bind(&thread_id)
+        .bind(state.account_id)
+        .fetch_all(state.db.pool())
+        .await
+        .with_context(|| format!("reading membership of thread {thread_id}"))?;
+        if members.is_empty() {
+            continue;
+        }
+        let mut members = members;
+        // Stable order for render: by receipt time, then id to break ties.
+        members.sort_by(|a, b| {
+            a.1.as_deref()
+                .unwrap_or("")
+                .cmp(b.1.as_deref().unwrap_or(""))
+                .then_with(|| a.0.cmp(&b.0))
+        });
         let email_ids: Vec<Value> = members
             .into_iter()
             .map(|(id, _)| Value::String(id))
@@ -497,27 +609,52 @@ async fn flush_threads(state: &mut RunState<'_>, summary: &mut FetchSummary) -> 
 ///
 /// Matches the JMAP path's handling of `Email/changes` destroyed ids:
 /// doltlite's history retains the prior state, so the row is recoverable
-/// from a previous commit and does not need a tombstone.
+/// from a previous commit and needs no tombstone.
 ///
-/// Gmail's ids are per-transport, and our row ids are `Message-ID`-based,
-/// so the mapping is not local — the deletion is applied by matching the
-/// stored `_source.gmailMessageId` provenance stamped at ingest.
+/// Gmail's ids are per-transport and our rows are keyed by `Message-ID`,
+/// so the mapping is not local — it comes from `gmail_messages`. An
+/// earlier version scanned `payload LIKE '%"gmailMessageId":"<id>"%'`
+/// instead, which was O(rows) per deletion *and* silently dependent on
+/// serde's exact key spacing: one formatting change upstream and every
+/// delete becomes a no-op that nothing would notice.
 async fn destroy(db: &RawDb, gmail_ids: &[String]) -> Result<usize> {
     if gmail_ids.is_empty() {
         return Ok(0);
     }
     let mut destroyed = 0;
     for id in gmail_ids {
-        let pattern = format!("%\"gmailMessageId\":\"{id}\"%");
-        let affected = sqlx::query("DELETE FROM emails WHERE payload LIKE ?")
-            .bind(&pattern)
+        let email_id: Option<String> =
+            sqlx::query_scalar("SELECT email_id FROM gmail_messages WHERE gmail_id = ?")
+                .bind(id)
+                .fetch_optional(db.pool())
+                .await
+                .with_context(|| format!("looking up Gmail message {id}"))?;
+        // Not ours to delete: Gmail reported a message we never mirrored
+        // (filtered out by label, or deleted before we ever saw it).
+        let Some(email_id) = email_id else { continue };
+        let affected = sqlx::query("DELETE FROM emails WHERE id = ?")
+            .bind(&email_id)
             .execute(db.pool())
             .await
-            .with_context(|| format!("deleting Gmail message {id}"))?
+            .with_context(|| format!("deleting email {email_id}"))?
             .rows_affected();
+        sqlx::query("DELETE FROM gmail_messages WHERE gmail_id = ?")
+            .bind(id)
+            .execute(db.pool())
+            .await
+            .with_context(|| format!("clearing the mapping for {id}"))?;
         destroyed += affected as usize;
     }
     Ok(destroyed)
+}
+
+/// Every Gmail id already mirrored into this store.
+async fn load_known_gmail_ids(db: &RawDb) -> Result<BTreeSet<String>> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT gmail_id FROM gmail_messages")
+        .fetch_all(db.pool())
+        .await
+        .context("loading known Gmail message ids")?;
+    Ok(ids.into_iter().collect())
 }
 
 #[cfg(test)]

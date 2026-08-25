@@ -119,6 +119,54 @@ impl LabelIndex {
         (mailbox_ids, keywords.into_iter().collect())
     }
 
+    /// Resolve configured label *names* to Gmail label *ids*, for the
+    /// server-side `messages.list?labelIds=` filter.
+    ///
+    /// Errors on a name that matches nothing rather than silently
+    /// returning an empty filter: an empty filter means "every message in
+    /// the account", so a typo'd label would quietly turn a small
+    /// targeted mirror into a full one.
+    pub fn ids_for_names(&self, names: &[String]) -> anyhow::Result<Vec<String>> {
+        let mut out = Vec::with_capacity(names.len());
+        for name in names {
+            let found = self.by_id.values().find(|l| {
+                let canonical = if l.is_system {
+                    labels::canonical_name(&l.name)
+                } else {
+                    l.name.clone()
+                };
+                canonical == *name || l.name == *name
+            });
+            match found {
+                Some(label) => out.push(label.id.clone()),
+                None => anyhow::bail!(
+                    "email `only_extract_labels` names {name:?}, which is not a label on this \
+                     Gmail account. Known labels: {}",
+                    self.known_names().join(", ")
+                ),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Label names as a user would write them in `only_extract_labels`.
+    fn known_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .by_id
+            .values()
+            .map(|l| {
+                if l.is_system {
+                    labels::canonical_name(&l.name)
+                } else {
+                    l.name.clone()
+                }
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// The canonical label names a message carries, for the download-time
     /// `only_extract_labels` filter. Matched against the same
     /// `Parent/Child` paths as every other mode.
@@ -296,6 +344,39 @@ mod tests {
         let (system, _) = idx.resolve("acct", &["INBOX".into()]);
         let (user, _) = idx.resolve("acct", &["Label_9".into()]);
         assert_ne!(system, user);
+    }
+
+    #[test]
+    fn resolves_configured_names_to_gmail_label_ids() {
+        let idx = index();
+        assert_eq!(
+            idx.ids_for_names(&["Work/Projects".into()]).unwrap(),
+            vec!["Label_7".to_string()]
+        );
+        // Written the canonical (Takeout) way, matched against Gmail's
+        // ALL-CAPS system name.
+        assert_eq!(idx.ids_for_names(&["Inbox".into()]).unwrap(), vec!["INBOX"]);
+        // Written Gmail's way, also matched.
+        assert_eq!(idx.ids_for_names(&["INBOX".into()]).unwrap(), vec!["INBOX"]);
+    }
+
+    /// An empty `labelIds` filter means "every message in the account",
+    /// so a typo must fail loudly rather than quietly turning a targeted
+    /// mirror into a full one.
+    #[test]
+    fn refuses_a_label_name_that_matches_nothing() {
+        let err = index()
+            .ids_for_names(&["Datalib".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Datalib"), "{err}");
+        // The message has to say what the options were.
+        assert!(err.contains("Work/Projects"), "{err}");
+    }
+
+    #[test]
+    fn resolves_nothing_for_an_empty_filter() {
+        assert!(index().ids_for_names(&[]).unwrap().is_empty());
     }
 
     /// A label id the list call didn't return still files the message

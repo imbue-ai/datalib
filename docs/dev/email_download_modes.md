@@ -228,12 +228,74 @@ per-mode cursor namespacing (`RawDb::load_scope` / `save_scope`), and
 `HttpRequest::latchkey_account` all came out of it and are load-bearing
 for the Gmail API mode.
 
-## 5. Known gaps
+## 5. Testing
+
+Unit tests cover the pure parts (label vocabulary, envelope synthesis,
+history parsing, base64url, the quota throttle). What they cannot cover
+is incremental correctness, so there is a **live test** —
+`tests/gmail_live.rs`, tagged `manual` + `external` + `no-sandbox`:
+
+```sh
+bazelisk test //datalib/backend/etl/providers/email:gmail_live \
+    --test_arg=--ignored --test_arg=--nocapture --test_output=all \
+    --test_env=PATH --test_env=HOME --test_env=USER
+```
+
+It mirrors one label (`$DATALIB_GMAIL_TEST_LABEL`, default `datalib`)
+out of a real account into a tempdir and asserts against **the doltlite
+store the run wrote**, not against log lines — per AGENTS.md, a log line
+tells you what the code said, the store tells you what it did. It
+asserts nothing about specific subjects or senders, only invariants that
+hold for any label.
+
+Two of its assertions exist because they caught real bugs, and neither
+failure is visible from a single run:
+
+- **A second run must be a no-op** spending less than one
+  `messages.get` of quota. Observed: 4 units (profile + labels +
+  history).
+- **A budget-limited backfill must walk forward.** Observed with
+  `message_budget = 2` over an 8-message label: `+2, +2, +2, +2`, then
+  incremental.
+
+### Known gaps
 
 - **No checked-in wire fixtures.** `DOWNLOAD.md`'s "Sample data" section
   is still accurate: `tests/jmap_render.rs` builds a `LoadedRaw` in
   memory, and the Gmail API surface is covered by unit tests over canned
   JSON rather than a replayed conversation. A synth + playback pair
-  matching the slack/notion pattern is the obvious next step.
+  matching the slack/notion pattern is the obvious next step, and would
+  let the live test's invariants run hermetically in CI.
 - **`DOWNLOAD.md` is titled "JMAP Extract"** and documents only that
   mode. It predates the other two.
+- **Render stamps `provider: jmap`** in QMD frontmatter and
+  `class="msg msg--jmap"` in the body, whatever mode produced the row.
+  Pre-existing (the mbox mode has always done it too) and harmless —
+  nothing keys off it — but misleading to read.
+
+## 6. Bugs the first cut had, and what they teach
+
+Recorded because each was invisible from a passing single run:
+
+1. **The label filter was applied client-side.** `only_extract_labels`
+   was checked after `messages.get`, so mirroring an 8-message label out
+   of a 26k-message account would have cost 522k quota units — ~105
+   minutes of throttled fetching — to keep 8 messages. Now
+   `messages.list?labelIds=` narrows it server-side, and a name that
+   matches no label is a hard error, because an empty `labelIds` means
+   "everything".
+2. **A budget-limited run advanced the cursor**, so run 2 went
+   incremental and silently abandoned the rest of the mailbox. Fixed by
+   holding the cursor when `budget_exhausted`, *and* by skipping
+   already-mirrored Gmail ids before spending quota — without the second
+   half the run re-fetches the same prefix forever.
+3. **Incremental runs clobbered thread membership.** Thread rows were
+   built from the messages *this run* fetched, so relabeling one message
+   of a ten-message thread rewrote the thread to contain only that one.
+   Membership is now read back out of the `emails` table.
+4. **Deletes matched on `payload LIKE '%"gmailMessageId":"…"%'`** —
+   O(rows) per deletion and silently dependent on serde's exact key
+   spacing. Replaced by the `gmail_messages` mapping table, which the
+   resumable backfill needed anyway.
+5. **`loaded_blob_ids()` was reloaded per `messages.list` page.** Now
+   once per run.

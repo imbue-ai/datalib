@@ -222,16 +222,29 @@ pub struct MessagePage {
 /// `users.messages.list` — ids only. `include_spam_trash` is on: the
 /// point of a mirror is everything, and the render-side label filter is
 /// where a user narrows what they actually look at.
+///
+/// `label_ids` restricts the enumeration **server-side** (Gmail ANDs
+/// them). That is not an optimization, it is the difference between
+/// usable and not: `messages.get` costs 20 quota units against a
+/// 6000/minute ceiling, so filtering client-side means paying for the
+/// whole mailbox to keep a subset. Mirroring one 8-message label out of
+/// a 26k-message account would take ~105 minutes of throttled fetching
+/// instead of seconds.
 pub async fn list_messages(
     user_id: &str,
     account: Option<&str>,
     page_token: Option<&str>,
     page_size: u32,
+    label_ids: &[String],
 ) -> Result<MessagePage> {
     let mut url = format!("{BASE}/{user_id}/messages?maxResults={page_size}&includeSpamTrash=true");
+    for id in label_ids {
+        url.push_str("&labelIds=");
+        url.push_str(&urlencode(id));
+    }
     if let Some(token) = page_token {
         url.push_str("&pageToken=");
-        url.push_str(token);
+        url.push_str(&urlencode(token));
     }
     let v = get_json(&url, account).await?;
     Ok(MessagePage {
@@ -335,7 +348,7 @@ pub async fn list_history(
     let mut url = format!("{BASE}/{user_id}/history?startHistoryId={start_history_id}");
     if let Some(token) = page_token {
         url.push_str("&pageToken=");
-        url.push_str(token);
+        url.push_str(&urlencode(token));
     }
     let v = get_json(&url, account).await?;
     Ok(parse_history(&v))
@@ -383,6 +396,22 @@ fn collect_ids(record: &Value, key: &str, out: &mut Vec<String>) {
 fn dedupe(ids: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     ids.retain(|id| seen.insert(id.clone()));
+}
+
+/// Percent-encode a query-parameter value. Gmail label ids are
+/// `[A-Za-z0-9_-]` in practice, but page tokens are opaque and nothing
+/// we interpolate should be able to inject a second parameter.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
@@ -529,6 +558,17 @@ mod tests {
         let page = parse_history(&json!({ "historyId": "5" }));
         assert!(page.added.is_empty() && page.deleted.is_empty() && page.relabeled.is_empty());
         assert_eq!(page.history_id.as_deref(), Some("5"));
+    }
+
+    /// A page token is opaque and may contain characters that would
+    /// otherwise terminate the parameter or start a new one.
+    #[test]
+    fn percent_encodes_query_values() {
+        assert_eq!(urlencode("Label_479427920"), "Label_479427920");
+        assert_eq!(urlencode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(urlencode("tok+en/x=="), "tok%2Ben%2Fx%3D%3D");
+        // Unreserved characters must survive untouched.
+        assert_eq!(urlencode("-_.~"), "-_.~");
     }
 
     #[test]
