@@ -118,7 +118,7 @@ Pick the surface that fits the question:
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<name>/rendered_md/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
-  them via `GET /api/chat/{markdown_uuid}`. The raw per-source
+  them via `GET /applet/unified_index/chat/{markdown_uuid}`. The raw per-source
   doltlite stores under `<name>/raw/` keep full wire fidelity when the
   rendered form isn't enough.
 - **Semantic search** — the qmd index:
@@ -128,11 +128,11 @@ Pick the surface that fits the question:
       npx -y @tobilu/qmd query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /api/search?q=…` (Gmail-flavored query language:
+  `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values; fields include
   `source:`, `kind:`, `channel:`, `author:`, `account:`, `project:`,
-  `before:`/`after:`, `convo:`), `GET /api/docs`, `GET /api/chat/{uuid}`,
-  `GET /api/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
+  `before:`/`after:`, `convo:`), `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
+  `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
   Every route needs the server's per-process API token — loopback does

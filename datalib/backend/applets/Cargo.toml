@@ -9,12 +9,18 @@ name = "datalib-applet"
 path = "src/main.rs"
 
 [dependencies]
+datalib-core = { path = "../core" }
+datalib-qmd-indexer = { path = "../qmd_indexer" }
+datalib-unified-index = { path = "../unified_index" }
 anyhow = { workspace = true }
+axum = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+mime_guess = "2"
 sha2 = "0.10"
+tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

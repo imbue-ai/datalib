@@ -15,7 +15,7 @@ dactalView({ load: "provider:slack", q: "rows/channel" })
 initial DACTAL query. Both flow to the page as `?fw=`/`?dq=`.
 
 It is **data-agnostic**: there is no per-provider code. The page loads whatever
-`/api/search` returns and converts it to DACTAL datasets on the fly (`bridge.js`),
+`/applet/unified_index/search` returns and converts it to DACTAL datasets on the fly (`bridge.js`),
 so it works over any corpus — Slack, GitHub, Notion, Perseus, all of it.
 
 ## What DACTAL is
@@ -57,7 +57,7 @@ bracketed: `rows:kind=[Slack Message]` (DACTAL treats space/`(`/`)` as syntax).
 ```
 dactalView() card ─► iframe ─► /dactal/index.html
                                    │
-/api/search ──► bridge.js ──► DACTAL engine ──► buildView() table UI
+/applet/unified_index/search ──► bridge.js ──► DACTAL engine ──► buildView() table UI
 (grid_rows)     rows→datasets    executeq()      drill-down re-runs runQuery
                 + survey()
 ```
@@ -107,11 +107,11 @@ fallback, which serves the main app instead.
 
 1. **Client-side, in-memory — no query pushdown.** DACTAL loads the working set
    into browser memory and queries it locally; it does not translate to SQL/qmd.
-   You pull a bounded slice via `/api/search`, then explore it. It does **not**
+   You pull a bounded slice via `/applet/unified_index/search`, then explore it. It does **not**
    scale to the full corpus — frame it as a power-tool over a working set, not a
    replacement for the main grid.
 2. **No ingestion.** DACTAL's loaders + IndexedDB store compete with the ETL
-   pipeline; we use none of it and treat DACTAL as read-only over `/api/search`.
+   pipeline; we use none of it and treat DACTAL as read-only over `/applet/unified_index/search`.
 3. **Two query languages coexist** — Datalib's Gmail-style search vs.
    DACTAL's `.`/`:`/`/`/`#`. A learning curve; scoped as an optional view.
 4. **Drill-down stays inside DACTAL** — clicking a row re-runs a DACTAL query, it

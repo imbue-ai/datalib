@@ -1,6 +1,10 @@
-//! Backend assembly: everything derived from a data root — which
-//! doltlite file to open, where the config lives, the qmd daemon, the
-//! sync worker — in one place, so every packaging boots identically.
+//! Backend assembly: everything derived from a data root — the stores
+//! this server owns, where the config lives, the sync worker — in one
+//! place, so every packaging boots identically.
+//!
+//! The grid and qmd indexes are not here. They belong to the
+//! `unified_index` applet, which the gateway spawns from `config.toml`
+//! like any other; this process never opens them.
 //! The `datalib-http` binary calls this directly; the Tauri shell
 //! runs that same binary as a child process, so this is the single
 //! boot path for both front doors. (History: the Tauri shell used to
@@ -13,17 +17,12 @@ use std::sync::Arc;
 
 use datalib_core::app_store::AppStore;
 use datalib_core::repo::DynAppRepo;
-use datalib_unified_index::repo::DynIndexRepo;
-use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 
 use crate::{auth::ApiToken, worker, AppState};
 
 /// Open the data root (creating it if absent) and assemble the served
-/// [`AppState`]: the doltlite repo at
-/// [`datalib_core::layout::grid_index_db`], the lazy qmd daemon,
-/// `<root>/config.toml`, the sync-progress channel, and the background
-/// sync worker. The worker is spawned onto the ambient tokio runtime,
+/// [`AppState`]: the feedback and job stores, `<root>/config.toml`, the
+/// sync-progress channel, and the background sync worker. The worker is spawned onto the ambient tokio runtime,
 /// so this must be called from within one. `dag_bin` is the
 /// `datalib-dag` runner the worker shells out to (with `binary_dir`
 /// passed through as `--binary-dir` when resolved); `None` makes
@@ -53,29 +52,15 @@ pub async fn build_state(
     api_token.write_token_file()?;
 
     eprintln!(
-        "stores: {} (index, read-only here), {}, {}",
-        datalib_core::layout::grid_index_db(&root).display(),
+        "stores: {}, {}",
         datalib_core::layout::feedback_db(&root).display(),
         datalib_core::layout::jobs_db(&root).display(),
-    );
-    let repo: DynIndexRepo = Arc::new(
-        DoltRepo::open(root.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!("open the grid index under {}: {e}", root.display()))?,
     );
     let app: DynAppRepo = Arc::new(
         AppStore::open(&root)
             .await
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
-
-    // The daemon resolves its index lazily per search, so an empty root
-    // (no sync yet) or a mid-session rebuild is handled transparently —
-    // search falls back until the index exists, then upgrades to qmd
-    // with no restart. Models are lazy too: the indexer warms the
-    // shared cache during sync, and a cold cache pays a one-time
-    // download on the first semantic search instead of blocking boot.
-    let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
 
     // Live sync-job progress fan-out: the worker + enqueue/cancel
     // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
@@ -112,9 +97,7 @@ pub async fn build_state(
 
     Ok(AppState {
         root,
-        repo,
         app,
-        qmd_daemon,
         progress_tx,
         applets,
         api_token,
@@ -126,36 +109,54 @@ mod tests {
     use super::*;
 
     /// Regression guard for the web/Tauri drift this module exists to
-    /// prevent: the state must open the doltlite file at the layout
-    /// helper's path (`unified_index/grid/db.doltlite_db`), not some
-    /// packaging-local filename at the root.
+    /// prevent: the state must open its stores at the layout helpers'
+    /// paths, not some packaging-local filename at the root.
     #[tokio::test]
-    async fn build_state_opens_the_layout_db_path() {
+    async fn build_state_opens_the_layout_store_paths() {
+        use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("boot-test-token", root.path());
         let state = build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
-        let db_path = datalib_core::layout::grid_index_db(root.path());
-        assert!(
-            db_path.is_file(),
-            "expected {} to be created",
-            db_path.display()
-        );
+        for p in [
+            layout::feedback_db(root.path()),
+            layout::jobs_db(root.path()),
+        ] {
+            assert!(p.is_file(), "expected {} to be created", p.display());
+        }
         assert_eq!(state.root.as_path(), root.path());
     }
 
-    /// Three stores, three files — and the feedback store is not inside
-    /// the index tree.
+    /// The server does not touch the search indexes.
     ///
-    /// Both halves are load-bearing. Sharing one file meant two
-    /// processes writing it (this server and the `grid_index` step),
-    /// and doltlite's working set is per file, so each one's
-    /// `dolt_commit('-Am', …)` swept the other's in-flight rows. And the
-    /// step tags its own tree with `CACHEDIR.TAG`, so feedback stored
-    /// under it was feedback a `--exclude-caches` backup would skip.
+    /// This is the whole point of the `unified_index` applet: booting
+    /// the server must not open — or create — the grid index, because
+    /// the applet owns it and the pipeline writes it. A regression here
+    /// would be invisible in behaviour (the file would just exist
+    /// again) and would quietly restore the two-writer arrangement the
+    /// store split removed.
     #[tokio::test]
-    async fn build_state_keeps_the_three_stores_apart() {
+    async fn build_state_never_touches_the_index() {
+        use datalib_core::layout;
+        let root = tempfile::tempdir().unwrap();
+        let token = ApiToken::from_value("no-index-token", root.path());
+        build_state(root.path().to_path_buf(), None, None, token)
+            .await
+            .unwrap();
+        assert!(
+            !layout::unified_index_dir(root.path()).exists(),
+            "booting the server created {}, which belongs to the applet",
+            layout::unified_index_dir(root.path()).display()
+        );
+    }
+
+    /// The two stores this server does own are separate files, and
+    /// neither is inside the tree the pipeline tags as rebuildable
+    /// cache — feedback is not regenerable and must survive a
+    /// `--exclude-caches` backup.
+    #[tokio::test]
+    async fn build_state_keeps_the_stores_apart() {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
@@ -163,25 +164,11 @@ mod tests {
             .await
             .unwrap();
 
-        let index = layout::grid_index_db(root.path());
         let feedback = layout::feedback_db(root.path());
         let jobs = layout::jobs_db(root.path());
-        for p in [&index, &feedback, &jobs] {
-            assert!(p.is_file(), "expected a store at {}", p.display());
-        }
-        assert_ne!(index, feedback);
-        assert_ne!(index, jobs);
         assert_ne!(feedback, jobs);
-
-        // The tree the pipeline marks as rebuildable cache holds the
-        // index and nothing else.
         let derived = layout::unified_index_dir(root.path());
-        assert!(index.starts_with(&derived), "{}", index.display());
-        assert!(
-            !feedback.starts_with(&derived),
-            "feedback must live outside the cache-tagged tree, got {}",
-            feedback.display()
-        );
+        assert!(!feedback.starts_with(&derived), "{}", feedback.display());
         assert!(!jobs.starts_with(&derived), "{}", jobs.display());
     }
 

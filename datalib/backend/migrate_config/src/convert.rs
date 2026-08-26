@@ -50,6 +50,17 @@ struct StepOut {
     params: Option<toml::Value>,
 }
 
+/// The `unified_index` applet, as a `[[applets]]` block of text.
+///
+/// A converted config needs it for the same reason a scaffolded one
+/// does: the grid, the document view and the document picker are served
+/// by this applet, so a config without it opens an app with no search.
+/// Emitted for both conversion paths.
+fn unified_index_applet() -> String {
+    "\n[[applets]]\nid = \"unified_index\"\ntitle = \"Search index\"\ncommand = \"datalib-applet unified_index\"\n"
+        .to_string()
+}
+
 /// One step as a `[[steps]]` block of text, ready to concatenate.
 fn step_block(step: &StepOut) -> Result<String> {
     #[derive(Serialize)]
@@ -108,6 +119,11 @@ pub fn steps_yaml_to_toml(text: &str) -> Result<String> {
             params: e.params,
         })?);
     }
+    // A pre-TOML steps config predates applets entirely, so it never
+    // named the one the app now needs. Add it rather than converting to
+    // a config whose grid is empty.
+    out.push('\n');
+    out.push_str(&unified_index_applet());
     Ok(out)
 }
 
@@ -152,6 +168,11 @@ pub fn stanza_yaml_to_toml(text: &str) -> Result<String> {
             "unified_index/qmd",
         ))?);
     }
+
+    out.push('\n');
+    out.push_str(&divider("the app's own surface"));
+    out.push_str("# Serves the grid; the app has no search without it.\n");
+    out.push_str(&unified_index_applet());
 
     for entry in &mut cfg.sources {
         entry.source.common_mut().fold_defaults(&defaults);

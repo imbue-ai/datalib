@@ -129,7 +129,7 @@ entry replaces the gallery card with the chosen component via
 `host.setSource`. Components that need arguments register a
 parameter-less picker instead — `documentView`'s gallery stand-in is
 `documentPickerView()`, which lists every rendered document
-(`/api/docs`) and replaces itself with `documentView("<uuid>")` on
+(`/applet/unified_index/docs`) and replaces itself with `documentView("<uuid>")` on
 pick. Cards opened by other cards (`host.openCards`) work the same in
 both modes.
 
@@ -260,18 +260,18 @@ The factories in `ViewLibs` are the public surface card source
 programs against:
 
 - `gridView(opts?: { q?: string })` — search bar + AG Grid over
-  `/api/search`. Row click opens the row's document via
+  `/applet/unified_index/search`. Row click opens the row's document via
   `host.openCard`; double-click opens it as a standalone
   single-column page in a new tab. Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
-  (`/api/chat/{markdownUuid}`), highlighting and scrolling to
+  (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
   (see `docs/dev/edges.md`); clicking either opens the destination via
   `host.openCard`.
 - `documentPickerView()` — parameter-less gallery stand-in for
-  `documentView`: lists every rendered document (`/api/docs`) and
+  `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
 - `galleryView()` — the new-card gallery (see "Titles and dev mode"
   above); replaces itself with whatever the user picks.

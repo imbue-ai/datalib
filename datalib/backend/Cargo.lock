@@ -1043,12 +1043,18 @@ name = "datalib-applet"
 version = "0.28.0"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
  "chrono",
  "clap",
+ "datalib-core",
+ "datalib-qmd-indexer",
+ "datalib-unified-index",
+ "mime_guess",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1642,7 +1648,6 @@ dependencies = [
  "clap",
  "datalib-core",
  "datalib-dag",
- "datalib-qmd-indexer",
  "datalib-time",
  "futures",
  "libc",

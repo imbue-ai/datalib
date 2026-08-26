@@ -40,13 +40,17 @@ trap 'rm -rf "$ROOT"' EXIT INT TERM
 echo "Perseus data root: $ROOT" >&2
 
 # Render-only DAG config: no download step, so the render step reads
-# the TEI XMLs directly from `input_path`. We DO build the qmd index
-# here even though we won't use the search bar — the backend
-# hard-fails at startup if the index is missing (see
-# `datalib/backend/http/src/main.rs`'s qmd_daemon block), so it's
-# easier to pay the cost once than special-case it out.
+# the TEI XMLs directly from `input_path`. We build the qmd index here
+# even though we won't use the search bar, because the `unified_index`
+# applet serves the grid off both indexes and paying for it once is
+# easier than special-casing it out.
+#
+# `binary_dir` is what makes the bare commands below resolve — for the
+# applet as much as for the steps, since the gateway resolves an
+# applet's command the same way the runner resolves a step's.
 cat > "$ROOT/config.toml" <<EOF
 data_root = "$ROOT"
+binary_dir = "$BIN_DIR"
 
 [[steps]]
 id = "perseus.render"
@@ -66,6 +70,12 @@ id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
 outputs = ["unified_index/qmd"]
+
+# Serves the grid, the document view and the document picker.
+[[applets]]
+id = "unified_index"
+title = "Search index"
+command = "datalib-applet unified_index"
 EOF
 
 # Mirror the model-cache symlink that materialize_tng_root.sh sets up,

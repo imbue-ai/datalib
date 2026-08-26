@@ -20,8 +20,6 @@ use datalib_http::frontend::frontend_dir;
 use datalib_http::sha256_hex;
 use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
-use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -97,15 +95,12 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     std::fs::write(root.join("config.toml"), config_toml).unwrap();
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(root.clone()).await.unwrap();
     let app = AppStore::open(root.as_path())
         .await
         .expect("open app stores");
     AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
         app: Arc::new(app),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),

@@ -6,12 +6,11 @@
 //! `datalib-http` — single-binary search backend.
 //!
 //! Usage: `datalib-http <data_root> [--no-open] [--url-file <path>]`.
-//! The data root is the directory the pipeline (`datalib-dag`) writes into:
-//! it contains one directory per source stanza plus `system/` holding
-//! the SQL store (`unified_index/grid/db.doltlite_db`), the
-//! `system/media/` symlinked attachments, and the qmd index. The
-//! directory is created on demand — first-run users get an empty index
-//! that fills in once they run a sync.
+//! The data root is the directory the pipeline (`datalib-dag`) writes
+//! into: one directory per source stanza, `unified_index/` for the
+//! search indexes, and `system/` for this server's own state — the
+//! feedback and job stores and the `system/media/` symlinked
+//! attachments. The directory is created on demand.
 //!
 //! On startup we open the default browser at the listening URL so the
 //! user doesn't need to copy-paste it; `--no-open` skips that, useful
@@ -33,9 +32,9 @@
 //! ephemeral port per run; users running the bundled release just get
 //! the default.
 //!
-//! Backend: [`DoltRepo`](datalib_unified_index::dolt_repo::DoltRepo) over a
-//! `sqlx::SqlitePool` against `<data_root>/unified_index/grid/db.doltlite_db`.
-//! No subprocess, no TCP port to MySQL.
+//! Stores: `system/feedback.doltlite_db` and `system/jobs.doltlite_db`,
+//! each through a one-connection `sqlx::SqlitePool`. The search indexes
+//! belong to the `unified_index` applet and are never opened here.
 
 use clap::Parser;
 use datalib_http::{router, ApiToken};
@@ -116,9 +115,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Everything root-derived (doltlite repo, qmd daemon, config path,
-    // sync worker) is assembled by the bootstrap shared with the Tauri
-    // shell — see `datalib_http::boot`.
+    // Everything root-derived (the feedback and job stores, the config
+    // path, the sync worker) is assembled by the bootstrap shared with
+    // the Tauri shell — see `datalib_http::boot`.
     let state = datalib_http::build_state(
         root,
         datalib_http::worker::resolve_dag_bin(),
@@ -126,59 +125,7 @@ async fn main() -> anyhow::Result<()> {
         api_token,
     )
     .await?;
-    let root = state.root.clone();
 
-    // Search runs on the qmd index. The daemon resolves that index
-    // lazily on each search, so it's always present — a brand-new/empty
-    // root (no index yet) or a mid-run rebuild is handled transparently:
-    // search falls back (LIKE / per-call CLI) until the index exists,
-    // then upgrades to qmd with no restart.
-    //
-    // Models are lazy too — no `qmd pull` at boot. The indexer warms
-    // the shared cache during every sync (embed pulls the embedding
-    // model; its best-effort `qmd pull` grabs the rest), so any machine
-    // that built its own index already has them. The remaining case —
-    // index copied from elsewhere / wiped `~/.cache/qmd/models` — pays
-    // a one-time download on the first semantic search instead of
-    // blocking boot behind a multi-hundred-MB pull and turning a
-    // network blip into a failed start.
-    let index_path = datalib_unified_index::qmd::qmd_index_path(&root);
-    if index_path.exists() {
-        // Models live once in a shared cache (`~/.cache/qmd/models`);
-        // each data root reaches them through a `<root>/qmd/models`
-        // symlink, so qmd — run with `XDG_CACHE_HOME=<root>` — resolves
-        // lookups out to that one copy instead of re-downloading into
-        // the root. The indexer creates this link during sync; ensure
-        // it here too, so a backend booting a root the indexer hasn't
-        // touched in this incarnation (or whose link went missing)
-        // still shares the cache rather than silently pulling ~2 GB
-        // into the data dir. Tolerate a pre-existing *real* dir rather
-        // than hard-failing an existing install — we just won't share.
-        let qmd_dir = datalib_core::layout::qmd_dir(&root);
-        let models_dir = datalib_qmd_indexer::default_models_dir();
-        if let Err(e) = std::fs::create_dir_all(&models_dir)
-            .map_err(anyhow::Error::from)
-            .and_then(|()| datalib_qmd_indexer::ensure_models_symlink(&qmd_dir, &models_dir))
-        {
-            eprintln!(
-                "qmd: could not ensure models symlink ({e:#}); \
-                 continuing with {}/models as-is",
-                qmd_dir.display()
-            );
-        }
-        if !datalib_qmd_indexer::models_present(&qmd_dir.join("models")) {
-            eprintln!(
-                "qmd: model cache cold — the first semantic search will \
-                 download models (one-time, shared across data roots)"
-            );
-        }
-    } else {
-        eprintln!(
-            "qmd: no index at {} yet — search falls back until the first \
-             sync builds it, then upgrades to qmd with no restart.",
-            index_path.display()
-        );
-    }
     eprintln!("config: {}", state.config_path().display());
 
     axum::serve(listener, router(state)).await?;

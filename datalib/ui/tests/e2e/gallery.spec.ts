@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 // a list of parameter-less components — and picking an entry REPLACES
 // that card via host.setSource. Components that need arguments hide
 // behind a picker: the gallery's "Document" entry opens
-// documentPickerView (a /api/docs listing), which in turn replaces
+// documentPickerView (a /applet/unified_index/docs listing), which in turn replaces
 // itself with `documentView("<uuid>")` on pick.
 //
 // Dev mode is off by default (fresh browser context), so these tests

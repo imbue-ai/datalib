@@ -9,7 +9,7 @@
 // datalib/backend/http/src/auth.rs), but the browser gets it as an
 // HttpOnly session cookie when it loads the app, and the dev-mode Vite
 // proxy stamps it on server-side — so `fetch`, `EventSource`, and
-// `<img src="/api/asset/…">` all authenticate without any call site
+// `<img src="/applet/unified_index/asset/…">` all authenticate without any call site
 // here knowing about it. That is the point of carrying it in a cookie:
 // there is no per-request token plumbing to forget.
 
@@ -20,7 +20,7 @@ export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
   // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `/api/chat/{markdown_uuid}` lookups
+  // .md it lives inside. Drives `{UNIFIED_INDEX}/chat/{markdown_uuid}` lookups
   // when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
@@ -92,7 +92,7 @@ export type SearchResponse = {
 // the same as the grid row's `uuid` column.
 // One row from the `edges` table joined with the destination
 // markdown's title. The backend produces this list on every
-// `/api/chat/{uuid}` response — see `EdgeRowOut` in
+// `{UNIFIED_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
 // `datalib/backend/core/src/repo.rs`. `src_anchor_uuid`/
 // `dst_anchor_uuid` reference values the renderer emits as
 // `data-section-uuid` attributes in the body; null means the
@@ -120,9 +120,9 @@ export type ChatResponse = {
   outgoing_edges: EdgeOut[];
 };
 
-// One rendered document (a `markdowns` row), as listed by /api/docs
+// One rendered document (a `markdowns` row), as listed by the applet
 // for the document-picker card. `markdown_uuid` is the same UUID
-// `documentView(...)` / `/api/chat/{uuid}` take.
+// `documentView(...)` / `{UNIFIED_INDEX}/chat/{uuid}` take.
 export type DocEntry = {
   markdown_uuid: string;
   title: string | null;
@@ -130,10 +130,24 @@ export type DocEntry = {
   provider: string;
   created_at: string | null;
 };
+// --- The unified_index applet --------------------------------------------
+//
+// Search, the document list, one document, and the files beside it are
+// served by `datalib-applet unified_index`, reached through the
+// gateway's applet proxy. `datalib-http` does not know these routes
+// exist — it forwards `/applet/<id>/…` to whatever the config declares
+// under that id.
+//
+// Consequence worth knowing: a data root whose `config.toml` does not
+// declare this applet has no grid. The scaffold writes it, and the
+// gateway answers 502 with the applet named when it is configured but
+// not running, so the failure says which file to fix.
+export const UNIFIED_INDEX = "/applet/unified_index";
+
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
-  return getJson<DocEntry[]>("/api/docs", signal);
+  return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
 }
 
 export type Health = {
@@ -207,7 +221,7 @@ export async function fetchSearch(
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
   const r = await getJson<SearchResponse>(
-    `/api/search?${params.toString()}`,
+    `${UNIFIED_INDEX}/search?${params.toString()}`,
     signal,
   );
   // Backend returned 200 but is telling us something went sideways
@@ -228,7 +242,7 @@ export function fetchChat(
   // Provider-specific sharding (beeper's per-period files) is already
   // encoded in the markdown_uuid scheme.
   return getJson<ChatResponse>(
-    `/api/chat/${encodeURIComponent(markdownUuid)}`,
+    `${UNIFIED_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
     signal,
   );
 }

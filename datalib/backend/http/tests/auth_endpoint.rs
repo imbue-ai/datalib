@@ -21,8 +21,6 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use datalib_core::app_store::AppStore;
 use datalib_http::{router, ApiToken, AppState};
-use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -39,18 +37,13 @@ fn unique_db_path() -> PathBuf {
 async fn app() -> (axum::Router, ApiToken) {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let dolt = DoltRepo::open(root.clone())
-        .await
-        .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let app = AppStore::open(root.as_path())
         .await
         .expect("open app stores");
     let api_token = ApiToken::from_value(TOKEN, root.as_path());
     let state = AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
         app: Arc::new(app),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
@@ -126,6 +119,22 @@ async fn unauthenticated_requests_are_refused() {
         ))
         .unwrap();
     assert_eq!(status(&app, put_lib).await, StatusCode::UNAUTHORIZED);
+
+    // The applet proxy. The grid's data left this binary for the
+    // `unified_index` applet, and the token gate is an outermost layer
+    // — so it still covers a route this process knows nothing about.
+    // Worth pinning: an applet reached without the gate would be an
+    // unauthenticated read of the whole mirror.
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/applet/unified_index/search?q=&limit=1")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
 
     // The SPA itself, and the DACTAL page that shares its origin.
     assert_eq!(

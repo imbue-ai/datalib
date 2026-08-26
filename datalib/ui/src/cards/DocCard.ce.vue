@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Document card: fetches /api/chat/{markdownUuid} and renders it via
+// Document card: fetches the unified_index applet's /chat/{markdownUuid} and renders it via
 // ChatBody. Fully determined by its props (which come from the card
 // source, e.g. `documentView("md-uuid", "section-uuid")`):
 // - navigation (edge clicks, inline /chat/<uuid> links) opens a new
@@ -28,7 +28,7 @@ import {
 const props = defineProps<{
   ctx: CardCtx;
   // Addresses one rendered `.md` file — the file this card fetches
-  // and displays. Same value `/api/chat/{markdown_uuid}` takes.
+  // and displays. Same value the applet's `/chat/{markdown_uuid}` takes.
   markdownUuid: string | null;
   // Section uuid inside the doc to highlight and scroll to. Matches
   // the renderer-emitted `data-section-uuid` attributes.

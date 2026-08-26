@@ -1,5 +1,5 @@
 // Bridge: Datalib `grid_rows` (the denormalized union table served by
-// `/api/search`) -> DACTAL datasets.
+// `/applet/unified_index/search`) -> DACTAL datasets.
 //
 // Datalib deliberately denormalizes everything onto one row per
 // displayable thing (see docs/dev/grid_rows.md). DACTAL, by contrast,
@@ -104,7 +104,7 @@ export function loadSearchIntoDactal(dactal, searchResponse) {
 // embedded backend. Mirrors `fetchSearch` in datalib/ui/src/api.ts.
 export async function fetchSearch(q, limit = 500) {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await fetch(`/api/search?${params.toString()}`);
-  if (!r.ok) throw new Error(`/api/search -> ${r.status}: ${await r.text()}`);
+  const r = await fetch(`/applet/unified_index/search?${params.toString()}`);
+  if (!r.ok) throw new Error(`/applet/unified_index/search -> ${r.status}: ${await r.text()}`);
   return r.json();
 }

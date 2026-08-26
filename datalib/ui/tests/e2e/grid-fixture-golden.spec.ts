@@ -56,7 +56,7 @@ test("grid fixture row set matches the golden", async ({ request }) => {
   // limit=10000 is bigger than any plausible TNG fixture row count
   // (the snapshot test currently sits at 79); the backend caps at
   // 100k internally, so this won't truncate silently.
-  const resp = await request.get("/api/search?q=&limit=10000");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=10000");
   expect(resp.ok(), `search API: HTTP ${resp.status()}`).toBeTruthy();
   const data = (await resp.json()) as { rows: SearchRow[] };
 

@@ -1,7 +1,8 @@
 // Builtin view: pick a document to read. `documentView` needs a
 // markdown UUID argument, so it can't be created from the gallery
 // directly; `documentPickerView()` is its parameter-less gallery
-// stand-in — a list of every rendered document (`/api/docs`), newest
+// stand-in — a list of every rendered document (the applet's
+// `/docs`), newest
 // first. Picking one REPLACES this card with `documentView("<uuid>")`
 // via ctx.host.setSource, so the picker acts as a transient "new card"
 // step rather than a lingering column.

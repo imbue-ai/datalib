@@ -14,8 +14,6 @@ use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
 use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
-use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -24,7 +22,6 @@ const TEST_TOKEN: &str = "applet-test-token";
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(root.clone()).await.unwrap();
     let app = AppStore::open(root.as_path())
         .await
         .expect("open app stores");
@@ -32,9 +29,7 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
     datalib_dag::config::validate_applets(&cfg).expect("fixture config is valid");
     AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
         app: Arc::new(app),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         // Every route is behind the per-process token; these tests
         // send it on each request (see `get_json`).

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Search-grid card: a search bar + AG Grid over /api/search results.
+// Search-grid card: a search bar + AG Grid over the unified_index
+// applet's /search results.
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.

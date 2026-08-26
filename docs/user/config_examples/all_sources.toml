@@ -728,3 +728,12 @@ outputs = ["lightroom/raw"]
 # gc = false
 [steps.params.common]
 input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+
+# The app's own surface: `unified_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+id = "unified_index"
+title = "Search index"
+command = "datalib-applet unified_index"

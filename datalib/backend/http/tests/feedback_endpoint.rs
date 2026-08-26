@@ -8,8 +8,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_core::app_store::AppStore;
 use datalib_http::{router, ApiToken, AppState};
-use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 use sqlx::Row;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,20 +35,14 @@ fn unique_db_path() -> PathBuf {
 async fn post_feedback_inserts_row() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let dolt = DoltRepo::open(root.clone())
-        .await
-        .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let app = AppStore::open(root.as_path())
         .await
         .expect("open app stores");
     let pool = app.feedback_pool().clone();
-    let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
     let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
         app: Arc::new(app),
-        qmd_daemon,
         progress_tx: tokio::sync::broadcast::channel(16).0,
         // These endpoints must keep working in a data root that
         // declares no applets, which is every data root by default.

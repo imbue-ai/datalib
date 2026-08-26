@@ -54,7 +54,7 @@ sidecars).
 ## Consumers today
 
 - The backend includes `outgoing_edges` in every
-  `GET /api/chat/{markdown_uuid}` response (joined with the
+  `GET /applet/unified_index/chat/{markdown_uuid}` response (joined with the
   destination markdown's title for direct rendering).
 - `DocCard.ce.vue` shows whole-doc outgoing edges as a list at the top
   of the preview.
