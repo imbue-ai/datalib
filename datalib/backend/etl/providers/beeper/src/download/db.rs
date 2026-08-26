@@ -41,7 +41,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::blob_cas::{self, BlobCas};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_committed, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -138,11 +138,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin bulk rooms tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
-        tx.commit().await.context("commit bulk rooms tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, rows, "bulk rooms").await
     }
 
     /// Bulk-upsert users. See [`Self::bulk_upsert_rooms`] for the
@@ -151,11 +147,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin bulk users tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
-        tx.commit().await.context("commit bulk users tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, rows, "bulk users").await
     }
 
     /// Bulk-upsert events. Hot path on a fresh ingest (thousands to
@@ -164,11 +156,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin bulk events tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
-        tx.commit().await.context("commit bulk events tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, rows, "bulk events").await
     }
 
     /// Bulk-upsert attachment edge rows (`beeper_media_attachments`).

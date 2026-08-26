@@ -18,7 +18,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_committed, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, DATA_TABLES};
@@ -53,11 +53,7 @@ impl RawDb {
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
         let row = SelfIdentityRow::from_payload(payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit self_identity tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "self_identity").await
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
@@ -77,22 +73,14 @@ impl RawDb {
 
     pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
         let row = MergeRequestRow::from_payload(proj, iid, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin merge_request tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit merge_request tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "merge_request").await
     }
 
     // ── discussions ─────────────────────────────────────────────────
 
     pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
         let row = DiscussionRow::from_payload(proj, iid, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin discussion tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit discussion tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "discussion").await
     }
 
     /// Upsert every discussion of one MR in a single transaction. The

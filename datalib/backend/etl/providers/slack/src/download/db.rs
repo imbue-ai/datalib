@@ -29,7 +29,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::blob_cas::BlobCas;
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_committed;
 use datalib_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split};
 use datalib_etl::event_tape::EventTape;
 
@@ -496,11 +496,7 @@ impl RawDb {
             thread_ts: thread_ts.to_string(),
             latest_reply: latest_reply.map(String::from),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin replies_page tx")?;
-        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
-        tx.commit().await.context("commit replies_page tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, std::slice::from_ref(&row), "replies_page").await
     }
 
     /// `(channel_id, thread_ts) → latest_reply` for every thread we've

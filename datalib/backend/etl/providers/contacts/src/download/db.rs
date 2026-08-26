@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_committed;
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -80,11 +80,7 @@ impl RawDb {
             principal_href: principal_href.map(String::from),
             addressbook_home_set: addressbook_home_set.map(String::from),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin account tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit account tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "account").await
     }
 
     // ── addressbooks ────────────────────────────────────────────────
@@ -109,11 +105,7 @@ impl RawDb {
             description: description.map(String::from),
             ctag: ctag.map(String::from),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin addressbook tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit addressbook tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "addressbook").await
     }
 
     /// Read the sync-token we persisted from the last
@@ -191,11 +183,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin contacts batch tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
-        tx.commit().await.context("commit contacts batch tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, rows, "contacts batch").await
     }
 
     /// Drop a contact + its sidecar row. Used when sync-collection

@@ -36,7 +36,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// One table's worth of `(id, payload)` pairs to record in a single
 /// bulk-write batch. Shared by the entity-side
@@ -220,6 +220,34 @@ pub trait BulkUpsertable: Sync {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments<'q>>,
     ) -> Query<'q, Sqlite, SqliteArguments<'q>>;
+}
+
+/// [`bulk_upsert_in_tx`] in a transaction of its own.
+///
+/// The common case: a caller with nothing else to batch, writing one
+/// table and committing immediately. `what` names the entity for error
+/// context — it is spliced into `"begin {what} tx"` / `"commit {what}
+/// tx"`, matching what the hand-written wrappers this replaces
+/// reported.
+///
+/// Reach for [`bulk_upsert_in_tx`] directly when two or more tables
+/// must land atomically; that is the whole reason it takes an open
+/// `tx` rather than a pool.
+pub async fn bulk_upsert_committed<T: BulkUpsertable>(
+    pool: &SqlitePool,
+    rows: &[T],
+    what: &str,
+) -> Result<()> {
+    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin {what} tx"))?;
+    bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit {what} tx"))?;
+    Ok(())
 }
 
 /// Generic bulk-UPSERT for any [`BulkUpsertable`] row type. The one

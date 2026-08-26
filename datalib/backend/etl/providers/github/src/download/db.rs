@@ -25,7 +25,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_committed, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -63,11 +63,7 @@ impl RawDb {
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
         let row = SelfIdentityRow::from_payload(payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit self_identity tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "self_identity").await
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
@@ -87,31 +83,19 @@ impl RawDb {
 
     pub async fn upsert_pull_request(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = PullRequestRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin pull_request tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit pull_request tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "pull_request").await
     }
 
     // ── issue_comments / pr_reviews / pr_review_comments ────────────
 
     pub async fn upsert_issue_comment(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = IssueCommentRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin issue_comment tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit issue_comment tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "issue_comment").await
     }
 
     pub async fn upsert_pr_review(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = PrReviewRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let mut tx = self.pool.begin().await.context("begin pr_review tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit pr_review tx")?;
-        Ok(())
+        bulk_upsert_committed(&self.pool, &[row], "pr_review").await
     }
 
     pub async fn upsert_pr_review_comment(
