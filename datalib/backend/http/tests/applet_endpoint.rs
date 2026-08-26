@@ -14,13 +14,14 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::dolt_repo::{AppStore, DoltRepo};
-use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
+use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
 use datalib_http::sha256_hex;
 use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
+use datalib_unified_index::dolt_repo::DoltRepo;
+use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -95,7 +96,6 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     std::fs::write(root.join("config.toml"), config_toml).unwrap();
-    let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
     let dolt = DoltRepo::open(root.clone()).await.unwrap();
     let app = AppStore::open(root.as_path())

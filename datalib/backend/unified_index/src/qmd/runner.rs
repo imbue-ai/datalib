@@ -107,7 +107,7 @@ impl QmdRunner {
         let out = cmd.output().with_context(|| {
             format!(
                 "failed to spawn `{}`; is Node.js installed?",
-                crate::node_runtime::display_command(&cmd)
+                datalib_core::node_runtime::display_command(&cmd)
             )
         })?;
         if !out.status.success() {

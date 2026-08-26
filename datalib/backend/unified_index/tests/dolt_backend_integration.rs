@@ -8,11 +8,11 @@
 //! `sqlite`-compatible doltlite is linked (the sqlx-sqlite driver opens
 //! the file natively).
 
-use datalib_core::dolt_repo::DoltRepo;
-use datalib_core::query::parse_query;
-use datalib_core::repo::IndexRepo;
 use datalib_schema::grid_rows::DDL as GRID_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
+use datalib_unified_index::dolt_repo::DoltRepo;
+use datalib_unified_index::query::parse_query;
+use datalib_unified_index::repo::IndexRepo;
 use std::path::PathBuf;
 use std::sync::Arc;
 

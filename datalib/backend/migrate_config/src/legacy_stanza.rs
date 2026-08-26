@@ -326,13 +326,16 @@ impl Default for QmdConfig {
 }
 
 fn default_qmd_index_path() -> String {
-    format!("${{data_root}}/{}", datalib_core::qmd::QMD_INDEX_REL)
+    format!(
+        "${{data_root}}/{}",
+        datalib_unified_index::qmd::QMD_INDEX_REL
+    )
 }
 fn default_qmd_version() -> String {
-    datalib_core::qmd::DEFAULT_QMD_VERSION.into()
+    datalib_unified_index::qmd::DEFAULT_QMD_VERSION.into()
 }
 fn default_qmd_collection() -> String {
-    datalib_core::qmd::DEFAULT_COLLECTION.into()
+    datalib_unified_index::qmd::DEFAULT_COLLECTION.into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

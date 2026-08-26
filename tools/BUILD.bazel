@@ -29,7 +29,7 @@ sh_test(
     srcs = ["check_qmd_model_cache_path.sh"],
     data = [
         "//:.bazelrc",
-        "//datalib/backend/core:src/qmd/mod.rs",
+        "//datalib/backend/unified_index:src/qmd/mod.rs",
         "//third-party/qmd:package.json",
         "//third-party/qmd:src/llm.ts",
     ],
@@ -83,7 +83,7 @@ py_test(
         "//:requirements.txt",
         "//datalib:tauri/stage-runtime.sh",
         "//datalib/backend/core:src/node_runtime.rs",
-        "//datalib/backend/core:src/qmd/mod.rs",
+        "//datalib/backend/unified_index:src/qmd/mod.rs",
         "//datalib/docker:Dockerfile",
         "//datalib/ui:pnpm-lock.yaml",
         "//tests/fixtures:BUILD.bazel",

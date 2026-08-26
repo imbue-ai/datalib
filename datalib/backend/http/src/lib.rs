@@ -30,11 +30,12 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use datalib_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
-use datalib_core::query::{parse_query, FreeTextMode, ParsedQuery};
-use datalib_core::repo::{DocRow, DynAppRepo, DynIndexRepo, EdgeRowOut, RepoError};
-use datalib_core::search::SearchRow;
+use datalib_core::repo::{DynAppRepo, RepoError};
 use datalib_core::version::git_hash;
+use datalib_unified_index::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
+use datalib_unified_index::query::{parse_query, FreeTextMode, ParsedQuery};
+use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
+use datalib_unified_index::search::SearchRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

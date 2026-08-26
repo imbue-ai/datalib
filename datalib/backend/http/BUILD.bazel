@@ -62,6 +62,7 @@ rust_library(
     deps = [
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -101,6 +102,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
@@ -120,6 +122,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
@@ -138,6 +141,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:tempfile",
@@ -153,6 +157,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
@@ -180,6 +185,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
@@ -208,6 +214,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
@@ -228,6 +235,7 @@ rust_binary(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "@datalib_crates//:anyhow",

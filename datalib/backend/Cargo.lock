@@ -1744,6 +1744,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-unified-index"
+version = "0.28.0"
+dependencies = [
+ "anyhow",
+ "app-schema",
+ "async-trait",
+ "chrono",
+ "datalib-core",
+ "datalib-obs",
+ "datalib-schema",
+ "datalib-time",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "datalib-whatsapp-backup"
 version = "0.28.0"
 dependencies = [

@@ -33,7 +33,7 @@
 //! ephemeral port per run; users running the bundled release just get
 //! the default.
 //!
-//! Backend: [`DoltRepo`](datalib_core::dolt_repo::DoltRepo) over a
+//! Backend: [`DoltRepo`](datalib_unified_index::dolt_repo::DoltRepo) over a
 //! `sqlx::SqlitePool` against `<data_root>/unified_index/grid/db.doltlite_db`.
 //! No subprocess, no TCP port to MySQL.
 
@@ -142,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
     // a one-time download on the first semantic search instead of
     // blocking boot behind a multi-hundred-MB pull and turning a
     // network blip into a failed start.
-    let index_path = datalib_core::qmd::qmd_index_path(&root);
+    let index_path = datalib_unified_index::qmd::qmd_index_path(&root);
     if index_path.exists() {
         // Models live once in a shared cache (`~/.cache/qmd/models`);
         // each data root reaches them through a `<root>/qmd/models`

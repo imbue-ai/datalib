@@ -11,9 +11,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datalib_core::dolt_repo::{AppStore, DoltRepo};
-use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
-use datalib_core::repo::{DynAppRepo, DynIndexRepo};
+use datalib_core::app_store::AppStore;
+use datalib_core::repo::DynAppRepo;
+use datalib_unified_index::repo::DynIndexRepo;
+use datalib_unified_index::dolt_repo::DoltRepo;
+use datalib_unified_index::qmd::{QmdDaemon, QmdDaemonConfig};
 
 use crate::{auth::ApiToken, worker, AppState};
 

@@ -4,6 +4,7 @@ members = [
     "schema",
     "app_schema",
     "index_lib",
+    "unified_index",
     "core",
     "dag",
     "http",
