@@ -101,6 +101,7 @@ rust_test(
     edition = "2021",
 )
 
+
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and
 # upsert into Dolt; tracks markdowns_loaded(qmd_path, fingerprint) for
 # idempotent skips.

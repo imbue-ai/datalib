@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "reveal-local-files",
+  "description": "Lets the grid reveal a local file in the platform file manager. The `remote` block is REQUIRED and not boilerplate: this app does not bundle its frontend (`frontendDist` is a stub) \u2014 it serves the UI from `datalib-http` and loads it as an external URL, and Tauri withholds IPC from a remote origin unless that origin is listed here. The patterns are URLPattern syntax and the trailing `/**` matters: `http://127.0.0.1:*` alone constrains the pathname to empty and would not match `/` or any route, which fails SILENTLY (the plugin call is simply never authorized). 127.0.0.1 is what the server actually binds (DEFAULT_BIND in datalib/backend/http/src/main.rs); localhost is carried for a DATALIB_BIND override. Only the reveal command is granted \u2014 `opener:allow-open-path` is deliberately absent, since that one launches a file's default application.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "opener:allow-reveal-item-in-dir"
+  ]
+}

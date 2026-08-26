@@ -155,13 +155,16 @@ pub struct GridRow {
     ///   notion: notion_space.name (workspace name; one per ingest)
     #[col(sql = "VARCHAR(96)")]
     pub account: Option<String>,
-    /// Project identifier. For anthropic this is the project UUID; for
-    /// github/gitlab this is the repo full name (e.g. 'owner/repo' or
-    /// 'group/.../project_path'). Null for providers without a project
-    /// notion (openai, slack).
+    /// Project identifier. For anthropic this is the Claude Project's
+    /// *name*; for github/gitlab this is the repo full name (e.g.
+    /// 'owner/repo' or 'group/.../project_path'). Null for providers
+    /// without a project notion (openai, slack).
     ///
     /// Per-provider mapping:
-    ///   anthropic: anthropic_conversations.project_uuid
+    ///   anthropic: the `projects.name` of the conversation's
+    ///     `project.uuid`, so a project page and every conversation in
+    ///     it group under one label. Falls back to the bare UUID when
+    ///     projects aren't mirrored (`sync.projects = false`).
     ///   openai: null
     ///   slack: null
     ///   github: pull_request.base.repo.full_name (e.g. 'enterprise-d/replicator-firmware')

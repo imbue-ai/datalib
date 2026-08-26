@@ -9,10 +9,11 @@
 //!
 //! ## Row structs and the bulk-upsert path
 //!
-//! `UserRow`, `OrgRow`, `ConversationRow` derive
-//! `WirePayloadRow` so the DDL + bulk-upsert plumbing comes from one
-//! source. The N:M edge table (`ConversationAttachmentRow`) is
-//! hand-rolled. All four go through `bulk_upsert_in_tx`.
+//! `UserRow`, `OrgRow`, `ProjectRow`, `ProjectDocRow` and
+//! `ConversationRow` derive `WirePayloadRow` so the DDL + bulk-upsert
+//! plumbing comes from one source. The N:M edge table
+//! (`ConversationAttachmentRow`) is hand-rolled. All of them go
+//! through `bulk_upsert_in_tx`.
 //!
 //! ## Attachment bytes
 //!
@@ -26,7 +27,14 @@ use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 
-pub const DATA_TABLES: &[&str] = &["users", "orgs", "conversations", "anthropic_attachments"];
+pub const DATA_TABLES: &[&str] = &[
+    "users",
+    "orgs",
+    "projects",
+    "project_docs",
+    "conversations",
+    "anthropic_attachments",
+];
 
 /// `users` — one row per Anthropic user UUID.
 #[derive(Debug, Clone, WirePayloadRow)]
@@ -60,6 +68,46 @@ pub struct ConversationRow {
     pub updated_at: Option<String>,
 }
 
+/// `projects` — one row per Claude Project UUID.
+///
+/// Stores the raw `/organizations/{org}/projects/{uuid}` listing entry.
+/// `updated_at` drives the same skip-check the conversation listing
+/// uses: an unchanged value means we already have this project's
+/// metadata, so only its knowledge docs (a separate table, on its own
+/// TTL) can still need a refetch.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "projects")]
+pub struct ProjectRow {
+    pub id_and_payload: WirePayload,
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
+    pub name: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// `project_docs` — one row per knowledge document attached to a
+/// project.
+///
+/// The document's full text rides inline in the payload's `content`
+/// field, so — unlike `chat_messages[*].files[]` — there is no
+/// download URL, no CAS edge, and no second request. Same reasoning as
+/// the `attachments[]` split documented in DOWNLOAD.md: we only put
+/// bytes in the CAS when there are bytes to fetch.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "project_docs")]
+pub struct ProjectDocRow {
+    pub id_and_payload: WirePayload,
+    pub project_uuid: Option<String>,
+    pub file_name: Option<String>,
+    pub created_at: Option<String>,
+}
+
+pub const PROJECTS_ORG_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS projects_org ON projects(org_uuid)";
+
+pub const PROJECT_DOCS_PROJECT_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS project_docs_project ON project_docs(project_uuid)";
+
 pub const CONVERSATIONS_ORG_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS conversations_org ON conversations(org_uuid)";
 
@@ -90,6 +138,10 @@ pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         UserRow::ddl(),
         OrgRow::ddl(),
+        ProjectRow::ddl(),
+        ProjectDocRow::ddl(),
+        PROJECTS_ORG_INDEX_DDL.to_string(),
+        PROJECT_DOCS_PROJECT_INDEX_DDL.to_string(),
         ConversationRow::ddl(),
         CONVERSATIONS_ORG_INDEX_DDL.to_string(),
         CONVERSATIONS_UPDATED_INDEX_DDL.to_string(),

@@ -119,6 +119,12 @@ ignore = "0.4"
 # parsers on reading order and tables.
 pdf-inspector = { version = "1.17", default-features = false }
 
+# RFC-8089 `file://` URL construction for the `pdf` provider's
+# `grid_rows.source_url`. Hand-rolling this is where you get `#` in a
+# filename (which truncates the URL), spaces, non-ASCII, and Windows
+# drive letters subtly wrong.
+url = "2"
+
 # Low-level PDF object access for the `pdf` provider's identity columns
 # (trailer `/ID`, the XMP metadata stream). pdf-inspector exposes
 # neither.

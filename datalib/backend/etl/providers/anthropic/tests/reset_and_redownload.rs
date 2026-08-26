@@ -23,6 +23,12 @@
 //!      mapping is byte-identical between the two runs.
 //!   5. Assert at least one `dolt_log()` entry per commit lands.
 //!
+//! Covers the project tables too: a reset has to land `projects` and
+//! `project_docs` back on the same PKs, and — because `reset()`
+//! truncates data tables but not the sweep markers in
+//! `sync_scope_state` — has to refetch the knowledge docs despite a
+//! still-fresh docs TTL.
+//!
 //! Bookkeeping sidecars (`*_bookkeeping`, `blobs_bookkeeping`) are
 //! intentionally NOT asserted — they carry `fetched_at` /
 //! `last_attempt_at` / `attempt_count` which churn on every fetch.
@@ -46,7 +52,7 @@ use tempfile::tempdir;
 /// reset+redownload of the same upstream fixtures. Excludes the
 /// `*_bookkeeping` sidecars (volatile `fetched_at`) and the
 /// whole-table bookkeeping (`sync_runs` etc.).
-const DATA_TABLES: &[&str] = &["users", "orgs", "conversations"];
+const DATA_TABLES: &[&str] = &["users", "orgs", "conversations", "projects", "project_docs"];
 
 /// Snapshot every row of a data table as a stable (id → JSON-text)
 /// map. `payload` is JSONB on disk; we unwrap it to its canonical
@@ -142,6 +148,25 @@ async fn reset_and_redownload_preserves_data_tables() {
         serde_json::to_vec_pretty(&json!([{"uuid": "acct-1"}])).unwrap(),
     )
     .unwrap();
+    // A project + its knowledge docs, so the two project tables are
+    // covered by the same PK-stability claim as everything else.
+    fs::create_dir_all(api.join("projects")).unwrap();
+    fs::write(
+        api.join("projects").join("p1.json"),
+        serde_json::to_vec_pretty(&json!({
+            "uuid": "proj-1",
+            "name": "Bridge Operations",
+            "creator": {"uuid": "acct-1"},
+            "updated_at": "2025-01-03T00:00:00Z",
+            "_source": {"org_uuid": "org-a"},
+            "docs": [
+                {"uuid": "doc-1", "file_name": "a.md", "content": "alpha"},
+                {"uuid": "doc-2", "file_name": "b.md", "content": "beta"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     AnthropicSynth::new(&api).synthesize(&playback).unwrap();
     std::env::set_var(PLAYBACK_ENV, &playback);
@@ -173,6 +198,8 @@ async fn reset_and_redownload_preserves_data_tables() {
     }
     assert_eq!(before["conversations"].len(), 2);
     assert_eq!(before["users"].len(), 1);
+    assert_eq!(before["projects"].len(), 1);
+    assert_eq!(before["project_docs"].len(), 2);
 
     // First commit (best-effort: stock libsqlite3 builds skip dolt).
     configure_committer(&pool).await;
@@ -202,6 +229,19 @@ async fn reset_and_redownload_preserves_data_tables() {
     assert_eq!(
         s2.fetched, 2,
         "after reset the second run should refetch every conversation"
+    );
+    // `reset()` truncates the data tables but leaves the sweep markers
+    // in `sync_scope_state`, so the docs refetch has to be driven by the
+    // metadata skip-check finding an empty `projects` table — not by the
+    // TTL, which is still fresh from run 1.
+    assert_eq!(
+        s2.projects_fetched, 1,
+        "after reset the project must be re-stored"
+    );
+    assert_eq!(
+        s2.project_docs_fetched, 2,
+        "after reset the knowledge docs must be re-pulled even though \
+         the per-project docs sweep marker survives the truncate"
     );
 
     // Pool size 1 is the only safe choice for doltlite (per-connection

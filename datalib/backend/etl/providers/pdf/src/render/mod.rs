@@ -31,6 +31,20 @@ fn md_path_for(out_dir: &Path, blake3: &str) -> PathBuf {
     out_dir.join("docs").join(format!("{blake3}.md"))
 }
 
+/// The render cache key for one document: its content hash *and* the
+/// renderer that would produce the output.
+///
+/// Content alone is not enough. A change to the markdown or to the
+/// `grid_rows` projection leaves every document's bytes untouched, so a
+/// pure-blake3 fingerprint would skip them all and an existing install
+/// would keep pre-change output indefinitely. Folding
+/// [`RENDER_VERSION`] in is what makes bumping it mean something — see
+/// that constant's docs for why the framework's `renderer_version`
+/// column cannot be relied on for this.
+pub fn render_fingerprint(blake3: &str) -> String {
+    format!("{blake3}.v{RENDER_VERSION}")
+}
+
 pub struct RenderSummary {
     pub converted: usize,
     pub skipped_unchanged: usize,
@@ -90,7 +104,8 @@ pub fn render_targets(
         // need re-conversion, and one that has changed has a different
         // primary key, so there is no separate invalidation to get
         // wrong.
-        if prior_fingerprints.get(&doc_uuid) == Some(&t.blake3) && md_path.exists() {
+        let fingerprint = render_fingerprint(&t.blake3);
+        if prior_fingerprints.get(&doc_uuid) == Some(&fingerprint) && md_path.exists() {
             summary.skipped_unchanged += 1;
             continue;
         }
@@ -195,6 +210,7 @@ fn render_one(
 
     let meta = grid_rows::DocumentMeta {
         blake3: &t.blake3,
+        abs_path: &t.abs_path,
         title: t.title.as_deref(),
         author: t.author.as_deref(),
         rel_path: &t.rel_path,
@@ -209,7 +225,7 @@ fn render_one(
     datalib_index_lib::emit_sidecar(
         &md_path.with_extension("grid_rows.json"),
         doc_uuid,
-        &t.blake3,
+        &render_fingerprint(&t.blake3),
         RENDER_VERSION,
         &rows,
         &[],
@@ -218,7 +234,7 @@ fn render_one(
     Ok(RenderedMarkdown {
         markdown_uuid: doc_uuid.to_string(),
         source_name: source_name.to_string(),
-        source_fingerprint: t.blake3.clone(),
+        source_fingerprint: render_fingerprint(&t.blake3),
         upstream_cursor: None,
         md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
@@ -235,6 +251,23 @@ fn yaml_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fingerprint_changes_when_the_renderer_does() {
+        // The whole point: content alone would skip re-rendering after a
+        // renderer change, leaving an existing install on stale output
+        // forever. If this ever equals the bare hash again, the cache
+        // key has lost its version component.
+        let fp = render_fingerprint("deadbeef");
+        assert_ne!(fp, "deadbeef");
+        assert!(fp.starts_with("deadbeef."), "{fp}");
+        assert!(fp.ends_with(&RENDER_VERSION.to_string()), "{fp}");
+    }
+
+    #[test]
+    fn the_fingerprint_still_distinguishes_content() {
+        assert_ne!(render_fingerprint("aaaa"), render_fingerprint("bbbb"));
+    }
 
     #[test]
     fn md_path_is_content_named() {

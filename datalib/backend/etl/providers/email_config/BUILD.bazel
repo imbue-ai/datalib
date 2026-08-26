@@ -25,4 +25,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_email_config",
     edition = "2021",
+    # Tests only: the round-trip cases parse a `--params` payload the way
+    # the step planner does, which is JSON.
+    deps = ["@datalib_crates//:serde_json"],
 )

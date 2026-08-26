@@ -33,7 +33,8 @@ pub use api::{ClaudeClient, ClaudeError};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 pub use db::{db_path_for, LoadedConversation, LoadedRaw, RawDb};
 use schema_raw::{
-    ConversationAttachmentRow, ConversationRow as ConversationRowSchema, OrgRow, UserRow,
+    ConversationAttachmentRow, ConversationRow as ConversationRowSchema, OrgRow, ProjectDocRow,
+    ProjectRow, UserRow,
 };
 
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
@@ -50,7 +51,28 @@ const CLAUDE_ORIGIN: &str = "https://claude.ai";
 pub const ORGS_TTL: chrono::Duration = chrono::Duration::hours(6);
 const ORGS_SWEEP_KEY: &str = "orgs";
 
-#[derive(Debug, Clone, Default)]
+/// How long a project's knowledge-doc listing stays good.
+///
+/// The project *listing* is refetched every run (one request per org),
+/// and a changed `updated_at` forces a doc refetch — that is the same
+/// incrementality the conversation walk uses. But we have not confirmed
+/// that adding or editing a knowledge document bumps the project's
+/// `updated_at`, and if it doesn't, an `updated_at`-only rule would let
+/// docs go stale forever. This TTL is the floor that bounds that risk:
+/// worst case one extra request per project per day.
+pub const PROJECT_DOCS_TTL: chrono::Duration = chrono::Duration::hours(24);
+
+/// Per-project sweep-marker key for the docs listing. Namespaced by
+/// project UUID so each project ages independently.
+fn project_docs_sweep_key(project_uuid: &str) -> String {
+    format!("project_docs:{project_uuid}")
+}
+
+/// `Default` is hand-written, not derived, so `projects` defaults to
+/// `true` and agrees with `ClaudeApiSync`'s serde default. A derived
+/// `Default` would make every `..Default::default()` caller silently
+/// opt out of the project mirror while their config said otherwise.
+#[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
@@ -76,9 +98,33 @@ pub struct FetchOptions {
     /// When non-empty, fetch only these conversation UUIDs. The
     /// listing walk is skipped entirely.
     pub conv_uuids: Vec<String>,
+    /// Also mirror Claude Projects (metadata + knowledge docs).
+    /// Ignored in `conv_uuids` mode, which skips the listing walk.
+    pub projects: bool,
+    /// When non-empty, mirror only these project UUIDs. The per-org
+    /// listing still runs; everything outside the set is skipped.
+    pub project_uuids: Vec<String>,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: datalib_etl::control::DownloadControl,
+}
+
+impl Default for FetchOptions {
+    fn default() -> Self {
+        Self {
+            db_path: PathBuf::new(),
+            db: None,
+            export_dir: None,
+            overlap: 0,
+            sleep_between: Duration::ZERO,
+            since: None,
+            conv_uuids: Vec::new(),
+            projects: true,
+            project_uuids: Vec::new(),
+            progress: Default::default(),
+            control: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -90,8 +136,19 @@ pub struct FetchSummary {
     /// "in scope and already up to date") or `total`.
     pub out_of_scope: usize,
     pub forbidden_orgs: usize,
+    /// Fetch failures across both walks — conversations and projects.
     pub errors: usize,
     pub total: usize,
+    /// Projects whose metadata row was written this run.
+    pub projects_fetched: usize,
+    /// Projects whose metadata was already current (no `updated_at`
+    /// change) — counted separately from conversations' `skipped`.
+    pub projects_skipped: usize,
+    /// Knowledge documents written this run, across every project.
+    pub project_docs_fetched: usize,
+    /// Projects whose docs listing was served by a fresh sweep marker
+    /// instead of a request.
+    pub project_docs_skipped: usize,
     pub new_blobs: usize,
     pub skipped_blobs: usize,
     pub failed_blobs: usize,
@@ -294,6 +351,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             return Ok::<(), anyhow::Error>(());
         }
 
+        // Projects come before the conversation walk so a rename lands
+        // in the same run as the conversations that dereference it.
+        // Best-effort: a project failure warns and is counted, but does
+        // not abort the chat mirror, which is the main event.
+        if opts.projects {
+            let only: HashSet<String> = opts
+                .project_uuids
+                .iter()
+                .map(|s| datalib_etl::ids::normalize_id_token(s))
+                .collect();
+            sync_projects(
+                &mut client,
+                &db,
+                &orgs,
+                &only,
+                &mut summary,
+                &opts.progress,
+                &now,
+            )
+            .await;
+        }
+
         // Pass 1: list every org, classify. Collect the per-org fetch
         // plans so we know the total work up front and can set the
         // progress bar's length exactly once — otherwise a length
@@ -313,14 +392,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let mut plans: Vec<OrgPlan> = Vec::new();
         let mut listings_by_org: Vec<(String, String, Vec<Value>)> = Vec::new();
         for org in &orgs {
-            let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
+            let Some((org_uuid, org_name)) = org_identity(org) else {
                 continue;
             };
-            let org_name = org
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
-                .to_string();
             let listing = match client
                 .list_conversations(org_uuid)
                 .instrument(info_span!("anthropic_org_listing", org = %org_name))
@@ -498,6 +572,263 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
+/// Mirror every org's Claude Projects: the project metadata rows plus
+/// each project's knowledge documents.
+///
+/// Incrementality mirrors the conversation walk — the listing is one
+/// request per org and a project whose `updated_at` is unchanged is not
+/// re-written — with one addition: knowledge docs live behind a
+/// per-project [`PROJECT_DOCS_TTL`] sweep marker, because we have not
+/// confirmed that editing a document bumps the project's `updated_at`.
+///
+/// Best-effort throughout. A 403 on an org means "no project permission
+/// here" (the same shape `list_conversations` already handles); any
+/// other failure warns, counts into `summary.errors`, and moves on
+/// rather than aborting the conversation mirror.
+///
+/// `only` narrows the walk to a specific set of project UUIDs when
+/// non-empty (config `sync.project_uuids`). It filters *after* the
+/// listing, not instead of it: the listing is one request per org and
+/// it is where the project metadata comes from.
+#[allow(clippy::too_many_arguments)]
+async fn sync_projects(
+    client: &mut ClaudeClient,
+    db: &RawDb,
+    orgs: &[Value],
+    only: &HashSet<String>,
+    summary: &mut FetchSummary,
+    progress: &datalib_etl::progress::Progress,
+    now: &str,
+) {
+    // Track which requested UUIDs we actually saw, so a typo doesn't
+    // silently mirror nothing.
+    let mut matched: HashSet<&str> = HashSet::new();
+
+    for org in orgs {
+        let Some((org_uuid, org_name)) = org_identity(org) else {
+            continue;
+        };
+        let listing = match client
+            .list_projects(org_uuid)
+            .instrument(info_span!("anthropic_project_listing", org = %org_name))
+            .await
+        {
+            Ok(l) => l,
+            Err(ClaudeError::Forbidden(_)) => {
+                info!(
+                    event = "anthropic_projects_forbidden",
+                    org = %org_name,
+                    note = "no project permission for this org"
+                );
+                continue;
+            }
+            Err(e) => {
+                warn!(event = "anthropic_projects_list_failed", org = %org_name, error = %e);
+                summary.errors += 1;
+                continue;
+            }
+        };
+        info!(
+            event = "anthropic_project_listing_count",
+            org = %org_name,
+            count = listing.len()
+        );
+
+        // Narrow before the skip-check so a filtered run doesn't even
+        // read rows it will never touch.
+        let listing: Vec<Value> = if only.is_empty() {
+            listing
+        } else {
+            listing
+                .into_iter()
+                .filter(|p| {
+                    p.get("uuid")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|u| only.contains(u))
+                })
+                .collect()
+        };
+        for p in &listing {
+            if let Some(u) = p.get("uuid").and_then(|v| v.as_str()) {
+                // Borrow from `only`, not from the listing, so the set
+                // outlives this iteration.
+                if let Some(k) = only.get(u) {
+                    matched.insert(k.as_str());
+                }
+            }
+        }
+        if listing.is_empty() {
+            continue;
+        }
+
+        let listed_ids: Vec<&str> = listing
+            .iter()
+            .filter_map(|p| p.get("uuid").and_then(|v| v.as_str()))
+            .collect();
+        let existing = match db.existing_project_updated_at(&listed_ids).await {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(event = "anthropic_projects_skipcheck_failed", error = %e);
+                summary.errors += 1;
+                continue;
+            }
+        };
+
+        let inner = progress.child(&format!("claude projects: {org_name}"));
+        inner.set_length(Some(listing.len() as u64));
+        for project in &listing {
+            let Some(uuid) = project.get("uuid").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            inner.inc(1);
+            inner.set_message(project.get("name").and_then(|v| v.as_str()).unwrap_or(uuid));
+
+            let api_updated = project
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let metadata_changed = existing.get(uuid).map(String::as_str) != Some(api_updated);
+            if metadata_changed {
+                match upsert_project(db, project, uuid, org_uuid, &org_name, now).await {
+                    Ok(()) => summary.projects_fetched += 1,
+                    Err(e) => {
+                        warn!(event = "anthropic_project_upsert_failed", uuid = uuid, error = %e);
+                        summary.errors += 1;
+                        continue;
+                    }
+                }
+            } else {
+                summary.projects_skipped += 1;
+            }
+
+            if !docs_need_refetch(db, uuid, metadata_changed).await {
+                summary.project_docs_skipped += 1;
+                continue;
+            }
+            match client.list_project_docs(org_uuid, uuid).await {
+                Ok(docs) => match upsert_project_docs(db, &docs, uuid, now).await {
+                    Ok(n) => {
+                        summary.project_docs_fetched += n;
+                        // Only stamp the marker once the rows are
+                        // stored, so an interrupted sweep doesn't
+                        // poison the TTL check (same rule as `orgs`).
+                        if let Err(e) = db.record_sweep(&project_docs_sweep_key(uuid)).await {
+                            warn!(event = "anthropic_project_docs_sweep_failed", error = %e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(event = "anthropic_project_docs_upsert_failed", uuid = uuid, error = %e);
+                        summary.errors += 1;
+                    }
+                },
+                Err(ClaudeError::Forbidden(_)) => {
+                    info!(event = "anthropic_project_docs_forbidden", uuid = uuid);
+                }
+                Err(e) => {
+                    warn!(event = "anthropic_project_docs_failed", uuid = uuid, error = %e);
+                    summary.errors += 1;
+                }
+            }
+            sleep(SLEEP_BETWEEN).await;
+        }
+        inner.finish_and_clear();
+    }
+
+    // A UUID in `sync.project_uuids` that matched nothing is almost
+    // always a typo or a project in an org this account can't see.
+    // Silently mirroring nothing is the worst outcome, so say it.
+    for requested in only {
+        if !matched.contains(requested.as_str()) {
+            warn!(
+                event = "anthropic_project_uuid_not_found",
+                uuid = %requested,
+                note = "listed in sync.project_uuids but not present in any visible org"
+            );
+        }
+    }
+}
+
+/// Whether to re-list one project's knowledge docs. Yes when the
+/// project's metadata changed, when no sweep has ever completed for it,
+/// or when the last one is older than [`PROJECT_DOCS_TTL`]. A marker
+/// read that errors is treated as "refetch" — doing the request is
+/// always safe, skipping on a broken read is not.
+async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: bool) -> bool {
+    if metadata_changed {
+        return true;
+    }
+    match db.sweep_age(&project_docs_sweep_key(project_uuid)).await {
+        Ok(Some(age)) => age >= PROJECT_DOCS_TTL,
+        Ok(None) => true,
+        Err(e) => {
+            warn!(event = "anthropic_project_docs_sweep_age_failed", error = %e);
+            true
+        }
+    }
+}
+
+async fn upsert_project(
+    db: &RawDb,
+    payload: &Value,
+    uuid: &str,
+    org_uuid: &str,
+    org_name: &str,
+    now: &str,
+) -> Result<()> {
+    let row = ProjectRow {
+        id_and_payload: WirePayload {
+            id: uuid.to_string(),
+            payload: serde_json::to_string(payload).context("serialize project")?,
+        },
+        org_uuid: Some(org_uuid.to_string()),
+        org_name: Some(org_name.to_string()),
+        name: payload
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        updated_at: payload
+            .get("updated_at")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    };
+    commit_rows(db, &[row], now).await
+}
+
+/// Write one project's knowledge documents. Returns how many rows were
+/// written. Docs carry their text inline, so there is nothing to fetch
+/// past this listing and nothing to put in the CAS.
+async fn upsert_project_docs(
+    db: &RawDb,
+    docs: &[Value],
+    project_uuid: &str,
+    now: &str,
+) -> Result<usize> {
+    let mut rows: Vec<ProjectDocRow> = Vec::with_capacity(docs.len());
+    for doc in docs {
+        let Some(id) = doc.get("uuid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        rows.push(ProjectDocRow {
+            id_and_payload: WirePayload {
+                id: id.to_string(),
+                payload: serde_json::to_string(doc).context("serialize project doc")?,
+            },
+            project_uuid: Some(project_uuid.to_string()),
+            file_name: doc
+                .get("file_name")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            created_at: doc
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        });
+    }
+    let n = rows.len();
+    commit_rows(db, &rows, now).await?;
+    Ok(n)
+}
+
 /// Wrap the preflight's failure in setup instructions when it looks
 /// like latchkey can't authenticate to claude.ai at all: the service
 /// was never registered ("No service matches URL"), or the sessionKey
@@ -539,14 +870,9 @@ async fn fetch_single(
     now: &str,
 ) -> Result<()> {
     for org in orgs {
-        let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
+        let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
         };
-        let org_name = org
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
-            .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
                 save_conversation(db, org_uuid, &org_name, conv_uuid, &full, now).await?;
@@ -680,14 +1006,48 @@ async fn save_conversation(
         name,
         updated_at,
     };
+    commit_rows(db, &[row], now).await
+}
+
+/// `(uuid, display name)` for one `/organizations` entry, or `None`
+/// when it carries no uuid.
+///
+/// The fallback label is the uuid's leading 8 characters — taken with
+/// `char_indices` rather than a byte slice, so an unexpected non-ASCII
+/// id truncates instead of panicking mid-codepoint. Three call sites
+/// (conversation listing, single-conversation fetch, project listing)
+/// need exactly this pair.
+fn org_identity(org: &Value) -> Option<(&str, String)> {
+    let uuid = org.get("uuid").and_then(|v| v.as_str())?;
+    let name = match org.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => uuid.char_indices().take(8).map(|(_, c)| c).collect(),
+    };
+    Some((uuid, name))
+}
+
+/// Open a transaction, bulk-upsert `rows`, commit.
+///
+/// Every entity write in this module has exactly this shape, and
+/// `T::TABLE` supplies the error context, so call sites carry only the
+/// row construction that actually differs between them.
+async fn commit_rows<T: datalib_etl::bulk::BulkUpsertable>(
+    db: &RawDb,
+    rows: &[T],
+    now: &str,
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
     let mut tx = db
         .pool()
         .begin()
         .await
-        .context("begin save_conversation tx")?;
-    bulk_upsert_in_tx(&mut tx, &[row], now).await?;
-    tx.commit().await.context("commit save_conversation tx")?;
-    Ok(())
+        .with_context(|| format!("begin {} upsert tx", T::TABLE))?;
+    bulk_upsert_in_tx(&mut tx, rows, now).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit {} upsert tx", T::TABLE))
 }
 
 /// Bulk-upsert helpers — same `now` as the rest of the fetch so the
@@ -719,13 +1079,7 @@ async fn upsert_users(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
             full_name,
         });
     }
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut tx = db.pool().begin().await.context("begin upsert_users tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
-    tx.commit().await.context("commit upsert_users tx")?;
-    Ok(())
+    commit_rows(db, &rows, now).await
 }
 
 async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
@@ -750,13 +1104,7 @@ async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
             name,
         });
     }
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut tx = db.pool().begin().await.context("begin upsert_orgs tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
-    tx.commit().await.context("commit upsert_orgs tx")?;
-    Ok(())
+    commit_rows(db, &rows, now).await
 }
 
 /// Pull `users.json` entries from an existing bulk-export directory
