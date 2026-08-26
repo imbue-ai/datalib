@@ -22,7 +22,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{capitalize, render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
@@ -284,20 +284,6 @@ fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'s
             _ => "LLM Response",
         },
         _ => "Tool Call",
-    }
-}
-
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut out: String = c.to_uppercase().collect();
-            for rest in chars {
-                out.extend(rest.to_lowercase());
-            }
-            out
-        }
     }
 }
 

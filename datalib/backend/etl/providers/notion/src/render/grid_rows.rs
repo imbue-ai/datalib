@@ -17,6 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use anyhow::Result;
+use datalib_etl::json::canonicalize;
 use datalib_schema::grid_rows::GridRow;
 use serde_json::Value;
 
@@ -311,22 +312,6 @@ fn thread_rows(
 
 fn canonical_json(v: &Value) -> String {
     serde_json::to_string(&canonicalize(v)).unwrap_or_default()
-}
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
 }
 
 fn fingerprint_for_page(

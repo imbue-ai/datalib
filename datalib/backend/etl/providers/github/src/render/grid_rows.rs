@@ -14,28 +14,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use anyhow::Result;
+use datalib_etl::json::canonicalize;
 use datalib_schema::grid_rows::GridRow;
 use serde_json::Value;
 
 use super::parse::{CommentRow, CommentSection, PullRequestRow};
 
 pub const RENDER_VERSION: u32 = 1;
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
 
 fn comment_json(c: &CommentRow) -> Value {
     serde_json::json!({

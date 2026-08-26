@@ -16,6 +16,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
+use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
@@ -237,7 +238,10 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
         // month so a busy space isn't a single monolithic page.
         let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
         for it in items {
-            by_month.entry(month_of(it.date_ms)).or_default().push(it);
+            by_month
+                .entry(Period::Month.key_for_ms(it.date_ms))
+                .or_default()
+                .push(it);
         }
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
@@ -368,7 +372,10 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
         // Month buckets (`YYYY-MM`), oldest first.
         let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
         for it in items {
-            by_month.entry(month_of(it.date_ms)).or_default().push(it);
+            by_month
+                .entry(Period::Month.key_for_ms(it.date_ms))
+                .or_default()
+                .push(it);
         }
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
@@ -546,15 +553,6 @@ fn voice_date_ms(m: &Value) -> i64 {
 }
 
 /// `YYYY-MM` (UTC) bucket key for a unix-millis timestamp.
-fn month_of(ms: i64) -> String {
-    use chrono::TimeZone;
-    chrono::Utc
-        .timestamp_millis_opt(ms)
-        .single()
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 /// MIME guess from an attachment filename's extension, so chat-common
 /// can pick `<img>` / `<audio>` / `<video>` / link rendering.
 fn voice_mime(name: &str) -> Option<String> {
@@ -641,7 +639,7 @@ mod tests {
     fn parse_date_ms_handles_narrow_no_break_space() {
         let feb = parse_date_ms("Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC");
         assert!(feb > 0, "narrow no-break space must still parse");
-        assert_eq!(month_of(feb), "2025-02");
+        assert_eq!(Period::Month.key_for_ms(feb), "2025-02");
     }
 
     #[test]

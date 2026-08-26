@@ -182,7 +182,7 @@ fn nonempty(s: &str) -> Option<&str> {
 
 /// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis.
 /// Returns 0 on any unexpected shape (sorts such rows to the top).
-fn parse_date_ms(s: &str) -> i64 {
+pub(crate) fn parse_date_ms(s: &str) -> i64 {
     let s = s.trim().trim_end_matches(" UTC").trim();
     chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
         .map(|dt| dt.and_utc().timestamp_millis())

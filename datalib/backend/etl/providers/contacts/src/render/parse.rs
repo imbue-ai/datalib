@@ -35,6 +35,7 @@
 //! seam — flip `parse_file` to call `vcard4::parse` and re-derive the
 //! same `ParsedContact` fields from its AST.
 
+use crate::vcard::split_vcards;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -160,38 +161,6 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
             .cmp(&b.addressbook)
             .then_with(|| a.uid.cmp(&b.uid))
     });
-    out
-}
-
-/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
-/// blocks. Tolerates CRLF / LF / mixed line endings and case-
-/// insensitive markers (RFC 6350 §3.3 says "BEGIN" / "END" are
-/// case-insensitive in practice every server emits uppercase, but
-/// stay defensive).
-///
-/// Discards any text outside a block — wrapper-style exports
-/// (CardDAV's `<address-data>` wrapping, leading mail-server
-/// envelope text) wouldn't survive a round trip through this and
-/// shouldn't.
-fn split_vcards(body: &str) -> Vec<String> {
-    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
-    let mut out: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
-            current = Some(String::new());
-        }
-        if let Some(buf) = current.as_mut() {
-            buf.push_str(line);
-            buf.push('\n');
-        }
-        if trimmed.eq_ignore_ascii_case("END:VCARD") {
-            if let Some(buf) = current.take() {
-                out.push(buf);
-            }
-        }
-    }
     out
 }
 

@@ -23,13 +23,14 @@
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
+use datalib_etl::json::canonicalize;
 use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{capitalize, render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
@@ -740,22 +741,6 @@ fn json_pretty_sorted(v: &Value) -> String {
     serde_json::to_string_pretty(&canonicalize(v)).unwrap_or_default()
 }
 
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
-
 /// Pull (file id, file name, is_image) out of an attachment row's
 /// raw_json. Anthropic uses `file_uuid` / `id` / `uuid` for the id
 /// depending on export vs live API.
@@ -789,20 +774,6 @@ fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
     }
     let quoted: String = body.lines().map(|l| format!("> {l}\n")).collect();
     format!("**[attachment: {header_label}]**\n{quoted}")
-}
-
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut out: String = c.to_uppercase().collect();
-            for rest in chars {
-                out.extend(rest.to_lowercase());
-            }
-            out
-        }
-    }
 }
 
 #[cfg(test)]

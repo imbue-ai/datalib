@@ -33,6 +33,7 @@ pub mod grid_index;
 pub mod http;
 pub mod ids;
 pub mod indicatif_progress;
+pub mod json;
 pub mod latchkey;
 pub mod layout;
 pub mod periodize;

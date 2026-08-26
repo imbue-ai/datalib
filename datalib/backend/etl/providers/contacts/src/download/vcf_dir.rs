@@ -18,6 +18,7 @@
 //!     suffixed with the block index when a single file packs many
 //!     vCards (Google's "Contacts.vcf" shape).
 
+use crate::vcard::split_vcards;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -297,31 +298,6 @@ fn relative_href(root: &Path, file: &Path) -> String {
                 .unwrap_or("contacts.vcf")
                 .to_string()
         })
-}
-
-/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
-/// blocks. Tolerates CRLF / LF / mixed line endings and case-
-/// insensitive markers. Text outside a block is dropped.
-fn split_vcards(body: &str) -> Vec<String> {
-    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
-    let mut out: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
-            current = Some(String::new());
-        }
-        if let Some(buf) = current.as_mut() {
-            buf.push_str(line);
-            buf.push('\n');
-        }
-        if trimmed.eq_ignore_ascii_case("END:VCARD") {
-            if let Some(buf) = current.take() {
-                out.push(buf);
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

@@ -28,6 +28,7 @@
 //! won't always merge into its share thread. We group on whatever URN
 //! each row carries; exact merges happen only when the URNs agree.
 
+use crate::render::parse_date_ms;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -337,16 +338,6 @@ fn field<'a>(p: &'a Value, key: &str) -> &'a str {
 fn nonempty(s: &str) -> Option<&str> {
     let t = s.trim();
     (!t.is_empty()).then_some(t)
-}
-
-/// Parse LinkedIn's `2026-06-16 22:11:33` (optionally ` UTC`) timestamp
-/// to unix millis. Returns 0 on any unexpected shape (sorts such rows to
-/// the top).
-fn parse_date_ms(s: &str) -> i64 {
-    let s = s.trim().trim_end_matches(" UTC").trim();
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map(|dt| dt.and_utc().timestamp_millis())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

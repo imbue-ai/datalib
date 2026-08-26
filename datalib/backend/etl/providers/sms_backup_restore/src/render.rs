@@ -16,6 +16,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
+use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
@@ -183,7 +184,10 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
 
         let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
         for it in items {
-            by_month.entry(month_of(it.date_ms)).or_default().push(it);
+            by_month
+                .entry(Period::Month.key_for_ms(it.date_ms))
+                .or_default()
+                .push(it);
         }
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
@@ -340,15 +344,6 @@ fn fmt_duration(s: i64) -> String {
 }
 
 /// `YYYY-MM` (UTC) bucket key for a unix-millis timestamp.
-fn month_of(ms: i64) -> String {
-    use chrono::TimeZone;
-    chrono::Utc
-        .timestamp_millis_opt(ms)
-        .single()
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 /// Basename of a `{message_id}/{partname}` ref.
 fn basename(ref_name: &str) -> &str {
     ref_name

@@ -706,6 +706,23 @@ fn display_ts(ms: i64) -> String {
         .unwrap_or_else(|| format!("@{ms}ms"))
 }
 
+/// Title-case a single word: first character uppercased, the rest
+/// lowercased. Used to turn a raw role/sender token (`"assistant"`,
+/// `"USER"`) into a display name.
+pub fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => {
+            let mut out: String = c.to_uppercase().collect();
+            for rest in chars {
+                out.extend(rest.to_lowercase());
+            }
+            out
+        }
+    }
+}
+
 fn human_bytes(n: i64) -> String {
     let n = n as f64;
     if n < 1024.0 {

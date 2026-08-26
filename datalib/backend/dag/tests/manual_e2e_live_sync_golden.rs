@@ -563,9 +563,7 @@ fn manual_e2e_live_sync_golden() {
     // this test so its tag may be absent. `system/` must NOT be tagged —
     // job logs are operational history, not rebuildable from raw.
     assert!(
-        data_root
-            .join("unified_index/grid/CACHEDIR.TAG")
-            .is_file(),
+        data_root.join("unified_index/grid/CACHEDIR.TAG").is_file(),
         "unified_index/grid/ must carry a CACHEDIR.TAG marking it as derived cache"
     );
     assert!(
