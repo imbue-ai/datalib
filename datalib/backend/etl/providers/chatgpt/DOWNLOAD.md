@@ -22,6 +22,24 @@ out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
 injects the `Authorization: Bearer <accessToken>` registered under
 the `chatgpt` service.
 
+### Why not latchkey's `cookie-capture` browser login?
+
+Because ChatGPT's cookie is not the API credential. latchkey >= 3.3.0
+has a generic `cookie-capture` login flow that opens a service's login
+page and stores named cookies as they are set, and for claude.ai that
+is the whole credential (see the Anthropic provider's `DOWNLOAD.md`).
+Here it is not: `__Secure-next-auth.session-token` authenticates the
+*web app*, which then calls `/api/auth/session` to mint the short-lived
+`accessToken` that `/backend-api/...` actually wants. Capturing the
+cookie would store something the API refuses.
+
+A browser login is still possible, but it needs a service that watches
+for that `/api/auth/session` response and lifts `accessToken` out of the
+body -- the same value the DevTools snippet below produces, obtained
+without the user touching DevTools. That is a latchkey service
+implementation, not a registration; no such service ships today, so the
+manual refresh below is the current route.
+
 ### Refreshing the access token
 
 ChatGPT rotates the bearer token frequently. When `latchkey services

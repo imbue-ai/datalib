@@ -30,6 +30,50 @@ The downloader does not handle claude.ai cookies directly. It shells
 out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
 injects the cookies registered under the `claude-ai` service.
 
+### Establishing the credential
+
+The whole credential is one cookie -- `sessionKey` -- stored under the
+`claude-ai` service. There are two ways to get it there, and they store
+the identical value (`-H "Cookie: sessionKey=..."`), so nothing
+downstream can tell them apart.
+
+**Browser login (needs latchkey >= 3.3.0).** latchkey ships a generic
+`cookie-capture` login flow: it opens the real claude.ai login page,
+watches the responses that follow, and stores the named cookies once
+they have been set. Nothing is pasted, and no secret passes through a
+shell:
+
+```sh
+latchkey services register claude-ai \
+  --base-api-url="https://claude.ai/" \
+  --login-url="https://claude.ai/login" \
+  --login-flow=cookie-capture \
+  --login-flow-params='{"cookieKeys": ["sessionKey"]}'
+latchkey auth browser claude-ai
+```
+
+**This does not work with the latchkey datalib pins.**
+`LATCHKEY_VERSION` in `datalib/backend/core/src/node_runtime.rs` is
+`3.1.0`, whose `services register` has no `--login-flow` option at all
+(`npx -y latchkey@3.1.0 services register --help` to confirm);
+`cookie-capture` first shipped in 3.3.0. The flow is therefore reachable
+today only through a newer latchkey on `PATH` -- using it from the
+bundled runtime means bumping that pin first.
+
+**Manual (works at the pinned 3.1.0).** Register the service, then paste
+the cookie in. `$(pbpaste)` keeps the secret out of shell history:
+
+```sh
+latchkey services register claude-ai --base-api-url="https://claude.ai/"
+# Open https://claude.ai logged in; DevTools -> Application -> Cookies ->
+# claude.ai, and copy the `sessionKey` value to the clipboard.
+latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+```
+
+Either way, smoke-test with `latchkey curl -s https://claude.ai/api/organizations`.
+
+### Cloudflare
+
 `claude.ai` is fronted by Cloudflare's managed-challenge system. To
 clear the challenge, point `LATCHKEY_CURL` at a Chrome-impersonating
 curl. The simplest option is the in-tree `latchkey-curl-impersonate` bin
