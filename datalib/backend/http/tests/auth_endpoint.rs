@@ -122,14 +122,6 @@ async fn unauthenticated_requests_are_refused() {
         .unwrap();
     assert_eq!(status(&app, put_lib).await, StatusCode::UNAUTHORIZED);
 
-    let post_card = Request::post("/api/card")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            serde_json::to_vec(&serde_json::json!({"source": "1"})).unwrap(),
-        ))
-        .unwrap();
-    assert_eq!(status(&app, post_card).await, StatusCode::UNAUTHORIZED);
-
     // The SPA itself, and the DACTAL page that shares its origin.
     assert_eq!(
         status(&app, Request::get("/").body(Body::empty()).unwrap()).await,

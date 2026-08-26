@@ -162,22 +162,6 @@ rust_test(
     ],
 )
 
-rust_test(
-    name = "card_endpoint_test",
-    srcs = ["tests/card_endpoint.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/dag:datalib_dag",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
 # Starts real applet processes and binds loopback ports, so it cannot
 # be sandboxed — same treatment as //datalib/ui:e2e_test. Pure store
 # semantics stay hermetic as unit tests in src/frontend.rs.

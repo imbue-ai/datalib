@@ -231,8 +231,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/docs", get(list_docs))
         .route("/api/asset/{markdown_uuid}/{*rel}", get(asset))
         .route("/api/feedback", post(submit_feedback))
-        .route("/api/card", post(create_card))
-        .route("/api/card/{hash}", get(get_card))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/dag", get(get_dag))
@@ -600,20 +598,6 @@ async fn submit_feedback(
     }
 }
 
-/// Body of `POST /api/card`. The user-authored JS source goes in
-/// verbatim; the server hashes it to derive the storage key. Bigger
-/// scripts (single-file Observable-style cells) are fine — the body
-/// is bounded by axum's default body limit.
-#[derive(Debug, Deserialize)]
-pub struct CreateCardRequest {
-    pub source: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateCardResponse {
-    pub hash: String,
-}
-
 // ---------------------------------------------------------------------------
 // Applets
 // ---------------------------------------------------------------------------
@@ -734,62 +718,6 @@ fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
         .expect("static response builds")
 }
 
-/// Content-addressed JS store under `<root>/.datalib/cards/<hash>.js`.
-/// Writes are idempotent: identical sources produce the same hash, and
-/// re-POSTing returns the same hash without touching the file.
-async fn create_card(
-    State(s): State<AppState>,
-    Json(req): Json<CreateCardRequest>,
-) -> Result<Json<CreateCardResponse>, StatusCode> {
-    let hash = sha256_hex(req.source.as_bytes());
-    let dir = s.root.join(".datalib/cards");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("create_card: mkdir {}: {e}", dir.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    let path = dir.join(format!("{hash}.js"));
-    if !path.exists() {
-        if let Err(e) = std::fs::write(&path, req.source.as_bytes()) {
-            eprintln!("create_card: write {}: {e}", path.display());
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
-    Ok(Json(CreateCardResponse { hash }))
-}
-
-/// Serve a stored card's JS body. The hash is validated to be 64 hex
-/// chars so the path can't traverse out of the cards directory.
-async fn get_card(
-    State(s): State<AppState>,
-    Path(hash): Path<String>,
-) -> Result<
-    (
-        StatusCode,
-        [(axum::http::HeaderName, &'static str); 1],
-        String,
-    ),
-    StatusCode,
-> {
-    // Same guard the module store applies: validate the digest's
-    // shape before it is ever joined onto a directory.
-    if !frontend::is_sha256_hex(&hash) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let path = s.root.join(".datalib/cards").join(format!("{hash}.js"));
-    match std::fs::read_to_string(&path) {
-        Ok(body) => Ok((
-            StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/javascript; charset=utf-8",
-            )],
-            body,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
 // --- Authoring the `user` namespace ----------------------------------------
 //
 // `/api/lib` is how a person or an agent puts a component into the
@@ -838,8 +766,8 @@ pub struct LibEntry {
     pub meta: frontend::Meta,
 }
 
-/// Lowercase hex sha256. The single definition in this crate: the card
-/// store and the frontend store name content the same way.
+/// Lowercase hex sha256. The single definition in this crate: every
+/// component in the frontend store is named by its own bytes.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);

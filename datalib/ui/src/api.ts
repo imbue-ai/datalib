@@ -458,30 +458,6 @@ export async function fetchJobLog(id: string, signal?: AbortSignal): Promise<str
   return await r.text();
 }
 
-// --- Cards (arbitrary JS visualizations) -----------------------------------
-//
-// POST /api/card stores a JS source string content-addressed by sha256 and
-// returns the hash. GET /api/card/{hash} fetches it back. The URL only
-// carries the hash, so the JS body never needs to fit in the URL.
-
-export async function createCard(source: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch("/api/card", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source }),
-    signal,
-  });
-  if (!r.ok) throw new Error(`POST /api/card → ${r.status}`);
-  const j = (await r.json()) as { hash: string };
-  return j.hash;
-}
-
-export async function fetchCard(hash: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch(`/api/card/${encodeURIComponent(hash)}`, { signal });
-  if (!r.ok) throw new Error(`GET /api/card/${hash} → ${r.status}`);
-  return await r.text();
-}
-
 // --- Authoring the `user` namespace ----------------------------------------
 //
 // GET  /api/lib/{name}          → the component's JS source
