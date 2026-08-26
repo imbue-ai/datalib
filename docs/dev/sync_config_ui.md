@@ -77,41 +77,89 @@ live, and nothing moves that shouldn't.
 | Sync configuration (what to mirror, from when) | **datalib** | Minds has no concept of a data root |
 | The mirror itself | **datalib, on the user's machine** | The trifecta constraint above |
 
-The two rows in bold that change hands are the credential UI (built once
-in datalib instead of twice) and the service definitions (pushed down
-into latchkey instead of living in Minds and datalib separately).
+The two rows in bold are the ones that change hands: the credential UI
+becomes something datalib owns and other hosts embed, and the service
+definitions move down into latchkey instead of being maintained
+separately by each product.
 
 ## The simplification, counted
 
-Today "sign the user into a third-party service" is implemented, or
-planned, **four times** across three repos:
+The count needs care, because two layers are easy to conflate:
 
-1. **latchkey** — `auth browser`, the login-flow registry, `services
-   info`. The actual mechanism.
-2. **`mngr_latchkey`** — a Python re-derivation of what latchkey already
-   knows: `core.py` (1,846 lines) parses `services info`, carries the
-   `auth browser` error taxonomy and the `browser-prepare` retry;
-   `credential_commands.py` (193) parses latchkey's
-   `setCredentialsExample` string back into form fields.
-3. **Minds' UI** — `PermissionsTab.ts` (981) plus
-   `workspacePermissions.ts` (487) and `ui_api_permissions.py` (484).
-4. **datalib** — phases 2 and 3 of [#174] propose a Rust re-derivation of
-   (2) and a Vue re-derivation of (3).
+- **The wrapper** — knowing how to invoke latchkey, parse `services
+  info`, map the `auth browser` error taxonomy, and turn latchkey's
+  `setCredentialsExample` string back into form fields.
+- **The UI** — the catalog, the Connect button, the login progress and
+  its error states, the token form.
 
-And the service catalog exists **three times**: latchkey's own service
-list; Minds' `services.json`, generated from detent's schemas with
-`HIDDEN_BUILTIN_SERVICES` skipped; and Minds' `additional_services.json`
-(34 lines), which holds `claude-ai` — a definition that exists there only
-because it had nowhere better to live, and which needed a whole
-propagation mechanism to reach remote gateways.
+latchkey is neither. It is the mechanism both of them wrap. Counted that
+way:
 
-After the shuffle: **one mechanism (latchkey), one credential UI
-(datalib), one grant model (Minds).** datalib never writes (4). Minds can
-eventually delete `additional_services.json` and its propagation path.
+| | Wrapper | UI |
+|---|---|---|
+| Today | latchkey (native) + `mngr_latchkey` — `core.py` 1,846 lines, `credential_commands.py` 193 | Minds — `PermissionsTab.ts` 981, `workspacePermissions.ts` 487, `ui_api_permissions.py` 484 |
+| datalib standalone, regardless of this proposal | + datalib (thin: spawn, parse JSON, stream progress) | + datalib |
+| After phase 3 | latchkey + datalib | datalib |
 
-That is the case. It is not "datalib would like a favour" — it is a net
-deletion of two of the four implementations, and the one that never gets
-written is datalib's.
+**This proposal does not delete datalib's implementation — datalib's is
+the one that survives.** And before phase 3 the count goes *up*, not
+down. Say that plainly, because the case does not rest on an immediate
+deletion. It rests on three things that are each true on their own.
+
+### 1. datalib builds this anyway
+
+The trifecta constraint forces datalib to stand alone; standing alone
+means owning credential establishment. The credential UI is therefore
+not a cost of *this* proposal — it is a cost of datalib existing, and it
+is being paid either way.
+
+The marginal ask here is only that it be built behind a seam: the
+`?embed=1` route, the embed-mode auth below, and a `frame-ancestors`
+policy. That is days of work, not the UI. Build it closed instead and
+the work still happens; Minds just can never benefit from it.
+
+### 2. The unconditional win is the definitions, not the UI
+
+Phase 0 is where something is actually deleted, and it needs no
+cooperation from either product's UI. Today a service catalog exists
+three times: latchkey's own service list; Minds' `services.json`,
+generated from detent's schemas; and Minds' `additional_services.json` —
+34 hand-written lines holding `claude-ai`, a definition that lives there
+only because it had nowhere better to go, and that needed a whole
+propagation mechanism to reach remote gateways. Push those definitions
+upstream and the hand-maintained copy dies, along with the mechanism
+that kept it in sync.
+
+### 3. Upstream definitions shrink the UI everyone has to build
+
+This is the mechanism by which the UI gets smaller rather than
+multiplying, and it is the part most worth understanding.
+
+A Connect button is trivial. A token form is where the complexity lives:
+per-service prose about where to find the secret, parsing
+`setCredentialsExample`, validation, the "now go run this in a terminal"
+escape hatch. `credential_commands.py` exists *entirely* because some
+services have no browser login.
+
+So every service that gains `browser` support upstream removes a token
+form — from **both** products at once. Of datalib's seven API sources,
+`browser` reaches two today (slack, github). The spike takes that to
+four (claude-ai, chatgpt). Fastmail is already in flight on its own
+latchkey branch, which would make five. That leaves gitlab and notion.
+
+The UI that never gets written is the token form for those five — and it
+is deleted upstream, in latchkey, not in either product.
+
+### Phase 3 is option value, not a promised saving
+
+If Minds later delegates credential establishment to the shared
+component, it can retire its credential half — the connect path in
+`PermissionsTab` and the credential portion of `mngr_latchkey` — while
+keeping grants. That is a real ~2,000-line prize, but it is *optional*
+and it is *last*, so it should be argued as an option this proposal buys
+cheaply, not as a saving it promises. Build the component embeddable and
+Minds can take that option whenever it wants. Build it closed and the
+option never exists.
 
 ### This is already partly proven
 
@@ -249,7 +297,8 @@ to refute.
 **Can be shared:** establishing a credential — the Connect button, the
 browser-login progress and its error states, the token form derived from
 `setCredentialsExample`, the "connected as `thad@imbue-ai` ✓" state.
-That work is identical for both products and is currently written twice.
+That work is identical for both products. Minds has written it; datalib
+is about to.
 
 **Cannot be shared, and shouldn't be:** Minds' per-`(service, account)`
 detent grants, the permission-request queue, the toggles that decide what
