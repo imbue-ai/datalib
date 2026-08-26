@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Search-grid card: a search bar + AG Grid over /api/search results.
+// Search-grid card: a search bar + AG Grid over the unified_index
+// applet's /search results.
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
@@ -42,6 +43,12 @@ import {
 } from "@/api";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
+import {
+  filePathFromUrl,
+  isDesktopApp,
+  revealActionLabel,
+  revealInFileManager,
+} from "@/desktop";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
@@ -793,17 +800,62 @@ const gridOptions: GridOptions<SearchRow> = {
         void copyUuids(targets);
       },
     });
-    if (linkTargets.length > 0) {
+    // Local files (today: the `pdf` source) carry a `file://` URL, which
+    // `window.open` cannot usefully follow from an http origin — a
+    // browser blocks it silently. Split on the URL SCHEME rather than on
+    // provider, so any future local-file source inherits this.
+    const localTargets = linkTargets.filter((r) => filePathFromUrl(linkOf(r)));
+    const webTargets = linkTargets.filter((r) => !filePathFromUrl(linkOf(r)));
+
+    if (webTargets.length > 0) {
       items.push({
         name: `Open source${
-          linkTargets.length === 1 ? "" : ` (${linkTargets.length})`
+          webTargets.length === 1 ? "" : ` (${webTargets.length})`
         }`,
         action: () => {
-          for (const r of linkTargets) {
+          for (const r of webTargets) {
             window.open(linkOf(r), "_blank", "noopener");
           }
         },
       });
+    }
+    if (localTargets.length > 0) {
+      const paths = localTargets
+        .map((r) => filePathFromUrl(linkOf(r)))
+        .filter((p): p is string => p !== null);
+      const suffix = paths.length === 1 ? "" : ` (${paths.length})`;
+      items.push(
+        isDesktopApp()
+          ? {
+              // Only offered in the desktop app: revealing a file is
+              // something a browser fundamentally cannot do.
+              name: `${revealActionLabel()}${suffix}`,
+              action: () => {
+                void (async () => {
+                  const failed: string[] = [];
+                  for (const p of paths) {
+                    if (!(await revealInFileManager(p))) failed.push(p);
+                  }
+                  // The IPC bridge can be present while the reveal
+                  // command is unauthorized (a capability whose URL
+                  // patterns stopped matching, say). Silently doing
+                  // nothing is the worst outcome, so degrade to the
+                  // same thing the browser offers.
+                  if (failed.length > 0) {
+                    void navigator.clipboard.writeText(failed.join("\n"));
+                  }
+                })();
+              },
+            }
+          : {
+              // In a browser the honest fallback is handing over the
+              // path, rather than an "Open" that quietly does nothing.
+              name: `Copy file path${suffix}`,
+              action: () => {
+                void navigator.clipboard.writeText(paths.join("\n"));
+              },
+            },
+      );
     }
     if (cellInfo) {
       items.push({

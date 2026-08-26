@@ -16,6 +16,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/anthropic:datalib_etl_anthropic",

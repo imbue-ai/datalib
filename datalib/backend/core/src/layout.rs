@@ -10,14 +10,26 @@
 //! ```text
 //! data_root/<stanza>/raw/…                          per-source download
 //! data_root/<stanza>/rendered_md/…                  per-source render
-//! data_root/system/backend_index/db.doltlite_db     grid_rows + markdowns index
-//! data_root/system/qmd/index.sqlite                 qmd search index
+//! data_root/unified_index/grid/db.doltlite_db       grid_rows + markdowns index
+//! data_root/unified_index/qmd/index.sqlite          qmd search index
+//! data_root/system/feedback.doltlite_db             filed feedback
+//! data_root/system/jobs.doltlite_db                 sync job queue + history
 //! data_root/system/media/…                          served attachments
-//! data_root/system/state/job-logs/…                 sync job logs
+//! data_root/system/job-logs/…                       sync job logs
 //! ```
 //!
-//! Invariant: every top-level entry in `data_root` except `system/` is a
-//! source stanza. `system` is therefore the one reserved stanza name.
+//! Two groups, split by who may write them and whether they are worth
+//! backing up. `unified_index/` is produced by the pipeline and read by
+//! the applet that serves search; it is fully derived and carries a
+//! `CACHEDIR.TAG`. `system/` is the server's own state, and the
+//! feedback store in it is precious — nothing regenerates it, so it must
+//! not sit under a directory tagged as cache.
+//!
+//! One database per table group, never one shared file: doltlite's
+//! working set is per *file* and shared across processes, so two writers
+//! on one file commit each other's in-flight rows. Splitting the files
+//! gives each exactly one writer — the `grid_index` step for the index,
+//! this server for feedback and jobs.
 
 use std::path::{Path, PathBuf};
 
@@ -25,19 +37,29 @@ use std::path::{Path, PathBuf};
 /// stanza lives under here.
 pub const SYSTEM_DIR: &str = "system";
 
-/// Directory owned by the backend-index (grid_rows + markdowns) processor,
-/// relative to `system/`.
-pub const BACKEND_INDEX_DIR: &str = "backend_index";
-/// The doltlite database file inside [`BACKEND_INDEX_DIR`].
-pub const BACKEND_INDEX_DB: &str = "db.doltlite_db";
-
-/// Directory owned by the qmd search-index processor, relative to `system/`.
+/// The top-level tree holding every search index. Owned end to end by
+/// the `unified_index` applet and the two steps that write it; nothing
+/// in `datalib-http` or `datalib-dag` reads what is under here.
+pub const UNIFIED_INDEX_DIR: &str = "unified_index";
+/// Directory owned by the grid-index (grid_rows + markdowns + edges)
+/// processor, relative to [`UNIFIED_INDEX_DIR`].
+pub const GRID_DIR: &str = "grid";
+/// The doltlite database file inside [`GRID_DIR`].
+pub const GRID_DB: &str = "db.doltlite_db";
+/// Directory owned by the qmd search-index processor, relative to
+/// [`UNIFIED_INDEX_DIR`].
 pub const QMD_DIR: &str = "qmd";
+
 /// Directory of server-served attachment bytes, relative to `system/`.
 pub const MEDIA_DIR: &str = "media";
-/// Directory of server runtime state (e.g. `job-logs/`), relative to
-/// `system/`.
-pub const STATE_DIR: &str = "state";
+/// Filed feedback, relative to `system/`. Its own file because it has a
+/// different writer from every other store and, unlike the indexes, it
+/// cannot be regenerated.
+pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
+/// The sync job queue and its history, relative to `system/`. Separate
+/// from [`FEEDBACK_DB`] so a job update and a feedback commit cannot
+/// land in each other's dolt history.
+pub const JOBS_DB: &str = "jobs.doltlite_db";
 
 /// Stanza names a source may not take, because each would collide with a
 /// reserved top-level directory on disk. With the `system/` split this is a
@@ -49,24 +71,30 @@ pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)
 }
 
-/// `data_root/system/backend_index` — the dir holding the grid_rows/markdowns
-/// index DB (and its `CACHEDIR.TAG`).
-pub fn backend_index_dir(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(BACKEND_INDEX_DIR)
+/// `data_root/unified_index` — the parent of every search index.
+pub fn unified_index_dir(data_root: &Path) -> PathBuf {
+    data_root.join(UNIFIED_INDEX_DIR)
 }
 
-/// `data_root/system/backend_index/db.doltlite_db` — the grid_rows/markdowns
-/// index DB. The http server resolves this from `data_root` alone (it never
-/// reads the config), so this helper is the contract between writer and reader.
-pub fn backend_index_db(data_root: &Path) -> PathBuf {
-    backend_index_dir(data_root).join(BACKEND_INDEX_DB)
+/// `data_root/unified_index/grid` — the dir holding the
+/// grid_rows/markdowns index DB (and its `CACHEDIR.TAG`).
+pub fn grid_index_dir(data_root: &Path) -> PathBuf {
+    unified_index_dir(data_root).join(GRID_DIR)
 }
 
-/// `data_root/system/qmd` — the qmd index directory. qmd writes
+/// `data_root/unified_index/grid/db.doltlite_db` — the
+/// grid_rows/markdowns/edges index. Resolved from `data_root` alone by
+/// both the step that writes it and the applet that reads it, so this
+/// helper is the contract between them.
+pub fn grid_index_db(data_root: &Path) -> PathBuf {
+    grid_index_dir(data_root).join(GRID_DB)
+}
+
+/// `data_root/unified_index/qmd` — the qmd index directory. qmd writes
 /// `qmd/index.sqlite` under whatever it sees as `XDG_CACHE_HOME`, so the
-/// cache home it runs with is [`system_dir`].
+/// cache home it runs with is [`unified_index_dir`].
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(QMD_DIR)
+    unified_index_dir(data_root).join(QMD_DIR)
 }
 
 /// `data_root/system/media`.
@@ -74,9 +102,14 @@ pub fn media_dir(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(MEDIA_DIR)
 }
 
-/// `data_root/system/state`.
-pub fn state_dir(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(STATE_DIR)
+/// `data_root/system/feedback.doltlite_db`.
+pub fn feedback_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(FEEDBACK_DB)
+}
+
+/// `data_root/system/jobs.doltlite_db`.
+pub fn jobs_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(JOBS_DB)
 }
 
 /// Body of the `CACHEDIR.TAG` files we drop into derived directories. The

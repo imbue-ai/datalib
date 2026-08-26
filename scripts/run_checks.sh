@@ -46,7 +46,17 @@ echo "Running pre-commit checks (read-only) in $WORKSPACE"
 # Checks the `no-sandbox` allowlist and that no first-party Python file
 # has escaped the Bazel lint roots. See scripts/lint_repo.py.
 echo "[repo] hygiene lints"
-python3 scripts/lint_repo.py
+# Via runfiles, so Bazel's pinned Python runs it — see the comment on
+# `//:lint_repo`. `BUILD_WORKSPACE_DIRECTORY` is already exported by
+# `bazel run`, which is how the script finds the real checkout from
+# inside the runfiles tree.
+LINT_REPO="$(rlocation _main/lint_repo)" || LINT_REPO=""
+if [[ -n "$LINT_REPO" && -x "$LINT_REPO" ]]; then
+  "$LINT_REPO"
+else
+  # Direct invocation outside `bazel run` (or a layout without runfiles).
+  python3 scripts/lint_repo.py
+fi
 
 # --- Lint + typecheck, via bazel ---
 # ruff (python), pyright (python), vue-tsc (typescript). All three are

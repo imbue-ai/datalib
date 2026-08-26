@@ -20,11 +20,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use datalib_core::qmd::mapping::norm_path;
-use datalib_core::qmd::runner::parse_stdout;
-use datalib_core::qmd::{GridIndex, GridRowRef, QmdHit};
 use datalib_index_lib::{Sidecar, SidecarHeader};
 use datalib_schema::grid_rows::GridRow;
+use datalib_unified_index::qmd::mapping::norm_path;
+use datalib_unified_index::qmd::runner::parse_stdout;
+use datalib_unified_index::qmd::{GridIndex, GridRowRef, QmdHit};
 
 // ---------------------------------------------------------------------------
 // Fixture construction

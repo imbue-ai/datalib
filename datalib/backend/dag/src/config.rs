@@ -21,7 +21,7 @@
 //! id = "grid_index"
 //! command = "datalib-step grid_index"
 //! inputs = ["**/rendered_md"]
-//! outputs = ["system/backend_index"]
+//! outputs = ["unified_index/grid"]
 //!
 //! [[steps]]
 //! id = "custom"
@@ -539,7 +539,7 @@ mod tests {
             [[steps]]
             id = "grid_index"
             inputs = ["**/rendered_md"]
-            outputs = ["system/backend_index"]
+            outputs = ["unified_index/grid"]
             command = "datalib-step grid_index"
             "#,
         )
@@ -583,7 +583,7 @@ mod tests {
                 "--inputs",
                 r#"["**/rendered_md"]"#,
                 "--outputs",
-                r#"["system/backend_index"]"#
+                r#"["unified_index/grid"]"#
             ]
         );
 

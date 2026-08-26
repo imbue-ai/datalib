@@ -1,7 +1,7 @@
 //! `grid-rows-load` — provider-agnostic Load step. Walks
 //! `<out>/<stanza>/rendered_md/**/*.grid_rows.json` (written by any Translate
 //! step) and inserts rows into the doltlite file at
-//! `<out>/system/backend_index/db.doltlite_db`.
+//! `<out>/unified_index/grid/db.doltlite_db`.
 //!
 //! Incremental: a `markdowns_loaded(qmd_path PK, source_fingerprint)`
 //! table tracks which documents have already been ingested. Sidecars
@@ -38,7 +38,7 @@ struct Args {
     out: PathBuf,
 
     /// Path to the doltlite database file. Defaults to
-    /// `<out>/system/backend_index/db.doltlite_db`.
+    /// `<out>/unified_index/grid/db.doltlite_db`.
     #[arg(long, env = "DOLT_DB_PATH")]
     dolt_db_path: Option<PathBuf>,
 
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     let db_path = args
         .dolt_db_path
         .clone()
-        .unwrap_or_else(|| datalib_core::layout::backend_index_db(&args.out));
+        .unwrap_or_else(|| datalib_core::layout::grid_index_db(&args.out));
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }

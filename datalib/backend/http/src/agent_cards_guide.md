@@ -16,7 +16,7 @@ read it before you have the token.)
 The token is minted per server process and published to a file:
 
 ```sh
-TOKEN=$(cat <data root>/system/state/api-token)
+TOKEN=$(cat <data root>/system/api-token)
 curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
 ```
 
@@ -108,7 +108,7 @@ you overwrite the alias, that card re-renders automatically.
   when `bar` changes too. The builtins `gridView` and `documentView` are
   always in scope.
 - **Data** comes from the backend HTTP API (same origin): e.g.
-  `GET /api/search?q=…`, `GET /api/chat/{markdown_uuid}`. Fetch with
+  `GET /applet/unified_index/search?q=…`, `GET /applet/unified_index/chat/{markdown_uuid}`. Fetch with
   relative paths — and *don't* add an auth header in card code. The
   browser holds the token as an HttpOnly session cookie it sends
   automatically; the token is deliberately not reachable from page JS.

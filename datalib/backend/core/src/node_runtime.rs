@@ -36,14 +36,14 @@ use std::process::Command;
 /// Relative path of the Node executable inside `runtime/`.
 const NODE_REL: &str = "node/bin/node";
 
-/// The ONE canonical latchkey version pin (see the qmd twin in
-/// [`crate::qmd::DEFAULT_QMD_VERSION`]): used for the `npx` fallback
+/// The ONE canonical latchkey version pin (see the qmd twin,
+/// `DEFAULT_QMD_VERSION` in `datalib_unified_index::qmd`): used for the `npx` fallback
 /// spec, as the key into the staged `runtime/latchkey/<version>/` tree,
 /// and re-exported by `datalib_etl::latchkey`.
 /// `datalib/tauri/stage-runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.1.0";
+pub const LATCHKEY_VERSION: &str = "3.7.0";
 
 /// The latchkey invocation to show in user-facing instructions and
 /// error messages: the app-bundled launcher when present (the

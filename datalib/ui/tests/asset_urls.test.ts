@@ -10,7 +10,7 @@ describe("isAbsoluteOrUrl", () => {
     for (const s of [
       "https://cdn.plot.ly/plotly-3.1.0.min.js",
       "//cdn.example/x.js",
-      "/api/asset/u/blobs/a.png",
+      "/applet/unified_index/asset/u/blobs/a.png",
       "data:image/png;base64,AAAA",
       "#anchor",
     ]) {
@@ -27,10 +27,10 @@ describe("isAbsoluteOrUrl", () => {
 describe("assetUrl", () => {
   it("percent-encodes each path segment but keeps the separators", () => {
     expect(assetUrl("u-1", "plots/temperature.html")).toBe(
-      "/api/asset/u-1/plots/temperature.html",
+      "/applet/unified_index/asset/u-1/plots/temperature.html",
     );
     expect(assetUrl("u/1", "a b/c&d.png")).toBe(
-      "/api/asset/u%2F1/a%20b/c%26d.png",
+      "/applet/unified_index/asset/u%2F1/a%20b/c%26d.png",
     );
   });
 });
@@ -45,7 +45,7 @@ describe("rewriteIframeSrcs", () => {
       'height="520" loading="lazy" sandbox="allow-scripts allow-downloads" ' +
       'style="border:1px solid rgba(128,128,128,.35);border-radius:6px"></iframe>';
     const out = rewriteIframeSrcs(html, uuid);
-    expect(out).toContain(`src="/api/asset/${uuid}/plots/temperature.html"`);
+    expect(out).toContain(`src="/applet/unified_index/asset/${uuid}/plots/temperature.html"`);
     // Every other attribute survives untouched — notably `sandbox`,
     // which is what keeps the frame on an opaque origin.
     expect(out).toContain('sandbox="allow-scripts allow-downloads"');
@@ -56,14 +56,14 @@ describe("rewriteIframeSrcs", () => {
     const html =
       '<iframe src="plots/a.html"></iframe><iframe src="plots/b.html"></iframe>';
     const out = rewriteIframeSrcs(html, uuid);
-    expect(out).toContain(`/api/asset/${uuid}/plots/a.html`);
-    expect(out).toContain(`/api/asset/${uuid}/plots/b.html`);
+    expect(out).toContain(`/applet/unified_index/asset/${uuid}/plots/a.html`);
+    expect(out).toContain(`/applet/unified_index/asset/${uuid}/plots/b.html`);
   });
 
   it("leaves absolute srcs and other elements alone", () => {
     const html =
       '<iframe src="https://example.com/x"></iframe>' +
-      '<iframe src="/api/asset/other/x.html"></iframe>' +
+      '<iframe src="/applet/unified_index/asset/other/x.html"></iframe>' +
       '<video src="clips/a.mp4"></video>';
     expect(rewriteIframeSrcs(html, uuid)).toBe(html);
   });

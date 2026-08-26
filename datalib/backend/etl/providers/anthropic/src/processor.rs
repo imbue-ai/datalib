@@ -45,6 +45,7 @@ pub fn plan_render(
         id: format!("anthropic/{name}/render"),
         raw_path,
         name,
+        max_project_doc_bytes: config.max_project_doc_bytes,
     })])
 }
 
@@ -77,12 +78,15 @@ impl DataProcessor for AnthropicDownload {
             sleep_between: Duration::ZERO,
             since: self.sync.since.clone(),
             conv_uuids: self.sync.conv_uuids.clone(),
+            projects: self.sync.projects,
+            project_uuids: self.sync.project_uuids.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
         })
         .await?;
         let summary = format!(
             "fetched={} skipped={} out_of_scope={} errors={} forbidden_orgs={} total={} \
+             projects={} projects_skipped={} project_docs={} project_docs_skipped={} \
              requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
             s.fetched,
             s.skipped,
@@ -90,6 +94,10 @@ impl DataProcessor for AnthropicDownload {
             s.errors,
             s.forbidden_orgs,
             s.total,
+            s.projects_fetched,
+            s.projects_skipped,
+            s.project_docs_fetched,
+            s.project_docs_skipped,
             s.requests,
             s.forbidden_retry_attempts,
             s.forbidden_retry_recoveries,
@@ -102,6 +110,8 @@ struct AnthropicRender {
     id: String,
     raw_path: PathBuf,
     name: String,
+    /// See [`AnthropicRenderConfig::max_project_doc_bytes`].
+    max_project_doc_bytes: Option<usize>,
 }
 
 #[async_trait]
@@ -124,8 +134,17 @@ impl DataProcessor for AnthropicRender {
         )
         .with_context(|| format!("anthropic parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
-            .context("anthropic render_all")?;
+        render_all(
+            &parsed,
+            ctx.root,
+            &self.name,
+            crate::render::render::RenderOptions {
+                max_project_doc_bytes: self.max_project_doc_bytes,
+            },
+            ctx.progress,
+            &mut on_doc,
+        )
+        .context("anthropic render_all")?;
         Ok("rendered".into())
     }
 }

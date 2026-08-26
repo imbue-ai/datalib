@@ -60,7 +60,7 @@
   We reuse the ENGINE and the RENDERER, but NOT DACTAL's full host page
   (its query page, saved-query store, AI assist, adapters). Instead we wire
   a tiny query bar to `dactal.executeq()` + `buildView()` ourselves, and pull
-  the working set from Datalib's own `/api/search`.
+  the working set from Datalib's own `/applet/unified_index/search`.
 -->
 <script src="./vendor/dactal.js"></script>
 <script src="./vendor/dactal_storage_indexeddb.js"></script>

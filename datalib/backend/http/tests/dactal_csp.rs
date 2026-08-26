@@ -20,8 +20,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::dolt_repo::DoltRepo;
-use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
+use datalib_core::app_store::AppStore;
 use datalib_http::{router, ApiToken, AppState};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,13 +34,12 @@ async fn fetch(path: &str) -> (StatusCode, String) {
         .keep()
         .join("backend_index.doltlite_db");
     let root: Arc<PathBuf> = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone())
+    let app = AppStore::open(root.as_path())
         .await
-        .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+        .expect("open app stores");
     let state = AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+        app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),

@@ -3,7 +3,7 @@
 //! `bazelisk test //...`. Run with:
 //!
 //! ```sh
-//! bazelisk test //datalib/backend/etl/providers/jmap:jmap_live \
+//! bazelisk test //datalib/backend/etl/providers/email:jmap_live \
 //!     --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER
 //! ```
 //!

@@ -14,8 +14,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::dolt_repo::DoltRepo;
-use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
+use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
 use datalib_http::sha256_hex;
@@ -95,13 +94,13 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     std::fs::write(root.join("config.toml"), config_toml).unwrap();
-    let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let app = AppStore::open(root.as_path())
+        .await
+        .expect("open app stores");
     AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+        app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),

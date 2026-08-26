@@ -23,4 +23,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# `reveal_item_in_dir` — selects a file in Finder / Explorer / the
+# platform file manager. Backs the grid's "Reveal in Finder" action for
+# rows whose `source_url` is a `file://` URL (today: the `pdf` source).
+# Only the reveal command is granted to the webview; see
+# `capabilities/reveal-local-files.json` for why that matters.
+tauri-plugin-opener = "2"
 anyhow = "1.0"

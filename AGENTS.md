@@ -34,6 +34,10 @@ are relative to the repo root.
   resumability, wire tape. Companion:
   [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
   (how to build a new provider).
+- [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
+  — the `email` source's three download modes (JMAP, Gmail API, mbox),
+  what keeps them writing one deduped schema, and why an IMAP mode was
+  built and removed.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
   union table behind the grid UI.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
@@ -139,14 +143,20 @@ datalib/
                    pre-TOML `config.yaml`. Holds every retired config
                    schema and the tree's last YAML parser, so the
                    shipping programs accept only `config.toml`.
-    core/          data-root layout, doltlite repo access, qmd, search.
+    core/          data-root layout, the feedback + job stores,
+                   host-runtime helpers. Knows nothing about the index.
+    unified_index/ the grid index, the qmd index, the query language
+                   over them, and the repo that reads them. Linked by
+                   datalib-step (writes it) and datalib-applet (serves
+                   it) — never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host, one subcommand
-                   per applet (today: slack). An applet contributes
-                   card components + the endpoints behind them.
+                   per applet (slack, unified_index). An applet
+                   contributes card components and/or the endpoints
+                   behind them.
     http/          `datalib-http`: API server + sync worker + UI host +
                    the applet gateway (src/applets.rs). Every route is
                    behind a per-process API token (src/auth.rs) — read
-                   it from <root>/system/state/api-token and send
+                   it from <root>/system/api-token and send
                    `Authorization: Bearer <token>`.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
@@ -166,9 +176,10 @@ the config's `[[steps]]` tables; edges are derived from output/input path
 overlap, never written by hand. Each source is a `<name>.download` +
 `<name>.render` step pair (`datalib-step download|render <type>`), and
 two shared fan-in steps index every source's `rendered_md` tree:
-`grid_index` (SQL index at `system/backend_index/db.doltlite_db`) and
-`qmd_index` (semantic search at `system/qmd/`). Scheduler state lives at
-`system/state/dag_state.json`. The http server's sync worker shells out
+`grid_index` (SQL index at `unified_index/grid/db.doltlite_db`) and
+`qmd_index` (semantic search at `unified_index/qmd/`). Both are read by
+the `unified_index` applet, which serves the grid — `datalib-http` does
+not open them. Scheduler state lives at `system/dag_state.json`. The http server's sync worker shells out
 to `datalib-dag`; the UI's Setup tab scaffolds/edits the config.
 Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
 `sources:` one) are converted out of band by `datalib-migrate-config`,
@@ -260,7 +271,7 @@ When you add or change a `grid_rows` column:
 
 The render step emits QMD markdown files for human/Quarto consumption.
 The backend serves those files **verbatim** (frontmatter stripped) at
-`/api/chat/{uuid}` — it never parses them back. Structured fields
+`/applet/unified_index/chat/{uuid}` — it never parses them back. Structured fields
 (name, account, project, channel, created_at, source_label) come from
 `grid_rows` in Dolt. Per-section anchors used by the UI
 (scroll-to-message, highlight, per-section feedback, copy-id) come from
@@ -297,11 +308,17 @@ the backend-side row + discriminated payload schema is the hand-written
 
 Each `POST /api/feedback` inserts a row **and** runs
 `SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
-connection so the commit covers exactly the row we just wrote — no
-chance of a concurrent writer's INSERT slipping into the same
-`dolt_log` entry. Doltlite's working set is per-file, not
-per-connection, so a sibling task on a different pool connection
-sees the commit immediately.
+connection, so the commit covers exactly the row just written.
+
+What makes that true is the **file**, not the connection. Doltlite's
+working set is per-file and shared across processes, so `-Am` commits
+whatever else is dirty in the same file — while `feedback` lived in the
+index database that the `grid_index` step also writes, a submission
+during a sync had its row swept into the step's commit and its own
+commit then failed `nothing to commit`. `system/feedback.doltlite_db`
+has one writer, which is what the exactness rests on. The
+same-connection discipline only keeps the INSERT and the commit on one
+HEAD; it isolates nothing by itself.
 
 Bazel stamps the binary with the git hash via
 `tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
@@ -337,10 +354,17 @@ interactive REPL all work, plus the dolt SQL surface
 Where the stores live under a data root:
 
 ```
-<data_root>/<name>/raw/entities.doltlite_db   per-source entities + sync bookkeeping
-<data_root>/<name>/raw/blobs.doltlite_db      content-addressed blobs
-<data_root>/system/backend_index/db.doltlite_db   grid_rows / markdowns / edges
+<data_root>/<name>/raw/entities.doltlite_db      per-source entities + sync bookkeeping
+<data_root>/<name>/raw/blobs.doltlite_db        content-addressed blobs
+<data_root>/unified_index/grid/db.doltlite_db   grid_rows / markdowns / edges
+<data_root>/system/feedback.doltlite_db         filed feedback
+<data_root>/system/jobs.doltlite_db             the sync job queue
 ```
+
+One writer per file, and it is load-bearing: doltlite's working set is
+per *file* and shared across processes, so two writers on one file
+commit each other's in-flight rows. The `grid_index` step owns the
+index; `datalib-http` owns feedback and jobs; the applet only reads.
 
 There is also a host `/usr/local/bin/doltlite` on some machines. Prefer
 the Bazel target: it is version-locked to `MODULE.bazel`'s pin, so it
@@ -395,6 +419,29 @@ narrower *bazel* invocation (`bazelisk test //some/subtree/...`, a single
 target's tests) is fine for inner-loop iteration, but don't call the tree
 green based on one of those. If you report "build green" without having run
 `bazelisk test //...`, say what you actually ran instead.
+
+**But `bazelisk test //...` is not the whole CI gate.** The `bazel test`
+job runs a **repo hygiene lint step first** and skips the tests entirely
+if it fails — so a tree can be green by the paragraph above and still get
+a red cross, with the test results never printed. It cannot be a Bazel
+*test*: `scripts/lint_repo.py` has to enumerate every tracked file via
+`git ls-files`, which is exactly what a sandbox exists to prevent. Its two checks are that every `no-sandbox` tag is
+allowlisted, and that every first-party `*.py` sits under a Python lint
+root so ruff and pyright actually see it.
+
+So the complete local gate is the hygiene lint **and** the test suite:
+
+```bash
+bazelisk run //:lint_repo && bazelisk test //...
+```
+
+`bazelisk run //:precommit` runs the same lint plus clippy, and is the
+friendlier wrapper if you want everything. Both go through
+[`//:lint_repo`](BUILD.bazel), a `py_binary` — deliberately, so the
+script runs on Bazel's pinned Python rather than the host's. It needs
+`tomllib` (Python ≥3.11) and macOS still ships 3.9 as `python3`, which
+used to make `//:precommit` die with a bare `ModuleNotFoundError` on
+every Mac.
 
 **Bazel is the only supported build/test driver — don't shell out to
 `cargo test` / `cargo build` / `pnpm test` for the inner loop.** They

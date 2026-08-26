@@ -224,13 +224,13 @@ outputs = ["claude/rendered_md"]
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 ```
 
 Two TOML rules worth knowing before you hand-edit: `data_root` has to
@@ -296,7 +296,7 @@ token for a session cookie on that first load and drops it from the
 address bar. If you want to open the app in a *different* browser (or
 you closed the tab and lost the URL), the line the server printed is
 still in your terminal, and the token is on disk at
-`<data_root>/system/state/api-token`.
+`<data_root>/system/api-token`.
 
 Prefer the terminal? Run the pipeline directly on your steps config:
 
@@ -324,7 +324,7 @@ and should be faster.
   a progress bar as each new / updated / overlap conversation is
   fetched from `claude.ai/api`. New conversations are fetched first.
 - A `render` step per source: each conversation rendered into intelligible Markdown (including image attachments).
-- The `grid_index` step: rows written into the doltlite SQL store at `<data_root>/system/backend_index/db.doltlite_db`.
+- The `grid_index` step: rows written into the doltlite SQL store at `<data_root>/unified_index/grid/db.doltlite_db`.
 - The `qmd_index` step: builds the search index. **First run is slow** —
   embedding ~5–10 minutes per thousand chunks on CPU. It's resumable, so
   Ctrl-C and re-run is safe. Re-runs after the backlog drains take
@@ -359,7 +359,7 @@ and should be faster.
 ```
 
 > **Backups:** the bulky **derived** artifacts — each `<name>/rendered_md/`
-> tree, the search DB (`system/backend_index/`), the qmd index (`system/qmd/`),
+> tree, the search DB (`unified_index/grid/`), the qmd index (`unified_index/qmd/`),
 > and served attachments (`system/media/`) — are all rebuildable from your raw
 > stores, and each carries a `CACHEDIR.TAG`, so cache-aware backups skip them
 > automatically:
@@ -371,7 +371,7 @@ and should be faster.
 >
 > What's left in the backup is exactly what you want to keep: the per-stanza
 > `<name>/raw/` stores (your precious captured data), `config.toml`, and
-> `system/state/` (scheduler state + sync job logs — operational
+> `system/` (scheduler state + sync job logs — operational
 > history, not rebuildable).
 
 A final per-step report prints when the run finishes, and a
@@ -400,7 +400,7 @@ URL the server prints, which already has it; to reach the API from a
 script instead:
 
 ```sh
-curl -H "Authorization: Bearer $(cat ./system/state/api-token)" \
+curl -H "Authorization: Bearer $(cat ./system/api-token)" \
   http://127.0.0.1:8731/api/health
 ```
 
@@ -422,7 +422,7 @@ pointing `qmd` at the sqlite file under your data root via the
 `INDEX_PATH` env var:
 
 ```sh
-INDEX_PATH=~/datalib/system/qmd/index.sqlite \
+INDEX_PATH=~/datalib/unified_index/qmd/index.sqlite \
     npx -y @tobilu/qmd query "hello"
 ```
 

@@ -31,10 +31,10 @@ test("the CSP leaves DACTAL fully working", async ({ page }) => {
   await expect(page.locator("#status")).toContainText(/results? for/);
   await expect(page.locator("#queryoutput .err")).toHaveCount(0);
 
-  // `/api/search` is same-origin, so `connect-src 'self'` must not have
+  // `/applet/unified_index/search` is same-origin, so `connect-src 'self'` must not have
   // blocked the working-set load.
   await expect(page.locator("#status")).not.toContainText(
-    "could not reach /api/search",
+    "could not reach /applet/unified_index/search",
   );
 });
 

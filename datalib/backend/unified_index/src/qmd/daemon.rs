@@ -211,7 +211,7 @@ fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig, index_mtime: SystemTime
     let mut child = cmd.spawn().with_context(|| {
         format!(
             "failed to spawn `{}` (is Node.js installed?)",
-            crate::node_runtime::display_command(&cmd)
+            datalib_core::node_runtime::display_command(&cmd)
         )
     })?;
     let stdin = child

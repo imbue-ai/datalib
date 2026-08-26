@@ -45,12 +45,16 @@ def main() -> int:
     out_tar = Path(sys.argv[2]).resolve()
     out_tar.parent.mkdir(parents=True, exist_ok=True)
 
-    # Each top-level dir except `system/` is a source stanza with a
-    # `rendered_md/` subtree. Tar them all, rooted at `qmd/<stanza>/...`.
+    # Every top-level dir that is not owned by the app itself is a source
+    # stanza with a `rendered_md/` subtree. Tar them all, rooted at
+    # `qmd/<stanza>/...`. `system/` is the server's own state and
+    # `unified_index/` is the index the steps write, so neither is a
+    # stanza even though both sit at the same level.
+    not_stanzas = {"system", "unified_index"}
     rendered_dirs = sorted(
         d
         for d in src_root.glob("*/rendered_md")
-        if d.is_dir() and d.parent.name != "system"
+        if d.is_dir() and d.parent.name not in not_stanzas
     )
 
     with tarfile.open(out_tar, "w") as tf:

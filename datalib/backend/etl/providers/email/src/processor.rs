@@ -1,7 +1,7 @@
 //! Program A `DataProcessor`s for the email source.
 //!
-//! Email contributes an **download** processor ([`EmailDownload`] — JMAP live
-//! sync or file-backed mbox, chosen by config) and a **render** processor
+//! Email contributes an **download** processor ([`EmailDownload`] — JMAP or
+//! Gmail-API live sync, or file-backed mbox, chosen by config) and a **render** processor
 //! ([`EmailRender`]). [`plan_download`] / [`plan_render`] build the per-wave
 //! processors the orchestrator drives, owning every email-specific decision
 //! (which download mode, whether
@@ -22,12 +22,15 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use datalib_etl_email_config::EmailRenderConfig;
-use datalib_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
+use datalib_etl_email_config::{
+    EmailConfig, EmailGmailApi, EmailLiveMode, EmailOutlink, EmailSync, MboxSync,
+};
 
 use crate::download;
 use crate::render::render::OutlinkFormat;
 
-/// Download wave: present iff managed — `sync:` → JMAP; else an
+/// Download wave: present iff managed — a live block (`sync:` for JMAP,
+/// `gmail_api:` for the Gmail REST API) selects a server mode; else an
 /// `.mbox` under input_path → mbox mode.
 pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
@@ -41,8 +44,13 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
 
-    let mode = match &config.sync {
-        Some(sync) => Some(ExtractMode::Jmap(sync.clone())),
+    // Live-server modes are declared explicitly and are mutually
+    // exclusive (`live_mode` enforces that); the file-backed mbox mode is
+    // the fallback, chosen by probing the filesystem — which is why it
+    // isn't a `live_mode` variant.
+    let mode = match config.live_mode()? {
+        Some(EmailLiveMode::Jmap(sync)) => Some(ExtractMode::Jmap(sync.clone())),
+        Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi(gmail.clone())),
         None => {
             if is_mbox_input(&input_path) {
                 let mbox = config.mbox.clone().unwrap_or_default();
@@ -55,7 +63,8 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
                 // holds no `.mbox` is a config error — same as the old
                 // orchestrator path.
                 return Err(anyhow!(
-                    "email source {name} has no sync: block and no .mbox found under {}",
+                    "email source {name} declares no download mode (`sync` for JMAP, \
+                     `gmail_api` for the Gmail REST API) and no .mbox was found under {}",
                     input_path.display()
                 ));
             } else {
@@ -105,6 +114,8 @@ fn outlink_format(f: EmailOutlink) -> OutlinkFormat {
 enum ExtractMode {
     /// Live JMAP server sync.
     Jmap(EmailSync),
+    /// Gmail REST API sync.
+    GmailApi(EmailGmailApi),
     /// File-backed `.mbox` ingest (e.g. a Google Takeout export).
     Mbox {
         input_path: PathBuf,
@@ -161,6 +172,34 @@ impl DataProcessor for EmailDownload {
                     s.blobs_downloaded,
                     s.blobs_oversize,
                     s.blobs_errored,
+                )
+            }
+            ExtractMode::GmailApi(gmail) => {
+                let s = download::gmail_api::fetch(download::gmail_api::FetchOptions {
+                    db_path: self.raw_path.clone(),
+                    db: Some(db),
+                    config: gmail.clone(),
+                    only_labels: self.only_extract_labels.clone(),
+                    blob_size_limit_bytes: self.blob_size_limit_bytes,
+                    progress: ctx.progress.clone(),
+                    control: ctx.control.clone(),
+                })
+                .await?;
+                format!(
+                    "mailboxes={} threads={} emails={} destroyed={} \
+                     blobs(stored={} skipped={} oversize={}) filtered={} \
+                     quota_units={} full_sync={} budget_exhausted={}",
+                    s.mailboxes_upserted,
+                    s.threads_upserted,
+                    s.emails_upserted,
+                    s.emails_destroyed,
+                    s.blobs_stored,
+                    s.blobs_skipped,
+                    s.blobs_oversize,
+                    s.messages_filtered,
+                    s.quota_units_spent,
+                    s.full_sync,
+                    s.budget_exhausted,
                 )
             }
             ExtractMode::Mbox {

@@ -53,8 +53,11 @@ gateway builds its registry. Note what it does *not* do: the DAG
 runner's `config::load` does not call it, so an invalid applet id does
 not stop a sync. And a rejection currently drops the **whole** applet
 list with a message on stderr rather than the one bad entry — the
-server keeps booting on purpose, because refusing to start would take
-search and Setup down with it and leave no way to fix the file.
+server keeps booting on purpose, because refusing to start would leave
+no way to fix the file. That is worth more now than when it was
+written: search is itself an applet, so a bad entry anywhere in the
+list costs you the grid, and booting anyway is what keeps the Setup tab
+reachable to repair it.
 
 ## What a command has to do
 
@@ -241,6 +244,30 @@ keeps the tail, rather than reading the pipe to EOF when the applet
 fails. That matters because the pipe is held by the child *and* by
 anything it spawned: a wrapper script whose own child is still alive
 would otherwise block the start path until that grandchild exited.
+
+## An applet that contributes no components
+
+`unified_index` is the other shape the contract allows and had no
+instance of until now: a server that contributes **endpoints only**. The
+grid, the document view and the document picker are builtins in the app
+bundle, so there is nothing to write into a namespace — the gateway
+still passes `--frontend-dir`, and the applet ignores it.
+
+It is also the applet the app cannot run without. A data root whose
+config does not declare it has no search, which is why the scaffold, the
+config examples and `datalib-migrate-config`'s output all write it. The
+UI calls it directly at `/applet/unified_index/…`; there is no `/api/`
+alias, and `datalib-http` does not know those routes exist.
+
+That is what makes the separation checkable rather than aspirational:
+
+```sh
+bazel query 'somepath(//datalib/backend/http:datalib_http, \
+                      //datalib/backend/unified_index:datalib_unified_index)'
+```
+
+comes back empty. The index crate is linked by `datalib-step`, which
+writes the indexes, and by `datalib-applet`, which serves them.
 
 ## Reference implementation
 

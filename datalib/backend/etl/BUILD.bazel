@@ -27,6 +27,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/schema:datalib_schema",
@@ -100,6 +101,7 @@ rust_test(
     edition = "2021",
 )
 
+
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and
 # upsert into Dolt; tracks markdowns_loaded(qmd_path, fingerprint) for
 # idempotent skips.
@@ -111,6 +113,7 @@ rust_binary(
     deps = [
         ":datalib_etl",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "@datalib_crates//:anyhow",

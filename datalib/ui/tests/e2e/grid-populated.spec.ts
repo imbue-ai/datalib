@@ -13,7 +13,7 @@ test("the grid populates with rows from the fixture", async ({
   request,
 }) => {
   // Backend has rows.
-  const resp = await request.get("/api/search?q=&limit=50");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=50");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: unknown[] };
   expect(data.rows.length, "fixture must have at least one row").toBeGreaterThan(0);

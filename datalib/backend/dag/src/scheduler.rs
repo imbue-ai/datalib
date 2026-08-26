@@ -814,7 +814,7 @@ mod tests {
     }
 
     /// The fan-in index step: concatenates every `*/rendered_md`
-    /// tree's files into `system/backend_index/index.txt`. Wildcard
+    /// tree's files into `out/index/index.txt`. Wildcard
     /// input. Counts invocations and remembers `changed_inputs`.
     fn index(runs: Arc<AtomicU32>, seen_changed: Arc<Mutex<Vec<String>>>) -> StepSpec {
         StepSpec::new(
@@ -845,7 +845,7 @@ mod tests {
                             combined.push('\n');
                         }
                     }
-                    let dir = ctx.path_str("system/backend_index");
+                    let dir = ctx.path_str("out/index");
                     std::fs::create_dir_all(&dir).unwrap();
                     std::fs::write(dir.join("index.txt"), combined).unwrap();
                     Ok(StepOutcome::default())
@@ -853,7 +853,7 @@ mod tests {
             }),
         )
         .input("**/rendered_md")
-        .output("system/backend_index")
+        .output("out/index")
     }
 
     struct Fixture {
@@ -933,7 +933,7 @@ mod tests {
                 rep1.step(id).status
             );
         }
-        let idx = fx.root.path().join("system/backend_index/index.txt");
+        let idx = fx.root.path().join("out/index/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V1\n"
@@ -975,7 +975,7 @@ mod tests {
             *fx.index_changed_inputs.lock().unwrap(),
             vec!["slack/rendered_md".to_string()]
         );
-        let idx = fx.root.path().join("system/backend_index/index.txt");
+        let idx = fx.root.path().join("out/index/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V2\n"
@@ -1011,7 +1011,7 @@ mod tests {
             *fx.index_changed_inputs.lock().unwrap(),
             vec!["slack/rendered_md".to_string()]
         );
-        let idx = fx.root.path().join("system/backend_index/index.txt");
+        let idx = fx.root.path().join("out/index/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V2\n"
@@ -1064,7 +1064,7 @@ mod tests {
         assert!(rep.all_ok(), "{rep:#?}");
         assert_eq!(fx.run_count("index"), 1);
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("system/backend_index/index.txt")).unwrap(),
+            std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
             "SLACK V1\n"
         );
     }
@@ -1143,7 +1143,7 @@ mod tests {
         assert_eq!(rep.step("takeout.render").status, StepStatus::NotSelected);
         assert_eq!(fx.run_count("email.render"), 0);
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("system/backend_index/index.txt")).unwrap(),
+            std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
             "SLACK V1\n"
         );
     }
@@ -1211,7 +1211,7 @@ mod tests {
         assert!(rep3.all_ok(), "{rep3:#?}");
         assert_eq!(fx.run_count("email.render"), 1, "full run recovers it");
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("system/backend_index/index.txt")).unwrap(),
+            std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
             "EMAIL V1\nSLACK V1\n"
         );
     }

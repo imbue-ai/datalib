@@ -218,6 +218,7 @@ pub async fn propfind(url: &str, depth: &str, body: &str) -> Result<Multistatus,
         body: Some(body.as_bytes().to_vec()),
         timeout: std::time::Duration::from_secs(60),
         bypass_latchkey: false,
+        latchkey_account: None,
     };
     let resp = latchkey_curl(&req).await?;
     expect_dav_status(&req.method, &req.url, &resp)?;
@@ -243,6 +244,7 @@ pub async fn report(url: &str, body: &str) -> Result<Multistatus, CarddavError> 
         body: Some(body.as_bytes().to_vec()),
         timeout: std::time::Duration::from_secs(120),
         bypass_latchkey: false,
+        latchkey_account: None,
     };
     let resp = latchkey_curl(&req).await?;
     expect_dav_status(&req.method, &req.url, &resp)?;

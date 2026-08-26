@@ -8,7 +8,7 @@
 
 
 Our raw ETL captures (under `<data_root>/<name>/raw/`) and the per-mirror
-backend index (`<data_root>/system/backend_index/db.doltlite_db`) are
+backend index (`<data_root>/unified_index/grid/db.doltlite_db`) are
 [doltlite](https://github.com/dolthub/doltlite) databases: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our

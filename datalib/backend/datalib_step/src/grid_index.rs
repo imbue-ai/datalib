@@ -1,7 +1,7 @@
 //! The `grid_index` step type: Load, un-fused into a first-class
 //! fan-in step — everything lands in the unified grid table.
 //!
-//! Rebuilds/refreshes `system/backend_index/db.doltlite_db` from
+//! Rebuilds/refreshes `unified_index/grid/db.doltlite_db` from
 //! every stanza's `.grid_rows.json` sidecar tree via
 //! [`datalib_etl::grid_index::build_grid_index`] — which already carries the
 //! per-doc fingerprint skip, so an up-to-date index costs one scan.
@@ -17,20 +17,26 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::events::{Emitter, OutputClaim};
 
-pub const OUT_REL: &str = "system/backend_index";
+pub const OUT_REL: &str = "unified_index/grid";
 
 pub async fn run(
     data_root: &Path,
     now: Option<&str>,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
-    let db_path = datalib_core::layout::backend_index_db(data_root);
+    let db_path = datalib_core::layout::grid_index_db(data_root);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
-        // The index is 100% rebuilt from the sidecar trees, so
-        // cache-aware backups (`restic --exclude-caches` etc.) may
-        // skip it.
-        datalib_core::layout::mark_derived_cache(parent);
+        // Tag the whole `unified_index/` tree, not just this step's own
+        // directory: every index under it is rebuilt from the sidecar
+        // trees, so cache-aware backups (`restic --exclude-caches` etc.)
+        // may skip all of it. Tagging the parent also means the tag is
+        // right before the qmd step has ever run. Nothing precious lives
+        // here — feedback and the job queue are under `system/`, which is
+        // never tagged.
+        datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(
+            data_root,
+        ));
     }
     // Pool size 1: doltlite's HEAD pointer + working tree are
     // per-connection (see datalib_etl::doltlite_raw module docs).
