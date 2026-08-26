@@ -1,8 +1,14 @@
-//! `MirrorRepo` is the single seam between the HTTP layer and the
-//! underlying SQL store.
+//! The seams between the HTTP layer and the stores on disk, one per
+//! store group.
 //!
-//! Sole implementation today: [`crate::dolt_repo::DoltRepo`] —
-//! `sqlx::SqlitePool` against a doltlite file on disk.
+//! [`IndexRepo`] reads the grid index the pipeline writes; [`AppRepo`]
+//! owns filed feedback and the sync job queue. They are separate traits
+//! because they are separate files with different writers, and after
+//! the index moves behind its applet they will be separate processes.
+//!
+//! Sole implementations today: [`crate::dolt_repo::DoltRepo`] and
+//! [`crate::dolt_repo::AppStore`], both `sqlx::SqlitePool` over doltlite
+//! files on disk.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,9 +33,13 @@ pub enum RepoError {
     Internal(String),
 }
 
-/// The single point that all backend SQL flows through.
+/// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
+///
+/// Nothing here writes. The `grid_index` step is the index's only
+/// writer, which is what lets any number of readers open the file at
+/// once — see `DoltRepo::open` for the constraint that forces it.
 #[async_trait]
-pub trait MirrorRepo: Send + Sync {
+pub trait IndexRepo: Send + Sync {
     /// Run a grid-search query and return rows for the UI.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
 
@@ -83,9 +93,18 @@ pub trait MirrorRepo: Send + Sync {
     async fn list_docs(&self, _limit: usize) -> Result<Vec<DocRow>, RepoError> {
         Ok(Vec::new())
     }
+}
 
+/// Writes and reads of the two application stores: filed feedback and
+/// the sync job queue.
+///
+/// Separate from [`IndexRepo`] because they are separate files with a
+/// different writer. One process owns both; the index is owned by the
+/// pipeline.
+#[async_trait]
+pub trait AppRepo: Send + Sync {
     /// Append a feedback row. The default impl returns
-    /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::DoltRepo`]
+    /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::AppStore`]
     /// overrides it.
     async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
@@ -212,4 +231,5 @@ pub struct DocRow {
 
 /// Convenience type alias for the dyn-dispatched repo handle used by
 /// HTTP handlers via `axum::State`.
-pub type DynRepo = Arc<dyn MirrorRepo>;
+pub type DynIndexRepo = Arc<dyn IndexRepo>;
+pub type DynAppRepo = Arc<dyn AppRepo>;

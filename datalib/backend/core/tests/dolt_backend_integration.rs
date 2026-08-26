@@ -2,7 +2,7 @@
 //!
 //! Opens a doltlite file in a temp directory, connects [`DoltRepo`],
 //! creates the `grid_rows` table, inserts a handful of fixture rows, and
-//! verifies that [`MirrorRepo::search`] returns them in the expected order.
+//! verifies that [`IndexRepo::search`] returns them in the expected order.
 //!
 //! No subprocess, no port — just a file on disk. This test runs anywhere
 //! `sqlite`-compatible doltlite is linked (the sqlx-sqlite driver opens
@@ -10,7 +10,7 @@
 
 use datalib_core::dolt_repo::DoltRepo;
 use datalib_core::query::parse_query;
-use datalib_core::repo::MirrorRepo;
+use datalib_core::repo::IndexRepo;
 use datalib_schema::grid_rows::DDL as GRID_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use std::path::PathBuf;

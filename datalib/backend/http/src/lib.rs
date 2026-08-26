@@ -32,7 +32,7 @@ use axum::{
 };
 use datalib_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
 use datalib_core::query::{parse_query, FreeTextMode, ParsedQuery};
-use datalib_core::repo::{DocRow, DynRepo, EdgeRowOut, RepoError};
+use datalib_core::repo::{DocRow, DynAppRepo, DynIndexRepo, EdgeRowOut, RepoError};
 use datalib_core::search::SearchRow;
 use datalib_core::version::git_hash;
 use serde::{Deserialize, Serialize};
@@ -57,10 +57,13 @@ pub struct AppState {
     /// the `accounts.json` lookup. The SQL store is reached through
     /// [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// All SQL flows through this seam.
-    /// [`datalib_core::dolt_repo::DoltRepo`] against a single
-    /// doltlite file is the only impl today.
-    pub repo: DynRepo,
+    /// Reads of the grid index the pipeline writes. Read-only here:
+    /// the `grid_index` step is the file's only writer, which is what
+    /// lets this process hold it open while a sync rewrites it.
+    pub repo: DynIndexRepo,
+    /// The two stores this process owns and writes: filed feedback and
+    /// the sync job queue, one doltlite file each.
+    pub app: DynAppRepo,
     /// Long-lived `qmd mcp` child for sub-second searches. Always present:
     /// it resolves its index lazily per query, so a missing index (no
     /// sync yet) or a mid-run rebuild is handled inside `search`. On any
@@ -377,7 +380,7 @@ async fn search_handler(
 /// the repo trait so both Dolt and SQLite backends work.
 async fn run_qmd_search(
     root: &std::sync::Arc<PathBuf>,
-    repo: &DynRepo,
+    repo: &DynIndexRepo,
     daemon: &Arc<QmdDaemon>,
     parsed: &ParsedQuery,
     limit: usize,
@@ -584,7 +587,7 @@ async fn submit_feedback(
         fixed_in_git_hash: None,
         notes: None,
     };
-    match s.repo.insert_feedback(row).await {
+    match s.app.insert_feedback(row).await {
         Ok(()) => Ok(Json(FeedbackResponse {
             feedback_uuid,
             created_at,
@@ -1399,7 +1402,7 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
 }
 
 async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
-    s.repo
+    s.app
         .list_jobs(true, 200)
         .await
         .map(Json)
@@ -1411,7 +1414,7 @@ async fn sync_jobs_all(
     Query(p): Query<JobsAllParams>,
 ) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
     let limit = p.limit.unwrap_or(200).min(10_000);
-    s.repo
+    s.app
         .list_jobs(false, limit)
         .await
         .map(Json)
@@ -1422,7 +1425,7 @@ async fn sync_job_get(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<SyncJobRow>, StatusCode> {
-    match s.repo.get_job(&id).await {
+    match s.app.get_job(&id).await {
         Ok(Some(row)) => Ok(Json(row)),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => Err(repo_err_to_status(e)),
@@ -1444,7 +1447,7 @@ async fn sync_enqueue(
         _ => return Err(StatusCode::BAD_REQUEST),
     }
     let row = s
-        .repo
+        .app
         .enqueue_job(&req.kind, req.source_name.as_deref())
         .await
         .map_err(repo_err_to_status)?;
@@ -1490,7 +1493,7 @@ async fn sync_job_cancel(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    s.repo
+    s.app
         .request_cancel_job(&id)
         .await
         .map_err(repo_err_to_status)?;

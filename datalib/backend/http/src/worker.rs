@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use app_schema::sync_jobs::SyncJobRow;
-use datalib_core::repo::DynRepo;
+use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -327,7 +327,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
 }
 
 /// The worker's main loop. Runs until the process exits.
-pub async fn run(repo: DynRepo, cfg: WorkerConfig) {
+pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     match repo.recover_running_jobs().await {
         Ok(0) => {}
         Ok(n) => eprintln!("worker: recovered {n} orphaned running job(s) → failed"),
@@ -401,7 +401,7 @@ fn terminate(pid: u32) {
     }
 }
 
-async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
+async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
     let Some(dag_bin) = cfg.dag_bin.as_ref() else {
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
     };

@@ -1,4 +1,4 @@
-//! `DoltRepo` — production [`MirrorRepo`](crate::repo::MirrorRepo) backed
+//! `DoltRepo` — production [`IndexRepo`](crate::repo::IndexRepo) backed
 //! by a `sqlx::SqlitePool` against a single doltlite file on disk.
 //!
 //! doltlite is a SQLite fork: the C API and on-disk format are
@@ -26,13 +26,13 @@ use sqlx::Row;
 use crate::db::{build_where, snippet, ChatMeta};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{DocRow, EdgeRowOut, MirrorRepo, RepoError};
+use crate::repo::{AppRepo, DocRow, EdgeRowOut, IndexRepo, RepoError};
 use crate::search::SearchRow;
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 use datalib_schema::edges::EdgeRow;
 
-/// SQLite/doltlite-backed implementation of [`MirrorRepo`].
+/// SQLite/doltlite-backed implementation of [`IndexRepo`].
 ///
 /// `root` is the data root (e.g. `~/Documents/datalib`) — needed
 /// because `qmd_path` in `grid_rows` is stored relative to the root and
@@ -41,13 +41,42 @@ pub struct DoltRepo {
     /// The grid index: `grid_rows`, `markdowns`, `edges`. Read-only from
     /// here — the `grid_index` step is its only writer.
     pool: SqlitePool,
-    /// Filed feedback, its own file so this process is its only writer
-    /// and so it sits outside the cache-tagged index tree.
-    feedback_pool: SqlitePool,
-    /// The sync job queue and its history, its own file for the same
-    /// reason.
-    jobs_pool: SqlitePool,
     root: Arc<PathBuf>,
+}
+
+impl DoltRepo {
+    /// Wrap an existing index pool.
+    pub fn from_pool(pool: SqlitePool, root: Arc<PathBuf>) -> Self {
+        Self { pool, root }
+    }
+
+    /// Open the grid index for this data root, read-only in practice:
+    /// the `grid_index` step is its only writer, and any number of
+    /// readers may hold it open at once.
+    pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
+        let pool = open_pool(&crate::layout::grid_index_db(&root)).await?;
+        Ok(Self::from_pool(pool, root))
+    }
+
+    /// The grid-index pool, for a test that wants to seed rows.
+    pub fn index_pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+}
+
+/// The two application stores: filed feedback and the sync job queue.
+///
+/// One type, two files, because they share a writer (this process) but
+/// must not share a database. Doltlite's working set is per file and
+/// shared across processes, so a `dolt_commit('-Am', …)` covers whatever
+/// else is dirty in the same file — which is why these live apart from
+/// the index the pipeline writes, and apart from each other.
+pub struct AppStore {
+    /// Filed feedback. Outside the cache-tagged index tree, because
+    /// nothing regenerates it.
+    feedback_pool: SqlitePool,
+    /// The sync job queue and its history.
+    jobs_pool: SqlitePool,
     /// Whether the linked libsqlite3 is doltlite (exposes `dolt_commit`).
     /// Probed once at connect time via `pragma_function_list`. When
     /// false, every `commit_version` call is a no-op — the row still
@@ -57,40 +86,22 @@ pub struct DoltRepo {
     has_dolt: bool,
 }
 
-impl DoltRepo {
-    /// Wrap existing pools. Probes for doltlite extensions; the caller
-    /// can also use [`from_pools_with_dolt`](Self::from_pools_with_dolt)
-    /// to skip the probe in tests that know the answer.
-    pub async fn from_pools(
-        pool: SqlitePool,
-        feedback_pool: SqlitePool,
-        jobs_pool: SqlitePool,
-        root: Arc<PathBuf>,
-    ) -> Self {
-        let has_dolt = probe_dolt_extensions(&pool).await;
-        Self {
-            pool,
+impl AppStore {
+    /// Open (or create) both stores for a data root and ensure their
+    /// tables exist. DDL is `CREATE TABLE IF NOT EXISTS`, so populated
+    /// files are untouched.
+    pub async fn open(root: &std::path::Path) -> Result<Self, sqlx::Error> {
+        let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
+        let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
+        let has_dolt = probe_dolt_extensions(&feedback_pool).await;
+        let store = Self {
             feedback_pool,
             jobs_pool,
-            root,
             has_dolt,
-        }
-    }
-
-    pub fn from_pools_with_dolt(
-        pool: SqlitePool,
-        feedback_pool: SqlitePool,
-        jobs_pool: SqlitePool,
-        root: Arc<PathBuf>,
-        has_dolt: bool,
-    ) -> Self {
-        Self {
-            pool,
-            feedback_pool,
-            jobs_pool,
-            root,
-            has_dolt,
-        }
+        };
+        store.init_feedback_table().await?;
+        store.init_sync_jobs_table().await?;
+        Ok(store)
     }
 
     /// True when the linked libsqlite3 is doltlite and version-control
@@ -99,8 +110,6 @@ impl DoltRepo {
         self.has_dolt
     }
 
-    /// Stamp a doltlite version commit covering the working set on this
-    /// connection. No-op when the linked libsqlite3 is stock SQLite.
     async fn commit_version(
         &self,
         conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
@@ -116,54 +125,279 @@ impl DoltRepo {
             .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
         Ok(())
     }
-
-    /// Open (or create) the three doltlite files a data root holds, and
-    /// ensure the `feedback` and `sync_jobs` tables exist. DDL is
-    /// `CREATE TABLE IF NOT EXISTS`, so a populated file is untouched.
-    ///
-    /// One file per table group, never one shared file. Doltlite's
-    /// working set is per *file* and shared across processes, so two
-    /// writers on one file commit each other's in-flight rows — which is
-    /// exactly what happened while `feedback` lived in the index
-    /// database that the `grid_index` step also writes. Split like this,
-    /// every file has one writer: the step owns the index, this process
-    /// owns feedback and jobs.
-    pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
-        let index = open_pool(&crate::layout::grid_index_db(&root)).await?;
-        let feedback = open_pool(&crate::layout::feedback_db(&root)).await?;
-        let jobs = open_pool(&crate::layout::jobs_db(&root)).await?;
-        let repo = Self::from_pools(index, feedback, jobs, root).await;
-        repo.init_feedback_table().await?;
-        repo.init_sync_jobs_table().await?;
-        Ok(repo)
-    }
-
     async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in FEEDBACK_DDL {
             sqlx::query(ddl).execute(&self.feedback_pool).await?;
         }
         Ok(())
     }
-
     async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in SYNC_JOBS_DDL {
             sqlx::query(ddl).execute(&self.jobs_pool).await?;
         }
         Ok(())
     }
-
-    /// The grid-index pool. Named for what it is now that the app
-    /// tables have files of their own.
-    pub fn index_pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// The feedback pool, for a test that wants to read back what
-    /// `insert_feedback` wrote. Named separately from the index pool
-    /// because the two are different files — reading `feedback` through
-    /// the index pool now finds no such table, which is the point.
     pub fn feedback_pool(&self) -> &SqlitePool {
         &self.feedback_pool
+    }
+}
+
+#[async_trait]
+impl AppRepo for AppStore {
+    async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
+        // The INSERT and the `dolt_commit` ride the same connection so
+        // the commit covers exactly the row we just wrote, with no
+        // chance of a concurrent writer's INSERT slipping into the same
+        // dolt_log entry. (The pool may hand a different connection to
+        // a sibling task, which is fine — doltlite's working set is
+        // per-file, not per-connection.)
+        let mut conn = self
+            .feedback_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        sqlx::query(
+            "INSERT INTO feedback \
+             (feedback_uuid, created_at, sentiment, comment, app_version, git_hash, context_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.feedback_uuid)
+        .bind(&row.created_at)
+        .bind(&row.sentiment)
+        .bind(&row.comment)
+        .bind(&row.app_version)
+        .bind(&row.git_hash)
+        .bind(&row.context_json)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert: {e}")))?;
+        let msg = format!("feedback: {}", row.feedback_uuid);
+        self.commit_version(&mut conn, &msg).await?;
+        Ok(())
+    }
+    async fn list_jobs(
+        &self,
+        only_active: bool,
+        limit: usize,
+    ) -> Result<Vec<SyncJobRow>, RepoError> {
+        let base = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+                           started_at, finished_at, error, pid, progress_pct, progress_msg \
+                    FROM sync_jobs";
+        let sql = if only_active {
+            format!(
+                "{base} WHERE state IN ('pending','running') \
+                 ORDER BY created_at DESC, id DESC LIMIT ?"
+            )
+        } else {
+            format!("{base} ORDER BY created_at DESC, id DESC LIMIT ?")
+        };
+        let rows = sqlx::query(&sql)
+            .bind(limit as i64)
+            .fetch_all(&self.jobs_pool)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let mut out: Vec<SyncJobRow> = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(row_to_sync_job(&r));
+        }
+        Ok(out)
+    }
+    async fn get_job(&self, job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
+        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+                          started_at, finished_at, error, pid, progress_pct, progress_msg \
+                   FROM sync_jobs WHERE id = ? LIMIT 1";
+        let row = sqlx::query(sql)
+            .bind(job_id)
+            .fetch_optional(&self.jobs_pool)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(row.as_ref().map(row_to_sync_job))
+    }
+    async fn enqueue_job(
+        &self,
+        kind: &str,
+        source_name: Option<&str>,
+    ) -> Result<SyncJobRow, RepoError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let row = SyncJobRow {
+            id: id.clone(),
+            source_name: source_name.map(|s| s.to_string()),
+            kind: kind.to_string(),
+            parent_job_id: None,
+            state: "pending".to_string(),
+            created_at: created_at.clone(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+            pid: None,
+            progress_pct: None,
+            progress_msg: None,
+        };
+        let mut conn = self
+            .jobs_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        sqlx::query(
+            "INSERT INTO sync_jobs \
+             (id, source_name, kind, parent_job_id, state, created_at, \
+              started_at, finished_at, error, pid, progress_pct, progress_msg) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.id)
+        .bind(&row.source_name)
+        .bind(&row.kind)
+        .bind(&row.parent_job_id)
+        .bind(&row.state)
+        .bind(&row.created_at)
+        .bind(&row.started_at)
+        .bind(&row.finished_at)
+        .bind(&row.error)
+        .bind(row.pid)
+        .bind(row.progress_pct)
+        .bind(&row.progress_msg)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
+        // NB: no DOLT_COMMIT here, and the reason has changed. It used
+        // to be forced: `sync_jobs` shared a file with the grid index,
+        // so a pipeline child committing mid-run would collide with a
+        // commit from here. `system/jobs.doltlite_db` has one writer,
+        // so that hazard is gone — what remains is that the queue is
+        // transient and a per-update dolt history would buy nothing.
+        // Queue writes persist as plain SQL in the working set.
+        Ok(row)
+    }
+    async fn request_cancel_job(&self, job_id: &str) -> Result<(), RepoError> {
+        let mut conn = self
+            .jobs_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        sqlx::query(
+            "UPDATE sync_jobs SET state = 'canceled' \
+             WHERE id = ? AND state IN ('pending', 'running')",
+        )
+        .bind(job_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`.
+        Ok(())
+    }
+    async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
+        let mut conn = self
+            .jobs_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM sync_jobs WHERE state = 'pending' \
+             ORDER BY created_at ASC, id ASC LIMIT 1",
+        )
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("claim select: {e}")))?;
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let started_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        sqlx::query(
+            "UPDATE sync_jobs SET state = 'running', started_at = ?, \
+             progress_msg = 'starting…' WHERE id = ? AND state = 'pending'",
+        )
+        .bind(&started_at)
+        .bind(&id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`.
+        // Re-read so the caller gets the row exactly as persisted.
+        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+                          started_at, finished_at, error, pid, progress_pct, progress_msg \
+                   FROM sync_jobs WHERE id = ? LIMIT 1";
+        let row = sqlx::query(sql)
+            .bind(&id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("claim refetch: {e}")))?;
+        Ok(row.as_ref().map(row_to_sync_job))
+    }
+    async fn set_job_pid(&self, job_id: &str, pid: i64) -> Result<(), RepoError> {
+        sqlx::query("UPDATE sync_jobs SET pid = ? WHERE id = ?")
+            .bind(pid)
+            .bind(job_id)
+            .execute(&self.jobs_pool)
+            .await
+            .map_err(|e| RepoError::Internal(format!("set pid: {e}")))?;
+        Ok(())
+    }
+    async fn update_job_progress(
+        &self,
+        job_id: &str,
+        pct: Option<f64>,
+        msg: Option<&str>,
+    ) -> Result<(), RepoError> {
+        // No DOLT_COMMIT here on purpose: progress ticks are high-frequency
+        // and would flood `dolt log`. Only the lifecycle transitions
+        // (claim / finish) are versioned.
+        sqlx::query("UPDATE sync_jobs SET progress_pct = ?, progress_msg = ? WHERE id = ?")
+            .bind(pct)
+            .bind(msg)
+            .bind(job_id)
+            .execute(&self.jobs_pool)
+            .await
+            .map_err(|e| RepoError::Internal(format!("update progress: {e}")))?;
+        Ok(())
+    }
+    async fn finish_job(
+        &self,
+        job_id: &str,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), RepoError> {
+        let mut conn = self
+            .jobs_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        sqlx::query(
+            "UPDATE sync_jobs SET state = ?, finished_at = ?, error = ?, pid = NULL \
+             WHERE id = ?",
+        )
+        .bind(state)
+        .bind(&finished_at)
+        .bind(error)
+        .bind(job_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("finish job: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`. (This is the
+        // transition that actually raced the sync child's commit in
+        // testing and produced "commit conflict".)
+        Ok(())
+    }
+    async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
+        let mut conn = self
+            .jobs_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let res = sqlx::query(
+            "UPDATE sync_jobs SET state = 'failed', finished_at = ?, pid = NULL, \
+             error = 'interrupted: backend restarted while job was running' \
+             WHERE state = 'running'",
+        )
+        .bind(&finished_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("recover running: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`.
+        let n = res.rows_affected() as usize;
+        Ok(n)
     }
 }
 
@@ -210,7 +444,7 @@ fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
 }
 
 #[async_trait]
-impl MirrorRepo for DoltRepo {
+impl IndexRepo for DoltRepo {
     async fn search(&self, q: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
         let needle = q.free_text.to_lowercase();
         let (where_sql, params) = build_where(q, &needle);
@@ -368,38 +602,6 @@ impl MirrorRepo for DoltRepo {
             .collect())
     }
 
-    async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
-        // The INSERT and the `dolt_commit` ride the same connection so
-        // the commit covers exactly the row we just wrote, with no
-        // chance of a concurrent writer's INSERT slipping into the same
-        // dolt_log entry. (The pool may hand a different connection to
-        // a sibling task, which is fine — doltlite's working set is
-        // per-file, not per-connection.)
-        let mut conn = self
-            .feedback_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
-            "INSERT INTO feedback \
-             (feedback_uuid, created_at, sentiment, comment, app_version, git_hash, context_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&row.feedback_uuid)
-        .bind(&row.created_at)
-        .bind(&row.sentiment)
-        .bind(&row.comment)
-        .bind(&row.app_version)
-        .bind(&row.git_hash)
-        .bind(&row.context_json)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("insert: {e}")))?;
-        let msg = format!("feedback: {}", row.feedback_uuid);
-        self.commit_version(&mut conn, &msg).await?;
-        Ok(())
-    }
-
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
         let rows = match sqlx::query(
             "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider FROM grid_rows",
@@ -531,239 +733,6 @@ impl MirrorRepo for DoltRepo {
             }
         }
         Ok(out)
-    }
-
-    async fn list_jobs(
-        &self,
-        only_active: bool,
-        limit: usize,
-    ) -> Result<Vec<SyncJobRow>, RepoError> {
-        let base = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
-                           started_at, finished_at, error, pid, progress_pct, progress_msg \
-                    FROM sync_jobs";
-        let sql = if only_active {
-            format!(
-                "{base} WHERE state IN ('pending','running') \
-                 ORDER BY created_at DESC, id DESC LIMIT ?"
-            )
-        } else {
-            format!("{base} ORDER BY created_at DESC, id DESC LIMIT ?")
-        };
-        let rows = sqlx::query(&sql)
-            .bind(limit as i64)
-            .fetch_all(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
-        let mut out: Vec<SyncJobRow> = Vec::with_capacity(rows.len());
-        for r in rows {
-            out.push(row_to_sync_job(&r));
-        }
-        Ok(out)
-    }
-
-    async fn get_job(&self, job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
-        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
-                          started_at, finished_at, error, pid, progress_pct, progress_msg \
-                   FROM sync_jobs WHERE id = ? LIMIT 1";
-        let row = sqlx::query(sql)
-            .bind(job_id)
-            .fetch_optional(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(row.as_ref().map(row_to_sync_job))
-    }
-
-    async fn enqueue_job(
-        &self,
-        kind: &str,
-        source_name: Option<&str>,
-    ) -> Result<SyncJobRow, RepoError> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let row = SyncJobRow {
-            id: id.clone(),
-            source_name: source_name.map(|s| s.to_string()),
-            kind: kind.to_string(),
-            parent_job_id: None,
-            state: "pending".to_string(),
-            created_at: created_at.clone(),
-            started_at: None,
-            finished_at: None,
-            error: None,
-            pid: None,
-            progress_pct: None,
-            progress_msg: None,
-        };
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
-            "INSERT INTO sync_jobs \
-             (id, source_name, kind, parent_job_id, state, created_at, \
-              started_at, finished_at, error, pid, progress_pct, progress_msg) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&row.id)
-        .bind(&row.source_name)
-        .bind(&row.kind)
-        .bind(&row.parent_job_id)
-        .bind(&row.state)
-        .bind(&row.created_at)
-        .bind(&row.started_at)
-        .bind(&row.finished_at)
-        .bind(&row.error)
-        .bind(row.pid)
-        .bind(row.progress_pct)
-        .bind(&row.progress_msg)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
-        // NB: no DOLT_COMMIT here, and the reason has changed. It used
-        // to be forced: `sync_jobs` shared a file with the grid index,
-        // so a pipeline child committing mid-run would collide with a
-        // commit from here. `system/jobs.doltlite_db` has one writer,
-        // so that hazard is gone — what remains is that the queue is
-        // transient and a per-update dolt history would buy nothing.
-        // Queue writes persist as plain SQL in the working set.
-        Ok(row)
-    }
-
-    async fn request_cancel_job(&self, job_id: &str) -> Result<(), RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
-            "UPDATE sync_jobs SET state = 'canceled' \
-             WHERE id = ? AND state IN ('pending', 'running')",
-        )
-        .bind(job_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`.
-        Ok(())
-    }
-
-    async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let id: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM sync_jobs WHERE state = 'pending' \
-             ORDER BY created_at ASC, id ASC LIMIT 1",
-        )
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("claim select: {e}")))?;
-        let Some(id) = id else {
-            return Ok(None);
-        };
-        let started_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        sqlx::query(
-            "UPDATE sync_jobs SET state = 'running', started_at = ?, \
-             progress_msg = 'starting…' WHERE id = ? AND state = 'pending'",
-        )
-        .bind(&started_at)
-        .bind(&id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`.
-        // Re-read so the caller gets the row exactly as persisted.
-        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
-                          started_at, finished_at, error, pid, progress_pct, progress_msg \
-                   FROM sync_jobs WHERE id = ? LIMIT 1";
-        let row = sqlx::query(sql)
-            .bind(&id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("claim refetch: {e}")))?;
-        Ok(row.as_ref().map(row_to_sync_job))
-    }
-
-    async fn set_job_pid(&self, job_id: &str, pid: i64) -> Result<(), RepoError> {
-        sqlx::query("UPDATE sync_jobs SET pid = ? WHERE id = ?")
-            .bind(pid)
-            .bind(job_id)
-            .execute(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(format!("set pid: {e}")))?;
-        Ok(())
-    }
-
-    async fn update_job_progress(
-        &self,
-        job_id: &str,
-        pct: Option<f64>,
-        msg: Option<&str>,
-    ) -> Result<(), RepoError> {
-        // No DOLT_COMMIT here on purpose: progress ticks are high-frequency
-        // and would flood `dolt log`. Only the lifecycle transitions
-        // (claim / finish) are versioned.
-        sqlx::query("UPDATE sync_jobs SET progress_pct = ?, progress_msg = ? WHERE id = ?")
-            .bind(pct)
-            .bind(msg)
-            .bind(job_id)
-            .execute(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(format!("update progress: {e}")))?;
-        Ok(())
-    }
-
-    async fn finish_job(
-        &self,
-        job_id: &str,
-        state: &str,
-        error: Option<&str>,
-    ) -> Result<(), RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        sqlx::query(
-            "UPDATE sync_jobs SET state = ?, finished_at = ?, error = ?, pid = NULL \
-             WHERE id = ?",
-        )
-        .bind(state)
-        .bind(&finished_at)
-        .bind(error)
-        .bind(job_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("finish job: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`. (This is the
-        // transition that actually raced the sync child's commit in
-        // testing and produced "commit conflict".)
-        Ok(())
-    }
-
-    async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let res = sqlx::query(
-            "UPDATE sync_jobs SET state = 'failed', finished_at = ?, pid = NULL, \
-             error = 'interrupted: backend restarted while job was running' \
-             WHERE state = 'running'",
-        )
-        .bind(&finished_at)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("recover running: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`.
-        let n = res.rows_affected() as usize;
-        Ok(n)
     }
 
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {

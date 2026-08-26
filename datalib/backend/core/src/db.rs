@@ -1,4 +1,4 @@
-//! Pure helpers used by `MirrorRepo` implementations: dialect-agnostic
+//! Pure helpers used by `IndexRepo` implementations: dialect-agnostic
 //! WHERE-builder, snippet generator, and the [`ChatMeta`] row shape the
 //! impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].

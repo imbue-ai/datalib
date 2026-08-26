@@ -11,9 +11,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datalib_core::dolt_repo::DoltRepo;
+use datalib_core::dolt_repo::{AppStore, DoltRepo};
 use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
-use datalib_core::repo::DynRepo;
+use datalib_core::repo::{DynAppRepo, DynIndexRepo};
 
 use crate::{auth::ApiToken, worker, AppState};
 
@@ -56,10 +56,16 @@ pub async fn build_state(
         datalib_core::layout::feedback_db(&root).display(),
         datalib_core::layout::jobs_db(&root).display(),
     );
-    let repo = DoltRepo::open(root.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("open doltlite stores under {}: {e}", root.display()))?;
-    let repo: DynRepo = Arc::new(repo);
+    let repo: DynIndexRepo = Arc::new(
+        DoltRepo::open(root.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("open the grid index under {}: {e}", root.display()))?,
+    );
+    let app: DynAppRepo = Arc::new(
+        AppStore::open(&root)
+            .await
+            .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
+    );
 
     // The daemon resolves its index lazily per search, so an empty root
     // (no sync yet) or a mid-session rebuild is handled transparently —
@@ -84,7 +90,7 @@ pub async fn build_state(
         binary_dir: binary_dir.clone(),
         progress_tx: progress_tx.clone(),
     };
-    let worker_repo = repo.clone();
+    let worker_repo = app.clone();
     tokio::spawn(async move {
         worker::run(worker_repo, worker_cfg).await;
     });
@@ -105,6 +111,7 @@ pub async fn build_state(
     Ok(AppState {
         root,
         repo,
+        app,
         qmd_daemon,
         progress_tx,
         applets,
