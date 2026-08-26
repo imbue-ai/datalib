@@ -930,8 +930,8 @@ fn render_one_page(
             collect_block_ids(blocks, children_by_parent, &mut owner_ids);
             for owner in owner_ids {
                 let ref_id = format!("{owner}:image");
-                if let Some(blob) = blobs.get(&ref_id) {
-                    local_blob_paths.insert(owner, format!("blobs/{}", blob.rendered_filename()));
+                if let Some(fname) = blobs.filename_for(&ref_id) {
+                    local_blob_paths.insert(owner, format!("blobs/{fname}"));
                 }
             }
         }
