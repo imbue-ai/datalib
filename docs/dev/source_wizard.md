@@ -41,15 +41,17 @@ The wizard's job is to move all of that in front of the first run.
 ## Principles
 
 1. **The config text stays the single source of truth.** The wizard is
-   a sophisticated snippet generator, not a parallel config store. It
-   ends by appending TOML to the same buffer the editor shows, and the
-   user can see the exact text before it's written. No hidden state, no
-   round-trip fidelity problem, no "the wizard and the file disagree".
+   a structured generator *and editor* of that text, not a parallel
+   config store: it appends to, or surgically edits, the same buffer the
+   raw editor shows, and the user can see the exact text before it's
+   written. No hidden state, no round-trip fidelity problem, no "the
+   wizard and the file disagree".
 2. **Providers own their own descriptors.** The catalog entry for
    `slack_api` lives next to `SlackConfig` in `slack_config`, the same
    way the schema does (issue #41's compose-don't-flatten discipline).
-   The UI renders a generic form from a declarative descriptor and
-   knows nothing about Slack.
+   The UI renders a generic form from a declarative descriptor — see
+   [What "generic" has to mean](#what-generic-has-to-mean) for exactly
+   how much Slack-specific behavior that does and doesn't buy.
 3. **Verify at every step, never at the end.** Credentials are
    established in-flow — a *Connect* button where latchkey supports a
    browser login, a token field where it doesn't — and confirmed before
@@ -92,9 +94,20 @@ its `Cargo.toml`) — providers are reached only by shelling out to
 `datalib-step`. The catalog descriptors live in the `*_config` crates,
 which are schema-only (serde + anyhow, no transport, no doltlite), so
 linking an aggregator crate costs the http binary nothing and saves a
-subprocess spawn on every page load. Anything that needs credentials,
-the network, or the filesystem goes through `datalib-step probe`,
-which already links the providers.
+subprocess spawn on every page load.
+
+The wizard certainly does need credentials, the network and the
+filesystem — that is most of what it does. Those split three ways by
+*who owns the knowledge*, and only the first needs a provider:
+
+| The wizard needs to… | Runs as | Because |
+|---|---|---|
+| list channels, inspect a PDF tree, hit a provider's API | `datalib-step probe` | provider code; http links none of it |
+| connect an account, check credential status | http → `latchkey` directly | latchkey is a generic credential CLI, not provider code, and its runtime resolution already lives in `datalib_core::node_runtime` |
+| browse for a folder or file | http itself | plain filesystem; no provider or credential involved |
+
+Routing the latchkey calls through `datalib-step` would be a hop for
+nothing — no provider crate is involved in `latchkey auth browser`.
 
 Three registries would then name the source types: `SOURCE_TYPES` and
 the `dispatch::plan` match in `datalib_step`, and the catalog. A test
@@ -118,13 +131,13 @@ One entry per source type. `serde`-serialized to JSON at
   "default_name": "slack",            // seeds the step id: slack.download / slack.render
   "docs": "datalib/backend/etl/providers/slack/DOWNLOAD.md",
 
-  "credential": {
-    "service": "slack",               // the latchkey service name
-    "register": [],                   // services register … lines, if any
-    "header": "Authorization: Bearer <token>",
-    "howto_md": "…",                  // today's hints.rs text, as markdown
-    "probe": "auth"
-  },
+  // Just the latchkey service name. latchkey already knows Slack —
+  // authOptions, the header shape, the token example and the live
+  // credential status all come from `services info slack` at runtime.
+  // The field exists only because the names differ (our `slack_api`
+  // vs latchkey's `slack`). See the credentials section for the
+  // `register` form user-registered services need.
+  "credential": { "service": "slack" },
 
   "screens": [
     { "id": "credential", "kind": "credential" },
@@ -151,10 +164,11 @@ One entry per source type. `serde`-serialized to JSON at
 ```
 
 Field kinds are a **closed, small set** — `text`, `int`, `bytes`,
-`bool`, `date`, `path`, `string_list`, `select`, `multiselect`. This is
-deliberately not a general form-builder DSL: anything a provider can't
-express in those kinds belongs in the raw-TOML escape hatch, not in a
-richer descriptor language.
+`bool`, `date`, `path`, `string_list`, `select`, `multiselect`,
+`tree_multiselect`. This is deliberately not a general form-builder
+DSL: anything a provider can't express in those kinds belongs in the
+raw-TOML escape hatch, not in a richer descriptor language. See
+[What "generic" has to mean](#what-generic-has-to-mean).
 
 `target` is a dotted path into the download step's `params` tree
 (`sync.channels` → `[steps.params.sync] channels = …`). A field may
@@ -166,6 +180,53 @@ it lives in the crate that owns the struct being filled.
 Descriptors are optional. A type with none gets
 `kind: "generic"` — name field, params textarea seeded from
 `all_sources.toml`, and the `credential.howto_md` text if any.
+
+## What "generic" has to mean
+
+"The UI knows nothing about Slack" is a claim worth pinning down,
+because listing a user's channels is obviously Slack-specific work.
+The Slack-specific parts are the **descriptor** (in `slack_config`) and
+the **probe implementation** (in the slack provider crate). What the UI
+holds is:
+
+> screen kind `multiselect`; call probe `list.channels` for source type
+> `slack_api`; render the returned rows using columns
+> `[name, is_private, num_members, purpose]`; store the `name` field of
+> each checked row into `sync.channels`.
+
+Every noun there is data from the descriptor. The UI POSTs
+`{type, op}`, gets back a list of flat JSON objects, and renders the
+declared columns. It never branches on the provider. Swap in
+`email` + `list.mailboxes` + different columns and the same component
+serves it.
+
+**The contract that makes this work is the probe's return shape**: a
+list of flat objects with string/number/bool fields, plus a descriptor
+naming which field is the stored value and which are displayed. That's
+the whole interop surface, and it is deliberately narrow.
+
+### Where it stops working, and what happens then
+
+A flat checklist doesn't serve everything:
+
+- **Email labels are a tree.** They're POSIX-like paths and matching is
+  exact — `Work` does *not* pull in `Work/Projects`
+  (`all_sources.toml`). A flat list of 300 labels is a bad picker; this
+  wants a tree with explicit per-node selection.
+- **Notion pages are a tree** for the same reason.
+
+So the closed set of screen kinds needs `tree_multiselect` alongside
+`multiselect` — probe returns the same flat objects plus a parent/path
+field, the UI builds the tree. Two kinds cover every selection case we
+have.
+
+**The rule for anything beyond the closed set: it falls back to the
+generic params form.** A provider does not get to inject bespoke UI. If
+some future source genuinely needs a control the kinds can't express,
+that is a deliberate decision to extend the closed set — reviewed, and
+paid for once in the shared renderer — not an escape hatch each provider
+opens for itself. The moment providers can ship UI, the "one generic
+renderer" property is gone and every screen becomes a special case.
 
 ## The probe verb
 
@@ -247,29 +308,63 @@ Two more things make the wizard simpler than designed:
   name come from. So `--op auth` is redundant for Slack; probes earn
   their keep on `list.channels`.
 
-### Coverage: browser login reaches two of our seven API sources
+### Registration is data, so browser login isn't only for built-ins
 
-| datalib type | latchkey service | authOptions |
+`latchkey services register` takes `--login-flow=cookie-capture` with
+`--login-flow-params '{"cookieKeys": [...]}'`: *"Open the login URL and
+capture named session cookies as they are set."* A service latchkey has
+never heard of can therefore be **taught** a browser login — and once
+registered it reports `authOptions: ["browser", "set"]` and the
+credential screen treats it exactly like Slack.
+
+That matters most for Claude, whose whole credential is the single
+`sessionKey` cookie we currently ask people to copy out of DevTools.
+The descriptor carries the registration as data:
+
+```jsonc
+"credential": {
+  "service": "claude-ai",
+  "register": {
+    "base_api_url":      "https://claude.ai/",
+    "login_url":         "https://claude.ai/login",
+    "login_flow":        "cookie-capture",
+    "login_flow_params": { "cookieKeys": ["sessionKey"] }
+  }
+}
+```
+
+**Unverified — this needs a live test before we build on it.** The help
+text is explicit about the failure mode: cookies are read from
+`Set-Cookie` headers seen *during* the sign-in, "so a cookie that only a
+page script sets is not seen, and neither is one that an already
+signed-in session never sends again." Whether claude.ai sets `sessionKey`
+that way is an empirical question.
+
+### Coverage, with that in hand
+
+| datalib type | latchkey service | How the user connects |
 |---|---|---|
-| `slack_api` | `slack` | **browser**, set |
-| `github_api` | `github` | **browser**, set |
-| `gitlab_api` | `gitlab` | set |
-| `notion_api` | `notion` | set |
-| `chatgpt_api` | `chatgpt` (user-registered) | set |
-| `claude_api` | `claude-ai` (user-registered) | set |
-| `email` (JMAP) | `fastmail` + `fastmail-content` (user-registered) | set |
+| `slack_api` | `slack` (built-in) | **Browser.** Works today. |
+| `github_api` | `github` (built-in) | **Browser.** Works today. |
+| `claude_api` | `claude-ai` (we register) | **Browser, probably** — cookie-capture on `sessionKey`. Needs the test above. |
+| `chatgpt_api` | `chatgpt` (we register) | Token field. Cookie-capture yields a session cookie, but the downloader sends `Authorization: Bearer <accessToken>` read from `/api/auth/session` — a JSON field, not a cookie. Would need the downloader to change too. |
+| `gitlab_api` | `gitlab` (built-in) | Token field (`PRIVATE-TOKEN`); the built-in is set-only. |
+| `notion_api` | `notion` (built-in) | Token field. `notion-mcp` *is* browser-capable, but it's a different API surface (`mcp.notion.com`) — adopting it means rewriting the downloader, not swapping a string. |
+| `email` (JMAP) | `fastmail` + `fastmail-content` (we register) | Token field — a Fastmail API token, not a cookie. |
 
-So the credential screen has **two modes, chosen from `authOptions`**:
+So: two work now, a third likely does with a registration we write once,
+and the rest are token fields. The credential screen still has **two
+modes, chosen from `authOptions`** — it just gets to use the good one
+more often than "built-in vs not" would suggest:
 
 - **`browser`** → one button, "Connect Slack". Backend runs
   `latchkey ensure-browser` then `latchkey auth browser slack`, streams
   status, then re-reads `services info` to confirm and to name the
   account. Nothing is typed, nothing is pasted, latchkey is never named.
-- **`set`** → a labeled secret field ("Paste your Slack token", "Paste
-  your claude.ai sessionKey") whose value the backend pipes to
-  `latchkey auth set` **on stdin** — never argv, which is
-  world-readable via `ps` — after running `services register` first for
-  the user-registered services. Still no latchkey command for the user
+- **`set`** → a labeled secret field ("Paste your Fastmail API token")
+  whose value the backend pipes to `latchkey auth set` **on stdin** —
+  never argv, which is world-readable via `ps` — after running the
+  descriptor's `register` block first for the user-registered services. Still no latchkey command for the user
   to run; the existing `hints.rs` prose becomes the *how to get this
   token* text beside the field, not an instruction to visit a terminal.
 
@@ -520,7 +615,7 @@ running it.)
 |---|---|
 | **1** | Catalog crate + `GET /api/sources/catalog`; the AG Grid sources table with Run/Edit/Delete and storage bars; picker screen with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit **and** delete-from-config. |
 | **2** | Slack end to end: the browser-mode credential screen (`/api/credentials/*` → `latchkey auth browser slack`), `datalib-step probe` + `POST /api/sources/probe` for the live channel multi-select, since/media, review. Includes plumbing `--account` through `HttpRequest` — the multi-workspace bug above. The reference implementation the rest copy. |
-| **3** | The `set`-mode credential screen (token field → `latchkey auth set` on stdin) for gitlab / notion / chatgpt / claude-ai / fastmail, incl. `services register` for the user-registered ones. |
+| **3** | Credentials for the rest: test cookie-capture registration for `claude-ai` (browser login if it works), and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail. |
 | **4** | `GET /api/fs/browse` + `inspect` probes; descriptors for the file-backed sources. |
 | **5** | Descriptors + probes for email (JMAP mailbox list — the second-best demo after Slack), notion, github, gitlab. |
 | **6** | Nothing — edit is folded into phase 1 now (see above). |
