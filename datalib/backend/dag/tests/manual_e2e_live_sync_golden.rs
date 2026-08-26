@@ -552,25 +552,25 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("system/backend_index/db.doltlite_db")
+            .join("unified_index/grid/db.doltlite_db")
             .is_file(),
-        "backend index DB must live at system/backend_index/db.doltlite_db"
+        "backend index DB must live at unified_index/grid/db.doltlite_db"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-stanza `rendered_md/` tags
     // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
     // walk below). The backend index is always produced here; qmd is skipped in
-    // this test so its tag may be absent. `system/state/` must NOT be tagged —
+    // this test so its tag may be absent. `system/` must NOT be tagged —
     // job logs are operational history, not rebuildable from raw.
     assert!(
         data_root
-            .join("system/backend_index/CACHEDIR.TAG")
+            .join("unified_index/grid/CACHEDIR.TAG")
             .is_file(),
-        "system/backend_index/ must carry a CACHEDIR.TAG marking it as derived cache"
+        "unified_index/grid/ must carry a CACHEDIR.TAG marking it as derived cache"
     );
     assert!(
-        !data_root.join("system/state/CACHEDIR.TAG").exists(),
-        "system/state/ (operational history) must NOT be tagged as cache"
+        !data_root.join("system/CACHEDIR.TAG").exists(),
+        "system/ (operational history) must NOT be tagged as cache"
     );
 
     // Snapshot each stanza's `raw/` and `rendered_md/` trees, mirroring the

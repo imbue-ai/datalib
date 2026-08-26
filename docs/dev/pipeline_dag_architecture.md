@@ -313,7 +313,7 @@ rough dependency order:
   content-hashes the output tree (blake3, content not mtime). The
   fallback is the safety net — real steps should report logical
   versions. The grid_index step's version is its dolt commit hash.
-* **Scheduler state** lives at `system/state/dag_state.json`
+* **Scheduler state** lives at `system/dag_state.json`
   (per-step input/output versions, saved after every terminal step).
   Input versions are recorded only on *success*, so a failed step stays
   dirty automatically — no explicit poisoned flag persists. A failed

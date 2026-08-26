@@ -27,11 +27,11 @@
 //!   skipped, using the sidecar tree itself as the prior-fingerprint
 //!   store (no index-DB peeking — that's the un-fused contract).
 //! * `grid_index` — rebuild/refresh the unified grid table
-//!   (`system/backend_index`) from every stanza's sidecar tree
+//!   (`unified_index/grid`) from every stanza's sidecar tree
 //!   (`build_grid_index`, per-doc fingerprint skip), then `dolt_commit`. This
 //!   is the load step un-fused from render.
 //! * `qmd_index` — the qmd search index over every rendered_md tree,
-//!   writing `system/qmd`.
+//!   writing `unified_index/qmd`.
 //! * `synthesize` — dev utility, not a pipeline step: build HTTP
 //!   playback fixtures for one source from its `input_path` raw
 //!   fixture tree (the `--synthesize-playback-root` mode of the old
@@ -129,11 +129,11 @@ enum Cmd {
     /// One source's render wave → `<name>/rendered_md`. Invoked
     /// `datalib-step render <source_type>`.
     Render { source_type: String },
-    /// Rebuild the unified grid table (`system/backend_index`) from
+    /// Rebuild the unified grid table (`unified_index/grid`) from
     /// every sidecar tree.
     #[command(name = "grid_index")]
     GridIndex,
-    /// Build the qmd search index → `system/qmd`.
+    /// Build the qmd search index → `unified_index/qmd`.
     #[command(name = "qmd_index")]
     QmdIndex {
         /// Directory where qmd caches its embedding model.

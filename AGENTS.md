@@ -146,7 +146,7 @@ datalib/
     http/          `datalib-http`: API server + sync worker + UI host +
                    the applet gateway (src/applets.rs). Every route is
                    behind a per-process API token (src/auth.rs) — read
-                   it from <root>/system/state/api-token and send
+                   it from <root>/system/api-token and send
                    `Authorization: Bearer <token>`.
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
@@ -166,9 +166,9 @@ the config's `[[steps]]` tables; edges are derived from output/input path
 overlap, never written by hand. Each source is a `<name>.download` +
 `<name>.render` step pair (`datalib-step download|render <type>`), and
 two shared fan-in steps index every source's `rendered_md` tree:
-`grid_index` (SQL index at `system/backend_index/db.doltlite_db`) and
-`qmd_index` (semantic search at `system/qmd/`). Scheduler state lives at
-`system/state/dag_state.json`. The http server's sync worker shells out
+`grid_index` (SQL index at `unified_index/grid/db.doltlite_db`) and
+`qmd_index` (semantic search at `unified_index/qmd/`). Scheduler state lives at
+`system/dag_state.json`. The http server's sync worker shells out
 to `datalib-dag`; the UI's Setup tab scaffolds/edits the config.
 Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
 `sources:` one) are converted out of band by `datalib-migrate-config`,
@@ -339,7 +339,7 @@ Where the stores live under a data root:
 ```
 <data_root>/<name>/raw/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<name>/raw/blobs.doltlite_db      content-addressed blobs
-<data_root>/system/backend_index/db.doltlite_db   grid_rows / markdowns / edges
+<data_root>/unified_index/grid/db.doltlite_db   grid_rows / markdowns / edges
 ```
 
 There is also a host `/usr/local/bin/doltlite` on some machines. Prefer

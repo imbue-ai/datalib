@@ -5,7 +5,7 @@
 //! fill (`POST /api/sync/jobs`): claim the oldest `pending` row, shell
 //! out to the `datalib-dag` runner against the data root's
 //! `config.toml` (the DAG config), stream the child's
-//! stdout+stderr to `<root>/system/state/job-logs/<id>.log` (which
+//! stdout+stderr to `<root>/system/job-logs/<id>.log` (which
 //! `GET /api/sync/jobs/{id}/log` tails live), and write the terminal
 //! state back into the queue.
 //!
@@ -416,7 +416,7 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     }
 
     // Per-job log file the UI tails via /api/sync/jobs/{id}/log.
-    let log_dir = datalib_core::layout::state_dir(&cfg.root).join("job-logs");
+    let log_dir = datalib_core::layout::system_dir(&cfg.root).join("job-logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("{}.log", job.id));
     let log_file = File::create(&log_path)?;

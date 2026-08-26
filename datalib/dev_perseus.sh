@@ -59,13 +59,13 @@ input_path = "$PERSEUS_FIXTURE_DIR"
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 EOF
 
 # Mirror the model-cache symlink that materialize_tng_root.sh sets up,

@@ -11,7 +11,7 @@
 //!
 //! qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`, so we point
 //! `XDG_CACHE_HOME` at `<root>/system` and the index lands at
-//! `<root>/system/qmd/index.sqlite` alongside the other aggregate processors
+//! `<root>/unified_index/qmd/index.sqlite` alongside the grid index
 //! (see [`crate::layout`]). The *scan* root stays `<root>` so qmd still finds
 //! every stanza's `rendered_md/`.
 
@@ -38,19 +38,20 @@ pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
 use std::path::{Path, PathBuf};
 
 /// Canonical sub-path of the qmd index, relative to `<root>`. qmd writes
-/// here when invoked with `XDG_CACHE_HOME=<root>/system` (see
+/// here when invoked with `XDG_CACHE_HOME=<root>/unified_index` (see
 /// [`qmd_cache_home`]).
-pub const QMD_INDEX_REL: &str = "system/qmd/index.sqlite";
+pub const QMD_INDEX_REL: &str = "unified_index/qmd/index.sqlite";
 
 /// Resolve the qmd index file path under a data root.
 pub fn qmd_index_path(root: &Path) -> PathBuf {
     crate::layout::qmd_dir(root).join("index.sqlite")
 }
 
-/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data root:
-/// `<root>/system`, so qmd writes its `qmd/index.sqlite` under `system/`.
+/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data
+/// root: `<root>/unified_index`, so qmd writes its `qmd/index.sqlite`
+/// beside the grid index rather than under the server's own `system/`.
 pub fn qmd_cache_home(root: &Path) -> PathBuf {
-    crate::layout::system_dir(root)
+    crate::layout::unified_index_dir(root)
 }
 
 /// Entry script of the `@tobilu/qmd` package inside a staged runtime

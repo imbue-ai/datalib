@@ -8,7 +8,7 @@
 //! Usage: `datalib-http <data_root> [--no-open] [--url-file <path>]`.
 //! The data root is the directory the pipeline (`datalib-dag`) writes into:
 //! it contains one directory per source stanza plus `system/` holding
-//! the SQL store (`system/backend_index/db.doltlite_db`), the
+//! the SQL store (`unified_index/grid/db.doltlite_db`), the
 //! `system/media/` symlinked attachments, and the qmd index. The
 //! directory is created on demand — first-run users get an empty index
 //! that fills in once they run a sync.
@@ -24,7 +24,7 @@
 //! [`datalib_http::auth`]). It rides in the announced URL as
 //! `?token=…`, which the browser trades for a session cookie on the
 //! first load; scripts and agents read it from
-//! `<data_root>/system/state/api-token` and send
+//! `<data_root>/system/api-token` and send
 //! `Authorization: Bearer …`. Set `$DATALIB_TOKEN` to pin it (that's
 //! how `dev.sh` shares one token with the Vite proxy).
 //!
@@ -34,7 +34,7 @@
 //! the default.
 //!
 //! Backend: [`DoltRepo`](datalib_core::dolt_repo::DoltRepo) over a
-//! `sqlx::SqlitePool` against `<data_root>/system/backend_index/db.doltlite_db`.
+//! `sqlx::SqlitePool` against `<data_root>/unified_index/grid/db.doltlite_db`.
 //! No subprocess, no TCP port to MySQL.
 
 use clap::Parser;

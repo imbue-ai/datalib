@@ -403,7 +403,7 @@ level too.
 ### grid_rows itself lives in doltlite
 
 The `grid_rows` table (the projection consumed by the UI) lives in
-`<data_root>/system/backend_index/db.doltlite_db`, just like raw stores. The "doltlite
+`<data_root>/unified_index/grid/db.doltlite_db`, just like raw stores. The "doltlite
 is our storage layer" claim should apply to every store the system writes —
 raw, blob CAS, and the backend index — not just to raw. Worth saying
 explicitly in

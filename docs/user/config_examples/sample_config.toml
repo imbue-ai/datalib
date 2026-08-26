@@ -16,13 +16,13 @@ data_root = "~/datalib"
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 
 # Google Takeout Gmail export. No JMAP `sync` block in the params —
 # that puts the email provider in file-backed mbox mode, reading the

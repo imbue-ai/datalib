@@ -8,7 +8,7 @@
 //!
 //! QMD stores its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. We pin
 //! it inside the data root by setting `XDG_CACHE_HOME=<root>/system`, so
-//! the resulting index lives at `<root>/system/qmd/index.sqlite` alongside
+//! the resulting index lives at `<root>/unified_index/qmd/index.sqlite` alongside
 //! the other cross-stanza aggregates (`backend_index/db.doltlite_db`).
 //!
 //! The run is **incremental** — qmd's `update` only re-indexes changed
@@ -130,7 +130,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         .with_context(|| format!("root does not exist: {}", opts.root.display()))?;
 
     // qmd writes `<XDG_CACHE_HOME>/qmd/index.sqlite`; point it at `<root>/system`
-    // so the index lands at `<root>/system/qmd/`. The collection-add scan root
+    // so the index lands at `<root>/unified_index/qmd/`. The collection-add scan root
     // below stays `<root>` so qmd still sees every stanza's `rendered_md/`.
     let cache_home = datalib_core::qmd::qmd_cache_home(&root);
     let qmd_dir = cache_home.join("qmd");

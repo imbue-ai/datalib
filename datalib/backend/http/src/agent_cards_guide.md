@@ -16,7 +16,7 @@ read it before you have the token.)
 The token is minted per server process and published to a file:
 
 ```sh
-TOKEN=$(cat <data root>/system/state/api-token)
+TOKEN=$(cat <data root>/system/api-token)
 curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
 ```
 

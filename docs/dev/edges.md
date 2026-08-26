@@ -6,7 +6,7 @@ schema is the hand-written `EdgeRow` struct at
 `datalib/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`); the table is created by
 `init_schema` in `datalib/backend/etl/src/grid_index.rs` and persists in
-`<root>/system/backend_index/db.doltlite_db` alongside `grid_rows` and
+`<root>/unified_index/grid/db.doltlite_db` alongside `grid_rows` and
 `markdowns`.
 
 ## Data model

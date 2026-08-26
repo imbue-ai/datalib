@@ -142,14 +142,14 @@ pub fn stanza_yaml_to_toml(text: &str) -> Result<String> {
     out.push_str(&step_block(&fanin(
         "grid_index",
         "datalib-step grid_index",
-        "system/backend_index",
+        "unified_index/grid",
     ))?);
     if !cfg.qmd.skip {
         out.push('\n');
         out.push_str(&step_block(&fanin(
             "qmd_index",
             "datalib-step qmd_index",
-            "system/qmd",
+            "unified_index/qmd",
         ))?);
     }
 

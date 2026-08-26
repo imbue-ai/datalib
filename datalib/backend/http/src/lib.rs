@@ -78,7 +78,7 @@ pub struct AppState {
     /// which is the state every data root starts in.
     pub applets: Arc<applets::AppletRegistry>,
     /// The per-process API token every request must carry. Minted at
-    /// startup and published to `<root>/system/state/api-token`; see
+    /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
 }
@@ -1367,13 +1367,13 @@ fn scaffold_toml() -> String {
 id = \"grid_index\"
 command = \"datalib-step grid_index\"
 inputs = [\"**/rendered_md\"]
-outputs = [\"system/backend_index\"]
+outputs = [\"unified_index/grid\"]
 
 [[steps]]
 id = \"qmd_index\"
 command = \"datalib-step qmd_index\"
 inputs = [\"**/rendered_md\"]
-outputs = [\"system/qmd\"]
+outputs = [\"unified_index/qmd\"]
 
 # Source steps go below. Anything you add above the first [[steps]]
 # is a top-level key (data_root, binary_dir), not part of a step.
@@ -1510,7 +1510,7 @@ async fn sync_job_cancel(
 }
 
 /// Tail the per-job log written by the worker at
-/// `<root>/system/state/job-logs/{id}.log`.
+/// `<root>/system/job-logs/{id}.log`.
 /// 404 when the file doesn't exist yet — the UI polls `/jobs/{id}` for state
 /// and only follows the log link once it appears.
 async fn sync_job_log(
@@ -1528,7 +1528,7 @@ async fn sync_job_log(
     if id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let path = datalib_core::layout::state_dir(&s.root)
+    let path = datalib_core::layout::system_dir(&s.root)
         .join("job-logs")
         .join(format!("{id}.log"));
     match std::fs::read_to_string(&path) {

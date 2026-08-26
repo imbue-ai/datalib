@@ -7,9 +7,9 @@
 #
 # Produces, under <out-root>:
 #   <stanza>/rendered_md/...           Conversation markdown trees (from qmd.tar).
-#   system/backend_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
-#   system/qmd/index.sqlite            QMD index (from qmd-index.tar).
-#   system/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
+#   unified_index/grid/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
+#   unified_index/qmd/index.sqlite            QMD index (from qmd-index.tar).
+#   unified_index/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
 #   config.toml                        { data_root } — backend reads via
 #                                      DATALIB_CONFIG.
 #
@@ -46,16 +46,16 @@ mkdir -p "$OUT_ROOT"
 
 # Both archives are rooted at `qmd/` (the genrule's staging dir name);
 # strip that one component so the per-stanza markdown trees land at
-# `<root>/<stanza>/rendered_md/...` and the index at `<root>/system/qmd/`,
+# `<root>/<stanza>/rendered_md/...` and the index at `<root>/unified_index/qmd/`,
 # where the backend's scanners look.
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
 tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 
 # Drop the doltlite file into its canonical home under `system/`; the
-# backend opens it directly via `<data_root>/system/backend_index/db.doltlite_db`.
-mkdir -p "$OUT_ROOT/system/backend_index"
-cp "$DB_FILE" "$OUT_ROOT/system/backend_index/db.doltlite_db"
-chmod u+w "$OUT_ROOT/system/backend_index/db.doltlite_db"
+# backend opens it directly via `<data_root>/unified_index/grid/db.doltlite_db`.
+mkdir -p "$OUT_ROOT/unified_index/grid"
+cp "$DB_FILE" "$OUT_ROOT/unified_index/grid/db.doltlite_db"
+chmod u+w "$OUT_ROOT/unified_index/grid/db.doltlite_db"
 
 cat > "$OUT_ROOT/config.toml" <<EOF
 data_root = "$OUT_ROOT"
@@ -87,8 +87,8 @@ if (( ${#missing[@]} > 0 )); then
   } >&2
   exit 3
 fi
-mkdir -p "$OUT_ROOT/system/qmd"
-ln -sfn "$SHARED_MODELS" "$OUT_ROOT/system/qmd/models"
+mkdir -p "$OUT_ROOT/unified_index/qmd"
+ln -sfn "$SHARED_MODELS" "$OUT_ROOT/unified_index/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
 # directory the `fsindex` (Unison-style) scanner can index; nothing renders it

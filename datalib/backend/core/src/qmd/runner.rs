@@ -4,7 +4,7 @@
 //! runtime when staged, else `npx -y @tobilu/qmd@<version>`) — same
 //! incantation as `datalib_qmd_indexer`. The runner does NOT build
 //! the index; it
-//! expects one already present at `<root>/system/qmd/index.sqlite`
+//! expects one already present at `<root>/unified_index/qmd/index.sqlite`
 //! ([`crate::qmd::qmd_index_path`]).
 //!
 //! Search modes:
@@ -29,7 +29,7 @@ pub const DEFAULT_COLLECTION: &str = "mirror";
 #[derive(Debug, Clone)]
 pub struct QmdRunnerConfig {
     /// Data root. Contains the rendered markdown tree AND
-    /// `system/qmd/index.sqlite`.
+    /// `unified_index/qmd/index.sqlite`.
     pub qmd_root: PathBuf,
     pub qmd_version: String,
     pub collection: String,

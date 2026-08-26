@@ -8,7 +8,7 @@ data_root = "/tmp/data"
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 # my main claude account
 [[steps]]

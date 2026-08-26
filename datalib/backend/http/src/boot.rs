@@ -19,7 +19,7 @@ use crate::{auth::ApiToken, worker, AppState};
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the doltlite repo at
-/// [`datalib_core::layout::backend_index_db`], the lazy qmd daemon,
+/// [`datalib_core::layout::grid_index_db`], the lazy qmd daemon,
 /// `<root>/config.toml`, the sync-progress channel, and the background
 /// sync worker. The worker is spawned onto the ambient tokio runtime,
 /// so this must be called from within one. `dag_bin` is the
@@ -50,7 +50,7 @@ pub async fn build_state(
     // terminal) reads it from here instead of scraping our stderr.
     api_token.write_token_file()?;
 
-    let db_path = datalib_core::layout::backend_index_db(&root);
+    let db_path = datalib_core::layout::grid_index_db(&root);
     eprintln!("dolt db: {}", db_path.display());
     let repo = DoltRepo::open(&db_path, root.clone())
         .await
@@ -114,7 +114,7 @@ mod tests {
 
     /// Regression guard for the web/Tauri drift this module exists to
     /// prevent: the state must open the doltlite file at the layout
-    /// helper's path (`system/backend_index/db.doltlite_db`), not some
+    /// helper's path (`unified_index/grid/db.doltlite_db`), not some
     /// packaging-local filename at the root.
     #[tokio::test]
     async fn build_state_opens_the_layout_db_path() {
@@ -123,7 +123,7 @@ mod tests {
         let state = build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
-        let db_path = datalib_core::layout::backend_index_db(root.path());
+        let db_path = datalib_core::layout::grid_index_db(root.path());
         assert!(
             db_path.is_file(),
             "expected {} to be created",

@@ -15,7 +15,7 @@ guide itself is public, so you can read it before you have the token.)
 The token is minted per server process and published to a file:
 
 ```sh
-TOKEN=$(cat <data root>/system/state/api-token)
+TOKEN=$(cat <data root>/system/api-token)
 curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
 ```
 
@@ -63,13 +63,13 @@ outputs = ["slack/rendered_md"]
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
