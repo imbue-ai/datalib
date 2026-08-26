@@ -305,7 +305,7 @@ impl FrontendStore {
 }
 
 /// Guard before a hash is used as a key or a path segment. Lowercase
-/// hex only — the same predicate the card store applies.
+/// hex only, so a request path can never reach outside the store.
 pub fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
