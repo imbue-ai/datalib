@@ -38,7 +38,7 @@ fn unique_db_path() -> PathBuf {
 async fn app() -> (axum::Router, ApiToken) {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone())
+    let dolt = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let api_token = ApiToken::from_value(TOKEN, root.as_path());

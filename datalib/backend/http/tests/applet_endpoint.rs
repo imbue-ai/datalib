@@ -97,7 +97,7 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
     std::fs::write(root.join("config.toml"), config_toml).unwrap();
     let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let dolt = DoltRepo::open(root.clone()).await.unwrap();
     AppState {
         root: root.clone(),
         repo: Arc::new(dolt),

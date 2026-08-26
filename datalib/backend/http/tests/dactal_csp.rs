@@ -35,7 +35,7 @@ async fn fetch(path: &str) -> (StatusCode, String) {
         .keep()
         .join("backend_index.doltlite_db");
     let root: Arc<PathBuf> = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone())
+    let dolt = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let state = AppState {

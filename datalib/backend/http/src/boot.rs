@@ -50,11 +50,15 @@ pub async fn build_state(
     // terminal) reads it from here instead of scraping our stderr.
     api_token.write_token_file()?;
 
-    let db_path = datalib_core::layout::grid_index_db(&root);
-    eprintln!("dolt db: {}", db_path.display());
-    let repo = DoltRepo::open(&db_path, root.clone())
+    eprintln!(
+        "stores: {} (index, read-only here), {}, {}",
+        datalib_core::layout::grid_index_db(&root).display(),
+        datalib_core::layout::feedback_db(&root).display(),
+        datalib_core::layout::jobs_db(&root).display(),
+    );
+    let repo = DoltRepo::open(root.clone())
         .await
-        .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
+        .map_err(|e| anyhow::anyhow!("open doltlite stores under {}: {e}", root.display()))?;
     let repo: DynRepo = Arc::new(repo);
 
     // The daemon resolves its index lazily per search, so an empty root
@@ -130,6 +134,46 @@ mod tests {
             db_path.display()
         );
         assert_eq!(state.root.as_path(), root.path());
+    }
+
+    /// Three stores, three files — and the feedback store is not inside
+    /// the index tree.
+    ///
+    /// Both halves are load-bearing. Sharing one file meant two
+    /// processes writing it (this server and the `grid_index` step),
+    /// and doltlite's working set is per file, so each one's
+    /// `dolt_commit('-Am', …)` swept the other's in-flight rows. And the
+    /// step tags its own tree with `CACHEDIR.TAG`, so feedback stored
+    /// under it was feedback a `--exclude-caches` backup would skip.
+    #[tokio::test]
+    async fn build_state_keeps_the_three_stores_apart() {
+        use datalib_core::layout;
+        let root = tempfile::tempdir().unwrap();
+        let token = ApiToken::from_value("split-test-token", root.path());
+        build_state(root.path().to_path_buf(), None, None, token)
+            .await
+            .unwrap();
+
+        let index = layout::grid_index_db(root.path());
+        let feedback = layout::feedback_db(root.path());
+        let jobs = layout::jobs_db(root.path());
+        for p in [&index, &feedback, &jobs] {
+            assert!(p.is_file(), "expected a store at {}", p.display());
+        }
+        assert_ne!(index, feedback);
+        assert_ne!(index, jobs);
+        assert_ne!(feedback, jobs);
+
+        // The tree the pipeline marks as rebuildable cache holds the
+        // index and nothing else.
+        let derived = layout::unified_index_dir(root.path());
+        assert!(index.starts_with(&derived), "{}", index.display());
+        assert!(
+            !feedback.starts_with(&derived),
+            "feedback must live outside the cache-tagged tree, got {}",
+            feedback.display()
+        );
+        assert!(!jobs.starts_with(&derived), "{}", jobs.display());
     }
 
     /// The token has to reach disk during boot — it is how an agent

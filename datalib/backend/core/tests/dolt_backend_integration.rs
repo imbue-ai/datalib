@@ -31,7 +31,7 @@ fn unique_db_path() -> PathBuf {
 async fn dolt_repo_databaseless_root_reads_as_empty() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let repo = DoltRepo::open(&db_path, root.clone())
+    let repo = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
 
@@ -51,7 +51,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     // exists but lacks the queried columns) must still be an error, not
     // read as "no data yet".
     sqlx::query("CREATE TABLE grid_rows (only_column TEXT)")
-        .execute(repo.pool())
+        .execute(repo.index_pool())
         .await
         .expect("create decoy grid_rows");
     let err = repo.search(&parse_query(""), 100).await.unwrap_err();
@@ -68,19 +68,19 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
 async fn dolt_repo_round_trip_search_and_chat_meta() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let repo = DoltRepo::open(&db_path, root.clone())
+    let repo = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
 
     for (_t, ddl) in GRID_DDL {
         sqlx::query(ddl)
-            .execute(repo.pool())
+            .execute(repo.index_pool())
             .await
             .expect("create grid_rows");
     }
     for (_t, ddl) in MARKDOWNS_DDL {
         sqlx::query(ddl)
-            .execute(repo.pool())
+            .execute(repo.index_pool())
             .await
             .expect("create markdowns");
     }
@@ -95,7 +95,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
                  'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1')",
     )
-    .execute(repo.pool())
+    .execute(repo.index_pool())
     .await
     .expect("insert chat row");
     sqlx::query(
@@ -106,7 +106,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
                  '2026-04-01T10:01:00.000000Z','+00:00', \
                  'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1')",
     )
-    .execute(repo.pool())
+    .execute(repo.index_pool())
     .await
     .expect("insert message row");
     sqlx::query(
@@ -114,7 +114,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
          row_set_hash, renderer_version) \
          VALUES ('c-1','test','anthropic','chat','chats/c-1.md','deadbeef','test-v1')",
     )
-    .execute(repo.pool())
+    .execute(repo.index_pool())
     .await
     .expect("insert markdown row");
 

@@ -36,10 +36,10 @@ fn unique_db_path() -> PathBuf {
 async fn post_feedback_inserts_row() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone())
+    let dolt = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
-    let pool = dolt.pool().clone();
+    let pool = dolt.feedback_pool().clone();
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
     let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {

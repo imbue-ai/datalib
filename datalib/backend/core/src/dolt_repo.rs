@@ -38,7 +38,15 @@ use datalib_schema::edges::EdgeRow;
 /// because `qmd_path` in `grid_rows` is stored relative to the root and
 /// the trait contract returns an absolute path.
 pub struct DoltRepo {
+    /// The grid index: `grid_rows`, `markdowns`, `edges`. Read-only from
+    /// here — the `grid_index` step is its only writer.
     pool: SqlitePool,
+    /// Filed feedback, its own file so this process is its only writer
+    /// and so it sits outside the cache-tagged index tree.
+    feedback_pool: SqlitePool,
+    /// The sync job queue and its history, its own file for the same
+    /// reason.
+    jobs_pool: SqlitePool,
     root: Arc<PathBuf>,
     /// Whether the linked libsqlite3 is doltlite (exposes `dolt_commit`).
     /// Probed once at connect time via `pragma_function_list`. When
@@ -50,21 +58,36 @@ pub struct DoltRepo {
 }
 
 impl DoltRepo {
-    /// Wrap an existing pool. Probes for doltlite extensions; the caller
-    /// can also use [`from_pool_with_dolt`](Self::from_pool_with_dolt)
+    /// Wrap existing pools. Probes for doltlite extensions; the caller
+    /// can also use [`from_pools_with_dolt`](Self::from_pools_with_dolt)
     /// to skip the probe in tests that know the answer.
-    pub async fn from_pool(pool: SqlitePool, root: Arc<PathBuf>) -> Self {
+    pub async fn from_pools(
+        pool: SqlitePool,
+        feedback_pool: SqlitePool,
+        jobs_pool: SqlitePool,
+        root: Arc<PathBuf>,
+    ) -> Self {
         let has_dolt = probe_dolt_extensions(&pool).await;
         Self {
             pool,
+            feedback_pool,
+            jobs_pool,
             root,
             has_dolt,
         }
     }
 
-    pub fn from_pool_with_dolt(pool: SqlitePool, root: Arc<PathBuf>, has_dolt: bool) -> Self {
+    pub fn from_pools_with_dolt(
+        pool: SqlitePool,
+        feedback_pool: SqlitePool,
+        jobs_pool: SqlitePool,
+        root: Arc<PathBuf>,
+        has_dolt: bool,
+    ) -> Self {
         Self {
             pool,
+            feedback_pool,
+            jobs_pool,
             root,
             has_dolt,
         }
@@ -94,31 +117,22 @@ impl DoltRepo {
         Ok(())
     }
 
-    /// Open (or create) a doltlite file at `db_path` and ensure the
-    /// `feedback` + `sync_jobs` tables exist. DDL is `CREATE TABLE IF NOT
-    /// EXISTS`, so a real ingest-populated file is left untouched.
-    pub async fn open(db_path: &std::path::Path, root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-            .create_if_missing(true)
-            // WAL / NORMAL synchronous are no-ops on doltlite (its
-            // chunk store ignores the SQLite pager journal), but
-            // harmless to leave as documentation of intent for
-            // stock-libsqlite3 builds (e.g. cargo-only unit tests).
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
-        // Pool size 1: doltlite's per-connection HEAD pointer means
-        // pool sizes >1 produce silent dolt_log dropouts and
-        // `commit conflict` errors on interleaved writes. See
-        // `datalib_etl::doltlite_raw` module docs for the full
-        // story (dolt-team-confirmed advice).
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await?;
-        let repo = Self::from_pool(pool, root).await;
+    /// Open (or create) the three doltlite files a data root holds, and
+    /// ensure the `feedback` and `sync_jobs` tables exist. DDL is
+    /// `CREATE TABLE IF NOT EXISTS`, so a populated file is untouched.
+    ///
+    /// One file per table group, never one shared file. Doltlite's
+    /// working set is per *file* and shared across processes, so two
+    /// writers on one file commit each other's in-flight rows — which is
+    /// exactly what happened while `feedback` lived in the index
+    /// database that the `grid_index` step also writes. Split like this,
+    /// every file has one writer: the step owns the index, this process
+    /// owns feedback and jobs.
+    pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
+        let index = open_pool(&crate::layout::grid_index_db(&root)).await?;
+        let feedback = open_pool(&crate::layout::feedback_db(&root)).await?;
+        let jobs = open_pool(&crate::layout::jobs_db(&root)).await?;
+        let repo = Self::from_pools(index, feedback, jobs, root).await;
         repo.init_feedback_table().await?;
         repo.init_sync_jobs_table().await?;
         Ok(repo)
@@ -126,21 +140,59 @@ impl DoltRepo {
 
     async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in FEEDBACK_DDL {
-            sqlx::query(ddl).execute(&self.pool).await?;
+            sqlx::query(ddl).execute(&self.feedback_pool).await?;
         }
         Ok(())
     }
 
     async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in SYNC_JOBS_DDL {
-            sqlx::query(ddl).execute(&self.pool).await?;
+            sqlx::query(ddl).execute(&self.jobs_pool).await?;
         }
         Ok(())
     }
 
-    pub fn pool(&self) -> &SqlitePool {
+    /// The grid-index pool. Named for what it is now that the app
+    /// tables have files of their own.
+    pub fn index_pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// The feedback pool, for a test that wants to read back what
+    /// `insert_feedback` wrote. Named separately from the index pool
+    /// because the two are different files — reading `feedback` through
+    /// the index pool now finds no such table, which is the point.
+    pub fn feedback_pool(&self) -> &SqlitePool {
+        &self.feedback_pool
+    }
+}
+
+/// Open (or create) one doltlite file with the settings every store in
+/// this codebase uses.
+///
+/// Pool size 1: doltlite's per-connection HEAD pointer means a pool
+/// wider than one connection produces silent `dolt_log` dropouts and
+/// `commit conflict` errors on interleaved writes. See
+/// `datalib_etl::doltlite_raw` module docs for the full story
+/// (dolt-team-confirmed advice). Splitting one database into three does
+/// not relax it: the working set is shared, so two connections on one
+/// file are no safer than they were.
+async fn open_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Error> {
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+        .create_if_missing(true)
+        // WAL / NORMAL synchronous are no-ops on doltlite (its chunk
+        // store ignores the SQLite pager journal), but harmless to leave
+        // as documentation of intent for stock-libsqlite3 builds (e.g.
+        // cargo-only unit tests).
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
 }
 
 /// True iff `e` is SQLite's "no such table: <table>" for exactly the
@@ -324,7 +376,7 @@ impl MirrorRepo for DoltRepo {
         // a sibling task, which is fine — doltlite's working set is
         // per-file, not per-connection.)
         let mut conn = self
-            .pool
+            .feedback_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
@@ -499,7 +551,7 @@ impl MirrorRepo for DoltRepo {
         };
         let rows = sqlx::query(&sql)
             .bind(limit as i64)
-            .fetch_all(&self.pool)
+            .fetch_all(&self.jobs_pool)
             .await
             .map_err(|e| RepoError::Internal(e.to_string()))?;
         let mut out: Vec<SyncJobRow> = Vec::with_capacity(rows.len());
@@ -515,7 +567,7 @@ impl MirrorRepo for DoltRepo {
                    FROM sync_jobs WHERE id = ? LIMIT 1";
         let row = sqlx::query(sql)
             .bind(job_id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.jobs_pool)
             .await
             .map_err(|e| RepoError::Internal(e.to_string()))?;
         Ok(row.as_ref().map(row_to_sync_job))
@@ -543,7 +595,7 @@ impl MirrorRepo for DoltRepo {
             progress_msg: None,
         };
         let mut conn = self
-            .pool
+            .jobs_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
@@ -568,20 +620,19 @@ impl MirrorRepo for DoltRepo {
         .execute(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
-        // NB: no DOLT_COMMIT here. `sync_jobs` is a transient work queue,
-        // and a pipeline *child process* (`datalib-step`) commits to the
-        // same doltlite repo while jobs run — two connections both calling
-        // DOLT_COMMIT on one branch hit "commit conflict: another
-        // connection committed". So all queue writes (enqueue / claim /
-        // progress / finish / cancel / recover) stay uncommitted; they
-        // persist via plain SQL and get folded into the child's next
-        // `-Am` commit. See worker.rs.
+        // NB: no DOLT_COMMIT here, and the reason has changed. It used
+        // to be forced: `sync_jobs` shared a file with the grid index,
+        // so a pipeline child committing mid-run would collide with a
+        // commit from here. `system/jobs.doltlite_db` has one writer,
+        // so that hazard is gone — what remains is that the queue is
+        // transient and a per-update dolt history would buy nothing.
+        // Queue writes persist as plain SQL in the working set.
         Ok(row)
     }
 
     async fn request_cancel_job(&self, job_id: &str) -> Result<(), RepoError> {
         let mut conn = self
-            .pool
+            .jobs_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
@@ -599,7 +650,7 @@ impl MirrorRepo for DoltRepo {
 
     async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
         let mut conn = self
-            .pool
+            .jobs_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
@@ -640,7 +691,7 @@ impl MirrorRepo for DoltRepo {
         sqlx::query("UPDATE sync_jobs SET pid = ? WHERE id = ?")
             .bind(pid)
             .bind(job_id)
-            .execute(&self.pool)
+            .execute(&self.jobs_pool)
             .await
             .map_err(|e| RepoError::Internal(format!("set pid: {e}")))?;
         Ok(())
@@ -659,7 +710,7 @@ impl MirrorRepo for DoltRepo {
             .bind(pct)
             .bind(msg)
             .bind(job_id)
-            .execute(&self.pool)
+            .execute(&self.jobs_pool)
             .await
             .map_err(|e| RepoError::Internal(format!("update progress: {e}")))?;
         Ok(())
@@ -672,7 +723,7 @@ impl MirrorRepo for DoltRepo {
         error: Option<&str>,
     ) -> Result<(), RepoError> {
         let mut conn = self
-            .pool
+            .jobs_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
@@ -696,7 +747,7 @@ impl MirrorRepo for DoltRepo {
 
     async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
         let mut conn = self
-            .pool
+            .jobs_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;

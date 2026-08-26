@@ -24,7 +24,7 @@ const TEST_TOKEN: &str = "applet-test-token";
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let dolt = DoltRepo::open(root.clone()).await.unwrap();
     let cfg = datalib_dag::config::parse(config_toml).expect("fixture config parses");
     datalib_dag::config::validate_applets(&cfg).expect("fixture config is valid");
     AppState {

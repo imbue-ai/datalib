@@ -82,7 +82,7 @@ fn user_dir(root: &Path) -> PathBuf {
 async fn app_for(root: &Path) -> axum::Router {
     let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let dolt = DoltRepo::open(root.clone()).await.unwrap();
     router(AppState {
         root: root.clone(),
         repo: Arc::new(dolt),
