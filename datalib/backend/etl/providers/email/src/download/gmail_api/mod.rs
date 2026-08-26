@@ -41,6 +41,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -117,10 +118,6 @@ fn state_scope(account_id: &str) -> String {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let cfg = &opts.config;
-    let account = cfg.account.as_deref();
-    let user_id = cfg.user_id().to_string();
-
     let db = match opts.db.clone() {
         Some(db) => db,
         None => RawDb::open(&super::db::db_path_for(&opts.db_path)).await?,
@@ -128,6 +125,37 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
+
+    // Stamp a `sync_runs` row for this pass, the same as every other
+    // live source. It is what the DAG-level run-2 incrementality golden
+    // reads: a source with no row there is reported as file-backed, so
+    // skipping this would make a Gmail incrementality regression
+    // invisible to the golden whose whole job is catching one.
+    let run = DownloadRun::start(
+        db.pool(),
+        &json!({
+            "user_id": opts.config.user_id(),
+            "account": opts.config.account,
+            "full_resync": opts.config.full_resync,
+            "only_extract_labels": opts.only_labels,
+            "message_budget": opts.config.message_budget,
+        }),
+    )
+    .await?;
+
+    let result = run_sync(&db, &opts).await;
+    // Even on error, record a summary stub so the row has the same
+    // fields a successful one does — the defaults populated as far as
+    // the run got. Mirrors the JMAP path.
+    let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
+    run.finish(&result, &summary_for_bookkeeping).await;
+    result
+}
+
+async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
+    let cfg = &opts.config;
+    let account = cfg.account.as_deref();
+    let user_id = cfg.user_id().to_string();
 
     let mut throttle = QuotaThrottle::new(cfg.quota_units_per_minute());
     let mut summary = FetchSummary::default();
@@ -151,7 +179,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .clone()
         .unwrap_or_else(|| account_id.clone());
     super::upsert_account(
-        &db,
+        db,
         &now,
         &account_id,
         &json!({
@@ -172,7 +200,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .into_iter()
         .map(|(id, name, role)| json!({ "id": id, "name": name, "role": role }))
         .collect();
-    super::upsert_mailboxes(&db, &now, &account_id, &mailbox_payloads).await?;
+    super::upsert_mailboxes(db, &now, &account_id, &mailbox_payloads).await?;
     summary.mailboxes_upserted = mailbox_payloads.len();
 
     // Turn `only_extract_labels` into Gmail label ids so the enumeration
@@ -218,10 +246,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Loaded once per run, not once per page: both are whole-table reads
     // and `fetch_ids` is called per `messages.list` page.
     let known_blobs = db.loaded_blob_ids().await?;
-    let known_gmail_ids = load_known_gmail_ids(&db).await?;
+    let known_gmail_ids = load_known_gmail_ids(db).await?;
 
     let mut state = RunState {
-        db: &db,
+        db,
         index: &index,
         account_id: &account_id,
         user_id: &user_id,
@@ -251,14 +279,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             full_sync(
                 &mut state,
                 &mut throttle,
-                &opts,
+                opts,
                 &filter_label_ids,
                 &mut summary,
             )
             .await?;
         }
         Plan::Partial(changes) => {
-            summary.emails_destroyed = destroy(&db, &changes.deleted).await?;
+            summary.emails_destroyed = destroy(db, &changes.deleted).await?;
             let ids: Vec<String> = changes
                 .added
                 .iter()
@@ -272,7 +300,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 deleted = changes.deleted.len(),
                 "history since stored cursor",
             );
-            fetch_ids(&mut state, &mut throttle, &ids, &opts, &mut summary).await?;
+            fetch_ids(&mut state, &mut throttle, &ids, opts, &mut summary).await?;
         }
     }
 
