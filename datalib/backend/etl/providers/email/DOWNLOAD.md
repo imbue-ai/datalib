@@ -99,7 +99,7 @@ discovery does the rest.
 ## Run it
 
 ```sh
-bazelisk run //datalib/backend/etl/providers/jmap:jmap_download -- \
+bazelisk run //datalib/backend/etl/providers/email:jmap_download -- \
     --out ~/backups/fastmail \
     --hostname api.fastmail.com
 ```

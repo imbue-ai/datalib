@@ -581,7 +581,7 @@
           "FILE:@@//datalib/backend/etl/providers/github/Cargo.toml 0be4f95ee819cad62966a7acbe7d4f12dd36e94532225c97a75648a3f7ec5c56",
           "FILE:@@//datalib/backend/etl/providers/google_takeout/Cargo.toml d35ff41b891e6c3821b36822fb1f3e51123cf35468823c173f99ddc8ae3bd29a",
           "FILE:@@//datalib/backend/etl/providers/gitlab/Cargo.toml 76e9db4f8c32048133a57298484214f02e8a5eb5deea263f154c8952d720804f",
-          "FILE:@@//datalib/backend/etl/providers/email/Cargo.toml 0fce6cb6319f189c7264ccf84d38c36af89019926aa48f1be85777d0babde97f",
+          "FILE:@@//datalib/backend/etl/providers/email/Cargo.toml e4474484aefbbb8ee444398be1dab3bfe93570fe22c8499ff6b90ae0bbc6af03",
           "FILE:@@//datalib/backend/etl/providers/linkedin/Cargo.toml e1ee972087f7a983b8bfba5ff6569eb35823ef5c36ba6659d532561f3f8bce23",
           "FILE:@@//datalib/backend/etl/providers/fsindex/Cargo.toml 8529c84e4e1daa8e2cad308f6836e9f4e89a28bcc8f0db1e95fa58b280e2c62e",
           "FILE:@@//datalib/backend/etl/providers/lightroom/Cargo.toml 3756d190cf28b0b55ad549d37b917e6b2dcce4517305fd21e50c7688f240ae96",

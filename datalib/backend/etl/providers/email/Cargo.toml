@@ -9,9 +9,11 @@ name = "datalib_etl_email"
 path = "src/lib.rs"
 
 # JMAP-specific extract entry point. Lives inside the broader email
-# crate because we expect to add IMAP (and possibly POP/EWS) under
-# the same roof; each transport gets its own `*-download` bin while
-# sharing the translate + render code path.
+# crate because every transport shares the translate + render code path;
+# the crate now holds three (JMAP, the Gmail REST API, and mbox), and
+# they agree on one raw schema by construction — see
+# `docs/dev/email_download_modes.md`. Only JMAP has a standalone
+# `*-download` bin; the others are reached through `datalib-step`.
 [[bin]]
 name = "jmap-download"
 path = "src/bin/jmap_download.rs"

@@ -28,7 +28,7 @@
 # below has to precede the first `[[steps]]` entirely.
 #
 # Sources that support more than one input mode include a step pair for
-# each: `email` (JMAP server vs. Google Takeout .mbox) and `carddav`
+# each: `email` (JMAP vs. Gmail API vs. Takeout .mbox) and `carddav`
 # contacts (CardDAV server vs. local .vcf files).
 #
 # There is no global `defaults` block in the steps format —
@@ -281,9 +281,58 @@ outlink_format = "fastmail"
 #   only_render_labels = ["Inbox", "Work/Projects"]
 only_render_labels = []
 
-# Mode B — Google Takeout .mbox on disk. No `sync` block → file-backed
-# mbox mode, reading the file at `common.input_path`. The `mbox` block
-# just labels the synthesized account row.
+# Mode B — Gmail REST API, for a Gmail account. The mode that needs the
+# least setup of any source in this file: latchkey has a built-in
+# `google-gmail` service and routes to it by URL host, so there is no
+# service name to configure and no credential in this file.
+#
+#   latchkey auth browser google-gmail    # one-time; opens a browser
+#
+# Incremental sync is driven by Gmail's historyId, which reports adds,
+# deletions, and label changes as explicit events. Throughput is capped by
+# quota rather than bytes: ~300 messages/minute regardless of size.
+[[steps]]
+id = "gmail.download"
+command = "datalib-step download email"
+outputs = ["gmail/raw"]
+
+[steps.params]
+# Same exact-match label paths as every other mode. System labels are
+# normalized to Takeout's spelling ("Inbox", not "INBOX") so one Gmail
+# account ingested via Takeout and via the API shares its mailbox rows
+# instead of doubling them.
+only_extract_labels = []
+
+[steps.params.gmail_api]
+# Everything here is optional; an empty `[steps.params.gmail_api]` table
+# is a complete, working configuration.
+#
+# account = "you@gmail.com"     # required only if `google-gmail` holds
+#                               # more than one credential (work +
+#                               # personal); latchkey demands it then.
+# full_resync = false
+# request_concurrency = 8
+# Google's per-user ceiling is 6000 quota units/minute and messages.get
+# costs 20, so ~300 messages/minute. The default stays under 6000 to
+# leave headroom for retries.
+# quota_units_per_minute = 5000
+# Stop after this many messages, commit the cursor, exit SUCCESSFULLY
+# with a partial result. A 100k-message mailbox is ~6 hours of backfill,
+# so a first pass is naturally spread over several runs.
+# message_budget = 20000
+
+[[steps]]
+id = "gmail.render"
+command = "datalib-step render email"
+inputs = ["gmail/raw"]
+outputs = ["gmail/rendered_md"]
+[steps.params]
+outlink_format = "gmail"
+only_render_labels = []
+
+# Mode C — Google Takeout .mbox on disk. No live block at all →
+# file-backed mbox mode, reading the file at `common.input_path`. The
+# `mbox` block just labels the synthesized account row.
 [[steps]]
 id = "gmail-takeout.download"
 command = "datalib-step download email"

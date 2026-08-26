@@ -34,6 +34,10 @@ are relative to the repo root.
   resumability, wire tape. Companion:
   [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
   (how to build a new provider).
+- [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
+  — the `email` source's three download modes (JMAP, Gmail API, mbox),
+  what keeps them writing one deduped schema, and why an IMAP mode was
+  built and removed.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
   union table behind the grid UI.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`

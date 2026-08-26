@@ -149,7 +149,11 @@ pub enum SourceConfig {
     GithubApi(GithubConfig),
     GitlabApi(GitlabConfig),
     NotionApi(NotionConfig),
-    Email(EmailConfig),
+    /// Boxed because `EmailConfig` carries a block per download mode and
+    /// is by some margin the largest variant — inlined, it would make
+    /// every `SourceConfig` the size of the biggest one. (Checked: still
+    /// over clippy's threshold without the IMAP block.)
+    Email(Box<EmailConfig>),
     Beeper(BeeperConfig),
     Carddav(CarddavConfig),
     Linkedin(LinkedinConfig),

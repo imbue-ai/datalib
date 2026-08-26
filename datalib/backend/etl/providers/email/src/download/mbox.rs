@@ -60,14 +60,15 @@ use datalib_etl::bulk::{
 };
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
-use mail_parser::{Address, HeaderValue, MessageParser, MimeHeaders, PartType};
+use mail_parser::MessageParser;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
 use super::db::{db_path_for, EmailRow, RawDb};
+use super::envelope::{self, header_text, strip_angle};
+use super::labels::{mailbox_id, map_label, split_gmail_labels, LabelMap};
 use super::schema_raw::{
     AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow, MboxFilesCheckpointRow,
 };
@@ -698,16 +699,7 @@ impl Accumulator {
         let (mailbox_ids, keywords) = self.resolve_labels(&labels);
 
         // Date — load-bearing for thread ordering, so computed up front.
-        let received_at = msg
-            .date()
-            .and_then(|d| datalib_time::parse_strict(&d.to_rfc3339()).ok())
-            .map(|t| t.to_rfc3339())
-            .or_else(|| header_text(msg.header("Date")?));
-
-        // Has-attachment is computed once by walking the parts — no
-        // per-part rows land. The bytes ARE the .eml; render
-        // mail-parses on demand if it needs to display attachments.
-        let has_attachment = iter_attachments(&msg).next().is_some();
+        let received_at = envelope::received_at(&msg);
 
         // Queue the .eml itself (the canonical body — everything we
         // need for render lives inside it) into the shared CAS-edge
@@ -738,67 +730,19 @@ impl Accumulator {
 
         // Synthesize a JMAP-shaped `Email/get` envelope so the row goes
         // through the exact same `EmailRow::from_jmap_envelope` path as
-        // the JMAP source — identical promoted columns + stored
-        // payload, including the `mailboxIds` / `keywords` objects the
-        // join refresh reads back out.
-        let mailbox_ids_obj: serde_json::Map<String, Value> = mailbox_ids
-            .iter()
-            .map(|m| (m.clone(), Value::Bool(true)))
-            .collect();
-        let keywords_obj: serde_json::Map<String, Value> = keywords
-            .iter()
-            .map(|k| (k.clone(), Value::Bool(true)))
-            .collect();
-        let mut envelope = serde_json::json!({
-            "id": email_id.clone(),
-            "blobId": eml_blob_id.clone(),
-            "threadId": thread_id.clone(),
-            "mailboxIds": Value::Object(mailbox_ids_obj),
-            "keywords": Value::Object(keywords_obj),
-            "size": raw.len(),
-            "hasAttachment": has_attachment,
-        });
-        let obj = envelope.as_object_mut().expect("envelope is an object");
-        if let Some(r) = &received_at {
-            obj.insert("receivedAt".into(), Value::String(r.clone()));
-            obj.insert("sentAt".into(), Value::String(r.clone()));
-        }
-        if let Some(s) = msg.subject() {
-            obj.insert("subject".into(), Value::String(s.to_string()));
-        }
-        if let Some(from) = addresses_to_jmap(msg.from()) {
-            obj.insert("from".into(), Value::Array(from));
-        }
-        if let Some(to) = addresses_to_jmap(msg.to()) {
-            obj.insert("to".into(), Value::Array(to));
-        }
-        if let Some(cc) = addresses_to_jmap(msg.cc()) {
-            obj.insert("cc".into(), Value::Array(cc));
-        }
-        if let Some(mid) = msg.message_id() {
-            obj.insert(
-                "messageId".into(),
-                Value::Array(vec![Value::String(strip_angle(mid).to_string())]),
-            );
-        }
-        if let Some(irt) = msg.header("In-Reply-To").and_then(header_text) {
-            obj.insert(
-                "inReplyTo".into(),
-                Value::Array(vec![Value::String(strip_angle(&irt).to_string())]),
-            );
-        }
-        let refs: Vec<Value> = msg
-            .header("References")
-            .and_then(header_text)
-            .map(|s| {
-                s.split_whitespace()
-                    .map(|tok| Value::String(strip_angle(tok).to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !refs.is_empty() {
-            obj.insert("references".into(), Value::Array(refs));
-        }
+        // the JMAP source. Shared with every other non-JMAP mode — see
+        // `super::envelope`.
+        let envelope = envelope::synthesize(
+            raw,
+            &msg,
+            &envelope::TransportFacts {
+                email_id: email_id.clone(),
+                blob_id: eml_blob_id.clone(),
+                thread_id: thread_id.clone(),
+                mailbox_ids,
+                keywords,
+            },
+        );
 
         if let Some(row) = EmailRow::from_jmap_envelope(&self.account_id, &envelope) {
             pending.emails.push(row);
@@ -1158,166 +1102,6 @@ async fn bulk_insert_threads(
 // ─────────────────────────────────────────────────────────────────────
 // Label mapping
 // ─────────────────────────────────────────────────────────────────────
-
-enum LabelMap {
-    Mailbox { role: Option<&'static str> },
-    Keyword(&'static str),
-    Unread,
-    Drop,
-}
-
-fn map_label(label: &str) -> LabelMap {
-    let lower = label.to_ascii_lowercase();
-    match lower.as_str() {
-        "inbox" => LabelMap::Mailbox {
-            role: Some("inbox"),
-        },
-        "sent" => LabelMap::Mailbox { role: Some("sent") },
-        "drafts" | "draft" => LabelMap::Mailbox {
-            role: Some("drafts"),
-        },
-        "trash" => LabelMap::Mailbox {
-            role: Some("trash"),
-        },
-        "spam" | "junk" => LabelMap::Mailbox { role: Some("junk") },
-        "all mail" => LabelMap::Mailbox {
-            role: Some("archive"),
-        },
-        "starred" => LabelMap::Keyword("$flagged"),
-        "important" => LabelMap::Keyword("$important"),
-        "opened" | "read" => LabelMap::Keyword("$seen"),
-        "unread" => LabelMap::Unread,
-        "archived" => LabelMap::Drop,
-        _ => LabelMap::Mailbox { role: None },
-    }
-}
-
-/// Split an `X-Gmail-Labels` header. Labels are comma-separated;
-/// commas inside a label are backslash-escaped (`\,`).
-pub fn split_gmail_labels(value: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut chars = value.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(&next) = chars.peek() {
-                cur.push(next);
-                chars.next();
-            }
-            continue;
-        }
-        if c == ',' {
-            out.push(cur.trim().to_string());
-            cur.clear();
-        } else {
-            cur.push(c);
-        }
-    }
-    if !cur.trim().is_empty() {
-        out.push(cur.trim().to_string());
-    }
-    out.retain(|s| !s.is_empty());
-    out
-}
-
-fn mailbox_id(account_id: &str, label: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(b"mbox:");
-    h.update(account_id.as_bytes());
-    h.update(b":");
-    h.update(label.as_bytes());
-    let digest = h.finalize();
-    let mut out = String::with_capacity(28);
-    out.push_str("mbox-");
-    for b in digest.iter().take(12) {
-        out.push_str(&format!("{:02x}", b));
-    }
-    out
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// mail-parser helpers
-// ─────────────────────────────────────────────────────────────────────
-
-fn strip_angle(s: &str) -> &str {
-    let t = s.trim();
-    let t = t.strip_prefix('<').unwrap_or(t);
-    t.strip_suffix('>').unwrap_or(t)
-}
-
-fn header_text(hv: &HeaderValue) -> Option<String> {
-    match hv {
-        HeaderValue::Text(s) => Some(s.to_string()),
-        HeaderValue::TextList(list) => Some(list.join(", ")),
-        _ => None,
-    }
-}
-
-fn addresses_to_jmap(addr: Option<&Address>) -> Option<Vec<Value>> {
-    let addr = addr?;
-    let mut out: Vec<Value> = Vec::new();
-    for a in addr.iter() {
-        let email = a.address().unwrap_or_default().to_string();
-        let name = a.name().map(str::to_string);
-        if email.is_empty() && name.is_none() {
-            continue;
-        }
-        let mut obj = serde_json::Map::new();
-        if let Some(n) = name {
-            obj.insert("name".into(), Value::String(n));
-        }
-        obj.insert("email".into(), Value::String(email));
-        out.push(Value::Object(obj));
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
-}
-
-/// Walk every MIME part the parser surfaces as an attachment or inline
-/// non-body part, yielding `(dotted_part_id, &MessagePart)`. Mirrors
-/// the JMAP server's `partId` convention (1-based dotted paths).
-fn iter_attachments<'a>(
-    msg: &'a mail_parser::Message<'a>,
-) -> impl Iterator<Item = (String, &'a mail_parser::MessagePart<'a>)> + 'a {
-    let body_idx: std::collections::HashSet<usize> = msg
-        .text_body
-        .iter()
-        .copied()
-        .chain(msg.html_body.iter().copied())
-        .collect();
-    msg.attachments
-        .iter()
-        .copied()
-        .chain(msg.html_body.iter().copied())
-        .scan(std::collections::HashSet::new(), move |seen, idx| {
-            if !seen.insert(idx) {
-                return Some(None);
-            }
-            if body_idx.contains(&idx) {
-                let part = msg.part(idx)?;
-                if part.content_id().is_some() {
-                    return Some(Some((idx, part)));
-                }
-                return Some(None);
-            }
-            let part = msg.part(idx)?;
-            // Skip non-body text/html parts that mail-parser
-            // sometimes surfaces in `attachments` (e.g. an alternate
-            // body). They're not attachments in the JMAP sense.
-            if matches!(part.body, PartType::Text(_) | PartType::Html(_))
-                && part.content_id().is_none()
-                && part.attachment_name().is_none()
-            {
-                return Some(None);
-            }
-            Some(Some((idx, part)))
-        })
-        .flatten()
-        .map(|(idx, part)| (format!("{}", idx + 1), part))
-}
 
 // ─────────────────────────────────────────────────────────────────────
 // Path + hash helpers
