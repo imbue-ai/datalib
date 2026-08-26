@@ -66,13 +66,15 @@ pub async fn run(
     }
     pool.close().await;
 
-    // The dolt commit hash is a faithful logical version: a new one
-    // exists iff rows changed. Without doltlite (stock-sqlite dev
-    // builds) there's no hash; claim changed/unchanged and let the
-    // scheduler carry versions.
-    Ok(vec![OutputClaim {
-        path: OUT_REL.to_string(),
-        changed: Some(summary.markdowns_loaded > 0),
-        version: commit,
-    }])
+    // The dolt commit hash is a faithful content version: HEAD only
+    // advances when rows actually changed. Without doltlite
+    // (stock-sqlite dev builds) there is no hash and we report nothing,
+    // so the runner hashes the index instead.
+    match commit {
+        Some(version) => Ok(vec![OutputClaim {
+            path: OUT_REL.to_string(),
+            version,
+        }]),
+        None => Ok(vec![]),
+    }
 }

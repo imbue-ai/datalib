@@ -973,6 +973,39 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     }
 }
 
+/// The store's current HEAD commit hash.
+///
+/// This is the store's *content version*: doltlite advances HEAD only
+/// when a commit actually changed something, so two download waves that
+/// pulled the same rows leave the same hash behind. That makes it the
+/// version a step reports to the DAG runner — derived from content, not
+/// asserted, and far cheaper than hashing a multi-gigabyte store.
+///
+/// `Ok(None)` when the linked libsqlite3 isn't doltlite (stock-sqlite
+/// dev builds) or the log is empty; the caller then reports no version
+/// and the runner content-hashes instead.
+pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
+    if !has_dolt_extensions(pool).await {
+        return Ok(None);
+    }
+    sqlx::query_scalar::<_, String>("SELECT commit_hash FROM dolt_log() LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("read dolt_log head")
+}
+
+/// [`head_commit`] against a store on disk. `Ok(None)` when the file
+/// doesn't exist — a source nobody has downloaded yet.
+pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let pool = open(db_path, &[]).await.context("open for head_commit")?;
+    let head = head_commit(&pool).await;
+    pool.close().await;
+    head
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Reset
 // ─────────────────────────────────────────────────────────────────────

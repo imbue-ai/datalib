@@ -66,7 +66,7 @@ drop them).
 | `DATALIB_DAG_STEP` | this step's config `id` |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root — wildcards in `inputs` are already expanded against producer outputs |
-| `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty on a first run |
+| `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-fetch — honor it if you fetch from an origin, ignore otherwise |
 | `DATALIB_DAG_REFETCH_BLOBS` | `1` when the user asked for attachments/blobs to re-fetch |
@@ -111,26 +111,40 @@ also just flows through).
 
 ### The outcome line
 
-The last thing you may print is one `outcome` event — your report on
-what actually changed:
+The last thing you may print is one `outcome` event — the content
+version of each output you produced:
 
 ```json
 {"event":"outcome","outputs":[
-  {"path":"weather/raw","changed":true,"version":"2026-07-21T06:00Z-a1b2"}
+  {"path":"weather/raw","version":"2026-07-21T06:00Z-a1b2"}
 ]}
 ```
 
-Per declared output you can claim, in order of preference:
+There are two cases per declared output, and that is the whole
+protocol:
 
-* `version` — a logical content version you vouch for (a row-set
-  hash, a dolt commit hash). Trusted verbatim; the cheapest and most
-  precise change signal.
-* `changed: true/false` — no version, just the fact. `false` carries
-  the previous version forward; `true` makes the scheduler
-  content-hash the tree.
-* nothing (omit the path, or the whole outcome line) — the scheduler
-  blake3-hashes the output tree and decides for itself. Always
-  correct, just slower and mtime-blind (content only).
+* **`version`** — a content version you vouch for: a dolt commit hash,
+  a row-set hash, a cursor hash. Trusted verbatim, and compared only
+  for equality.
+* **nothing** (omit the path, or the whole outcome line) — the
+  scheduler blake3-hashes the output tree and decides for itself.
+  Always correct, and always slower: it reads every byte under the
+  output.
+
+**The version must be a function of the output's content.** Two runs
+that leave the same data behind must report the same string, because
+that string is the entire signal for "did this change?" — a step that
+did nothing this pass reports the version it reported last time, and
+its consumers skip. There is no separate "unchanged" flag to assert;
+unchanged is something the scheduler *derives* from two equal
+versions. A timestamp, a run id, or a counter is not a version: it
+moves every run and re-runs everything downstream forever.
+
+If you cannot cheaply derive one, omit the output and let the
+scheduler hash. That is correct, just slower — and for a big output
+(a raw store with a blob CAS, a large rendered tree) the difference is
+substantial, so prefer a logical version wherever the underlying store
+already has one.
 
 Claiming a path you didn't declare in `outputs` is a contract
 violation and fails the step. Exit `0` means success; the outcome
@@ -143,7 +157,7 @@ kind* of failure this is, which drives retry policy:
 
 ```json
 {"event":"outcome","failure":"rate_limited","outputs":[
-  {"path":"weather/raw","changed":true}
+  {"path":"weather/raw","version":"2026-07-21T05:00Z-9f3c"}
 ]}
 ```
 
@@ -232,10 +246,11 @@ A python step using inputs + progress + outcome:
 
 ```python
 #!/usr/bin/env python3
-import json, os, sys
+import hashlib, json, os, pathlib, sys
 
 inputs = [p for p in os.environ["DATALIB_DAG_INPUTS"].split("\n") if p]
 changed = set(os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n"))
+root = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"])
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
 params = json.loads(args.get("--params", "{}"))
 outputs = json.loads(args["--outputs"])
@@ -248,8 +263,17 @@ for src in inputs:
         pass  # ... process only what moved ...
     emit({"event": "progress_inc", "step": "", "delta": 1})
 
+# A content version: same output bytes → same string, every run. A
+# store with its own commit hash should report that instead; this
+# digest is the generic fallback for a plain file tree.
+h = hashlib.blake2b(digest_size=16)
+for f in sorted((root / outputs[0]).rglob("*")):
+    if f.is_file():
+        h.update(str(f.relative_to(root / outputs[0])).encode())
+        h.update(f.read_bytes())
+
 emit({"event": "outcome",
-      "outputs": [{"path": outputs[0], "changed": bool(changed)}]})
+      "outputs": [{"path": outputs[0], "version": h.hexdigest()}]})
 ```
 
 ## How `datalib-step` fits

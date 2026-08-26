@@ -60,7 +60,10 @@ pub struct ProgressEvent {
 }
 
 /// One DAG task's state as shown to the UI. `state` is one of
-/// `todo` / `running` / `done` / `skipped` / `failed` / `blocked`.
+/// `todo` / `running` / `done` / `skipped` / `not_selected` / `failed`
+/// / `blocked`. `skipped` means "checked, and already up to date";
+/// `not_selected` means "outside this run's subgraph, never
+/// considered" — a per-source sync leaves most of the graph there.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskState {
     pub id: String,
@@ -89,7 +92,8 @@ struct TaskBoard {
 
 #[derive(Default)]
 struct TaskEntry {
-    /// `todo` / `running` / `done` / `skipped` / `failed` / `blocked`.
+    /// `todo` / `running` / `done` / `skipped` / `not_selected` /
+    /// `failed` / `blocked`.
     state: String,
     total: Option<u64>,
     pos: u64,
@@ -141,6 +145,7 @@ impl TaskBoard {
                 e.state = match status {
                     "succeeded" => "done",
                     "skipped_up_to_date" => "skipped",
+                    "not_selected" => "not_selected",
                     "blocked" => "blocked",
                     _ => "failed",
                 }
@@ -177,6 +182,7 @@ impl TaskBoard {
                         e.state = match status {
                             "succeeded" => "done",
                             "skipped_up_to_date" => "skipped",
+                            "not_selected" => "not_selected",
                             "blocked" => "blocked",
                             _ => "failed",
                         }
@@ -226,7 +232,12 @@ impl TaskBoard {
         }
         let terminal = tasks
             .iter()
-            .filter(|t| matches!(t.state.as_str(), "done" | "skipped" | "failed" | "blocked"))
+            .filter(|t| {
+                matches!(
+                    t.state.as_str(),
+                    "done" | "skipped" | "not_selected" | "failed" | "blocked"
+                )
+            })
             .count();
         let pct = terminal as f64 / tasks.len() as f64;
         let msg = serde_json::json!({"v": 1, "tasks": tasks}).to_string();

@@ -79,13 +79,42 @@ pub async fn run(
     // (`restic --exclude-caches` etc.) may skip it. No-op until the
     // first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    Ok(vec![OutputClaim {
+    match rendered_tree_version(&rendered_root) {
         // rendered_md always lives at the canonical path (only
         // raw_path is overridable).
-        path: out_rel,
-        changed: Some(docs > 0),
-        version: None,
-    }])
+        Some(version) => Ok(vec![OutputClaim {
+            path: out_rel,
+            version,
+        }]),
+        // No cursor: a provider that hasn't been ported to the
+        // dolt-diff render path, so we have nothing content-derived to
+        // vouch for. The runner hashes the tree instead.
+        None => Ok(vec![]),
+    }
+}
+
+/// A content version for a rendered tree, read back from the cursor the
+/// render just wrote.
+///
+/// The cursor records the raw store commit the tree was rendered from
+/// and the render params it was rendered under. Together those
+/// determine the tree's contents, so a render that found nothing new
+/// leaves the same version behind — no need to walk and hash the whole
+/// `rendered_md` tree to discover that.
+fn rendered_tree_version(rendered_root: &Path) -> Option<String> {
+    let cursor = datalib_etl::render_cursor::read(&rendered_root.join("_render_cursor.json"))
+        .ok()
+        .flatten()?;
+    let params = cursor
+        .params
+        .as_ref()
+        .map(|p| p.to_string())
+        .unwrap_or_default();
+    Some(format!(
+        "raw:{} params:{}",
+        cursor.last_rendered_hash,
+        blake3::hash(params.as_bytes()).to_hex()
+    ))
 }
 
 /// `markdown_uuid → source_fingerprint` for every sidecar under the

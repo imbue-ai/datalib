@@ -78,17 +78,42 @@ pub async fn run(
     )
     .await?;
 
-    let report = report_cell.take();
+    let _report = report_cell.take();
     let Some(rel) = planned.canonical_rel(data_root, "raw") else {
         // raw_path overridden away from the canonical layout: no claim.
         return Ok(vec![]);
     };
-    Ok(vec![OutputClaim {
-        path: rel,
-        // Only claim when the provider published a report; its
-        // emptiness is the honest change signal. No report → the
-        // scheduler hashes the tree.
-        changed: report.as_ref().map(|r| !r.is_empty()),
-        version: None,
-    }])
+    match raw_store_version(&data_root.join(&rel)).await? {
+        Some(version) => Ok(vec![OutputClaim { path: rel, version }]),
+        // Stock-sqlite dev build, or nothing materialized yet: no
+        // version we can vouch for, so let the runner hash instead.
+        None => Ok(vec![]),
+    }
+}
+
+/// A content version for one source's `raw/` tree: the HEAD commit of
+/// each doltlite store under it.
+///
+/// doltlite only advances HEAD when a commit actually changed
+/// something, so a poll that found nothing new leaves both hashes
+/// alone and the version is byte-identical to last run's. That is what
+/// lets the runner skip the render without the download having to
+/// assert anything — and it avoids reading the whole store (blob CAS
+/// included) just to hash it.
+async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
+    use datalib_etl::doltlite_raw::head_commit_at_path;
+    let entities = head_commit_at_path(&datalib_etl::raw_layout::entities_db(raw_dir))
+        .await
+        .context("entities head")?;
+    let blobs = head_commit_at_path(&datalib_etl::raw_layout::blobs_db(raw_dir))
+        .await
+        .context("blobs head")?;
+    if entities.is_none() && blobs.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "entities:{} blobs:{}",
+        entities.as_deref().unwrap_or("-"),
+        blobs.as_deref().unwrap_or("-")
+    )))
 }

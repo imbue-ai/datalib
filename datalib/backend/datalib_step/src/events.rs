@@ -8,14 +8,16 @@ use std::sync::{Arc, Mutex};
 use datalib_dag::events::{Event, LogLevel};
 use datalib_etl::progress::{Progress, ProgressSink};
 
-/// What this step claims about one of its outputs. `changed`/`version`
-/// are optional exactly like the wire `ArtifactState` — absent means
-/// "scheduler, hash it yourself".
+/// What this step claims about one of its outputs: its content version
+/// now. Mirrors the wire `ArtifactState`.
+///
+/// A step that cannot derive a version for an output omits the claim
+/// entirely — the runner then content-hashes that output, which is
+/// always correct and always slower.
 #[derive(Debug, Clone)]
 pub struct OutputClaim {
     pub path: String,
-    pub changed: Option<bool>,
-    pub version: Option<String>,
+    pub version: String,
 }
 
 #[derive(Clone)]
@@ -54,12 +56,7 @@ impl Emitter {
             .map(|o| {
                 let mut m = serde_json::Map::new();
                 m.insert("path".into(), o.path.clone().into());
-                if let Some(c) = o.changed {
-                    m.insert("changed".into(), c.into());
-                }
-                if let Some(v) = &o.version {
-                    m.insert("version".into(), v.clone().into());
-                }
+                m.insert("version".into(), o.version.clone().into());
                 serde_json::Value::Object(m)
             })
             .collect();

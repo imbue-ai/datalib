@@ -171,6 +171,13 @@ pub struct StepEntry {
     /// Extra environment for the child process.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Optional version of the step's own behavior, for steps whose
+    /// output can change without their command line changing (a
+    /// renderer that was reworked, a binary that was upgraded in
+    /// place). Bumping it makes the runner re-run the step once, even
+    /// though none of its inputs moved.
+    #[serde(default)]
+    pub code_version: Option<String>,
 }
 
 /// The config file inside a data root: `<data_root>/config.toml`. The
@@ -243,6 +250,7 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
                 env: e.env.clone(),
             },
         );
+        spec.code_version = e.code_version.clone();
         for i in &e.inputs {
             spec.inputs
                 .push(crate::ArtifactPat::parse(i).with_context(|| format!("step {:?}", e.id))?);

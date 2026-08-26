@@ -370,7 +370,10 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
 }
 
 // One DAG task's state on a job's task board. `state` is one of
-// todo / running / done / skipped / failed / blocked.
+// todo / running / done / skipped / not_selected / failed / blocked.
+// `skipped` = checked, already up to date. `not_selected` = outside
+// this run's subgraph, so it was never considered (a per-source sync
+// leaves most of the graph there).
 export type SyncTask = {
   id: string;
   state: string;

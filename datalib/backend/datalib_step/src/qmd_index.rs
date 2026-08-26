@@ -7,8 +7,6 @@ use anyhow::{Context, Result};
 
 use crate::events::{Emitter, OutputClaim};
 
-pub const OUT_REL: &str = "system/qmd";
-
 pub async fn run(
     data_root: &Path,
     models_dir: Option<PathBuf>,
@@ -29,14 +27,10 @@ pub async fn run(
     // backups (`restic --exclude-caches` etc.) may skip it.
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::qmd_dir(data_root));
 
-    // qmd's sqlite gets touched on every pass, so a content hash would
-    // always read "changed"; and qmd has no incremental-change signal
-    // we can cheaply expose. Claim nothing beyond having run — the
-    // step is a leaf (nothing consumes system/qmd downstream), so the
-    // imprecision costs nothing today.
-    Ok(vec![OutputClaim {
-        path: OUT_REL.to_string(),
-        changed: None,
-        version: None,
-    }])
+    // qmd's sqlite gets touched on every pass, so any version we could
+    // derive would move even when nothing was indexed. Report nothing:
+    // the step is a leaf (nothing consumes system/qmd downstream), so
+    // the runner's fallback hash is never read by anyone and the
+    // imprecision costs nothing.
+    Ok(vec![])
 }
