@@ -362,6 +362,10 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         // page shows this string, and calling a scanned manual a "chat"
         // is just wrong.
         "PDF Document" => "document",
+        // Same reasoning as PDF: a Claude Project is a collection of
+        // written context (description, custom instructions, knowledge
+        // files), not a conversation.
+        "Project" => "document",
         _ => "chat",
     }
 }

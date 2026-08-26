@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the Anthropic (Claude) provider.
 //!
-//! Four tables — `users`, `orgs`, `conversations`,
-//! `anthropic_attachments` — shared bookkeeping
+//! Six tables — `users`, `orgs`, `projects`, `project_docs`,
+//! `conversations`, `anthropic_attachments` — shared bookkeeping
 //! (`<table>_bookkeeping`, `sync_runs`, …) lives in
 //! [`datalib_etl::doltlite_raw`].
 //!
@@ -153,6 +153,28 @@ impl RawDb {
     /// to decide which conversations need a detail fetch. Rows only
     /// exist post-detail-fetch, so "id in map" ↔ "payload present."
     pub async fn existing_updated_at(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
+        self.existing_updated_at_in("conversations", ids).await
+    }
+
+    // ── projects ───────────────────────────────────────────────────
+
+    /// Bulk-read `(project id → updated_at)` for the listed ids, same
+    /// shape and same purpose as [`Self::existing_updated_at`]: the
+    /// caller compares against the live listing to decide which
+    /// projects changed. Missing ids are absent from the map.
+    pub async fn existing_project_updated_at(
+        &self,
+        ids: &[&str],
+    ) -> Result<HashMap<String, String>> {
+        self.existing_updated_at_in("projects", ids).await
+    }
+
+    /// Shared body of the two `existing_*_updated_at` skip-checks.
+    async fn existing_updated_at_in(
+        &self,
+        table: &str,
+        ids: &[&str],
+    ) -> Result<HashMap<String, String>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -160,7 +182,7 @@ impl RawDb {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT id, updated_at FROM conversations \
+            "SELECT id, updated_at FROM {table} \
               WHERE id IN ({placeholders}) AND updated_at IS NOT NULL"
         );
         let mut q = sqlx::query(&sql);
@@ -170,7 +192,7 @@ impl RawDb {
         let rows = q
             .fetch_all(&self.pool)
             .await
-            .context("existing_updated_at")?;
+            .with_context(|| format!("existing_updated_at {table}"))?;
         let mut out = HashMap::with_capacity(rows.len());
         for r in &rows {
             let id: String = r.try_get("id").unwrap_or_default();
@@ -179,6 +201,17 @@ impl RawDb {
             }
         }
         Ok(out)
+    }
+
+    /// Every stored project, with the org columns the render step needs
+    /// to stamp on the project's grid rows.
+    pub async fn load_projects(&self) -> Result<Vec<LoadedProject>> {
+        load_projects_from(&self.pool).await
+    }
+
+    /// Every stored knowledge document, keyed by its owning project.
+    pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
+        load_project_docs_from(&self.pool).await
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
@@ -236,6 +269,85 @@ impl RawDb {
         datalib_etl::blob_cas::load_blake3_index(&self.pool, "anthropic_attachments", "file_uuid")
             .await
     }
+}
+
+/// One project as it sits between download and render.
+#[derive(Debug, Clone)]
+pub struct LoadedProject {
+    pub id: String,
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
+    pub payload: Value,
+}
+
+/// One knowledge document, with its owning project surfaced out of the
+/// payload so render can bucket docs without re-parsing every one.
+#[derive(Debug, Clone)]
+pub struct LoadedProjectDoc {
+    pub id: String,
+    pub project_uuid: String,
+    pub payload: Value,
+}
+
+/// Read `projects` off any pool — the writable one [`RawDb`] holds and
+/// the read-only one `render::parse` opens both go through here, so the
+/// two can't drift.
+pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
+    let rows = sqlx::query(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects \
+          WHERE payload IS NOT NULL ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load_projects")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let Some(payload) = row_payload(r) else {
+            continue;
+        };
+        out.push(LoadedProject {
+            id: r.try_get("id").unwrap_or_default(),
+            org_uuid: r.try_get("org_uuid").ok(),
+            org_name: r.try_get("org_name").ok(),
+            payload,
+        });
+    }
+    Ok(out)
+}
+
+/// Read `project_docs` off any pool. Rows whose `project_uuid` is null
+/// are dropped: a doc with no owning project has nowhere to render.
+pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProjectDoc>> {
+    let rows = sqlx::query(
+        "SELECT id, project_uuid, json(payload) AS payload FROM project_docs \
+          WHERE payload IS NOT NULL AND project_uuid IS NOT NULL ORDER BY project_uuid, id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load_project_docs")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let Some(payload) = row_payload(r) else {
+            continue;
+        };
+        let Ok(project_uuid) = r.try_get::<String, _>("project_uuid") else {
+            continue;
+        };
+        out.push(LoadedProjectDoc {
+            id: r.try_get("id").unwrap_or_default(),
+            project_uuid,
+            payload,
+        });
+    }
+    Ok(out)
+}
+
+/// Decode the `json(payload)` column of a row, or `None` when it is
+/// missing or unparseable. Skipping a corrupt row beats failing a whole
+/// render over one.
+fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Option<Value> {
+    let s: String = r.try_get("payload").ok()?;
+    serde_json::from_str(&s).ok()
 }
 
 #[derive(Debug, Clone)]

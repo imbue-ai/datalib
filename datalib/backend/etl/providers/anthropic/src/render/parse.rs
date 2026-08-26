@@ -3,8 +3,9 @@
 //! Reads either the doltlite raw store written by [`crate::download`]
 //! (the production path), normalizing each conversation into export
 //! shape at read time, or the legacy JSON tree (`users.json` +
-//! `conversations.json` [+ optional `projects/*.json`]) used by the
-//! in-crate render fixture test.
+//! `conversations.json` [+ optional `projects/*.json`, each of which
+//! may carry a nested `docs` array]) used by the in-crate render
+//! fixture test.
 //!
 //! `raw_json` carries the JSON minus any sibling rows we've exploded
 //! out.
@@ -44,11 +45,33 @@ pub struct AccountRow {
 pub struct ProjectRow {
     pub account_uuid: String,
     pub project_uuid: String,
+    /// Owning Anthropic organization, same provenance as
+    /// [`ConversationRow::org_uuid`] — a project lives in exactly one
+    /// org and its grid rows carry that scope.
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
+    /// The project's custom instructions ("prompt template" upstream).
+    /// Only the detail endpoint returns this; absent from the listing.
+    pub prompt_template: Option<String>,
     pub is_starter: Option<bool>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub raw_json: Value,
+    /// This project's knowledge documents, sorted by `(created_at, uuid)`.
+    pub docs: Vec<ProjectDocRow>,
+}
+
+/// One knowledge document attached to a project. The text rides inline
+/// in `content` — there is no separate fetch and nothing in the CAS.
+#[derive(Debug, Clone)]
+pub struct ProjectDocRow {
+    pub project_uuid: String,
+    pub doc_uuid: String,
+    pub file_name: Option<String>,
+    pub content: Option<String>,
+    pub created_at: Option<String>,
     pub raw_json: Value,
 }
 
@@ -143,9 +166,11 @@ pub struct ShreddedConversation {
 /// round-trip.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
-    /// `Some(set)` → render only conversations whose UUID is in
-    /// `set`. `None` → cold start.
-    pub changed_conversations: Option<HashSet<String>>,
+    /// `Some(set)` → render only the conversations and projects whose
+    /// UUID is in `set`. `None` → cold start. Conversation and project
+    /// UUIDs share one set because they are drawn from disjoint
+    /// upstream id spaces, so a membership test can't confuse them.
+    pub changed_buckets: Option<HashSet<String>>,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<Duration>,
 }
@@ -153,9 +178,17 @@ pub struct ScanResult {
 #[derive(Clone, Default)]
 pub struct ParsedExport {
     pub accounts: Vec<AccountRow>,
+    /// The projects to render this pass — narrowed by the diff scan,
+    /// exactly like [`Self::conversations`].
     pub projects: Vec<ProjectRow>,
+    /// `project_uuid → name` over **every** stored project, not just the
+    /// changed ones. Conversations put their project's human name in the
+    /// `project` grid column, and a conversation can be re-rendered in a
+    /// pass where its project didn't change.
+    pub project_name_by_uuid: std::collections::HashMap<String, String>,
     pub conversations: Vec<AnthropicConversation>,
-    /// Count of conversations `dolt_diff` reported as unchanged.
+    /// Count of docs (conversations + projects) `dolt_diff` reported as
+    /// unchanged.
     pub docs_skipped: usize,
     pub scan: ScanResult,
 }
@@ -232,7 +265,7 @@ async fn parse_doltlite_async(
     let all_convs = load_conversations(&pool).await?;
     let total = all_convs.len();
 
-    let (filtered, docs_skipped) = match &scan.changed_conversations {
+    let (filtered, docs_skipped) = match &scan.changed_buckets {
         None => (all_convs, 0usize),
         Some(changed) => {
             let kept: Vec<LoadedConversation> = all_convs
@@ -252,6 +285,28 @@ async fn parse_doltlite_async(
 
     let mut parsed = parse_loaded(raw);
     parsed.docs_skipped = docs_skipped;
+
+    // Projects ride the same changed-bucket filter as conversations.
+    // `project_name_by_uuid` is loaded unfiltered, though — an unchanged
+    // conversation that *is* being re-rendered (because something else
+    // in its bucket moved) still has to resolve its project's name.
+    let all_projects = load_project_rows(&pool).await?;
+    parsed.project_name_by_uuid = all_projects
+        .iter()
+        .filter_map(|p| Some((p.project_uuid.clone(), p.name.clone()?)))
+        .collect();
+    parsed.projects = match &scan.changed_buckets {
+        None => all_projects,
+        Some(changed) => {
+            let before = all_projects.len();
+            let kept: Vec<ProjectRow> = all_projects
+                .into_iter()
+                .filter(|p| changed.contains(&p.project_uuid))
+                .collect();
+            parsed.docs_skipped += before.saturating_sub(kept.len());
+            kept
+        }
+    };
     parsed.scan = scan;
 
     // Per-doc BlobBundle: walk each conversation's
@@ -316,6 +371,82 @@ async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+/// Load every project out of the raw store and hang its knowledge
+/// documents off it. Two queries total, not one per project.
+async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
+    let projects = crate::download::db::load_projects_from(pool).await?;
+    if projects.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut docs_by_project: std::collections::HashMap<String, Vec<ProjectDocRow>> =
+        std::collections::HashMap::new();
+    for d in crate::download::db::load_project_docs_from(pool).await? {
+        docs_by_project
+            .entry(d.project_uuid.clone())
+            .or_default()
+            .push(project_doc_row(d.project_uuid.clone(), d.id, d.payload));
+    }
+
+    let mut out = Vec::with_capacity(projects.len());
+    for p in projects {
+        let mut docs = docs_by_project.remove(&p.id).unwrap_or_default();
+        // Deterministic order: the render is a golden test, and the
+        // upstream listing order is not promised to be stable.
+        docs.sort_by(|a, b| {
+            (a.created_at.as_deref().unwrap_or(""), a.doc_uuid.as_str())
+                .cmp(&(b.created_at.as_deref().unwrap_or(""), b.doc_uuid.as_str()))
+        });
+        out.push(project_row(p.id, p.org_uuid, p.org_name, p.payload, docs));
+    }
+    out.sort_by(|a, b| a.project_uuid.cmp(&b.project_uuid));
+    Ok(out)
+}
+
+/// Build a [`ProjectRow`] from one stored project payload. Shared by
+/// the doltlite path and the legacy JSON-tree path so the two can't
+/// disagree about which upstream field maps where.
+fn project_row(
+    project_uuid: String,
+    org_uuid: Option<String>,
+    org_name: Option<String>,
+    payload: Value,
+    docs: Vec<ProjectDocRow>,
+) -> ProjectRow {
+    let obj = payload.as_object().cloned().unwrap_or_default();
+    let creator = obj
+        .get("creator")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    ProjectRow {
+        account_uuid: str_field(&creator, "uuid").unwrap_or_default(),
+        project_uuid,
+        org_uuid,
+        org_name,
+        name: str_field(&obj, "name"),
+        description: str_field(&obj, "description"),
+        prompt_template: str_field(&obj, "prompt_template"),
+        is_starter: obj.get("is_starter_project").and_then(Value::as_bool),
+        created_at: str_field(&obj, "created_at"),
+        updated_at: str_field(&obj, "updated_at"),
+        raw_json: payload,
+        docs,
+    }
+}
+
+/// Build a [`ProjectDocRow`] from one stored knowledge-doc payload.
+fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> ProjectDocRow {
+    let obj = payload.as_object().cloned().unwrap_or_default();
+    ProjectDocRow {
+        project_uuid,
+        doc_uuid,
+        file_name: str_field(&obj, "file_name"),
+        content: str_field(&obj, "content"),
+        created_at: str_field(&obj, "created_at"),
+        raw_json: payload,
+    }
+}
+
 async fn load_first_user_uuid(pool: &SqlitePool) -> Result<Option<String>> {
     let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
         .fetch_optional(pool)
@@ -353,35 +484,49 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
     Ok(out)
 }
 
-/// Phase 1: union over `dolt_diff_conversations` +
-/// `dolt_diff_anthropic_attachments` to project changed conversation
-/// UUIDs. Any change to `users` or `orgs` fans out to "render
-/// everything" — rendered conversations dereference those names in
-/// frontmatter / path slugs, so a rename has to repaint every doc in
-/// the affected scope.
+/// Phase 1: union over `dolt_diff_conversations`,
+/// `dolt_diff_anthropic_attachments` and `dolt_diff_project_docs` to
+/// project the changed bucket keys — conversation UUIDs from the first
+/// two, project UUIDs from the third.
+///
+/// `users`, `orgs` and `projects` fan out to "render everything":
+/// rendered docs dereference those names in frontmatter, grid columns
+/// and page titles, so a rename has to repaint every doc in the
+/// affected scope. `projects` is on that list because every
+/// conversation's `project` grid column carries its project's *name* —
+/// a rename that only repainted the project's own page would leave
+/// every conversation in it showing the old label.
+///
+/// `project_docs` deliberately is **not** a fanout table: editing a
+/// knowledge document changes that project's page and nothing else, and
+/// it is the one project-side write that happens with any regularity.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &["users", "orgs"],
+            global_fanout_tables: &["users", "orgs", "projects"],
             bucket_query: "
-                SELECT DISTINCT conversation_uuid FROM (
-                    SELECT coalesce(to_id, from_id) AS conversation_uuid
+                SELECT DISTINCT bucket_uuid FROM (
+                    SELECT coalesce(to_id, from_id) AS bucket_uuid
                       FROM dolt_diff_conversations
                      WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_conversation_uuid, from_conversation_uuid)
                       FROM dolt_diff_anthropic_attachments
                      WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_project_uuid, from_project_uuid)
+                      FROM dolt_diff_project_docs
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
                 )
-                WHERE conversation_uuid IS NOT NULL
+                WHERE bucket_uuid IS NOT NULL
             ",
         },
     )
     .await?;
     Ok(ScanResult {
-        changed_conversations: scan.changed_buckets,
+        changed_buckets: scan.changed_buckets,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
@@ -468,24 +613,52 @@ pub fn parse_export_json_dir(export_dir: &Path) -> Result<ParsedExport> {
             let p: Value = serde_json::from_str(&fs::read_to_string(&f)?)
                 .with_context(|| format!("parsing {}", f.display()))?;
             let Some(obj) = p.as_object() else { continue };
-            let creator = obj
-                .get("creator")
-                .and_then(Value::as_object)
-                .cloned()
+            let project_uuid =
+                str_field(obj, "uuid").ok_or_else(|| anyhow!("project missing uuid"))?;
+            // The bulk export nests each project's knowledge documents
+            // under `docs`; the live API serves them from a separate
+            // endpoint. Both land in the same `ProjectRow::docs`.
+            let docs: Vec<ProjectDocRow> = obj
+                .get("docs")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|d| {
+                            let doc_uuid = d.get("uuid").and_then(Value::as_str)?;
+                            Some(project_doc_row(
+                                project_uuid.clone(),
+                                doc_uuid.to_string(),
+                                d.clone(),
+                            ))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
-            out.projects.push(ProjectRow {
-                account_uuid: str_field(&creator, "uuid").unwrap_or_default(),
-                project_uuid: str_field(obj, "uuid")
-                    .ok_or_else(|| anyhow!("project missing uuid"))?,
-                name: str_field(obj, "name"),
-                description: str_field(obj, "description"),
-                is_starter: obj.get("is_starter_project").and_then(Value::as_bool),
-                created_at: str_field(obj, "created_at"),
-                updated_at: str_field(obj, "updated_at"),
-                raw_json: p.clone(),
-            });
+            // The export tree carries no org scope; `_source.org_uuid`
+            // is present when the file came out of our own API mirror.
+            let source = obj.get("_source").and_then(Value::as_object);
+            let org_uuid = source
+                .and_then(|s| s.get("org_uuid"))
+                .and_then(Value::as_str)
+                .map(String::from);
+            let org_name = source
+                .and_then(|s| s.get("org_name"))
+                .and_then(Value::as_str)
+                .map(String::from);
+            let mut row = project_row(project_uuid, org_uuid, org_name, p.clone(), docs);
+            // `docs` is bookkeeping we exploded out, same rule as
+            // `chat_messages` on a conversation.
+            if let Some(o) = row.raw_json.as_object_mut() {
+                o.remove("docs");
+            }
+            out.projects.push(row);
         }
     }
+    out.project_name_by_uuid = out
+        .projects
+        .iter()
+        .filter_map(|p| Some((p.project_uuid.clone(), p.name.clone()?)))
+        .collect();
 
     let convs_path = export_dir.join("conversations.json");
     if !convs_path.exists() {
