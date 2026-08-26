@@ -99,6 +99,36 @@ impl ClaudeClient {
         })
     }
 
+    /// `GET /organizations/{org}/projects` — every project in one org.
+    /// Like the conversation listing, a `403` here means "no project
+    /// permission for this org" and is the caller's to swallow.
+    pub async fn list_projects(&mut self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
+        let v = self
+            .get(&format!("/organizations/{org_uuid}/projects"))
+            .await?;
+        v.as_array().cloned().ok_or_else(|| {
+            ClaudeError::Permanent(format!(
+                "/organizations/{org_uuid}/projects: expected array"
+            ))
+        })
+    }
+
+    /// `GET /organizations/{org}/projects/{project}/docs` — the
+    /// project's knowledge documents. Unlike chat attachments, each
+    /// doc carries its full text inline in `content`, so there is no
+    /// second fetch and nothing to put in the blob CAS.
+    pub async fn list_project_docs(
+        &mut self,
+        org_uuid: &str,
+        project_uuid: &str,
+    ) -> Result<Vec<Value>, ClaudeError> {
+        let path = format!("/organizations/{org_uuid}/projects/{project_uuid}/docs");
+        let v = self.get(&path).await?;
+        v.as_array()
+            .cloned()
+            .ok_or_else(|| ClaudeError::Permanent(format!("{path}: expected array")))
+    }
+
     pub async fn get_conversation(
         &mut self,
         org_uuid: &str,

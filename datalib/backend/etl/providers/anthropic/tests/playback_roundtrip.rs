@@ -63,7 +63,9 @@ async fn anthropic_synth_playback_extract_roundtrip() {
     .unwrap();
 
     let report = AnthropicSynth::new(&api).synthesize(&playback).unwrap();
-    assert_eq!(report.fixtures_written, 5);
+    // /organizations + 2 chat listings + 2 details + 2 project listings
+    // (one per org, empty — the downloader asks unconditionally).
+    assert_eq!(report.fixtures_written, 7);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
