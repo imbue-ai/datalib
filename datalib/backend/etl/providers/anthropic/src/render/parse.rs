@@ -20,9 +20,8 @@ use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use serde_json::{Map, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::Row;
 
-use crate::download::db::{db_path_for, LoadedConversation, LoadedRaw};
+use crate::download::db::{self, db_path_for, LoadedConversation, LoadedRaw};
 use crate::download::normalize::normalize_to_export_shape;
 
 /// SQL projection that maps an Anthropic `file_uuid` to its CAS
@@ -260,9 +259,13 @@ async fn parse_doltlite_async(
 
     let scan = scan_diff(&pool, last_render_hash).await?;
 
-    let users = load_payloads(&pool, "users").await?;
-    let first_user_uuid = load_first_user_uuid(&pool).await?;
-    let all_convs = load_conversations(&pool).await?;
+    // These three all read tables the download side also reads; the
+    // single copy of each lives in `download::db` (users/orgs go
+    // through the shared `doltlite_raw` helper). See "One reader per
+    // table" there.
+    let users = datalib_etl::doltlite_raw::load_payloads(&pool, "users").await?;
+    let first_user_uuid = db::first_user_uuid_from(&pool).await?;
+    let all_convs = db::load_conversations_from(&pool).await?;
     let total = all_convs.len();
 
     let (filtered, docs_skipped) = match &scan.changed_buckets {
@@ -291,10 +294,7 @@ async fn parse_doltlite_async(
     // conversation that *is* being re-rendered (because something else
     // in its bucket moved) still has to resolve its project's name.
     let all_projects = load_project_rows(&pool).await?;
-    parsed.project_name_by_uuid = all_projects
-        .iter()
-        .filter_map(|p| Some((p.project_uuid.clone(), p.name.clone()?)))
-        .collect();
+    parsed.project_name_by_uuid = name_index(&all_projects);
     parsed.projects = match &scan.changed_buckets {
         None => all_projects,
         Some(changed) => {
@@ -355,32 +355,16 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
     out
 }
 
-async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
-    let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
-    let rows = sqlx::query(&sql)
-        .fetch_all(pool)
-        .await
-        .with_context(|| format!("load_payloads {table}"))?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        let s: String = r.try_get("payload").unwrap_or_default();
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            out.push(v);
-        }
-    }
-    Ok(out)
-}
-
 /// Load every project out of the raw store and hang its knowledge
 /// documents off it. Two queries total, not one per project.
 async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
-    let projects = crate::download::db::load_projects_from(pool).await?;
+    let projects = db::load_projects_from(pool).await?;
     if projects.is_empty() {
         return Ok(Vec::new());
     }
     let mut docs_by_project: std::collections::HashMap<String, Vec<ProjectDocRow>> =
         std::collections::HashMap::new();
-    for d in crate::download::db::load_project_docs_from(pool).await? {
+    for d in db::load_project_docs_from(pool).await? {
         docs_by_project
             .entry(d.project_uuid.clone())
             .or_default()
@@ -400,6 +384,20 @@ async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
     }
     out.sort_by(|a, b| a.project_uuid.cmp(&b.project_uuid));
     Ok(out)
+}
+
+/// `project_uuid → name` over the projects passed in.
+///
+/// **Must be built from every stored project, not from the narrowed
+/// render set.** Conversations put their project's name in the
+/// `project` grid column, and a conversation can be re-rendered in a
+/// pass where its own project didn't change — feeding this the filtered
+/// list would silently degrade those rows back to a bare UUID.
+fn name_index(projects: &[ProjectRow]) -> std::collections::HashMap<String, String> {
+    projects
+        .iter()
+        .filter_map(|p| Some((p.project_uuid.clone(), p.name.clone()?)))
+        .collect()
 }
 
 /// Build a [`ProjectRow`] from one stored project payload. Shared by
@@ -445,43 +443,6 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
         created_at: str_field(&obj, "created_at"),
         raw_json: payload,
     }
-}
-
-async fn load_first_user_uuid(pool: &SqlitePool) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("first_user_uuid")?;
-    Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
-}
-
-async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
-    let rows = sqlx::query(
-        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
-          WHERE payload IS NOT NULL ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load_conversations")?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let id: String = r.try_get("id").unwrap_or_default();
-        let org_uuid: Option<String> = r.try_get("org_uuid").ok();
-        let org_name: Option<String> = r.try_get("org_name").ok();
-        let Ok(s) = r.try_get::<String, _>("payload") else {
-            continue;
-        };
-        let Ok(p) = serde_json::from_str::<Value>(&s) else {
-            continue;
-        };
-        out.push(LoadedConversation {
-            id,
-            org_uuid: org_uuid.unwrap_or_default(),
-            org_name,
-            payload: p,
-        });
-    }
-    Ok(out)
 }
 
 /// Phase 1: union over `dolt_diff_conversations`,
@@ -654,11 +615,7 @@ pub fn parse_export_json_dir(export_dir: &Path) -> Result<ParsedExport> {
             out.projects.push(row);
         }
     }
-    out.project_name_by_uuid = out
-        .projects
-        .iter()
-        .filter_map(|p| Some((p.project_uuid.clone(), p.name.clone()?)))
-        .collect();
+    out.project_name_by_uuid = name_index(&out.projects);
 
     let convs_path = export_dir.join("conversations.json");
     if !convs_path.exists() {

@@ -5,6 +5,15 @@
 //! (`<table>_bookkeeping`, `sync_runs`, …) lives in
 //! [`datalib_etl::doltlite_raw`].
 //!
+//! ## One reader per table
+//!
+//! Every table's read lives once, as a `*_from(&SqlitePool)` free
+//! function; the [`RawDb`] methods are one-line delegations. Render
+//! opens its own read-only pool (`render::parse`) and calls the same
+//! free functions, so the download-side and render-side reads of a
+//! table cannot drift — which they had, for `conversations` and
+//! `first_user_uuid`, until this was made the rule.
+//!
 //! Per the dolt_diff + per-provider CAS edge migration: attachment
 //! bytes still ride in the shared `cas_objects`, but the (file_uuid →
 //! blake3) mapping lives on `anthropic_attachments` rather than the
@@ -137,11 +146,7 @@ impl RawDb {
     /// First user's uuid, used to fill the `account.uuid` field on
     /// normalized conversations.
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
-            .fetch_optional(&self.pool)
-            .await
-            .context("first_user_uuid")?;
-        Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
+        first_user_uuid_from(&self.pool).await
     }
 
     // ── conversations: listing skip-check ──────────────────────────
@@ -232,33 +237,7 @@ impl RawDb {
     }
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
-        let rows = sqlx::query(
-            "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
-              WHERE payload IS NOT NULL ORDER BY id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("load_conversations")?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            let id: String = r.try_get("id").unwrap_or_default();
-            let org_uuid: Option<String> = r.try_get("org_uuid").ok();
-            let org_name: Option<String> = r.try_get("org_name").ok();
-            let payload: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let Ok(p) = serde_json::from_str::<Value>(&payload) else {
-                continue;
-            };
-            out.push(LoadedConversation {
-                id,
-                org_uuid: org_uuid.unwrap_or_default(),
-                org_name,
-                payload: p,
-            });
-        }
-        Ok(out)
+        load_conversations_from(&self.pool).await
     }
 
     /// Snapshot `(file_uuid → blake3)` for every attachment whose
@@ -287,6 +266,39 @@ pub struct LoadedProjectDoc {
     pub id: String,
     pub project_uuid: String,
     pub payload: Value,
+}
+
+/// Read `conversations` off any pool.
+pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
+    let rows = sqlx::query(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
+          WHERE payload IS NOT NULL ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load_conversations")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let Some(payload) = row_payload(r) else {
+            continue;
+        };
+        out.push(LoadedConversation {
+            id: r.try_get("id").unwrap_or_default(),
+            org_uuid: r.try_get("org_uuid").unwrap_or_default(),
+            org_name: r.try_get("org_name").ok(),
+            payload,
+        });
+    }
+    Ok(out)
+}
+
+/// First user's uuid off any pool.
+pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("first_user_uuid")?;
+    Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
 }
 
 /// Read `projects` off any pool — the writable one [`RawDb`] holds and

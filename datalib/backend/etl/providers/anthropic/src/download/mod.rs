@@ -392,14 +392,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let mut plans: Vec<OrgPlan> = Vec::new();
         let mut listings_by_org: Vec<(String, String, Vec<Value>)> = Vec::new();
         for org in &orgs {
-            let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
+            let Some((org_uuid, org_name)) = org_identity(org) else {
                 continue;
             };
-            let org_name = org
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
-                .to_string();
             let listing = match client
                 .list_conversations(org_uuid)
                 .instrument(info_span!("anthropic_org_listing", org = %org_name))
@@ -610,14 +605,9 @@ async fn sync_projects(
     let mut matched: HashSet<&str> = HashSet::new();
 
     for org in orgs {
-        let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
+        let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
         };
-        let org_name = org
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
-            .to_string();
         let listing = match client
             .list_projects(org_uuid)
             .instrument(info_span!("anthropic_project_listing", org = %org_name))
@@ -801,10 +791,7 @@ async fn upsert_project(
             .and_then(|v| v.as_str())
             .map(String::from),
     };
-    let mut tx = db.pool().begin().await.context("begin upsert_project tx")?;
-    bulk_upsert_in_tx(&mut tx, &[row], now).await?;
-    tx.commit().await.context("commit upsert_project tx")?;
-    Ok(())
+    commit_rows(db, &[row], now).await
 }
 
 /// Write one project's knowledge documents. Returns how many rows were
@@ -837,17 +824,8 @@ async fn upsert_project_docs(
                 .map(String::from),
         });
     }
-    if rows.is_empty() {
-        return Ok(0);
-    }
     let n = rows.len();
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin upsert_project_docs tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
-    tx.commit().await.context("commit upsert_project_docs tx")?;
+    commit_rows(db, &rows, now).await?;
     Ok(n)
 }
 
@@ -892,14 +870,9 @@ async fn fetch_single(
     now: &str,
 ) -> Result<()> {
     for org in orgs {
-        let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
+        let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
         };
-        let org_name = org
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
-            .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
                 save_conversation(db, org_uuid, &org_name, conv_uuid, &full, now).await?;
@@ -1033,14 +1006,48 @@ async fn save_conversation(
         name,
         updated_at,
     };
+    commit_rows(db, &[row], now).await
+}
+
+/// `(uuid, display name)` for one `/organizations` entry, or `None`
+/// when it carries no uuid.
+///
+/// The fallback label is the uuid's leading 8 characters — taken with
+/// `char_indices` rather than a byte slice, so an unexpected non-ASCII
+/// id truncates instead of panicking mid-codepoint. Three call sites
+/// (conversation listing, single-conversation fetch, project listing)
+/// need exactly this pair.
+fn org_identity(org: &Value) -> Option<(&str, String)> {
+    let uuid = org.get("uuid").and_then(|v| v.as_str())?;
+    let name = match org.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => uuid.char_indices().take(8).map(|(_, c)| c).collect(),
+    };
+    Some((uuid, name))
+}
+
+/// Open a transaction, bulk-upsert `rows`, commit.
+///
+/// Every entity write in this module has exactly this shape, and
+/// `T::TABLE` supplies the error context, so call sites carry only the
+/// row construction that actually differs between them.
+async fn commit_rows<T: datalib_etl::bulk::BulkUpsertable>(
+    db: &RawDb,
+    rows: &[T],
+    now: &str,
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
     let mut tx = db
         .pool()
         .begin()
         .await
-        .context("begin save_conversation tx")?;
-    bulk_upsert_in_tx(&mut tx, &[row], now).await?;
-    tx.commit().await.context("commit save_conversation tx")?;
-    Ok(())
+        .with_context(|| format!("begin {} upsert tx", T::TABLE))?;
+    bulk_upsert_in_tx(&mut tx, rows, now).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit {} upsert tx", T::TABLE))
 }
 
 /// Bulk-upsert helpers — same `now` as the rest of the fetch so the
@@ -1072,13 +1079,7 @@ async fn upsert_users(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
             full_name,
         });
     }
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut tx = db.pool().begin().await.context("begin upsert_users tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
-    tx.commit().await.context("commit upsert_users tx")?;
-    Ok(())
+    commit_rows(db, &rows, now).await
 }
 
 async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
@@ -1103,13 +1104,7 @@ async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
             name,
         });
     }
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut tx = db.pool().begin().await.context("begin upsert_orgs tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
-    tx.commit().await.context("commit upsert_orgs tx")?;
-    Ok(())
+    commit_rows(db, &rows, now).await
 }
 
 /// Pull `users.json` entries from an existing bulk-export directory
