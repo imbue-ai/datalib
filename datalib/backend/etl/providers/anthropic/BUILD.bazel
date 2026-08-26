@@ -97,6 +97,23 @@ rust_test(
     ],
 )
 
+# End-to-end coverage for the Claude Projects mirror: synthesize →
+# download → doltlite → render::parse. The insta golden only exercises
+# the legacy JSON-tree parse path, which is not what production runs.
+rust_test(
+    name = "anthropic_projects",
+    srcs = ["tests/anthropic_projects.rs"],
+    crate_root = "tests/anthropic_projects.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_anthropic",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "anthropic_unittests",
     size = "small",

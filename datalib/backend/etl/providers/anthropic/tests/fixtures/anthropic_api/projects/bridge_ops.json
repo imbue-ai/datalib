@@ -1,0 +1,40 @@
+{
+  "uuid": "70000001-1701-4d00-8000-000000000701",
+  "name": "Bridge Operations",
+  "description": "Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.",
+  "prompt_template": "Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.",
+  "is_private": false,
+  "is_starred": true,
+  "is_starter_project": false,
+  "creator": {
+    "uuid": "00000001-1701-4d00-8000-000000000001",
+    "full_name": "Jean-Luc Picard"
+  },
+  "created_at": "2364-03-01T09:00:00+00:00",
+  "updated_at": "2364-03-04T17:20:00+00:00",
+  "_source": {
+    "via": "claude.ai/api",
+    "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+    "org_name": "USS Enterprise"
+  },
+  "docs": [
+    {
+      "uuid": "7d000001-1701-4d00-8000-0000000007d1",
+      "file_name": "hailing-frequencies.md",
+      "content": "# Hailing frequencies\n\nOpen on subspace band 3 unless the target is cloaked.\n\n- Klingon vessels: lead with rank, then ship name.\n- Romulan vessels: do not open first.\n",
+      "created_at": "2364-03-01T09:05:00+00:00",
+      "project_uuid": "70000001-1701-4d00-8000-000000000701",
+      "estimated_token_count": 48,
+      "content_length": 186
+    },
+    {
+      "uuid": "7d000002-1701-4d00-8000-0000000007d2",
+      "file_name": "escalation-ladder.txt",
+      "content": "Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).\nMedical emergencies route directly to Sickbay (Crusher).\n",
+      "created_at": "2364-03-02T11:30:00+00:00",
+      "project_uuid": "70000001-1701-4d00-8000-000000000701",
+      "estimated_token_count": 31,
+      "content_length": 126
+    }
+  ]
+}

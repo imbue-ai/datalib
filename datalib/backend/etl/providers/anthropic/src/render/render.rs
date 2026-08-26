@@ -35,12 +35,15 @@ use datalib_etl_chat_common::types::{
 };
 
 use super::parse::{
-    shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ShreddedConversation,
+    shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ProjectRow,
+    ShreddedConversation,
 };
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (block-explosion).
-pub const RENDER_VERSION: u32 = 3;
+/// v4: projects render as their own pages, and a conversation's
+///     `project` grid column carries the project name, not its UUID.
+pub const RENDER_VERSION: u32 = 4;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -54,10 +57,45 @@ fn profile() -> RenderProfile {
     }
 }
 
+/// Projects are not chats, but they are *page-shaped* in exactly the
+/// way chat-common already handles: a titled page whose body is a list
+/// of anchored sections, each with its own grid row. Reusing the same
+/// renderer gets the `id="m-{uuid}"` / `data-section-uuid` anchors, the
+/// sidecar, and the fingerprint skip for free — see docs/dev/cards.md
+/// for why those anchors are load-bearing.
+fn project_profile() -> RenderProfile {
+    RenderProfile {
+        provider: "anthropic",
+        source_label: "Claude".to_string(),
+        chat_kind: "Project".to_string(),
+        message_kind: "Project Knowledge".to_string(),
+        // Projects have no reactions; chat-common needs the field set.
+        reaction_kind: "Claude Reaction".to_string(),
+        render_version: RENDER_VERSION,
+    }
+}
+
+/// Render-time knobs. Separate from the config struct so the render
+/// layer doesn't depend on the config crate.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOptions {
+    /// See [`datalib_etl_anthropic_config::AnthropicRenderConfig::max_project_doc_bytes`].
+    pub max_project_doc_bytes: Option<usize>,
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            max_project_doc_bytes: Some(128 * 1024),
+        }
+    }
+}
+
 pub fn render_all(
     parsed: &ParsedExport,
     root: &std::path::Path,
     source_name: &str,
+    options: RenderOptions,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
@@ -65,13 +103,15 @@ pub fn render_all(
     tracing::info!(
         source = source_name,
         scan_elapsed_ms = elapsed_ms,
-        changed_conversations = parsed
+        changed_buckets = parsed
             .scan
-            .changed_conversations
+            .changed_buckets
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
-        cold_start = parsed.scan.changed_conversations.is_none(),
+        conversations = parsed.conversations.len(),
+        projects = parsed.projects.len(),
+        cold_start = parsed.scan.changed_buckets.is_none(),
         "[render] anthropic dolt_diff scan"
     );
 
@@ -79,7 +119,7 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let chat = build_chat(&shredded);
+        let chat = build_chat(&shredded, &parsed.project_name_by_uuid);
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
@@ -97,6 +137,31 @@ pub fn render_all(
     )
     .context("anthropic chat-common render")?;
 
+    // Projects are a second pass with their own profile. They share the
+    // page-path namespace with conversations (`rendered_md/<source>/
+    // <uuid>/all.md`) and can't collide: a project UUID is never a
+    // conversation UUID. No blobs — knowledge docs carry their text
+    // inline.
+    if !parsed.projects.is_empty() {
+        let project_chats: Vec<NormalizedChat> = parsed
+            .projects
+            .iter()
+            .map(|p| build_project_page(p, &options))
+            .collect();
+        let no_blobs: HashMap<String, BlobBundle> = HashMap::new();
+        cc_render_all(
+            &project_profile(),
+            &project_chats,
+            root,
+            source_name,
+            &no_blobs,
+            progress,
+            &no_priors,
+            on_doc_complete,
+        )
+        .context("anthropic project render")?;
+    }
+
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(root, source_name);
         render_cursor::write(
@@ -111,7 +176,15 @@ pub fn render_all(
 }
 
 /// One [`NormalizedChat`] per conversation, messages exploded into items.
-fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
+///
+/// `project_names` resolves the conversation's `project_uuid` to the
+/// human name that goes in the `project` grid column. An unresolved
+/// UUID falls back to the UUID itself — that is what a mirror with
+/// `sync.projects = false` looks like, and a raw id beats a blank cell.
+fn build_chat(
+    shredded: &ShreddedConversation,
+    project_names: &HashMap<String, String>,
+) -> NormalizedChat {
     let conv = &shredded.conv;
     let conv_uuid = conv.conversation_uuid.clone();
     let model = conv
@@ -285,7 +358,12 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         display: title.clone(),
         title: Some(title),
         account: Some(conv.account_uuid.clone()),
-        project: conv.project_uuid.clone(),
+        project: conv.project_uuid.as_ref().map(|uuid| {
+            project_names
+                .get(uuid)
+                .cloned()
+                .unwrap_or_else(|| uuid.clone())
+        }),
         external_id: None,
         source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
         org_uuid: conv.org_uuid.clone(),
@@ -295,6 +373,159 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
             markdown_uuid: conv_uuid,
             items,
         }],
+    }
+}
+
+/// One page per Claude Project: its description, its custom
+/// instructions, and one section per knowledge document.
+///
+/// Section ids follow the same prefix convention as the block ids
+/// (`tu-`/`tr-`/`th-`): `pdesc-`/`pinst-` for the two synthesized
+/// sections, and the document's own UUID for each knowledge doc. They
+/// only have to be stable and unique, not RFC-4122.
+fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> NormalizedChat {
+    let project_uuid = project.project_uuid.clone();
+    let name = project
+        .name
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "(untitled project)".to_string());
+
+    // Anchor every synthesized section to the project's own timestamp so
+    // the page is stable across runs; docs use their own `created_at`
+    // where they have one. `+1` / `+2` keeps the description and the
+    // instructions in that order under chat-common's sort.
+    let base_ms = project
+        .created_at
+        .as_deref()
+        .and_then(iso_to_ms)
+        .or_else(|| project.updated_at.as_deref().and_then(iso_to_ms))
+        .unwrap_or(0);
+
+    let mut items: Vec<NormalizedChatItem> = Vec::new();
+    if let Some(text) = project.description.clone().and_then(filter_nonempty) {
+        items.push(project_item(
+            format!("pdesc-{project_uuid}"),
+            "Description",
+            "Project Description",
+            base_ms + 1,
+            text,
+        ));
+    }
+    if let Some(text) = project.prompt_template.clone().and_then(filter_nonempty) {
+        items.push(project_item(
+            format!("pinst-{project_uuid}"),
+            "Custom instructions",
+            "Project Instructions",
+            base_ms + 2,
+            text,
+        ));
+    }
+    for (i, doc) in project.docs.iter().enumerate() {
+        let label = doc
+            .file_name
+            .clone()
+            .and_then(filter_nonempty)
+            .unwrap_or_else(|| "(unnamed document)".to_string());
+        let ms = doc
+            .created_at
+            .as_deref()
+            .and_then(iso_to_ms)
+            .unwrap_or(base_ms + 3 + i as i64);
+        // Knowledge docs are arbitrary user text — often markdown, and
+        // fencing them would break that. Emitted verbatim, the same way
+        // a chat message body is; the section header carries the file
+        // name. Bounded, though: see `max_project_doc_bytes`.
+        let body = doc
+            .content
+            .as_deref()
+            .map(|c| clamp_doc_text(c, options.max_project_doc_bytes))
+            .and_then(filter_nonempty);
+        items.push(NormalizedChatItem {
+            message_uuid: doc.doc_uuid.clone(),
+            author_id: "project_doc".into(),
+            author_display: label,
+            date_ms: ms,
+            text: body,
+            kind: ItemKind::Text,
+            attachments: Vec::new(),
+            reactions: Vec::new(),
+            system_note: None,
+            source_url: None,
+            kind_label: Some("Project Knowledge".to_string()),
+        });
+    }
+    items.sort_by_key(|i| i.date_ms);
+
+    NormalizedChat {
+        id: project_uuid.clone(),
+        chat_uuid: project_uuid.clone(),
+        display: name.clone(),
+        // Distinguishes a project page from a chat page at a glance;
+        // without it chat-common derives the same "Claude · {name}"
+        // heading it gives conversations.
+        title: Some(format!("Claude Project · {name}")),
+        account: filter_nonempty(project.account_uuid.clone()),
+        // A project's own `project` column is itself, so the grid groups
+        // the project page together with its conversations.
+        project: Some(name),
+        external_id: None,
+        source_url: Some(format!("https://claude.ai/project/{project_uuid}")),
+        org_uuid: project.org_uuid.clone(),
+        org_name: project.org_name.clone(),
+        buckets: vec![NormalizedDoc {
+            period_key: "all".to_string(),
+            markdown_uuid: project_uuid,
+            items,
+        }],
+    }
+}
+
+/// Bound one knowledge document's inline text, appending a visible
+/// marker when it is cut. Truncates on a char boundary so the result is
+/// still valid UTF-8, and says how much was dropped so a reader knows
+/// to raise the ceiling (or open the source) rather than assuming the
+/// document ends there.
+fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
+    let Some(max) = max_bytes else {
+        return content.to_string();
+    };
+    if content.len() <= max {
+        return content.to_string();
+    }
+    let mut cut = max;
+    while cut > 0 && !content.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!(
+        "{}\n\n*[truncated: showing {} of {} bytes — raise \
+         `max_project_doc_bytes` to see more; the raw store has all of it]*",
+        &content[..cut],
+        cut,
+        content.len()
+    )
+}
+
+/// One synthesized project section (description / custom instructions).
+fn project_item(
+    uuid: String,
+    author_display: &str,
+    kind_label: &str,
+    date_ms: i64,
+    text: String,
+) -> NormalizedChatItem {
+    NormalizedChatItem {
+        message_uuid: uuid,
+        author_id: kind_label.to_string(),
+        author_display: author_display.to_string(),
+        date_ms,
+        text: Some(text),
+        kind: ItemKind::Text,
+        attachments: Vec::new(),
+        reactions: Vec::new(),
+        system_note: None,
+        source_url: None,
+        kind_label: Some(kind_label.to_string()),
     }
 }
 
@@ -571,5 +802,54 @@ fn capitalize(s: &str) -> String {
             }
             out
         }
+    }
+}
+
+#[cfg(test)]
+mod project_doc_tests {
+    use super::*;
+
+    #[test]
+    fn short_docs_are_untouched() {
+        assert_eq!(clamp_doc_text("hello", Some(128)), "hello");
+        assert_eq!(clamp_doc_text("hello", None), "hello");
+    }
+
+    /// The whole point of the ceiling: a book-sized knowledge doc must
+    /// not reach the page (or the grid row) at full length.
+    #[test]
+    fn long_docs_are_cut_and_say_so() {
+        let big = "x".repeat(10_000);
+        let out = clamp_doc_text(&big, Some(100));
+        assert!(
+            out.len() < 400,
+            "expected a bounded result, got {}",
+            out.len()
+        );
+        assert!(out.starts_with(&"x".repeat(100)));
+        assert!(
+            out.contains("truncated: showing 100 of 10000 bytes"),
+            "a reader has to be able to tell the doc was cut: {out}"
+        );
+    }
+
+    /// Cutting mid-codepoint would produce invalid UTF-8; we back up to
+    /// the previous boundary instead. 'é' is two bytes, so a limit of 5
+    /// lands inside the third one.
+    #[test]
+    fn cuts_on_a_char_boundary() {
+        let s = "ééé";
+        assert_eq!(s.len(), 6);
+        let out = clamp_doc_text(s, Some(5));
+        assert!(out.starts_with("éé"), "got {out:?}");
+        assert!(out.contains("showing 4 of 6 bytes"), "got {out:?}");
+    }
+
+    /// A zero ceiling keeps the marker rather than emitting an empty
+    /// section, so the doc still shows up as existing.
+    #[test]
+    fn zero_ceiling_still_names_the_document() {
+        let out = clamp_doc_text("anything", Some(0));
+        assert!(out.contains("showing 0 of 8 bytes"), "got {out:?}");
     }
 }

@@ -2,12 +2,152 @@
 source: datalib/backend/etl/providers/anthropic/tests/anthropic_render.rs
 expression: sbundle
 ---
+=== anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.grid_rows.json ===
+{
+  "header": {
+    "markdown_uuid": "70000001-1701-4d00-8000-000000000701",
+    "source_fingerprint": "1333c53e90043ea04c6009aaf333f379e2c04c2a16f6fb8417885b5561275dfa",
+    "render_version": 4
+  },
+  "rows": [
+    {
+      "uuid": "70000001-1701-4d00-8000-000000000701",
+      "provider": "anthropic",
+      "kind": "Project",
+      "source_label": "Claude",
+      "when_ts": "2364-03-01T09:00:00+00:00",
+      "author": null,
+      "account": "00000001-1701-4d00-8000-000000000001",
+      "project": "Bridge Operations",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Bridge Operations",
+      "conversation_name": "Bridge Operations",
+      "conversation_uuid": "70000001-1701-4d00-8000-000000000701",
+      "message_index": null,
+      "entire_chat": "/chat/70000001-1701-4d00-8000-000000000701",
+      "text": "Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.\nAnswer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.\n# Hailing frequencies\n\nOpen on subspace band 3 unless the target is cloaked.\n\n- Klingon vessels: lead with rank, then ship name.\n- Romulan vessels: do not open first.\n\nOps -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).\nMedical emergencies route directly to Sickbay (Crusher).\n",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md",
+      "source_url": "https://claude.ai/project/70000001-1701-4d00-8000-000000000701",
+      "git_sha": null,
+      "external_id": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "70000001-1701-4d00-8000-000000000701"
+    },
+    {
+      "uuid": "pdesc-70000001-1701-4d00-8000-000000000701",
+      "provider": "anthropic",
+      "kind": "Project Description",
+      "source_label": "Claude",
+      "when_ts": "2364-03-01T09:00:00+00:00",
+      "author": "Description",
+      "account": "00000001-1701-4d00-8000-000000000001",
+      "project": "Bridge Operations",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Bridge Operations",
+      "conversation_name": "Bridge Operations",
+      "conversation_uuid": "70000001-1701-4d00-8000-000000000701",
+      "message_index": 0,
+      "entire_chat": "/chat/70000001-1701-4d00-8000-000000000701",
+      "text": "Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "external_id": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "70000001-1701-4d00-8000-000000000701"
+    },
+    {
+      "uuid": "pinst-70000001-1701-4d00-8000-000000000701",
+      "provider": "anthropic",
+      "kind": "Project Instructions",
+      "source_label": "Claude",
+      "when_ts": "2364-03-01T09:00:00+00:00",
+      "author": "Custom instructions",
+      "account": "00000001-1701-4d00-8000-000000000001",
+      "project": "Bridge Operations",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Bridge Operations",
+      "conversation_name": "Bridge Operations",
+      "conversation_uuid": "70000001-1701-4d00-8000-000000000701",
+      "message_index": 1,
+      "entire_chat": "/chat/70000001-1701-4d00-8000-000000000701",
+      "text": "Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "external_id": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "70000001-1701-4d00-8000-000000000701"
+    },
+    {
+      "uuid": "7d000001-1701-4d00-8000-0000000007d1",
+      "provider": "anthropic",
+      "kind": "Project Knowledge",
+      "source_label": "Claude",
+      "when_ts": "2364-03-01T09:05:00+00:00",
+      "author": "hailing-frequencies.md",
+      "account": "00000001-1701-4d00-8000-000000000001",
+      "project": "Bridge Operations",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Bridge Operations",
+      "conversation_name": "Bridge Operations",
+      "conversation_uuid": "70000001-1701-4d00-8000-000000000701",
+      "message_index": 2,
+      "entire_chat": "/chat/70000001-1701-4d00-8000-000000000701",
+      "text": "# Hailing frequencies\n\nOpen on subspace band 3 unless the target is cloaked.\n\n- Klingon vessels: lead with rank, then ship name.\n- Romulan vessels: do not open first.\n",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "external_id": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "70000001-1701-4d00-8000-000000000701"
+    },
+    {
+      "uuid": "7d000002-1701-4d00-8000-0000000007d2",
+      "provider": "anthropic",
+      "kind": "Project Knowledge",
+      "source_label": "Claude",
+      "when_ts": "2364-03-02T11:30:00+00:00",
+      "author": "escalation-ladder.txt",
+      "account": "00000001-1701-4d00-8000-000000000001",
+      "project": "Bridge Operations",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Bridge Operations",
+      "conversation_name": "Bridge Operations",
+      "conversation_uuid": "70000001-1701-4d00-8000-000000000701",
+      "message_index": 3,
+      "entire_chat": "/chat/70000001-1701-4d00-8000-000000000701",
+      "text": "Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).\nMedical emergencies route directly to Sickbay (Crusher).\n",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "external_id": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "70000001-1701-4d00-8000-000000000701"
+    }
+  ]
+}
 === anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003",
-    "source_fingerprint": "ee494d33941efc0884c950a892e0b23dbcfbccc8c09c3b16b3f8394568ba7be0",
-    "render_version": 3
+    "source_fingerprint": "aa22ca8c4bb10fb522e77cb4abd3ea009b7e38ab7617adaeb1c80c143118f63c",
+    "render_version": 4
   },
   "rows": [
     {
@@ -18,7 +158,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:00:00+00:00",
       "author": null,
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -44,7 +184,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:00:00+00:00",
       "author": "Human",
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -70,7 +210,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:00:30+00:00",
       "author": "claude-opus-4-7",
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -96,7 +236,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:00:32+00:00",
       "author": "claude-opus-4-7",
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -122,7 +262,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:01:00+00:00",
       "author": "claude-opus-4-7",
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -148,7 +288,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:01:00+00:00",
       "author": "claude-opus-4-7",
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -174,7 +314,7 @@ expression: sbundle
       "when_ts": "2369-04-14T10:02:00+00:00",
       "author": "Human",
       "account": "00000001-1701-4d00-8000-000000000001",
-      "project": null,
+      "project": "Bridge Operations",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
       "org_name": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -198,8 +338,8 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004",
-    "source_fingerprint": "33093472c7abe44edb9909b5f1e3d18b23fa0681fda358f0f7c05a3ba557602d",
-    "render_version": 3
+    "source_fingerprint": "91f9ee23e19a87b6cb56d85d792b6262660d1c13fdc07354c21c2f1c877d84ab",
+    "render_version": 4
   },
   "rows": [
     {
@@ -286,8 +426,8 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005",
-    "source_fingerprint": "87286bfafff1145c1e465857bbc53effc37917bf88bee30c4950f9d722895c4e",
-    "render_version": 3
+    "source_fingerprint": "4df72f1fc91c57c23ac8976cea959166a655f8338720902f8772fc2011c48195",
+    "render_version": 4
   },
   "rows": [
     {

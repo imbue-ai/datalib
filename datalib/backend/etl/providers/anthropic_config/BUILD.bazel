@@ -21,4 +21,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_anthropic_config",
     edition = "2021",
+    # The default-agreement tests parse real TOML, so the test needs the
+    # TOML parser even though the library itself is serde-only.
+    deps = ["@datalib_crates//:toml"],
 )

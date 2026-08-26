@@ -56,6 +56,18 @@ struct Args {
     #[arg(long = "conv-uuid", value_name = "UUID")]
     conv_uuids: Vec<String>,
 
+    /// Skip the Claude Projects mirror (project metadata + knowledge
+    /// documents). Mirrors the config's `sync.projects = false`.
+    #[arg(long)]
+    no_projects: bool,
+
+    /// Mirror only these projects instead of every one the account can
+    /// see. Pass `--project-uuid` once per target (bare UUID or a
+    /// paste-able `https://claude.ai/project/<uuid>` URL). Mirrors the
+    /// config's `sync.project_uuids`.
+    #[arg(long = "project-uuid", value_name = "UUID")]
+    project_uuids: Vec<String>,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -72,6 +84,8 @@ async fn main() -> Result<()> {
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         since: args.since.clone(),
         conv_uuids: args.conv_uuids.clone(),
+        projects: !args.no_projects,
+        project_uuids: args.project_uuids.clone(),
         ..Default::default()
     };
 
@@ -84,6 +98,8 @@ async fn main() -> Result<()> {
         skipped = summary.skipped,
         out_of_scope = summary.out_of_scope,
         forbidden_orgs = summary.forbidden_orgs,
+        projects = summary.projects_fetched,
+        project_docs = summary.project_docs_fetched,
         errors = summary.errors,
         requests = summary.requests,
         network_seconds = summary.network_seconds,

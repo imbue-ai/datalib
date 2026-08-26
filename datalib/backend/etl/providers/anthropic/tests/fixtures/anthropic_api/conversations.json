@@ -16,7 +16,7 @@
     "platform": "CLAUDE_AI",
     "current_leaf_message_uuid": "30000003-1701-4d00-8000-000000030003",
     "account": {"uuid": "00000001-1701-4d00-8000-000000000001"},
-    "project": null,
+    "project": {"uuid": "70000001-1701-4d00-8000-000000000701"},
     "_source": {
       "via": "claude.ai/api",
       "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
