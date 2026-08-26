@@ -3,7 +3,7 @@
 //! inputs change since I last ran?" answerable across process
 //! restarts.
 //!
-//! Lives at `<data_root>/system/state/dag_state.json` — alongside the
+//! Lives at `<data_root>/system/dag_state.json` — alongside the
 //! other operational (non-rebuildable-from-raw) state per the layout
 //! doc. JSON for now; the open question of moving this into a
 //! `pipeline_runs` table in the control DB is noted in the design doc.
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::step::StepId;
 
-pub const STATE_REL_PATH: &str = "system/state/dag_state.json";
+pub const STATE_REL_PATH: &str = "system/dag_state.json";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DagState {

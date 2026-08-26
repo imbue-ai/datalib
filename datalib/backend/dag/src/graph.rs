@@ -102,7 +102,7 @@ impl Graph {
                         // inputs — wildcard inputs would otherwise
                         // self-loop (e.g. the index step under a
                         // `**/rendered_md` input while writing
-                        // `system/backend_index`).
+                        // `out/index`).
                         continue;
                     }
                     for out in &a.outputs {
@@ -193,7 +193,7 @@ mod tests {
             spec("slack.render", &["slack/raw"], &["slack/rendered_md"]),
             spec("email.download", &[], &["email/raw"]),
             spec("email.render", &["email/raw"], &["email/rendered_md"]),
-            spec("index", &["**/rendered_md"], &["system/backend_index"]),
+            spec("index", &["**/rendered_md"], &["out/index"]),
         ])
         .unwrap();
 
@@ -282,7 +282,7 @@ mod tests {
         // become a self-edge (which would read as a cycle).
         let g = Graph::build(vec![
             spec("render", &[], &["slack/rendered_md"]),
-            spec("index", &["**"], &["system/backend_index"]),
+            spec("index", &["**"], &["out/index"]),
         ])
         .unwrap();
         let idx = |id: &str| g.by_id[id];

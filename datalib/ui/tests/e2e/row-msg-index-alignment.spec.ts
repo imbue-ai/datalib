@@ -34,7 +34,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   // Per-row click + chat fetch is ~1s; with many candidates we need
   // headroom past the 30s default.
   test.setTimeout(120_000);
-  const resp = await request.get("/api/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: Row[] };
 
@@ -55,7 +55,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   async function bodyFor(conv: string): Promise<string | null> {
     const cached = bodyCache.get(conv);
     if (cached !== undefined) return cached;
-    const r = await request.get(`/api/chat/${encodeURIComponent(conv)}`);
+    const r = await request.get(`/applet/unified_index/chat/${encodeURIComponent(conv)}`);
     if (!r.ok()) {
       bodyCache.set(conv, "");
       return null;

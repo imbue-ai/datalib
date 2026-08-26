@@ -99,7 +99,7 @@ and `/cancel` do what they say.
 Pick the surface that fits the question:
 
 - **SQL over everything** — the `grid_rows` union table in
-  `system/backend_index/db.doltlite_db`: one row per
+  `unified_index/grid/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `when_ts`, `author`, `channel`, `conversation_uuid`, `text`,
   `entire_chat`, etc. Any SQLite-shaped client can read it; the
@@ -108,7 +108,7 @@ Pick the surface that fits the question:
   a stray writer can wedge later syncs:
 
   ```sh
-  doltlite -readonly system/backend_index/db.doltlite_db \
+  doltlite -readonly unified_index/grid/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
@@ -118,21 +118,21 @@ Pick the surface that fits the question:
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<name>/rendered_md/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
-  them via `GET /api/chat/{markdown_uuid}`. The raw per-source
+  them via `GET /applet/unified_index/chat/{markdown_uuid}`. The raw per-source
   doltlite stores under `<name>/raw/` keep full wire fidelity when the
   rendered form isn't enough.
 - **Semantic search** — the qmd index:
 
   ```sh
-  INDEX_PATH=<data_root>/system/qmd/index.sqlite \
+  INDEX_PATH=<data_root>/unified_index/qmd/index.sqlite \
       npx -y @tobilu/qmd query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /api/search?q=…` (Gmail-flavored query language:
+  `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values; fields include
   `source:`, `kind:`, `channel:`, `author:`, `account:`, `project:`,
-  `before:`/`after:`, `convo:`), `GET /api/docs`, `GET /api/chat/{uuid}`,
-  `GET /api/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
+  `before:`/`after:`, `convo:`), `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
+  `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
   Every route needs the server's per-process API token — loopback does
@@ -141,7 +141,7 @@ Pick the surface that fits the question:
   bearer token:
 
   ```sh
-  TOKEN=$(cat <data_root>/system/state/api-token)
+  TOKEN=$(cat <data_root>/system/api-token)
   curl -H "Authorization: Bearer $TOKEN" "<origin>/api/health"
   ```
 
@@ -177,7 +177,7 @@ Pick the surface that fits the question:
   contains the provider-specific `latchkey` walkthrough. Cloudflare
   403s despite a fresh cookie usually mean a flagged IP/UA; wait or
   change networks.
-- **"Why did/didn't this step run?"**: `system/state/dag_state.json`
+- **"Why did/didn't this step run?"**: `system/dag_state.json`
   records each step's last input/output versions; a step re-runs when
   an input version moved (download steps always run — their input is a
   remote service).

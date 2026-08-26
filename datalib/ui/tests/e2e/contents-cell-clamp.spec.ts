@@ -37,7 +37,7 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
   // Find a fixture row with a snippet long enough that a 2-line clamp
   // must actually truncate. 200 chars comfortably overflows two lines at
   // the column's typical width.
-  const resp = await request.get("/api/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as {
     rows: { uuid: string; snippet: string | null }[];

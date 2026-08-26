@@ -5,7 +5,7 @@
 //! fill (`POST /api/sync/jobs`): claim the oldest `pending` row, shell
 //! out to the `datalib-dag` runner against the data root's
 //! `config.toml` (the DAG config), stream the child's
-//! stdout+stderr to `<root>/system/state/job-logs/<id>.log` (which
+//! stdout+stderr to `<root>/system/job-logs/<id>.log` (which
 //! `GET /api/sync/jobs/{id}/log` tails live), and write the terminal
 //! state back into the queue.
 //!
@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use app_schema::sync_jobs::SyncJobRow;
-use datalib_core::repo::DynRepo;
+use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -327,7 +327,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
 }
 
 /// The worker's main loop. Runs until the process exits.
-pub async fn run(repo: DynRepo, cfg: WorkerConfig) {
+pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     match repo.recover_running_jobs().await {
         Ok(0) => {}
         Ok(n) => eprintln!("worker: recovered {n} orphaned running job(s) → failed"),
@@ -401,7 +401,7 @@ fn terminate(pid: u32) {
     }
 }
 
-async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
+async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
     let Some(dag_bin) = cfg.dag_bin.as_ref() else {
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
     };
@@ -416,7 +416,7 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     }
 
     // Per-job log file the UI tails via /api/sync/jobs/{id}/log.
-    let log_dir = datalib_core::layout::state_dir(&cfg.root).join("job-logs");
+    let log_dir = datalib_core::layout::system_dir(&cfg.root).join("job-logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("{}.log", job.id));
     let log_file = File::create(&log_path)?;

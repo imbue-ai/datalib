@@ -12,7 +12,7 @@ test("right-click on a grid row suppresses the native browser menu", async ({
   page,
   request,
 }) => {
-  const resp = await request.get("/api/search?q=&limit=50");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=50");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: unknown[] };
   expect(data.rows.length, "fixture must have at least one row").toBeGreaterThan(0);

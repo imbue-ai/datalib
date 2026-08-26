@@ -11,8 +11,8 @@
 //!
 //! qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`, so we point
 //! `XDG_CACHE_HOME` at `<root>/system` and the index lands at
-//! `<root>/system/qmd/index.sqlite` alongside the other aggregate processors
-//! (see [`crate::layout`]). The *scan* root stays `<root>` so qmd still finds
+//! `<root>/unified_index/qmd/index.sqlite` alongside the grid index
+//! (see [`datalib_core::layout`]). The *scan* root stays `<root>` so qmd still finds
 //! every stanza's `rendered_md/`.
 
 pub mod daemon;
@@ -38,19 +38,20 @@ pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
 use std::path::{Path, PathBuf};
 
 /// Canonical sub-path of the qmd index, relative to `<root>`. qmd writes
-/// here when invoked with `XDG_CACHE_HOME=<root>/system` (see
+/// here when invoked with `XDG_CACHE_HOME=<root>/unified_index` (see
 /// [`qmd_cache_home`]).
-pub const QMD_INDEX_REL: &str = "system/qmd/index.sqlite";
+pub const QMD_INDEX_REL: &str = "unified_index/qmd/index.sqlite";
 
 /// Resolve the qmd index file path under a data root.
 pub fn qmd_index_path(root: &Path) -> PathBuf {
-    crate::layout::qmd_dir(root).join("index.sqlite")
+    datalib_core::layout::qmd_dir(root).join("index.sqlite")
 }
 
-/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data root:
-/// `<root>/system`, so qmd writes its `qmd/index.sqlite` under `system/`.
+/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data
+/// root: `<root>/unified_index`, so qmd writes its `qmd/index.sqlite`
+/// beside the grid index rather than under the server's own `system/`.
 pub fn qmd_cache_home(root: &Path) -> PathBuf {
-    crate::layout::system_dir(root)
+    datalib_core::layout::unified_index_dir(root)
 }
 
 /// Entry script of the `@tobilu/qmd` package inside a staged runtime
@@ -61,10 +62,11 @@ const QMD_ENTRY_REL: &str = "node_modules/@tobilu/qmd/dist/cli/qmd.js";
 
 /// `Command` invoking the qmd CLI at exactly `version`: the app-bundled
 /// Node runtime when that version is staged (see
-/// [`crate::node_runtime`]), else `npx -y @tobilu/qmd@<version>`. Every
+/// [`datalib_core::node_runtime`]), else `npx -y @tobilu/qmd@<version>`. Every
 /// qmd shell-out (indexer, runner, daemon) must go through this so the
 /// bundled/npx choice stays in one place.
 pub fn qmd_command(version: &str) -> std::process::Command {
-    crate::node_runtime::bundled_command("qmd", version, QMD_ENTRY_REL)
-        .unwrap_or_else(|| crate::node_runtime::npx_command(&format!("@tobilu/qmd@{version}")))
+    datalib_core::node_runtime::bundled_command("qmd", version, QMD_ENTRY_REL).unwrap_or_else(
+        || datalib_core::node_runtime::npx_command(&format!("@tobilu/qmd@{version}")),
+    )
 }

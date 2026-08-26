@@ -16,13 +16,13 @@ data_root = "~/datalib"
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 
 # Google Takeout Gmail export. No JMAP `sync` block in the params —
 # that puts the email provider in file-backed mbox mode, reading the
@@ -94,3 +94,12 @@ id = "anthropic-api.render"
 command = "datalib-step render claude_api"
 inputs = ["anthropic-api/raw"]
 outputs = ["anthropic-api/rendered_md"]
+
+# The app's own surface: `unified_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+id = "unified_index"
+title = "Search index"
+command = "datalib-applet unified_index"

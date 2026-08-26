@@ -54,7 +54,7 @@ function seedSource(name: string): string {
 // this user, and can re-read it whenever it needs a fresh one.
 function authLines(): string[] {
   const tokenFile =
-    healthSnapshot()?.token_file ?? "<data root>/system/state/api-token";
+    healthSnapshot()?.token_file ?? "<data root>/system/api-token";
   return [
     `The API needs the server's token on every call. It changes each time`,
     `the server restarts, so read it fresh:`,

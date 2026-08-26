@@ -6,7 +6,7 @@
 # `datalib_qmd_indexer::default_models_dir()` returns.
 #
 # Why this exists: qmd is fetched at build time via `npx -y
-# @tobilu/qmd@<DEFAULT_QMD_VERSION>` (see core/src/qmd/mod.rs). The
+# @tobilu/qmd@<DEFAULT_QMD_VERSION>` (see unified_index/src/qmd/mod.rs). The
 # vendored `third-party/qmd/` snapshot is kept in sync with that
 # version (parity checked below) so this test catches the case where
 # upstream qmd changes its cache-path constant — we'd otherwise notice
@@ -33,7 +33,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 
 llm_ts="$(rlocation _main/third-party/qmd/src/llm.ts)"
 pkg_json="$(rlocation _main/third-party/qmd/package.json)"
-core_qmd_mod="$(rlocation _main/datalib/backend/core/src/qmd/mod.rs)"
+core_qmd_mod="$(rlocation _main/datalib/backend/unified_index/src/qmd/mod.rs)"
 bazelrc="$(rlocation _main/.bazelrc)"
 
 for f in "$llm_ts" "$pkg_json" "$core_qmd_mod" "$bazelrc"; do
@@ -88,7 +88,7 @@ if [[ "$pkg_version" != "$pinned_version" ]]; then
 Vendored qmd snapshot is out of sync with DEFAULT_QMD_VERSION.
 
   third-party/qmd/package.json               version = "$pkg_version"
-  core/src/qmd/mod.rs    DEFAULT_QMD_VERSION = "$pinned_version"
+  unified_index/src/qmd/mod.rs    DEFAULT_QMD_VERSION = "$pinned_version"
 
 Either update DEFAULT_QMD_VERSION to "$pkg_version" or re-vendor
 third-party/qmd/ at $pinned_version, then re-run this test. The

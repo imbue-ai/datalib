@@ -37,7 +37,7 @@ test("no token means no app, on the page and on the API", async ({
   expect(resp?.status()).toBe(401);
   await expect(page.getByText("This browser isn't authenticated")).toBeVisible();
 
-  const api = await request.get("/api/search?q=&limit=1");
+  const api = await request.get("/applet/unified_index/search?q=&limit=1");
   expect(api.status()).toBe(401);
 });
 
@@ -61,7 +61,7 @@ test("?token= mints a session cookie, then the app runs on it", async ({
   expect(cookie?.sameSite).toBe("Lax");
 
   // The app itself came up, which means the cookie carried the bundle,
-  // the /api/search behind the grid, and everything else the page asked
+  // the /applet/unified_index/search behind the grid, and everything else the page asked
   // for — no per-request token plumbing anywhere in the UI.
   const firstRow = page.locator('.ag-center-cols-container [role="row"]').first();
   await expect(firstRow).toBeVisible({ timeout: 20_000 });

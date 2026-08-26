@@ -19,7 +19,7 @@
 // docs/dev/dactal.md caveats 5 and 4. Sandboxing it for real needs the
 // postMessage bridge that would replace same-origin access.
 //
-// The page lives in public/dactal/ and calls the same /api/search the
+// The page lives in public/dactal/ and calls the same search endpoint the
 // grid uses.
 import type { CardCtx, CardRender } from "../types";
 

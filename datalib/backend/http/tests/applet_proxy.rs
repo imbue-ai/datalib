@@ -9,8 +9,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::dolt_repo::DoltRepo;
-use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
+use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
 use datalib_http::ApiToken;
@@ -22,15 +21,15 @@ use tower::ServiceExt;
 const TEST_TOKEN: &str = "applet-test-token";
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
-    let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let app = AppStore::open(root.as_path())
+        .await
+        .expect("open app stores");
     let cfg = datalib_dag::config::parse(config_toml).expect("fixture config parses");
     datalib_dag::config::validate_applets(&cfg).expect("fixture config is valid");
     AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+        app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         // Every route is behind the per-process token; these tests
         // send it on each request (see `get_json`).

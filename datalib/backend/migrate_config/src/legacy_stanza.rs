@@ -289,7 +289,7 @@ impl SourceConfig {
 }
 
 /// Settings for the backend index doltlite DB. Its location is canonical —
-/// `data_root/system/backend_index/db.doltlite_db` (see
+/// `data_root/unified_index/grid/db.doltlite_db` (see
 /// [`datalib_core::layout`]) — because the http server resolves it from
 /// `data_root` alone and never reads this config; an override here couldn't be
 /// honored on the read side, so there's nothing to configure (yet).
@@ -330,13 +330,16 @@ impl Default for QmdConfig {
 }
 
 fn default_qmd_index_path() -> String {
-    format!("${{data_root}}/{}", datalib_core::qmd::QMD_INDEX_REL)
+    format!(
+        "${{data_root}}/{}",
+        datalib_unified_index::qmd::QMD_INDEX_REL
+    )
 }
 fn default_qmd_version() -> String {
-    datalib_core::qmd::DEFAULT_QMD_VERSION.into()
+    datalib_unified_index::qmd::DEFAULT_QMD_VERSION.into()
 }
 fn default_qmd_collection() -> String {
-    datalib_core::qmd::DEFAULT_COLLECTION.into()
+    datalib_unified_index::qmd::DEFAULT_COLLECTION.into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -484,9 +487,9 @@ impl Config {
     }
 
     /// Absolute path to the backend index doltlite DB:
-    /// `data_root/system/backend_index/db.doltlite_db`.
+    /// `data_root/unified_index/grid/db.doltlite_db`.
     pub fn dolt_db_path(&self) -> PathBuf {
-        datalib_core::layout::backend_index_db(&self.data_root)
+        datalib_core::layout::grid_index_db(&self.data_root)
     }
 }
 
@@ -562,7 +565,7 @@ mod tests {
         // Derived paths hang off the resolved root.
         assert_eq!(
             cfg.dolt_db_path(),
-            want.join("system/backend_index/db.doltlite_db")
+            want.join("unified_index/grid/db.doltlite_db")
         );
     }
 
@@ -597,7 +600,7 @@ mod tests {
         };
         assert_eq!(
             cfg.dolt_db_path(),
-            tmp.join("system/backend_index/db.doltlite_db")
+            tmp.join("unified_index/grid/db.doltlite_db")
         );
     }
 

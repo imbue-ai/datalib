@@ -53,7 +53,7 @@ test("row clicks highlight and scroll to the right message", async ({
 }) => {
   // Use the backend search API to find a conversation with two message
   // rows far apart, so the scroll between them is unambiguous.
-  const resp = await request.get("/api/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: Row[] };
   const byConv = new Map<string, Row[]>();

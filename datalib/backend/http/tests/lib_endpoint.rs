@@ -9,8 +9,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::dolt_repo::DoltRepo;
-use datalib_core::qmd::{QmdDaemon, QmdDaemonConfig};
+use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
 use datalib_http::{router, ApiToken, AppState};
@@ -80,13 +79,13 @@ fn user_dir(root: &Path) -> PathBuf {
 }
 
 async fn app_for(root: &Path) -> axum::Router {
-    let db_path = root.join("backend_index.doltlite_db");
     let root = Arc::new(root.to_path_buf());
-    let dolt = DoltRepo::open(&db_path, root.clone()).await.unwrap();
+    let app = AppStore::open(root.as_path())
+        .await
+        .expect("open app stores");
     router(AppState {
         root: root.clone(),
-        repo: Arc::new(dolt),
-        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+        app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::build(Vec::new(), (*root).clone(), None)),

@@ -62,11 +62,11 @@
 //! `$DATALIB_TOKEN` when set — how `dev.sh` hands one token to both the
 //! backend and the Vite proxy, and how the Playwright suite pins one —
 //! otherwise 244 random bits as hex. Either way it is written to
-//! `<root>/system/state/api-token` (mode 0600) so anything running as
+//! `<root>/system/api-token` (mode 0600) so anything running as
 //! the user can authenticate without scraping process output:
 //!
 //! ```sh
-//! curl -H "Authorization: Bearer $(cat ~/Documents/datalib/system/state/api-token)" \
+//! curl -H "Authorization: Bearer $(cat ~/Documents/datalib/system/api-token)" \
 //!   http://127.0.0.1:8731/api/health
 //! ```
 
@@ -85,7 +85,7 @@ use uuid::Uuid;
 /// dev proxy, the Playwright suite).
 pub const TOKEN_ENV: &str = "DATALIB_TOKEN";
 
-/// Token file basename inside [`datalib_core::layout::state_dir`].
+/// Token file basename inside [`datalib_core::layout::system_dir`].
 pub const TOKEN_FILE: &str = "api-token";
 
 /// Query-string key carrying the token on the launch URL.
@@ -177,7 +177,7 @@ impl ApiToken {
         &self.0.token_file
     }
 
-    /// Publish the token to `<root>/system/state/api-token`, mode 0600.
+    /// Publish the token to `<root>/system/api-token`, mode 0600.
     /// Callers run this once the data root exists.
     pub fn write_token_file(&self) -> anyhow::Result<()> {
         let path = self.token_file();
@@ -281,9 +281,9 @@ enum Credential {
     Query,
 }
 
-/// `<root>/system/state/api-token`.
+/// `<root>/system/api-token`.
 pub fn token_file_path(root: &Path) -> PathBuf {
-    datalib_core::layout::state_dir(root).join(TOKEN_FILE)
+    datalib_core::layout::system_dir(root).join(TOKEN_FILE)
 }
 
 /// `chmod 0600` — the token is a credential, and on a shared machine
@@ -505,7 +505,7 @@ mod tests {
     fn token_file_lands_under_system_state() {
         let t = token();
         assert!(
-            t.token_file().ends_with("system/state/api-token"),
+            t.token_file().ends_with("system/api-token"),
             "{:?}",
             t.token_file()
         );

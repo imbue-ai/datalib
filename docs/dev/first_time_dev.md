@@ -141,7 +141,7 @@ specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 (backend). Ctrl-C tears both down.
 
 Data root resolution (the rendered Markdown feeds the search index, but
-`system/backend_index/db.doltlite_db` remains the source of truth):
+`unified_index/grid/db.doltlite_db` remains the source of truth):
 
 1. positional arg to `bazelisk run //datalib:dev` (or `:serve`)
 2. `~/Documents/datalib`
@@ -183,10 +183,10 @@ Both launchers handle it for you:
   every `/api` call comes back 401.
 
 For curl, scripts, and coding agents, the running server publishes its
-token to `<root>/system/state/api-token` (mode 0600):
+token to `<root>/system/api-token` (mode 0600):
 
 ```sh
-curl -H "Authorization: Bearer $(cat ~/datalib.thad/system/state/api-token)" \
+curl -H "Authorization: Bearer $(cat ~/datalib.thad/system/api-token)" \
   http://127.0.0.1:<port>/api/health
 ```
 
@@ -205,7 +205,7 @@ as a subprocess. The built-in steps live in the `datalib-step` binary
 `datalib/backend/etl/providers/` also exposes a standalone
 `*_download` binary), `render <source_type>` renders markdown + sidecars,
 and `grid_index` loads them into
-`<root>/system/backend_index/db.doltlite_db`. See
+`<root>/unified_index/grid/db.doltlite_db`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the
 DAG design.
@@ -232,9 +232,9 @@ after the markdown tree is rendered + loaded. The indexer
 (`datalib/backend/qmd_indexer/`) shells out to the qmd CLI — the
 app-bundled runtime when one is staged (the Tauri bundle and the Bazel
 fixture genrule both stage one), else `npx -y @tobilu/qmd@<version>` —
-with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/system/qmd/index.sqlite`
+with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/unified_index/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/rendered_md/**/*.md` mask), alongside the per-stanza
-`<name>/rendered_md/` trees and `system/backend_index/db.doltlite_db`. This is what the search bar's hybrid / vector
+`<name>/rendered_md/` trees and `unified_index/grid/db.doltlite_db`. This is what the search bar's hybrid / vector
 queries hit (see `datalib/backend/core/src/qmd/`).
 
 Design notes:

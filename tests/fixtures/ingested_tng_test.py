@@ -137,7 +137,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
-        return self.workspace / "system" / "backend_index" / "db.doltlite_db"
+        return self.workspace / "unified_index" / "grid" / "db.doltlite_db"
 
     @property
     def _signal_entities_db(self) -> Path:

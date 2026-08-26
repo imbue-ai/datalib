@@ -229,7 +229,6 @@ rust_binary(
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:clap",

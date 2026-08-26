@@ -10,6 +10,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
     ],
