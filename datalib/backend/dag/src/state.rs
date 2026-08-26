@@ -42,9 +42,9 @@ pub struct StepState {
     #[serde(default)]
     pub succeeded: bool,
     /// The step's own fingerprint as of its last success: a hash over
-    /// everything about it that is not its inputs — argv (which
-    /// carries `--params`), env overrides, and the artifact patterns
-    /// it declares. A step whose fingerprint no longer matches is
+    /// its definition — argv (which carries `--params`), env overrides,
+    /// and the artifact patterns it declares. Not the contents of what
+    /// it reads; those are `input_versions`. A step whose fingerprint no longer matches is
     /// stale even when every input is untouched, which is how a config
     /// edit takes effect. Empty for state written before fingerprints
     /// existed; treated as "unknown", which forces one re-run.

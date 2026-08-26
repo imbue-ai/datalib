@@ -90,6 +90,22 @@ struct TaskBoard {
     tasks: HashMap<String, TaskEntry>,
 }
 
+/// Runner step status → the task-board state the UI renders.
+///
+/// Shared by the per-step `step_finish` path and the authoritative
+/// `run_summary` path, which must agree: an unmapped status falls to
+/// `failed` via the catch-all, so a status added on one side only would
+/// show a healthy step as failed.
+fn task_state_for(status: &str) -> &'static str {
+    match status {
+        "succeeded" => "done",
+        "skipped_up_to_date" => "skipped",
+        "not_selected" => "not_selected",
+        "blocked" => "blocked",
+        _ => "failed",
+    }
+}
+
 #[derive(Default)]
 struct TaskEntry {
     /// `todo` / `running` / `done` / `skipped` / `not_selected` /
@@ -142,14 +158,7 @@ impl TaskBoard {
             ("step_finish", Some(id)) => {
                 let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
                 let e = self.entry(id);
-                e.state = match status {
-                    "succeeded" => "done",
-                    "skipped_up_to_date" => "skipped",
-                    "not_selected" => "not_selected",
-                    "blocked" => "blocked",
-                    _ => "failed",
-                }
-                .into();
+                e.state = task_state_for(status).into();
                 e.msg = None;
             }
             ("progress_length", Some(id)) => {
@@ -179,14 +188,7 @@ impl TaskBoard {
                             continue;
                         };
                         let e = self.entry(id);
-                        e.state = match status {
-                            "succeeded" => "done",
-                            "skipped_up_to_date" => "skipped",
-                            "not_selected" => "not_selected",
-                            "blocked" => "blocked",
-                            _ => "failed",
-                        }
-                        .into();
+                        e.state = task_state_for(status).into();
                     }
                 }
             }
@@ -738,5 +740,27 @@ mod tests {
         let tasks = b.snapshot();
         assert_eq!(tasks[0].state, "failed");
         assert_eq!(tasks[1].state, "skipped");
+    }
+
+    /// `not_selected` (a step outside a `--sync` run's subgraph) must
+    /// survive both paths into the board. Neither may fall through to
+    /// the catch-all, which would show an untouched step as failed.
+    #[test]
+    fn not_selected_survives_both_the_step_and_summary_paths() {
+        for line in [
+            r#"{"event":"step_finish","step":"a","status":"not_selected"}"#,
+            r#"{"event":"run_summary","steps":[{"step":"a","status":"not_selected","attempts":0,"outputs":[]}]}"#,
+        ] {
+            let mut b = TaskBoard::default();
+            feed(&mut b, &[r#"{"event":"run_plan","steps":["a"]}"#, line]);
+            assert_eq!(
+                b.snapshot()[0].state,
+                "not_selected",
+                "unmapped status reads as failed: {line}"
+            );
+        }
+        // And it counts as terminal, so a sync of one source doesn't
+        // sit at "in progress" forever because of the steps it skipped.
+        assert_eq!(task_state_for("not_selected"), "not_selected");
     }
 }

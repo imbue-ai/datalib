@@ -52,13 +52,53 @@ pub const ENV_RESET_AND_REDOWNLOAD: &str = "DATALIB_DAG_RESET_AND_REDOWNLOAD";
 pub const ENV_REFETCH_BLOBS: &str = "DATALIB_DAG_REFETCH_BLOBS";
 
 /// The final stdout line a subprocess step may emit.
+///
+/// Deliberately lenient about the per-output rows: any executable can
+/// be a step, and one written against an older protocol reports
+/// `{"path": …, "changed": true}` with no version. Rejecting that would
+/// fail the step and poison its subtree over a field that used to be
+/// valid, so a row with no version is dropped with a warning and the
+/// runner content-hashes that output — exactly what the old
+/// `changed: true` resolved to anyway.
 #[derive(Debug, Default, Deserialize)]
 struct WireOutcome {
     #[serde(default)]
-    outputs: Vec<ArtifactState>,
+    outputs: Vec<WireArtifactState>,
     /// Set (with a non-zero exit) to classify the failure.
     #[serde(default)]
     failure: Option<FailureKind>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireArtifactState {
+    path: crate::ArtifactPat,
+    version: Option<String>,
+}
+
+impl WireOutcome {
+    /// Keep the rows that carry a version; warn about the rest.
+    fn into_outputs(self, sink: &Arc<dyn EventSink>, step: &str) -> Vec<ArtifactState> {
+        let mut out = Vec::with_capacity(self.outputs.len());
+        for row in self.outputs {
+            match row.version {
+                Some(version) => out.push(ArtifactState {
+                    path: row.path,
+                    version,
+                }),
+                None => sink.emit(&Event::Log {
+                    step: step.to_string(),
+                    level: LogLevel::Warn,
+                    msg: format!(
+                        "reported output {:?} with no version; content-hashing it \
+                         instead. Steps report a content-derived version per \
+                         output — see docs/dev/step_protocol.md",
+                        row.path.as_str()
+                    ),
+                }),
+            }
+        }
+        out
+    }
 }
 
 pub(crate) async fn run_subprocess(
@@ -164,12 +204,16 @@ pub(crate) async fn run_subprocess(
 
     if status.success() {
         Ok(StepOutcome {
-            outputs: outcome.map(|w| w.outputs).unwrap_or_default(),
+            outputs: outcome
+                .map(|w| w.into_outputs(sink, &ctx.step_id))
+                .unwrap_or_default(),
         })
     } else {
         let w = outcome.unwrap_or_default();
+        let failure = w.failure.unwrap_or(FailureKind::Data);
+        let outputs = w.into_outputs(sink, &ctx.step_id);
         Err(StepError::new(
-            w.failure.unwrap_or(FailureKind::Data),
+            failure,
             anyhow::anyhow!(
                 "step {} exited with {status}{}{}",
                 ctx.step_id,
@@ -177,7 +221,7 @@ pub(crate) async fn run_subprocess(
                 stderr_tail
             ),
         )
-        .with_outputs(w.outputs))
+        .with_outputs(outputs))
     }
 }
 
@@ -307,6 +351,48 @@ mod tests {
         }
     }
 
+    /// A step written against the older protocol reports
+    /// `{"path": …, "changed": true}` and no version. That must not fail
+    /// the step — the row is dropped with a warning and the runner
+    /// content-hashes the output, which is what `changed: true` resolved
+    /// to before the version became the only signal.
+    #[tokio::test]
+    async fn outcome_row_without_a_version_warns_and_falls_back_to_hashing() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "legacy.download",
+            sh(r#"
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/legacy/raw"
+                echo body > "$DATALIB_DAG_DATA_ROOT/legacy/raw/x.txt"
+                echo '{"event":"outcome","outputs":[{"path":"legacy/raw","changed":true}]}'
+            "#),
+        )
+        .output("legacy/raw");
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let rep = Runner::new(root.path())
+            .sink(rec.clone())
+            .run(&g)
+            .await
+            .unwrap();
+
+        assert!(
+            rep.all_ok(),
+            "a versionless row must not fail the step: {rep:#?}"
+        );
+        // Fell back to the content hash rather than recording nothing.
+        // (Recorded versions carry the step fingerprint as a prefix.)
+        let version = &rep.step("legacy.download").outputs[0].1;
+        let hashed = version.rsplit(':').next().unwrap();
+        assert_ne!(hashed, crate::version::ABSENT);
+        assert_eq!(hashed.len(), 64, "blake3 hex, i.e. the fallback ran");
+
+        let warned = rec.0.lock().unwrap().iter().any(|e| {
+            matches!(e, Event::Log { level: LogLevel::Warn, msg, .. } if msg.contains("no version"))
+        });
+        assert!(warned, "the step author needs to hear about it");
+    }
+
     #[tokio::test]
     async fn subprocess_step_events_outcome_and_env() {
         let root = tempfile::tempdir().unwrap();
@@ -319,7 +405,7 @@ mod tests {
                 echo plain text line
                 echo "downloading 3/10..." >&2
                 echo '{"timestamp":"t","level":"ERROR","fields":{"message":"boom"}}' >&2
-                echo '{"event":"outcome","outputs":[{"path":"shell/raw","changed":true,"version":"v1"}]}'
+                echo '{"event":"outcome","outputs":[{"path":"shell/raw","version":"v1"}]}'
             "#),
         )
         .output("shell/raw");
@@ -334,7 +420,13 @@ mod tests {
             "hi from shell.download\n"
         );
         // The reported version was trusted verbatim.
-        assert_eq!(rep.step("shell.download").outputs[0].1, "v1");
+        // The recorded version is the step's fingerprint plus what it
+        // reported, so a change to the step itself reaches consumers.
+        assert!(
+            rep.step("shell.download").outputs[0].1.ends_with(":v1"),
+            "{}",
+            rep.step("shell.download").outputs[0].1
+        );
 
         let events = rec.0.lock().unwrap();
         // Progress event forwarded and re-tagged from "me" to the real id.

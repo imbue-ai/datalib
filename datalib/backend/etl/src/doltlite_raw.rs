@@ -996,11 +996,23 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
 
 /// [`head_commit`] against a store on disk. `Ok(None)` when the file
 /// doesn't exist — a source nobody has downloaded yet.
+///
+/// Deliberately NOT via [`open`]: that is the write path — it rescues a
+/// dirty working tree, applies the shared DDL (`sync_runs`,
+/// `sync_scope_state`, …), reconciles schemas and commits. Using it to
+/// read a version would create bookkeeping tables inside a blob CAS
+/// that has only `cas_objects`, and the resulting schema commit would
+/// advance HEAD — a version read that changes the version it reads.
 pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     if !db_path.exists() {
         return Ok(None);
     }
-    let pool = open(db_path, &[]).await.context("open for head_commit")?;
+    let url = format!("sqlite://{}?mode=ro", db_path.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .with_context(|| format!("open read-only {}", db_path.display()))?;
     let head = head_commit(&pool).await;
     pool.close().await;
     head
@@ -1680,10 +1692,116 @@ mod tests {
         vec![WIDGETS_DDL.to_string(), bookkeeping_ddl_for("widgets")]
     }
 
+    /// A pool with no DDL and no rescue/commit — what a store looks
+    /// like to something that only means to read it.
+    async fn plain_pool(p: &Path) -> SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))
+                    .unwrap()
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap()
+    }
+
     async fn open_test(p: &Path) -> SqlitePool {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    // ── HEAD as a content version ─────────────────────────────────
+
+    /// The property every reported version rests on: the same data
+    /// produces the same string. A version that moved every run would
+    /// re-render and re-index forever; one that never moved would skip
+    /// real work. Both fail silently, so pin it here.
+    #[tokio::test]
+    async fn head_commit_is_stable_across_a_no_op_run() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+
+        let pool = open_test(&path).await;
+        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "first").await.unwrap();
+        let v1 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
+        pool.close().await;
+
+        // A second wave that pulls nothing new: commit_run finds a clean
+        // tree and returns None, but HEAD — and so the version — holds.
+        let pool = open_test(&path).await;
+        assert!(commit_run(&pool, "second").await.unwrap().is_none());
+        let v2 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
+        pool.close().await;
+        assert_eq!(
+            v1, v2,
+            "an unchanged store must report an unchanged version"
+        );
+
+        // Real new data moves it.
+        let pool = open_test(&path).await;
+        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('b', '{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "third").await.unwrap();
+        let v3 = head_commit(&pool).await.unwrap().unwrap();
+        pool.close().await;
+        assert_ne!(v1, v3, "new rows must move the version");
+    }
+
+    /// Reading a version must not write. `open` provisions the shared
+    /// bookkeeping DDL and commits, so using it here would create tables
+    /// inside a blob CAS and advance the very HEAD being read — one
+    /// spurious full re-render per source on first upgrade.
+    #[tokio::test]
+    async fn head_commit_at_path_does_not_touch_the_store() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("blobs.doltlite_db");
+
+        // Built the way `BlobCas::open` builds it: cas_objects only,
+        // none of the write path's shared bookkeeping.
+        let pool = plain_pool(&path).await;
+        sqlx::query(crate::blob_cas::CAS_OBJECTS_DDL)
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit_run(&pool, "cas init").await.unwrap();
+        let before = head_commit(&pool).await.unwrap();
+        pool.close().await;
+        assert!(before.is_some(), "fixture must have a HEAD to compare");
+
+        let read = head_commit_at_path(&path).await.unwrap();
+        assert_eq!(read, before, "the read must report HEAD as it stands");
+
+        // Inspect through a plain connection — `open` would provision
+        // the very tables we are checking for.
+        let pool = plain_pool(&path).await;
+        let after = head_commit(&pool).await.unwrap();
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        pool.close().await;
+        assert_eq!(after, before, "reading a version must not advance HEAD");
+        assert!(
+            !tables.iter().any(|t| t == "sync_runs"),
+            "reading a version must not provision write-path tables: {tables:?}"
+        );
+    }
+
+    /// A store nobody has downloaded yet has no version to report.
+    #[tokio::test]
+    async fn head_commit_at_path_is_none_for_a_missing_store() {
+        let td = tempfile::tempdir().unwrap();
+        let missing = td.path().join("nope.doltlite_db");
+        assert!(head_commit_at_path(&missing).await.unwrap().is_none());
     }
 
     // ── Volatile split / overlay ──────────────────────────────────

@@ -24,7 +24,7 @@ function cellClass(state: string): string {
     case "skipped":
       return "ok";
     case "not_selected":
-      return "unselected";
+      return "not-selected";
     case "failed":
       return "failed";
     case "blocked":
@@ -142,7 +142,7 @@ const labelText = computed(() => {
 }
 /* Outside this run's subgraph: never considered. Deliberately fainter
    than `blocked` (which did get considered, and was poisoned). */
-.cell.unselected {
+.cell.not-selected {
   background: var(--datalib-muted);
   opacity: 0.35;
 }

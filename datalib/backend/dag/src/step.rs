@@ -53,9 +53,11 @@ pub struct StepSpec {
 }
 
 impl StepSpec {
-    /// Everything about this step that is not its inputs, as the bytes
-    /// its fingerprint is taken over: the command it runs, its
-    /// environment overrides, and the artifact patterns it declares.
+    /// Everything about this step except the *contents* of what it
+    /// reads, as the bytes its fingerprint is taken over: the command it
+    /// runs, its environment overrides, and the artifact patterns it
+    /// declares — inputs included, since editing an `inputs =` line
+    /// changes what the step is.
     ///
     /// This is what makes a config edit invalidate a step. A step whose
     /// `params` changed has different argv (the runner appends

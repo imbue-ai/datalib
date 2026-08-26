@@ -307,7 +307,12 @@ impl Runner {
                 .unwrap_or_default();
             let st = match res {
                 Ok(outcome) => {
-                    match resolve_outputs(&self.data_root, spec, &outcome.outputs) {
+                    match resolve_outputs(
+                        &self.data_root,
+                        spec,
+                        &graph.fingerprints[i],
+                        &outcome.outputs,
+                    ) {
                         Ok(resolved) => {
                             let mut changed = 0usize;
                             for (path, v) in &resolved {
@@ -352,9 +357,12 @@ impl Runner {
                     // explicitly reported artifacts — unreported ones
                     // may be mid-write and get re-hashed next run.)
                     if !step_err.outputs.is_empty() {
-                        if let Ok(resolved) =
-                            resolve_outputs(&self.data_root, spec, &step_err.outputs)
-                        {
+                        if let Ok(resolved) = resolve_outputs(
+                            &self.data_root,
+                            spec,
+                            &graph.fingerprints[i],
+                            &step_err.outputs,
+                        ) {
                             let entry = state.steps.entry(spec.id.clone()).or_default();
                             for (path, v) in resolved {
                                 entry.output_versions.insert(path, v);
@@ -619,9 +627,19 @@ fn step_summary(r: &StepReport) -> crate::events::StepSummary {
 /// version, or it didn't and we hash the tree. Hashing is always
 /// correct and always slower — it reads every file under the output —
 /// so first-party steps report a version for everything they declare.
+///
+/// The step's `fingerprint` is folded into every recorded version. A
+/// step reports on its *content*, and it has no way to know that its
+/// own definition changed — the runner never tells it. Without this, a
+/// bumped `code_version` re-runs the step (its fingerprint moved) but
+/// leaves the reported version identical, so consumers skip: the tree
+/// gets rebuilt while the index keeps serving what the old definition
+/// produced. Folding it in makes "produced by a different step" count
+/// as a change downstream, which is the conservative direction.
 fn resolve_outputs(
     data_root: &std::path::Path,
     spec: &StepSpec,
+    fingerprint: &str,
     reported: &[ArtifactState],
 ) -> Result<Vec<(String, String)>> {
     let mut by_path: BTreeMap<&str, &ArtifactState> = BTreeMap::new();
@@ -646,7 +664,7 @@ fn resolve_outputs(
             // Said nothing about this output: decide for ourselves.
             None => tree_version(&data_root.join(path))?,
         };
-        out.push((path.to_string(), v));
+        out.push((path.to_string(), format!("{fingerprint}:{v}")));
     }
     Ok(out)
 }

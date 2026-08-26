@@ -4,17 +4,16 @@
 //! ambient metrics, rate-limit guard, diagnostics — around the
 //! provider's download `DataProcessor`s (planned per-provider by
 //! [`crate::dispatch`]), which own their store
-//! (open/DDL/commit/checkpoint). The step's change claim comes from
-//! the provider-assembled [`DownloadReport`]: empty report → outputs
-//! unchanged; non-empty → changed. A provider that publishes no
-//! report gets no claim, and the scheduler content-hashes the raw
-//! tree instead.
+//! (open/DDL/commit/checkpoint). The step reports its raw store's
+//! doltlite HEAD commits as the output version: doltlite only advances
+//! HEAD when a commit changed something, so a poll that found nothing
+//! new reports the same string as last run and the render skips.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::processor::{CheckpointSink, ReportCell, RunCtx};
+use datalib_etl::processor::{CheckpointSink, RunCtx};
 
 use crate::dispatch::PlannedSource;
 use crate::events::{Emitter, OutputClaim};
@@ -43,7 +42,6 @@ pub async fn run(
     let checkpoints = std::sync::Arc::new(CheckpointSink::new());
     let _ = crate::CHECKPOINTS.set(checkpoints.clone());
     let control = control.clone();
-    let report_cell = ReportCell::new();
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
     let guard = datalib_etl::retry::RetryGuard::from_params(&planned.download_params);
 
@@ -59,7 +57,6 @@ pub async fn run(
                 &checkpoints,
                 metrics.clone(),
                 diagnostics.clone(),
-                &report_cell,
             );
             let summary = proc
                 .run(&ctx)
@@ -78,16 +75,26 @@ pub async fn run(
     )
     .await?;
 
-    let _report = report_cell.take();
     let Some(rel) = planned.canonical_rel(data_root, "raw") else {
         // raw_path overridden away from the canonical layout: no claim.
         return Ok(vec![]);
     };
-    match raw_store_version(&data_root.join(&rel)).await? {
-        Some(version) => Ok(vec![OutputClaim { path: rel, version }]),
+    // Never fail the step here: the download itself has completed and
+    // committed. A version we cannot read is a reason to fall back to
+    // the runner's hash, not to throw away hours of successful work and
+    // block every downstream step.
+    match raw_store_version(&data_root.join(&rel)).await {
+        Ok(Some(version)) => Ok(vec![OutputClaim { path: rel, version }]),
         // Stock-sqlite dev build, or nothing materialized yet: no
         // version we can vouch for, so let the runner hash instead.
-        None => Ok(vec![]),
+        Ok(None) => Ok(vec![]),
+        Err(e) => {
+            tracing::warn!(
+                error = %format!("{e:#}"),
+                "download: could not read the raw store version;                  the runner will content-hash the tree instead"
+            );
+            Ok(vec![])
+        }
     }
 }
 

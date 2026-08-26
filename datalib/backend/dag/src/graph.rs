@@ -44,10 +44,12 @@ pub struct Graph {
     pub resolved_inputs: Vec<Vec<ArtifactPat>>,
     /// A topological order (dependencies before dependents).
     pub topo: Vec<usize>,
-    /// step idx → hash of everything about the step that is not its
-    /// inputs (see [`StepSpec::fingerprint_material`]). A step whose
-    /// fingerprint differs from the one recorded at its last success is
-    /// stale, which is how a config edit takes effect.
+    /// step idx → hash of the step's own definition: command, env, and
+    /// declared input/output patterns (see
+    /// [`StepSpec::fingerprint_material`]). Not the contents of what it
+    /// reads — those are the input versions. A step whose fingerprint
+    /// differs from the one recorded at its last success is stale, which
+    /// is how a config edit takes effect.
     pub fingerprints: Vec<String>,
 }
 
@@ -71,6 +73,7 @@ impl Graph {
     }
 
     pub fn build(steps: Vec<StepSpec>) -> Result<Graph> {
+        check_self_written(&steps)?;
         let steps = synthesize_staged_sources(steps)?;
 
         let mut by_id: HashMap<StepId, usize> = HashMap::new();
@@ -144,12 +147,14 @@ impl Graph {
                         // and must still load and run.
                         continue;
                     }
-                    // Only reachable when a step declares the same
-                    // path as both an input and an output: the
-                    // synthesis pass above leaves it alone (the step
-                    // does write it), and a step's own outputs never
-                    // satisfy its own inputs. No edge, no producer.
-                    resolved_inputs[bi].insert(pat.as_str().to_string(), pat.clone());
+                    // Unreachable: `check_self_written` rejects the only
+                    // shape that reaches here (input == own output), and
+                    // every other concrete input got a synthesized
+                    // producer above.
+                    unreachable!(
+                        "step {:?}: concrete input {pat} has no producer after synthesis",
+                        b.id
+                    );
                 }
             }
         }
@@ -192,6 +197,39 @@ impl Graph {
     }
 }
 
+/// Reject a step that declares the same tree as both an input and an
+/// output.
+///
+/// It reads as "transform in place", but nothing in the model supports
+/// it: a step's own outputs never satisfy its own inputs (that would
+/// self-loop), and the path cannot be staged either, because the step
+/// already writes it — a synthesized source would be a second writer.
+/// The result would be an input no step in the graph produces, whose
+/// version is therefore never known, leaving the step dirty on every
+/// run forever. Better to say so at build time.
+fn check_self_written(steps: &[StepSpec]) -> Result<()> {
+    for s in steps {
+        for pat in &s.inputs {
+            // Concrete only. A wildcard fan-in legitimately *matches*
+            // its own output tree — `index` reads `**/rendered_md` and
+            // writes under `system/` — and edge derivation already skips
+            // self-edges for exactly that case. Rejecting it would break
+            // the shared index steps.
+            if !pat.is_concrete() {
+                continue;
+            }
+            if let Some(out) = s.outputs.iter().find(|out| pat.overlaps(out)) {
+                bail!(
+                    "step {:?} declares {pat} as an input and writes {out}; a step \
+                     cannot consume what it produces — split it into two steps",
+                    s.id
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn fingerprint_of(spec: &StepSpec) -> String {
     blake3::hash(spec.fingerprint_material().as_bytes())
         .to_hex()
@@ -215,6 +253,9 @@ fn synthesize_staged_sources(mut steps: Vec<StepSpec>) -> Result<Vec<StepSpec>> 
                 // set; staging a path for it would be a guess.
                 continue;
             }
+            // Includes `b` itself: a step that writes its own input has
+            // a producer, so there is nothing to stage. `Graph::build`
+            // rejects that shape separately — see `check_self_written`.
             let has_producer = steps
                 .iter()
                 .any(|a| a.outputs.iter().any(|out| pat.overlaps(out)));
@@ -223,7 +264,25 @@ fn synthesize_staged_sources(mut steps: Vec<StepSpec>) -> Result<Vec<StepSpec>> 
             }
         }
     }
-    for path in wanted {
+    // Two staged paths where one contains the other would become two
+    // steps writing overlapping trees, which the single-writer check
+    // rejects — naming steps the user never wrote. One source step over
+    // the outermost path covers both readers.
+    let outermost: Vec<String> = wanted
+        .iter()
+        .filter(|p| {
+            !wanted.iter().any(|other| {
+                other.as_str() != p.as_str()
+                    && ArtifactPat::parse(other)
+                        .ok()
+                        .zip(ArtifactPat::parse(p).ok())
+                        .map(|(o, inner)| o.conflicts_with(&inner) && other.len() < p.len())
+                        .unwrap_or(false)
+            })
+        })
+        .cloned()
+        .collect();
+    for path in outermost {
         let id = format!("{STAGED_STEP_PREFIX}{path}");
         if steps.iter().any(|s| s.id == id) {
             bail!("step id {id:?} collides with a synthesized staged-input step");
@@ -374,6 +433,46 @@ mod tests {
             out2.outputs[0].version, v1,
             "content change moves the version"
         );
+    }
+
+    /// Two staged paths where one contains the other must share a
+    /// single source step: synthesizing one each would produce two
+    /// steps writing overlapping trees, and the single-writer check
+    /// would reject the graph naming steps the user never wrote.
+    #[test]
+    fn nested_staged_inputs_share_one_source_step() {
+        let g = Graph::build(vec![
+            spec("all.render", &["takeout/staged"], &["takeout/all_md"]),
+            spec(
+                "voice.render",
+                &["takeout/staged/voice"],
+                &["takeout/voice_md"],
+            ),
+        ])
+        .unwrap();
+        let staged: Vec<&str> = g
+            .steps
+            .iter()
+            .map(|s| s.id.as_str())
+            .filter(|id| id.starts_with(STAGED_STEP_PREFIX))
+            .collect();
+        assert_eq!(staged, vec!["staged:takeout/staged"], "one writer, not two");
+        // Both readers hang off it.
+        let src = idx_in(&g, "staged:takeout/staged");
+        assert_eq!(g.deps[idx_in(&g, "all.render")], BTreeSet::from([src]));
+        assert_eq!(g.deps[idx_in(&g, "voice.render")], BTreeSet::from([src]));
+    }
+
+    /// A step that consumes what it produces has no coherent reading:
+    /// its own outputs never satisfy its own inputs, and the path
+    /// cannot be staged because the step already writes it. Left alone
+    /// it would be dirty on every run forever, so say so at build time.
+    #[test]
+    fn a_step_may_not_consume_its_own_output() {
+        let err = Graph::build(vec![spec("inplace", &["notes/tree"], &["notes/tree"])])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot consume what it produces"), "{err}");
     }
 
     #[test]
