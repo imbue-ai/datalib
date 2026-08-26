@@ -20,7 +20,7 @@
 use crate::qmd::mapping::{QmdHit, QueryMode};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub use crate::qmd::DEFAULT_QMD_VERSION;
 
@@ -183,13 +183,6 @@ pub fn strip_uri(uri: &str) -> &str {
         Some(i) => &after_scheme[i + 1..],
         None => after_scheme,
     }
-}
-
-/// Cache-home for the qmd CLI under a data root. Re-exported for
-/// callers that want to set `XDG_CACHE_HOME` themselves (e.g. the
-/// indexer binary).
-pub fn cache_home_for(root: &Path) -> PathBuf {
-    qmd_cache_home(root)
 }
 
 /// Rewrite a free-text search bar query into a qmd query string that

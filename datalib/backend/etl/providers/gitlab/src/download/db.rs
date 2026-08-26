@@ -21,20 +21,9 @@ use sqlx::Row;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{
-    discussion_pk_recipe, full_ddl, mr_pk_recipe, DiscussionRow, MergeRequestRow, SelfIdentityRow,
-    DATA_TABLES,
-};
+use super::schema_raw::{full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, DATA_TABLES};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
-
-pub fn mr_pk(proj: &str, iid: u32) -> String {
-    mr_pk_recipe(proj, iid)
-}
-
-pub fn discussion_pk(proj: &str, iid: u32, discussion_id: &str) -> String {
-    discussion_pk_recipe(proj, iid, discussion_id)
-}
 
 #[derive(Clone, Debug)]
 pub struct RawDb {

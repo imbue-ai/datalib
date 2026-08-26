@@ -76,25 +76,6 @@ fn array_items(
         .unwrap_or_default()
 }
 
-/// Walk all `conversations.history` keys in the index, projecting out
-/// `channel -> max(ts)`. The resume cursor on the next forward pass.
-pub fn latest_ts_by_channel<'a, I: Iterator<Item = &'a str>>(keys: I) -> BTreeMap<String, String> {
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
-    for k in keys {
-        let mut parts = k.split('\t');
-        let cid = parts.next().unwrap_or("");
-        let ts = parts.next().unwrap_or("");
-        if cid.is_empty() || ts.is_empty() {
-            continue;
-        }
-        let entry = out.entry(cid.to_string()).or_default();
-        if ts > entry.as_str() {
-            *entry = ts.to_string();
-        }
-    }
-    out
-}
-
 /// Walk all `conversations.replies` keys, projecting out
 /// `(channel, thread_ts) -> max(reply_ts)`. Used to skip threads whose
 /// latest reply we've already captured.

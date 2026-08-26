@@ -285,27 +285,6 @@ impl RawDb {
         Ok(())
     }
 
-    pub async fn delete_threads(&self, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin delete threads tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM threads WHERE id = ?",
-                "DELETE FROM threads_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete thread {id}"))?;
-            }
-        }
-        tx.commit().await.context("commit delete threads tx")?;
-        Ok(())
-    }
-
     /// Hard-delete one email plus its joins + bookkeeping. Blobs are
     /// untouched — another email may share the same `.eml` blob.
     /// Dolt history preserves the pre-delete state.

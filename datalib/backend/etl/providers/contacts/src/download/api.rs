@@ -158,28 +158,6 @@ pub fn body_sync_collection(prev_token: &str) -> String {
     )
 }
 
-/// `addressbook-multiget` REPORT body listing hrefs to fetch in one
-/// shot. Used as the etag-walk fallback when a server doesn't
-/// honor `sync-collection`.
-pub fn body_addressbook_multiget(hrefs: &[String]) -> String {
-    let mut body = String::from(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<card:addressbook-multiget xmlns="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
-  <prop>
-    <getetag/>
-    <card:address-data/>
-  </prop>
-"#,
-    );
-    for h in hrefs {
-        body.push_str("  <href>");
-        body.push_str(&escape_xml(h));
-        body.push_str("</href>\n");
-    }
-    body.push_str("</card:addressbook-multiget>\n");
-    body
-}
-
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

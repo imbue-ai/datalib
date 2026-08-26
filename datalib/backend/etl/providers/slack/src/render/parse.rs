@@ -10,7 +10,7 @@
 //! path is taken when the JSON-tree fallback fires (in-crate render
 //! fixture).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -77,14 +77,7 @@ pub struct ParsedSlack {
     pub scan: ScanResult,
 }
 
-impl ParsedSlack {
-    pub fn fallback_team_id(&self) -> &str {
-        self.workspace
-            .as_ref()
-            .map(|w| w.team_id.as_str())
-            .unwrap_or("unknown")
-    }
-}
+impl ParsedSlack {}
 
 /// Two-phase parse. Cold start (`last_render_hash = None`) renders
 /// every thread; same path when `path` resolves to a legacy JSON tree.
@@ -710,11 +703,6 @@ fn array_field<'a>(v: &'a Value, key: &str) -> &'a [Value] {
         .and_then(|x| x.as_array())
         .map(|a| a.as_slice())
         .unwrap_or(&[])
-}
-
-#[allow(dead_code)] // exists so the dead-code linter doesn't flag the import
-fn _dummy_use() -> HashMap<(), ()> {
-    HashMap::new()
 }
 
 #[cfg(test)]
