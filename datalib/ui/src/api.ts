@@ -433,10 +433,6 @@ export function fetchAllJobs(limit = 50, signal?: AbortSignal): Promise<SyncJob[
   return getJson<SyncJob[]>(`/api/sync/jobs/all?${params.toString()}`, signal);
 }
 
-export function fetchJob(id: string, signal?: AbortSignal): Promise<SyncJob> {
-  return getJson<SyncJob>(`/api/sync/jobs/${encodeURIComponent(id)}`, signal);
-}
-
 export async function enqueueJob(
   req: { kind: SyncJobKind; source_name?: string | null },
   signal?: AbortSignal,
@@ -526,12 +522,6 @@ export async function fetchFrontend(signal?: AbortSignal): Promise<FrontendView>
   const r = await fetch("/api/frontend", { signal });
   if (!r.ok) throw new Error(`GET /api/frontend → ${r.status}`);
   return (await r.json()) as FrontendView;
-}
-
-export async function fetchLib(name: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, { signal });
-  if (!r.ok) throw new Error(`GET /api/lib/${name} → ${r.status}`);
-  return await r.text();
 }
 
 // `description` semantics match the backend: undefined keeps whatever

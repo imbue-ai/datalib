@@ -429,11 +429,6 @@ impl Config {
         expand_tilde(&s)
     }
 
-    /// Absolute path to the rendered-markdown tree.
-    pub fn rendered_md_path(&self) -> PathBuf {
-        self.data_root.join("rendered_md")
-    }
-
     /// Validate cross-source invariants (non-empty + unique names) and each
     /// source's provider-local rules (delegated to its `*-config` crate).
     /// Called by [`load_config`] after [`Config::normalize`].

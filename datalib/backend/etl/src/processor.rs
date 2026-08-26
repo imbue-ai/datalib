@@ -30,7 +30,6 @@ use crate::control::DownloadControl;
 use crate::download_metrics::DownloadMetrics;
 use crate::grid_index::RenderedMarkdown;
 use crate::progress::Progress;
-use crate::synthesize::Synthesizer;
 use datalib_obs::diagnostics::Diagnostics;
 
 /// One config-driven, monitorable unit of work the orchestrator runs.
@@ -82,15 +81,6 @@ pub trait Checkpoint: Send + Sync {
     /// Best-effort persist of whatever the owning processor has buffered so
     /// far, so an interrupt doesn't lose it.
     async fn checkpoint(&self) -> Result<()>;
-}
-
-/// An optional capability: a processor that can synthesize its own playback
-/// fixtures (the `--synthesize-playback-root` mode). Kept OFF the universal
-/// [`DataProcessor`] trait — only some download processors have it — so the
-/// core trait stays about the thing every processor does.
-pub trait HasSynthesizer {
-    /// The provider's fixture synthesizer.
-    fn synthesizer(&self) -> Box<dyn Synthesizer>;
 }
 
 /// A render processor emits each finished document through this callback;

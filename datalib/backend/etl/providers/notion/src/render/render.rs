@@ -974,20 +974,6 @@ fn collect_block_ids(
     }
 }
 
-pub fn thread_snippet(comment_rich_text_plain: &str) -> String {
-    let first_line = comment_rich_text_plain
-        .lines()
-        .next()
-        .unwrap_or("thread")
-        .to_string();
-    let s = if first_line.is_empty() {
-        "thread".into()
-    } else {
-        first_line
-    };
-    s.chars().take(60).collect()
-}
-
 pub fn thread_filename(discussion_id: &str) -> String {
     format!("{discussion_id}.md")
 }

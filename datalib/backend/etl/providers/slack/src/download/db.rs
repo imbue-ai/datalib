@@ -212,10 +212,6 @@ impl RawDb {
 
     // ── users ───────────────────────────────────────────────────────
 
-    pub async fn upsert_user(&self, payload: &Value) -> Result<()> {
-        self.upsert_users(std::slice::from_ref(payload)).await
-    }
-
     pub async fn upsert_users(&self, payloads: &[Value]) -> Result<()> {
         if payloads.is_empty() {
             return Ok(());

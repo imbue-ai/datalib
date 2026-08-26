@@ -195,11 +195,6 @@ impl WriteLock {
             .map(|_| ())
     }
 
-    /// True iff a `BEGIN ... COMMIT` batch is currently open.
-    pub async fn in_transaction(&self) -> bool {
-        self.inner.lock().await.tx_conn.is_some()
-    }
-
     /// Acquire write access. Returns a guard wrapping `&mut conn`.
     /// If a transaction is active, the guard hands out the held
     /// connection (so the caller's statements accumulate in the
@@ -656,21 +651,6 @@ fn derive_md_path(sidecar: &Path) -> Option<PathBuf> {
     let name = sidecar.file_name()?.to_str()?;
     let stem = name.strip_suffix(".grid_rows.json")?;
     Some(sidecar.with_file_name(format!("{stem}.md")))
-}
-
-/// Look up the on-disk render's fingerprint for one markdown. Caller
-/// uses this to decide whether to skip work (sync builds a bulk
-/// `HashMap<uuid, fingerprint>` once per source via [`load_fingerprints`]
-/// rather than calling this in a loop).
-pub async fn existing_fingerprint(
-    pool: &SqlitePool,
-    markdown_uuid: &str,
-) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT source_fingerprint FROM markdowns WHERE markdown_uuid = ?")
-        .bind(markdown_uuid)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.and_then(|r| r.try_get::<String, _>("source_fingerprint").ok()))
 }
 
 /// Bulk fingerprint snapshot. Used once per sync to populate the

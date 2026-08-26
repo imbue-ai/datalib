@@ -140,27 +140,4 @@ impl NotionOfficialClient {
         }
         self.request("GET", &format!("/comments{q}"), None).await
     }
-
-    pub async fn get_database(&self, database_id: &str) -> Result<Value, NotionOfficialError> {
-        self.request("GET", &format!("/databases/{database_id}"), None)
-            .await
-    }
-
-    pub async fn query_database(
-        &self,
-        database_id: &str,
-        start_cursor: Option<&str>,
-    ) -> Result<Value, NotionOfficialError> {
-        let mut body = serde_json::Map::new();
-        body.insert("page_size".into(), Value::from(PAGE_SIZE));
-        if let Some(c) = start_cursor {
-            body.insert("start_cursor".into(), Value::String(c.into()));
-        }
-        self.request(
-            "POST",
-            &format!("/databases/{database_id}/query"),
-            Some(&Value::Object(body)),
-        )
-        .await
-    }
 }

@@ -57,7 +57,3 @@ export function dismissToast(id: number): void {
   const i = toasts.findIndex((t) => t.id === id);
   if (i >= 0) toasts.splice(i, 1);
 }
-
-export function clearToasts(): void {
-  toasts.splice(0, toasts.length);
-}

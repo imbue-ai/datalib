@@ -13,6 +13,5 @@ pub mod download;
 pub mod mailbox_labels;
 pub mod processor;
 pub mod render;
-pub mod synthesize;
 
 pub use download::db;

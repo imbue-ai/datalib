@@ -25,9 +25,9 @@ use hmac::{Hmac, Mac};
 use prost::Message;
 use sha2::Sha256;
 
+use crate::backup;
 use crate::crypto::{derive_backup_key, derive_message_keys, normalize_passphrase};
 use crate::local;
-use crate::{backup, hex_lower};
 
 type HmacSha256 = Hmac<Sha256>;
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
@@ -203,13 +203,6 @@ fn encode_files_sidecar(names: &[String]) -> Vec<u8> {
         encode_one_delimited(&mut out, &frame);
     }
     out
-}
-
-/// Suppress "unused" complaint for the hex helper when only `write`
-/// is consumed (e.g. by the fixture binary).
-#[allow(dead_code)]
-fn _keep_hex_alive() -> String {
-    hex_lower(&[0])
 }
 
 #[cfg(test)]
