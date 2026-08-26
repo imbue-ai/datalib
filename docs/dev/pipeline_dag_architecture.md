@@ -349,26 +349,33 @@ rough dependency order:
   the runner's only throughput knob); the scheduler dispatches as many
   ready steps as the bound allows, so independent source chains overlap
   naturally.
-* **Subset sync** (`--sync <fringe-id>…`) **runs a subgraph, and only
-  that subgraph.** Scope is the selected download steps plus their
-  transitive dependents; every other step is declared up to date and
-  does nothing. Inside the subgraph, ordinary change propagation
-  applies, so the shared fan-in still re-runs only if a selected chain
-  actually moved. The UI's per-source / multi-select "Sync now" maps
-  onto it (`<name>.download` id convention), the whole selection as one
-  run.
+* **Subset sync** (`--sync <source-id>…`) **runs a subgraph, and only
+  that subgraph.** The runnable subgraph is the selected source steps
+  plus their transitive dependents, computed once before anything runs.
+  Every other step is reported `not_selected` and never considered.
+  Inside the subgraph, ordinary change propagation applies, so the
+  shared fan-in still re-runs only if a selected chain actually moved.
+  The UI's per-source / multi-select "Sync now" maps onto it
+  (`<name>.download` id convention), the whole selection as one run.
 
-  The rule is *reachability in the graph*, computed once before
-  anything runs — deliberately not a function of run-time state (what
-  succeeded before, whether an input exists, what ran earlier this
-  pass). Two reasons. **It makes the button mean what it says**: click
-  "sync yolink" and the set of steps that can move is readable straight
-  off the DAG, the same every time. If syncing yolink could also make
-  something happen for slack, that's spooky action at a distance — the
-  work done, and the time it takes, would depend on unrelated state the
-  user can't see. **And it's simpler**: one BFS over `dependents`
-  replaces per-step reasoning about first-runs and absent inputs, so
-  there's much less to get wrong.
+  The rule is *reachability in the graph*, deliberately not a function
+  of run-time state (what succeeded before, whether an input exists,
+  what ran earlier this pass). Two reasons. **It makes the button mean
+  what it says**: click "sync yolink" and the set of steps that can move
+  is readable straight off the DAG, the same every time. If syncing
+  yolink could also make something happen for slack, that's spooky
+  action at a distance — the work done, and the time it takes, would
+  depend on unrelated state the user can't see. **And it's simpler**:
+  one BFS over `dependents` replaces per-step reasoning about which
+  chains have data.
+
+  Steps outside the subgraph are still *walked*, because an in-subgraph
+  fan-in can depend on them: walking publishes their recorded output
+  versions, so consumers compare against the right thing, and gives
+  every step a terminal status for the report. They are never invoked.
+  `not_selected` is deliberately its own status rather than
+  `skipped_up_to_date` — "not part of this run" and "checked, and
+  current" are different facts, and the UI shows them differently.
 
   The accepted cost: pending work in an unselected chain stays pending.
   A source that downloaded yesterday but whose render failed is *not*
@@ -377,12 +384,38 @@ rough dependency order:
   quietly do broad work.
 
   This was originally built as an "up to date" decree that stopped at
-  the download step, which left never-run downstream steps dirty anyway:
-  the scheduler treats a step with no recorded successful run as dirty
-  (derived from `dag_state.json`, nothing anyone declares), and that
-  check ran ahead of the decree. On a fresh data root it rendered
-  sources nobody had downloaded, failed `Data`, and blocked the shared
-  fan-in for the chains that *were* selected (#152).
+  the download step, which left never-run downstream steps dirty anyway.
+  On a fresh data root it rendered sources nobody had downloaded, failed
+  `Data`, and blocked the shared fan-in for the chains that *were*
+  selected (#152).
+
+* **Staleness is one predicate with four clauses.** Inside the runnable
+  subgraph a step runs iff: it declares no inputs (its real input is
+  outside the graph, so the scheduler can't version it); **or** it has
+  never succeeded; **or** some input's version differs from the one it
+  consumed at its last success; **or** its own *fingerprint* differs
+  from the one recorded then. The fingerprint is a hash of everything
+  about the step that isn't its inputs — argv (which carries
+  `--params`), env overrides, declared patterns — so editing a step's
+  config in `config.toml` re-runs it even when nothing it reads moved.
+  Clause 2 is what makes "aborted last run" and "added to the config
+  since" the same case.
+
+* **Steps report a content version, not a boolean.** Per declared
+  output a step reports one version string derived from that output's
+  content (a dolt commit hash, a render cursor hash); two runs over the
+  same data report the same string, so "unchanged" is *derived* rather
+  than asserted and consumers skip on their own. An output a step says
+  nothing about is blake3-hashed by the runner instead — always
+  correct, and always slower, since it reads every byte. See
+  `docs/dev/step_protocol.md`.
+
+* **Every input has a producer.** An input path no step writes (a
+  staged Takeout export, a Signal backup) gets a synthesized `staged:`
+  source step that hashes the path and reports the hash as its output
+  version. The scheduler therefore never reads an input path itself,
+  there is no "external artifact" special case anywhere in it, and
+  `--sync staged:<path>` works like any other source.
 * **Run-wide `--now`** is exported by the runner to every step as
   `DATALIB_DAG_NOW` (sampled once when omitted) so all stamped
   outputs agree; reset controls (`--reset-and-redownload`,

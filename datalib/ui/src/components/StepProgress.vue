@@ -3,7 +3,9 @@
 // Done tasks are green (succeeded / skipped-up-to-date) or red
 // (failed; blocked shows muted — it never ran, its upstream failed),
 // running tasks flash yellow, todo tasks are the remaining blank
-// space. Multiple tasks run concurrently, so every running task's
+// space. Tasks outside this run's subgraph (a per-source sync leaves
+// most of the graph there) show as a faint outline: never considered,
+// as distinct from checked-and-current. Multiple tasks run concurrently, so every running task's
 // sub-detail is listed under the bar. When no board is known yet
 // (queued, legacy rows) we fall back to a single indeterminate bar.
 import { computed } from "vue";
@@ -21,6 +23,8 @@ function cellClass(state: string): string {
     case "done":
     case "skipped":
       return "ok";
+    case "not_selected":
+      return "not-selected";
     case "failed":
       return "failed";
     case "blocked":
@@ -49,7 +53,9 @@ const labelText = computed(() => {
   const ts = tasks.value;
   if (ts) {
     const terminal = ts.filter((t) =>
-      ["done", "skipped", "failed", "blocked"].includes(t.state),
+      ["done", "skipped", "not_selected", "failed", "blocked"].includes(
+        t.state,
+      ),
     ).length;
     const failed = ts.filter((t) => t.state === "failed").length;
     const base = `${terminal}/${ts.length} tasks`;
@@ -133,6 +139,12 @@ const labelText = computed(() => {
 }
 .cell.blocked {
   background: var(--datalib-muted);
+}
+/* Outside this run's subgraph: never considered. Deliberately fainter
+   than `blocked` (which did get considered, and was poisoned). */
+.cell.not-selected {
+  background: var(--datalib-muted);
+  opacity: 0.35;
 }
 .cell.running {
   background: #d4a017;

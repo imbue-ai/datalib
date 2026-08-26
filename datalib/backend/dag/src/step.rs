@@ -6,7 +6,15 @@
 //! cursors, dedup indexes, retry bookkeeping all live behind the
 //! step's own artifacts. The scheduler relies only on the advertised
 //! guarantees: idempotent re-invocation, atomic outputs, and honest
-//! change reporting.
+//! version reporting.
+//!
+//! A step reports one *version string* per output it has something to
+//! say about. The version is meant to be derived from the output's
+//! content (a dolt commit hash, a row-set hash, a cursor hash), so
+//! "unchanged" is something the scheduler *derives* — two runs over
+//! the same data report the same string — rather than something the
+//! step asserts. An output the step says nothing about is content
+//! hashed by the scheduler instead: always correct, just slower.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -36,16 +44,77 @@ pub struct StepSpec {
     /// How to run it. In-process today; a spawned subprocess under the
     /// same contract.
     pub run: StepRun,
+    /// Optional author-declared version of the step's own behavior,
+    /// for steps whose output can change without their command line
+    /// changing — a renderer whose formatting was reworked, say. It
+    /// feeds the fingerprint, so bumping it re-runs the step once.
+    /// Most steps leave this `None`: argv already covers `params`.
+    pub code_version: Option<String>,
 }
 
 impl StepSpec {
+    /// Everything about this step except the *contents* of what it
+    /// reads, as the bytes its fingerprint is taken over: the command it
+    /// runs, its environment overrides, and the artifact patterns it
+    /// declares — inputs included, since editing an `inputs =` line
+    /// changes what the step is.
+    ///
+    /// This is what makes a config edit invalidate a step. A step whose
+    /// `params` changed has different argv (the runner appends
+    /// `--params JSON`), so it fingerprints differently and is stale
+    /// even though its inputs did not move. In-process steps have no
+    /// argv; they contribute their id, which is enough for tests and
+    /// for the built-in steps the runner synthesizes.
+    pub fn fingerprint_material(&self) -> String {
+        let mut m = String::new();
+        m.push_str(&self.id);
+        m.push('\u{1}');
+        for i in &self.inputs {
+            m.push_str(i.as_str());
+            m.push('\u{2}');
+        }
+        m.push('\u{1}');
+        for o in &self.outputs {
+            m.push_str(o.as_str());
+            m.push('\u{2}');
+        }
+        m.push('\u{1}');
+        m.push_str(self.code_version.as_deref().unwrap_or(""));
+        m.push('\u{1}');
+        match &self.run {
+            StepRun::InProcess(_) => m.push_str("in-process"),
+            StepRun::Subprocess { argv, env } => {
+                for a in argv {
+                    m.push_str(a);
+                    m.push('\u{2}');
+                }
+                m.push('\u{1}');
+                for (k, v) in env {
+                    m.push_str(k);
+                    m.push('=');
+                    m.push_str(v);
+                    m.push('\u{2}');
+                }
+            }
+        }
+        m
+    }
+
     pub fn new(id: impl Into<String>, run: StepRun) -> Self {
         Self {
             id: id.into(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             run,
+            code_version: None,
         }
+    }
+
+    /// Declare a version for the step's own behavior. See
+    /// [`StepSpec::code_version`].
+    pub fn code_version(mut self, v: impl Into<String>) -> Self {
+        self.code_version = Some(v.into());
+        self
     }
 
     pub fn input(mut self, pat: &str) -> Self {
@@ -107,12 +176,12 @@ pub struct StepCtx {
     /// patterns (producer outputs + external artifacts), relative to
     /// `data_root`.
     pub inputs: Vec<ArtifactPat>,
-    /// The subset of `inputs` whose version changed since this step
-    /// last succeeded. Empty on a first run (everything is new — see
-    /// `first_run`).
+    /// The subset of `inputs` whose version differs from the one this
+    /// step consumed at its last success. Empty when the step has no
+    /// last success to compare against — it is running because it has
+    /// never completed, or because its own definition changed, so
+    /// "what moved" has no meaning and the step should do all its work.
     pub changed_inputs: Vec<ArtifactPat>,
-    /// True when the scheduler has no record of a prior successful run.
-    pub first_run: bool,
     /// Progress/log emitter, already tagged with this step's id.
     pub progress: StepProgress,
 }
@@ -130,60 +199,40 @@ impl StepCtx {
     }
 }
 
-/// Per-output report: did this artifact change, and (optionally) what
-/// is its content version now. `path` must be one of the step's
-/// declared outputs.
+/// Per-output report: the content version of this artifact now.
+/// `path` must be one of the step's declared outputs.
+///
+/// The version is opaque to the scheduler — it only ever compares it
+/// for equality with the version a consumer recorded. What matters is
+/// that it is a function of the output's *content*: a step that ran
+/// twice over the same data must report the same string both times, or
+/// consumers re-run for nothing. A dolt commit hash, a row-set hash,
+/// or a render cursor's hash all qualify; a timestamp does not.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactState {
     pub path: ArtifactPat,
-    /// `None` → "scheduler, decide for yourself" (content hash).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changed: Option<bool>,
-    /// Content version the step vouches for (e.g. a row-set hash or a
-    /// dolt commit hash). `None` → scheduler computes a tree hash.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
+    /// Content version the step vouches for.
+    pub version: String,
 }
 
 impl ArtifactState {
-    pub fn changed(path: &ArtifactPat) -> Self {
-        Self {
-            path: path.clone(),
-            changed: Some(true),
-            version: None,
-        }
-    }
-    pub fn unchanged(path: &ArtifactPat) -> Self {
-        Self {
-            path: path.clone(),
-            changed: Some(false),
-            version: None,
-        }
-    }
     pub fn versioned(path: &ArtifactPat, version: impl Into<String>) -> Self {
         Self {
             path: path.clone(),
-            changed: None,
-            version: Some(version.into()),
+            version: version.into(),
         }
     }
 }
 
-/// What a successful step reports. An empty `outputs` list means "I
-/// have nothing to say about my outputs" — the scheduler content-hashes
-/// each declared output to find out what changed.
+/// What a successful step reports. A declared output missing from
+/// `outputs` means "I have nothing to say about this one" — the
+/// scheduler content-hashes it instead. That is always correct and
+/// always slower, so first-party steps report a version for every
+/// output they declare.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StepOutcome {
     #[serde(default)]
     pub outputs: Vec<ArtifactState>,
-}
-
-impl StepOutcome {
-    pub fn unchanged_all() -> Self {
-        // Marker resolved by the scheduler against the declared
-        // outputs (we don't have them here).
-        Self { outputs: vec![] }
-    }
 }
 
 /// Failure classification — the part of a failure the scheduler acts

@@ -70,15 +70,26 @@ pub async fn run(
     if let Some(h) = commit.as_deref() {
         tracing::info!(commit = h, "grid_index: committed");
     }
+    // HEAD, not the commit this run happened to make: `commit_run`
+    // returns `None` both without doltlite *and* when the working tree
+    // was already clean. Reporting no version in the clean case would
+    // drop us to the tree hash — a digest from a different hash space
+    // than the dolt hash reported last time — so every no-op run after
+    // a real change would read as changed.
+    let version = datalib_etl::doltlite_raw::head_commit(&pool)
+        .await
+        .context("grid_index head")?;
     pool.close().await;
 
-    // The dolt commit hash is a faithful logical version: a new one
-    // exists iff rows changed. Without doltlite (stock-sqlite dev
-    // builds) there's no hash; claim changed/unchanged and let the
-    // scheduler carry versions.
-    Ok(vec![OutputClaim {
-        path: OUT_REL.to_string(),
-        changed: Some(summary.markdowns_loaded > 0),
-        version: commit,
-    }])
+    // The dolt commit hash is a faithful content version: HEAD only
+    // advances when rows actually changed. Without doltlite
+    // (stock-sqlite dev builds) there is no hash and we report nothing,
+    // so the runner hashes the index instead.
+    match version {
+        Some(version) => Ok(vec![OutputClaim {
+            path: OUT_REL.to_string(),
+            version,
+        }]),
+        None => Ok(vec![]),
+    }
 }

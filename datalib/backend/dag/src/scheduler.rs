@@ -2,16 +2,22 @@
 //! skipping steps whose inputs are unchanged, retrying failures by
 //! kind, and poisoning the subtree below a failure.
 //!
-//! Scheduling semantics (from the design doc + addendum):
+//! Scheduling semantics:
 //!
-//! * A step with no inputs (a download step — its real input is the
-//!   remote service, which the scheduler can't version) is always
-//!   invoked; its internal incrementality makes that cheap, and it
-//!   reports whether its outputs actually changed.
-//! * A step with inputs is invoked iff it has never succeeded or some
-//!   input artifact's version differs from what it saw at its last
-//!   success. An invoked step may still report all outputs unchanged,
-//!   in which case its dependents skip.
+//! * The run executes a *runnable subgraph*: the source steps this run
+//!   selected plus everything downstream of them. With no `--sync` that
+//!   is the whole graph. Steps outside it are reported `NotSelected`
+//!   and cannot run, whatever their state.
+//! * Inside the subgraph a step runs iff it is **stale**, which is one
+//!   predicate with four clauses: it declares no inputs (its real input
+//!   is outside the graph, so it always runs); or it has never
+//!   succeeded; or some input's version differs from the one it
+//!   consumed at its last success; or its own fingerprint — argv,
+//!   env, declared patterns — differs from the one recorded then.
+//! * A step reports a content-derived version per output. Two runs over
+//!   the same data report the same string, so "unchanged" is derived
+//!   rather than asserted, and consumers skip. An output the step says
+//!   nothing about is content hashed instead.
 //! * A failed step blocks its dependents *this run*, but any partial
 //!   output versions it reported are recorded — steps are
 //!   incremental, so the next run resumes from the committed partial
@@ -70,20 +76,11 @@ pub struct Runner {
     pub parallelism: usize,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
-    /// Subset-sync mode: the fringe steps (those with no declared
-    /// inputs — the download steps, whose real input is a remote
-    /// service) the user asked to sync. This run touches those steps
-    /// and their transitive dependents; every other step is declared
-    /// up to date and does nothing at all. Inside that subgraph,
-    /// ordinary change propagation applies, so a shared fan-in
-    /// (index/qmd) still re-runs only if a selected chain moved.
-    /// `None` (the default) puts the whole graph in scope.
-    ///
-    /// "Sync yolink" means yolink. If clicking it made something
-    /// happen for slack, that's spooky action at a distance — the
-    /// button would no longer mean what it says, and its cost would
-    /// depend on unrelated state the user can't see. See
-    /// [`Runner::in_scope`].
+    /// Subset-sync mode: the source steps (those with no declared
+    /// inputs) the user asked to sync. The run executes those steps
+    /// plus their transitive dependents and nothing else; `None` (the
+    /// default) selects every source step, so the subgraph is the whole
+    /// graph. See [`Runner::runnable_subgraph`].
     pub only_fringe: Option<std::collections::HashSet<String>>,
     /// Extra environment applied to every subprocess step — run-wide
     /// settings like `PATH` (with the binary dir prepended) and the
@@ -135,8 +132,15 @@ pub enum StepStatus {
     Succeeded {
         changed: usize,
     },
-    /// Inputs unchanged since last success; not invoked.
+    /// In the runnable subgraph, but up to date: same inputs, same
+    /// fingerprint as at its last success. Checked, and current.
     SkippedUpToDate,
+    /// Outside the runnable subgraph — this run didn't ask for it, so
+    /// it was never considered. Distinct from `SkippedUpToDate` on
+    /// purpose: "not part of this run" and "checked, and current" are
+    /// different facts, and a per-source sync makes the difference
+    /// visible in the UI's task list.
+    NotSelected,
     /// An upstream step failed (or was itself blocked); not invoked.
     Blocked {
         on: String,
@@ -151,6 +155,7 @@ impl StepStatus {
         match self {
             StepStatus::Succeeded { .. } => "succeeded",
             StepStatus::SkippedUpToDate => "skipped_up_to_date",
+            StepStatus::NotSelected => "not_selected",
             StepStatus::Blocked { .. } => "blocked",
             StepStatus::Failed { .. } => "failed",
         }
@@ -158,7 +163,7 @@ impl StepStatus {
     pub fn is_ok(&self) -> bool {
         matches!(
             self,
-            StepStatus::Succeeded { .. } | StepStatus::SkippedUpToDate
+            StepStatus::Succeeded { .. } | StepStatus::SkippedUpToDate | StepStatus::NotSelected
         )
     }
 }
@@ -194,9 +199,18 @@ impl RunReport {
 
 /// What the dispatcher decided for a ready step.
 enum Decision {
-    Run { ctx: StepCtx },
-    Skip,
-    Block { on: String },
+    Run {
+        ctx: StepCtx,
+    },
+    /// Up to date, or outside the runnable subgraph. Either way the
+    /// step's outputs keep the versions recorded for them, so consumers
+    /// compare against the right thing.
+    Skip {
+        status: StepStatus,
+    },
+    Block {
+        on: String,
+    },
 }
 
 impl Runner {
@@ -214,22 +228,17 @@ impl Runner {
 
         let n = graph.steps.len();
         // Current version of every concrete artifact, filled in as
-        // producers reach a terminal state. Externals have no producer
-        // to report on them, so they're hashed up front.
+        // producers reach a terminal state. Every artifact has a
+        // producer: `Graph::build` synthesizes a source step for any
+        // path the config leaves unwritten, so there is nothing for the
+        // scheduler to hash on its own behalf.
         let mut versions: HashMap<String, String> = HashMap::new();
         // Whether each artifact's version moved this run (drives the
         // per-output `changed` flag in the report).
         let mut changed_now: HashMap<String, bool> = HashMap::new();
-        for exts in &graph.external_inputs {
-            for a in exts {
-                let v = tree_version(&self.data_root.join(a.as_str()))
-                    .with_context(|| format!("hash external input {a}"))?;
-                versions.insert(a.as_str().to_string(), v);
-            }
-        }
 
         let mut status: Vec<Option<StepStatus>> = vec![None; n];
-        let in_scope = self.in_scope(graph);
+        let runnable = self.runnable_subgraph(graph);
         let mut attempts_taken: Vec<u32> = vec![0; n];
         let mut errors: Vec<Option<String>> = vec![None; n];
         let mut remaining_deps: Vec<usize> = graph.deps.iter().map(|d| d.len()).collect();
@@ -243,8 +252,8 @@ impl Runner {
             // real work is spawned.
             while running < self.parallelism {
                 let Some(i) = ready.pop_front() else { break };
-                match self.decide(graph, &state, &status, &in_scope, &versions, i) {
-                    Decision::Skip => {
+                match self.decide(graph, &state, &status, &runnable, &versions, i) {
+                    Decision::Skip { status: st } => {
                         // Outputs keep their last-recorded versions.
                         let prev = state.steps.get(&graph.steps[i].id);
                         for out in &graph.steps[i].outputs {
@@ -257,7 +266,7 @@ impl Runner {
                             versions.insert(out.as_str().to_string(), v);
                             changed_now.insert(out.as_str().to_string(), false);
                         }
-                        self.finish(graph, &mut status, i, StepStatus::SkippedUpToDate, None);
+                        self.finish(graph, &mut status, i, st, None);
                         release_dependents(graph, &mut remaining_deps, &mut ready, i);
                     }
                     Decision::Block { on } => {
@@ -298,7 +307,12 @@ impl Runner {
                 .unwrap_or_default();
             let st = match res {
                 Ok(outcome) => {
-                    match resolve_outputs(&self.data_root, spec, &outcome.outputs, &prior_outs) {
+                    match resolve_outputs(
+                        &self.data_root,
+                        spec,
+                        &graph.fingerprints[i],
+                        &outcome.outputs,
+                    ) {
                         Ok(resolved) => {
                             let mut changed = 0usize;
                             for (path, v) in &resolved {
@@ -321,6 +335,7 @@ impl Runner {
                                     input_versions,
                                     output_versions: resolved.into_iter().collect(),
                                     succeeded: true,
+                                    fingerprint: graph.fingerprints[i].clone(),
                                 },
                             );
                             StepStatus::Succeeded { changed }
@@ -342,9 +357,12 @@ impl Runner {
                     // explicitly reported artifacts — unreported ones
                     // may be mid-write and get re-hashed next run.)
                     if !step_err.outputs.is_empty() {
-                        if let Ok(resolved) =
-                            resolve_outputs(&self.data_root, spec, &step_err.outputs, &prior_outs)
-                        {
+                        if let Ok(resolved) = resolve_outputs(
+                            &self.data_root,
+                            spec,
+                            &graph.fingerprints[i],
+                            &step_err.outputs,
+                        ) {
                             let entry = state.steps.entry(spec.id.clone()).or_default();
                             for (path, v) in resolved {
                                 entry.output_versions.insert(path, v);
@@ -409,26 +427,30 @@ impl Runner {
         Ok(report)
     }
 
-    /// Which steps this run is allowed to touch. Everything, unless
-    /// subset-sync mode is on — then it's the selected download steps
-    /// plus their transitive dependents, i.e. exactly the subgraph the
-    /// user asked to sync.
+    /// The runnable subgraph: the source steps this run selected plus
+    /// their transitive dependents. With no subset-sync selection that
+    /// is every step.
     ///
-    /// Scope is *reachability in the graph*, computed once up front. It
-    /// deliberately doesn't depend on run-time state — not on what
-    /// succeeded before, not on whether an input exists, not on what
-    /// happened to run earlier this pass. That's what makes "sync
-    /// yolink" mean the same thing every time you click it: the set of
-    /// steps that can move is a property of the config, readable
-    /// straight off the DAG, not something you have to reconstruct from
-    /// the state file to predict.
+    /// This is reachability in the graph, computed once before anything
+    /// runs, and deliberately independent of run-time state — not what
+    /// succeeded before, not whether an input exists, not what happened
+    /// to run earlier this pass. It is what makes "sync yolink" mean
+    /// the same thing every time: the set of steps that can move is a
+    /// property of the config, readable off the DAG, rather than
+    /// something you reconstruct from the state file to predict.
     ///
     /// The cost is that pending work elsewhere stays pending — a source
     /// whose render failed yesterday isn't dragged along by an
     /// unrelated sync. That's the intended trade: it comes back on the
     /// next full run, and in exchange a per-source sync never does
     /// surprising work on someone else's chain.
-    fn in_scope(&self, graph: &Graph) -> Vec<bool> {
+    ///
+    /// Steps outside it are still walked, because an in-subgraph fan-in
+    /// can depend on them: walking publishes their recorded output
+    /// versions (so consumers compare against the right thing) and
+    /// gives every step a terminal status for the report. They are
+    /// never invoked.
+    fn runnable_subgraph(&self, graph: &Graph) -> Vec<bool> {
         let n = graph.steps.len();
         let Some(only) = &self.only_fringe else {
             return vec![true; n];
@@ -456,7 +478,7 @@ impl Runner {
         graph: &Graph,
         state: &DagState,
         status: &[Option<StepStatus>],
-        in_scope: &[bool],
+        runnable: &[bool],
         versions: &HashMap<String, String>,
         i: usize,
     ) -> Decision {
@@ -472,46 +494,84 @@ impl Runner {
             }
         }
 
+        // Outside the runnable subgraph: this run didn't ask for it, so
+        // it is not considered at all — not its state, not its inputs.
+        // "Sync yolink" means run yolink and leave the rest of the graph
+        // alone, including work that is genuinely pending elsewhere (a
+        // source downloaded yesterday whose render failed). Its outputs
+        // keep their recorded versions, so nothing downstream is
+        // spuriously dirtied, and the next full run picks it back up.
+        if !runnable[i] {
+            return Decision::Skip {
+                status: StepStatus::NotSelected,
+            };
+        }
+
         let spec = &graph.steps[i];
         let prev = state.steps.get(&spec.id);
-        let first_run = !prev.map(|s| s.succeeded).unwrap_or(false);
 
+        // Clause 1: no declared inputs. Its real input is outside the
+        // graph — a remote service for a download, a staged directory
+        // for a synthesized `staged:` step — so the scheduler cannot
+        // version it and always runs the step. Internal incrementality
+        // is what makes that cheap.
+        let no_inputs = spec.inputs.is_empty();
+        // Clause 2: never completed. Aborted last run, failed last run,
+        // or added to the config since — all the same fact, and all
+        // reasons to run. This overlaps clause 4 today (a step with no
+        // recorded success has no recorded fingerprint either, and the
+        // empty string differs from every real hash), but it is the
+        // honest statement of the rule and shouldn't lean on that
+        // coincidence.
+        let never_succeeded = !prev.map(|s| s.succeeded).unwrap_or(false);
+        // Clause 4: the step itself changed. Editing `params` in the
+        // config changes the argv the runner would execute, so the
+        // fingerprint moves and the step is stale even though nothing
+        // it reads did. State written before fingerprints existed has
+        // an empty string here, which differs from any real hash and
+        // costs one re-run.
+        let fingerprint_changed = prev
+            .map(|s| s.fingerprint != graph.fingerprints[i])
+            .unwrap_or(true);
+
+        // Clause 3: an input moved. Only meaningful against a recorded
+        // success — with no baseline there is nothing to compare, which
+        // is what clause 2 is for.
         let mut changed_inputs = Vec::new();
-        for a in &graph.resolved_inputs[i] {
-            let now = versions.get(a.as_str());
-            let before = prev.and_then(|s| s.input_versions.get(a.as_str()));
-            match (now, before) {
-                (Some(nv), Some(bv)) if nv == bv => {}
-                // New input artifact, version moved, or (defensively)
-                // no current version — treat as changed.
-                _ => changed_inputs.push(a.clone()),
+        if let Some(prev) = prev.filter(|p| p.succeeded) {
+            for a in &graph.resolved_inputs[i] {
+                let now = versions.get(a.as_str());
+                let before = prev.input_versions.get(a.as_str());
+                match (now, before) {
+                    (Some(nv), Some(bv)) if nv == bv => {}
+                    // Newly declared input, version moved, or (defensively)
+                    // no current version — treat as changed.
+                    _ => changed_inputs.push(a.clone()),
+                }
             }
         }
 
-        // Subset sync: anything out of scope is declared up to date,
-        // whatever its state. "Sync yolink" means run yolink and leave
-        // the rest of the graph alone — including work that is genuinely
-        // pending elsewhere (a source downloaded yesterday whose render
-        // failed). Skipped steps keep their recorded output versions, so
-        // nothing downstream is spuriously dirtied, and the next full
-        // run picks the pending work back up.
-        if !in_scope[i] {
-            return Decision::Skip;
-        }
-
-        // Fringe steps (no declared inputs) always run: their real
-        // input is a remote service the scheduler can't version.
-        let dirty = first_run || spec.inputs.is_empty() || !changed_inputs.is_empty();
-        if !dirty {
-            return Decision::Skip;
+        let stale =
+            no_inputs || never_succeeded || fingerprint_changed || !changed_inputs.is_empty();
+        if !stale {
+            return Decision::Skip {
+                status: StepStatus::SkippedUpToDate,
+            };
         }
         Decision::Run {
             ctx: StepCtx {
                 step_id: spec.id.clone(),
                 data_root: self.data_root.clone(),
                 inputs: graph.resolved_inputs[i].clone(),
-                changed_inputs: if first_run { vec![] } else { changed_inputs },
-                first_run,
+                // "What moved" only means something when the step is
+                // running *because* something moved. If it never
+                // succeeded, or its own definition changed, it should
+                // redo all of its work.
+                changed_inputs: if never_succeeded || fingerprint_changed {
+                    vec![]
+                } else {
+                    changed_inputs
+                },
                 progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
             },
         }
@@ -562,11 +622,25 @@ fn step_summary(r: &StepReport) -> crate::events::StepSummary {
 /// Resolve a step's reported (possibly empty) output states to
 /// concrete `(path, version)` pairs for every declared output.
 /// Reporting on an undeclared output is a contract violation.
+///
+/// Two cases, and that is the whole protocol: the step supplied a
+/// version, or it didn't and we hash the tree. Hashing is always
+/// correct and always slower — it reads every file under the output —
+/// so first-party steps report a version for everything they declare.
+///
+/// The step's `fingerprint` is folded into every recorded version. A
+/// step reports on its *content*, and it has no way to know that its
+/// own definition changed — the runner never tells it. Without this, a
+/// bumped `code_version` re-runs the step (its fingerprint moved) but
+/// leaves the reported version identical, so consumers skip: the tree
+/// gets rebuilt while the index keeps serving what the old definition
+/// produced. Folding it in makes "produced by a different step" count
+/// as a change downstream, which is the conservative direction.
 fn resolve_outputs(
     data_root: &std::path::Path,
     spec: &StepSpec,
+    fingerprint: &str,
     reported: &[ArtifactState],
-    prior: &BTreeMap<String, String>,
 ) -> Result<Vec<(String, String)>> {
     let mut by_path: BTreeMap<&str, &ArtifactState> = BTreeMap::new();
     for r in reported {
@@ -583,26 +657,14 @@ fn resolve_outputs(
     for o in &spec.outputs {
         let path = o.as_str();
         let v = match by_path.get(path) {
-            // The step vouched for a version: trust it. This is the
-            // "thin declared output" from the design doc — mechanics
-            // (row-set hash, dolt commit, …) stay hidden.
-            Some(ArtifactState {
-                version: Some(v), ..
-            }) => v.clone(),
-            // The step says "unchanged": carry the prior version
-            // forward (hash if we never recorded one).
-            Some(ArtifactState {
-                changed: Some(false),
-                ..
-            }) => match prior.get(path) {
-                Some(v) => v.clone(),
-                None => tree_version(&data_root.join(path))?,
-            },
-            // Changed-without-version, or no report at all:
-            // content-hash the tree.
-            _ => tree_version(&data_root.join(path))?,
+            // The step vouched for a version: trust it. The mechanics
+            // behind it (row-set hash, dolt commit, cursor hash) stay
+            // the step's business.
+            Some(a) => a.version.clone(),
+            // Said nothing about this output: decide for ourselves.
+            None => tree_version(&data_root.join(path))?,
         };
-        out.push((path.to_string(), v));
+        out.push((path.to_string(), format!("{fingerprint}:{v}")));
     }
     Ok(out)
 }
@@ -702,7 +764,6 @@ mod tests {
                     std::fs::create_dir_all(&dir).unwrap();
                     let file = dir.join("data.txt");
                     let new = content.lock().unwrap().clone();
-                    let changed = std::fs::read_to_string(&file).ok().as_deref() != Some(&new);
                     std::fs::write(&file, &new).unwrap();
                     ctx.progress.set_length(Some(1));
                     ctx.progress.inc(1);
@@ -711,12 +772,13 @@ mod tests {
                         ctx.step_id.strip_suffix(".download").unwrap()
                     ))
                     .unwrap();
+                    // Stands in for a real download reporting its raw
+                    // store's dolt commit: derived from what was
+                    // written, so an unchanged poll reports the same
+                    // string without the step having to remember it.
+                    let version = blake3::hash(new.as_bytes()).to_hex().to_string();
                     Ok(StepOutcome {
-                        outputs: vec![if changed {
-                            ArtifactState::changed(&pat)
-                        } else {
-                            ArtifactState::unchanged(&pat)
-                        }],
+                        outputs: vec![ArtifactState::versioned(&pat, version)],
                     })
                 }
             }),
@@ -939,11 +1001,8 @@ mod tests {
 
         assert_eq!(fx.run_count("slack.download"), 2);
         assert_eq!(fx.run_count("email.download"), 1, "email must not sync");
-        assert_eq!(
-            rep.step("email.download").status,
-            StepStatus::SkippedUpToDate
-        );
-        assert_eq!(rep.step("email.render").status, StepStatus::SkippedUpToDate);
+        assert_eq!(rep.step("email.download").status, StepStatus::NotSelected);
+        assert_eq!(rep.step("email.render").status, StepStatus::NotSelected);
         assert_eq!(fx.run_count("slack.render"), 2);
         assert_eq!(fx.run_count("index"), 2);
         // The index saw only the synced chain as changed, and the
@@ -991,17 +1050,14 @@ mod tests {
 
         // The unselected chain must not be touched at all — not the
         // download (that part already worked), and not the render.
-        assert_eq!(
-            rep.step("email.download").status,
-            StepStatus::SkippedUpToDate
-        );
+        assert_eq!(rep.step("email.download").status, StepStatus::NotSelected);
         assert_eq!(
             fx.run_count("email.render"),
             0,
             "render of an unselected chain must not be invoked: its raw \
              store does not exist yet"
         );
-        assert_eq!(rep.step("email.render").status, StepStatus::SkippedUpToDate);
+        assert_eq!(rep.step("email.render").status, StepStatus::NotSelected);
 
         // ...so nothing is poisoned, and the fan-in still indexes the
         // chain the user asked to sync.
@@ -1070,8 +1126,10 @@ mod tests {
             .position(|s| s.id.as_str() == "takeout.render")
             .unwrap();
         assert!(
-            !g.external_inputs[ti].is_empty(),
-            "fixture must exercise the external-input path"
+            g.deps[ti]
+                .iter()
+                .any(|&d| g.steps[d].id.starts_with(crate::graph::STAGED_STEP_PREFIX)),
+            "fixture must exercise the staged-input path"
         );
 
         let r = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
@@ -1082,10 +1140,7 @@ mod tests {
             0,
             "a step no selected download feeds is out of scope"
         );
-        assert_eq!(
-            rep.step("takeout.render").status,
-            StepStatus::SkippedUpToDate
-        );
+        assert_eq!(rep.step("takeout.render").status, StepStatus::NotSelected);
         assert_eq!(fx.run_count("email.render"), 0);
         assert_eq!(
             std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
@@ -1146,10 +1201,7 @@ mod tests {
         assert!(rep2.all_ok(), "{rep2:#?}");
         assert_eq!(fx.run_count("email.download"), 1, "no poll");
         assert_eq!(fx.run_count("email.render"), 0, "no retry");
-        assert_eq!(
-            rep2.step("email.render").status,
-            StepStatus::SkippedUpToDate
-        );
+        assert_eq!(rep2.step("email.render").status, StepStatus::NotSelected);
         // The index was blocked in run 1 (email.render failed), so this
         // is its first run: slack reaches it, email contributes nothing.
         assert_eq!(fx.run_count("index"), 1);
@@ -1162,6 +1214,224 @@ mod tests {
             std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
             "EMAIL V1\nSLACK V1\n"
         );
+    }
+
+    /// A step's config changed but its inputs did not: it re-runs.
+    ///
+    /// Without this, editing `[steps.params]` in `config.toml` — a
+    /// widened date range, a changed render knob — silently does
+    /// nothing until some input happens to move, and the tree keeps
+    /// serving output built under the old config.
+    #[tokio::test]
+    async fn config_change_reruns_the_step_with_unchanged_inputs() {
+        let fx = Fixture::new();
+        let runs = Arc::new(AtomicU32::new(0));
+        // Same id, same inputs, same outputs — only the step's own
+        // definition differs, which is what a params edit amounts to.
+        let render_v = |tag: &'static str, runs: Arc<AtomicU32>| {
+            StepSpec::new(
+                "slack.render",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        let src = ctx.path_str("slack/raw/data.txt");
+                        let dir = ctx.path_str("slack/rendered_md");
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let text = std::fs::read_to_string(&src).unwrap_or_default();
+                        std::fs::write(
+                            std::path::Path::new(&dir).join("data.md"),
+                            format!("{tag}:{text}"),
+                        )
+                        .unwrap();
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/raw")
+            .output("slack/rendered_md")
+            .code_version(tag)
+        };
+        let graph_with = |tag: &'static str, runs: Arc<AtomicU32>| {
+            Graph::build(vec![
+                download(
+                    "slack",
+                    fx.slack_content.clone(),
+                    fx.runs["slack.download"].clone(),
+                ),
+                render_v(tag, runs),
+            ])
+            .unwrap()
+        };
+
+        let rep1 = runner(fx.root.path())
+            .run(&graph_with("v1", runs.clone()))
+            .await
+            .unwrap();
+        assert!(rep1.all_ok(), "{rep1:#?}");
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+        // Same config again: nothing moved, nothing re-runs.
+        let rep2 = runner(fx.root.path())
+            .run(&graph_with("v1", runs.clone()))
+            .await
+            .unwrap();
+        assert_eq!(
+            rep2.step("slack.render").status,
+            StepStatus::SkippedUpToDate
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "idempotent re-run");
+
+        // Config edited. The raw store is untouched, so only the
+        // fingerprint can catch this.
+        let rep3 = runner(fx.root.path())
+            .run(&graph_with("v2", runs.clone()))
+            .await
+            .unwrap();
+        assert!(rep3.all_ok(), "{rep3:#?}");
+        assert!(
+            matches!(
+                rep3.step("slack.render").status,
+                StepStatus::Succeeded { .. }
+            ),
+            "a config change must re-run the step: {:?}",
+            rep3.step("slack.render").status
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            std::fs::read_to_string(fx.root.path().join("slack/rendered_md/data.md")).unwrap(),
+            "v2:slack v1",
+            "the tree must be rebuilt under the new config"
+        );
+    }
+
+    /// A step added to the config after a successful run, consuming an
+    /// output that has *not* changed. It has no recorded success, so it
+    /// is stale and runs — same clause that retries an aborted step.
+    #[tokio::test]
+    async fn step_added_to_the_config_runs_against_unchanged_inputs() {
+        let fx = Fixture::new();
+        let g1 = Graph::build(vec![
+            download(
+                "slack",
+                fx.slack_content.clone(),
+                fx.runs["slack.download"].clone(),
+            ),
+            render("slack", fx.runs["slack.render"].clone()),
+        ])
+        .unwrap();
+        assert!(runner(fx.root.path()).run(&g1).await.unwrap().all_ok());
+
+        let audit_runs = Arc::new(AtomicU32::new(0));
+        let ar = audit_runs.clone();
+        let audit = StepSpec::new(
+            "slack.audit",
+            StepRun::in_process(move |ctx: StepCtx| {
+                let ar = ar.clone();
+                async move {
+                    ar.fetch_add(1, Ordering::SeqCst);
+                    let dir = ctx.path_str("slack/audit");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(std::path::Path::new(&dir).join("a.txt"), "audited").unwrap();
+                    Ok(StepOutcome::default())
+                }
+            }),
+        )
+        .input("slack/raw")
+        .output("slack/audit");
+
+        let g2 = Graph::build(vec![
+            download(
+                "slack",
+                fx.slack_content.clone(),
+                fx.runs["slack.download"].clone(),
+            ),
+            render("slack", fx.runs["slack.render"].clone()),
+            audit,
+        ])
+        .unwrap();
+        let rep = runner(fx.root.path()).run(&g2).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        // The download re-polled and found nothing new...
+        assert!(
+            matches!(
+                rep.step("slack.download").status,
+                StepStatus::Succeeded { changed: 0 }
+            ),
+            "{:?}",
+            rep.step("slack.download").status
+        );
+        // ...the existing render is up to date...
+        assert_eq!(rep.step("slack.render").status, StepStatus::SkippedUpToDate);
+        // ...and the new step still runs.
+        assert_eq!(audit_runs.load(Ordering::SeqCst), 1);
+        assert!(fx.root.path().join("slack/audit/a.txt").is_file());
+    }
+
+    /// An input that was real and then went away. Its version moves
+    /// from a content hash to `absent`, which is a difference like any
+    /// other, so its consumer re-runs and gets a chance to drop the
+    /// output built from data that no longer exists.
+    #[tokio::test]
+    async fn deleted_input_reruns_its_consumer() {
+        let root = tempfile::tempdir().unwrap();
+        let staged = root.path().join("takeout/staged");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("chat.json"), "v1").unwrap();
+
+        let runs = Arc::new(AtomicU32::new(0));
+        let rn = runs.clone();
+        let step = StepSpec::new(
+            "takeout.render",
+            StepRun::in_process(move |ctx: StepCtx| {
+                let rn = rn.clone();
+                async move {
+                    rn.fetch_add(1, Ordering::SeqCst);
+                    let dir = ctx.path_str("takeout/rendered_md");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    let out = std::path::Path::new(&dir).join("chat.md");
+                    match std::fs::read_to_string(ctx.path_str("takeout/staged/chat.json")) {
+                        Ok(text) => std::fs::write(out, text).unwrap(),
+                        // Source gone: drop what we rendered from it.
+                        Err(_) => {
+                            let _ = std::fs::remove_file(out);
+                        }
+                    }
+                    Ok(StepOutcome::default())
+                }
+            }),
+        )
+        .input("takeout/staged")
+        .output("takeout/rendered_md");
+
+        let g = Graph::build(vec![step]).unwrap();
+        let r = runner(root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert!(root.path().join("takeout/rendered_md/chat.md").is_file());
+
+        // The user deletes the staged export.
+        std::fs::remove_dir_all(&staged).unwrap();
+
+        let rep = r.run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "a deleted input must re-run its consumer, not read as unchanged"
+        );
+        assert!(
+            !root.path().join("takeout/rendered_md/chat.md").exists(),
+            "the consumer got its chance to drop output built from data that is gone"
+        );
+
+        // And it settles: still absent next run, so nothing re-runs.
+        let rep = r.run(&g).await.unwrap();
+        assert_eq!(
+            rep.step("takeout.render").status,
+            StepStatus::SkippedUpToDate
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -1274,7 +1544,10 @@ mod tests {
                         let pat = crate::ArtifactPat::parse("src/raw").unwrap();
                         return Err(
                             StepError::new(FailureKind::Auth, anyhow::anyhow!("HTTP 401"))
-                                .with_outputs(vec![ArtifactState::changed(&pat)]),
+                                .with_outputs(vec![ArtifactState::versioned(
+                                    &pat,
+                                    blake3::hash(b"partial").to_hex().to_string(),
+                                )]),
                         );
                     }
                     std::fs::write(dir.join("data.txt"), "complete").unwrap();

@@ -10,10 +10,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// The version of an artifact that does not exist on disk. Distinct
-/// from every real tree hash, so "not yet produced" never compares
-/// equal to a real version — and lets the scheduler tell "no data
-/// upstream" apart from "data that happens to be unchanged".
+/// The version reported for an artifact that does not exist on disk.
+/// A real version is a 64-character blake3 digest, so this six-letter
+/// word cannot collide with one.
+///
+/// The scheduler does not special-case it: it is compared for equality
+/// like any other version, which gives the right answer in both
+/// directions. A path that was never produced and still isn't compares
+/// equal to itself, so a consumer that already recorded it is not
+/// dirtied; a path that existed and was deleted moves from a real
+/// digest to this, which is a difference, so its consumers re-run.
 pub const ABSENT: &str = "absent";
 
 /// Hash the tree (or single file) at `path`. Deterministic: files are

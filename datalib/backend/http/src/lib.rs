@@ -739,15 +739,16 @@ fn validate_config_text(text: &str) -> anyhow::Result<Vec<String>> {
 
 /// Run the runner's own validation over a parsed config and return its
 /// source step ids. Nothing is executed here.
+///
+/// Taken from the built graph rather than re-derived from `cfg.steps`,
+/// so this list is exactly what `--sync` accepts. The graph adds
+/// `staged:<path>` source steps for inputs the config leaves unwritten;
+/// re-deriving from the config would silently omit them and a staged
+/// source could never be synced from the UI.
 fn check_dag_config(cfg: &datalib_dag::config::DagConfig) -> anyhow::Result<Vec<String>> {
     let specs = datalib_dag::config::to_specs(cfg)?;
-    datalib_dag::Graph::build(specs)?;
-    Ok(cfg
-        .steps
-        .iter()
-        .filter(|e| e.inputs.is_empty())
-        .map(|e| e.id.clone())
-        .collect())
+    let graph = datalib_dag::Graph::build(specs)?;
+    Ok(graph.fringe_ids().into_iter().map(str::to_string).collect())
 }
 
 #[derive(Debug, Serialize)]

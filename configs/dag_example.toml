@@ -30,6 +30,13 @@
 # in, so a step's plain keys come first and its params headers last;
 # likewise `data_root` below has to precede the first `[[steps]]`.
 #
+# Editing a step re-runs it. The runner fingerprints each step over its
+# command, `params`, `env` and declared paths, so changing any of them
+# makes the step stale even when nothing it reads has moved — widen a
+# `since`, flip a render knob, and the next run rebuilds that step's
+# output. An optional `code_version = "..."` covers the remaining case:
+# a step whose behavior changed without its command line changing.
+#
 #   bazelisk build //datalib/backend:bin
 #   bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
 #

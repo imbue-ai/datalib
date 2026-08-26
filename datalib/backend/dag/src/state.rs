@@ -1,6 +1,7 @@
 //! Persisted scheduler state: per step, the input/output artifact
-//! versions as of its last successful run. This is what makes "did my
-//! inputs change since I last ran?" answerable across process
+//! versions and the step fingerprint as of its last successful run.
+//! This is what makes "is this step still up to date with the inputs
+//! and the config it would run under?" answerable across process
 //! restarts.
 //!
 //! Lives at `<data_root>/system/dag_state.json` — alongside the
@@ -40,6 +41,15 @@ pub struct StepState {
     /// Whether the step has ever completed successfully.
     #[serde(default)]
     pub succeeded: bool,
+    /// The step's own fingerprint as of its last success: a hash over
+    /// its definition — argv (which carries `--params`), env overrides,
+    /// and the artifact patterns it declares. Not the contents of what
+    /// it reads; those are `input_versions`. A step whose fingerprint no longer matches is
+    /// stale even when every input is untouched, which is how a config
+    /// edit takes effect. Empty for state written before fingerprints
+    /// existed; treated as "unknown", which forces one re-run.
+    #[serde(default)]
+    pub fingerprint: String,
 }
 
 impl DagState {
@@ -85,6 +95,7 @@ mod tests {
                 input_versions: BTreeMap::new(),
                 output_versions: BTreeMap::from([("slack/raw".into(), "abc".into())]),
                 succeeded: true,
+                fingerprint: "fp-1".into(),
             },
         );
         st.save(td.path()).unwrap();
@@ -94,6 +105,7 @@ mod tests {
             back.steps["slack.download"].output_versions["slack/raw"],
             "abc"
         );
+        assert_eq!(back.steps["slack.download"].fingerprint, "fp-1");
     }
 
     #[test]

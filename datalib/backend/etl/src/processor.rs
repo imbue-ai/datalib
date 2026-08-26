@@ -27,7 +27,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::control::DownloadControl;
-use crate::download_metrics::{DownloadMetrics, DownloadReport};
+use crate::download_metrics::DownloadMetrics;
 use crate::grid_index::RenderedMarkdown;
 use crate::progress::Progress;
 use crate::synthesize::Synthesizer;
@@ -80,37 +80,8 @@ pub struct PlanContext {
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
     /// Best-effort persist of whatever the owning processor has buffered so
-    /// far, so an interrupt doesn't lose it. Returns the source's partial
-    /// "what changed" [`DownloadReport`] when it has one — assembled
-    /// source-side, so the orchestrator collects it without ever reading the
-    /// store. `None` for sources that keep no reportable store.
-    async fn checkpoint(&self) -> Result<Option<DownloadReport>>;
-}
-
-/// A one-slot mailbox a store-backed download processor publishes its
-/// [`DownloadReport`] into; the orchestrator reads it back through the run
-/// result. Interior-mutable so the source can publish through a shared
-/// `&RunCtx`.
-#[derive(Default)]
-pub struct ReportCell {
-    inner: Mutex<Option<DownloadReport>>,
-}
-
-impl ReportCell {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Publish the source's report (replaces any prior one — a source has at
-    /// most one store-backed download processor).
-    pub fn publish(&self, report: DownloadReport) {
-        *self.inner.lock().unwrap() = Some(report);
-    }
-
-    /// Take the published report, if any.
-    pub fn take(&self) -> Option<DownloadReport> {
-        self.inner.lock().unwrap().take()
-    }
+    /// far, so an interrupt doesn't lose it.
+    async fn checkpoint(&self) -> Result<()>;
 }
 
 /// An optional capability: a processor that can synthesize its own playback
@@ -197,14 +168,10 @@ pub struct RunCtx<'a> {
     /// Where download processors register their interrupt-commit hooks.
     checkpoints: &'a CheckpointSink,
     /// Per-source "what changed" counters + WARN/ERROR buffer — the ambient
-    /// observability the source folds into its own [`DownloadReport`]. `None` on
-    /// a render context. (Observability, not storage: the orchestrator
-    /// installs these as ambient scopes; the source reads them to self-report.)
+    /// observability the orchestrator installs as scopes. `None` on a render
+    /// context.
     metrics: Option<Arc<DownloadMetrics>>,
     diagnostics: Option<Arc<Diagnostics>>,
-    /// Where a download processor publishes its source-assembled report; the
-    /// orchestrator reads it back through the run result. `None` on render.
-    report: Option<&'a ReportCell>,
     /// Where render processors send finished documents (fused Load).
     /// `None` on a download context.
     emit: Option<DocSink<'a>>,
@@ -225,7 +192,6 @@ impl<'a> RunCtx<'a> {
         checkpoints: &'a CheckpointSink,
         metrics: Arc<DownloadMetrics>,
         diagnostics: Arc<Diagnostics>,
-        report: &'a ReportCell,
     ) -> Self {
         Self {
             name,
@@ -237,7 +203,6 @@ impl<'a> RunCtx<'a> {
             checkpoints,
             metrics: Some(metrics),
             diagnostics: Some(diagnostics),
-            report: Some(report),
             emit: None,
         }
     }
@@ -265,7 +230,6 @@ impl<'a> RunCtx<'a> {
             checkpoints,
             metrics: None,
             diagnostics: None,
-            report: None,
             emit: Some(DocSink {
                 cb: Mutex::new(on_doc),
             }),
@@ -280,12 +244,11 @@ impl<'a> RunCtx<'a> {
     }
 
     /// Open a doltlite [`RawStoreSession`](crate::raw_store::RawStoreSession)
-    /// over a source's write `pool`: captures the before-snapshot and registers
-    /// the session's interrupt-commit `Checkpoint` (which also reports on
-    /// interrupt). The processor calls `session.finish(self, summary)` after
-    /// the fetch. This is the uniform "doltlite-backed source" entry point —
-    /// all the snapshot/commit/report machinery lives in `etl`, not here and
-    /// not in the orchestrator.
+    /// over a source's write `pool` and register the session's
+    /// interrupt-commit `Checkpoint`. The processor calls
+    /// `session.finish(self, summary)` after the fetch. This is the uniform
+    /// "doltlite-backed source" entry point — the commit machinery lives in
+    /// `etl`, not here and not in the orchestrator.
     pub async fn open_store(
         &self,
         pool: sqlx::sqlite::SqlitePool,
@@ -306,14 +269,6 @@ impl<'a> RunCtx<'a> {
         self.diagnostics
             .clone()
             .expect("diagnostics() on a non-download RunCtx")
-    }
-
-    /// Publish the source-assembled [`DownloadReport`] for this source. No-op on
-    /// a context without a report cell.
-    pub fn publish_report(&self, report: DownloadReport) {
-        if let Some(cell) = self.report {
-            cell.publish(report);
-        }
     }
 
     /// Emit a finished rendered document (render processors only). Errors
