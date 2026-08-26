@@ -308,11 +308,17 @@ the backend-side row + discriminated payload schema is the hand-written
 
 Each `POST /api/feedback` inserts a row **and** runs
 `SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
-connection so the commit covers exactly the row we just wrote — no
-chance of a concurrent writer's INSERT slipping into the same
-`dolt_log` entry. Doltlite's working set is per-file, not
-per-connection, so a sibling task on a different pool connection
-sees the commit immediately.
+connection, so the commit covers exactly the row just written.
+
+What makes that true is the **file**, not the connection. Doltlite's
+working set is per-file and shared across processes, so `-Am` commits
+whatever else is dirty in the same file — while `feedback` lived in the
+index database that the `grid_index` step also writes, a submission
+during a sync had its row swept into the step's commit and its own
+commit then failed `nothing to commit`. `system/feedback.doltlite_db`
+has one writer, which is what the exactness rests on. The
+same-connection discipline only keeps the INSERT and the commit on one
+HEAD; it isolates nothing by itself.
 
 Bazel stamps the binary with the git hash via
 `tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
