@@ -23,7 +23,7 @@ use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-pub use client::{GitLabClient, GitLabError, BASE, PER_PAGE};
+pub use client::{gitlab_client, GitLabClient, GitLabError, BASE, PER_PAGE};
 pub use db::{
     block_on_load_all, db_path_for, LoadedDiscussion, LoadedMergeRequest, LoadedRaw, RawDb,
 };
@@ -301,7 +301,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
 
-    let client = GitLabClient::new();
+    let client = gitlab_client();
     let mut summary = FetchSummary::default();
     // Whether discovery actually covered every scope this run. Only then
     // has the run satisfied `refresh_window_days`; see `scope_config`.

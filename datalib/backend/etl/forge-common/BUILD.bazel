@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_forge_common",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_forge_common",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:once_cell",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "forge_common_unittests",
+    size = "small",
+    crate = ":datalib_etl_forge_common",
+    edition = "2021",
+)

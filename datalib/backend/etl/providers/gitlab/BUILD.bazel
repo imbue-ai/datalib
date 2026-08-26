@@ -18,6 +18,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/forge-common:datalib_etl_forge_common",
         "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
         "//datalib/backend/index_lib:datalib_index_lib",
         "//datalib/backend/schema:datalib_schema",
@@ -47,6 +48,7 @@ rust_binary(
     deps = [
         ":datalib_etl_gitlab",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/forge-common:datalib_etl_forge_common",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -70,6 +72,7 @@ rust_test(
     deps = [
         ":datalib_etl_gitlab",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/forge-common:datalib_etl_forge_common",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -93,6 +96,7 @@ rust_test(
     deps = [
         ":datalib_etl_gitlab",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/forge-common:datalib_etl_forge_common",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

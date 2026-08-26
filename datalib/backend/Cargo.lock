@@ -1291,6 +1291,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-forge-common"
+version = "0.28.0"
+dependencies = [
+ "datalib-etl",
+ "once_cell",
+ "regex",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "datalib-etl-fsindex"
 version = "0.28.0"
 dependencies = [
@@ -1322,6 +1333,7 @@ dependencies = [
  "chrono",
  "clap",
  "datalib-etl",
+ "datalib-etl-forge-common",
  "datalib-etl-macros",
  "datalib-index-lib",
  "datalib-obs",
@@ -1349,6 +1361,7 @@ dependencies = [
  "chrono",
  "clap",
  "datalib-etl",
+ "datalib-etl-forge-common",
  "datalib-etl-macros",
  "datalib-index-lib",
  "datalib-obs",

@@ -36,6 +36,7 @@ members = [
     "etl/providers/whatsapp",
     "etl/chat-common",
     "etl/contact-common",
+    "etl/forge-common",
     "applets",
     # NOTE: datalib_migrate_config, source_common, and the provider
     # *_config crates are bazel-only (no Cargo.toml). This workspace

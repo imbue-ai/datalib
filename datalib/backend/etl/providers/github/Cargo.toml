@@ -14,6 +14,7 @@ path = "src/bin/github_download.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
+datalib-etl-forge-common = { path = "../../forge-common" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-obs = { path = "../../../obs" }
 datalib-time = { path = "../../../time" }
