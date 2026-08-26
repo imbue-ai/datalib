@@ -120,6 +120,53 @@ impl<'a> std::fmt::LowerHex for BytesAsHex<'a> {
     }
 }
 
+/// Snapshot-stable rendering of `grid_rows.source_url`.
+///
+/// Web URLs pass through unchanged. `file://` URLs do NOT: a local
+/// corpus is addressed by absolute path, so under Bazel the value
+/// embeds the sandbox root — a username, a workspace hash, and a
+/// per-run sandbox number. Snapshotting that verbatim passes on the
+/// machine that generated it and fails on every other one, CI
+/// included.
+///
+/// We keep the scheme and the final path segment, which is what the
+/// assertion is actually about (this row points at *that document*, as
+/// a file URL) and drop the part that is a property of the machine.
+fn stable_source_url(v: Option<String>) -> Option<String> {
+    let u = v?;
+    let Some(rest) = u.strip_prefix("file://") else {
+        return Some(u);
+    };
+    let tail = rest.rsplit('/').next().unwrap_or(rest);
+    Some(format!("file://…/{tail}"))
+}
+
+/// Snapshot-stable rendering of `markdowns.row_set_hash`.
+///
+/// The hash is a SHA-256 over the document's grid rows. For a local
+/// corpus one of those fields is `source_url`, an ABSOLUTE `file://`
+/// URL — so under Bazel the hash folds in the sandbox root and differs
+/// on every machine. Normalizing the displayed `source_url` (see
+/// [`stable_source_url`]) is not enough: the hash is computed from the
+/// real value, which is how CI caught this after the display fix looked
+/// like it had solved it.
+///
+/// Redacting costs very little coverage here, because `row_set_hash` is
+/// derived entirely from rows this same snapshot already records
+/// field-by-field — uuid, kind, author, text_sha, and the rest. What is
+/// lost is only the absolute path prefix, which is a property of the
+/// machine rather than of the code.
+///
+/// Keyed on provider rather than on the hash's shape, so a second
+/// local-file source has to opt in deliberately instead of silently
+/// inheriting a redaction.
+fn stable_row_set_hash(provider: Option<&str>, v: Option<String>) -> Option<String> {
+    match provider {
+        Some("pdf") => Some("<machine-specific: rows embed an absolute path>".to_string()),
+        _ => v,
+    }
+}
+
 #[tokio::test]
 async fn snapshot_grid_rows_and_documents() {
     let db = fixture_db_path();
@@ -161,7 +208,9 @@ async fn snapshot_grid_rows_and_documents() {
                 "entire_chat": entire_chat,
                 "slack_link": r.try_get::<Option<String>, _>("slack_link").ok().flatten(),
                 "qmd_path": r.try_get::<Option<String>, _>("qmd_path").ok().flatten(),
-                "source_url": r.try_get::<Option<String>, _>("source_url").ok().flatten(),
+                "source_url": stable_source_url(
+                    r.try_get::<Option<String>, _>("source_url").ok().flatten(),
+                ),
                 "git_sha": r.try_get::<Option<String>, _>("git_sha").ok().flatten(),
                 "external_id": r.try_get::<Option<String>, _>("external_id").ok().flatten(),
                 "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
@@ -197,7 +246,10 @@ async fn snapshot_grid_rows_and_documents() {
                 "updated_at": r.try_get::<Option<String>, _>("updated_at").ok().flatten(),
                 "md_path": r.try_get::<Option<String>, _>("md_path").ok().flatten(),
                 "source_fingerprint": r.try_get::<Option<String>, _>("source_fingerprint").ok().flatten(),
-                "row_set_hash": r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
+                "row_set_hash": stable_row_set_hash(
+                    r.try_get::<String, _>("provider").ok().as_deref(),
+                    r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
+                ),
                 "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
                 "rendered_at": r.try_get::<Option<String>, _>("rendered_at").ok().flatten(),
             })

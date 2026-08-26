@@ -50,6 +50,13 @@ fn main() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Backs the grid's "Reveal in Finder" action. The webview is
+        // granted ONLY `reveal_item_in_dir` — see
+        // `capabilities/reveal-local-files.json`, which also explains
+        // why that capability needs a `remote` block at all (this app
+        // loads its UI from localhost as an external URL, and Tauri
+        // withholds IPC from remote origins by default).
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![version])
         .manage(HttpChild(Mutex::new(None)))
         .setup(|app| {

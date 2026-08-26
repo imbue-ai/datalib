@@ -2,6 +2,7 @@ load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//datalib/ui:vite/package_json.bzl", vite_bin = "bin")
+load("@npm//datalib/ui:vitest/package_json.bzl", vitest_bin = "bin")
 load("@npm//datalib/ui:vue-tsc/package_json.bzl", vue_tsc_bin = "bin")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -187,5 +188,38 @@ vue_tsc_bin.vue_tsc_test(
     data = [
         ":node_modules",
         ":typecheck_inputs",
+    ],
+)
+
+# The vitest unit suite. It existed as `pnpm test` for a while but was
+# reachable from nothing Bazel runs, so its 9 files sat outside the
+# `bazelisk test //...` gate that AGENTS.md calls the source of truth —
+# they could have gone red without anyone noticing. This target puts
+# them back inside it.
+#
+# `--run` is load-bearing: bare `vitest` starts a watcher and the test
+# action would never terminate.
+copy_to_bin(
+    name = "vitest_inputs",
+    srcs = glob(
+        [
+            "src/**",
+            "tests/**",
+        ],
+        allow_empty = False,
+    ) + [
+        "package.json",
+        "tsconfig.json",
+        "vite.config.ts",
+    ],
+)
+
+vitest_bin.vitest_test(
+    name = "unit_test",
+    args = ["--run"],
+    chdir = package_name(),
+    data = [
+        ":node_modules",
+        ":vitest_inputs",
     ],
 )
