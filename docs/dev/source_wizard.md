@@ -355,7 +355,7 @@ after a failed sync — just twenty minutes earlier.
 
 | op | meaning | Slack | email (JMAP) | pdf / fsindex |
 |---|---|---|---|---|
-| `auth` | credentials work; return an identity summary | `auth.test` | `.well-known/jmap` | n/a |
+| `auth` | credentials work; return an identity summary — **the only check available for user-registered services**, whose `credentialStatus` is always `unknown` | `auth.test` | `.well-known/jmap` | n/a |
 | `list.<resource>` | enumerate selectable things | `conversations.list` | `Mailbox/get` | n/a |
 | `inspect` | validate a path, summarize what's there | n/a | n/a | file count, total bytes, `needs_ocr` count |
 
@@ -406,8 +406,9 @@ Two more things make the wizard simpler than designed:
   definition carries
   `credentialCheckCurlArguments = ['https://slack.com/api/auth.test']`,
   which is where the `valid` status and the workspace-derived account
-  name come from. So `--op auth` is redundant for Slack; probes earn
-  their keep on `list.channels`.
+  name come from. So `--op auth` is redundant for Slack — though not in
+  general; see
+  [`credentialStatus` is only as good as latchkey's checker](#credentialstatus-is-only-as-good-as-latchkeys-checker).
 
 ### Registration is data, so browser login isn't only for built-ins
 
@@ -441,56 +442,110 @@ page script sets is not seen, and neither is one that an already
 signed-in session never sends again." Whether claude.ai sets `sessionKey`
 that way is an empirical question.
 
-### Coverage, with that in hand
+### Coverage: better than it looks, because latchkey matches by URL
 
-| datalib type | latchkey service | How the user connects |
+Two things I had wrong. First, **latchkey picks the service by matching
+the request URL against the service's `baseApiUrls`** — not by any name
+we pass it. `etl/src/http.rs` shells out to `latchkey curl <url>` and
+latchkey resolves from there; the string providers pass to
+`HttpRequest::get("jmap", …)` is our own tag for logging and
+impersonation routing, nothing more. The email provider's Gmail module
+says so in its header: *"it routes by URL host"*.
+
+Second, the 3.7.0 pin (#177) made **Fastmail built-in with OAuth**, and
+#175 added a Gmail REST path that lands on `gmail.googleapis.com` —
+which is the built-in `google-gmail` service. Both have browser login.
+
+Checked against a live `latchkey auth list` on a developer machine:
+
+| datalib source | latchkey service (URL-matched) | How the user connects |
 |---|---|---|
-| `slack_api` | `slack` (built-in) | **Browser.** Works today. |
-| `github_api` | `github` (built-in) | **Browser.** Works today. |
-| `claude_api` | `claude-ai` (we register) | **Browser, probably** — cookie-capture on `sessionKey`. Needs the test above. |
-| `chatgpt_api` | `chatgpt` (we register) | Token field. Cookie-capture yields a session cookie, but the downloader sends `Authorization: Bearer <accessToken>` read from `/api/auth/session` — a JSON field, not a cookie. Would need the downloader to change too. |
-| `gitlab_api` | `gitlab` (built-in) | Token field (`PRIVATE-TOKEN`); the built-in is set-only. |
-| `notion_api` | `notion` (built-in) | Token field. `notion-mcp` *is* browser-capable, but it's a different API surface (`mcp.notion.com`) — adopting it means rewriting the downloader, not swapping a string. |
-| `email` (JMAP) | `fastmail` + `fastmail-content` (we register) | Token field — a Fastmail API token, not a cookie. |
+| `slack_api` | `slack` — built-in | **Browser.** |
+| `github_api` | `github` — built-in | **Browser.** |
+| `email` (JMAP / Fastmail) | `fastmail` — built-in, OAuth | **Browser.** |
+| `email` (Gmail REST) | `google-gmail` — built-in, OAuth | **Browser**, after a one-time `auth browser-prepare` to mint an OAuth client. |
+| `claude_api` | `claude-ai` — user-registered | Token field today. Cookie-capture candidate (above). |
+| `chatgpt_api` | `chatgpt` — user-registered | Token field; the downloader wants a Bearer token from a JSON endpoint, not a cookie. |
+| `gitlab_api` | `gitlab` — built-in | Token field (`PRIVATE-TOKEN`); built-in is set-only. |
+| `notion_api` | `notion` — built-in | Token field. |
+| `carddav` (Fastmail DAV) | `fastmail-dav` — built-in | Token field — an app password, not OAuth. |
 
-So: two work now, a third likely does with a registration we write once,
-and the rest are token fields. The credential screen still has **two
-modes, chosen from `authOptions`** — it just gets to use the good one
-more often than "built-in vs not" would suggest:
+So **four sources get a Connect button**, not two — including the
+Gmail-over-IMAP-style onboarding that started this whole thread, which
+is now reachable rather than aspirational.
 
-- **`browser`** → one button, "Connect Slack". Backend runs
-  `latchkey ensure-browser` then `latchkey auth browser slack`, streams
-  status, then re-reads `services info` to confirm and to name the
-  account. Nothing is typed, nothing is pasted, latchkey is never named.
-- **`set`** → a labeled secret field ("Paste your Fastmail API token")
-  whose value the backend pipes to `latchkey auth set` **on stdin** —
-  never argv, which is world-readable via `ps` — after running the
-  descriptor's `register` block first for the user-registered services. Still no latchkey command for the user
-  to run; the existing `hints.rs` prose becomes the *how to get this
-  token* text beside the field, not an instruction to visit a terminal.
+### The screen still has two modes, chosen from `authOptions`
 
-The copy-this-command escape hatch stays available behind a
-disclosure, because it is the only thing that works when the server is
-headless.
+- **`browser`** → one button, "Connect Slack". The backend runs
+  `latchkey ensure-browser` then `latchkey auth browser <service>`,
+  streams status, and re-reads `services info` to confirm and name the
+  account. Nothing typed, nothing pasted, latchkey never named. Covers
+  slack, github, fastmail and google-gmail.
+- **`set`** → a labeled secret field whose value the backend pipes to
+  `latchkey auth set` **on stdin** — never argv, which is world-readable
+  via `ps` — after running the descriptor's `register` block first for
+  the user-registered services. The `hints.rs` prose becomes the *how to
+  get this token* text beside the field, not an instruction to open a
+  terminal.
 
-Notably, `google-gmail` supports `browser` (via `auth browser-prepare`,
-which provisions an OAuth client). That is the Thunderbird-grade Gmail
-onboarding — but it needs a Gmail-API provider we don't have; today
-Gmail arrives as a Takeout `.mbox`. Worth knowing the credential half is
-already solved if we ever build that provider.
+The copy-this-command escape hatch stays behind a disclosure, because it
+is the only thing that works against a headless server.
+
+### `credentialStatus` is only as good as latchkey's checker
+
+The design leaned on `services info` reporting `valid` / `invalid` /
+`unknown`. Comparing two live entries shows where that stops:
+
+```jsonc
+"slack":     { "thad@imbue-ai": { "credentialType": "slack",   "credentialStatus": "valid"   } }
+"claude-ai": { "":              { "credentialType": "rawCurl", "credentialStatus": "unknown" } }
+```
+
+Both are connected and working. Slack reads `valid` because its built-in
+service carries `credentialCheckCurlArguments =
+['https://slack.com/api/auth.test']` — latchkey has something to call.
+`claude-ai` is a generic user-registered service with no checker, so it
+**can never report better than `unknown`**, no matter how healthy the
+credential is.
+
+That settles a question the earlier draft got half right. The `--op
+auth` probe is redundant *for Slack* — but it is the only confirmation
+available for every user-registered service, which is most of the
+token-field column above. So:
+
+- `credentialStatus` is `valid`/`invalid` → show it, skip the probe.
+- `credentialStatus` is `unknown` → run the provider's `auth` probe and
+  show *that* result. Never render "unknown" to a user as if it were a
+  problem; it usually isn't.
+
+### Hazard: the descriptor's service name can silently drift
+
+Because latchkey resolves by URL, the `"service"` field in a descriptor
+is used only for the credential UI — `services info`, `auth browser`,
+`auth set`. Nothing at request time validates it. A descriptor naming
+the wrong service would therefore show the wrong status, and connect an
+account the downloader never uses, while syncs kept working (or kept
+failing) for unrelated reasons.
+
+Cheap guard: a test that, for each descriptor, asserts the provider's
+base URL matches the named service's `baseApiUrls` per
+`latchkey services info`. Tagged `requires-network`-ish since it shells
+out, but it turns a silent mismatch into a red test.
 
 ### Three things this turns up
 
-1. **Multi-account is a live bug, not a wizard feature.** latchkey keys
-   Slack credentials by workspace (`thad@imbue-ai`) and errors when a
-   service has more than one stored account and no `--account` is
-   passed. `datalib/backend/etl/src/http.rs` builds
-   `latchkey curl …` with no `--account` ever. A second Slack workspace
-   therefore breaks *every* request today. The wizard forces this into
-   the open on day one, since "connect an account" is its first screen:
-   it needs an account field on the source config and `--account`
-   plumbed through `HttpRequest`. **Fix this in phase 2, alongside the
-   Slack descriptor.**
+1. **Multi-account is a live bug, not a wizard feature.** latchkey
+   stores credentials *per account* and errors when a service has more
+   than one and no `--account` is passed.
+   `datalib/backend/etl/src/http.rs` builds `latchkey curl …` with no
+   `--account`, ever. A live `auth list` shows named accounts on
+   `slack` (`thad@imbue-ai`), `github`, `gitlab`, `fastmail`
+   (`thad_imbue@fastmail.com`) and `google-gmail` (`thad@imbue.com`) —
+   so this is not a Slack quirk. A second Slack workspace, or a second
+   Gmail account, breaks *every* request for that service today.
+   The wizard forces it open on day one, since "connect an account" is
+   its first screen: it needs an account field on the source config and
+   `--account` plumbed through `HttpRequest`. **Fix in phase 2.**
 2. **`ensure-browser` may download a Chromium.** Its source list ends
    in `download-playwright-browser`. First-run can therefore pull a
    large binary — that has to be surfaced as an explicit, consented
@@ -752,7 +807,7 @@ running it.)
 | **1** | The Manage screen inversion: AG Grid of sources with Run/Edit/Delete, **Add Data Source** above it, config editor demoted to an Advanced disclosure. Catalog crate + `GET /api/sources/catalog`; picker with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit and delete-from-config. |
 | **1b** | `step_runs` in `system/jobs.doltlite_db`, so the grid's Last synced / Last status columns have data. |
 | **2** | Slack end to end: the browser-mode credential screen (`/api/credentials/*` → `latchkey auth browser slack`), `datalib-step probe` + `POST /api/sources/probe` for the live channel multi-select, since/media, review. Includes plumbing `--account` through `HttpRequest` — the multi-workspace bug above. The reference implementation the rest copy. |
-| **3** | Credentials for the rest: test cookie-capture registration for `claude-ai` (browser login if it works), and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail. |
+| **3** | Credentials for the rest: test cookie-capture registration for `claude-ai`, and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail-dav. Includes the `auth`-probe fallback for services whose `credentialStatus` can only ever be `unknown`. |
 | **4** | `GET /api/fs/browse` + `inspect` probes; descriptors for the file-backed sources. |
 | **5** | Descriptors + probes for email (JMAP mailbox list — the second-best demo after Slack), notion, github, gitlab. |
 | **6** | Nothing — edit is folded into phase 1 now (see above). |
