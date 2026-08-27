@@ -1,6 +1,12 @@
 # Design: the "New Data Source" wizard
 
-**Status: proposal, 2026-08-25. Nothing here is built yet.**
+**Status: proposal, revised 2026-08-26 against main @ `f54e7e80`.
+Nothing here is built yet.** The first revision was written against a
+tree that has since moved a long way — `unified_index/`, the
+one-file-per-writer store split, the applet that took the grid routes
+out of `datalib-http`, and the removal of the download report. Claims
+below have been re-checked against that main; the ones that changed are
+called out where they sit.
 Related: [#171](https://github.com/imbue-ai/datalib/issues/171)
 (`grid_rows` needs `source_name` before the sources grid can count rows
 per source). Per
@@ -37,6 +43,101 @@ as a failure. The knowledge needed to do it right is distributed across
 never shows you.
 
 The wizard's job is to move all of that in front of the first run.
+
+## The Manage screen
+
+The wizard is not a feature bolted onto today's Manage tab — it replaces
+what that tab leads with. Right now the tab opens on a raw
+`config.toml` textarea, with a derived list of step ids beside it and a
+row of quick-add chips. That puts a text editor in front of a person
+whose actual question is "which of my things are mirrored, and are they
+working?"
+
+Invert it:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Data sources                                    [ + Add Data Source ]│
+├──────────────────────────────────────────────────────────────────────┤
+│  ▣ Slack       slack_api    imbue-ai ✓   2h ago    ok      ▓▓▓▓░ 4.1G │
+│  ▣ Claude      claude_api   thad     ✓   2h ago    ok      ▓▓░░░ 890M │
+│  ▣ Fastmail    email        thad     ⚠   6d ago    failed  ▓▓▓░░ 2.2G │
+│  ▣ Documents   pdf          —            2h ago    ok      ▓▓▓▓▓ 12G  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Recent activity …                                                    │
+│  ▸ Advanced: edit config.toml                                         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+An AG Grid of configured sources is the page. **Add Data Source** sits
+above it and opens the picker → configure flow. Each row carries
+**Run · Edit · Delete**, and Edit opens the same wizard that created the
+source, on the screen you came for.
+
+The config editor doesn't go away — it stays the source of truth and the
+escape hatch, and agents edit through it via `PUT /api/config`. It moves
+into a collapsed **Advanced** disclosure at the bottom. Demoted, not
+deleted: when the wizard can't express something, "edit as TOML" has to
+lead somewhere.
+
+### Columns
+
+| Column | Where the value comes from |
+|---|---|
+| **Source** | stanza name + catalog icon |
+| **Type** | the step `command`'s provider word |
+| **Account** | `latchkey services info <service>` → account key + `credentialStatus` chip |
+| **Last synced** | *(needs new persistence — see below)* |
+| **Last status** | *(same)* |
+| **Documents** | the `unified_index` applet — **not** a direct query, see below |
+| **Storage** | http stats the source's directories itself |
+| **Actions** | Run · Edit · Delete |
+
+### Two of those columns have no data source yet
+
+"Last synced" and "Last status" are the obvious things to want per
+source, and **neither is currently recorded per source.**
+
+- `sync_jobs` (in `system/jobs.doltlite_db`) is per *run*, and a run
+  routinely spans several sources — the UI comma-joins step ids into one
+  job's `source_name`. A multi-source job that failed doesn't say which
+  source failed.
+- `DagState`'s `StepState` *is* per step, but it holds
+  `input_versions`, `output_versions`, `succeeded` and `fingerprint` —
+  no timestamp, no error. It answers "is this step up to date", not
+  "when did it last run and how did it go".
+
+The events already exist and are simply not persisted: every run ends
+with `Event::RunSummary`, whose `StepSummary { step, status, failure,
+attempts, error, outputs }` is exactly these two columns, per step.
+
+**Proposal: persist it.** A `step_runs` table in
+`system/jobs.doltlite_db` — the server already owns that file and is its
+only writer — keyed `(job_id, step_id)`, written by the sync worker as
+it consumes the run's event stream. Both columns become one query, and
+per-source run history comes free (a status sparkline in the row, if we
+want it later). `dag_state.rs`'s own module doc already flags moving
+this state into a `pipeline_runs` table as an open question, so this
+runs with the grain.
+
+### Document counts must go through the applet
+
+The first draft had `datalib-http` running
+`SELECT source_name, COUNT(*) FROM markdowns GROUP BY source_name`.
+**That is no longer allowed.** `core/src/layout.rs` now states that
+`unified_index/` is "owned end to end by the `unified_index` applet and
+the two steps that write it; nothing in `datalib-http` or `datalib-dag`
+reads what is under here" — which is the whole point of the applet that
+took `/api/search` and friends out of the server.
+
+So the count comes from a new endpoint on the `unified_index` applet
+(it serves `/search`, `/columns`, `/docs`, `/chat`, `/asset` today —
+add `/sources/stats`), reached through the existing applet gateway. The
+grid degrades gracefully when the applet isn't running: blank counts,
+everything else still renders.
+
+**Storage stays on the http side**, because it is a plain directory
+stat of `<data_root>/<name>/` — no index, no applet, no provider.
 
 ## Principles
 
@@ -274,11 +375,11 @@ change, not a twenty-crate refactor.
 **The user should never learn the word "latchkey."** For Slack that is
 fully achievable today, because latchkey already has the flow we want.
 
-### What latchkey actually offers (verified against 3.1.0 and 3.6.0)
+### What latchkey actually offers (verified against the pinned 3.7.0)
 
 `latchkey auth browser <service>` — *"Login to a service via the
 browser and store the API credentials."* It exists in the pinned
-**3.1.0** as well as the globally-installed 3.6.0. For Slack it opens a
+**3.7.0** (bumped from 3.1.0 by #177; it was already there in 3.1.0). For Slack it opens a
 real Chromium at `https://slack.com/signin`, lets the user log in
 normally, and scrapes the `xoxc-` api_token plus the `d` cookie out of
 the authenticated session — exactly the credential shape our downloader
@@ -539,25 +640,14 @@ anything.
 
 ## The sources grid
 
-The wizard needs a home, and the thing it should sit on top of is a real
-table of configured sources — replacing today's plain-HTML list of step
-ids beside a textarea. AG Grid is already a dependency
-(`ag-grid-community` + `ag-grid-vue3` + `ag-grid-enterprise` 35.2.1), so
-the Manage tab can look like the Explore tab instead of like a form.
+Column list and data sources are in [The Manage screen](#the-manage-screen)
+above. What follows is the part that needs argument rather than a table.
 
-Proposed columns, and — the part that matters — where each number
-actually comes from:
-
-| Column | Source of truth |
-|---|---|
-| Source (icon + name) | the config's step ids, as today |
-| Type | the step `command`'s provider word |
-| Account / status | `latchkey services info <service>` → account key + `credentialStatus` |
-| Last sync | `sync_jobs` (`app_schema`): `finished_at`, `state`, `error` |
-| Documents | `SELECT source_name, COUNT(*) FROM markdowns GROUP BY source_name` |
-| Rows | `grid_rows JOIN markdowns USING (markdown_uuid)`, grouped by `source_name` — see [#171](https://github.com/imbue-ai/datalib/issues/171) |
-| Storage | directory walk of the step's declared outputs |
-| Actions | Run · Edit · Delete |
+`markdowns` is what makes per-source attribution possible at all: it
+carries `source_name`, so counts attribute to the *configured source*.
+`grid_rows` has only `provider` and `source_label`, under which two
+email sources (`fastmail` and `gmail-takeout`) collapse into one bucket
+— hence [#171](https://github.com/imbue-ai/datalib/issues/171).
 
 ### Storage: a stacked bar, not one number
 
@@ -579,6 +669,51 @@ source's raw store outside the data root (documented in
 `all_sources.toml`). The declared `outputs` still say `slack/raw` in
 that case, so a naive walk reports zero. Resolve the real path, or mark
 the cell "stored elsewhere" — do not render a confident 0 B.
+
+### Source names must be unique, and some are reserved
+
+A source's name is its identity everywhere: it is the stanza directory
+on disk (`<data_root>/<name>/`), the prefix of both its artifact paths
+(`<name>/raw`, `<name>/rendered_md`), the `markdowns.source_name` its
+rows carry, and the stem of its two step ids. Nothing currently enforces
+that it is unique, and the wizard is the moment that stops being
+academic — a "Add Data Source" button with a pre-filled default name
+will produce a second `slack` the first time someone connects a second
+workspace.
+
+**Duplicates are not rejected today.** `dag::config::to_specs` builds a
+`Vec<StepSpec>` with no id check — `validate_applets` has a
+`bail!("applet {:?}: duplicate id")` and the steps path has no
+counterpart. Both duplicate steps then run, writing the same output
+paths, while the persisted scheduler state (`DagState.steps`, a
+`BTreeMap<StepId, StepState>`) has one entry the two of them clobber in
+turn. So the failure isn't a clean error, it's two steps fighting over
+one slot of bookkeeping.
+
+**Reserved names aren't enforced either.** `layout.rs` declares
+`RESERVED_STANZA_NAMES` — and it has **zero callers**, so nothing stops
+a source named `system`. The list is also now incomplete: it holds only
+`SYSTEM_DIR`, but `unified_index/` became a second reserved top-level
+directory in the same refactor that introduced it.
+
+Three fixes, smallest first, and the first two are worth doing whether or
+not the wizard ships:
+
+1. **Reject duplicate step ids in `to_specs`**, mirroring
+   `validate_applets`. This is where the config loader already refuses
+   malformed configs, so every entry point gets it — the wizard, a
+   hand-edited file, and an agent's `PUT /api/config` alike.
+2. **Enforce `RESERVED_STANZA_NAMES`** at the same point, and add
+   `UNIFIED_INDEX_DIR` to the list.
+3. **Make the wizard never propose a colliding name**: the name field
+   starts from `default_name`, and if that is taken it suffixes
+   (`slack-2`) and shows the conflict inline rather than failing on
+   save. Validation still lives in the loader — the wizard is just being
+   polite about it.
+
+Enforcing this in the loader rather than the UI is the point. The config
+file is the source of truth, so a rule the UI enforces alone is a rule
+that a hand-edit silently breaks.
 
 ### Delete means "remove from config"
 
@@ -613,7 +748,9 @@ running it.)
 
 | Phase | Delivers |
 |---|---|
-| **1** | Catalog crate + `GET /api/sources/catalog`; the AG Grid sources table with Run/Edit/Delete and storage bars; picker screen with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit **and** delete-from-config. |
+| **0** | Duplicate + reserved source-name rejection in `dag::config::to_specs`. Independently correct, and everything below assumes it. |
+| **1** | The Manage screen inversion: AG Grid of sources with Run/Edit/Delete, **Add Data Source** above it, config editor demoted to an Advanced disclosure. Catalog crate + `GET /api/sources/catalog`; picker with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit and delete-from-config. |
+| **1b** | `step_runs` in `system/jobs.doltlite_db`, so the grid's Last synced / Last status columns have data. |
 | **2** | Slack end to end: the browser-mode credential screen (`/api/credentials/*` → `latchkey auth browser slack`), `datalib-step probe` + `POST /api/sources/probe` for the live channel multi-select, since/media, review. Includes plumbing `--account` through `HttpRequest` — the multi-workspace bug above. The reference implementation the rest copy. |
 | **3** | Credentials for the rest: test cookie-capture registration for `claude-ai` (browser login if it works), and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail. |
 | **4** | `GET /api/fs/browse` + `inspect` probes; descriptors for the file-backed sources. |
@@ -627,24 +764,44 @@ better off than today.
 
 ## Part two: running one source and watching it
 
-Sketched here only to keep phase-1 seams honest; designed separately.
+Sketched here only to keep the phase-1 seams honest; designed
+separately.
 
-The wanted thing is: pick a source, hit Run, and watch **logs at
-several levels of detail, rows added, bytes stored**. Most of that data
-already exists and simply isn't plumbed to the UI:
+The wanted thing is: hit Run on a grid row and watch **logs at several
+levels of detail, rows added, bytes stored**.
 
-- `datalib_etl::download_metrics` already computes, source-agnostically,
-  API-request counts, per-table rows upserted, and before/after row and
-  byte deltas of the raw store. Today `datalib_step::download` uses the
-  resulting `DownloadReport` only for the output-changed claim and a
-  `tracing::info!`. **It is not emitted as a structured event** — there
-  is no metrics variant in `datalib_dag::events::Event`. Adding one, and
-  a per-step counters panel that consumes it, is the single highest-value
-  change in this half.
-- Per-source runs already work end to end (`--sync <step id>`, surfaced
-  as the table's Sync button); what's missing is a focused *run view*
-  rather than a row in a job table.
-- Log levels: the worker writes NDJSON from the tracing subscriber to
-  `<root>/system/state/job-logs/<id>.log`, and `SourcesView` already
-  classifies lines by `level`. A level filter and a per-step grouping
-  are UI work on data that's already there.
+> **Correction.** The first revision of this doc said the highest-value
+> change here was emitting `DownloadReport` as a structured event. That
+> machinery **no longer exists** — `6dae9185` deleted `DownloadReport`,
+> `DbFileReport`, `DbSnapshot`, `TableStats`, `snapshot_db_file` and the
+> rest, precisely because it was assembling something nobody read at a
+> cost of four full table-count passes per source per sync. Do not
+> resurrect it.
+
+What survives is the cheap half, and it is the half worth using: the
+**live counters** at the shared chokepoints —
+`download_metrics::record_api_request` in `etl/src/http.rs`,
+`record_upserts` in `bulk.rs` and `blob_cas.rs`, accumulating into a
+task-local `DownloadMetrics` that `datalib_step::download` already
+installs for the duration of a source's download. Those are increments
+on an atomic, not table scans. They give API-call counts and rows
+written per table, source-agnostically, with no provider aware they
+exist.
+
+So part two is:
+
+- **Emit the live counters** as a periodic structured event on the step's
+  NDJSON stream (there is still no metrics variant in
+  `datalib_dag::events::Event`), and render them as a per-step counters
+  panel. No before/after snapshots — for "bytes stored", stat the
+  directory, the same walk the grid's storage column already does.
+- **A focused run view.** Per-source runs already work
+  (`--sync <step id>`, behind the row's Run button); what's missing is a
+  view of one run rather than a row in a job table.
+- **Log levels.** The worker writes the tracing subscriber's NDJSON to
+  `<root>/system/job-logs/<id>.log` and `SourcesView` already classifies
+  lines by `level`. A level filter and per-step grouping are UI work on
+  data that is already there.
+- **`step_runs`** (proposed above for the grid's Last synced / Last
+  status columns) is the same table a run view would page through for
+  history.
