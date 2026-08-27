@@ -49,6 +49,7 @@ import {
   revealActionLabel,
   revealInFileManager,
 } from "@/desktop";
+import { openExternal } from "@/externalLinks";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
@@ -814,7 +815,10 @@ const gridOptions: GridOptions<SearchRow> = {
         }`,
         action: () => {
           for (const r of webTargets) {
-            window.open(linkOf(r), "_blank", "noopener");
+            // `openExternal`, not `window.open`: the desktop app has no
+            // tabs and does not implement `window.open`, so the bare
+            // call was a silent no-op there.
+            void openExternal(linkOf(r));
           }
         },
       });

@@ -38,5 +38,4 @@ outputs = ["unified_index/qmd"]
 # what a grid row is.
 [[applets]]
 id = "unified_index"
-title = "Search index"
 command = "datalib-applet unified_index"

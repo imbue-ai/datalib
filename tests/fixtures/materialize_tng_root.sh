@@ -69,7 +69,6 @@ data_root = "$OUT_ROOT"
 
 [[applets]]
 id = "unified_index"
-title = "Search index"
 command = "$APPLET_BIN unified_index"
 EOF
 

@@ -10,7 +10,7 @@ those components read. It is the second kind of entry in
 | Lifetime | runs to completion during a sync | long-lived server, spawned on demand |
 | Produces | artifacts on disk | HTTP responses and card components |
 | Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, from an incoming request |
-| Declares | `command`, `inputs`, `outputs`, `params` | `command`, `title`, `params` |
+| Declares | `command`, `inputs`, `outputs`, `params` | `command`, `params` |
 
 An applet declares no `inputs`/`outputs` because it is never
 scheduled and owns no artifacts: it reads what steps already wrote.
@@ -20,11 +20,17 @@ scheduled and owns no artifacts: it reads what steps already wrote.
 ```toml
 [[applets]]
 id = "slack_work"
-title = "Work Slack"
 command = "datalib-applet slack"
 [applets.params]
 tree = "slack/rendered_md"
 ```
+
+There is no `title` key, and an unknown key is rejected by name rather
+than ignored. The label the gallery shows is written by the applet
+into its own namespace metadata, so a config-level title would be a
+second spelling of a label that lives elsewhere — one the gallery
+never reads. An applet that wants a configurable label takes it
+through `params`, the way the slack applet takes `workspace`.
 
 `command` is split shell-style (the same `shlex` call the runner uses)
 and resolved through `binary_dir`, then `~/.datalib/bin`, then the
@@ -154,13 +160,20 @@ The `.js` therefore has to stay byte-identical to what the browser
 evaluates, which is why title, description and arguments live in a
 sibling `<name>.json` rather than as frontmatter.
 
-## Restart is destructive, and `user` is reserved
+## Starting an applet is destructive to its namespace, and `user` is reserved
 
-Restarting deletes every namespace directory except `user` and lets the
-applets rewrite theirs as they come up. That is what keeps the store
-honest: an applet removed from `config.toml` takes its components with
-it, and a component removed from an applet's output actually
+An applet about to start has its namespace directory deleted first, and
+rewrites it as it comes up. Every namespace belonging to no configured
+applet is deleted too. That is what keeps the store honest: an applet
+removed from `config.toml` takes its components with it, and a
+component removed from a restarting applet's output actually
 disappears.
+
+An applet that keeps running across a config reload (see [When the
+store is re-read](#when-the-store-is-re-read)) keeps its directory
+untouched. It would rewrite the same bytes anyway — the write is
+idempotent for unchanged config — so deleting it would only open a
+window where the gallery could scan a namespace that is missing.
 
 `user` is never touched, because nothing regenerates it — which is
 exactly why an applet may not take that id. The config loader rejects
@@ -213,17 +226,38 @@ The case the design is built around:
 At server start, and again whenever it changes. Two triggers, kept
 separate because they cost different amounts:
 
-- **`config.toml` moved** → stop every applet, wipe their namespaces,
-  start them again, rescan.
+- **`config.toml` moved** → reconcile the running applets against the
+  new list, then rescan.
 - **the store's own files moved** → rescan only.
 
-Conflating them would make a `PUT /api/lib` restart every applet. The
-config path restarts everything rather than diffing, because an
-applet's components are written as it starts, so anything that might
-have changed its output has to restart it anyway. Both checks are `stat`-only when nothing changed, so
-they can sit on the endpoint the UI polls — which is what turns a saved
-config, or a file dropped in by hand, into a live gallery update
-without a restart.
+Conflating them would make a `PUT /api/lib` restart every applet. Both
+checks are `stat`-only when nothing changed, so they can sit on the
+endpoint the UI polls — which is what turns a saved config, or a file
+dropped in by hand, into a live gallery update without a restart.
+
+**Reconciling** compares the new applet list against the one the
+gateway last started, entry by entry:
+
+| The entry | What happens |
+| --- | --- |
+| unchanged, and its process is alive | left alone — not stopped, not restarted, namespace untouched |
+| unchanged, but its process has died | stopped (reaped) and started again |
+| changed in any field | stopped and started again, namespace rebuilt |
+| new | started, namespace rebuilt |
+| gone from the config | stopped, namespace deleted |
+
+A changed entry has to restart because an applet writes its components
+as it starts, so its output cannot follow the edit otherwise. The
+comparison is over the whole entry rather than a chosen few fields, so
+no field can quietly become load-bearing without the restart following
+it.
+
+The config's `binary_dir` counts too: it is compared alongside the
+entries, and a change to it restarts everything, since the same
+`command` can resolve to a different program underneath it.
+
+An applet whose process died is restarted by the same rule, which also
+means a config edit retries one that failed to start last time.
 
 ## Failure
 

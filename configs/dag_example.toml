@@ -107,13 +107,13 @@ outputs = ["unified_index/qmd"]
 # is never scheduled — it reads what the steps above already wrote.
 #
 # `id` is the mount prefix (`/applet/<id>/`) *and* the name card source
-# calls, so it must be a JavaScript identifier. `title` is what the
-# component gallery shows, which is what makes two instances of one
-# command tellable apart.
+# calls, so it must be a JavaScript identifier. There is no `title`
+# key: the label the component gallery shows is written by the applet
+# itself, from its own `params` — `workspace` below, for this one.
 #
-# The entry below serves the `slack` source rendered above. On a
-# refresh the gateway wipes `system/frontend/slack_view/` and asks this
-# command to rewrite it; what lands there — one `<sha256>.js` and one
+# The entry below serves the `slack` source rendered above. Starting
+# this applet wipes `system/frontend/slack_view/` and asks the command
+# to rewrite it; what lands there — one `<sha256>.js` and one
 # `<name>.json` — is what defines `comp.slack_view.channels` and its
 # gallery row.
 #
@@ -128,7 +128,6 @@ outputs = ["unified_index/qmd"]
 # hand-written components, which a refresh never touches.
 [[applets]]
 id = "slack_view"
-title = "Slack"
 command = "datalib-applet slack"
 [applets.params]
 tree = "slack/rendered_md"
@@ -140,5 +139,4 @@ workspace = "Slack"
 # what a grid row is.
 [[applets]]
 id = "unified_index"
-title = "Search index"
 command = "datalib-applet unified_index"
