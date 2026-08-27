@@ -5,8 +5,8 @@
 the tree. When a slice lands, rewrite the section it makes real and
 delete the rest.
 
-Companion to [`source_wizard.md`](source_wizard.md) ([#174]), which
-designs what the wizard *does* — the catalog descriptor, the probe verb,
+Companion to [`source_wizard.md`](source_wizard.md) (landed via [#174]),
+which designs what the wizard *does* — the catalog descriptor, the probe verb,
 the screens, the TOML it writes. **This document is about where that UI
 lives and who else can host it.** Read that one for the wizard's
 internals; this one for the boundary around it.
@@ -186,11 +186,12 @@ that decides whether this is a week or a quarter:
   store something the API refuses. It needs a real (small) service that
   watches for that response. Symmetry was the natural assumption and it
   is wrong.
-- **`cookie-capture` needs latchkey ≥ 3.3.0 and datalib pins 3.1.0**
-  (`LATCHKEY_VERSION` in `datalib/backend/core/src/node_runtime.rs`).
-  Verified, not assumed: `npx -y latchkey@3.1.0 services register --help`
-  lists no `--login-flow` option at all. Bumping that pin is a
-  prerequisite for any of this.
+- **The version prerequisite is already satisfied.** `cookie-capture`
+  first shipped in latchkey 3.3.0, and `LATCHKEY_VERSION` in
+  `datalib/backend/core/src/node_runtime.rs` is now 3.7.0 — so the flow
+  is reachable from the bundled runtime with nothing to bump. (It was
+  3.1.0 when this was first written, which had no `--login-flow` option
+  at all; the pin moved under us.)
 - **latchkey's own credential check cannot reach either host.** Both sit
   behind Cloudflare's managed challenge, which answers vanilla curl with
   a 403 interstitial, so `services info` reports `invalid` and no account
@@ -241,7 +242,7 @@ that inside an iframe:
    and datalib is http on loopback.
 2. **`EventSource` cannot set headers.** The sync progress stream
    (`openJobStream` in `ui/src/api.ts`) is SSE, so a
-   bearer-token-in-header scheme authenticates the other ten call sites
+   bearer-token-in-header scheme authenticates the other eight call sites
    and silently fails on the one that streams job progress.
 
 So embed mode should:
@@ -249,11 +250,11 @@ So embed mode should:
 - take the token from `?token=` once, hold it **in memory** (not a
   cookie), and strip it from the URL with `history.replaceState`;
 - attach it as `Authorization: Bearer` in `api.ts` — which is the single
-  fetch layer for all eleven call sites, so this is one file;
+  fetch layer for all eight of them, so this is one file;
 - append `?token=` to the `EventSource` URL specifically, since that
   carrier is the only one it has.
 
-The chrome gets the token by reading `<data_root>/system/state/api-token`
+The chrome gets the token by reading `<data_root>/system/api-token`
 from disk. It runs on the user's machine, so it can; and a token the
 chrome holds is strictly less exposure than a UI the chrome reimplements.
 

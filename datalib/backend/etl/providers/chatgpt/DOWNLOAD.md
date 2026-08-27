@@ -24,8 +24,8 @@ the `chatgpt` service.
 
 ### Why not latchkey's `cookie-capture` browser login?
 
-Because ChatGPT's cookie is not the API credential. latchkey >= 3.3.0
-has a generic `cookie-capture` login flow that opens a service's login
+Because ChatGPT's cookie is not the API credential. latchkey has a
+generic `cookie-capture` login flow that opens a service's login
 page and stores named cookies as they are set, and for claude.ai that
 is the whole credential (see the Anthropic provider's `DOWNLOAD.md`).
 Here it is not: `__Secure-next-auth.session-token` authenticates the

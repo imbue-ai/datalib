@@ -37,11 +37,10 @@ The whole credential is one cookie -- `sessionKey` -- stored under the
 the identical value (`-H "Cookie: sessionKey=..."`), so nothing
 downstream can tell them apart.
 
-**Browser login (needs latchkey >= 3.3.0).** latchkey ships a generic
-`cookie-capture` login flow: it opens the real claude.ai login page,
-watches the responses that follow, and stores the named cookies once
-they have been set. Nothing is pasted, and no secret passes through a
-shell:
+**Browser login (preferred).** latchkey ships a generic `cookie-capture`
+login flow: it opens the real claude.ai login page, watches the responses
+that follow, and stores the named cookies once they have been set.
+Nothing is pasted, and no secret passes through a shell:
 
 ```sh
 latchkey services register claude-ai \
@@ -52,16 +51,13 @@ latchkey services register claude-ai \
 latchkey auth browser claude-ai
 ```
 
-**This does not work with the latchkey datalib pins.**
-`LATCHKEY_VERSION` in `datalib/backend/core/src/node_runtime.rs` is
-`3.1.0`, whose `services register` has no `--login-flow` option at all
-(`npx -y latchkey@3.1.0 services register --help` to confirm);
-`cookie-capture` first shipped in 3.3.0. The flow is therefore reachable
-today only through a newer latchkey on `PATH` -- using it from the
-bundled runtime means bumping that pin first.
+`cookie-capture` first shipped in latchkey 3.3.0, and `LATCHKEY_VERSION`
+in `datalib/backend/core/src/node_runtime.rs` is 3.7.0 — so this works
+from the bundled runtime, with no globally-installed latchkey needed.
 
-**Manual (works at the pinned 3.1.0).** Register the service, then paste
-the cookie in. `$(pbpaste)` keeps the secret out of shell history:
+**Manual.** The fallback when the browser flow can't run — a headless
+box, or a login that needs an SSO hop latchkey's flow doesn't survive.
+`$(pbpaste)` keeps the secret out of shell history:
 
 ```sh
 latchkey services register claude-ai --base-api-url="https://claude.ai/"
