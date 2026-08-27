@@ -74,7 +74,6 @@ outputs = ["unified_index/qmd"]
 # Serves the grid, the document view and the document picker.
 [[applets]]
 id = "unified_index"
-title = "Search index"
 command = "datalib-applet unified_index"
 EOF
 

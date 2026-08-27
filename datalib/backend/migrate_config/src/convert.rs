@@ -57,7 +57,7 @@ struct StepOut {
 /// by this applet, so a config without it opens an app with no search.
 /// Emitted for both conversion paths.
 fn unified_index_applet() -> String {
-    "\n[[applets]]\nid = \"unified_index\"\ntitle = \"Search index\"\ncommand = \"datalib-applet unified_index\"\n"
+    "\n[[applets]]\nid = \"unified_index\"\ncommand = \"datalib-applet unified_index\"\n"
         .to_string()
 }
 

@@ -54,15 +54,36 @@
 //! arrives, a restarted applet simply rewrites the same files, since
 //! the write is idempotent.
 //!
-//! ## Restart is destructive
+//! ## A config reload restarts only what changed
 //!
-//! Restarting deletes every namespace directory except `user` and lets
-//! the applets rewrite theirs. That is what keeps the store honest when
-//! an applet is removed from the config — its components go with it —
-//! and it is why `user` is refused as an applet id
+//! The registry remembers the applet list it last started. When
+//! `config.toml` moves, the new list is compared against that record
+//! entry by entry. An entry spelled exactly the same way, whose
+//! process is still alive, keeps running untouched. Everything else is
+//! stopped and started again: an entry whose config changed, one that
+//! is new, and one whose process has died since it was started.
+//!
+//! Restarting an applet the edit had nothing to do with is not free —
+//! it throws away whatever the process holds in memory, and the thing
+//! that notices the config moved is a UI poll of `/api/frontend`, so
+//! an unrelated edit would interrupt every applet at once.
+//!
+//! ## Starting an applet is destructive to its namespace
+//!
+//! An applet about to start gets a clean namespace: its directory is
+//! deleted first and it rewrites it, so a component it no longer emits
+//! actually disappears. Every directory belonging to no configured
+//! applet is deleted too, which is what takes the components of a
+//! removed applet with it. `user` is never touched, which is the whole
+//! reason that id is reserved
 //! ([`datalib_dag::config::RESERVED_APPLET_ID`]).
+//!
+//! A kept applet's directory is left exactly as it is. It would be
+//! rewritten byte-for-byte anyway — the write is idempotent for
+//! unchanged config — so deleting it would only open a window where
+//! the gallery could scan a namespace that is missing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -140,14 +161,8 @@ fn base_command(
     Ok(cmd)
 }
 
-/// Wipe every applet-owned namespace directory.
-///
-/// Deleting before a restart is what makes the store track the config:
-/// an applet removed from `config.toml` leaves no orphaned components
-/// behind, and a component removed from an applet's output actually
-/// disappears. `user` is never touched, which is the whole reason that
-/// id is reserved.
-fn clear_applet_namespaces(data_root: &Path) -> anyhow::Result<PathBuf> {
+/// The frontend store root, created and marked as derived.
+fn frontend_root(data_root: &Path) -> anyhow::Result<PathBuf> {
     let root = crate::frontend::frontend_dir(data_root);
     std::fs::create_dir_all(&root)
         .map_err(|e| anyhow::anyhow!("create {}: {e}", root.display()))?;
@@ -155,22 +170,35 @@ fn clear_applet_namespaces(data_root: &Path) -> anyhow::Result<PathBuf> {
     // so cache-aware backups may skip it — except `user`, which is not.
     // Marking the parent is close enough: the tag is advisory.
     datalib_core::layout::mark_derived_cache(&root);
+    Ok(root)
+}
 
-    if let Ok(rd) = std::fs::read_dir(&root) {
-        for ent in rd.flatten() {
-            let path = ent.path();
-            if !path.is_dir() {
-                continue;
-            }
-            match path.file_name().and_then(|s| s.to_str()) {
-                Some(crate::frontend::USER_NAMESPACE) | None => continue,
-                Some(_) => {
-                    let _ = std::fs::remove_dir_all(&path);
-                }
+/// Delete every applet-owned namespace directory except the ones in
+/// `keep`.
+///
+/// Deleting is what makes the store track the config: an applet
+/// removed from `config.toml` is in neither `keep` nor the list about
+/// to be started, so it leaves no orphaned components behind, and a
+/// component dropped from a restarting applet's output actually
+/// disappears. `user` is never touched, which is the whole reason that
+/// id is reserved.
+fn prune_namespaces(root: &Path, keep: &BTreeSet<String>) {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        match path.file_name().and_then(|s| s.to_str()) {
+            Some(crate::frontend::USER_NAMESPACE) | None => continue,
+            Some(name) if keep.contains(name) => continue,
+            Some(_) => {
+                let _ = std::fs::remove_dir_all(&path);
             }
         }
     }
-    Ok(root)
 }
 
 /// The PATH an applet child sees: `binary_dir`, then `~/.datalib/bin`,
@@ -245,7 +273,15 @@ pub struct AppletRegistry {
 }
 
 struct RegistryState {
+    /// The applet list as of the last start — the record a config
+    /// reload diffs against to decide what has to restart.
     entries: Vec<AppletEntry>,
+    /// The directory the last start resolved commands against. Kept
+    /// alongside `entries` because it is half of what an entry means:
+    /// the same `command = "datalib-applet slack"` is a different
+    /// program under a different `binary_dir`, so a change here
+    /// invalidates every entry at once.
+    binary_dir: Option<PathBuf>,
     store: crate::frontend::FrontendStore,
     /// applet id → why its write failed, for the ones that did.
     errors: BTreeMap<String, String>,
@@ -273,6 +309,10 @@ fn config_stamp_of(data_root: &Path) -> Option<(u64, std::time::SystemTime)> {
 impl AppletRegistry {
     /// Run every applet's write, then scan the store.
     ///
+    /// `binary_dir` is the directory applet commands resolve against,
+    /// already resolved — [`Self::from_data_root`] is what turns a CLI
+    /// override plus the config's own `binary_dir` into one.
+    ///
     /// A failing applet does not fail the boot: its error is recorded
     /// and everything else still loads. `user` is scanned either way,
     /// since nothing regenerates it.
@@ -281,17 +321,38 @@ impl AppletRegistry {
         data_root: PathBuf,
         binary_dir: Option<PathBuf>,
     ) -> Self {
+        Self::new(entries, data_root, binary_dir.clone(), binary_dir)
+    }
+
+    /// `binary_dir_override` is the CLI's, kept for later reloads;
+    /// `binary_dir` is what this start actually resolves against. They
+    /// differ whenever the config supplies its own.
+    fn new(
+        entries: Vec<AppletEntry>,
+        data_root: PathBuf,
+        binary_dir_override: Option<PathBuf>,
+        binary_dir: Option<PathBuf>,
+    ) -> Self {
         let supervisor = Supervisor::default();
-        let errors = start_all(&supervisor, &entries, &data_root, binary_dir.as_deref());
+        // Nothing is running yet, so every entry starts and every
+        // applet namespace is rebuilt.
+        let errors = reconcile(
+            &supervisor,
+            &[],
+            &entries,
+            &data_root,
+            binary_dir.as_deref(),
+        );
         let store = crate::frontend::FrontendStore::scan(&data_root);
         let config_stamp = config_stamp_of(&data_root);
         let store_stamp = crate::frontend::StoreStamp::of(&data_root);
         Self {
             data_root,
-            binary_dir_override: binary_dir,
+            binary_dir_override,
             state: std::sync::RwLock::new(RegistryState {
                 store_stamp,
                 entries,
+                binary_dir,
                 store,
                 errors,
                 config_stamp,
@@ -308,18 +369,23 @@ impl AppletRegistry {
     /// refused to start over a bad applet id would take search and
     /// setup down with it, leaving no way to fix the file.
     pub fn from_data_root(data_root: &Path, binary_dir: Option<PathBuf>) -> Self {
-        let (entries, _) = load_entries(data_root, binary_dir.clone());
-        Self::build(entries, data_root.to_path_buf(), binary_dir)
+        // The *resolved* dir is what the start uses, the same one a
+        // later reload will resolve. Handing `build` the bare override
+        // instead would make boot resolve commands one way and the
+        // first config edit resolve them another.
+        let (entries, resolved) = load_entries(data_root, binary_dir.clone());
+        Self::new(entries, data_root.to_path_buf(), binary_dir, resolved)
     }
 
-    /// Rebuild if `config.toml` has changed since the last pass.
+    /// Reconcile the running applets with `config.toml` if it has
+    /// changed since the last pass.
     ///
-    /// Blocking: it execs one child per applet. Callers on the async
-    /// side run it inside `spawn_blocking`. Cheap when nothing moved —
-    /// one `stat` and a read lock.
+    /// Blocking: it execs one child per applet that has to start.
+    /// Callers on the async side run it inside `spawn_blocking`. Cheap
+    /// when nothing moved — one `stat` and a read lock.
     pub fn refresh_if_config_changed(&self) {
         let current = config_stamp_of(&self.data_root);
-        {
+        let (prev_entries, prev_binary_dir) = {
             let Ok(state) = self.state.read() else { return };
             if state.config_stamp == current {
                 // The config is unchanged, but the store may not be —
@@ -328,26 +394,32 @@ impl AppletRegistry {
                 self.rescan_if_store_changed();
                 return;
             }
-        }
-        let (entries, bin_dir) = load_entries(&self.data_root, self.binary_dir_override.clone());
+            (state.entries.clone(), state.binary_dir.clone())
+        };
+        let (entries, binary_dir) = load_entries(&self.data_root, self.binary_dir_override.clone());
 
-        // Stop everything and start it again, rather than diffing the
-        // config. An applet's components are written as it starts, so
-        // anything that might have changed its output has to restart it
-        // anyway; and applets are few and config edits rare, so the
-        // simpler rule is worth more than the saved restarts.
-        self.supervisor.stop_all();
-        let errors = start_all(
+        // A different `binary_dir` can resolve every command to a
+        // different program, so no entry survives that change however
+        // unchanged its own text is. Passing an empty `prev` is how
+        // that is said: nothing matches, everything restarts.
+        let prev: &[AppletEntry] = if binary_dir == prev_binary_dir {
+            &prev_entries
+        } else {
+            &[]
+        };
+        let errors = reconcile(
             &self.supervisor,
+            prev,
             &entries,
             &self.data_root,
-            bin_dir.as_deref(),
+            binary_dir.as_deref(),
         );
         let store = crate::frontend::FrontendStore::scan(&self.data_root);
 
         let store_stamp = crate::frontend::StoreStamp::of(&self.data_root);
         if let Ok(mut state) = self.state.write() {
             state.entries = entries;
+            state.binary_dir = binary_dir;
             state.store = store;
             state.errors = errors;
             state.config_stamp = current;
@@ -445,34 +517,60 @@ pub struct FrontendView {
     pub applet_errors: BTreeMap<String, String>,
 }
 
-/// Clear the applet namespaces, then start every applet.
+/// Bring the running applets in line with `next`, given `prev` — the
+/// list that is currently running.
 ///
-/// Starts run on threads so boot is bounded by the slowest applet
+/// An entry in both lists, spelled identically, whose process is still
+/// alive, is left alone: not stopped, not started, its namespace
+/// directory not touched. Everything else in `next` is started, and
+/// everything running that `next` does not keep is stopped. Pass an
+/// empty `prev` to restart the lot.
+///
+/// Starts run on threads so a reload is bounded by the slowest applet
 /// rather than their sum: a broken one costs the readiness timeout
 /// once, not once per applet ahead of it in the list.
 ///
-/// Returns one message per applet that failed, so a broken applet is
-/// visible instead of just absent.
-fn start_all(
+/// Returns one message per applet that failed to start, so a broken
+/// applet is visible instead of just absent. A kept applet contributes
+/// no entry — it is running, which is the only thing an error here
+/// means.
+fn reconcile(
     supervisor: &Supervisor,
-    entries: &[AppletEntry],
+    prev: &[AppletEntry],
+    next: &[AppletEntry],
     data_root: &Path,
     binary_dir: Option<&Path>,
 ) -> BTreeMap<String, String> {
-    let root = match clear_applet_namespaces(data_root) {
+    // `port` is also the liveness check, and it reaps: an applet that
+    // died since it was started reports gone here and gets started
+    // again, rather than being kept with a port nothing is listening
+    // on. That also means a config edit retries an applet that failed
+    // to start last time.
+    let keep: BTreeSet<String> = next
+        .iter()
+        .filter(|e| prev.contains(e) && supervisor.port(&e.id).is_some())
+        .map(|e| e.id.clone())
+        .collect();
+
+    supervisor.stop_except(&keep);
+
+    let to_start: Vec<&AppletEntry> = next.iter().filter(|e| !keep.contains(&e.id)).collect();
+
+    let root = match frontend_root(data_root) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("applets: {e:#}");
-            return entries
+            return to_start
                 .iter()
                 .map(|e2| (e2.id.clone(), format!("{e:#}")))
                 .collect();
         }
     };
+    prune_namespaces(&root, &keep);
 
     let mut errors = BTreeMap::new();
     std::thread::scope(|scope| {
-        let handles: Vec<_> = entries
+        let handles: Vec<_> = to_start
             .iter()
             .map(|entry| {
                 let dir = root.join(&entry.id);
@@ -648,16 +746,30 @@ impl Supervisor {
         }
     }
 
-    /// Stop every applet, reaping as it goes.
-    fn stop_all(&self) {
-        if let Ok(mut map) = self.running.lock() {
-            for (_, mut r) in std::mem::take(&mut *map) {
+    /// Stop every applet whose id is not in `keep`, reaping as it
+    /// goes.
+    fn stop_except(&self, keep: &BTreeSet<String>) {
+        let Ok(mut map) = self.running.lock() else {
+            return;
+        };
+        let doomed: Vec<String> = map
+            .keys()
+            .filter(|id| !keep.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in doomed {
+            if let Some(mut r) = map.remove(&id) {
                 let _ = r.child.kill();
                 // Reap: `kill` only signals, and an unwaited child stays
                 // a zombie until its parent exits.
                 let _ = r.child.wait();
             }
         }
+    }
+
+    /// Stop every applet.
+    fn stop_all(&self) {
+        self.stop_except(&BTreeSet::new());
     }
 }
 

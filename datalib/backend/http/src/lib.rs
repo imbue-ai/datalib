@@ -1029,7 +1029,6 @@ outputs = [\"unified_index/qmd\"]
 
 [[applets]]
 id = \"unified_index\"
-title = \"Search index\"
 command = \"datalib-applet unified_index\"
 
 # Source steps go below. Anything you add above the first [[steps]]

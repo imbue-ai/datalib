@@ -29,8 +29,8 @@
 //! outputs = ["custom/out"]
 //!
 //! [[applets]]
-//! id = "slack_view"                # a JS identifier: it reaches card
-//! title = "Slack"                  # source as a bare name
+//! id = "slack_view"                # a JS identifier: it reaches
+//!                                  # card source as a bare name
 //! command = "datalib-applet slack"
 //! [applets.params]
 //! tree = "slack/rendered_md"
@@ -108,6 +108,14 @@ pub struct DagConfig {
 /// wrote. Everything else (`command` splitting, `params` as JSON,
 /// `env` merge, cwd = data root) follows the step's conventions so
 /// there is one set of rules to learn.
+///
+/// There is no `title`, and `deny_unknown_fields` means a config
+/// carrying one is rejected by name. The field existed and nothing
+/// read it: the label the component gallery shows is written by the
+/// applet itself into its namespace metadata, so a config-level title
+/// was a second, silent spelling of a label that lives elsewhere. An
+/// applet that wants one takes it through `params` — the slack
+/// applet's `workspace`, for instance.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletEntry {
@@ -116,12 +124,6 @@ pub struct AppletEntry {
     /// restricted to what JavaScript will accept as a variable name —
     /// see [`validate_applets`].
     pub id: String,
-    /// Human label for the component gallery. Falls back to `id`.
-    /// This is the field that makes two instances of one command
-    /// distinguishable to a reader ("Work Slack" vs "Personal
-    /// Slack"), so it earns its place in the schema.
-    #[serde(default)]
-    pub title: Option<String>,
     /// The command to run, split shell-style into an argv, resolved
     /// the same way a step's is (`binary_dir`, then `PATH`).
     pub command: String,
@@ -135,11 +137,6 @@ pub struct AppletEntry {
 }
 
 impl AppletEntry {
-    /// The label to show a human. Config `title` when set, else the id.
-    pub fn display_title(&self) -> &str {
-        self.title.as_deref().unwrap_or(&self.id)
-    }
-
     /// `params` as JSON, ready for `--params`. `None` when the entry
     /// declared none.
     pub fn params_json(&self) -> Result<Option<serde_json::Value>> {
@@ -349,11 +346,11 @@ fn expand_tilde(p: &Path) -> PathBuf {
 /// The one namespace an applet may not claim.
 ///
 /// Frontend components all live under `system/frontend/<namespace>/`,
-/// and a refresh *deletes* every namespace directory before asking the
-/// applets to rewrite theirs. `user` holds hand- and agent-authored
+/// and starting an applet *deletes* its namespace directory first, so
+/// it rewrites the whole thing. `user` holds hand- and agent-authored
 /// components, which nothing regenerates — so an applet allowed to take
-/// that id would have its directory wiped on the next refresh, taking
-/// the user's own work with it.
+/// that id would have its directory wiped the next time it started,
+/// taking the user's own work with it.
 pub const RESERVED_APPLET_ID: &str = "user";
 
 /// Check the applet list before anything tries to use it.
@@ -719,11 +716,10 @@ mod applet_tests {
     }
 
     #[test]
-    fn parses_an_applet_with_params_and_title() {
+    fn parses_an_applet_with_params() {
         let c = cfg(r#"
 [[applets]]
 id = "slack_work"
-title = "Work Slack"
 command = "datalib-applet slack"
 [applets.params]
 tree = "slack_work/rendered_md"
@@ -731,16 +727,27 @@ tree = "slack_work/rendered_md"
         assert_eq!(c.applets.len(), 1);
         let a = &c.applets[0];
         assert_eq!(a.id, "slack_work");
-        assert_eq!(a.display_title(), "Work Slack");
         let params = a.params_json().unwrap().expect("params present");
         assert_eq!(params["tree"], "slack_work/rendered_md");
     }
 
     #[test]
-    fn title_falls_back_to_id() {
+    fn an_applet_may_declare_no_params() {
         let c = cfg("[[applets]]\nid = \"grid\"\ncommand = \"x\"\n");
-        assert_eq!(c.applets[0].display_title(), "grid");
         assert!(c.applets[0].params_json().unwrap().is_none());
+    }
+
+    /// `title` was accepted and read by nothing; removing it makes a
+    /// config that still carries one fail to parse. Pinned because
+    /// that is what a user upgrading hits, and the message has to name
+    /// the key so the fix is obvious — `deny_unknown_fields` is what
+    /// makes it name the key rather than ignore it.
+    #[test]
+    fn a_leftover_title_is_rejected_by_name() {
+        let err = parse("[[applets]]\nid = \"grid\"\ntitle = \"Grid\"\ncommand = \"x\"\n")
+            .expect_err("title is no longer a field");
+        let msg = err.to_string();
+        assert!(msg.contains("title"), "{msg}");
     }
 
     /// The id reaches card source as a bare identifier, so a dotted or
