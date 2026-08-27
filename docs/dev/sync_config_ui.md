@@ -143,9 +143,14 @@ services have no browser login.
 
 So every service that gains `browser` support upstream removes a token
 form — from **both** products at once. Of datalib's seven API sources,
-`browser` reaches two today (slack, github). The spike takes that to
-four (claude-ai, chatgpt). Fastmail is already in flight on its own
-latchkey branch, which would make five. That leaves gitlab and notion.
+`browser` reached two when this was drafted (slack, github). Fastmail
+has since landed upstream, and the spike adds claude-ai and chatgpt,
+which makes **five**; gitlab and notion remain `set`-only. That is
+measured against the built registry, not projected:
+
+```sh
+SERVICE_REGISTRY.services.filter(s => typeof s.getSession === 'function')
+```
 
 The UI that never gets written is the token form for those five — and it
 is deleted upstream, in latchkey, not in either product.
