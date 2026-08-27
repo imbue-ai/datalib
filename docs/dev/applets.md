@@ -10,7 +10,7 @@ those components read. It is the second kind of entry in
 | Lifetime | runs to completion during a sync | long-lived server, spawned on demand |
 | Produces | artifacts on disk | HTTP responses and card components |
 | Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, from an incoming request |
-| Declares | `command`, `inputs`, `outputs`, `params` | `command`, `title`, `params` |
+| Declares | `command`, `inputs`, `outputs`, `params` | `command`, `params` |
 
 An applet declares no `inputs`/`outputs` because it is never
 scheduled and owns no artifacts: it reads what steps already wrote.
@@ -20,11 +20,17 @@ scheduled and owns no artifacts: it reads what steps already wrote.
 ```toml
 [[applets]]
 id = "slack_work"
-title = "Work Slack"
 command = "datalib-applet slack"
 [applets.params]
 tree = "slack/rendered_md"
 ```
+
+There is no `title` key, and an unknown key is rejected by name rather
+than ignored. The label the gallery shows is written by the applet
+into its own namespace metadata, so a config-level title would be a
+second spelling of a label that lives elsewhere — one the gallery
+never reads. An applet that wants a configurable label takes it
+through `params`, the way the slack applet takes `workspace`.
 
 `command` is split shell-style (the same `shlex` call the runner uses)
 and resolved through `binary_dir`, then `~/.datalib/bin`, then the
@@ -242,9 +248,9 @@ gateway last started, entry by entry:
 
 A changed entry has to restart because an applet writes its components
 as it starts, so its output cannot follow the edit otherwise. The
-comparison is over the whole entry — `title` included, even though the
-gateway does not pass it to the child — so no field can quietly become
-load-bearing without the restart following it.
+comparison is over the whole entry rather than a chosen few fields, so
+no field can quietly become load-bearing without the restart following
+it.
 
 The config's `binary_dir` counts too: it is compared alongside the
 entries, and a change to it restarts everything, since the same

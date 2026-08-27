@@ -111,7 +111,6 @@ async fn the_reference_applet_round_trips_through_the_gateway() {
         r#"
 [[applets]]
 id = "slack_work"
-title = "Work Slack"
 command = "{bin}"
 [applets.params]
 tree = "slack/rendered_md"

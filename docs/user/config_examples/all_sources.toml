@@ -735,5 +735,4 @@ input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 # what a grid row is.
 [[applets]]
 id = "unified_index"
-title = "Search index"
 command = "datalib-applet unified_index"
