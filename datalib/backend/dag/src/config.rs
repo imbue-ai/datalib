@@ -349,11 +349,11 @@ fn expand_tilde(p: &Path) -> PathBuf {
 /// The one namespace an applet may not claim.
 ///
 /// Frontend components all live under `system/frontend/<namespace>/`,
-/// and a refresh *deletes* every namespace directory before asking the
-/// applets to rewrite theirs. `user` holds hand- and agent-authored
+/// and starting an applet *deletes* its namespace directory first, so
+/// it rewrites the whole thing. `user` holds hand- and agent-authored
 /// components, which nothing regenerates — so an applet allowed to take
-/// that id would have its directory wiped on the next refresh, taking
-/// the user's own work with it.
+/// that id would have its directory wiped the next time it started,
+/// taking the user's own work with it.
 pub const RESERVED_APPLET_ID: &str = "user";
 
 /// Check the applet list before anything tries to use it.

@@ -228,6 +228,15 @@ async fn a_restart_rebuilds_applet_namespaces_and_spares_user() {
         "a removed applet must take its components with it"
     );
     assert!(view["namespaces"]["stays"].is_object());
+    // …and its process is gone, not merely unlisted.
+    let (status, body) = get_json(&app, "/applet/goes/channels").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(
+        body["error"].as_str().unwrap().contains("no applet"),
+        "{body}"
+    );
+    let (status, _) = get_json(&app, "/applet/stays/channels").await;
+    assert_eq!(status, StatusCode::OK, "the kept applet stopped serving");
     // The hand-authored namespace is untouched by any of this.
     assert_eq!(
         view["namespaces"]["user"]["entries"]["tetris"]["title"],
@@ -320,6 +329,121 @@ async fn a_config_edit_is_picked_up_without_a_restart() {
     // …and the newly-started applet is serving.
     let (status, _) = get_json(&app, "/applet/second/channels").await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// A wrapper around the real applet that appends its id to a log every
+/// time it is started. Counting those lines is the only way to tell
+/// "still the process from before" from "stopped and started again".
+fn start_logging_command(tmp: &Path, log: &Path) -> String {
+    let wrapper = write_script(
+        tmp,
+        "wrapper.sh",
+        &format!(
+            "#!/bin/sh\necho \"$DATALIB_APPLET_ID\" >> {}\nexec {} \"$@\"\n",
+            log.display(),
+            applet_command()
+        ),
+    );
+    format!("sh {}", wrapper.display())
+}
+
+/// How many times the applet with this id has been started.
+fn starts(log: &Path, id: &str) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.trim() == id)
+        .count()
+}
+
+/// One applet stanza, with an optional `workspace` param — the field
+/// the slack applet turns into its gallery title, so a change to it is
+/// visible from `/api/frontend`.
+fn applet_stanza(id: &str, command: &str, workspace: Option<&str>) -> String {
+    let mut s = format!("[[applets]]\nid = \"{id}\"\ncommand = \"{command}\"\n[applets.params]\ntree = \"slack/rendered_md\"\n");
+    if let Some(w) = workspace {
+        s.push_str(&format!("workspace = \"{w}\"\n"));
+    }
+    s.push('\n');
+    s
+}
+
+/// Adding an applet must not disturb the ones already running: they
+/// keep their process, and whatever it holds in memory.
+#[tokio::test]
+async fn adding_an_applet_leaves_the_running_ones_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let log = tmp.path().join("starts.log");
+    let cmd = start_logging_command(tmp.path(), &log);
+
+    let app = router(state_with(tmp.path(), &applet_stanza("keep", &cmd, None)).await);
+    assert_eq!(starts(&log, "keep"), 1, "boot should start it once");
+
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        format!(
+            "{}{}",
+            applet_stanza("keep", &cmd, None),
+            applet_stanza("added", &cmd, None)
+        ),
+    )
+    .unwrap();
+
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(view["namespaces"]["added"].is_object(), "{view}");
+    assert_eq!(
+        starts(&log, "keep"),
+        1,
+        "an unrelated applet was added and `keep` restarted"
+    );
+    assert_eq!(starts(&log, "added"), 1);
+    // Both are serving, and `keep` is serving from the same process.
+    for id in ["keep", "added"] {
+        let (status, _) = get_json(&app, &format!("/applet/{id}/channels")).await;
+        assert_eq!(status, StatusCode::OK, "{id}");
+    }
+}
+
+/// Editing one applet's config restarts that one and only that one.
+/// An applet writes its components as it starts, so a changed entry
+/// has to restart for its output to follow the edit.
+#[tokio::test]
+async fn editing_one_applet_restarts_only_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let log = tmp.path().join("starts.log");
+    let cmd = start_logging_command(tmp.path(), &log);
+    let cfg = |b_workspace: Option<&str>| {
+        format!(
+            "{}{}",
+            applet_stanza("a", &cmd, None),
+            applet_stanza("b", &cmd, b_workspace)
+        )
+    };
+
+    let app = router(state_with(tmp.path(), &cfg(None)).await);
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert_eq!(
+        view["namespaces"]["b"]["entries"]["channels"]["title"],
+        "Slack — b"
+    );
+
+    std::fs::write(tmp.path().join("config.toml"), cfg(Some("Renamed"))).unwrap();
+    let (_, view) = get_json(&app, "/api/frontend").await;
+
+    assert_eq!(starts(&log, "a"), 1, "`a` restarted over an edit to `b`");
+    assert_eq!(starts(&log, "b"), 2, "`b`'s edit did not restart it");
+    // The restart is what makes the new params reach the store…
+    assert_eq!(
+        view["namespaces"]["b"]["entries"]["channels"]["title"],
+        "Slack — Renamed"
+    );
+    // …and the untouched applet's namespace survived the reload.
+    assert_eq!(
+        view["namespaces"]["a"]["entries"]["channels"]["title"],
+        "Slack — a"
+    );
 }
 
 /// Restarting sits on a polled endpoint, so an unchanged config must
