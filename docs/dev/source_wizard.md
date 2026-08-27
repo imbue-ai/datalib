@@ -64,7 +64,7 @@ Invert it:
 │  ▣ Fastmail    email        thad     ⚠   6d ago    failed  ▓▓▓░░ 2.2G │
 │  ▣ Documents   pdf          —            2h ago    ok      ▓▓▓▓▓ 12G  │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Recent activity …                                                    │
+│  Recent activity …          (status cells open a per-source log panel)│
 │  ▸ Advanced: edit config.toml                                         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -88,10 +88,48 @@ lead somewhere.
 | **Type** | the step `command`'s provider word |
 | **Account** | `latchkey services info <service>` → account key + `credentialStatus` chip |
 | **Last synced** | *(needs new persistence — see below)* |
-| **Last status** | *(same)* |
+| **Last status** | *(same)* — **and it's a button**: clicking it opens that source's recent logs |
 | **Documents** | the `unified_index` applet — **not** a direct query, see below |
 | **Storage** | http stats the source's directories itself |
 | **Actions** | Run · Edit · Delete |
+
+### The status cell is the way into the logs
+
+A source that failed should not make you go hunting. The **Last status**
+cell is the control: click `failed` and you get that source's recent
+log, scrolled to the failure. Click `ok` and you get the last run's log
+anyway — the same affordance, no dead ends, and it doubles as "what did
+that sync actually do?"
+
+That beats a separate Logs button in the actions group for two reasons:
+the status is *already* the thing you looked at to decide you cared, and
+an actions group of four buttons in every row is where a table starts
+feeling like a cockpit.
+
+What opens is a side panel, not a route — you are triaging one row of a
+table you want to stay in. It carries:
+
+- **The failure first.** The DAG already emits `Event::Hint` for
+  actionable remediation, distinct from `Log` precisely so a UI can
+  surface it instead of burying it — and `hints.rs` fills it with the
+  provider's fix-it text on an auth failure. That hint belongs at the
+  top of the panel, above the log, with the *Reconnect* button beside it
+  when the failure kind is `auth`.
+- **A level filter.** The worker already writes the tracing
+  subscriber's NDJSON to `<root>/system/job-logs/<id>.log`, and
+  `SourcesView` already classifies lines by `level`. Error / warn / info
+  / everything is a filter over data that exists.
+- **This source's lines only.** A run spans several sources, so the
+  panel filters the job log by step id rather than showing the whole
+  run. (The same per-step attribution the `step_runs` table needs — one
+  more reason it comes first.)
+- **Older runs.** A dropdown of this source's recent runs, from
+  `step_runs`, so "it broke sometime last week" is answerable.
+
+Live runs stream into the same panel over the existing
+`/api/sync/stream` SSE, so clicking status on a running source is how
+you watch it — which is most of what "part two" wanted, reachable from
+the grid rather than as a separate screen.
 
 ### Two of those columns have no data source yet
 
