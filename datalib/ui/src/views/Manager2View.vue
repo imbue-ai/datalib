@@ -12,9 +12,8 @@
 //
 // Columns that need backend work the design calls for, and which are
 // therefore absent rather than faked: Account (needs the latchkey
-// endpoints), Documents (must come from the unified_index applet — the
-// layout now forbids datalib-http reading that tree), and Storage
-// (needs a directory-stat endpoint).
+// endpoints) and Documents (must come from the unified_index applet —
+// the layout now forbids datalib-http reading that tree).
 //
 // "Last synced" / "Last status" are best-effort. There is no per-source
 // run record yet — `sync_jobs` is per *run*, and a run routinely spans
@@ -40,9 +39,11 @@ import {
   fetchConfigScaffold,
   saveConfig,
   fetchAllJobs,
+  fetchSourceStorage,
   enqueueJob,
   openJobStream,
   type SyncJob,
+  type SourceStorage,
 } from "@/api";
 import {
   listConfiguredSources,
@@ -66,6 +67,7 @@ const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
+const storage = ref<SourceStorage[]>([]);
 const sources = ref<ConfiguredSource[]>([]);
 
 const wizardOpen = ref(false);
@@ -84,6 +86,10 @@ type Row = {
   lastSynced: string | null;
   lastStatus: string;
   approximate: boolean;
+  /// Null when the source has no directory yet — rendered as "—", not
+  /// "0 B", which would read as "synced and empty".
+  bytes: number | null;
+  storage: SourceStorage | undefined;
 };
 
 /// Most recent job naming this source. `source_name` is a comma-joined
@@ -119,7 +125,10 @@ const rows = computed<Row[]>(() =>
           `Edit this one in the Manage tab.`;
       }
     }
+    const size = storage.value.find((x) => x.name === s.name);
     return {
+      bytes: size && size.present ? size.total_bytes : null,
+      storage: size,
       name: s.name,
       type: s.type,
       label: entry?.label ?? s.type ?? "unknown",
@@ -133,9 +142,24 @@ const rows = computed<Row[]>(() =>
   }),
 );
 
+/// Base-10 units, matching what a file manager shows — the question
+/// behind this column is "how much of my disk is this", not a precise
+/// block count.
+function formatBytes(n: number): string {
+  if (n < 1000) return `${n} B`;
+  const units = ["kB", "MB", "GB", "TB"];
+  let v = n / 1000;
+  let i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i++;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
 const columnDefs: ColDef<Row>[] = [
   {
-    headerName: "Source",
+    headerName: "Name",
     field: "name",
     flex: 2,
     minWidth: 180,
@@ -180,6 +204,29 @@ const columnDefs: ColDef<Row>[] = [
         : (p.data?.lastStatus ?? "");
       return span;
     },
+  },
+  {
+    headerName: "Bytes on disk",
+    field: "bytes",
+    type: "numericColumn",
+    flex: 1,
+    minWidth: 140,
+    // The breakdown is what answers "why is this 40 GB?" — attachments
+    // routinely dwarf both the entity store and the rendered markdown.
+    tooltipValueGetter: (p: { data?: Row }) => {
+      const s = p.data?.storage;
+      if (!s || !s.present) return "Nothing on disk yet — this source hasn't synced.";
+      const parts = [
+        `entities ${formatBytes(s.raw_bytes)}`,
+        `attachments ${formatBytes(s.blobs_bytes)}`,
+        `markdown ${formatBytes(s.rendered_bytes)}`,
+      ];
+      if (s.raw_elsewhere) {
+        parts.push("plus a raw store held outside the data root, which isn't counted");
+      }
+      return parts.join(" · ");
+    },
+    valueFormatter: (p) => (p.value === null ? "—" : formatBytes(p.value as number)),
   },
   {
     headerName: "Actions",
@@ -247,6 +294,14 @@ async function loadJobs() {
     jobs.value = await fetchAllJobs(100);
   } catch {
     // The grid is still useful without status; leave the columns empty.
+  }
+}
+
+async function loadStorage() {
+  try {
+    storage.value = await fetchSourceStorage();
+  } catch {
+    // Same: a missing size column beats an error banner over the grid.
   }
 }
 
@@ -338,13 +393,14 @@ let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), loadJobs()]);
+  await Promise.all([loadConfig(), loadJobs(), loadStorage()]);
   stream = openJobStream(() => void loadJobs());
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
   poll = setInterval(() => {
     void loadConfig();
     void loadJobs();
+    void loadStorage();
   }, 5000);
 });
 
@@ -392,10 +448,11 @@ onUnmounted(() => {
     </p>
 
     <p class="m2-note">
-      Account, document counts and storage columns aren’t here yet — each needs a backend
-      endpoint the design calls for. “Last status” is derived from the job queue, which records
-      whole runs rather than individual sources; a <code>~</code> marks a status inferred from a
-      run that covered several.
+      Account and document-count columns aren’t here yet — each needs a backend endpoint the
+      design calls for. “Bytes on disk” is a directory walk; hover a value for the split between
+      entities, attachments and rendered markdown. “Last status” comes from the job queue, which
+      records whole runs rather than individual sources, so a <code>~</code> marks a status
+      inferred from a run that covered several.
     </p>
 
     <SourceWizard

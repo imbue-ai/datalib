@@ -16,7 +16,7 @@
 // wizard never silently drops something it can't model.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
-import type { CatalogEntry, Field } from "./catalog";
+import type { CatalogEntry, Field, FieldPhase } from "./catalog";
 
 export type SourcePhase = "download" | "render";
 
@@ -177,17 +177,23 @@ export function paramsAreRepresentable(
   source: ConfiguredSource,
   entry: CatalogEntry,
 ): { ok: true } | { ok: false; unknown: string[] } {
-  const known = new Set((entry.fields ?? []).map((f) => f.target));
   const unknown: string[] = [];
   for (const step of source.steps) {
-    // Render params aren't modeled by any current descriptor; a render
-    // step carrying its own knobs is out of scope for the form.
-    const prefix = step.phase === "render" ? "render:" : "";
+    const known = new Set(fieldsFor(entry, step.phase).map((f) => f.target));
     for (const path of leafPaths(step.params)) {
-      if (!known.has(path)) unknown.push(prefix + path);
+      // Name the phase in the message: `common.input_path` means
+      // different things on a download and a render step, and the
+      // person reading this is about to go find it in the file.
+      if (!known.has(path)) unknown.push(`${step.phase}.${path}`);
     }
   }
   return unknown.length === 0 ? { ok: true } : { ok: false, unknown };
+}
+
+/// A descriptor's fields for one phase. `phase` is optional on a field
+/// and defaults to `download`, which is where all but a handful sit.
+export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
+  return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,10 +205,10 @@ export type FieldValues = Record<string, unknown>;
 /// Render the download step's `[steps.params.…]` body from form values.
 /// Emitted as sub-table headers, so it must come last within its step —
 /// in TOML every key after a table header belongs to that table.
-function paramsToml(entry: CatalogEntry, values: FieldValues): string {
+function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase): string {
   // Group by the table each target sits in (`sync.channels` → `sync`).
   const tables = new Map<string, string[]>();
-  for (const field of entry.fields ?? []) {
+  for (const field of fieldsFor(entry, phase)) {
     const value = values[field.target];
     if (!isSet(field, value)) continue;
     const dot = field.target.lastIndexOf(".");
@@ -213,11 +219,19 @@ function paramsToml(entry: CatalogEntry, values: FieldValues): string {
     tables.set(table, lines);
   }
   if (tables.size === 0) {
-    // An empty `sync` table is not the same as no sync block: for every
-    // API provider its *presence* selects the live-download path.
+    // On a render step, no knobs means no params at all.
+    if (phase === "render") return "";
+    // On a download step, an empty `sync` table is not the same as no
+    // sync block: for several providers its *presence* selects the
+    // live-download path over a file-backed one.
     return "[steps.params]\nsync = {}";
   }
+  // Shallowest table first, so `[steps.params]` precedes
+  // `[steps.params.common]`. TOML permits defining a super-table after
+  // a sub-table, but a generated file people are meant to read and
+  // hand-edit shouldn't make them work that out.
   return [...tables.entries()]
+    .sort(([a], [b]) => a.split(".").length - b.split(".").length || a.localeCompare(b))
     .map(([table, lines]) =>
       `[steps.params${table ? `.${table}` : ""}]\n${lines.join("\n")}`,
     )
@@ -261,18 +275,24 @@ export function buildStepPair(
   values: FieldValues,
 ): string {
   const divider = `# ── ${name} ${"─".repeat(Math.max(4, 66 - name.length))}`;
-  return `${divider}
-[[steps]]
+  const download = `[[steps]]
 id = "${name}.download"
 command = "datalib-step download ${entry.type}"
 outputs = ["${name}/raw"]
-${paramsToml(entry, values)}
+${paramsToml(entry, values, "download")}`;
 
-[[steps]]
+  // Download-only providers (lightroom, fsindex) render nothing, so
+  // they declare no render step at all.
+  if (entry.renderStep === false) return `${divider}\n${download.trimEnd()}`;
+
+  const renderParams = paramsToml(entry, values, "render");
+  const render = `[[steps]]
 id = "${name}.render"
 command = "datalib-step render ${entry.type}"
 inputs = ["${name}/raw"]
-outputs = ["${name}/rendered_md"]`;
+outputs = ["${name}/rendered_md"]${renderParams ? `\n${renderParams}` : ""}`;
+
+  return `${divider}\n${download.trimEnd()}\n\n${render}`;
 }
 
 /// Append a step pair to the config text. Always at the end: the DAG

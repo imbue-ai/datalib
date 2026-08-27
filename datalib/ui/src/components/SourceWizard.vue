@@ -131,6 +131,19 @@ const nameError = computed(() => {
   return null;
 });
 
+/// Fields the provider's Rust struct declares non-optional — a
+/// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
+/// fails at deserialize time rather than at sync time. Caught here so
+/// the message lands under the field instead of in a job log.
+const missingRequired = computed(() =>
+  (chosen.value?.fields ?? [])
+    .filter((f) => "required" in f && f.required)
+    .filter((f) => String(values.value[f.target] ?? "").trim() === "")
+    .map((f) => f.label),
+);
+
+const canSubmit = computed(() => !nameError.value && missingRequired.value.length === 0);
+
 const body = computed(() =>
   chosen.value ? buildStepPair(chosen.value, name.value.trim(), values.value) : "",
 );
@@ -147,7 +160,7 @@ function setListText(field: Field, text: string) {
 }
 
 function submit() {
-  if (nameError.value || !chosen.value) return;
+  if (!canSubmit.value || !chosen.value) return;
   emit("submit", { name: name.value.trim(), body: body.value, entry: chosen.value });
 }
 </script>
@@ -231,7 +244,10 @@ function submit() {
         </label>
 
         <label v-for="f in chosen.fields ?? []" :key="f.target" class="wiz-field">
-          <span class="wiz-label">{{ f.label }}</span>
+          <span class="wiz-label">
+            {{ f.label }}
+            <em v-if="'required' in f && f.required" class="wiz-req">required</em>
+          </span>
 
           <input
             v-if="f.kind === 'bool'"
@@ -252,6 +268,14 @@ function submit() {
             type="number"
             class="wiz-input"
             :value="values[f.target] as string"
+            @input="values[f.target] = ($event.target as HTMLInputElement).value"
+          />
+          <input
+            v-else-if="f.kind === 'path'"
+            class="wiz-input wiz-path"
+            :placeholder="f.placeholder"
+            :value="values[f.target] as string"
+            spellcheck="false"
             @input="values[f.target] = ($event.target as HTMLInputElement).value"
           />
           <input
@@ -280,11 +304,14 @@ function submit() {
       </div>
 
       <footer class="wiz-foot">
+        <span v-if="stage === 'configure' && missingRequired.length" class="wiz-foot-note">
+          Still needed: {{ missingRequired.join(", ") }}
+        </span>
         <button class="btn ghost" @click="emit('close')">Cancel</button>
         <button
           v-if="stage === 'configure'"
           class="btn primary"
-          :disabled="!!nameError"
+          :disabled="!canSubmit"
           @click="submit"
         >
           {{ isEdit ? "Save changes" : "Add source" }}
@@ -412,6 +439,17 @@ function submit() {
 .wiz-label { font-size: 12.5px; font-weight: 600; }
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
+.wiz-req {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--datalib-muted);
+  margin-left: 6px;
+}
+.wiz-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.wiz-foot-note { margin-right: auto; font-size: 12px; color: var(--datalib-muted); }
 
 .wiz-review { margin-top: 8px; }
 .wiz-review summary { cursor: pointer; font-size: 12.5px; color: var(--datalib-muted); }

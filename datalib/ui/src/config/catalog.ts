@@ -9,19 +9,39 @@
 // the shapes below are deliberately the shapes that endpoint should
 // return, so the swap is a fetch and a type import.
 //
-// Only `slack_api` and `claude_api` carry descriptors. Every other type
-// is listed so the picker shows the real breadth of what datalib
-// supports, but is marked `wizard: false` — picking one sends you to
-// the config editor rather than pretending a form exists.
+// Five types carry descriptors: `slack_api` and `claude_api` for the
+// credentialed path, and `lightroom` / `signal_backup` /
+// `whatsapp_backup` for the on-disk one. Every other type is listed so
+// the picker shows the real breadth of what datalib supports, but is
+// marked `wizard: false` — picking one sends you to the config editor
+// rather than pretending a form exists.
 
-/// A form field, mapped onto a dotted path into the download step's
-/// `params` tree (`sync.channels` → `[steps.params.sync] channels`).
+/// A form field, mapped onto a dotted path into a step's `params` tree
+/// (`sync.channels` → `[steps.params.sync] channels`).
+///
+/// `phase` says which of the source's two steps the value lands on.
+/// It defaults to `download`; the render step carries only render-time
+/// knobs, and the two params schemas are `deny_unknown_fields` on the
+/// Rust side, so putting a value on the wrong step fails loudly.
+export type FieldPhase = "download" | "render";
+
+type FieldBase = {
+  target: string;
+  label: string;
+  help?: string;
+  phase?: FieldPhase;
+};
+
 export type Field =
-  | { kind: "text"; target: string; label: string; help?: string; placeholder?: string }
-  | { kind: "date"; target: string; label: string; help?: string }
-  | { kind: "bool"; target: string; label: string; help?: string; default?: boolean }
-  | { kind: "int"; target: string; label: string; help?: string }
-  | { kind: "string_list"; target: string; label: string; help?: string; placeholder?: string };
+  | ({ kind: "text" } & FieldBase & { placeholder?: string; required?: boolean })
+  /// A path on the machine running the backend. Typed for now — the
+  /// design's file picker needs a `GET /api/fs/browse` endpoint, since
+  /// the UI has no Tauri IPC and is also served to a plain browser.
+  | ({ kind: "path" } & FieldBase & { placeholder?: string; required?: boolean; picks?: "file" | "dir" })
+  | ({ kind: "date" } & FieldBase)
+  | ({ kind: "bool" } & FieldBase & { default?: boolean })
+  | ({ kind: "int" } & FieldBase)
+  | ({ kind: "string_list" } & FieldBase & { placeholder?: string });
 
 export type CatalogEntry = {
   /// The `datalib-step download|render <type>` word.
@@ -38,6 +58,9 @@ export type CatalogEntry = {
   defaultName: string;
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
+  /// False for download-only providers, which render nothing and so
+  /// declare no render step (`lightroom`, `fsindex`). Defaults to true.
+  renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials.
   /// Used only for the credential UI: at request time latchkey picks
   /// the service by matching the URL, not by this string.
@@ -157,14 +180,136 @@ export const CATALOG: CatalogEntry[] = [
   { type: "claude_export", label: "Claude export", blurb: "Render an unpacked Claude data export already on disk.", keywords: ["claude", "anthropic", "export", "backup"], kind: "export", icon: "claude", defaultName: "claude-export", wizard: false },
   { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", wizard: false },
   { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", wizard: false },
-  { type: "signal_backup", label: "Signal", blurb: "Decrypt and mirror an Android Signal backup.", keywords: ["signal", "backup", "messages", "sms"], kind: "export", icon: "signal", defaultName: "signal", wizard: false },
-  { type: "whatsapp_backup", label: "WhatsApp", blurb: "Decrypt and mirror an Android crypt15 backup.", keywords: ["whatsapp", "backup", "messages"], kind: "export", icon: "whatsapp", defaultName: "whatsapp", wizard: false },
+  {
+    type: "signal_backup",
+    label: "Signal",
+    blurb: "Decrypt and mirror an Android Signal backup.",
+    keywords: ["signal", "backup", "messages", "sms", "chat"],
+    kind: "export",
+    icon: "signal",
+    defaultName: "signal",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        required: true,
+        target: "sync.snapshot_dir",
+        label: "Backup folder",
+        placeholder: "~/backups/SignalBackups",
+        help:
+          "The folder holding your signal-backup-* snapshots, pulled off the phone. " +
+          "The newest snapshot in it is the one decrypted.",
+      },
+      {
+        kind: "text",
+        target: "sync.aep_env_var",
+        label: "Passphrase environment variable",
+        placeholder: "SIGNAL_BACKUP_PASSPHRASE",
+        help:
+          "Name of the env var holding the backup passphrase — not the passphrase itself. " +
+          "The backend reads it at download time. Leave empty for the default.",
+      },
+      {
+        kind: "text",
+        target: "period",
+        phase: "render",
+        label: "Document span",
+        placeholder: "month",
+        help: "How much of a conversation goes in one rendered page: day, month, year or all.",
+      },
+    ],
+  },
+  {
+    type: "whatsapp_backup",
+    label: "WhatsApp",
+    blurb: "Decrypt and mirror an Android crypt15 backup.",
+    keywords: ["whatsapp", "backup", "messages", "chat"],
+    kind: "export",
+    icon: "whatsapp",
+    defaultName: "whatsapp",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        required: true,
+        target: "sync.backup_dir",
+        label: "WhatsApp folder",
+        placeholder: "~/backups/WhatsApp",
+        help:
+          "The WhatsApp/ directory pulled off the phone — the one containing " +
+          "Databases/msgstore.db.crypt15 and a Media/ tree.",
+      },
+      {
+        kind: "text",
+        target: "sync.key_env_var",
+        label: "Decryption-key environment variable",
+        placeholder: "WHATSAPP_BACKUP_DECRYPTION_KEY",
+        help:
+          "Name of the env var holding the hex-encoded 32-byte root key — not the key " +
+          "itself. Leave empty for the default.",
+      },
+    ],
+  },
   { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", wizard: false },
   { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", wizard: false },
 
   { type: "pdf", label: "PDFs", blurb: "Convert a directory tree of PDFs into searchable markdown.", keywords: ["pdf", "documents", "papers", "files"], kind: "local", icon: null, defaultName: "pdfs", wizard: false },
   { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
-  { type: "lightroom", label: "Lightroom", blurb: "Mirror a Lightroom Classic catalog, with full history.", keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite"], kind: "local", icon: null, defaultName: "lightroom", wizard: false },
+  {
+    type: "lightroom",
+    label: "Lightroom",
+    blurb: "Mirror a Lightroom Classic catalog, with full history.",
+    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images"],
+    kind: "local",
+    icon: null,
+    defaultName: "lightroom",
+    wizard: true,
+    // Download-only: a photo catalog isn't chat-shaped, so nothing is
+    // rendered and no render step is declared.
+    renderStep: false,
+    fields: [
+      {
+        kind: "path",
+        picks: "file",
+        required: true,
+        target: "common.input_path",
+        label: "Catalog file",
+        placeholder: "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat",
+        help:
+          "A .lrcat, which is an ordinary SQLite database. Every table is mirrored, and " +
+          "doltlite stores only what changed between runs — so prior states stay queryable.",
+      },
+      {
+        kind: "bool",
+        target: "skip_xmp",
+        label: "Skip XMP packets and search indexes",
+        default: false,
+        help:
+          "The bulkiest columns in a catalog, and wholly derived from columns that stay. " +
+          "Off by default: a backup should be faithful unless you say otherwise.",
+      },
+      {
+        kind: "bool",
+        target: "snapshot",
+        label: "Snapshot before reading",
+        default: true,
+        help:
+          "Take a VACUUM INTO copy first, so a catalog Lightroom has open can't be read " +
+          "half-written.",
+      },
+      {
+        kind: "bool",
+        target: "gc",
+        label: "Collect unreachable chunks each run",
+        default: false,
+        help:
+          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
+          "every run.",
+      },
+    ],
+  },
   { type: "perseus", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", wizard: false },
 ];
 
