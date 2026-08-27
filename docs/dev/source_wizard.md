@@ -783,11 +783,22 @@ paths, while the persisted scheduler state (`DagState.steps`, a
 turn. So the failure isn't a clean error, it's two steps fighting over
 one slot of bookkeeping.
 
-**Reserved names aren't enforced either.** `layout.rs` declares
-`RESERVED_STANZA_NAMES` — and it has **zero callers**, so nothing stops
-a source named `system`. The list is also now incomplete: it holds only
-`SYSTEM_DIR`, but `unified_index/` became a second reserved top-level
-directory in the same refactor that introduced it.
+**Reserved names are enforced on the wrong path.**
+`RESERVED_STANZA_NAMES` has exactly one caller —
+`migrate_config/src/legacy_stanza.rs::validate_source_name`, which runs
+only when converting a pre-TOML `config.yaml`. Nothing checked it on the
+live TOML path, so `config.toml` could name a source `system`. The list
+was also incomplete: it held only `SYSTEM_DIR`, while `unified_index/`
+became a second reserved top-level directory in the refactor that
+introduced it.
+
+Worth noting what else that migrator function does, since it is the only
+place source names are validated at all: it rejects `.`/`..`, a leading
+`-`, and anything outside the POSIX portable filename character set.
+**None of those rules apply to a `config.toml`.** Porting them is a
+separate change from the reserved-name fix — a step's `outputs` are
+free-form paths, not a `name` field — but a source called `../etc` is
+worth thinking about before the wizard starts generating names.
 
 Three fixes, smallest first, and the first two are worth doing whether or
 not the wizard ships:
@@ -797,7 +808,8 @@ not the wizard ships:
    malformed configs, so every entry point gets it — the wizard, a
    hand-edited file, and an agent's `PUT /api/config` alike.
 2. **Enforce `RESERVED_STANZA_NAMES`** at the same point, and add
-   `UNIFIED_INDEX_DIR` to the list.
+   `unified_index` to the list. One list, shared with the migrator, so
+   the two paths can't disagree about what a stanza may be called.
 3. **Make the wizard never propose a colliding name**: the name field
    starts from `default_name`, and if that is taken it suffixes
    (`slack-2`) and shows the conflict inline rather than failing on

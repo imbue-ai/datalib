@@ -384,8 +384,10 @@ pub enum ConfigError {
 /// (`[A-Za-z0-9._-]`); reject path separators, `.`/`..`, and a leading `-`
 /// (which would read as a flag to CLI tools).
 fn validate_source_name(name: &str) -> Result<(), &'static str> {
-    if datalib_core::layout::RESERVED_STANZA_NAMES.contains(&name) {
-        return Err("name is reserved (collides with the data_root/system directory)");
+    // One list, shared with the live TOML path's `validate_steps` — the
+    // migrator and the runner must agree on what a stanza may be called.
+    if datalib_dag::config::RESERVED_STANZA_NAMES.contains(&name) {
+        return Err("name is reserved (it names a top-level directory the pipeline owns)");
     }
     if name == "." || name == ".." {
         return Err("name must not be '.' or '..'");
