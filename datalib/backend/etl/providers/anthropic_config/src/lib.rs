@@ -53,8 +53,11 @@ pub struct ClaudeApiSync {
     /// needs refreshing, and a project is the only place some of a
     /// user's written context lives.
     ///
-    /// Ignored in `conv_uuids` mode, which is a targeted single-chat
-    /// refetch and skips the listing walk entirely.
+    /// Applies in `conv_uuids` mode too. That mode skips the
+    /// *conversation* listing walk, not this one: a targeted chat still
+    /// resolves its `project` grid column against the mirrored
+    /// projects, and would otherwise show a bare UUID. Set this to
+    /// `false` to opt out.
     #[serde(default = "default_true")]
     pub projects: bool,
     /// When non-empty, restrict the project mirror to exactly these
@@ -64,7 +67,8 @@ pub struct ClaudeApiSync {
     /// comes from — but every project outside this set is left alone.
     ///
     /// Intended for development and for bounding a first run against a
-    /// large account; leave it empty to mirror everything.
+    /// large account; leave it empty to mirror everything. Independent
+    /// of `conv_uuids`, which scopes conversations only.
     #[serde(default)]
     pub project_uuids: Vec<String>,
 }

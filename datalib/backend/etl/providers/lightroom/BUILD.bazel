@@ -108,9 +108,23 @@ rust_test(
 #
 # `requires-network`: hermetic and cached once fetched, but a cold cache
 # has to reach github.com.
+#
+# `medium` (300s), not `small` (60s): headroom for a loaded CI runner.
+# The body takes 6-13s on a dev machine, and the catalog download is an
+# `http_file` repository rule that runs at fetch time and so never counts
+# against this timeout — but it still hit 60.2s and TIMEOUT on #178, then
+# passed on a re-run of the same commit. What is special about CI is
+# contention: this test only runs there when something invalidates
+# `datalib_etl` (otherwise it is a cache hit), which is precisely the run
+# where the whole suite is rebuilding around it.
+#
+# Bazel will now warn that 6.5s is "outside of range for MODERATE tests"
+# on every warm run. That heuristic reads the warm path, which is the one
+# path that was never the problem. The warning is advisory and does not
+# fail the build; several other targets already trigger it.
 rust_test(
     name = "real_catalogs",
-    size = "small",
+    size = "medium",
     srcs = ["tests/real_catalogs.rs"],
     crate_name = "real_catalogs",
     data = [

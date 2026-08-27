@@ -18,7 +18,8 @@
 //! / `attach_hash` write API was retired once every provider moved
 //! to the per-provider edge shape; see git history for the old API.
 
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -241,6 +242,11 @@ pub fn extension_for_content_type(ct: Option<&str>) -> Option<String> {
         "text/markdown" => "md",
         "text/csv" => "csv",
         "text/html" => "html",
+        // Calendar invites arrive both as an inline `text/calendar;
+        // method=REQUEST` body part (no filename) and as an `invite.ics`
+        // attachment part. Without this arm the inline copy derives no
+        // extension at all and lands as a bare hex stem.
+        "text/calendar" | "text/x-vcalendar" | "application/ics" => "ics",
         "video/mp4" => "mp4",
         "video/quicktime" => "mov",
         "video/webm" => "webm",
@@ -262,6 +268,16 @@ pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
     Some(ext.to_ascii_lowercase())
 }
 
+/// Total order over the candidate names refs sharing one content hash
+/// derive, used by [`BlobBundle::names_by_blake3`] to pick a winner.
+/// Higher wins: a name carrying an extension beats a bare stem, and
+/// among equals the lexicographically smallest name wins (`Reverse`).
+/// Deliberately total — ties broken by `HashMap` order would make the
+/// rendered tree differ run to run.
+fn name_rank(name: &str) -> (bool, std::cmp::Reverse<&str>) {
+    (name.contains('.'), std::cmp::Reverse(name))
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // BlobBundle — per-doc unit of attachment data, read + write
 // ─────────────────────────────────────────────────────────────────────
@@ -279,6 +295,14 @@ pub struct Blob {
 impl Blob {
     /// Stable on-disk filename: `<short-blake3>.<ext>`. Extension comes
     /// from `content_type` when known, else from the upstream filename.
+    ///
+    /// The stem is content-addressed but the extension is derived from
+    /// **this ref's** metadata, so two refs holding identical bytes with
+    /// different metadata derive two names for one payload. Nothing
+    /// outside this module should call it directly — go through
+    /// [`BlobBundle::filename_for`], which resolves that disagreement to
+    /// one name per distinct content hash. See
+    /// [`BlobBundle::names_by_blake3`].
     pub fn rendered_filename(&self) -> String {
         let ext = extension_for_content_type(self.content_type.as_deref())
             .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()));
@@ -548,18 +572,88 @@ impl BlobBundle {
 
     // ── render side (sync) ───────────────────────────────────────────
 
-    /// Write every blob's bytes into `blobs_dir/<rendered_filename>`.
-    /// Skips a write when the target file already exists with the
-    /// expected size, so re-running render against the same bundle is
-    /// idempotent.
+    /// One filename per distinct content hash — the resolution every
+    /// other render-side method is built on.
+    ///
+    /// [`Blob::rendered_filename`] derives the extension from a single
+    /// ref's metadata, but the file it names is content-addressed: the
+    /// stem is `blake3[..16]`. So when one payload reaches the bundle
+    /// under two refs with different metadata, it derives two names and
+    /// gets written twice. A Google Calendar invite does exactly that —
+    /// the same iCalendar bytes arrive once as an inline `text/calendar`
+    /// MIME part (no upstream filename) and once as an `invite.ics`
+    /// attachment part — which used to leave `blobs/<stem>` beside
+    /// `blobs/<stem>.ics`, byte-identical, with only one of them linked.
+    ///
+    /// Collapsing on `blake3` rather than on the derived name is the
+    /// fix that generalizes: it does not depend on both refs happening
+    /// to derive the *same* extension, so an `application/octet-stream`
+    /// ref paired with a `report.pdf` ref collapses too.
+    ///
+    /// The winner is chosen by a total order over the candidate names —
+    /// prefer one carrying an extension, then the lexicographically
+    /// smallest — never by `by_ref` iteration order, which is a
+    /// `HashMap`'s and would make the rendered tree nondeterministic.
+    fn names_by_blake3(&self) -> BTreeMap<&str, String> {
+        let mut out: BTreeMap<&str, String> = BTreeMap::new();
+        for blob in self.by_ref.values() {
+            let cand = blob.rendered_filename();
+            match out.entry(blob.blake3.as_str()) {
+                Entry::Vacant(v) => {
+                    v.insert(cand);
+                }
+                Entry::Occupied(mut o) => {
+                    if name_rank(&cand) > name_rank(o.get()) {
+                        o.insert(cand);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The name `ref_id`'s bytes are materialized under, deduped across
+    /// every ref in the bundle sharing those bytes. Callers building a
+    /// `blobs/<file>` link MUST use this rather than
+    /// [`Blob::rendered_filename`], or the link can name a file
+    /// [`Self::materialize_to_dir`] chose not to write.
+    pub fn filename_for(&self, ref_id: &str) -> Option<String> {
+        let blob = self.by_ref.get(ref_id)?;
+        // Only this ref's hash-mates matter, so scan for the winner
+        // directly instead of building the whole map for one lookup.
+        let mut best = blob.rendered_filename();
+        for other in self.by_ref.values() {
+            if other.blake3 != blob.blake3 {
+                continue;
+            }
+            let cand = other.rendered_filename();
+            if name_rank(&cand) > name_rank(&best) {
+                best = cand;
+            }
+        }
+        Some(best)
+    }
+
+    /// Write each distinct payload's bytes into
+    /// `blobs_dir/<filename_for(ref)>`, once — refs sharing a content
+    /// hash share the one file. Skips a write when the target already
+    /// exists with the expected size, so re-running render against the
+    /// same bundle is idempotent.
     pub fn materialize_to_dir(&self, blobs_dir: &Path) -> std::io::Result<()> {
         if self.by_ref.is_empty() {
             return Ok(());
         }
         std::fs::create_dir_all(blobs_dir)?;
+        let names = self.names_by_blake3();
+        let mut by_hash: HashMap<&str, &Blob> = HashMap::new();
         for blob in self.by_ref.values() {
-            let fname = blob.rendered_filename();
-            let abs = blobs_dir.join(&fname);
+            by_hash.entry(blob.blake3.as_str()).or_insert(blob);
+        }
+        for (hash, fname) in &names {
+            let Some(blob) = by_hash.get(hash) else {
+                continue;
+            };
+            let abs = blobs_dir.join(fname);
             if let Ok(meta) = std::fs::metadata(&abs) {
                 if meta.len() == blob.bytes.len() as u64 {
                     continue;
@@ -578,13 +672,16 @@ impl BlobBundle {
             let label = display.unwrap_or(ref_id);
             return format!("*[attachment not yet fetched: {label}]*");
         };
+        let fname = self
+            .filename_for(ref_id)
+            .unwrap_or_else(|| blob.rendered_filename());
         let display_clean = display.unwrap_or("").replace(']', "");
         let alt = if display_clean.is_empty() {
-            blob.rendered_filename()
+            fname.clone()
         } else {
             display_clean
         };
-        let link = format!("blobs/{}", blob.rendered_filename());
+        let link = format!("blobs/{fname}");
         if is_image {
             format!("![{alt}]({link})")
         } else {
@@ -1057,6 +1154,109 @@ mod tests {
         let s = b.markdown_link("img-1", Some("kitten.png"), true);
         assert!(s.starts_with("![kitten.png](blobs/"));
         assert!(s.ends_with(".png)"));
+    }
+
+    /// `text/calendar` was simply missing from the extension table, so
+    /// an inline invite part derived no extension at all.
+    #[test]
+    fn calendar_content_type_yields_ics() {
+        assert_eq!(
+            extension_for_content_type(Some("text/calendar; method=REQUEST")).as_deref(),
+            Some("ics")
+        );
+    }
+
+    /// The shape that produced byte-identical `blobs/<stem>` +
+    /// `blobs/<stem>.ics` pairs: one payload reaching the bundle under
+    /// two refs whose metadata derives different extensions.
+    ///
+    /// Deliberately NOT the calendar case — with `text/calendar` in the
+    /// extension table both refs now derive `.ics` and collide onto one
+    /// name anyway, so a calendar-shaped assertion here would pass with
+    /// the dedupe removed. An unmappable content type paired with a
+    /// named attachment fails without it.
+    #[test]
+    fn identical_bytes_under_two_refs_resolve_to_one_name() {
+        const BYTES: &[u8] = b"one payload, two refs";
+        let mut b = BlobBundle::new();
+        // An inline MIME part whose type maps to no extension, with no
+        // upstream filename to fall back to: a bare hex stem.
+        b.add(
+            "inline:x",
+            BYTES.to_vec(),
+            Some("application/x-thing".into()),
+            None,
+        );
+        // The same bytes again as a named attachment part.
+        b.add("att:x", BYTES.to_vec(), None, Some("report.pdf".into()));
+        let inline = b.filename_for("inline:x").unwrap();
+        let att = b.filename_for("att:x").unwrap();
+        assert_eq!(inline, att, "one payload, one name");
+        assert!(att.ends_with(".pdf"), "keeps the usable extension: {att}");
+        assert_eq!(b.names_by_blake3().len(), 1, "one file per content hash");
+    }
+
+    /// The winner must not come from `HashMap` iteration order, or the
+    /// rendered tree differs run to run.
+    #[test]
+    fn resolved_name_is_deterministic_across_insertion_orders() {
+        const BYTES: &[u8] = b"same-payload-either-way";
+        let build = |flip: bool| {
+            let mut b = BlobBundle::new();
+            let refs: [(&str, Option<String>, Option<String>); 3] = [
+                ("a", Some("application/octet-stream".into()), None),
+                ("b", None, Some("report.pdf".into())),
+                ("c", None, Some("report.zip".into())),
+            ];
+            let order: Vec<usize> = if flip { vec![2, 1, 0] } else { vec![0, 1, 2] };
+            for i in order {
+                let (r, ct, name) = &refs[i];
+                b.add(*r, BYTES.to_vec(), ct.clone(), name.clone());
+            }
+            b
+        };
+        let fwd = build(false);
+        let rev = build(true);
+        for r in ["a", "b", "c"] {
+            assert_eq!(fwd.filename_for(r), rev.filename_for(r), "ref {r}");
+            assert_eq!(fwd.filename_for("a"), fwd.filename_for(r), "ref {r}");
+        }
+        // `.pdf` < `.zip` lexicographically, and both beat the bare stem
+        // `application/octet-stream` alone would give.
+        assert!(fwd.filename_for("a").unwrap().ends_with(".pdf"));
+    }
+
+    /// Every ref sharing a payload writes one file, and `markdown_link`
+    /// points at it from both sides.
+    #[test]
+    fn materialize_writes_shared_payload_once() {
+        let d = tempdir().unwrap();
+        const BYTES: &[u8] = b"one payload, two refs";
+        let mut b = BlobBundle::new();
+        b.add(
+            "inline:x",
+            BYTES.to_vec(),
+            Some("application/x-thing".into()),
+            None,
+        );
+        b.add("att:x", BYTES.to_vec(), None, Some("report.pdf".into()));
+        let blobs_dir = d.path().join("blobs");
+        b.materialize_to_dir(&blobs_dir).unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(&blobs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 1, "one file, not two: {names:?}");
+        let written = format!("blobs/{}", names[0]);
+        for r in ["inline:x", "att:x"] {
+            let link = b.markdown_link(r, Some("report.pdf"), false);
+            assert!(
+                link.contains(&written),
+                "link for {r} must name the written file: {link}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -31,7 +31,7 @@ use sqlx::Row;
 /// v3 = attachment bytes now stream through `datalib_etl::blob_cas`
 /// (the same store every other chat-style provider uses). The on-disk
 /// `blobs/<short>.<ext>` filename is whatever
-/// `Blob::rendered_filename` picks, which is blake3-prefixed (was
+/// `BlobBundle::filename_for` picks, which is blake3-prefixed (was
 /// sha256-prefixed in v2); existing docs all rebuild.
 ///
 /// v2 = attachments now materialize bytes into the rendered page's

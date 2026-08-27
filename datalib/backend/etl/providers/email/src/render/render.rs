@@ -288,9 +288,41 @@ fn build_chat(
             .map(|b| ParsedEml::from_eml_bytes(&b.bytes))
             .unwrap_or_default();
 
-        // Inline `.eml` image parts → bundle (content-addressed ref so
+        // Real downloadable attachments → bundle. Filled BEFORE the
+        // inline parts so the inline pass can recognize a part that is
+        // byte-for-byte one of them — Google Calendar ships the same
+        // iCalendar payload both ways on every invite (an inline
+        // `text/calendar; method=REQUEST` part plus an `invite.ics`
+        // attachment part).
+        let atts: &[LoadedAttachment] = bucket
+            .joins
+            .attachments
+            .get(&em.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        //
+        // `listed_hashes` holds only the ones that reach the "###
+        // Attachments" list below — inline-dispositioned attachments are
+        // filtered out of that list, so their bytes still need a body
+        // reference or nothing would link them at all.
+        let mut listed_hashes: HashSet<String> = HashSet::new();
+        for a in atts {
+            if let Some(blob) = bucket.blobs.get(&a.blob_id) {
+                if !is_inline_attachment(a) {
+                    listed_hashes.insert(blob.blake3.clone());
+                }
+                render_bundle.add(
+                    a.blob_id.clone(),
+                    blob.bytes.clone(),
+                    blob.content_type.clone(),
+                    blob.upstream_name.clone(),
+                );
+            }
+        }
+
+        // Inline `.eml` body parts → bundle (content-addressed ref so
         // the same image across replies collapses to one file).
-        let mut inline_cid_to_fname: HashMap<String, String> = HashMap::new();
+        let mut inline_cid_refs: Vec<(String, String)> = Vec::new();
         let mut loose_inline: Vec<String> = Vec::new();
         for inline in &parsed_eml.inline_parts {
             let b3 = blake3_hex(&inline.bytes);
@@ -301,43 +333,41 @@ fn build_chat(
                 inline.content_type.clone(),
                 None,
             );
-            let fname = render_bundle
-                .get(&ref_id)
-                .map(|b| b.rendered_filename())
-                .unwrap_or_default();
             match &inline.cid {
-                Some(cid) => {
-                    inline_cid_to_fname.entry(cid.clone()).or_insert(fname);
-                }
+                Some(cid) => inline_cid_refs.push((cid.clone(), ref_id)),
                 None => {
-                    if !loose_inline.iter().any(|f| f == &fname) {
-                        loose_inline.push(fname);
+                    // A non-image part that the attachment list already
+                    // links adds nothing as a second body link — and
+                    // that is the shape a calendar invite takes. Images
+                    // keep their inline preview even when also listed;
+                    // seeing the picture beats a second link to it.
+                    let is_image = inline
+                        .content_type
+                        .as_deref()
+                        .is_some_and(|ct| ct.starts_with("image/"));
+                    if (!is_image && listed_hashes.contains(&b3)) || loose_inline.contains(&ref_id)
+                    {
+                        continue;
                     }
+                    loose_inline.push(ref_id);
                 }
             }
         }
 
-        // Real downloadable attachments → bundle; collect blob_id→fname
-        // for the cid rewrite + the "### Attachments" list.
-        let atts: &[LoadedAttachment] = bucket
-            .joins
-            .attachments
-            .get(&em.id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let mut materialized: HashMap<String, String> = HashMap::new();
-        for a in atts {
-            if let Some(blob) = bucket.blobs.get(&a.blob_id) {
-                let fname = blob.rendered_filename();
-                render_bundle.add(
-                    a.blob_id.clone(),
-                    blob.bytes.clone(),
-                    blob.content_type.clone(),
-                    blob.upstream_name.clone(),
-                );
-                materialized.insert(a.blob_id.clone(), fname);
+        // Names resolve only once every ref is in the bundle:
+        // `filename_for` collapses refs sharing a content hash onto a
+        // single name, so a mid-fill lookup can hand back a name the
+        // finished bundle won't materialize.
+        let mut inline_cid_to_fname: HashMap<String, String> = HashMap::new();
+        for (cid, ref_id) in inline_cid_refs {
+            if let Some(fname) = render_bundle.filename_for(&ref_id) {
+                inline_cid_to_fname.entry(cid).or_insert(fname);
             }
         }
+        let materialized: HashMap<String, String> = atts
+            .iter()
+            .filter_map(|a| Some((a.blob_id.clone(), render_bundle.filename_for(&a.blob_id)?)))
+            .collect();
 
         // Body markdown (HTML → md, cid → blobs/<fname>), then fold the
         // quoted reply history.
@@ -357,10 +387,25 @@ fn build_chat(
             text.push_str(&q);
         }
         // Loose inline parts the body never referenced.
-        for fname in &loose_inline {
+        for ref_id in &loose_inline {
+            let Some(fname) = render_bundle.filename_for(ref_id) else {
+                continue;
+            };
             let link = format!("blobs/{fname}");
-            if !text.contains(&link) {
-                text.push_str(&format!("\n\n![](blobs/{fname})"));
+            if text.contains(&link) {
+                continue;
+            }
+            // Image syntax only for images. A non-image part emitted as
+            // `![](…)` renders as a broken image rather than something
+            // the reader can open.
+            let is_image = render_bundle
+                .get(ref_id)
+                .and_then(|b| b.content_type.as_deref())
+                .is_some_and(|ct| ct.starts_with("image/"));
+            if is_image {
+                text.push_str(&format!("\n\n![]({link})"));
+            } else {
+                text.push_str(&format!("\n\n[\\[file\\] {fname}]({link})"));
             }
         }
         // Attachment list (excluding inline parts already in the body).

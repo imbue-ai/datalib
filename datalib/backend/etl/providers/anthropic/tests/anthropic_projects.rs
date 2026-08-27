@@ -139,6 +139,73 @@ async fn projects_mirror_end_to_end() {
     round_trip_and_only_refetch_when_upstream_moves().await;
     project_uuids_bounds_the_walk().await;
     projects_can_be_disabled().await;
+    conv_uuids_scopes_conversations_not_projects().await;
+}
+
+/// `conv_uuids` scopes *conversations*. It used to short-circuit the
+/// whole run before the project walk, so a targeted refetch mirrored no
+/// projects at all — and `sync.projects` (default on) and an explicit
+/// `sync.project_uuids` were both silently ignored.
+///
+/// That is the wrong default precisely because of what the targeted
+/// conversation needs: it resolves its `project` grid column through
+/// `project_name_by_uuid`, so with no projects mirrored the column shows
+/// a bare UUID instead of the project's name.
+async fn conv_uuids_scopes_conversations_not_projects() {
+    let d = tempdir().unwrap();
+    let api = d.path().join("input_snapshot");
+    let playback = d.path().join("playback");
+    let raw = d.path().join("raw");
+    fs::create_dir_all(&raw).unwrap();
+    seed(&api, &playback, "2025-01-03T00:00:00Z");
+    std::env::set_var(PLAYBACK_ENV, &playback);
+
+    let s = fetch(FetchOptions {
+        conv_uuids: vec!["c1".to_string()],
+        ..opts(&raw, &api)
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        s.projects_fetched, 2,
+        "a targeted chat refetch still mirrors projects"
+    );
+    assert_eq!(s.project_docs_fetched, 3, "and their knowledge docs");
+
+    let parsed = parse(&raw, None).expect("parse the raw store");
+    assert_eq!(
+        parsed.project_name_by_uuid.get(PROJECT).map(String::as_str),
+        Some("Bridge Operations"),
+        "so the targeted conversation resolves a name, not a bare UUID"
+    );
+
+    // The two knobs are independent: `project_uuids` narrows the project
+    // walk whether or not conversations are scoped.
+    let raw2 = d.path().join("raw2");
+    fs::create_dir_all(&raw2).unwrap();
+    let s2 = fetch(FetchOptions {
+        conv_uuids: vec!["c1".to_string()],
+        project_uuids: vec![PROJECT.to_string()],
+        ..opts(&raw2, &api)
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        s2.projects_fetched, 1,
+        "an explicit project_uuids is honored, not swallowed by conv_uuids"
+    );
+
+    // And `projects = false` still switches it off in this mode.
+    let raw3 = d.path().join("raw3");
+    fs::create_dir_all(&raw3).unwrap();
+    let s3 = fetch(FetchOptions {
+        conv_uuids: vec!["c1".to_string()],
+        projects: false,
+        ..opts(&raw3, &api)
+    })
+    .await
+    .unwrap();
+    assert_eq!(s3.projects_fetched, 0, "the off switch still works");
 }
 
 async fn round_trip_and_only_refetch_when_upstream_moves() {
