@@ -199,8 +199,9 @@ app's own components and endpoints, which the scheduler never sees
 It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin (`DEFAULT_QMD_VERSION`
-in `datalib/backend/core/src/qmd/mod.rs`): the Tauri app bundles a pinned Node
-runtime plus registry-installed `latchkey`/`qmd` trees (staged by
+in `datalib/backend/unified_index/src/qmd/mod.rs`): the Tauri app
+bundles a pinned Node runtime plus registry-installed `latchkey`/`qmd`
+trees (staged by
 `datalib/tauri/stage-runtime.sh`, resolved by
 `datalib_core::node_runtime`), and every other environment — and
 the app, when a pinned version isn't staged — falls back to

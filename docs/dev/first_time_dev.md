@@ -235,7 +235,7 @@ fixture genrule both stage one), else `npx -y @tobilu/qmd@<version>` —
 with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/unified_index/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/rendered_md/**/*.md` mask), alongside the per-stanza
 `<name>/rendered_md/` trees and `unified_index/grid/db.doltlite_db`. This is what the search bar's hybrid / vector
-queries hit (see `datalib/backend/core/src/qmd/`).
+queries hit (see `datalib/backend/unified_index/src/qmd/`).
 
 Design notes:
 
