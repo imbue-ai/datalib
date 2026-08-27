@@ -381,6 +381,9 @@ export type SyncJob = {
 
 export type SourceStorage = {
   name: string;
+  /// Absolute path of the stanza directory, for the desktop app's
+  /// reveal-in-file-manager IPC.
+  path: string;
   raw_bytes: number;
   blobs_bytes: number;
   rendered_bytes: number;

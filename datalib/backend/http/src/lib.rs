@@ -1071,6 +1071,11 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
 pub struct SourceStorage {
     /// Stanza name — the source's directory under the data root.
     pub name: String,
+    /// Absolute path of that directory. Sent so the UI can hand it to
+    /// the desktop app's reveal-in-file-manager IPC without having to
+    /// reassemble it from the data root and the name — the server is
+    /// the side that knows where the root actually is.
+    pub path: String,
     /// `<root>/<name>/raw/`, excluding the blob CAS below.
     pub raw_bytes: u64,
     /// `<root>/<name>/raw/blobs.doltlite_db`.
@@ -1160,6 +1165,7 @@ async fn sources_storage(State(s): State<AppState>) -> Json<Vec<SourceStorage>> 
             SourceStorage {
                 present: stanza.is_dir(),
                 total_bytes: raw_bytes + blobs_bytes + rendered_bytes,
+                path: stanza.to_string_lossy().into_owned(),
                 name,
                 raw_bytes,
                 blobs_bytes,

@@ -2,9 +2,10 @@
 // Manager2 — the Manage tab inverted, per docs/dev/source_wizard.md.
 //
 // A grid of configured sources is the page; "Add Data Source" sits
-// above it; each row carries Run / Edit / Delete. The raw config
-// editor is not here at all — it stays on the Manage tab while this
-// one is proven out.
+// above it; each row carries Run / Edit / Delete, plus Reveal in the
+// desktop app. The raw config editor is here but collapsed — demoted,
+// not removed, because it stays the source of truth and the wizard's
+// "edit as TOML" escape hatch has to lead somewhere.
 //
 // Everything is derived from the config text, which stays the single
 // source of truth: rows come from parsing it, and add/edit/delete
@@ -21,7 +22,7 @@
 // job attributes its outcome to every source it named. The design's
 // `step_runs` table is what makes these honest; until then the column
 // says so on hover.
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -56,6 +57,7 @@ import {
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import SourceWizard from "@/components/SourceWizard.vue";
+import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
@@ -69,6 +71,17 @@ const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
 const storage = ref<SourceStorage[]>([]);
 const sources = ref<ConfiguredSource[]>([]);
+
+// The Advanced disclosure. Closed on load: the point of this tab is
+// that a text editor is not the first thing you meet.
+const configOpen = ref(false);
+const configDirty = ref(false);
+const editorEl = ref<HTMLTextAreaElement | null>(null);
+
+// Resolved once — the desktop bridge either exists for this window or
+// it doesn't, and the label depends only on the platform.
+const canReveal = isDesktopApp();
+const revealLabel = revealActionLabel();
 
 const wizardOpen = ref(false);
 const editing = ref<{ source: ConfiguredSource; entry: CatalogEntry } | null>(null);
@@ -234,7 +247,7 @@ const columnDefs: ColDef<Row>[] = [
     sortable: false,
     filter: false,
     flex: 1,
-    minWidth: 210,
+    minWidth: canReveal ? 350 : 250,
     valueGetter: (p: ValueGetterParams<Row>) => p.data?.name,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
@@ -256,6 +269,17 @@ const columnDefs: ColDef<Row>[] = [
       const row = p.data!;
       mk("Run", "", null, () => runSource(row.name));
       mk("Edit", "", row.editBlocked, () => openEdit(row.name));
+      // Absent rather than disabled in a plain browser — the same
+      // "a missing menu item, not a broken one" rule desktop.ts states.
+      if (canReveal) {
+        mk(
+          revealLabel,
+          "muted",
+          row.storage?.present ? null : "Nothing on disk yet — this source hasn't synced.",
+          () => reveal(row.name),
+        );
+      }
+      mk("Config", "muted", null, () => showInConfig(row.name));
       mk("Delete", "danger", null, () => deleteSource(row.name));
       return wrap;
     },
@@ -282,6 +306,9 @@ async function loadConfig() {
     let cfg = await fetchConfig();
     if (!cfg.exists) cfg = await fetchConfigScaffold();
     configPath.value = cfg.path;
+    // The poll must never overwrite what someone is typing into the
+    // Advanced editor. Their text wins until they save or discard.
+    if (configDirty.value) return;
     configText.value = cfg.text;
     reparse();
   } catch (e) {
@@ -319,6 +346,7 @@ async function writeConfig(text: string, what: string) {
       return false;
     }
     configText.value = text;
+    configDirty.value = false;
     reparse();
     banner.value = { ok: true, text: what };
     return true;
@@ -369,6 +397,53 @@ async function deleteSource(name: string) {
   );
   if (!ok) return;
   await writeConfig(removeSource(configText.value, source), `Removed ${name}.`);
+}
+
+async function reveal(name: string) {
+  const path = rows.value.find((r) => r.name === name)?.storage?.path;
+  if (!path) return;
+  const ok = await revealInFileManager(path);
+  if (!ok) {
+    banner.value = { ok: false, text: `Could not open ${path} in the file manager.` };
+  }
+}
+
+/// Open the Advanced editor and select this source's stanza in it.
+///
+/// A textarea doesn't scroll to its own selection, so estimate the
+/// target line's offset from the line count and the computed line
+/// height — the same approach the Manage tab's "Locate config" uses.
+async function showInConfig(name: string) {
+  const source = sources.value.find((s) => s.name === name);
+  if (!source) return;
+  configOpen.value = true;
+  await nextTick();
+  const el = editorEl.value;
+  if (!el) return;
+  el.focus();
+  // A zero range means the step has no tables of its own to select —
+  // an inline `steps = [{…}]` entry. Leave the cursor alone rather
+  // than selecting some unrelated span.
+  if (source.end === 0) return;
+  el.setSelectionRange(source.start, source.end);
+  const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 16;
+  const line = configText.value.slice(0, source.start).split("\n").length - 1;
+  el.scrollTop = Math.max(0, line * lineHeight - el.clientHeight / 3);
+}
+
+function onConfigEdit() {
+  configDirty.value = true;
+  banner.value = null;
+}
+
+async function saveConfigEdits() {
+  await writeConfig(configText.value, "Saved the config.");
+}
+
+async function discardConfigEdits() {
+  configDirty.value = false;
+  await loadConfig();
+  banner.value = null;
 }
 
 async function runSource(name: string) {
@@ -455,6 +530,33 @@ onUnmounted(() => {
       inferred from a run that covered several.
     </p>
 
+    <details class="m2-advanced" :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
+      <summary>Advanced — edit <code>config.toml</code> directly</summary>
+      <p class="m2-advanced-note">
+        The file is the source of truth; everything above is a view of it. This is where to go
+        for anything the forms don’t model — a source type with no wizard yet, or a knob like
+        <code>common.download_params</code> that would make a row’s Edit button refuse.
+      </p>
+      <textarea
+        ref="editorEl"
+        v-model="configText"
+        class="m2-editor"
+        spellcheck="false"
+        @input="onConfigEdit"
+      />
+      <div class="m2-advanced-actions">
+        <button class="m2-btn" :disabled="!configDirty || busy" @click="saveConfigEdits">
+          Save
+        </button>
+        <button class="m2-btn muted" :disabled="!configDirty || busy" @click="discardConfigEdits">
+          Discard changes
+        </button>
+        <span v-if="configDirty" class="m2-advanced-dirty">
+          Unsaved — the grid above still shows the last saved version.
+        </span>
+      </div>
+    </details>
+
     <SourceWizard
       v-if="wizardOpen"
       :taken-names="takenNames"
@@ -489,6 +591,46 @@ onUnmounted(() => {
 
 .m2-grid { margin-top: 16px; }
 .m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
+.m2-advanced {
+  margin-top: 24px;
+  border-top: 1px solid var(--datalib-border);
+  padding-top: 14px;
+}
+.m2-advanced > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--datalib-muted);
+  user-select: none;
+}
+.m2-advanced > summary:hover { color: var(--datalib-fg); }
+.m2-advanced-note {
+  margin: 12px 0 8px;
+  font-size: 12.5px;
+  color: var(--datalib-muted);
+  line-height: 1.6;
+  max-width: 76ch;
+}
+.m2-editor {
+  width: 100%;
+  min-height: 340px;
+  padding: 10px 12px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 5px;
+  background: var(--datalib-input-bg);
+  color: var(--datalib-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.m2-advanced-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.m2-advanced-dirty { font-size: 12px; color: var(--datalib-muted); }
+
 .m2-note {
   margin-top: 20px;
   color: var(--datalib-muted);
@@ -522,4 +664,6 @@ onUnmounted(() => {
 .m2-btn:hover:not(:disabled) { background: var(--datalib-hover); }
 .m2-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .m2-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
+.m2-btn.muted { color: var(--datalib-muted); }
+.m2-btn.muted:hover:not(:disabled) { color: var(--datalib-fg); }
 </style>
