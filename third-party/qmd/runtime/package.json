@@ -2,7 +2,7 @@
   "name": "datalib-qmd-runtime",
   "version": "0.0.0",
   "private": true,
-  "//": "Bazel-managed replacement for `npx -y @tobilu/qmd@<v>`. One dependency, pinned to DEFAULT_QMD_VERSION in datalib/backend/core/src/qmd/mod.rs; //tools:qmd_version_pins_test keeps the two in step. npm_translate_lock turns the lockfile below into integrity-checked Bazel fetches, which is what `npx -y` never gave us.",
+  "//": "Bazel-managed replacement for `npx -y @tobilu/qmd@<v>`. One dependency, pinned to DEFAULT_QMD_VERSION in datalib/backend/unified_index/src/qmd/mod.rs; //tools:qmd_version_pins_test keeps the two in step. npm_translate_lock turns the lockfile below into integrity-checked Bazel fetches, which is what `npx -y` never gave us.",
   "dependencies": {
     "@tobilu/qmd": "2.5.3"
   },
