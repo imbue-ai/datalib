@@ -116,14 +116,18 @@ and the guide it reads can't drift apart.
    gh repo clone qi-imbue/datalib-inspiration   # or, in an existing clone:
    git checkout main && git pull
    ```
-2. Replace every `v<old>` datalib pin with `vX.Y.Z` in exactly three
-   files — `.agents/skills/datalib/SKILL.md`, `README.md`, and
-   `inspiration-datalib.md`. That covers the `install.sh` raw URL, the
-   `DATALIB_VERSION` env var, the `docs/agent_user.md` links (including
-   the relative-link base), and the "pinned to datalib v..." prose. Grep
-   the three files for the literal old version — `grep -n v<old> README.md
-   inspiration-datalib.md .agents/skills/datalib/SKILL.md` — rather than
-   for a URL shape; the pins are spelled several different ways.
+2. Replace every `v<old>` datalib pin with `vX.Y.Z` in exactly four
+   files — `.agents/skills/datalib/SKILL.md`, `README.md`,
+   `inspiration-datalib.md`, and `system/apps/data/run_datalib_http.sh`.
+   That covers the `install.sh` raw URL, the `DATALIB_VERSION` env var
+   (it appears twice: the skill installs the binaries on first use, and
+   the web-UI service installs them at boot if the skill hasn't yet —
+   they must agree), the `docs/agent_user.md` links (including the
+   relative-link base), and the "pinned to datalib v..." prose. Grep the
+   four files for the literal old version — `grep -n v<old> README.md
+   inspiration-datalib.md .agents/skills/datalib/SKILL.md
+   system/apps/data/run_datalib_http.sh` — rather than for a URL shape;
+   the pins are spelled several different ways.
 3. Leave two things alone:
    - `system/vendor/mngr/**`, which is vendored from mngr. Its
      `DATALIB_CURL_VERSION` pins the datalib *curl* release the latchkey
