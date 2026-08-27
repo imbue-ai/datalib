@@ -331,6 +331,36 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
         }
 
+        // Projects come before the conversation walk — including the
+        // targeted `conv_uuids` walk below — so a rename lands in the
+        // same run as the conversations that dereference it. Scoping to
+        // specific conversations does not mean wanting their project
+        // labels stale: a conversation resolves its `project` grid
+        // column through `project_name_by_uuid`, and with no projects
+        // mirrored that column falls back to a bare UUID.
+        //
+        // `project_uuids` is the knob for narrowing this walk; empty
+        // means every project. Best-effort: a project failure warns and
+        // is counted, but does not abort the chat mirror, which is the
+        // main event.
+        if opts.projects {
+            let only: HashSet<String> = opts
+                .project_uuids
+                .iter()
+                .map(|s| datalib_etl::ids::normalize_id_token(s))
+                .collect();
+            sync_projects(
+                &mut client,
+                &db,
+                &orgs,
+                &only,
+                &mut summary,
+                &opts.progress,
+                &now,
+            )
+            .await;
+        }
+
         if !opts.conv_uuids.is_empty() {
             opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
             for raw in &opts.conv_uuids {
@@ -349,28 +379,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .await?;
             }
             return Ok::<(), anyhow::Error>(());
-        }
-
-        // Projects come before the conversation walk so a rename lands
-        // in the same run as the conversations that dereference it.
-        // Best-effort: a project failure warns and is counted, but does
-        // not abort the chat mirror, which is the main event.
-        if opts.projects {
-            let only: HashSet<String> = opts
-                .project_uuids
-                .iter()
-                .map(|s| datalib_etl::ids::normalize_id_token(s))
-                .collect();
-            sync_projects(
-                &mut client,
-                &db,
-                &orgs,
-                &only,
-                &mut summary,
-                &opts.progress,
-                &now,
-            )
-            .await;
         }
 
         // Pass 1: list every org, classify. Collect the per-org fetch

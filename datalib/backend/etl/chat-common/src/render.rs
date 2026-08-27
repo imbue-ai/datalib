@@ -208,7 +208,7 @@ fn render_one(
 /// Write every blob in the per-chat bundle into
 /// `<page_dir>/blobs/<short-blake3>.<ext>`, then walk `doc.items` and
 /// — for every attachment whose `ref_id` resolves in the bundle — set
-/// `rel_path = "blobs/<rendered_filename>"` so the markdown emitter
+/// `rel_path = "blobs/<filename_for(ref)>"` so the markdown emitter
 /// picks up the materialized blob instead of the "(not yet fetched)"
 /// placeholder. Same shape slack's bucket-side render uses.
 ///
@@ -238,8 +238,8 @@ fn materialize_attachment_bytes(
             let Some(ref_id) = att.ref_id.as_deref() else {
                 continue;
             };
-            if let Some(blob) = blobs.get(ref_id) {
-                att.rel_path = Some(format!("blobs/{}", blob.rendered_filename()));
+            if let Some(fname) = blobs.filename_for(ref_id) {
+                att.rel_path = Some(format!("blobs/{fname}"));
             }
         }
     }
