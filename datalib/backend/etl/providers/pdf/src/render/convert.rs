@@ -46,15 +46,13 @@ use std::path::Path;
 /// previously-rendered documents — the markdown itself, or the shape of
 /// the `grid_rows` projected from it.
 ///
-/// It genuinely participates in the cache key, via
-/// [`render_fingerprint`](super::render_fingerprint). That indirection
-/// is necessary: the framework stores this in
-/// `markdowns.renderer_version` and that column's doc comment claims a
-/// bump "invalidates every cache entry at once", but `load_fingerprints`
-/// selects only `(markdown_uuid, source_fingerprint)` and never reads
-/// the version back. Relying on the documented behavior would mean an
-/// existing install silently keeps stale output forever, since a
-/// document's content hash does not change when our renderer does.
+/// It participates in the cache key via
+/// [`render_fingerprint`](super::render_fingerprint), which folds it
+/// into `source_fingerprint`. That is how every provider does it: the
+/// render step's skip key is the only thing that decides whether a
+/// document is re-rendered, so a version bump has to move that value or
+/// it does nothing. A document's content hash does not change when our
+/// renderer does.
 ///
 /// This is also the hook that makes an OCR engine swappable later:
 /// turning OCR on bumps this, and every affected document re-renders

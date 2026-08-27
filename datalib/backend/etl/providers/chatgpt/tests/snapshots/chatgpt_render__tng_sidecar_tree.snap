@@ -6,8 +6,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001",
-    "source_fingerprint": "002150b21f0826ce07f33336f08f0d3d7cfddee7678c89481db114e08a20cf93",
-    "render_version": 4
+    "source_fingerprint": "002150b21f0826ce07f33336f08f0d3d7cfddee7678c89481db114e08a20cf93"
   },
   "rows": [
     {
@@ -146,8 +145,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002",
-    "source_fingerprint": "20c31d39b08489bf6aac846d7915885627058d7800ccd5d1978f986ffb03be71",
-    "render_version": 4
+    "source_fingerprint": "20c31d39b08489bf6aac846d7915885627058d7800ccd5d1978f986ffb03be71"
   },
   "rows": [
     {
@@ -260,8 +258,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003",
-    "source_fingerprint": "a9c18269b2ffd2988edac53b097afe80d0331d2287e63bea2c250197933009a6",
-    "render_version": 4
+    "source_fingerprint": "a9c18269b2ffd2988edac53b097afe80d0331d2287e63bea2c250197933009a6"
   },
   "rows": [
     {

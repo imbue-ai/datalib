@@ -235,7 +235,7 @@ mod tests {
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(
             tree.join("a.grid_rows.json"),
-            r#"{"header":{"markdown_uuid":"u1","source_fingerprint":"f1","render_version":3},"rows":[{"ignored":"payload"}]}"#,
+            r#"{"header":{"markdown_uuid":"u1","source_fingerprint":"f1"},"rows":[{"ignored":"payload"}]}"#,
         )
         .unwrap();
         std::fs::write(tree.join("b.grid_rows.json"), "not json").unwrap();

@@ -111,8 +111,8 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     .expect("insert message row");
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, md_path, \
-         row_set_hash, renderer_version) \
-         VALUES ('c-1','test','anthropic','chat','chats/c-1.md','deadbeef','test-v1')",
+         row_set_hash) \
+         VALUES ('c-1','test','anthropic','chat','chats/c-1.md','deadbeef')",
     )
     .execute(repo.index_pool())
     .await

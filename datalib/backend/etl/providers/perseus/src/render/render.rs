@@ -175,23 +175,14 @@ fn render_book(
 
     let rows = vec![book_grid_row(source_name, book, &m_uuid)?];
     let edges: Vec<EdgeRow> = Vec::new();
-    emit_sidecar(
-        &sidecar_path,
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &edges,
-    )?;
+    emit_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: None,
         md_path,
-        render_version: RENDER_VERSION,
         rows,
         edges,
     })
@@ -251,23 +242,14 @@ fn render_chapter(
         idx += 1;
     }
     let edges = chapter_edges(book, chapter, edition, &m_uuid, alignments);
-    emit_sidecar(
-        &sidecar_path,
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &edges,
-    )?;
+    emit_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: None,
         md_path,
-        render_version: RENDER_VERSION,
         rows,
         edges,
     })

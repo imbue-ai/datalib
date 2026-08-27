@@ -221,12 +221,13 @@ async fn snapshot_grid_rows_and_documents() {
         .collect();
 
     // ── documents ────────────────────────────────────────────────
-    // Includes source_fingerprint (render's input-hash) since the
-    // markdowns_loaded table merged into documents.
+    // Includes source_fingerprint — the render step's input hash, kept
+    // on the row as provenance. The index's own skip key is
+    // `row_set_hash`; the two are deliberately separate.
     let drows = sqlx::query(
         "SELECT markdown_uuid, source_name, provider, kind, title, \
                 created_at, updated_at, md_path, source_fingerprint, \
-                row_set_hash, renderer_version, rendered_at \
+                row_set_hash, rendered_at \
          FROM markdowns ORDER BY markdown_uuid",
     )
     .fetch_all(&pool)
@@ -250,7 +251,6 @@ async fn snapshot_grid_rows_and_documents() {
                     r.try_get::<String, _>("provider").ok().as_deref(),
                     r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
                 ),
-                "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
                 "rendered_at": r.try_get::<Option<String>, _>("rendered_at").ok().flatten(),
             })
         })

@@ -121,7 +121,7 @@ fn sidecars_carry_stable_uuids_and_provider_metadata() {
     let expected = chapter_uuid("1", "1", GRC);
     assert_eq!(v["header"]["markdown_uuid"], expected);
     assert!(v["header"]["source_fingerprint"].is_string());
-    assert!(v["header"]["render_version"].is_number());
+    assert!(v["header"]["source_fingerprint"].is_string());
 
     let row = &v["rows"][0];
     assert_eq!(row["uuid"], expected);
