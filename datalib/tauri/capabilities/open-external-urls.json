@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "open-external-urls",
+  "description": "Lets the UI hand an off-origin link to the OS default browser (`ui/src/externalLinks.ts`). Without it, a document's `↗` outlink is dead in the app: `target=\"_blank\"` needs `window.open`, which Tauri does not implement. BOTH permissions are required and neither is redundant — `allow-open-url` enables the command, `allow-default-urls` supplies the scope it is checked against, and the plugin denies every URL when the allow-scope is empty (`is_url_allowed` in tauri-plugin-opener), which fails SILENTLY from the webview's point of view. The scope is that permission's stock `mailto:`/`tel:`/`http://*`/`https://*` — the same set a browser would follow — and notably still excludes `opener:allow-open-path`, which launches a local file's default application. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json: the UI is loaded from `datalib-http` as an external URL, and Tauri withholds IPC from a remote origin unless it is listed.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
+  ]
+}

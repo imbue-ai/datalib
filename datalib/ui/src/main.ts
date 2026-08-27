@@ -3,6 +3,7 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
 import { fetchHealth } from "./api";
+import { installExternalLinkHandler } from "./externalLinks";
 
 function applyThemeMode(mode: "light" | "dark") {
   document.documentElement.dataset.theme = mode;
@@ -20,6 +21,11 @@ function setupSystemThemeSync() {
 }
 
 setupSystemThemeSync();
+
+// Off-origin links (a doc's `↗` outlink, any `<a>` that came out of the
+// source content) go to the OS browser rather than replacing the app.
+// Installed at boot, before any card can render one.
+installExternalLinkHandler();
 
 // Warm the health snapshot at boot: the agent hand-off (handoff.ts) needs
 // the API token's path out of it and builds its text inside a synchronous
