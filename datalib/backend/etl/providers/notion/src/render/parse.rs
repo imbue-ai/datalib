@@ -37,7 +37,7 @@ pub struct ParsedNotionOfficial {
     /// email's per-bucket BlobBundle shape — render calls
     /// `bundle.materialize_to_dir(<page_dir>/blobs)` once per page
     /// and walks blocks to set image `src`s from
-    /// `bundle.rendered_filename()`. Pages without image blocks have
+    /// `bundle.filename_for(ref_id)`. Pages without image blocks have
     /// no entry; render falls through to the upstream-URL
     /// placeholder.
     pub blobs_by_page: HashMap<String, datalib_etl::blob_cas::BlobBundle>,

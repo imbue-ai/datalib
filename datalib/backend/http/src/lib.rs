@@ -30,10 +30,7 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use datalib_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
-use datalib_core::query::{parse_query, FreeTextMode, ParsedQuery};
-use datalib_core::repo::{DocRow, DynRepo, EdgeRowOut, RepoError};
-use datalib_core::search::SearchRow;
+use datalib_core::repo::{DynAppRepo, RepoError};
 use datalib_core::version::git_hash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -57,16 +54,9 @@ pub struct AppState {
     /// the `accounts.json` lookup. The SQL store is reached through
     /// [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// All SQL flows through this seam.
-    /// [`datalib_core::dolt_repo::DoltRepo`] against a single
-    /// doltlite file is the only impl today.
-    pub repo: DynRepo,
-    /// Long-lived `qmd mcp` child for sub-second searches. Always present:
-    /// it resolves its index lazily per query, so a missing index (no
-    /// sync yet) or a mid-run rebuild is handled inside `search`. On any
-    /// daemon error `run_qmd_search` still falls back to the per-call
-    /// `npx … query` shell-out path so search keeps working.
-    pub qmd_daemon: Arc<QmdDaemon>,
+    /// The two stores this process owns and writes: filed feedback and
+    /// the sync job queue, one doltlite file each.
+    pub app: DynAppRepo,
     /// Fan-out channel for live sync-job progress. The worker (and the
     /// enqueue/cancel handlers) publish [`worker::ProgressEvent`]s here;
     /// `GET /api/sync/stream` subscribes and pushes them to the UI over
@@ -78,7 +68,7 @@ pub struct AppState {
     /// which is the state every data root starts in.
     pub applets: Arc<applets::AppletRegistry>,
     /// The per-process API token every request must carry. Minted at
-    /// startup and published to `<root>/system/state/api-token`; see
+    /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
 }
@@ -105,59 +95,6 @@ pub struct Health {
     /// can tell a coding agent where to read it (see `handoff.ts`);
     /// reaching this response already required holding the token.
     pub token_file: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SearchParams {
-    pub q: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SearchResponse {
-    pub query_echo: serde_json::Value,
-    pub rows: Vec<SearchRow>,
-    pub columns: Vec<ColumnSpec>,
-    pub total_estimated: u64,
-    /// Backend-side errors the user should know about even though we
-    /// returned 200 + rows. Populated when a degraded path ran (qmd
-    /// fallback) or when a swallowed error would otherwise leave the
-    /// UI staring at an empty grid with no signal. The UI surfaces
-    /// these as toasts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct ColumnSpec {
-    pub field: String,
-    pub header: String,
-    pub default_visible: bool,
-}
-
-/// Response shape for `/api/chat/{markdown_uuid}`. The body is the raw
-/// QMD content minus the YAML frontmatter — the UI runs markdown-it on
-/// it directly. We do **not** ship a structured `messages[]` array;
-/// per-message scrolling uses the
-/// `<div id="m-{uuid}" data-section-uuid="…">` wrappers the renderer
-/// emits in the body.
-#[derive(Debug, Serialize)]
-pub struct ChatResponse {
-    pub markdown_uuid: String,
-    pub name: Option<String>,
-    pub account: Option<String>,
-    pub project: Option<String>,
-    pub channel: Option<String>,
-    pub created_at: Option<String>,
-    pub source_label: Option<String>,
-    pub source_url: Option<String>,
-    pub body: String,
-    /// Outgoing edges from this markdown. The UI uses this to render
-    /// the "outgoing destinations" list at the top of the doc preview
-    /// AND to resolve `<span data-edge-id>` clicks inside the body to
-    /// their destinations. Empty for documents with no edges (or for
-    /// data roots without an `edges` table).
-    pub outgoing_edges: Vec<EdgeRowOut>,
 }
 
 /// Client-supplied portion of a feedback submission. The server stamps
@@ -224,15 +161,8 @@ pub fn router(state: AppState) -> Router {
     let api_token = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
-        .route("/api/search", get(search_handler))
-        .route("/api/columns", get(columns))
         .route("/api/accounts", get(accounts))
-        .route("/api/chat/{markdown_uuid}", get(chat))
-        .route("/api/docs", get(list_docs))
-        .route("/api/asset/{markdown_uuid}/{*rel}", get(asset))
         .route("/api/feedback", post(submit_feedback))
-        .route("/api/card", post(create_card))
-        .route("/api/card/{hash}", get(get_card))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/dag", get(get_dag))
@@ -306,256 +236,6 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
     })
 }
 
-async fn search_handler(
-    State(s): State<AppState>,
-    Query(p): Query<SearchParams>,
-) -> Json<SearchResponse> {
-    let parsed = parse_query(p.q.as_deref().unwrap_or(""));
-    let limit = p.limit.unwrap_or(200).min(100_000);
-    // Three routing cases:
-    //   1. Empty free-text — pure structured query, route through repo.search.
-    //   2. Non-empty free-text + qmd index present — shell out to qmd, map
-    //      hits to row uuids via the repo's grid_row_refs, then fetch full
-    //      rows via repo.search_by_uuids preserving rank order.
-    //   3. Non-empty free-text but no qmd index — degrade gracefully: surface
-    //      the error in `query_echo.qmd_error` and fall back to repo.search
-    //      (SQL substring LIKE) so the UI isn't dead.
-    let mut qmd_error: Option<String> = None;
-    let mut errors: Vec<String> = Vec::new();
-    // Run repo.search but collect any error instead of swallowing it.
-    // The previous `unwrap_or_default()` hid schema mismatches and
-    // connection failures behind an empty grid with no signal.
-    let rows = if parsed.free_text.is_empty() {
-        match s.repo.search(&parsed, limit).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                let msg = format!("structured search: {e}");
-                eprintln!("search: {msg}");
-                errors.push(msg);
-                Vec::new()
-            }
-        }
-    } else {
-        match run_qmd_search(&s.root, &s.repo, &s.qmd_daemon, &parsed, limit).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                qmd_error = Some(format!("{e:#}"));
-                match s.repo.search(&parsed, limit).await {
-                    Ok(rows) => rows,
-                    Err(e2) => {
-                        let msg = format!("LIKE fallback: {e2}");
-                        eprintln!("search: {msg}");
-                        errors.push(msg);
-                        Vec::new()
-                    }
-                }
-            }
-        }
-    };
-
-    let total = rows.len() as u64;
-    Json(SearchResponse {
-        query_echo: serde_json::json!({
-            "free_text": parsed.free_text,
-            "free_text_mode": match parsed.free_text_mode {
-                FreeTextMode::Hybrid => "hybrid",
-                FreeTextMode::Vsearch => "vsearch",
-            },
-            "resolved_type": format!("{:?}", parsed.resolved_type),
-            "filters": parsed.filters.iter()
-                .map(|(k, v)| (format!("{:?}", k), v.clone()))
-                .collect::<Vec<_>>(),
-            "qmd_error": qmd_error,
-        }),
-        rows,
-        columns: default_columns(),
-        total_estimated: total,
-        errors,
-    })
-}
-
-/// Run a qmd-routed search. qmd itself is shelled out via `npx` on a
-/// blocking thread; the row-resolution layer is async and goes through
-/// the repo trait so both Dolt and SQLite backends work.
-async fn run_qmd_search(
-    root: &std::sync::Arc<PathBuf>,
-    repo: &DynRepo,
-    daemon: &Arc<QmdDaemon>,
-    parsed: &ParsedQuery,
-    limit: usize,
-) -> anyhow::Result<Vec<SearchRow>> {
-    let root_owned = root.as_ref().clone();
-    let parsed_for_qmd = parsed.clone();
-    let daemon = daemon.clone();
-    // Ask qmd for a generous hit count: a single qmd hit (e.g. a
-    // conversation-level snippet) can resolve to many grid rows. We then
-    // truncate to `limit` after row expansion.
-    let qmd_limit = std::cmp::min(limit.saturating_mul(2).max(50), 1_000);
-    let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let mode = match parsed_for_qmd.free_text_mode {
-            FreeTextMode::Hybrid => QueryMode::Hybrid,
-            FreeTextMode::Vsearch => QueryMode::Vsearch,
-        };
-        // Prefer the long-lived MCP daemon (sub-second). On any error —
-        // including a not-yet-built index — we drop down to a fresh
-        // `npx … query` shell-out so a missing or misbehaving daemon
-        // doesn't kill search entirely.
-        match daemon.search(mode, &parsed_for_qmd.free_text, qmd_limit) {
-            Ok(hits) => return Ok(hits),
-            Err(e) => {
-                eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
-            }
-        }
-        let cfg = QmdRunnerConfig::new(root_owned);
-        let runner = QmdRunner::new(cfg)?;
-        runner.search(mode, &parsed_for_qmd.free_text, qmd_limit)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
-
-    let refs = repo
-        .grid_row_refs()
-        .await
-        .map_err(|e| anyhow::anyhow!("grid_row_refs: {e}"))?;
-    let idx = GridIndex::new((**root).clone(), refs);
-    // Map hits to grid rows in rank order, keeping only the top hit per
-    // markdown document so the result list stays concise — a single chat that
-    // matches in several places shows up once, at its best rank. Orphan hits
-    // (a path the grid doesn't know about, e.g. a stale render under an old
-    // layout) resolve to no rows; flag them loudly so their dropped score is
-    // visible. (ERROR level; this file logs via eprintln!.)
-    let ranked = idx.ranked_rows_one_per_doc(&hits, |h| {
-        eprintln!(
-            "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
-            h.path, h.score
-        );
-    });
-    let uuids: Vec<String> = ranked.iter().map(|(row, _)| row.uuid.clone()).collect();
-    let scores: std::collections::HashMap<String, f64> = ranked
-        .iter()
-        .map(|(row, score)| (row.uuid.clone(), *score))
-        .collect();
-    drop(idx);
-    let mut rows = repo
-        .search_by_uuids(parsed, &uuids, limit)
-        .await
-        .map_err(|e| anyhow::anyhow!("search_by_uuids: {e}"))?;
-    for r in rows.iter_mut() {
-        r.score = scores.get(&r.uuid).copied();
-    }
-    Ok(rows)
-}
-
-async fn columns() -> Json<Vec<ColumnSpec>> {
-    Json(default_columns())
-}
-
-/// List rendered documents for the document-picker card, newest first.
-/// The row shape is [`DocRow`] straight from the repo; 500 is plenty
-/// for a pick-from-a-list UI without paging machinery.
-async fn list_docs(State(s): State<AppState>) -> Result<Json<Vec<DocRow>>, StatusCode> {
-    match s.repo.list_docs(500).await {
-        Ok(rows) => Ok(Json(rows)),
-        Err(e) => {
-            eprintln!("list_docs: {e}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-async fn chat(
-    State(s): State<AppState>,
-    Path(markdown_uuid): Path<String>,
-) -> Result<Json<ChatResponse>, StatusCode> {
-    // QMDs are write-only output. We read the file just to ship its body
-    // to the UI as-is; structured metadata comes from grid_rows. Per-section
-    // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
-    // let the UI scroll-and-highlight without a structured chat schema.
-    // One UUID → one file: no enumeration, no fallbacks.
-    let path = s
-        .repo
-        .qmd_path_for_markdown(&markdown_uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let body = strip_frontmatter(&raw).to_string();
-    let meta = s
-        .repo
-        .chat_meta(&markdown_uuid)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    // Synthesize page-level URLs for providers that don't carry one in
-    // `source_url`. Claude/ChatGPT use the conversation UUID directly
-    // in their public URL scheme — and for those providers
-    // markdown_uuid == conversation_uuid (one rendered file per chat),
-    // so we can drop it straight in.
-    let source_url = meta
-        .source_url
-        .or_else(|| match meta.source_label.as_deref() {
-            Some("Claude") => Some(format!("https://claude.ai/chat/{markdown_uuid}")),
-            Some("ChatGPT") => Some(format!("https://chatgpt.com/c/{markdown_uuid}")),
-            _ => None,
-        });
-    let outgoing_edges = s
-        .repo
-        .outgoing_edges(&markdown_uuid)
-        .await
-        .unwrap_or_default();
-    Ok(Json(ChatResponse {
-        markdown_uuid,
-        name: meta.name,
-        account: meta.account,
-        project: meta.project,
-        channel: meta.channel,
-        created_at: meta.when_ts,
-        source_label: meta.source_label,
-        source_url,
-        body,
-        outgoing_edges,
-    }))
-}
-
-/// Serve a file living next to (or under) a rendered markdown. Relative
-/// `![](blobs/foo.png)` references in the markdown body become
-/// `/api/asset/{markdown_uuid}/blobs/foo.png` once the UI rewrites them;
-/// this handler resolves them by looking up the markdown's on-disk path
-/// and joining `rel` against its parent directory.
-///
-/// Path-traversal guard: canonicalize both the parent dir and the target,
-/// reject the request if the target escapes the parent.
-async fn asset(
-    State(s): State<AppState>,
-    Path((markdown_uuid, rel)): Path<(String, String)>,
-) -> Result<Response<Body>, StatusCode> {
-    let md_path = s
-        .repo
-        .qmd_path_for_markdown(&markdown_uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let parent = md_path.parent().ok_or(StatusCode::NOT_FOUND)?.to_path_buf();
-    let target = parent.join(&rel);
-    let parent_canon = parent
-        .canonicalize()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let target_canon = target.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
-    if !target_canon.starts_with(&parent_canon) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    let bytes = std::fs::read(&target_canon).map_err(|_| StatusCode::NOT_FOUND)?;
-    let mime = mime_guess::from_path(&target_canon)
-        .first_or_octet_stream()
-        .essence_str()
-        .to_string();
-    Response::builder()
-        .header(header::CONTENT_TYPE, mime)
-        .body(Body::from(bytes))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 async fn submit_feedback(
     State(s): State<AppState>,
     Json(req): Json<FeedbackRequest>,
@@ -586,7 +266,7 @@ async fn submit_feedback(
         fixed_in_git_hash: None,
         notes: None,
     };
-    match s.repo.insert_feedback(row).await {
+    match s.app.insert_feedback(row).await {
         Ok(()) => Ok(Json(FeedbackResponse {
             feedback_uuid,
             created_at,
@@ -598,20 +278,6 @@ async fn submit_feedback(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
-}
-
-/// Body of `POST /api/card`. The user-authored JS source goes in
-/// verbatim; the server hashes it to derive the storage key. Bigger
-/// scripts (single-file Observable-style cells) are fine — the body
-/// is bounded by axum's default body limit.
-#[derive(Debug, Deserialize)]
-pub struct CreateCardRequest {
-    pub source: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateCardResponse {
-    pub hash: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -734,62 +400,6 @@ fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
         .expect("static response builds")
 }
 
-/// Content-addressed JS store under `<root>/.datalib/cards/<hash>.js`.
-/// Writes are idempotent: identical sources produce the same hash, and
-/// re-POSTing returns the same hash without touching the file.
-async fn create_card(
-    State(s): State<AppState>,
-    Json(req): Json<CreateCardRequest>,
-) -> Result<Json<CreateCardResponse>, StatusCode> {
-    let hash = sha256_hex(req.source.as_bytes());
-    let dir = s.root.join(".datalib/cards");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("create_card: mkdir {}: {e}", dir.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    let path = dir.join(format!("{hash}.js"));
-    if !path.exists() {
-        if let Err(e) = std::fs::write(&path, req.source.as_bytes()) {
-            eprintln!("create_card: write {}: {e}", path.display());
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
-    Ok(Json(CreateCardResponse { hash }))
-}
-
-/// Serve a stored card's JS body. The hash is validated to be 64 hex
-/// chars so the path can't traverse out of the cards directory.
-async fn get_card(
-    State(s): State<AppState>,
-    Path(hash): Path<String>,
-) -> Result<
-    (
-        StatusCode,
-        [(axum::http::HeaderName, &'static str); 1],
-        String,
-    ),
-    StatusCode,
-> {
-    // Same guard the module store applies: validate the digest's
-    // shape before it is ever joined onto a directory.
-    if !frontend::is_sha256_hex(&hash) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let path = s.root.join(".datalib/cards").join(format!("{hash}.js"));
-    match std::fs::read_to_string(&path) {
-        Ok(body) => Ok((
-            StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/javascript; charset=utf-8",
-            )],
-            body,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
 // --- Authoring the `user` namespace ----------------------------------------
 //
 // `/api/lib` is how a person or an agent puts a component into the
@@ -838,8 +448,8 @@ pub struct LibEntry {
     pub meta: frontend::Meta,
 }
 
-/// Lowercase hex sha256. The single definition in this crate: the card
-/// store and the frontend store name content the same way.
+/// Lowercase hex sha256. The single definition in this crate: every
+/// component in the frontend store is named by its own bytes.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -1068,44 +678,6 @@ async fn agent_config_guide() -> (
     markdown_doc(include_str!("agent_config_guide.md"))
 }
 
-/// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text
-/// trimming, not parsing — we don't look at the YAML contents and we don't
-/// care if it's malformed; the body is whatever's after the closing `---`.
-fn strip_frontmatter(text: &str) -> &str {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return text;
-    };
-    let Some(end) = rest.find("\n---") else {
-        return text;
-    };
-    let after = &rest[end + 4..];
-    after.strip_prefix('\n').unwrap_or(after)
-}
-
-fn default_columns() -> Vec<ColumnSpec> {
-    vec![
-        col("score", "Score", true),
-        col("source", "Source", true),
-        col("kind", "Type", true),
-        col("when", "Time", true),
-        col("snippet", "Contents", true),
-        col("author", "Author", true),
-        col("account", "Account", true),
-        col("org_name", "Org", false),
-        col("conversation_name", "Conversation Name", false),
-        col("project", "Project", false),
-        col("entire_chat", "Entire Chat", false),
-    ]
-}
-
-fn col(field: &str, header: &str, default_visible: bool) -> ColumnSpec {
-    ColumnSpec {
-        field: field.into(),
-        header: header.into(),
-        default_visible,
-    }
-}
-
 /// One entry in `GET /api/sync/sources`. Derived from the config file
 /// at the data root — the backend never persists this list to SQL. A
 /// source is any step with no declared inputs (a fringe step — the
@@ -1167,15 +739,16 @@ fn validate_config_text(text: &str) -> anyhow::Result<Vec<String>> {
 
 /// Run the runner's own validation over a parsed config and return its
 /// source step ids. Nothing is executed here.
+///
+/// Taken from the built graph rather than re-derived from `cfg.steps`,
+/// so this list is exactly what `--sync` accepts. The graph adds
+/// `staged:<path>` source steps for inputs the config leaves unwritten;
+/// re-deriving from the config would silently omit them and a staged
+/// source could never be synced from the UI.
 fn check_dag_config(cfg: &datalib_dag::config::DagConfig) -> anyhow::Result<Vec<String>> {
     let specs = datalib_dag::config::to_specs(cfg)?;
-    datalib_dag::Graph::build(specs)?;
-    Ok(cfg
-        .steps
-        .iter()
-        .filter(|e| e.inputs.is_empty())
-        .map(|e| e.id.clone())
-        .collect())
+    let graph = datalib_dag::Graph::build(specs)?;
+    Ok(graph.fringe_ids().into_iter().map(str::to_string).collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -1439,13 +1012,25 @@ fn scaffold_toml() -> String {
 id = \"grid_index\"
 command = \"datalib-step grid_index\"
 inputs = [\"**/rendered_md\"]
-outputs = [\"system/backend_index\"]
+outputs = [\"unified_index/grid\"]
 
 [[steps]]
 id = \"qmd_index\"
 command = \"datalib-step qmd_index\"
 inputs = [\"**/rendered_md\"]
-outputs = [\"system/qmd\"]
+outputs = [\"unified_index/qmd\"]
+
+# ── the app's own surface ──────────────────────────────────────────────
+# `unified_index` serves the grid: the app has no search, no document
+# view and no document picker without it. It is an applet like any
+# other — a server the gateway spawns and proxies at
+# `/applet/unified_index/` — which is why it is written here rather
+# than compiled into the backend.
+
+[[applets]]
+id = \"unified_index\"
+title = \"Search index\"
+command = \"datalib-applet unified_index\"
 
 # Source steps go below. Anything you add above the first [[steps]]
 # is a top-level key (data_root, binary_dir), not part of a step.
@@ -1471,7 +1056,7 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
 }
 
 async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
-    s.repo
+    s.app
         .list_jobs(true, 200)
         .await
         .map(Json)
@@ -1483,7 +1068,7 @@ async fn sync_jobs_all(
     Query(p): Query<JobsAllParams>,
 ) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
     let limit = p.limit.unwrap_or(200).min(10_000);
-    s.repo
+    s.app
         .list_jobs(false, limit)
         .await
         .map(Json)
@@ -1494,7 +1079,7 @@ async fn sync_job_get(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<SyncJobRow>, StatusCode> {
-    match s.repo.get_job(&id).await {
+    match s.app.get_job(&id).await {
         Ok(Some(row)) => Ok(Json(row)),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => Err(repo_err_to_status(e)),
@@ -1516,7 +1101,7 @@ async fn sync_enqueue(
         _ => return Err(StatusCode::BAD_REQUEST),
     }
     let row = s
-        .repo
+        .app
         .enqueue_job(&req.kind, req.source_name.as_deref())
         .await
         .map_err(repo_err_to_status)?;
@@ -1562,7 +1147,7 @@ async fn sync_job_cancel(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    s.repo
+    s.app
         .request_cancel_job(&id)
         .await
         .map_err(repo_err_to_status)?;
@@ -1582,7 +1167,7 @@ async fn sync_job_cancel(
 }
 
 /// Tail the per-job log written by the worker at
-/// `<root>/system/state/job-logs/{id}.log`.
+/// `<root>/system/job-logs/{id}.log`.
 /// 404 when the file doesn't exist yet — the UI polls `/jobs/{id}` for state
 /// and only follows the log link once it appears.
 async fn sync_job_log(
@@ -1600,7 +1185,7 @@ async fn sync_job_log(
     if id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let path = datalib_core::layout::state_dir(&s.root)
+    let path = datalib_core::layout::system_dir(&s.root)
         .join("job-logs")
         .join(format!("{id}.log"));
     match std::fs::read_to_string(&path) {
@@ -1630,11 +1215,6 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_columns_listed() {
-        assert_eq!(default_columns().len(), 11);
-    }
 
     /// Whatever the scaffold emits has to survive the round trip the
     /// user is about to put it through: parse as TOML, then pass the

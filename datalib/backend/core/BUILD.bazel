@@ -1,11 +1,9 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//tools:insta.bzl", "insta_update")
 
 exports_files([
     "Cargo.toml",
-    # Canonical version constants, read by //tools:version_pins_test.
+    # Canonical version constant, read by //tools:version_pins_test.
     "src/node_runtime.rs",  # LATCHKEY_VERSION
-    "src/qmd/mod.rs",  # DEFAULT_QMD_VERSION
 ])
 
 rust_library(
@@ -42,65 +40,4 @@ rust_test(
     deps = [
         "@datalib_crates//:tempfile",
     ],
-)
-
-# End-to-end test of the production DoltRepo path against a doltlite
-# file in a throwaway temp dir. No subprocess, no port — runs anywhere.
-rust_test(
-    name = "dolt_backend_integration_test",
-    srcs = ["tests/dolt_backend_integration.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_core",
-        "//datalib/backend/schema:datalib_schema",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-# (config_examples_test lives at
-# //datalib/backend/migrate_config:config_examples_test, next to the
-# `SourceConfig` union it validates the documented examples against.)
-
-# Insta snapshot of the TNG fixture's `backend_index.doltlite_db` contents. Catches
-# silent data drift in the load pipeline — most recently the
-# WAL-not-checkpointed bug where the genrule shipped an empty .db.
-# Update by running `cargo insta review` from datalib/backend.
-rust_test(
-    name = "fixture_db_snapshot_test",
-    srcs = ["tests/fixture_db_snapshot.rs"],
-    # Force the crate name so insta's `.snap` lookup ("<crate>__<test>.snap")
-    # agrees with what cargo would generate. Without this, bazel uses the
-    # rule name (`fixture_db_snapshot_test`) while cargo uses the source
-    # filename (`fixture_db_snapshot`), and the two would write/read
-    # different files.
-    crate_name = "fixture_db_snapshot",
-    data = [
-        "//tests/fixtures:ingested/backend_index.doltlite_db",
-    ] + glob(
-        ["tests/snapshots/fixture_db_snapshot__*.snap"],
-        allow_empty = True,
-    ),
-    edition = "2021",
-    env = {
-        # insta defaults to writing .new files next to the source file,
-        # which it locates via CARGO_MANIFEST_DIR. Bazel doesn't surface
-        # the source tree to the test, so point insta at the workspace
-        # root explicitly. Same trick the per-provider snapshot tests use.
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    deps = [
-        "@datalib_crates//:insta",
-        "@datalib_crates//:runfiles",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sha2",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-insta_update(
-    name = "fixture_db_snapshot_test.update",
-    test = ":fixture_db_snapshot_test",
 )

@@ -1,13 +1,11 @@
 //! The `qmd_index` step type: the qmd search index over every
-//! rendered_md tree, writing `system/qmd`.
+//! rendered_md tree, writing `unified_index/qmd`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::events::{Emitter, OutputClaim};
-
-pub const OUT_REL: &str = "system/qmd";
 
 pub async fn run(
     data_root: &Path,
@@ -26,17 +24,15 @@ pub async fn run(
         .context("qmd task panicked")??;
     tracing::info!(index = %outcome.index_path.display(), "qmd: done");
     // The index rebuilds from the rendered_md trees, so cache-aware
-    // backups (`restic --exclude-caches` etc.) may skip it.
-    datalib_core::layout::mark_derived_cache(&datalib_core::layout::qmd_dir(data_root));
+    // backups (`restic --exclude-caches` etc.) may skip it. Tag the
+    // whole `unified_index/` tree for the same reason the grid step
+    // does — one tag covers both indexes however they are ordered.
+    datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
 
-    // qmd's sqlite gets touched on every pass, so a content hash would
-    // always read "changed"; and qmd has no incremental-change signal
-    // we can cheaply expose. Claim nothing beyond having run — the
-    // step is a leaf (nothing consumes system/qmd downstream), so the
-    // imprecision costs nothing today.
-    Ok(vec![OutputClaim {
-        path: OUT_REL.to_string(),
-        changed: None,
-        version: None,
-    }])
+    // qmd's sqlite gets touched on every pass, so any version we could
+    // derive would move even when nothing was indexed. Report nothing:
+    // the step is a leaf (nothing consumes unified_index/qmd
+    // downstream), so the runner's fallback hash is never read by anyone
+    // and the imprecision costs nothing.
+    Ok(vec![])
 }

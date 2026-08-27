@@ -490,6 +490,39 @@ impl MboxFilesCheckpointRow {
     }
 }
 
+/// `gmail_messages` — Gmail's own message id → the row it produced.
+///
+/// Gmail's API speaks in its own opaque message ids; our rows are keyed
+/// by `Message-ID` so that a mailbox ingested from a Takeout export and
+/// then from the API dedupes. That means the mapping between the two is
+/// not derivable from either side, and three separate things need it:
+///
+/// * **Deletions.** `history.list` reports `messagesDeleted` as Gmail
+///   ids. Without this table the only way to find the row is a
+///   `payload LIKE '%…%'` scan, which is both O(rows) per deletion and
+///   silently dependent on serde's exact key spacing — a fragile no-op
+///   waiting to happen.
+/// * **Resumable backfill.** A run that stops at `message_budget` has to
+///   know, next time, which ids it already has; otherwise it re-fetches
+///   the same first N messages forever and never reaches the rest.
+/// * **Thread membership.** See [`ThreadRow`]: an incremental run must
+///   rebuild a thread from every message in it, not just the ones it
+///   touched.
+///
+/// Plain mode (no bookkeeping sidecar): it is derived bookkeeping, not
+/// upstream payload, and `dolt diff` has nothing to say about it.
+#[derive(Debug, Clone, RawTable)]
+#[raw_table(
+    table = "gmail_messages",
+    primary_key = "gmail_id",
+    index = "gmail_messages_by_email:email_id"
+)]
+pub struct GmailMessageRow {
+    pub gmail_id: String,
+    pub email_id: String,
+    pub thread_id: String,
+}
+
 /// Compose the full DDL list passed to
 /// [`datalib_etl::doltlite_raw::open`].
 pub fn full_ddl() -> Vec<String> {
@@ -502,6 +535,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailKeywordRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
     out.extend(MboxFilesCheckpointRow::all_ddl());
+    out.extend(GmailMessageRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

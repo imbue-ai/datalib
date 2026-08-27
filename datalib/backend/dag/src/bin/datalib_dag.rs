@@ -11,15 +11,15 @@
 //!   can name step binaries bare (`datalib-step …`). Defaults to the
 //!   config `binary_dir`, then this executable's own directory.
 //! * `--sync` runs a subgraph and only that subgraph: the named
-//!   download steps (the steps with no inputs) plus everything
-//!   downstream of them. Every other step is declared up to date and
-//!   does nothing — including work pending elsewhere, like a source
-//!   that downloaded yesterday but failed to render. "Sync yolink"
-//!   means yolink; nothing happens for slack. Inside the subgraph the
-//!   usual change propagation applies, so a fan-in re-runs only if a
-//!   selected chain actually moved. This is the per-source "Sync now"
-//!   mode; a full run (no `--sync`) picks up whatever was left
-//!   pending.
+//!   source steps (the steps with no inputs) plus everything
+//!   downstream of them. Every other step is reported `not_selected`
+//!   and never considered — including work pending elsewhere, like a
+//!   source that downloaded yesterday but failed to render. "Sync
+//!   yolink" means yolink; nothing happens for slack. Inside the
+//!   subgraph the usual change propagation applies, so a fan-in
+//!   re-runs only if a selected chain actually moved. This is the
+//!   per-source "Sync now" mode; a full run (no `--sync`) picks up
+//!   whatever was left pending.
 //! * `--now` pins the run timestamp, exported to every step as
 //!   `DATALIB_DAG_NOW` (downloads stamp it into raw bookkeeping,
 //!   index into `markdowns.rendered_at`); omitted, the local clock is
@@ -159,7 +159,7 @@ async fn main() -> Result<()> {
         for id in &sync_only {
             if !fringe.contains(&id.as_str()) {
                 bail!(
-                    "--sync {id:?}: not a download step (a step with no inputs). \
+                    "--sync {id:?}: not a source step (a step with no inputs). \
                      Available: {}",
                     fringe.join(", ")
                 );

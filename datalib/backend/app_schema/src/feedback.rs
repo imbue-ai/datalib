@@ -107,21 +107,6 @@ pub struct FeedbackContext {
     pub payload: FeedbackContextPayload,
 }
 
-/// One ancestor in `dom_path_breadcrumb`. We record only what's useful
-/// for reconstruction — no inline styles, no random attributes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DomPathStep {
-    /// Lowercased element tag name, e.g. `div`, `span`.
-    pub tag: String,
-    /// Element id when set. Used in the flat selector as `#id`.
-    pub id: Option<String>,
-    /// Class list as seen in the DOM. Order is preserved.
-    pub classes: Option<serde_json::Value>,
-    /// `data-*` attributes on the element. Used to recover the UUID
-    /// context (e.g. `data-msg-index`, `data-uuid`).
-    pub data: Option<serde_json::Value>,
-}
-
 /// Right-click on a grid cell (a filterable column on a row). Lightroom
 /// semantics expand `row_uuids` to the full selection when the
 /// right-clicked row is in the active selection; otherwise it contains

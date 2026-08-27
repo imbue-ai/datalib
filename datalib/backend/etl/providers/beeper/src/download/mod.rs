@@ -19,7 +19,7 @@ pub mod index_db;
 pub mod megabridge;
 pub mod schema_raw;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use datalib_etl::download_run::DownloadRun;
@@ -215,7 +215,3 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 // Re-export for the [`sync`] orchestrator to thread through.
-pub fn resolve_beeper_data_dir(p: Option<&Path>) -> PathBuf {
-    p.map(Path::to_path_buf)
-        .unwrap_or_else(default_beeper_data_dir)
-}

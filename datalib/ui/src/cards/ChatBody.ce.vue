@@ -47,7 +47,7 @@ const props = defineProps<{
   /**
    * The markdown_uuid of the body we're rendering. Used to rewrite
    * relative image references (`![](blobs/foo.png)`) to backend asset
-   * URLs (`/api/asset/{markdownUuid}/blobs/foo.png`) so the browser
+   * URLs (`/applet/unified_index/asset/{markdownUuid}/blobs/foo.png`) so the browser
    * actually fetches them. Optional: when absent, relative refs pass
    * through unchanged.
    */

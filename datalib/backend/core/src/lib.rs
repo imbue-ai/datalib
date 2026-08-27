@@ -1,17 +1,16 @@
-//! Datalib core: query engine. v0 skeleton.
+//! Datalib core: the data-root layout, the stores this server owns, and
+//! the host-runtime helpers every binary shares.
+//!
+//! Deliberately not here: anything that knows what a grid row or a qmd
+//! hit is. That lives in `datalib_unified_index`, which only
+//! `datalib-step` and `datalib-applet` link.
 
-// `config` left this crate long ago: naming every source `type:` puts it
-// above the providers rather than in this base crate. What remains of it
-// is the retired stanza schema in `datalib_migrate_config`.
-pub mod db;
+pub mod app_store;
 pub mod deeplink;
-pub mod dolt_repo;
 pub mod layout;
 pub mod node_runtime;
-pub mod qmd;
-pub mod query;
 pub mod repo;
-pub mod search;
+pub mod store;
 pub mod version;
 
 #[cfg(test)]

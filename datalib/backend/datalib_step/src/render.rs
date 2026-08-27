@@ -79,13 +79,55 @@ pub async fn run(
     // (`restic --exclude-caches` etc.) may skip it. No-op until the
     // first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    Ok(vec![OutputClaim {
+    match rendered_tree_version(&rendered_root) {
         // rendered_md always lives at the canonical path (only
         // raw_path is overridable).
-        path: out_rel,
-        changed: Some(docs > 0),
-        version: None,
-    }])
+        Some(version) => Ok(vec![OutputClaim {
+            path: out_rel,
+            version,
+        }]),
+        // No cursor: a provider that hasn't been ported to the
+        // dolt-diff render path, so we have nothing content-derived to
+        // vouch for. The runner hashes the tree instead.
+        None => Ok(vec![]),
+    }
+}
+
+/// A content version for a rendered tree, read back from the cursor the
+/// render just wrote.
+///
+/// The cursor records the raw store commit the tree was rendered from
+/// and the render params it was rendered under. Together those
+/// determine the tree's contents, so a render that found nothing new
+/// leaves the same version behind — no need to walk and hash the whole
+/// `rendered_md` tree to discover that.
+fn rendered_tree_version(rendered_root: &Path) -> Option<String> {
+    let path = rendered_root.join("_render_cursor.json");
+    let cursor = match datalib_etl::render_cursor::read(&path) {
+        Ok(c) => c?,
+        // The cursor is written without an atomic rename, so a crash
+        // mid-write leaves truncated JSON. Falling back to the hash is
+        // correct, but doing it silently looks identical to "provider
+        // not ported yet" and would stay that way forever.
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %format!("{e:#}"),
+                "render: unreadable render cursor; reporting no version,                  so the runner will content-hash the tree"
+            );
+            return None;
+        }
+    };
+    let params = cursor
+        .params
+        .as_ref()
+        .map(|p| p.to_string())
+        .unwrap_or_default();
+    Some(format!(
+        "raw:{} params:{}",
+        cursor.last_rendered_hash,
+        blake3::hash(params.as_bytes()).to_hex()
+    ))
 }
 
 /// `markdown_uuid → source_fingerprint` for every sidecar under the
@@ -132,6 +174,58 @@ fn sidecar_fingerprints(rendered_root: &Path) -> Result<HashMap<String, String>>
 
 #[cfg(test)]
 mod tests {
+
+    /// The reported version must be stable for an unchanged tree and
+    /// move when either half of what determines the tree moves. Both
+    /// failure modes are silent: a version that drifts re-indexes
+    /// forever, one that sticks skips real work.
+    #[test]
+    fn rendered_tree_version_is_stable_and_moves_with_source_or_params() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("slack/rendered_md");
+        let cursor = root.join("_render_cursor.json");
+        let params = |p: &str| serde_json::json!({ "period": p });
+
+        datalib_etl::render_cursor::write(&cursor, "commit-a", None, &params("month")).unwrap();
+        let v1 = rendered_tree_version(&root).expect("cursor present");
+        // A second render that found nothing new rewrites the same
+        // cursor; the version must not budge.
+        datalib_etl::render_cursor::write(&cursor, "commit-a", None, &params("month")).unwrap();
+        assert_eq!(rendered_tree_version(&root).as_deref(), Some(v1.as_str()));
+
+        // New upstream data.
+        datalib_etl::render_cursor::write(&cursor, "commit-b", None, &params("month")).unwrap();
+        let v2 = rendered_tree_version(&root).unwrap();
+        assert_ne!(v1, v2, "a new source commit must move the version");
+
+        // Same data, different render knob: the tree differs, so the
+        // version must too, or the index keeps the old rendering.
+        datalib_etl::render_cursor::write(&cursor, "commit-b", None, &params("week")).unwrap();
+        assert_ne!(
+            rendered_tree_version(&root).unwrap(),
+            v2,
+            "a render param change must move the version"
+        );
+    }
+
+    /// No cursor (a provider not on the dolt-diff render path) means no
+    /// version, and the runner content-hashes instead.
+    #[test]
+    fn rendered_tree_version_is_none_without_a_cursor() {
+        let td = tempfile::tempdir().unwrap();
+        assert!(rendered_tree_version(&td.path().join("nope")).is_none());
+    }
+
+    /// A truncated cursor — the file is written without an atomic
+    /// rename — must not be mistaken for "no cursor" silently.
+    #[test]
+    fn rendered_tree_version_is_none_for_an_unreadable_cursor() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("slack/rendered_md");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("_render_cursor.json"), "{ truncated").unwrap();
+        assert!(rendered_tree_version(&root).is_none());
+    }
     use super::*;
 
     #[test]

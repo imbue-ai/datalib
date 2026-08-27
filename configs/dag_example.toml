@@ -30,6 +30,13 @@
 # in, so a step's plain keys come first and its params headers last;
 # likewise `data_root` below has to precede the first `[[steps]]`.
 #
+# Editing a step re-runs it. The runner fingerprints each step over its
+# command, `params`, `env` and declared paths, so changing any of them
+# makes the step stale even when nothing it reads has moved — widen a
+# `since`, flip a render knob, and the next run rebuilds that step's
+# output. An optional `code_version = "..."` covers the remaining case:
+# a step whose behavior changed without its command line changing.
+#
 #   bazelisk build //datalib/backend:bin
 #   bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
 #
@@ -85,13 +92,13 @@ outputs = ["claude/rendered_md"]
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the other kind of config entry: a long-lived server the
@@ -126,3 +133,12 @@ command = "datalib-applet slack"
 [applets.params]
 tree = "slack/rendered_md"
 workspace = "Slack"
+
+# The app's own surface: `unified_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+id = "unified_index"
+title = "Search index"
+command = "datalib-applet unified_index"

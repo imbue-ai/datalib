@@ -73,7 +73,7 @@ function setStatus(prefix, query) {
 }
 
 // Card params (set by dactalView(...) via the iframe URL):
-//   ?datalib=<datalib search>  working set to pull from /api/search
+//   ?datalib=<datalib search>  working set to pull from /applet/unified_index/search
 //   ?dq=<dactal query>         initial DACTAL query (default rows/source)
 const PARAMS = new URLSearchParams(location.search);
 const INITIAL_DATALIB = PARAMS.get("datalib") || "";
@@ -118,7 +118,7 @@ async function load(datalibQuery, initialDq) {
     runQuery(initialDq || INITIAL_DQ);
   } catch (e) {
     statusEl.innerHTML =
-      `<span class="err">could not reach /api/search (${e.message}). ` +
+      `<span class="err">could not reach /applet/unified_index/search (${e.message}). ` +
       `Serve this page so /api proxies to the Datalib backend — see README.</span>`;
   }
 }

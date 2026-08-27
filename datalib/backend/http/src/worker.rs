@@ -5,7 +5,7 @@
 //! fill (`POST /api/sync/jobs`): claim the oldest `pending` row, shell
 //! out to the `datalib-dag` runner against the data root's
 //! `config.toml` (the DAG config), stream the child's
-//! stdout+stderr to `<root>/system/state/job-logs/<id>.log` (which
+//! stdout+stderr to `<root>/system/job-logs/<id>.log` (which
 //! `GET /api/sync/jobs/{id}/log` tails live), and write the terminal
 //! state back into the queue.
 //!
@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use app_schema::sync_jobs::SyncJobRow;
-use datalib_core::repo::DynRepo;
+use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -60,7 +60,10 @@ pub struct ProgressEvent {
 }
 
 /// One DAG task's state as shown to the UI. `state` is one of
-/// `todo` / `running` / `done` / `skipped` / `failed` / `blocked`.
+/// `todo` / `running` / `done` / `skipped` / `not_selected` / `failed`
+/// / `blocked`. `skipped` means "checked, and already up to date";
+/// `not_selected` means "outside this run's subgraph, never
+/// considered" — a per-source sync leaves most of the graph there.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskState {
     pub id: String,
@@ -87,9 +90,26 @@ struct TaskBoard {
     tasks: HashMap<String, TaskEntry>,
 }
 
+/// Runner step status → the task-board state the UI renders.
+///
+/// Shared by the per-step `step_finish` path and the authoritative
+/// `run_summary` path, which must agree: an unmapped status falls to
+/// `failed` via the catch-all, so a status added on one side only would
+/// show a healthy step as failed.
+fn task_state_for(status: &str) -> &'static str {
+    match status {
+        "succeeded" => "done",
+        "skipped_up_to_date" => "skipped",
+        "not_selected" => "not_selected",
+        "blocked" => "blocked",
+        _ => "failed",
+    }
+}
+
 #[derive(Default)]
 struct TaskEntry {
-    /// `todo` / `running` / `done` / `skipped` / `failed` / `blocked`.
+    /// `todo` / `running` / `done` / `skipped` / `not_selected` /
+    /// `failed` / `blocked`.
     state: String,
     total: Option<u64>,
     pos: u64,
@@ -138,13 +158,7 @@ impl TaskBoard {
             ("step_finish", Some(id)) => {
                 let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
                 let e = self.entry(id);
-                e.state = match status {
-                    "succeeded" => "done",
-                    "skipped_up_to_date" => "skipped",
-                    "blocked" => "blocked",
-                    _ => "failed",
-                }
-                .into();
+                e.state = task_state_for(status).into();
                 e.msg = None;
             }
             ("progress_length", Some(id)) => {
@@ -174,13 +188,7 @@ impl TaskBoard {
                             continue;
                         };
                         let e = self.entry(id);
-                        e.state = match status {
-                            "succeeded" => "done",
-                            "skipped_up_to_date" => "skipped",
-                            "blocked" => "blocked",
-                            _ => "failed",
-                        }
-                        .into();
+                        e.state = task_state_for(status).into();
                     }
                 }
             }
@@ -226,7 +234,12 @@ impl TaskBoard {
         }
         let terminal = tasks
             .iter()
-            .filter(|t| matches!(t.state.as_str(), "done" | "skipped" | "failed" | "blocked"))
+            .filter(|t| {
+                matches!(
+                    t.state.as_str(),
+                    "done" | "skipped" | "not_selected" | "failed" | "blocked"
+                )
+            })
             .count();
         let pct = terminal as f64 / tasks.len() as f64;
         let msg = serde_json::json!({"v": 1, "tasks": tasks}).to_string();
@@ -327,7 +340,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
 }
 
 /// The worker's main loop. Runs until the process exits.
-pub async fn run(repo: DynRepo, cfg: WorkerConfig) {
+pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     match repo.recover_running_jobs().await {
         Ok(0) => {}
         Ok(n) => eprintln!("worker: recovered {n} orphaned running job(s) → failed"),
@@ -401,7 +414,7 @@ fn terminate(pid: u32) {
     }
 }
 
-async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
+async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
     let Some(dag_bin) = cfg.dag_bin.as_ref() else {
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
     };
@@ -416,7 +429,7 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     }
 
     // Per-job log file the UI tails via /api/sync/jobs/{id}/log.
-    let log_dir = datalib_core::layout::state_dir(&cfg.root).join("job-logs");
+    let log_dir = datalib_core::layout::system_dir(&cfg.root).join("job-logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join(format!("{}.log", job.id));
     let log_file = File::create(&log_path)?;
@@ -727,5 +740,27 @@ mod tests {
         let tasks = b.snapshot();
         assert_eq!(tasks[0].state, "failed");
         assert_eq!(tasks[1].state, "skipped");
+    }
+
+    /// `not_selected` (a step outside a `--sync` run's subgraph) must
+    /// survive both paths into the board. Neither may fall through to
+    /// the catch-all, which would show an untouched step as failed.
+    #[test]
+    fn not_selected_survives_both_the_step_and_summary_paths() {
+        for line in [
+            r#"{"event":"step_finish","step":"a","status":"not_selected"}"#,
+            r#"{"event":"run_summary","steps":[{"step":"a","status":"not_selected","attempts":0,"outputs":[]}]}"#,
+        ] {
+            let mut b = TaskBoard::default();
+            feed(&mut b, &[r#"{"event":"run_plan","steps":["a"]}"#, line]);
+            assert_eq!(
+                b.snapshot()[0].state,
+                "not_selected",
+                "unmapped status reads as failed: {line}"
+            );
+        }
+        // And it counts as terminal, so a sync of one source doesn't
+        // sit at "in progress" forever because of the steps it skipped.
+        assert_eq!(task_state_for("not_selected"), "not_selected");
     }
 }

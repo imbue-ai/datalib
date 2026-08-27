@@ -12,7 +12,7 @@ test("selected message has a visible accent-colored outline", async ({
   page,
   request,
 }) => {
-  const resp = await request.get("/api/search?q=&limit=1000");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as {
     rows: {

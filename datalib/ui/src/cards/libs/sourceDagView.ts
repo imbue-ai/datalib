@@ -8,7 +8,7 @@
 // Live state rides the existing sync-progress SSE stream: the worker's
 // task board is keyed by step id, so while a job runs each node is
 // tinted by its task state (flashing yellow running, green done /
-// skipped, red failed, muted blocked) — the DAG itself becomes the
+// skipped, red failed, muted blocked, dashed not-in-this-sync) — the DAG itself becomes the
 // progress display. States are cleared when the next job starts and
 // kept after a terminal event so the last run's outcome stays visible.
 //
@@ -55,6 +55,7 @@ export function sourceDagView(): CardRender {
       .dv-node.skipped { fill: #2e8b5718; stroke: #2e8b5788; }
       .dv-node.failed { fill: #c0392b33; stroke: #c0392b; }
       .dv-node.blocked { fill: #88888822; stroke: #888888; }
+      .dv-node.not_selected { fill: none; stroke: #88888866; stroke-dasharray: 2 3; }
       @keyframes dv-flash { 0%, 100% { fill-opacity: 1; } 50% { fill-opacity: .35; } }
       .dv-label { fill: currentColor; }
       .dv-sub { fill: currentColor; opacity: .5; font-size: 10px; }
@@ -219,6 +220,7 @@ export function sourceDagView(): CardRender {
         ["skipped", "up to date", "#2e8b5788"],
         ["failed", "failed", "#c0392b"],
         ["blocked", "blocked", "#888888"],
+        ["not_selected", "not in this sync", "#88888866"],
       ] as const) {
         const item = document.createElement("span");
         const dot = document.createElement("span");

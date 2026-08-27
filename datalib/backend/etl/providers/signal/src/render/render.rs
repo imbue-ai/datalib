@@ -187,7 +187,7 @@ fn render_one(
     // Materialize attachment bytes into `<page_dir>/blobs/<short-b3>.<ext>`
     // before the .md is written, so the relative links the renderer
     // emits resolve to files that exist by the time the file appears
-    // on disk. Filename comes from `Blob::rendered_filename` — same
+    // on disk. Filename comes from `BlobBundle::filename_for` — same
     // convention every other provider uses (slack, anthropic, notion,
     // chatgpt, email), via the shared `BlobBundle::materialize_to_dir`.
     let blobs_dir = page_dir.join("blobs");

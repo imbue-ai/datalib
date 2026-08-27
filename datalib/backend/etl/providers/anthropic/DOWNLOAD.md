@@ -113,9 +113,67 @@ latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"
 | `/organizations`                                                    | Enumerate orgs the user belongs to |
 | `/organizations/{org}/chat_conversations`                           | Per-org conversation listing       |
 | `/organizations/{org}/chat_conversations/{id}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong` | Full conversation with all blocks  |
+| `/organizations/{org}/projects`                                     | Per-org project listing            |
+| `/organizations/{org}/projects/{id}/docs`                           | One project's knowledge documents  |
 
 `403` on the listing endpoint is treated as "no chat permission for
-this org" — we count it and continue rather than abort.
+this org" — we count it and continue rather than abort. Same for the
+project listing ("no project permission for this org").
+
+## Projects
+
+Claude Projects ride the same source type, the same credentials and the
+same raw store as conversations. `sync.projects` (default **on**) turns
+the walk on and off; `sync.project_uuids` narrows it to a named set
+(bare UUIDs or paste-able `https://claude.ai/project/<uuid>` URLs) — the
+per-org listing still runs, since that is one request and it is where
+the metadata comes from.
+
+Two tables: `projects` (the listing entry, `org_uuid` / `org_name` /
+`name` / `updated_at` promoted out of the payload) and `project_docs`
+(one row per knowledge document, `project_uuid` promoted).
+
+### Why knowledge docs never touch the CAS
+
+`…/projects/{id}/docs` returns each document's **full text inline** in
+`content`. There is no `preview_url`, no second fetch, and no binary
+retained server-side — Claude keeps only its own text extraction. Same
+shape as `chat_messages[*].attachments[]` (see the table above), and the
+same conclusion: nothing to put in the blob CAS, so `project_docs` is a
+plain payload table rather than a CAS edge.
+
+One consequence worth knowing: Claude extracts text from *any* upload,
+so a project whose "knowledge document" is a 500-page EPUB stores half a
+megabyte of pandoc-flavored markup. The raw store keeps all of it; the
+**render** step clamps what reaches the page and the grid row at
+`max_project_doc_bytes` (render-step param, default 128 KiB) and appends
+a visible truncation marker. Raising it and re-rendering backfills.
+
+### Incrementality
+
+The project listing is refetched every run — one request per org — and a
+project whose `updated_at` matches the stored row is not re-written.
+Knowledge docs are the awkward part: **we have not confirmed that
+editing a document bumps its project's `updated_at`**, and if it does
+not, an `updated_at`-only rule would let docs go stale forever. So the
+docs listing sits behind a per-project sweep marker in
+`sync_scope_state` (`anthropic:sweep:project_docs:<uuid>`) with a
+`PROJECT_DOCS_TTL` of 24h. Docs are refetched when the project's
+metadata changed, when no sweep has ever completed, or when the last one
+aged out — worst case one extra request per project per day.
+
+`--reset-and-redownload` truncates the data tables but not
+`sync_scope_state`, so the docs refetch after a reset is driven by the
+metadata skip-check finding an empty `projects` table, not by the TTL.
+`tests/reset_and_redownload.rs` pins that.
+
+**Deletions are not mirrored.** A project or knowledge document removed
+upstream keeps its row (and keeps rendering) — the walk only ever
+upserts what the listing returns, same as conversations. A
+`--reset-and-redownload` is the way to drop them today. A UUID in
+`sync.project_uuids` that matches nothing in any visible org logs
+`anthropic_project_uuid_not_found` rather than quietly mirroring
+nothing.
 
 ## Attachments: `files[]` vs `attachments[]`
 

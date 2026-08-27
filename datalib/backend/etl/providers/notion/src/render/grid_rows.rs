@@ -21,9 +21,7 @@ use datalib_schema::grid_rows::GridRow;
 use serde_json::Value;
 
 use super::parse::ParsedNotionOfficial;
-use super::render::{
-    notion_thread_url, notion_url, page_qmd_path_rel, slugify, thread_qmd_path_rel,
-};
+use super::render::{notion_thread_url, notion_url, page_qmd_path_rel, thread_qmd_path_rel};
 
 pub const RENDER_VERSION: u32 = 1;
 
@@ -673,13 +671,6 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
     );
 
     Ok(DocumentRows { pages, threads })
-}
-
-// Silence unused-import warning for slugify (re-exported from render
-// for the sidecar path; some downstream tests poke at it).
-#[allow(dead_code)]
-fn _slugify_smoke(s: &str) -> String {
-    slugify(s)
 }
 
 #[cfg(test)]

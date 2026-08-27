@@ -28,7 +28,7 @@
 # below has to precede the first `[[steps]]` entirely.
 #
 # Sources that support more than one input mode include a step pair for
-# each: `email` (JMAP server vs. Google Takeout .mbox) and `carddav`
+# each: `email` (JMAP vs. Gmail API vs. Takeout .mbox) and `carddav`
 # contacts (CardDAV server vs. local .vcf files).
 #
 # There is no global `defaults` block in the steps format —
@@ -58,13 +58,13 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -85,6 +85,14 @@ since = "2025-01-01"                  # only sync conversations updated at/after
 refresh_most_recent_n_chat_count = 3  # force-refetch top-N by updated_at
 # conv_uuids = [                      # or: fetch only these (UUIDs or paste-able URLs)
 #   "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",
+# ]
+# projects = false                    # skip Claude Projects (default: on). Each
+                                      # project renders as its own page — description,
+                                      # custom instructions, knowledge documents — and
+                                      # its name fills the `project` grid column on
+                                      # every conversation inside it.
+# project_uuids = [                   # or: mirror only these projects (UUIDs or URLs).
+#   "https://claude.ai/project/6ba7b810-9dad-11d1-80b4-00c04fd430c8",
 # ]
 
 [[steps]]
@@ -281,9 +289,58 @@ outlink_format = "fastmail"
 #   only_render_labels = ["Inbox", "Work/Projects"]
 only_render_labels = []
 
-# Mode B — Google Takeout .mbox on disk. No `sync` block → file-backed
-# mbox mode, reading the file at `common.input_path`. The `mbox` block
-# just labels the synthesized account row.
+# Mode B — Gmail REST API, for a Gmail account. The mode that needs the
+# least setup of any source in this file: latchkey has a built-in
+# `google-gmail` service and routes to it by URL host, so there is no
+# service name to configure and no credential in this file.
+#
+#   latchkey auth browser google-gmail    # one-time; opens a browser
+#
+# Incremental sync is driven by Gmail's historyId, which reports adds,
+# deletions, and label changes as explicit events. Throughput is capped by
+# quota rather than bytes: ~300 messages/minute regardless of size.
+[[steps]]
+id = "gmail.download"
+command = "datalib-step download email"
+outputs = ["gmail/raw"]
+
+[steps.params]
+# Same exact-match label paths as every other mode. System labels are
+# normalized to Takeout's spelling ("Inbox", not "INBOX") so one Gmail
+# account ingested via Takeout and via the API shares its mailbox rows
+# instead of doubling them.
+only_extract_labels = []
+
+[steps.params.gmail_api]
+# Everything here is optional; an empty `[steps.params.gmail_api]` table
+# is a complete, working configuration.
+#
+# account = "you@gmail.com"     # required only if `google-gmail` holds
+#                               # more than one credential (work +
+#                               # personal); latchkey demands it then.
+# full_resync = false
+# request_concurrency = 8
+# Google's per-user ceiling is 6000 quota units/minute and messages.get
+# costs 20, so ~300 messages/minute. The default stays under 6000 to
+# leave headroom for retries.
+# quota_units_per_minute = 5000
+# Stop after this many messages, commit the cursor, exit SUCCESSFULLY
+# with a partial result. A 100k-message mailbox is ~6 hours of backfill,
+# so a first pass is naturally spread over several runs.
+# message_budget = 20000
+
+[[steps]]
+id = "gmail.render"
+command = "datalib-step render email"
+inputs = ["gmail/raw"]
+outputs = ["gmail/rendered_md"]
+[steps.params]
+outlink_format = "gmail"
+only_render_labels = []
+
+# Mode C — Google Takeout .mbox on disk. No live block at all →
+# file-backed mbox mode, reading the file at `common.input_path`. The
+# `mbox` block just labels the synthesized account row.
 [[steps]]
 id = "gmail-takeout.download"
 command = "datalib-step download email"
@@ -671,3 +728,12 @@ outputs = ["lightroom/raw"]
 # gc = false
 [steps.params.common]
 input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+
+# The app's own surface: `unified_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+id = "unified_index"
+title = "Search index"
+command = "datalib-applet unified_index"

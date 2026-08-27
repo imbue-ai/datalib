@@ -49,6 +49,7 @@ fn renders_tng_fixture() {
         &parsed,
         tmp.path(),
         "anthropic_api",
+        Default::default(),
         &datalib_etl::progress::Progress::noop(),
         &mut |_doc| Ok(()),
     )

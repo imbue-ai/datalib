@@ -144,6 +144,31 @@ rust_test(
 )
 
 # Live test — talks to api.fastmail.com via latchkey. Manual.
+# Live Gmail REST API test: mirrors one label out of a real account and
+# asserts against the doltlite store it wrote. Needs a `google-gmail`
+# credential in the host's latchkey (hence no-sandbox) and talks to
+# Google (hence external).
+rust_test(
+    name = "gmail_live",
+    srcs = ["tests/gmail_live.rs"],
+    crate_root = "tests/gmail_live.rs",
+    edition = "2021",
+    tags = [
+        "external",  # talks to gmail.googleapis.com
+        "manual",
+        "no-sandbox",  # latchkey reads the host keyring
+    ],
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "jmap_live",
     srcs = ["tests/jmap_live.rs"],

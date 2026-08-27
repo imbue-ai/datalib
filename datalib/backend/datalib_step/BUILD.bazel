@@ -16,6 +16,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/anthropic:datalib_etl_anthropic",
@@ -61,6 +62,7 @@ rust_binary(
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
         "@datalib_crates//:clap",
         "@datalib_crates//:futures",
         "@datalib_crates//:serde",

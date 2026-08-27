@@ -4,7 +4,7 @@
 // error:" text the host renders when a card fails to compile/run.
 //
 //   node datalib/ui/scripts/render.mjs '<cardUrl>' --out /tmp/card.png \
-//     --token "$(cat <data_root>/system/state/api-token)"
+//     --token "$(cat <data_root>/system/api-token)"
 //
 // Prints a JSON report to stdout; writes the screenshot to --out
 // (default ./card.png). Exit code is non-zero if anything errored, so a
@@ -38,7 +38,7 @@ if (!url) {
 if (!token) {
   console.error(
     "no API token: pass --token or set $DATALIB_TOKEN.\n" +
-      "The running server's token is in <data_root>/system/state/api-token.",
+      "The running server's token is in <data_root>/system/api-token.",
   );
   process.exit(2);
 }
@@ -63,7 +63,7 @@ if (response && response.status() === 401) {
   console.error(
     `${url} → 401: the API token is wrong or stale (it changes every time ` +
       "the server restarts). Re-read it from " +
-      "<data_root>/system/state/api-token.",
+      "<data_root>/system/api-token.",
   );
   await browser.close();
   process.exit(1);

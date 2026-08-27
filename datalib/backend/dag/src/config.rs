@@ -21,7 +21,7 @@
 //! id = "grid_index"
 //! command = "datalib-step grid_index"
 //! inputs = ["**/rendered_md"]
-//! outputs = ["system/backend_index"]
+//! outputs = ["unified_index/grid"]
 //!
 //! [[steps]]
 //! id = "custom"
@@ -171,6 +171,13 @@ pub struct StepEntry {
     /// Extra environment for the child process.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Optional version of the step's own behavior, for steps whose
+    /// output can change without their command line changing (a
+    /// renderer that was reworked, a binary that was upgraded in
+    /// place). Bumping it makes the runner re-run the step once, even
+    /// though none of its inputs moved.
+    #[serde(default)]
+    pub code_version: Option<String>,
 }
 
 /// The config file inside a data root: `<data_root>/config.toml`. The
@@ -243,6 +250,7 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
                 env: e.env.clone(),
             },
         );
+        spec.code_version = e.code_version.clone();
         for i in &e.inputs {
             spec.inputs
                 .push(crate::ArtifactPat::parse(i).with_context(|| format!("step {:?}", e.id))?);
@@ -454,6 +462,63 @@ fn is_js_identifier(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// `code_version` has to survive the trip from TOML into the spec,
+    /// or the fingerprint never sees it and bumping it silently does
+    /// nothing. The scheduler tests use the builder, not this path.
+    #[test]
+    fn code_version_reaches_the_spec_and_moves_the_fingerprint() {
+        let with = |line: &str| {
+            let cfg: DagConfig = toml::from_str(&format!(
+                r#"
+                [[steps]]
+                id = "slack.render"
+                inputs = ["slack/raw"]
+                outputs = ["slack/rendered_md"]
+                command = "datalib-step render slack_api"
+                {line}
+                "#
+            ))
+            .expect("parse");
+            to_specs(&cfg).expect("to_specs").remove(0)
+        };
+
+        let none = with("");
+        let v1 = with(r#"code_version = "v1""#);
+        let v2 = with(r#"code_version = "v2""#);
+
+        assert_eq!(none.code_version, None);
+        assert_eq!(v1.code_version.as_deref(), Some("v1"));
+        assert_ne!(
+            v1.fingerprint_material(),
+            v2.fingerprint_material(),
+            "a bumped code_version must change what the step fingerprints to"
+        );
+        assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
+    }
+
+    /// Editing `params` changes the argv the runner executes, which is
+    /// what makes a config edit re-run the step.
+    #[test]
+    fn params_edit_moves_the_fingerprint() {
+        let with = |since: &str| {
+            let cfg: DagConfig = toml::from_str(&format!(
+                r#"
+                [[steps]]
+                id = "slack.download"
+                outputs = ["slack/raw"]
+                command = "datalib-step download slack_api"
+                params.sync = {{ since = "{since}" }}
+                "#
+            ))
+            .expect("parse");
+            to_specs(&cfg).expect("to_specs").remove(0)
+        };
+        assert_ne!(
+            with("2026-06-15").fingerprint_material(),
+            with("2020-01-01").fingerprint_material()
+        );
+    }
+
     #[test]
     fn command_gets_declared_fields_as_json_flags() {
         let cfg: DagConfig = toml::from_str(
@@ -474,7 +539,7 @@ mod tests {
             [[steps]]
             id = "grid_index"
             inputs = ["**/rendered_md"]
-            outputs = ["system/backend_index"]
+            outputs = ["unified_index/grid"]
             command = "datalib-step grid_index"
             "#,
         )
@@ -518,7 +583,7 @@ mod tests {
                 "--inputs",
                 r#"["**/rendered_md"]"#,
                 "--outputs",
-                r#"["system/backend_index"]"#
+                r#"["unified_index/grid"]"#
             ]
         );
 

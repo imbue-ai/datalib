@@ -9,7 +9,7 @@
 // datalib/backend/http/src/auth.rs), but the browser gets it as an
 // HttpOnly session cookie when it loads the app, and the dev-mode Vite
 // proxy stamps it on server-side — so `fetch`, `EventSource`, and
-// `<img src="/api/asset/…">` all authenticate without any call site
+// `<img src="/applet/unified_index/asset/…">` all authenticate without any call site
 // here knowing about it. That is the point of carrying it in a cookie:
 // there is no per-request token plumbing to forget.
 
@@ -20,7 +20,7 @@ export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
   // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `/api/chat/{markdown_uuid}` lookups
+  // .md it lives inside. Drives `{UNIFIED_INDEX}/chat/{markdown_uuid}` lookups
   // when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
@@ -92,7 +92,7 @@ export type SearchResponse = {
 // the same as the grid row's `uuid` column.
 // One row from the `edges` table joined with the destination
 // markdown's title. The backend produces this list on every
-// `/api/chat/{uuid}` response — see `EdgeRowOut` in
+// `{UNIFIED_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
 // `datalib/backend/core/src/repo.rs`. `src_anchor_uuid`/
 // `dst_anchor_uuid` reference values the renderer emits as
 // `data-section-uuid` attributes in the body; null means the
@@ -120,9 +120,9 @@ export type ChatResponse = {
   outgoing_edges: EdgeOut[];
 };
 
-// One rendered document (a `markdowns` row), as listed by /api/docs
+// One rendered document (a `markdowns` row), as listed by the applet
 // for the document-picker card. `markdown_uuid` is the same UUID
-// `documentView(...)` / `/api/chat/{uuid}` take.
+// `documentView(...)` / `{UNIFIED_INDEX}/chat/{uuid}` take.
 export type DocEntry = {
   markdown_uuid: string;
   title: string | null;
@@ -130,10 +130,24 @@ export type DocEntry = {
   provider: string;
   created_at: string | null;
 };
+// --- The unified_index applet --------------------------------------------
+//
+// Search, the document list, one document, and the files beside it are
+// served by `datalib-applet unified_index`, reached through the
+// gateway's applet proxy. `datalib-http` does not know these routes
+// exist — it forwards `/applet/<id>/…` to whatever the config declares
+// under that id.
+//
+// Consequence worth knowing: a data root whose `config.toml` does not
+// declare this applet has no grid. The scaffold writes it, and the
+// gateway answers 502 with the applet named when it is configured but
+// not running, so the failure says which file to fix.
+export const UNIFIED_INDEX = "/applet/unified_index";
+
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
-  return getJson<DocEntry[]>("/api/docs", signal);
+  return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
 }
 
 export type Health = {
@@ -207,7 +221,7 @@ export async function fetchSearch(
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
   const r = await getJson<SearchResponse>(
-    `/api/search?${params.toString()}`,
+    `${UNIFIED_INDEX}/search?${params.toString()}`,
     signal,
   );
   // Backend returned 200 but is telling us something went sideways
@@ -228,7 +242,7 @@ export function fetchChat(
   // Provider-specific sharding (beeper's per-period files) is already
   // encoded in the markdown_uuid scheme.
   return getJson<ChatResponse>(
-    `/api/chat/${encodeURIComponent(markdownUuid)}`,
+    `${UNIFIED_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
     signal,
   );
 }
@@ -370,7 +384,10 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
 }
 
 // One DAG task's state on a job's task board. `state` is one of
-// todo / running / done / skipped / failed / blocked.
+// todo / running / done / skipped / not_selected / failed / blocked.
+// `skipped` = checked, already up to date. `not_selected` = outside
+// this run's subgraph, so it was never considered (a per-source sync
+// leaves most of the graph there).
 export type SyncTask = {
   id: string;
   state: string;
@@ -416,10 +433,6 @@ export function fetchAllJobs(limit = 50, signal?: AbortSignal): Promise<SyncJob[
   return getJson<SyncJob[]>(`/api/sync/jobs/all?${params.toString()}`, signal);
 }
 
-export function fetchJob(id: string, signal?: AbortSignal): Promise<SyncJob> {
-  return getJson<SyncJob>(`/api/sync/jobs/${encodeURIComponent(id)}`, signal);
-}
-
 export async function enqueueJob(
   req: { kind: SyncJobKind; source_name?: string | null },
   signal?: AbortSignal,
@@ -455,30 +468,6 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 export async function fetchJobLog(id: string, signal?: AbortSignal): Promise<string> {
   const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}/log`, { signal });
   if (!r.ok) throw new Error(`GET /api/sync/jobs/${id}/log → ${r.status}`);
-  return await r.text();
-}
-
-// --- Cards (arbitrary JS visualizations) -----------------------------------
-//
-// POST /api/card stores a JS source string content-addressed by sha256 and
-// returns the hash. GET /api/card/{hash} fetches it back. The URL only
-// carries the hash, so the JS body never needs to fit in the URL.
-
-export async function createCard(source: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch("/api/card", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source }),
-    signal,
-  });
-  if (!r.ok) throw new Error(`POST /api/card → ${r.status}`);
-  const j = (await r.json()) as { hash: string };
-  return j.hash;
-}
-
-export async function fetchCard(hash: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch(`/api/card/${encodeURIComponent(hash)}`, { signal });
-  if (!r.ok) throw new Error(`GET /api/card/${hash} → ${r.status}`);
   return await r.text();
 }
 
@@ -533,12 +522,6 @@ export async function fetchFrontend(signal?: AbortSignal): Promise<FrontendView>
   const r = await fetch("/api/frontend", { signal });
   if (!r.ok) throw new Error(`GET /api/frontend → ${r.status}`);
   return (await r.json()) as FrontendView;
-}
-
-export async function fetchLib(name: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, { signal });
-  if (!r.ok) throw new Error(`GET /api/lib/${name} → ${r.status}`);
-  return await r.text();
 }
 
 // `description` semantics match the backend: undefined keeps whatever

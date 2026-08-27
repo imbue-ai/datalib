@@ -24,10 +24,19 @@ outputs = ["claude_chats/rendered_md"]
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]
+outputs = ["unified_index/grid"]
 
 [[steps]]
 id = "qmd_index"
 command = "datalib-step qmd_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/qmd"]
+outputs = ["unified_index/qmd"]
+
+# The app's own surface: `unified_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+id = "unified_index"
+title = "Search index"
+command = "datalib-applet unified_index"

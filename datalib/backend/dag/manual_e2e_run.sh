@@ -13,9 +13,26 @@
 # located at $DATALIB_MANUAL_E2E_DIR. That dir defaults to the canonical
 # checkout below; export the var yourself to point at a different copy.
 #
-# Prereqs: latchkey creds configured for the API-backed sources
-# (`latchkey auth set …`). This script builds and exports LATCHKEY_CURL for
-# you — see the block below for why that is not optional.
+# Prereqs: latchkey creds configured for the API-backed sources. Most are
+# `latchkey auth set …`; the `gmail` source uses latchkey's built-in
+# `google-gmail` service, so it is `latchkey auth browser google-gmail`
+# instead (and `latchkey auth browser-prepare google-gmail` first, once, if
+# it reports no OAuth client).
+#
+# Two failure modes worth telling apart, because the messages are similar
+# and the fixes are not:
+#   "No service matches URL: …"        → the SERVICE registration is gone.
+#                                        Self-hosted registrations live in
+#                                        ~/.latchkey/config.json, separate
+#                                        from the encrypted credential
+#                                        store, so one can vanish while the
+#                                        other survives. Re-run the
+#                                        `latchkey services register …` from
+#                                        the provider's DOWNLOAD.md.
+#   "Credentials for X are expired."   → the TOKEN needs reissuing.
+#
+# This script builds and exports LATCHKEY_CURL for you — see the block below
+# for why that is not optional.
 set -euo pipefail
 
 # External private data dir (dag.toml + sources/ + snapshots/). Honor an

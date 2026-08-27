@@ -60,12 +60,6 @@ impl IsoOffsetTimestamp {
         DateTime::<Utc>::from_timestamp_millis(ms).map(|dt| Self(dt.fixed_offset()))
     }
 
-    /// Construct from a Unix epoch-second value. Same offset rules as
-    /// [`from_unix_millis`].
-    pub fn from_unix_seconds(s: i64) -> Option<Self> {
-        DateTime::<Utc>::from_timestamp(s, 0).map(|dt| Self(dt.fixed_offset()))
-    }
-
     /// Bump this timestamp forward by `n` microseconds. The canonical
     /// recipe for synthesizing sub-item stamps when upstream gave the
     /// parent a time but didn't give one to each child (anthropic /
@@ -288,28 +282,6 @@ pub fn coerce_when_ts(s: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// String-in/string-out shim for callsites that hold raw RFC 3339
-/// strings (e.g. translate code carrying upstream timestamps through
-/// to `GridRow.when_ts`). Tolerates `Z` (treated as `+00:00`). Returns
-/// the bumped value rendered with microsecond precision and an
-/// explicit offset. Returns `None` on parse failure so the caller can
-/// pick its own fallback — *do not* silently swallow.
-pub fn bump_micros_str(s: &str, n: i64) -> Option<String> {
-    if s.is_empty() {
-        return None;
-    }
-    let owned;
-    let normalized: &str = if let Some(prefix) = s.strip_suffix('Z') {
-        owned = format!("{prefix}+00:00");
-        &owned
-    } else {
-        s
-    };
-    parse_strict(normalized)
-        .ok()
-        .map(|t| t.bump_micros(n).to_rfc3339_micros())
 }
 
 /// Split a stored `when_ts` (RFC 3339 with an explicit offset;

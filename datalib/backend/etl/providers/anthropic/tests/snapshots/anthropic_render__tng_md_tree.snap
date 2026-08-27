@@ -2,6 +2,64 @@
 source: datalib/backend/etl/providers/anthropic/tests/anthropic_render.rs
 expression: bundle
 ---
+=== anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md ===
+---
+title: "Claude Project · Bridge Operations (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: 70000001-1701-4d00-8000-000000000701
+markdown_uuid: 70000001-1701-4d00-8000-000000000701
+period: all
+display: "Bridge Operations"
+account: 00000001-1701-4d00-8000-000000000001
+project: Bridge Operations
+item_count: 4
+source_fingerprint: 1333c53e90043ea04c6009aaf333f379e2c04c2a16f6fb8417885b5561275dfa
+---
+
+<h1 class="page-title" data-page-title-uuid="70000001-1701-4d00-8000-000000000701">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-pdesc-70000001-1701-4d00-8000-000000000701" data-section-uuid="pdesc-70000001-1701-4d00-8000-000000000701" class="msg msg--anthropic">
+
+## 2364-03-01 09:00:00 UTC — Description
+
+Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.
+
+</div>
+
+<div id="m-pinst-70000001-1701-4d00-8000-000000000701" data-section-uuid="pinst-70000001-1701-4d00-8000-000000000701" class="msg msg--anthropic">
+
+## 2364-03-01 09:00:00 UTC — Custom instructions
+
+Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.
+
+</div>
+
+<div id="m-7d000001-1701-4d00-8000-0000000007d1" data-section-uuid="7d000001-1701-4d00-8000-0000000007d1" class="msg msg--anthropic">
+
+## 2364-03-01 09:05:00 UTC — hailing-frequencies.md
+
+# Hailing frequencies
+
+Open on subspace band 3 unless the target is cloaked.
+
+- Klingon vessels: lead with rank, then ship name.
+- Romulan vessels: do not open first.
+
+
+</div>
+
+<div id="m-7d000002-1701-4d00-8000-0000000007d2" data-section-uuid="7d000002-1701-4d00-8000-0000000007d2" class="msg msg--anthropic">
+
+## 2364-03-02 11:30:00 UTC — escalation-ladder.txt
+
+Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
+Medical emergencies route directly to Sickbay (Crusher).
+
+
+</div>
+
+
 === anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md ===
 ---
 title: "Klingon Diplomatic Greeting Drafting (all)"
@@ -12,8 +70,9 @@ markdown_uuid: c0000003-1701-4d00-8000-00000000c003
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
 account: 00000001-1701-4d00-8000-000000000001
+project: Bridge Operations
 item_count: 6
-source_fingerprint: ee494d33941efc0884c950a892e0b23dbcfbccc8c09c3b16b3f8394568ba7be0
+source_fingerprint: aa22ca8c4bb10fb522e77cb4abd3ea009b7e38ab7617adaeb1c80c143118f63c
 ---
 
 <h1 class="page-title" data-page-title-uuid="c0000003-1701-4d00-8000-00000000c003">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -104,7 +163,7 @@ period: all
 display: "Tricorder Image Diagnostic"
 account: 00000003-1701-4d00-8000-000000000003
 item_count: 2
-source_fingerprint: 33093472c7abe44edb9909b5f1e3d18b23fa0681fda358f0f7c05a3ba557602d
+source_fingerprint: 91f9ee23e19a87b6cb56d85d792b6262660d1c13fdc07354c21c2f1c877d84ab
 ---
 
 <h1 class="page-title" data-page-title-uuid="c0000004-1701-4d00-8000-00000000c004">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -139,7 +198,7 @@ period: all
 display: "Borg Encryption Signature Lookup"
 account: 00000001-1701-4d00-8000-000000000001
 item_count: 6
-source_fingerprint: 87286bfafff1145c1e465857bbc53effc37917bf88bee30c4950f9d722895c4e
+source_fingerprint: 4df72f1fc91c57c23ac8976cea959166a655f8338720902f8772fc2011c48195
 ---
 
 <h1 class="page-title" data-page-title-uuid="c0000005-1701-4d00-8000-00000000c005">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>

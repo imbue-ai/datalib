@@ -329,7 +329,7 @@ outputs = ["{name}/rendered_md"]{render_params_line}"""
 id = "grid_index"
 command = "datalib-step grid_index"
 inputs = ["**/rendered_md"]
-outputs = ["system/backend_index"]"""
+outputs = ["unified_index/grid"]"""
     )
     dag_config = workspace / "dag.toml"
     dag_config.write_text(

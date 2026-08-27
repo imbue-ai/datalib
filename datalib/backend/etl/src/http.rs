@@ -96,6 +96,18 @@ pub struct HttpRequest {
     /// flag is behavior-only and is NOT part of [`fixture_key`], so a
     /// synthesizer's fixtures match whether or not the bypass is set.
     pub bypass_latchkey: bool,
+    /// Which stored latchkey account to use, for a service that holds
+    /// more than one (`latchkey --account <acct> curl …`). Latchkey keys
+    /// credentials by (service, account) and *requires* the flag once a
+    /// service has two — which is the normal case for Gmail, where work
+    /// and personal accounts live under the same `google-gmail` service.
+    ///
+    /// `None` means "the only one", which is what every provider that
+    /// predates this field wants. Like [`bypass_latchkey`] it is NOT part
+    /// of [`fixture_key`]: which identity fetched a response doesn't
+    /// change the response's shape, and folding it in would make one
+    /// user's fixtures unusable by another.
+    pub latchkey_account: Option<String>,
 }
 
 impl HttpRequest {
@@ -108,6 +120,7 @@ impl HttpRequest {
             body: None,
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
+            latchkey_account: None,
         }
     }
 
@@ -122,6 +135,7 @@ impl HttpRequest {
             body: Some(body),
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
+            latchkey_account: None,
         }
     }
 
@@ -139,6 +153,13 @@ impl HttpRequest {
     /// auth-free resources. See [`HttpRequest::bypass_latchkey`].
     pub fn plain(mut self) -> Self {
         self.bypass_latchkey = true;
+        self
+    }
+
+    /// Use a specific stored latchkey account. See
+    /// [`HttpRequest::latchkey_account`].
+    pub fn account(mut self, account: Option<impl Into<String>>) -> Self {
+        self.latchkey_account = account.map(Into::into);
         self
     }
 }
@@ -488,6 +509,11 @@ mod live {
             tokio::process::Command::new("curl")
         } else {
             let mut c = latchkey_tokio_command();
+            // `--account` is a latchkey *global* option, so it goes before
+            // the subcommand, not after.
+            if let Some(account) = &req.latchkey_account {
+                c.arg("--account").arg(account);
+            }
             c.arg("curl");
             c
         };

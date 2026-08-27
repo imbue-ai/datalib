@@ -75,10 +75,10 @@ FAMILIES: list[Family] = [
             "constants and missed the other, so search ran qmd 2.1.0 "
             "against a 2.5.3-built index for six weeks."
         ),
-        canonical="datalib/backend/core/src/qmd/mod.rs",
+        canonical="datalib/backend/unified_index/src/qmd/mod.rs",
         sites=[
             (
-                "datalib/backend/core/src/qmd/mod.rs",
+                "datalib/backend/unified_index/src/qmd/mod.rs",
                 r'^pub const DEFAULT_QMD_VERSION: &str = "([^"]+)"',
             ),
             ("tests/fixtures/BUILD.bazel", r'^QMD_VERSION = "([^"]+)"'),

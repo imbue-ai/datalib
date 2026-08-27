@@ -3,58 +3,40 @@
 //! [`crate::processor`] model.
 //!
 //! Program A's rule is that the orchestrator is storage-agnostic: a source that
-//! keeps a doltlite store owns it end to end (open, schema, write, commit,
-//! before/after snapshot, "what changed" report) and exposes only opaque seams
-//! — an interrupt [`Checkpoint`] and a published [`DownloadReport`] — so the
-//! orchestrator never reads the store.
+//! keeps a doltlite store owns it end to end (open, schema, write, commit) and
+//! exposes one opaque seam — an interrupt [`Checkpoint`] — so the orchestrator
+//! never reads the store.
 //!
 //! [`RawStoreSession`] is that easy button: open it over a source's write pool
-//! (captures the before-snapshot, registers the interrupt hook), then
-//! `finish(ctx, summary)` after the fetch (commit + after-snapshot + assemble
-//! the report + publish it + close). The interrupt hook ([`Checkpoint`]) does
-//! the same commit + report on Ctrl-C, so both paths are source-side.
+//! (registers the interrupt hook), then `finish(ctx, summary)` after the fetch
+//! (commit + close). The interrupt hook ([`Checkpoint`]) does the same commit
+//! on Ctrl-C, so both paths are source-side.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use datalib_obs::diagnostics::Diagnostics;
 use sqlx::sqlite::SqlitePool;
 
-use crate::download_metrics::{
-    assemble_report, snapshot_source, DbSnapshot, DownloadMetrics, DownloadReport,
-};
 use crate::processor::{Checkpoint, RunCtx};
 
-/// A doltlite raw-store session owned by a single download processor. Captures
-/// the before-snapshot at [`open`](RawStoreSession::open), commits + snapshots +
-/// reports at [`finish`](RawStoreSession::finish), and exposes an interrupt
-/// [`Checkpoint`] that does the same on Ctrl-C — all source-side.
+/// A doltlite raw-store session owned by a single download processor. Commits
+/// at [`finish`](RawStoreSession::finish) and exposes an interrupt
+/// [`Checkpoint`] that commits on Ctrl-C — both source-side.
 pub struct RawStoreSession {
     pool: SqlitePool,
-    entity_path: PathBuf,
-    before_events: DbSnapshot,
-    before_blobs: DbSnapshot,
     source_name: String,
-    metrics: Arc<DownloadMetrics>,
-    diagnostics: Arc<Diagnostics>,
 }
 
 impl RawStoreSession {
-    /// Open over a source's write `pool` (entity doltlite at `entity_path`):
-    /// capture the before-snapshot and register the interrupt-commit
-    /// `Checkpoint`. Prefer [`RunCtx::open_store`](crate::processor::RunCtx::open_store).
-    pub async fn open(pool: SqlitePool, entity_path: PathBuf, ctx: &RunCtx<'_>) -> Self {
-        let (before_events, before_blobs) = snapshot_source(&entity_path).await;
+    /// Open over a source's write `pool` (entity doltlite at `entity_path`)
+    /// and register the interrupt-commit `Checkpoint`. Prefer
+    /// [`RunCtx::open_store`](crate::processor::RunCtx::open_store).
+    pub async fn open(pool: SqlitePool, _entity_path: PathBuf, ctx: &RunCtx<'_>) -> Self {
         let session = Self {
             pool,
-            entity_path,
-            before_events,
-            before_blobs,
             source_name: ctx.name.to_string(),
-            metrics: ctx.metrics(),
-            diagnostics: ctx.diagnostics(),
         };
         ctx.register_checkpoint(ctx.name, session.checkpoint_hook());
         session
@@ -63,63 +45,35 @@ impl RawStoreSession {
     fn checkpoint_hook(&self) -> Arc<dyn Checkpoint> {
         Arc::new(RawStoreCheckpoint {
             pool: self.pool.clone(),
-            entity_path: self.entity_path.clone(),
-            before_events: self.before_events.clone(),
-            before_blobs: self.before_blobs.clone(),
             source_name: self.source_name.clone(),
-            metrics: self.metrics.clone(),
-            diagnostics: self.diagnostics.clone(),
         })
     }
 
-    /// Clean-completion finish: commit the source's `dolt_commit` (appending the
-    /// `commit=<hash>` suffix to `summary`), snapshot-after + assemble the
-    /// [`DownloadReport`], publish it through `ctx`, and `close()` the pool so
-    /// translate can re-open the file. Best-effort commit — a failure logs and
+    /// Clean-completion finish: commit the source's `dolt_commit` (appending
+    /// the `commit=<hash>` suffix to `summary`) and `close()` the pool so
+    /// render can re-open the file. Best-effort commit — a failure logs and
     /// returns the bare summary.
-    pub async fn finish(self, ctx: &RunCtx<'_>, summary: String) -> String {
+    pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
         let final_summary = commit_with_suffix(&self.pool, &self.source_name, summary).await;
-        let report = assemble_report(
-            &self.entity_path,
-            &self.before_events,
-            &self.before_blobs,
-            &self.metrics,
-            &self.diagnostics,
-        )
-        .await;
-        ctx.publish_report(report);
         self.pool.close().await;
         final_summary
     }
 }
 
 /// The interrupt-commit hook a [`RawStoreSession`] registers. On Ctrl-C it
-/// commits the partial state AND assembles the partial report — both source-side
-/// — so the orchestrator collects an opaque report and never reads the store.
+/// commits the partial state, source-side, so the orchestrator never reads the
+/// store.
 struct RawStoreCheckpoint {
     pool: SqlitePool,
-    entity_path: PathBuf,
-    before_events: DbSnapshot,
-    before_blobs: DbSnapshot,
     source_name: String,
-    metrics: Arc<DownloadMetrics>,
-    diagnostics: Arc<Diagnostics>,
 }
 
 #[async_trait]
 impl Checkpoint for RawStoreCheckpoint {
-    async fn checkpoint(&self) -> Result<Option<DownloadReport>> {
+    async fn checkpoint(&self) -> Result<()> {
         let msg = format!("download {}: interrupted (Ctrl-C)", self.source_name);
         crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
-        let report = assemble_report(
-            &self.entity_path,
-            &self.before_events,
-            &self.before_blobs,
-            &self.metrics,
-            &self.diagnostics,
-        )
-        .await;
-        Ok(Some(report))
+        Ok(())
     }
 }
 

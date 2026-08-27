@@ -82,10 +82,16 @@ impl RawDb {
                 .await
                 .with_context(|| format!("truncate {table}"))?;
         }
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE 'jmap:%'")
-            .execute(&mut *tx)
-            .await
-            .context("clear jmap scope state on reset")?;
+        // Every live mode's cursor namespace. A reset that cleared only
+        // one would leave a stale cursor pointing into a store that no
+        // longer has the rows it names.
+        for prefix in ["jmap:%", "gmail:%"] {
+            sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE ?")
+                .bind(prefix)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("clear {prefix} scope state on reset"))?;
+        }
         sqlx::query("DELETE FROM mbox_files_checkpoint")
             .execute(&mut *tx)
             .await
@@ -97,17 +103,31 @@ impl RawDb {
     // ── state tokens ────────────────────────────────────────────────
 
     pub async fn load_state(&self, account_id: &str, type_name: &str) -> Result<Option<String>> {
-        let scope = state_scope(account_id, type_name);
+        self.load_scope(&state_scope(account_id, type_name)).await
+    }
+
+    pub async fn save_state(&self, account_id: &str, type_name: &str, token: &str) -> Result<()> {
+        self.save_scope(&state_scope(account_id, type_name), token)
+            .await
+    }
+
+    /// Read a cursor under a caller-supplied scope key.
+    ///
+    /// [`load_state`](Self::load_state) hard-codes the `jmap:` prefix;
+    /// the other live modes own their own namespaces (`gmail:`) so
+    /// several accounts and several transports can share one raw store
+    /// without stepping on each other's cursors.
+    pub async fn load_scope(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
-            .bind(&scope)
+            .bind(scope)
             .fetch_optional(&self.pool)
             .await
             .context("select state token")?;
         Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at").ok()))
     }
 
-    pub async fn save_state(&self, account_id: &str, type_name: &str, token: &str) -> Result<()> {
-        dr::upsert_scope_state(&self.pool, &state_scope(account_id, type_name), token).await
+    pub async fn save_scope(&self, scope: &str, token: &str) -> Result<()> {
+        dr::upsert_scope_state(&self.pool, scope, token).await
     }
 
     // ── loads (consumed by render) ───────────────────────────────
@@ -262,27 +282,6 @@ impl RawDb {
             }
         }
         tx.commit().await.context("commit delete mailboxes tx")?;
-        Ok(())
-    }
-
-    pub async fn delete_threads(&self, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin delete threads tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM threads WHERE id = ?",
-                "DELETE FROM threads_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete thread {id}"))?;
-            }
-        }
-        tx.commit().await.context("commit delete threads tx")?;
         Ok(())
     }
 

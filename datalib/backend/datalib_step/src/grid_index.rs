@@ -1,7 +1,7 @@
 //! The `grid_index` step type: Load, un-fused into a first-class
 //! fan-in step — everything lands in the unified grid table.
 //!
-//! Rebuilds/refreshes `system/backend_index/db.doltlite_db` from
+//! Rebuilds/refreshes `unified_index/grid/db.doltlite_db` from
 //! every stanza's `.grid_rows.json` sidecar tree via
 //! [`datalib_etl::grid_index::build_grid_index`] — which already carries the
 //! per-doc fingerprint skip, so an up-to-date index costs one scan.
@@ -17,20 +17,26 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::events::{Emitter, OutputClaim};
 
-pub const OUT_REL: &str = "system/backend_index";
+pub const OUT_REL: &str = "unified_index/grid";
 
 pub async fn run(
     data_root: &Path,
     now: Option<&str>,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
-    let db_path = datalib_core::layout::backend_index_db(data_root);
+    let db_path = datalib_core::layout::grid_index_db(data_root);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
-        // The index is 100% rebuilt from the sidecar trees, so
-        // cache-aware backups (`restic --exclude-caches` etc.) may
-        // skip it.
-        datalib_core::layout::mark_derived_cache(parent);
+        // Tag the whole `unified_index/` tree, not just this step's own
+        // directory: every index under it is rebuilt from the sidecar
+        // trees, so cache-aware backups (`restic --exclude-caches` etc.)
+        // may skip all of it. Tagging the parent also means the tag is
+        // right before the qmd step has ever run. Nothing precious lives
+        // here — feedback and the job queue are under `system/`, which is
+        // never tagged.
+        datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(
+            data_root,
+        ));
     }
     // Pool size 1: doltlite's HEAD pointer + working tree are
     // per-connection (see datalib_etl::doltlite_raw module docs).
@@ -64,15 +70,26 @@ pub async fn run(
     if let Some(h) = commit.as_deref() {
         tracing::info!(commit = h, "grid_index: committed");
     }
+    // HEAD, not the commit this run happened to make: `commit_run`
+    // returns `None` both without doltlite *and* when the working tree
+    // was already clean. Reporting no version in the clean case would
+    // drop us to the tree hash — a digest from a different hash space
+    // than the dolt hash reported last time — so every no-op run after
+    // a real change would read as changed.
+    let version = datalib_etl::doltlite_raw::head_commit(&pool)
+        .await
+        .context("grid_index head")?;
     pool.close().await;
 
-    // The dolt commit hash is a faithful logical version: a new one
-    // exists iff rows changed. Without doltlite (stock-sqlite dev
-    // builds) there's no hash; claim changed/unchanged and let the
-    // scheduler carry versions.
-    Ok(vec![OutputClaim {
-        path: OUT_REL.to_string(),
-        changed: Some(summary.markdowns_loaded > 0),
-        version: commit,
-    }])
+    // The dolt commit hash is a faithful content version: HEAD only
+    // advances when rows actually changed. Without doltlite
+    // (stock-sqlite dev builds) there is no hash and we report nothing,
+    // so the runner hashes the index instead.
+    match version {
+        Some(version) => Ok(vec![OutputClaim {
+            path: OUT_REL.to_string(),
+            version,
+        }]),
+        None => Ok(vec![]),
+    }
 }

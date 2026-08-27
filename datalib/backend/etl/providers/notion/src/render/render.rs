@@ -930,8 +930,8 @@ fn render_one_page(
             collect_block_ids(blocks, children_by_parent, &mut owner_ids);
             for owner in owner_ids {
                 let ref_id = format!("{owner}:image");
-                if let Some(blob) = blobs.get(&ref_id) {
-                    local_blob_paths.insert(owner, format!("blobs/{}", blob.rendered_filename()));
+                if let Some(fname) = blobs.filename_for(&ref_id) {
+                    local_blob_paths.insert(owner, format!("blobs/{fname}"));
                 }
             }
         }
@@ -972,20 +972,6 @@ fn collect_block_ids(
             }
         }
     }
-}
-
-pub fn thread_snippet(comment_rich_text_plain: &str) -> String {
-    let first_line = comment_rich_text_plain
-        .lines()
-        .next()
-        .unwrap_or("thread")
-        .to_string();
-    let s = if first_line.is_empty() {
-        "thread".into()
-    } else {
-        first_line
-    };
-    s.chars().take(60).collect()
 }
 
 pub fn thread_filename(discussion_id: &str) -> String {

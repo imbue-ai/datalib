@@ -4,7 +4,8 @@
 //! runtime when staged, else `npx -y @tobilu/qmd@<version>`) — same
 //! incantation as `datalib_qmd_indexer`. The runner does NOT build
 //! the index; it
-//! expects one already present at `<root>/.datalib/qmd/index.sqlite`.
+//! expects one already present at `<root>/unified_index/qmd/index.sqlite`
+//! ([`crate::qmd::qmd_index_path`]).
 //!
 //! Search modes:
 //!   * `query`   — hybrid (BM25 + vectors + reranker). What a user types
@@ -19,7 +20,7 @@
 use crate::qmd::mapping::{QmdHit, QueryMode};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub use crate::qmd::DEFAULT_QMD_VERSION;
 
@@ -28,7 +29,7 @@ pub const DEFAULT_COLLECTION: &str = "mirror";
 #[derive(Debug, Clone)]
 pub struct QmdRunnerConfig {
     /// Data root. Contains the rendered markdown tree AND
-    /// `.datalib/qmd/index.sqlite`.
+    /// `unified_index/qmd/index.sqlite`.
     pub qmd_root: PathBuf,
     pub qmd_version: String,
     pub collection: String,
@@ -106,7 +107,7 @@ impl QmdRunner {
         let out = cmd.output().with_context(|| {
             format!(
                 "failed to spawn `{}`; is Node.js installed?",
-                crate::node_runtime::display_command(&cmd)
+                datalib_core::node_runtime::display_command(&cmd)
             )
         })?;
         if !out.status.success() {
@@ -182,13 +183,6 @@ pub fn strip_uri(uri: &str) -> &str {
         Some(i) => &after_scheme[i + 1..],
         None => after_scheme,
     }
-}
-
-/// Cache-home for the qmd CLI under a data root. Re-exported for
-/// callers that want to set `XDG_CACHE_HOME` themselves (e.g. the
-/// indexer binary).
-pub fn cache_home_for(root: &Path) -> PathBuf {
-    qmd_cache_home(root)
 }
 
 /// Rewrite a free-text search bar query into a qmd query string that

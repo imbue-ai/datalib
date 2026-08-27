@@ -88,7 +88,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
 # Service running, so latchkey exits non-zero with "No encryption key
 # available." The entrypoint script (datalib-entrypoint.sh) handles
 # this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
-ARG LATCHKEY_VERSION=3.1.0
+ARG LATCHKEY_VERSION=3.7.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
 # Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
@@ -137,7 +137,7 @@ RUN arch="$(dpkg --print-architecture)" \
 #
 # Pinned to the qmd version that the qmd step invokes via
 # `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
-# datalib/backend/core/src/qmd/mod.rs. The
+# datalib/backend/unified_index/src/qmd/mod.rs. The
 # //tools:version_pins_test asserts the values agree.
 #
 # qmd 2.5.3 transitively depends on `tree-sitter-javascript`, which

@@ -26,6 +26,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",

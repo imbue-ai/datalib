@@ -21,6 +21,9 @@
 
 pub mod api;
 pub mod db;
+pub mod envelope;
+pub mod gmail_api;
+pub mod labels;
 pub mod mbox;
 pub mod schema_raw;
 pub mod session;

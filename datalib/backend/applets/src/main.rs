@@ -40,6 +40,7 @@
 #![allow(clippy::disallowed_macros)]
 
 mod slack;
+mod unified_index;
 
 use std::path::PathBuf;
 
@@ -73,6 +74,14 @@ enum Which {
     /// Browse a Slack mirror: channels, then one channel's threads,
     /// then a whole thread.
     Slack,
+    /// Serve the grid index and the qmd index: search, columns, the
+    /// document list, one document, and the files beside it.
+    ///
+    /// Spelled with an underscore so the subcommand matches the applet
+    /// id and the tree it reads (`<root>/unified_index/`); clap would
+    /// otherwise kebab-case it and the three names would disagree.
+    #[command(name = "unified_index")]
+    UnifiedIndex,
 }
 
 fn main() {
@@ -98,6 +107,13 @@ fn run() -> Result<()> {
             }
             let port = cli.port.context("-p <port> is required")?;
             slack::serve(port, &params)
+        }
+        // Contributes no components, so there is nothing to write
+        // first: the app's grid and document views are builtins, and
+        // this applet only serves the endpoints behind them.
+        Which::UnifiedIndex => {
+            let port = cli.port.context("-p <port> is required")?;
+            unified_index::serve(port, &params)
         }
     }
 }

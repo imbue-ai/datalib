@@ -93,7 +93,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8731/api/health
 | Host path                      | Container path             | Mode at sync time | Why                                                                                          |
 |--------------------------------|----------------------------|-------------------|----------------------------------------------------------------------------------------------|
 | `$LATCHKEY_DIR`                | `/root/.latchkey`          | `:ro`             | latchkey's encrypted credential store. Needs RW only during `services register` / `auth set` / `auth browser-prepare`. |
-| `$DATA_ROOT`                   | `/data`                    | RW                | `config.toml`, one directory per source stanza (`<name>/raw/` + `<name>/rendered_md/`), and the aggregates under `system/` (`system/backend_index/db.doltlite_db`, `system/qmd/`). |
+| `$DATA_ROOT`                   | `/data`                    | RW                | `config.toml`, one directory per source stanza (`<name>/raw/` + `<name>/rendered_md/`), and the aggregates under `system/` (`unified_index/grid/db.doltlite_db`, `unified_index/qmd/`). |
 | `~/.cache/qmd/models`          | `/root/.cache/qmd/models`  | RW (optional)     | qmd's embedding/reranker/expansion model cache (~2.25 GB). The image already ships the three default models pre-baked at `/root/.cache/qmd/models/`, so this mount is only needed if you've set `QMD_EMBED_MODEL=…` to override the default to an unbaked model, or you want to share a cache with a host `qmd` install. |
 
 Default `ENV` inside the image already sets `DATALIB_ROOT=/data` and

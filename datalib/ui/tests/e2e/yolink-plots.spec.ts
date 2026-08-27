@@ -6,7 +6,7 @@ import { clickRowByUuid } from "./grid-helpers";
 // several pieces have to agree on:
 //
 //   renderer writes a RELATIVE `src="plots/<q>.html"`  (render/render.rs)
-//     → ChatBody rewrites it to `/api/asset/{markdown_uuid}/…`  (asset_urls.ts)
+//     → ChatBody rewrites it to `/applet/unified_index/asset/{markdown_uuid}/…`  (asset_urls.ts)
 //       → the backend resolves that against the markdown's directory  (http/src/lib.rs)
 //         → the framed document is the page the renderer generated
 //
@@ -59,7 +59,7 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
   page,
   request,
 }) => {
-  const resp = await request.get("/api/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const pageRow = rows.find((r) => r.kind === "Sensor Timeseries");
@@ -78,7 +78,7 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
   for (const quantity of ["temperature", "humidity", "volume"]) {
     await expect(
       page.locator(
-        `iframe[src="/api/asset/${mdUuid}/plots/${quantity}.html"]`,
+        `iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`,
       ),
       `plots/${quantity}.html should be iframed via the asset route`,
     ).toHaveCount(1);

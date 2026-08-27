@@ -4,6 +4,7 @@ members = [
     "schema",
     "app_schema",
     "index_lib",
+    "unified_index",
     "core",
     "dag",
     "http",
@@ -46,7 +47,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.28.0"
+version = "0.29.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false

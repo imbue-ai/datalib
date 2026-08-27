@@ -23,7 +23,7 @@
 # drift):
 #   * latchkey  — LATCHKEY_VERSION in backend/core/src/node_runtime.rs
 #                 (the ONE canonical latchkey pin; etl re-exports it)
-#   * qmd       — DEFAULT_QMD_VERSION in backend/core/src/qmd/mod.rs
+#   * qmd       — DEFAULT_QMD_VERSION in backend/unified_index/src/qmd/mod.rs
 #                 (the ONE canonical qmd pin; indexer re-exports it,
 #                 //tools:version_pins_test guards the rest)
 #
@@ -88,7 +88,7 @@ extract_pin() { # file, pattern of the const line
 
 latchkey_version="$(extract_pin "$backend_dir/core/src/node_runtime.rs" \
     '^pub const LATCHKEY_VERSION:')"
-qmd_version="$(extract_pin "$backend_dir/core/src/qmd/mod.rs" \
+qmd_version="$(extract_pin "$backend_dir/unified_index/src/qmd/mod.rs" \
     '^pub const DEFAULT_QMD_VERSION:')"
 
 log "pins: node=$NODE_VERSION latchkey=$latchkey_version qmd=$qmd_version"
