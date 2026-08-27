@@ -32,8 +32,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt;
 
 /// The spawned `datalib-http` child, managed in tauri state so the
 /// exit handler can kill it. `None` until boot succeeds.
@@ -50,12 +51,16 @@ fn main() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        // Backs the grid's "Reveal in Finder" action. The webview is
-        // granted ONLY `reveal_item_in_dir` — see
-        // `capabilities/reveal-local-files.json`, which also explains
-        // why that capability needs a `remote` block at all (this app
-        // loads its UI from localhost as an external URL, and Tauri
-        // withholds IPC from remote origins by default).
+        // Backs two things: the grid's "Reveal in Finder" action, and
+        // handing an off-origin link to the OS browser (the `↗`
+        // outlink and any link inside a rendered document). The webview
+        // is granted those two commands and no others — notably not
+        // `open_path`, which launches a local file's default
+        // application. See `capabilities/reveal-local-files.json` and
+        // `capabilities/open-external-urls.json`, which also explain
+        // why both need a `remote` block at all (this app loads its UI
+        // from localhost as an external URL, and Tauri withholds IPC
+        // from remote origins by default).
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![version])
         .manage(HttpChild(Mutex::new(None)))
@@ -199,15 +204,63 @@ async fn boot(app: AppHandle, root: PathBuf) {
         Ok(Err(e)) => return fatal(&app, format!("could not start the backend: {e:#}")),
         Err(e) => return fatal(&app, format!("backend startup task panicked: {e}")),
     };
-    let Ok(url) = url.parse() else {
+    let Ok(url) = url.parse::<Url>() else {
         return fatal(&app, format!("backend produced an unusable URL: {url}"));
     };
+    // Serialized rather than kept as a `url::Origin`: that type is
+    // not re-exported by tauri, and naming it would mean adding a
+    // direct `url` dependency for one comparison.
+    let app_origin = url.origin().ascii_serialization();
+    let nav_app = app.clone();
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url))
         .title("Datalib")
         .inner_size(1280.0, 800.0)
+        // The app window shows the app, never someone else's website.
+        // Rendered documents carry links we did not author — the `↗`
+        // outlink, and every `<a>` that came out of the source content
+        // (a "Sent via Superhuman" footer, a newsletter's tracking
+        // link). Following one in place replaces the whole UI with a
+        // marketing page and leaves no chrome to come back from.
+        //
+        // `ui/src/externalLinks.ts` intercepts the clicks and is what
+        // makes those links actually *work*; this is the backstop
+        // under it, for the navigations a click handler never sees —
+        // an HTTP redirect, a `<meta refresh>`, embedded script
+        // assigning `location`.
+        //
+        // Caveat: wry does not tell us which frame navigated, so an
+        // *external* iframe would be blocked and popped into the
+        // browser too. Nothing renders one today — email HTML goes
+        // through htmd, which drops iframes, and plot embeds are
+        // rewritten to same-origin asset URLs — but a renderer that
+        // starts emitting one would want a frame check here first.
+        .on_navigation(move |next| {
+            if !leaves_the_app(next, &app_origin) {
+                return true;
+            }
+            if let Err(e) = nav_app.opener().open_url(next.as_str(), None::<&str>) {
+                eprintln!("could not open {next} externally: {e}");
+            }
+            false
+        })
         .build();
     if let Err(e) = window {
         return fatal(&app, format!("could not open the main window: {e}"));
+    }
+}
+
+/// Whether navigating to `next` would take the window off the app.
+///
+/// Mirrors `isExternalHref` in `ui/src/externalLinks.ts` — same-origin
+/// http(s) is the app itself (its routes, its asset URLs); `mailto:` /
+/// `tel:` are handoffs no webview can service. Every other scheme
+/// (`about:`, `blob:`, `data:`, devtools) is left alone rather than
+/// guessed at.
+fn leaves_the_app(next: &Url, app_origin: &str) -> bool {
+    match next.scheme() {
+        "http" | "https" => next.origin().ascii_serialization() != app_origin,
+        "mailto" | "tel" => true,
+        _ => false,
     }
 }
 
