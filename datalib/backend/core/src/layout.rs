@@ -61,10 +61,14 @@ pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 /// land in each other's dolt history.
 pub const JOBS_DB: &str = "jobs.doltlite_db";
 
-/// Stanza names a source may not take, because each would collide with a
-/// reserved top-level directory on disk. With the `system/` split this is a
-/// single name; the per-aggregate dirs live *inside* `system/`.
-pub const RESERVED_STANZA_NAMES: &[&str] = &[SYSTEM_DIR];
+// Stanza names a source may not take live with the code that enforces
+// them: `datalib_dag::config::RESERVED_STANZA_NAMES`, checked by
+// `validate_steps` on the path every entry point already takes. A
+// constant here had no callers at all, so nothing stopped a source
+// named `system` — and it predated `unified_index/` becoming a second
+// reserved top-level directory. `datalib-dag` deliberately doesn't
+// depend on this crate, so the policy lives where it is applied and
+// the path constants stay here.
 
 /// `data_root/system`.
 pub fn system_dir(data_root: &Path) -> PathBuf {

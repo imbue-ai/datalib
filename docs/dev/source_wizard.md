@@ -1,6 +1,12 @@
 # Design: the "New Data Source" wizard
 
-**Status: proposal, 2026-08-25. Nothing here is built yet.**
+**Status: proposal, revised 2026-08-26 against main @ `f54e7e80`.
+Nothing here is built yet.** The first revision was written against a
+tree that has since moved a long way — `unified_index/`, the
+one-file-per-writer store split, the applet that took the grid routes
+out of `datalib-http`, and the removal of the download report. Claims
+below have been re-checked against that main; the ones that changed are
+called out where they sit.
 Related: [#171](https://github.com/imbue-ai/datalib/issues/171)
 (`grid_rows` needs `source_name` before the sources grid can count rows
 per source). Per
@@ -37,6 +43,139 @@ as a failure. The knowledge needed to do it right is distributed across
 never shows you.
 
 The wizard's job is to move all of that in front of the first run.
+
+## The Manage screen
+
+The wizard is not a feature bolted onto today's Manage tab — it replaces
+what that tab leads with. Right now the tab opens on a raw
+`config.toml` textarea, with a derived list of step ids beside it and a
+row of quick-add chips. That puts a text editor in front of a person
+whose actual question is "which of my things are mirrored, and are they
+working?"
+
+Invert it:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Data sources                                    [ + Add Data Source ]│
+├──────────────────────────────────────────────────────────────────────┤
+│  ▣ Slack       slack_api    imbue-ai ✓   2h ago    ok      ▓▓▓▓░ 4.1G │
+│  ▣ Claude      claude_api   thad     ✓   2h ago    ok      ▓▓░░░ 890M │
+│  ▣ Fastmail    email        thad     ⚠   6d ago    failed  ▓▓▓░░ 2.2G │
+│  ▣ Documents   pdf          —            2h ago    ok      ▓▓▓▓▓ 12G  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Recent activity …          (status cells open a per-source log panel)│
+│  ▸ Advanced: edit config.toml                                         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+An AG Grid of configured sources is the page. **Add Data Source** sits
+above it and opens the picker → configure flow. Each row carries
+**Run · Edit · Delete**, and Edit opens the same wizard that created the
+source, on the screen you came for.
+
+The config editor doesn't go away — it stays the source of truth and the
+escape hatch, and agents edit through it via `PUT /api/config`. It moves
+into a collapsed **Advanced** disclosure at the bottom. Demoted, not
+deleted: when the wizard can't express something, "edit as TOML" has to
+lead somewhere.
+
+### Columns
+
+| Column | Where the value comes from |
+|---|---|
+| **Source** | stanza name + catalog icon |
+| **Type** | the step `command`'s provider word |
+| **Account** | `latchkey services info <service>` → account key + `credentialStatus` chip |
+| **Last synced** | *(needs new persistence — see below)* |
+| **Last status** | *(same)* — **and it's a button**: clicking it opens that source's recent logs |
+| **Documents** | the `unified_index` applet — **not** a direct query, see below |
+| **Storage** | http stats the source's directories itself |
+| **Actions** | Run · Edit · Delete |
+
+### The status cell is the way into the logs
+
+A source that failed should not make you go hunting. The **Last status**
+cell is the control: click `failed` and you get that source's recent
+log, scrolled to the failure. Click `ok` and you get the last run's log
+anyway — the same affordance, no dead ends, and it doubles as "what did
+that sync actually do?"
+
+That beats a separate Logs button in the actions group for two reasons:
+the status is *already* the thing you looked at to decide you cared, and
+an actions group of four buttons in every row is where a table starts
+feeling like a cockpit.
+
+What opens is a side panel, not a route — you are triaging one row of a
+table you want to stay in. It carries:
+
+- **The failure first.** The DAG already emits `Event::Hint` for
+  actionable remediation, distinct from `Log` precisely so a UI can
+  surface it instead of burying it — and `hints.rs` fills it with the
+  provider's fix-it text on an auth failure. That hint belongs at the
+  top of the panel, above the log, with the *Reconnect* button beside it
+  when the failure kind is `auth`.
+- **A level filter.** The worker already writes the tracing
+  subscriber's NDJSON to `<root>/system/job-logs/<id>.log`, and
+  `SourcesView` already classifies lines by `level`. Error / warn / info
+  / everything is a filter over data that exists.
+- **This source's lines only.** A run spans several sources, so the
+  panel filters the job log by step id rather than showing the whole
+  run. (The same per-step attribution the `step_runs` table needs — one
+  more reason it comes first.)
+- **Older runs.** A dropdown of this source's recent runs, from
+  `step_runs`, so "it broke sometime last week" is answerable.
+
+Live runs stream into the same panel over the existing
+`/api/sync/stream` SSE, so clicking status on a running source is how
+you watch it — which is most of what "part two" wanted, reachable from
+the grid rather than as a separate screen.
+
+### Two of those columns have no data source yet
+
+"Last synced" and "Last status" are the obvious things to want per
+source, and **neither is currently recorded per source.**
+
+- `sync_jobs` (in `system/jobs.doltlite_db`) is per *run*, and a run
+  routinely spans several sources — the UI comma-joins step ids into one
+  job's `source_name`. A multi-source job that failed doesn't say which
+  source failed.
+- `DagState`'s `StepState` *is* per step, but it holds
+  `input_versions`, `output_versions`, `succeeded` and `fingerprint` —
+  no timestamp, no error. It answers "is this step up to date", not
+  "when did it last run and how did it go".
+
+The events already exist and are simply not persisted: every run ends
+with `Event::RunSummary`, whose `StepSummary { step, status, failure,
+attempts, error, outputs }` is exactly these two columns, per step.
+
+**Proposal: persist it.** A `step_runs` table in
+`system/jobs.doltlite_db` — the server already owns that file and is its
+only writer — keyed `(job_id, step_id)`, written by the sync worker as
+it consumes the run's event stream. Both columns become one query, and
+per-source run history comes free (a status sparkline in the row, if we
+want it later). `dag_state.rs`'s own module doc already flags moving
+this state into a `pipeline_runs` table as an open question, so this
+runs with the grain.
+
+### Document counts must go through the applet
+
+The first draft had `datalib-http` running
+`SELECT source_name, COUNT(*) FROM markdowns GROUP BY source_name`.
+**That is no longer allowed.** `core/src/layout.rs` now states that
+`unified_index/` is "owned end to end by the `unified_index` applet and
+the two steps that write it; nothing in `datalib-http` or `datalib-dag`
+reads what is under here" — which is the whole point of the applet that
+took `/api/search` and friends out of the server.
+
+So the count comes from a new endpoint on the `unified_index` applet
+(it serves `/search`, `/columns`, `/docs`, `/chat`, `/asset` today —
+add `/sources/stats`), reached through the existing applet gateway. The
+grid degrades gracefully when the applet isn't running: blank counts,
+everything else still renders.
+
+**Storage stays on the http side**, because it is a plain directory
+stat of `<data_root>/<name>/` — no index, no applet, no provider.
 
 ## Principles
 
@@ -254,7 +393,7 @@ after a failed sync — just twenty minutes earlier.
 
 | op | meaning | Slack | email (JMAP) | pdf / fsindex |
 |---|---|---|---|---|
-| `auth` | credentials work; return an identity summary | `auth.test` | `.well-known/jmap` | n/a |
+| `auth` | credentials work; return an identity summary — **the only check available for user-registered services**, whose `credentialStatus` is always `unknown` | `auth.test` | `.well-known/jmap` | n/a |
 | `list.<resource>` | enumerate selectable things | `conversations.list` | `Mailbox/get` | n/a |
 | `inspect` | validate a path, summarize what's there | n/a | n/a | file count, total bytes, `needs_ocr` count |
 
@@ -274,11 +413,11 @@ change, not a twenty-crate refactor.
 **The user should never learn the word "latchkey."** For Slack that is
 fully achievable today, because latchkey already has the flow we want.
 
-### What latchkey actually offers (verified against 3.1.0 and 3.6.0)
+### What latchkey actually offers (verified against the pinned 3.7.0)
 
 `latchkey auth browser <service>` — *"Login to a service via the
 browser and store the API credentials."* It exists in the pinned
-**3.1.0** as well as the globally-installed 3.6.0. For Slack it opens a
+**3.7.0** (bumped from 3.1.0 by #177; it was already there in 3.1.0). For Slack it opens a
 real Chromium at `https://slack.com/signin`, lets the user log in
 normally, and scrapes the `xoxc-` api_token plus the `d` cookie out of
 the authenticated session — exactly the credential shape our downloader
@@ -305,8 +444,9 @@ Two more things make the wizard simpler than designed:
   definition carries
   `credentialCheckCurlArguments = ['https://slack.com/api/auth.test']`,
   which is where the `valid` status and the workspace-derived account
-  name come from. So `--op auth` is redundant for Slack; probes earn
-  their keep on `list.channels`.
+  name come from. So `--op auth` is redundant for Slack — though not in
+  general; see
+  [`credentialStatus` is only as good as latchkey's checker](#credentialstatus-is-only-as-good-as-latchkeys-checker).
 
 ### Registration is data, so browser login isn't only for built-ins
 
@@ -340,56 +480,110 @@ page script sets is not seen, and neither is one that an already
 signed-in session never sends again." Whether claude.ai sets `sessionKey`
 that way is an empirical question.
 
-### Coverage, with that in hand
+### Coverage: better than it looks, because latchkey matches by URL
 
-| datalib type | latchkey service | How the user connects |
+Two things I had wrong. First, **latchkey picks the service by matching
+the request URL against the service's `baseApiUrls`** — not by any name
+we pass it. `etl/src/http.rs` shells out to `latchkey curl <url>` and
+latchkey resolves from there; the string providers pass to
+`HttpRequest::get("jmap", …)` is our own tag for logging and
+impersonation routing, nothing more. The email provider's Gmail module
+says so in its header: *"it routes by URL host"*.
+
+Second, the 3.7.0 pin (#177) made **Fastmail built-in with OAuth**, and
+#175 added a Gmail REST path that lands on `gmail.googleapis.com` —
+which is the built-in `google-gmail` service. Both have browser login.
+
+Checked against a live `latchkey auth list` on a developer machine:
+
+| datalib source | latchkey service (URL-matched) | How the user connects |
 |---|---|---|
-| `slack_api` | `slack` (built-in) | **Browser.** Works today. |
-| `github_api` | `github` (built-in) | **Browser.** Works today. |
-| `claude_api` | `claude-ai` (we register) | **Browser, probably** — cookie-capture on `sessionKey`. Needs the test above. |
-| `chatgpt_api` | `chatgpt` (we register) | Token field. Cookie-capture yields a session cookie, but the downloader sends `Authorization: Bearer <accessToken>` read from `/api/auth/session` — a JSON field, not a cookie. Would need the downloader to change too. |
-| `gitlab_api` | `gitlab` (built-in) | Token field (`PRIVATE-TOKEN`); the built-in is set-only. |
-| `notion_api` | `notion` (built-in) | Token field. `notion-mcp` *is* browser-capable, but it's a different API surface (`mcp.notion.com`) — adopting it means rewriting the downloader, not swapping a string. |
-| `email` (JMAP) | `fastmail` + `fastmail-content` (we register) | Token field — a Fastmail API token, not a cookie. |
+| `slack_api` | `slack` — built-in | **Browser.** |
+| `github_api` | `github` — built-in | **Browser.** |
+| `email` (JMAP / Fastmail) | `fastmail` — built-in, OAuth | **Browser.** |
+| `email` (Gmail REST) | `google-gmail` — built-in, OAuth | **Browser**, after a one-time `auth browser-prepare` to mint an OAuth client. |
+| `claude_api` | `claude-ai` — user-registered | Token field today. Cookie-capture candidate (above). |
+| `chatgpt_api` | `chatgpt` — user-registered | Token field; the downloader wants a Bearer token from a JSON endpoint, not a cookie. |
+| `gitlab_api` | `gitlab` — built-in | Token field (`PRIVATE-TOKEN`); built-in is set-only. |
+| `notion_api` | `notion` — built-in | Token field. |
+| `carddav` (Fastmail DAV) | `fastmail-dav` — built-in | Token field — an app password, not OAuth. |
 
-So: two work now, a third likely does with a registration we write once,
-and the rest are token fields. The credential screen still has **two
-modes, chosen from `authOptions`** — it just gets to use the good one
-more often than "built-in vs not" would suggest:
+So **four sources get a Connect button**, not two — including the
+Gmail-over-IMAP-style onboarding that started this whole thread, which
+is now reachable rather than aspirational.
 
-- **`browser`** → one button, "Connect Slack". Backend runs
-  `latchkey ensure-browser` then `latchkey auth browser slack`, streams
-  status, then re-reads `services info` to confirm and to name the
-  account. Nothing is typed, nothing is pasted, latchkey is never named.
-- **`set`** → a labeled secret field ("Paste your Fastmail API token")
-  whose value the backend pipes to `latchkey auth set` **on stdin** —
-  never argv, which is world-readable via `ps` — after running the
-  descriptor's `register` block first for the user-registered services. Still no latchkey command for the user
-  to run; the existing `hints.rs` prose becomes the *how to get this
-  token* text beside the field, not an instruction to visit a terminal.
+### The screen still has two modes, chosen from `authOptions`
 
-The copy-this-command escape hatch stays available behind a
-disclosure, because it is the only thing that works when the server is
-headless.
+- **`browser`** → one button, "Connect Slack". The backend runs
+  `latchkey ensure-browser` then `latchkey auth browser <service>`,
+  streams status, and re-reads `services info` to confirm and name the
+  account. Nothing typed, nothing pasted, latchkey never named. Covers
+  slack, github, fastmail and google-gmail.
+- **`set`** → a labeled secret field whose value the backend pipes to
+  `latchkey auth set` **on stdin** — never argv, which is world-readable
+  via `ps` — after running the descriptor's `register` block first for
+  the user-registered services. The `hints.rs` prose becomes the *how to
+  get this token* text beside the field, not an instruction to open a
+  terminal.
 
-Notably, `google-gmail` supports `browser` (via `auth browser-prepare`,
-which provisions an OAuth client). That is the Thunderbird-grade Gmail
-onboarding — but it needs a Gmail-API provider we don't have; today
-Gmail arrives as a Takeout `.mbox`. Worth knowing the credential half is
-already solved if we ever build that provider.
+The copy-this-command escape hatch stays behind a disclosure, because it
+is the only thing that works against a headless server.
+
+### `credentialStatus` is only as good as latchkey's checker
+
+The design leaned on `services info` reporting `valid` / `invalid` /
+`unknown`. Comparing two live entries shows where that stops:
+
+```jsonc
+"slack":     { "thad@imbue-ai": { "credentialType": "slack",   "credentialStatus": "valid"   } }
+"claude-ai": { "":              { "credentialType": "rawCurl", "credentialStatus": "unknown" } }
+```
+
+Both are connected and working. Slack reads `valid` because its built-in
+service carries `credentialCheckCurlArguments =
+['https://slack.com/api/auth.test']` — latchkey has something to call.
+`claude-ai` is a generic user-registered service with no checker, so it
+**can never report better than `unknown`**, no matter how healthy the
+credential is.
+
+That settles a question the earlier draft got half right. The `--op
+auth` probe is redundant *for Slack* — but it is the only confirmation
+available for every user-registered service, which is most of the
+token-field column above. So:
+
+- `credentialStatus` is `valid`/`invalid` → show it, skip the probe.
+- `credentialStatus` is `unknown` → run the provider's `auth` probe and
+  show *that* result. Never render "unknown" to a user as if it were a
+  problem; it usually isn't.
+
+### Hazard: the descriptor's service name can silently drift
+
+Because latchkey resolves by URL, the `"service"` field in a descriptor
+is used only for the credential UI — `services info`, `auth browser`,
+`auth set`. Nothing at request time validates it. A descriptor naming
+the wrong service would therefore show the wrong status, and connect an
+account the downloader never uses, while syncs kept working (or kept
+failing) for unrelated reasons.
+
+Cheap guard: a test that, for each descriptor, asserts the provider's
+base URL matches the named service's `baseApiUrls` per
+`latchkey services info`. Tagged `requires-network`-ish since it shells
+out, but it turns a silent mismatch into a red test.
 
 ### Three things this turns up
 
-1. **Multi-account is a live bug, not a wizard feature.** latchkey keys
-   Slack credentials by workspace (`thad@imbue-ai`) and errors when a
-   service has more than one stored account and no `--account` is
-   passed. `datalib/backend/etl/src/http.rs` builds
-   `latchkey curl …` with no `--account` ever. A second Slack workspace
-   therefore breaks *every* request today. The wizard forces this into
-   the open on day one, since "connect an account" is its first screen:
-   it needs an account field on the source config and `--account`
-   plumbed through `HttpRequest`. **Fix this in phase 2, alongside the
-   Slack descriptor.**
+1. **Multi-account is a live bug, not a wizard feature.** latchkey
+   stores credentials *per account* and errors when a service has more
+   than one and no `--account` is passed.
+   `datalib/backend/etl/src/http.rs` builds `latchkey curl …` with no
+   `--account`, ever. A live `auth list` shows named accounts on
+   `slack` (`thad@imbue-ai`), `github`, `gitlab`, `fastmail`
+   (`thad_imbue@fastmail.com`) and `google-gmail` (`thad@imbue.com`) —
+   so this is not a Slack quirk. A second Slack workspace, or a second
+   Gmail account, breaks *every* request for that service today.
+   The wizard forces it open on day one, since "connect an account" is
+   its first screen: it needs an account field on the source config and
+   `--account` plumbed through `HttpRequest`. **Fix in phase 2.**
 2. **`ensure-browser` may download a Chromium.** Its source list ends
    in `download-playwright-browser`. First-run can therefore pull a
    large binary — that has to be surfaced as an explicit, consented
@@ -539,25 +733,14 @@ anything.
 
 ## The sources grid
 
-The wizard needs a home, and the thing it should sit on top of is a real
-table of configured sources — replacing today's plain-HTML list of step
-ids beside a textarea. AG Grid is already a dependency
-(`ag-grid-community` + `ag-grid-vue3` + `ag-grid-enterprise` 35.2.1), so
-the Manage tab can look like the Explore tab instead of like a form.
+Column list and data sources are in [The Manage screen](#the-manage-screen)
+above. What follows is the part that needs argument rather than a table.
 
-Proposed columns, and — the part that matters — where each number
-actually comes from:
-
-| Column | Source of truth |
-|---|---|
-| Source (icon + name) | the config's step ids, as today |
-| Type | the step `command`'s provider word |
-| Account / status | `latchkey services info <service>` → account key + `credentialStatus` |
-| Last sync | `sync_jobs` (`app_schema`): `finished_at`, `state`, `error` |
-| Documents | `SELECT source_name, COUNT(*) FROM markdowns GROUP BY source_name` |
-| Rows | `grid_rows JOIN markdowns USING (markdown_uuid)`, grouped by `source_name` — see [#171](https://github.com/imbue-ai/datalib/issues/171) |
-| Storage | directory walk of the step's declared outputs |
-| Actions | Run · Edit · Delete |
+`markdowns` is what makes per-source attribution possible at all: it
+carries `source_name`, so counts attribute to the *configured source*.
+`grid_rows` has only `provider` and `source_label`, under which two
+email sources (`fastmail` and `gmail-takeout`) collapse into one bucket
+— hence [#171](https://github.com/imbue-ai/datalib/issues/171).
 
 ### Storage: a stacked bar, not one number
 
@@ -579,6 +762,63 @@ source's raw store outside the data root (documented in
 `all_sources.toml`). The declared `outputs` still say `slack/raw` in
 that case, so a naive walk reports zero. Resolve the real path, or mark
 the cell "stored elsewhere" — do not render a confident 0 B.
+
+### Source names must be unique, and some are reserved
+
+A source's name is its identity everywhere: it is the stanza directory
+on disk (`<data_root>/<name>/`), the prefix of both its artifact paths
+(`<name>/raw`, `<name>/rendered_md`), the `markdowns.source_name` its
+rows carry, and the stem of its two step ids. Nothing currently enforces
+that it is unique, and the wizard is the moment that stops being
+academic — a "Add Data Source" button with a pre-filled default name
+will produce a second `slack` the first time someone connects a second
+workspace.
+
+**Duplicates are not rejected today.** `dag::config::to_specs` builds a
+`Vec<StepSpec>` with no id check — `validate_applets` has a
+`bail!("applet {:?}: duplicate id")` and the steps path has no
+counterpart. Both duplicate steps then run, writing the same output
+paths, while the persisted scheduler state (`DagState.steps`, a
+`BTreeMap<StepId, StepState>`) has one entry the two of them clobber in
+turn. So the failure isn't a clean error, it's two steps fighting over
+one slot of bookkeeping.
+
+**Reserved names are enforced on the wrong path.**
+`RESERVED_STANZA_NAMES` has exactly one caller —
+`migrate_config/src/legacy_stanza.rs::validate_source_name`, which runs
+only when converting a pre-TOML `config.yaml`. Nothing checked it on the
+live TOML path, so `config.toml` could name a source `system`. The list
+was also incomplete: it held only `SYSTEM_DIR`, while `unified_index/`
+became a second reserved top-level directory in the refactor that
+introduced it.
+
+Worth noting what else that migrator function does, since it is the only
+place source names are validated at all: it rejects `.`/`..`, a leading
+`-`, and anything outside the POSIX portable filename character set.
+**None of those rules apply to a `config.toml`.** Porting them is a
+separate change from the reserved-name fix — a step's `outputs` are
+free-form paths, not a `name` field — but a source called `../etc` is
+worth thinking about before the wizard starts generating names.
+
+Three fixes, smallest first, and the first two are worth doing whether or
+not the wizard ships:
+
+1. **Reject duplicate step ids in `to_specs`**, mirroring
+   `validate_applets`. This is where the config loader already refuses
+   malformed configs, so every entry point gets it — the wizard, a
+   hand-edited file, and an agent's `PUT /api/config` alike.
+2. **Enforce `RESERVED_STANZA_NAMES`** at the same point, and add
+   `unified_index` to the list. One list, shared with the migrator, so
+   the two paths can't disagree about what a stanza may be called.
+3. **Make the wizard never propose a colliding name**: the name field
+   starts from `default_name`, and if that is taken it suffixes
+   (`slack-2`) and shows the conflict inline rather than failing on
+   save. Validation still lives in the loader — the wizard is just being
+   polite about it.
+
+Enforcing this in the loader rather than the UI is the point. The config
+file is the source of truth, so a rule the UI enforces alone is a rule
+that a hand-edit silently breaks.
 
 ### Delete means "remove from config"
 
@@ -613,9 +853,11 @@ running it.)
 
 | Phase | Delivers |
 |---|---|
-| **1** | Catalog crate + `GET /api/sources/catalog`; the AG Grid sources table with Run/Edit/Delete and storage bars; picker screen with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit **and** delete-from-config. |
+| **0** | Duplicate + reserved source-name rejection in `dag::config::to_specs`. Independently correct, and everything below assumes it. |
+| **1** | The Manage screen inversion: AG Grid of sources with Run/Edit/Delete, **Add Data Source** above it, config editor demoted to an Advanced disclosure. Catalog crate + `GET /api/sources/catalog`; picker with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit and delete-from-config. |
+| **1b** | `step_runs` in `system/jobs.doltlite_db`, so the grid's Last synced / Last status columns have data. |
 | **2** | Slack end to end: the browser-mode credential screen (`/api/credentials/*` → `latchkey auth browser slack`), `datalib-step probe` + `POST /api/sources/probe` for the live channel multi-select, since/media, review. Includes plumbing `--account` through `HttpRequest` — the multi-workspace bug above. The reference implementation the rest copy. |
-| **3** | Credentials for the rest: test cookie-capture registration for `claude-ai` (browser login if it works), and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail. |
+| **3** | Credentials for the rest: test cookie-capture registration for `claude-ai`, and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail-dav. Includes the `auth`-probe fallback for services whose `credentialStatus` can only ever be `unknown`. |
 | **4** | `GET /api/fs/browse` + `inspect` probes; descriptors for the file-backed sources. |
 | **5** | Descriptors + probes for email (JMAP mailbox list — the second-best demo after Slack), notion, github, gitlab. |
 | **6** | Nothing — edit is folded into phase 1 now (see above). |
@@ -627,24 +869,44 @@ better off than today.
 
 ## Part two: running one source and watching it
 
-Sketched here only to keep phase-1 seams honest; designed separately.
+Sketched here only to keep the phase-1 seams honest; designed
+separately.
 
-The wanted thing is: pick a source, hit Run, and watch **logs at
-several levels of detail, rows added, bytes stored**. Most of that data
-already exists and simply isn't plumbed to the UI:
+The wanted thing is: hit Run on a grid row and watch **logs at several
+levels of detail, rows added, bytes stored**.
 
-- `datalib_etl::download_metrics` already computes, source-agnostically,
-  API-request counts, per-table rows upserted, and before/after row and
-  byte deltas of the raw store. Today `datalib_step::download` uses the
-  resulting `DownloadReport` only for the output-changed claim and a
-  `tracing::info!`. **It is not emitted as a structured event** — there
-  is no metrics variant in `datalib_dag::events::Event`. Adding one, and
-  a per-step counters panel that consumes it, is the single highest-value
-  change in this half.
-- Per-source runs already work end to end (`--sync <step id>`, surfaced
-  as the table's Sync button); what's missing is a focused *run view*
-  rather than a row in a job table.
-- Log levels: the worker writes NDJSON from the tracing subscriber to
-  `<root>/system/state/job-logs/<id>.log`, and `SourcesView` already
-  classifies lines by `level`. A level filter and a per-step grouping
-  are UI work on data that's already there.
+> **Correction.** The first revision of this doc said the highest-value
+> change here was emitting `DownloadReport` as a structured event. That
+> machinery **no longer exists** — `6dae9185` deleted `DownloadReport`,
+> `DbFileReport`, `DbSnapshot`, `TableStats`, `snapshot_db_file` and the
+> rest, precisely because it was assembling something nobody read at a
+> cost of four full table-count passes per source per sync. Do not
+> resurrect it.
+
+What survives is the cheap half, and it is the half worth using: the
+**live counters** at the shared chokepoints —
+`download_metrics::record_api_request` in `etl/src/http.rs`,
+`record_upserts` in `bulk.rs` and `blob_cas.rs`, accumulating into a
+task-local `DownloadMetrics` that `datalib_step::download` already
+installs for the duration of a source's download. Those are increments
+on an atomic, not table scans. They give API-call counts and rows
+written per table, source-agnostically, with no provider aware they
+exist.
+
+So part two is:
+
+- **Emit the live counters** as a periodic structured event on the step's
+  NDJSON stream (there is still no metrics variant in
+  `datalib_dag::events::Event`), and render them as a per-step counters
+  panel. No before/after snapshots — for "bytes stored", stat the
+  directory, the same walk the grid's storage column already does.
+- **A focused run view.** Per-source runs already work
+  (`--sync <step id>`, behind the row's Run button); what's missing is a
+  view of one run rather than a row in a job table.
+- **Log levels.** The worker writes the tracing subscriber's NDJSON to
+  `<root>/system/job-logs/<id>.log` and `SourcesView` already classifies
+  lines by `level`. A level filter and per-step grouping are UI work on
+  data that is already there.
+- **`step_runs`** (proposed above for the grid's Last synced / Last
+  status columns) is the same table a run view would page through for
+  history.

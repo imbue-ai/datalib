@@ -211,10 +211,111 @@ pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     Ok((cfg, data_root))
 }
 
+/// Top-level directories the pipeline reserves for itself, so no source
+/// stanza may take one as its name.
+///
+/// A source's name is the first path segment of its artifacts
+/// (`<name>/raw`, `<name>/rendered_md`), which is also its directory
+/// under the data root — so a stanza named `system` or `unified_index`
+/// would land its store inside a tree that isn't its own.
+/// `unified_index/` in particular carries a `CACHEDIR.TAG`, so a raw
+/// store placed there would be silently skipped by every backup tool
+/// that honors it. That is the failure worth preventing: not a crash,
+/// a quiet data-loss trap.
+///
+/// This is the *policy* (what a stanza may be called). The path
+/// constants themselves live in `datalib_core::layout`, which this
+/// crate deliberately doesn't depend on — the runner is lean on
+/// purpose. `layout.rs` points here.
+/// The reserved directory that holds the runner's and the server's own
+/// state (`system/dag_state.json`, `system/jobs.doltlite_db`, the job
+/// logs). `state.rs` encodes the same name in `STATE_REL_PATH`.
+pub const SYSTEM_DIR: &str = "system";
+
+pub const RESERVED_STANZA_NAMES: &[&str] = &[SYSTEM_DIR, "unified_index"];
+
+/// Artifact suffixes that mark an output as belonging to a *source
+/// stanza* rather than to one of the pipeline's own aggregate trees.
+/// `unified_index/grid` is a legitimate output; `unified_index/raw`
+/// would be a source stanza colliding with it.
+const STANZA_OUTPUT_SUFFIXES: &[&str] = &["raw", "rendered_md"];
+
+/// Validate the `[[steps]]` array as a whole — the checks that need to
+/// see every entry, not just one.
+///
+/// Called from [`to_specs`], which is the single chokepoint every
+/// entry point already goes through: the `datalib-dag` binary, and
+/// `datalib-http`'s config load *and* its `PUT /api/config` validation.
+/// Putting this here rather than in the UI is deliberate — the config
+/// file is the source of truth, so a rule the UI enforces alone is a
+/// rule a hand-edit silently breaks.
+///
+///   * **Ids are unique.** They key the persisted scheduler state
+///     (`DagState.steps`, a map), so two entries sharing an id get one
+///     bookkeeping slot between them and clobber each other's
+///     up-to-date bookkeeping in turn — while both still run, against
+///     the same declared outputs. TOML cannot enforce this for us
+///     since `[[steps]]` is an array.
+///   * **Stanza names aren't reserved.** See
+///     [`RESERVED_STANZA_NAMES`].
+///   * **Nothing writes under `system/`.** That tree is the server's
+///     and the runner's own state (`system/dag_state.json`,
+///     `system/jobs.doltlite_db`, the job logs); a step claiming an
+///     artifact there would put the scheduler's bookkeeping under its
+///     own change detection.
+pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
+    let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
+    for e in &cfg.steps {
+        if seen.insert(e.id.as_str(), ()).is_some() {
+            bail!(
+                "step {:?}: duplicate id. Step ids key the scheduler's persisted state, so two \
+                 steps sharing one would overwrite each other's bookkeeping. Give each source a \
+                 distinct name.",
+                e.id
+            );
+        }
+        for out in &e.outputs {
+            let mut segments = out.split('/');
+            let Some(first) = segments.next() else {
+                continue;
+            };
+            if first == SYSTEM_DIR {
+                bail!(
+                    "step {:?}: output {:?} is under {:?}, which is reserved for the runner's \
+                     and the server's own state.",
+                    e.id,
+                    out,
+                    SYSTEM_DIR
+                );
+            }
+            // A source stanza is what `<name>/raw` and
+            // `<name>/rendered_md` identify; the aggregate index trees
+            // legitimately live under a reserved name
+            // (`unified_index/grid`), so only the stanza-shaped outputs
+            // are refused.
+            let rest: Vec<&str> = segments.collect();
+            if RESERVED_STANZA_NAMES.contains(&first)
+                && rest.len() == 1
+                && STANZA_OUTPUT_SUFFIXES.contains(&rest[0])
+            {
+                bail!(
+                    "step {:?}: output {:?} would make {:?} a source name, but that is a \
+                     reserved top-level directory. Rename the source.",
+                    e.id,
+                    out,
+                    first
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Turn config entries into scheduler specs: split each `command` and
 /// append the declared `params`/`inputs`/`outputs` as `--flag JSON`
 /// pairs (each only when present).
 pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
+    validate_steps(cfg)?;
     let mut specs = Vec::with_capacity(cfg.steps.len());
     for e in &cfg.steps {
         let mut argv = shlex::split(&e.command).with_context(|| {
@@ -626,6 +727,71 @@ mod tests {
             toml::from_str(r#"steps = [{id = "x", outputs = ["x/raw"], command = ""}]"#).unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("empty command"), "{err}");
+    }
+
+    #[test]
+    fn rejects_duplicate_step_ids() {
+        let cfg: DagConfig = toml::from_str(
+            r#"steps = [
+                 {id = "slack.download", command = "a", outputs = ["slack/raw"]},
+                 {id = "slack.download", command = "b", outputs = ["slack2/raw"]},
+               ]"#,
+        )
+        .unwrap();
+        let err = to_specs(&cfg).unwrap_err().to_string();
+        assert!(err.contains("duplicate id"), "{err}");
+    }
+
+    /// Two sources with the same *name* collide through their step ids,
+    /// which is the shape the UI's "Add Data Source" will produce if it
+    /// ever defaults a name twice.
+    #[test]
+    fn distinct_ids_are_fine() {
+        let cfg: DagConfig = toml::from_str(
+            r#"steps = [
+                 {id = "slack.download", command = "a", outputs = ["slack/raw"]},
+                 {id = "slack2.download", command = "b", outputs = ["slack2/raw"]},
+               ]"#,
+        )
+        .unwrap();
+        to_specs(&cfg).expect("distinct ids must pass");
+    }
+
+    #[test]
+    fn rejects_outputs_under_system() {
+        let cfg: DagConfig =
+            toml::from_str(r#"steps = [{id = "x", command = "a", outputs = ["system/state"]}]"#)
+                .unwrap();
+        let err = to_specs(&cfg).unwrap_err().to_string();
+        assert!(err.contains("reserved"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_source_stanza_named_after_a_reserved_dir() {
+        for out in ["unified_index/raw", "unified_index/rendered_md"] {
+            let cfg: DagConfig = toml::from_str(&format!(
+                r#"steps = [{{id = "x", command = "a", outputs = ["{out}"]}}]"#
+            ))
+            .unwrap();
+            let err = to_specs(&cfg).unwrap_err().to_string();
+            assert!(err.contains("reserved top-level directory"), "{out}: {err}");
+        }
+    }
+
+    /// The aggregate index steps legitimately write under a reserved
+    /// name — they are not source stanzas, so the check must let them
+    /// through. This is the regression that a blanket prefix ban would
+    /// cause.
+    #[test]
+    fn allows_the_real_index_step_outputs() {
+        let cfg: DagConfig = toml::from_str(
+            r#"steps = [
+                 {id = "grid_index", command = "a", inputs = ["**/rendered_md"], outputs = ["unified_index/grid"]},
+                 {id = "qmd_index", command = "b", inputs = ["**/rendered_md"], outputs = ["unified_index/qmd"]},
+               ]"#,
+        )
+        .unwrap();
+        to_specs(&cfg).expect("index steps must remain valid");
     }
 
     #[test]
