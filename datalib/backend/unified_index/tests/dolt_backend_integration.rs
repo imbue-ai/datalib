@@ -46,6 +46,11 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     assert!(repo.grid_row_refs().await.unwrap().is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
     assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
+    assert!(repo
+        .md_paths_for(&["c-1".to_string()])
+        .await
+        .unwrap()
+        .is_empty());
 
     // Narrowness: a real failure (here, a schema mismatch — the table
     // exists but lacks the queried columns) must still be an error, not
@@ -148,6 +153,16 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     let qmd = qmd.unwrap();
     assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");
     assert!(qmd.to_string_lossy().ends_with("chats/c-1.md"));
+
+    // The batch form the grid's index-state columns use must agree
+    // with the single lookup, and must simply omit uuids it has no
+    // rendered file for rather than inventing an entry for them.
+    let batch = repo
+        .md_paths_for(&["c-1".to_string(), "nope".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
+    assert_eq!(batch.get("c-1"), Some(&qmd));
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);

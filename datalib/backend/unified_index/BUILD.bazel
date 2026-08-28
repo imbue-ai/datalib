@@ -34,6 +34,7 @@ rust_library(
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
@@ -47,6 +48,30 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",
+    ],
+)
+
+# The qmd index-state reader, against the REAL qmd index the fixture
+# builds. Guards the one claim the grid's Indexed / Embedded columns
+# rest on: `documents.hash` is the SHA-256 of the rendered file's
+# bytes, so a grid row can be joined to a qmd document without
+# reimplementing qmd's `handelize` path mangling. Both fixtures are
+# already inputs to //datalib/ui:e2e_test, so this adds no new work to
+# `bazel test //...`.
+rust_test(
+    name = "qmd_index_state_test",
+    srcs = ["tests/qmd_index_state.rs"],
+    data = [
+        "//tests/fixtures:ingested/backend_index.doltlite_db",
+        "//tests/fixtures:ingested/qmd.tar",
+        "//tests/fixtures:ingested/qmd-index.tar",
+    ],
+    edition = "2021",
+    deps = [
+        ":datalib_unified_index",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 

@@ -44,6 +44,22 @@ pub trait IndexRepo: Send + Sync {
         markdown_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError>;
 
+    /// Resolve the on-disk paths of many rendered markdowns at once,
+    /// keyed by `markdowns.markdown_uuid`. Same resolution as
+    /// [`qmd_path_for_markdown`](Self::qmd_path_for_markdown) — paths
+    /// come back absolute — but in one round trip, because the grid's
+    /// index-state columns ask about every markdown behind the current
+    /// result set.
+    ///
+    /// UUIDs with no `markdowns` row, or whose row has no `md_path`
+    /// (rendered nothing yet), are simply absent from the returned map
+    /// rather than mapped to `None`: "we have no file for this" is one
+    /// state, however it arose.
+    async fn md_paths_for(
+        &self,
+        markdown_uuids: &[String],
+    ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
+
     /// Fetch every row's `(uuid, kind, qmd_path, provider)` tuple. Used to
     /// build a `GridIndex` so qmd-routed search can map hits → grid rows.
     /// Returning an empty list is acceptable for an empty / missing store.

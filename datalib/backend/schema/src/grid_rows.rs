@@ -286,20 +286,40 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(512)")]
     pub slack_link: Option<String>,
     /// Path to the rendered Markdown file for this row's
-    /// conversation/thread, relative to the data root. All paths are
-    /// rooted under `rendered_md/<provider>/...`. Set on every row
-    /// (chat-level rows point at their own .md; message/block rows
-    /// inherit their parent thread's). The chat preview pane uses this to
-    /// load the conversation directly — no glob, no frontmatter scan.
-    /// (Column name retained as `qmd_path` for historical reasons.)
+    /// conversation/thread, **relative to the data root**. Set on every
+    /// row (chat-level rows point at their own .md; message/block rows
+    /// inherit their parent thread's). The chat preview pane uses this
+    /// to load the conversation directly — no glob, no frontmatter
+    /// scan. (Column name retained as `qmd_path` for historical
+    /// reasons.)
     ///
-    /// Per-provider mapping:
-    ///   anthropic: rendered_md/anthropic/{account_uuid}/{org_uuid}/llm_chats/{conversation_uuid}/index.md
-    ///   openai: rendered_md/openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.md
-    ///   slack: rendered_md/slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.md
-    ///   github: rendered_md/github/{owner}/{repo}/pr-{number}__{slug(title)}/index.md (PR), or .../threads/{thread_uuid}__{slug}.md (comment threads)
-    ///   gitlab: rendered_md/gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.md (MR), or .../threads/{discussion_uuid}__{slug}.md (discussion threads)
-    ///   notion: rendered_md/notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.md (pages + headings); .../comments/{thread_short_id}__{snippet}.md (comment threads)
+    /// Shape: `<source_name>/rendered_md/<renderer-specific tail>`,
+    /// where `<source_name>` is the config step's name — NOT the
+    /// provider type, and NOT a leading `rendered_md/`. That prefix is
+    /// load-bearing beyond the preview pane: `GridIndex` keys rows by
+    /// this path to resolve qmd search hits back to grid rows
+    /// (`datalib_unified_index::qmd::mapping`), and a row whose path
+    /// doesn't match what qmd reports is silently dropped from
+    /// free-text results.
+    ///
+    /// The tail is each renderer's own business; verified examples from
+    /// the TNG fixture (`//tests/fixtures:ingested_tng`, 2026-08-27):
+    ///
+    /// ```text
+    /// anthropic  anthropic-api/rendered_md/{conversation_uuid}/all.md
+    /// openai     chatgpt-api/rendered_md/{conversation_id}/all.md
+    /// slack      slack/rendered_md/{thread_uuid}/all.md
+    /// beeper     beeper/rendered_md/{network}/{chat_uuid}/{YYYY-MM}.md
+    /// github     github/rendered_md/{owner}/{repo}/pr-{number}/index.md
+    /// gitlab     gitlab/rendered_md/{group}/{project}/mr-{iid}/index.md
+    /// notion     notion/rendered_md/pages/{page_uuid}/index.md
+    /// pdf        tng_pdfs/rendered_md/docs/{sha256}.md
+    /// ```
+    ///
+    /// Prefer `markdowns.md_path` (via `markdown_uuid`) when you need
+    /// the file itself: it carries the same path, has one writer, and
+    /// is the column the index-state columns and `/api/chat` resolve
+    /// through.
     #[col(sql = "VARCHAR(512)")]
     pub qmd_path: Option<String>,
     /// Canonical URL pointing back to the original source on the
