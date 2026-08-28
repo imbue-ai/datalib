@@ -25,10 +25,27 @@ const field = (page: Page, caption: string) =>
 const labelField = (page: Page) => field(page, "Label");
 const nameField = (page: Page) => field(page, "Name");
 
-test("a label is editable, the name is not, and clearing it drops the key", async ({ page }) => {
+// Captured before the test edits it and put back afterwards even when
+// the test fails: the data root is one mkdtemp shared by every spec in
+// the run, so a failure that left a source behind would cascade.
+let original = "";
+
+test.beforeEach(async ({ page }) => {
   await openManager(page);
+  original = await page.locator(".m2-editor").inputValue();
+});
+
+test.afterEach(async ({ page }) => {
+  if (!original) return;
+  await openManager(page);
+  await page.getByText("Advanced — edit config.toml directly").click();
+  await page.locator(".m2-editor").fill(original);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
+});
+
+test("a label is editable, the name is not, and clearing it drops the key", async ({ page }) => {
   const editor = page.locator(".m2-editor");
-  const original = await editor.inputValue();
 
   // --- Add, with a label -------------------------------------------
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
@@ -75,14 +92,4 @@ test("a label is editable, the name is not, and clearing it drops the key", asyn
   await expect(editor).not.toHaveValue(/label = /);
   await expect(page.locator(".ag-row", { hasText: "Personal Claude" })).toHaveCount(0);
   await expect(page.locator(".ag-row").first()).toContainText("claude");
-
-  // --- Restore the shared fixture config ---------------------------
-  // The data root is one mkdtemp shared by every spec in the run, so
-  // leaving a source behind would break whichever spec sorts after this
-  // one. The editor lives inside a closed disclosure; open it to type.
-  await page.getByText("Advanced — edit config.toml directly").click();
-  await editor.fill(original);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
-  await expect(page.getByText("No data sources configured yet.")).toBeVisible();
 });

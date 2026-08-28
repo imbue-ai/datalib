@@ -37,12 +37,14 @@ import {
 import { AllEnterpriseModule } from "ag-grid-enterprise";
 import {
   fetchAccounts,
+  fetchConfig,
   fetchQmdState,
   fetchSearch,
   type AccountsMap,
   type QmdDocState,
   type SearchRow,
 } from "@/api";
+import { listConfiguredSources } from "@/config/sourceSteps";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -121,6 +123,14 @@ const accounts = ref<AccountsMap>({});
 // `rows` to carry it would blow away selection, scroll position, and
 // the adaptive column pass on every refresh. `refreshCells` on two
 // columns is the whole update.
+// Stanza name → the `label` its steps declare in config.toml, for the
+// "Source name" column. Config-side, not index-side, and deliberately
+// so: a label is free text a person edits at any time, while the index
+// is rebuilt by a pipeline step. Baking labels into `grid_rows` would
+// make relabelling a source a re-indexing job. Sources with no label
+// are simply absent here and the column falls back to the stanza.
+const sourceLabels = ref<Map<string, string>>(new Map());
+
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
 // Collection-wide totals, shown next to the row count.
 const qmdSummary = ref<{ documents: number; embedded: number } | null>(null);
@@ -139,6 +149,31 @@ function currentMarkdownUuids(): string[] {
     if (r.markdown_uuid) seen.add(r.markdown_uuid);
   }
   return [...seen];
+}
+
+/// Read the labels out of `config.toml`. Once, on mount: the config
+/// changes on human time, and a stale label is a cosmetic miss, not a
+/// wrong row. A failure leaves the map empty, which shows stanza names
+/// — the same thing the column showed before labels existed.
+async function loadSourceLabels() {
+  try {
+    const cfg = await fetchConfig();
+    const m = new Map<string, string>();
+    for (const src of listConfiguredSources(cfg.text)) {
+      if (src.label !== src.name) m.set(src.name, src.label);
+    }
+    sourceLabels.value = m;
+    gridApi?.refreshCells({ columns: ["source_name"], force: true });
+  } catch {
+    /* labels are cosmetic; the column falls back to the stanza name */
+  }
+}
+
+/// What the "Source name" column shows: the configured label when there
+/// is one, else the stanza directory the row's document lives under.
+function sourceLabelFor(row: SearchRow | null | undefined): string {
+  if (!row?.source_name) return "";
+  return sourceLabels.value.get(row.source_name) ?? row.source_name;
 }
 
 async function refreshQmdState() {
@@ -357,6 +392,7 @@ const FILTER_COLUMNS: Record<
   { key: string; header: string; uuidCol?: keyof SearchRow }
 > = {
   source: { key: "source", header: "Source" },
+  source_name: { key: "source_name", header: "Source name" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
   author: { key: "author", header: "Author", uuidCol: "author" },
@@ -713,6 +749,7 @@ onMounted(async () => {
   } catch {
     /* accounts mapping is best-effort */
   }
+  void loadSourceLabels();
   runSearch(query.value);
 });
 
@@ -760,6 +797,30 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
       img.title = v;
       img.className = "source-icon";
       return img;
+    },
+  },
+  // The configured source, as opposed to the provider icon left of it:
+  // two Slack workspaces are one "Source" and two of these.
+  //
+  // `field` and `valueGetter` disagree on purpose. The cell shows the
+  // label from config.toml, but `buildFilterCtx` reads `row[colId]` off
+  // the raw row, so right-click "Keep only" emits the stanza name —
+  // which is what `source_name:` matches. Filtering on a label would be
+  // wrong twice over: labels are mutable, and two sources may share one.
+  {
+    field: "source_name",
+    colId: "source_name",
+    headerName: "Source name",
+    headerTooltip:
+      "The configured source this row came from — its directory under the data root, " +
+      "shown by the label config.toml gives it",
+    width: 130,
+    valueGetter: (p) => sourceLabelFor(p.data),
+    tooltipValueGetter: (p) => {
+      const name = p.data?.source_name ?? "";
+      if (!name) return "";
+      const label = sourceLabels.value.get(name);
+      return label ? `${label} — stored in ${name}/` : `Stored in ${name}/`;
     },
   },
   { field: "kind", headerName: "Type", width: 110 },

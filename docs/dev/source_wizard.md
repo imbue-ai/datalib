@@ -871,6 +871,33 @@ A source is a group of steps rather than a config entry of its own, so
 the label belongs to a step and the grid takes the first one its steps
 declare. The wizard writes it on the download step.
 
+**The label reaches the unified index grid too**, as a "Source name"
+column beside the provider icon — because "Slack" in the Source column
+is a property of the source *type*, and says nothing about which of two
+Slack workspaces a row came from. The join is client-side and that is
+the whole point:
+
+- `SearchRow.source_name` is the stanza, derived server-side as the
+  first segment of the row's `qmd_path`
+  (`dolt_repo::source_name_from_qmd_path`) — the same derivation
+  `datalib-step` uses to name a source from its outputs and `grid_index`
+  uses when it walks one directory per stanza.
+- The label comes from `config.toml`, read once on mount by `GridCard`
+  and joined by that name. It is deliberately *not* an index column: a
+  label is free text edited at any moment, while `grid_rows` is written
+  by a pipeline step, so storing it there would make relabelling a
+  re-indexing job — exactly the cost this feature exists to avoid.
+- The cell shows the label; the row still carries the stanza, so
+  right-click "Keep only" emits `source_name:<stanza>`. Filtering on a
+  label would be wrong twice over: labels are mutable, and two sources
+  may share one.
+
+`source_name:` is the one filter with no column behind it. `build_where`
+matches it as `INSTR(qmd_path, ?) = 1` with a trailing separator on the
+needle — `LIKE 'slack_work/%'` would be wrong, since a source name may
+legally contain `_` and LIKE reads that as a wildcard, so
+`source_name:slack_work` would also return a `slackXwork` stanza.
+
 **What is and isn't unique.** Labels may collide freely — two workspaces
 both called "Slack" is a legitimate thing to want, and the muted
 directory name is what tells them apart. Step *ids* must be unique

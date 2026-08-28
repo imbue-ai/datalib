@@ -39,7 +39,16 @@ export type SearchRow = {
   // Human-readable org name (from /api/organizations). Empty when missing.
   org_name: string;
   entire_chat: string;
+  // The provider's human label ("Slack") — a property of the source
+  // *type*. Two Slack workspaces both say "Slack"; source_name is what
+  // separates them.
   source: string;
+  // The configured source this row came from: the stanza directory under
+  // the data root (the first segment of its qmd_path). Empty when the row
+  // has no rendered document. The friendly `label` a person may have put
+  // on that source lives in config.toml, not here — the grid joins the
+  // two client-side so relabelling never needs a re-index.
+  source_name: string;
   kind: string;
   author: string;
   channel: string;
