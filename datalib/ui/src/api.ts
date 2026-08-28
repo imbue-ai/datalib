@@ -379,6 +379,27 @@ export type SyncJob = {
   pid?: number | null;
 };
 
+export type SourceStorage = {
+  name: string;
+  /// Absolute path of the stanza directory, for the desktop app's
+  /// reveal-in-file-manager IPC.
+  path: string;
+  raw_bytes: number;
+  blobs_bytes: number;
+  rendered_bytes: number;
+  total_bytes: number;
+  /// The stanza directory doesn't exist yet — never synced. Distinct
+  /// from a real zero, so the UI shows "—" rather than "0 B".
+  present: boolean;
+  /// A step sets `params.common.raw_path`, so the raw store may sit
+  /// outside the data root and isn't counted.
+  raw_elsewhere: boolean;
+};
+
+export function fetchSourceStorage(signal?: AbortSignal): Promise<SourceStorage[]> {
+  return getJson<SourceStorage[]>("/api/sources/storage", signal);
+}
+
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
 }

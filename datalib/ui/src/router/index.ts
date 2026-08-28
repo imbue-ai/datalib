@@ -23,6 +23,13 @@ const router = createRouter({
       name: "sources",
       component: () => import("@/views/SourcesView.vue"),
     },
+    // Manager2: the sources-grid rewrite of the Manage tab, alongside
+    // the original while it's proven out. See docs/dev/source_wizard.md.
+    {
+      path: "/sources2",
+      name: "sources2",
+      component: () => import("@/views/Manager2View.vue"),
+    },
     // The old Setup and Sync tabs merged into Sources; keep the paths
     // working for muscle memory and stale links.
     { path: "/setup", redirect: "/sources" },
