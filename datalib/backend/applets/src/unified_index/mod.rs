@@ -23,6 +23,7 @@
 //!
 //! ```text
 //! /search?q=&limit=     the grid
+//! /qmd_state            which of these documents the qmd index holds
 //! /columns              its column set
 //! /docs                 rendered documents, for the picker card
 //! /chat/{uuid}          one document: header from the index, body from disk
@@ -47,11 +48,13 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, Response, StatusCode},
     response::Json,
-    routing::get,
+    routing::{get, post},
     Router,
 };
+use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
 use datalib_unified_index::qmd::{
-    GridIndex, QmdDaemon, QmdDaemonConfig, QmdRunner, QmdRunnerConfig, QueryMode,
+    GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader, QmdIndexSummary, QmdRunner,
+    QmdRunnerConfig, QueryMode,
 };
 use datalib_unified_index::query::{parse_query, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
@@ -105,6 +108,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         };
         let app = Router::new()
             .route("/search", get(search_handler))
+            .route("/qmd_state", post(qmd_state))
             .route("/columns", get(columns))
             .route("/docs", get(list_docs))
             .route("/chat/{markdown_uuid}", get(chat))
@@ -354,6 +358,138 @@ async fn run_qmd_search(
         r.score = scores.get(&r.uuid).copied();
     }
     Ok(rows)
+}
+
+/// Cap on how many documents one `/qmd_state` call may ask about.
+/// Each one costs a file read + a SHA-256, so this bounds the work a
+/// single request can trigger. The grid's default result limit is 200;
+/// a client wanting more chunks its requests.
+const QMD_STATE_MAX_DOCS: usize = 2_000;
+
+#[derive(Debug, Deserialize)]
+pub struct QmdStateRequest {
+    /// The markdowns to report on. Duplicates are fine — they collapse.
+    pub markdown_uuids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QmdStateResponse {
+    /// False when this data root has no `index.sqlite` yet — nothing
+    /// has synced, so every document is legitimately un-indexed rather
+    /// than unknown.
+    pub index_present: bool,
+    pub summary: QmdIndexSummary,
+    /// markdown_uuid → state. Every requested uuid appears.
+    pub docs: std::collections::HashMap<String, DocReport>,
+    /// Same contract as `/search`: errors the user should see even
+    /// though we answered 200.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+/// Report which of the given rendered markdowns the qmd index holds,
+/// and which of those have a complete set of embedding vectors.
+///
+/// POST rather than GET because the uuid list is as long as the grid's
+/// result set. Kept out of `/search` deliberately: the two answers
+/// change on different clocks — search results when the user types,
+/// index state while an indexing run is in flight — and the grid wants
+/// to refresh the badges without re-running the query.
+///
+/// The resolution chain itself lives in
+/// `datalib_unified_index::qmd::index_state::resolve_markdown_states`,
+/// which is what its tests drive; everything here is request shaping:
+/// dedupe, cap, and turn batch-level failures into `errors` rather than
+/// a 500 the grid can do nothing with.
+async fn qmd_state(
+    State(s): State<Index>,
+    Json(req): Json<QmdStateRequest>,
+) -> Json<QmdStateResponse> {
+    let mut errors: Vec<String> = Vec::new();
+
+    // Dedupe first: many grid rows share one markdown, and the caller
+    // is not required to have collapsed them.
+    let mut uuids: Vec<String> = req.markdown_uuids;
+    uuids.sort();
+    uuids.dedup();
+    if uuids.len() > QMD_STATE_MAX_DOCS {
+        errors.push(format!(
+            "qmd_state: asked about {} documents, answering the first {QMD_STATE_MAX_DOCS}",
+            uuids.len()
+        ));
+        uuids.truncate(QMD_STATE_MAX_DOCS);
+    }
+
+    let reader = match QmdIndexReader::open(&s.root).await {
+        Ok(r) => r,
+        Err(e) => {
+            errors.push(format!("qmd index: {e}"));
+            None
+        }
+    };
+    let Some(reader) = reader else {
+        // No index (or it would not open). With no index at all, every
+        // document is un-indexed — a fact, not a failure, and one a
+        // data root reports until its first sync. If instead the open
+        // *errored*, we know nothing, so say so.
+        let known = errors.is_empty();
+        let report = if known {
+            DocReport {
+                indexed: Some(false),
+                embedded: Some(false),
+                note: Some("no qmd index yet".to_string()),
+            }
+        } else {
+            DocReport {
+                indexed: None,
+                embedded: None,
+                note: Some("the qmd index could not be opened".to_string()),
+            }
+        };
+        return Json(QmdStateResponse {
+            index_present: false,
+            summary: QmdIndexSummary::default(),
+            docs: uuids.into_iter().map(|u| (u, report.clone())).collect(),
+            errors,
+        });
+    };
+
+    let summary = match reader.summary().await {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(format!("qmd summary: {e}"));
+            QmdIndexSummary::default()
+        }
+    };
+
+    let docs = match resolve_markdown_states(s.repo.as_ref(), &reader, &uuids).await {
+        Ok(d) => d,
+        Err(e) => {
+            errors.push(e);
+            // Answer every uuid anyway, as unknown — an empty `docs`
+            // would read to the client as "asked about nothing".
+            uuids
+                .into_iter()
+                .map(|u| {
+                    (
+                        u,
+                        DocReport {
+                            indexed: None,
+                            embedded: None,
+                            note: Some("index state could not be resolved".to_string()),
+                        },
+                    )
+                })
+                .collect()
+        }
+    };
+
+    Json(QmdStateResponse {
+        index_present: true,
+        summary,
+        docs,
+        errors,
+    })
 }
 
 async fn columns() -> Json<Vec<ColumnSpec>> {
