@@ -57,6 +57,7 @@ import {
   removeSource,
   replaceSource,
   paramsAreRepresentable,
+  emptyTableDiagnosis,
   type ConfiguredSource,
 } from "@/config/sourceSteps";
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
@@ -83,6 +84,11 @@ const configPath = ref("");
 // worth showing.
 const parseError = ref<string | null>(null);
 const configError = ref<string | null>(null);
+// What the backend's own loader made of the same file. Held so the
+// empty state can cross-check itself against it — see
+// `emptyTableDiagnosis`.
+const serverSourceCount = ref(0);
+const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
@@ -109,6 +115,18 @@ const editing = ref<{ source: ConfiguredSource; entry: CatalogEntry } | null>(nu
 
 // Only source names gate the wizard: an applet id and a stanza name
 // live in different namespaces and may safely coincide.
+/// Non-null when the table is empty for a reason worth shouting about
+/// rather than the ordinary "you haven't added anything yet".
+const emptyDiagnosis = computed(() =>
+  emptyTableDiagnosis({
+    parsedCount: sources.value.length,
+    serverSourceCount: serverSourceCount.value,
+    textLength: configText.value.length,
+    exists: configExists.value,
+    path: configPath.value,
+  }),
+);
+
 const takenNames = computed(
   () => new Set(sources.value.filter((s) => s.kind === "source").map((s) => s.name)),
 );
@@ -444,11 +462,23 @@ async function loadConfig() {
     if (!cfg.exists) cfg = await fetchConfigScaffold();
     configPath.value = cfg.path;
     configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
+    serverSourceCount.value = cfg.source_count;
+    configExists.value = cfg.exists;
     // The poll must never overwrite what someone is typing into the
     // Advanced editor. Their text wins until they save or discard.
     if (configDirty.value) return;
     configText.value = cfg.text;
     reparse();
+    if (sources.value.length === 0 && cfg.source_count > 0) {
+      // The inspector is the only channel when someone hits this in the
+      // desktop app and can't copy text out of a banner.
+      console.warn(
+        "manager2: parsed 0 entries from a config the server reads",
+        cfg.source_count,
+        "sources from —",
+        { path: cfg.path, textLength: cfg.text.length, parsedOk: cfg.parsed_ok },
+      );
+    }
   } catch (e) {
     loadError.value = (e as Error).message;
   }
@@ -666,7 +696,12 @@ onUnmounted(() => {
     </div>
 
     <div class="m2-foot">
-    <p v-if="rows.length === 0 && !parseError" class="m2-empty">
+    <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
+      <b>This table is empty, and it shouldn’t be.</b>
+      <span>{{ emptyDiagnosis }}</span>
+      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+    </div>
+    <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
       Nothing configured yet. <b>Add Data Source</b> walks you through one.
     </p>
 
