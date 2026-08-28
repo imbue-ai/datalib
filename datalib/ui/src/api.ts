@@ -356,6 +356,37 @@ export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigRespons
   return getJson<ConfigResponse>("/api/config/scaffold", signal);
 }
 
+// What POST /api/config/init did. `created` is false both when a
+// config was already there (`text` is that file, `error` null) and when
+// the backend refused — today only for a root holding a pre-TOML
+// config.yaml, where starting empty would strand the user's sources.
+export type InitConfigResponse = {
+  created: boolean;
+  path: string;
+  text: string;
+  error: string | null;
+};
+
+// Initialize an empty data library: write the starter config.toml into
+// a root that has none. The "only if absent" check lives server-side
+// (one `create_new`), so this can't clobber a config that appeared in
+// between — a second window, a migration, an agent editing the root.
+export async function initConfig(signal?: AbortSignal): Promise<InitConfigResponse> {
+  const r = await fetch("/api/config/init", { method: "POST", signal });
+  if (!r.ok) {
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch {
+      // ignore
+    }
+    throw new Error(
+      detail ? `${r.status}: ${detail}` : `POST /api/config/init → ${r.status}`,
+    );
+  }
+  return (await r.json()) as InitConfigResponse;
+}
+
 // One step of the config's derived DAG (GET /api/dag), in topological
 // order. `deps` are the actual edges the runner derives from artifact
 // overlap.

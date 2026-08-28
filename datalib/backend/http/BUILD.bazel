@@ -111,6 +111,23 @@ rust_test(
     ],
 )
 
+# The first-run onboarding action: POST /api/config/init, which turns an
+# empty folder into a data library. Hermetic — no applet is started.
+rust_test(
+    name = "config_init_test",
+    srcs = ["tests/config_init.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
 # Regression guard for issue #138: the token gate that fronts every
 # route (`src/auth.rs`).
 rust_test(

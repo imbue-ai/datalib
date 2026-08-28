@@ -81,7 +81,7 @@ py_test(
         "//.devcontainer:Dockerfile",
         "//:MODULE.bazel",
         "//:requirements.txt",
-        "//datalib:tauri/stage-runtime.sh",
+        "//datalib/tauri:stage-runtime.sh",
         "//datalib/backend/core:src/node_runtime.rs",
         "//datalib/backend/unified_index:src/qmd/mod.rs",
         "//datalib/docker:Dockerfile",

@@ -185,7 +185,14 @@ two shared fan-in steps index every source's `rendered_md` tree:
 `qmd_index` (semantic search at `unified_index/qmd/`). Both are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
 not open them. Scheduler state lives at `system/dag_state.json`. The http server's sync worker shells out
-to `datalib-dag`; the UI's Setup tab scaffolds/edits the config.
+to `datalib-dag`; the UI's Manage tab edits the config. A root with no
+config at all is the new-user case: the desktop shell's launcher
+(`datalib/tauri/launcher-dist/`) offers recent roots, a folder picker,
+and "create an empty one", and the app's own first-run screen
+(`ui/src/views/FirstRunView.vue`) explains what `POST /api/config/init`
+will write before writing it. Without that config there is no
+`unified_index` applet, so the grid answers `no applet "unified_index"`
+— which is what the two screens exist to prevent.
 Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
 `sources:` one) are converted out of band by `datalib-migrate-config`,
 the only place their schemas — and the tree's last YAML parser — still

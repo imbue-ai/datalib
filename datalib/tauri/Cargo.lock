@@ -655,10 +655,12 @@ name = "datalib-tauri"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
 ]
 
 [[package]]
