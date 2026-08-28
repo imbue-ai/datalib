@@ -166,6 +166,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/feedback", post(submit_feedback))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
+        .route("/api/config/init", post(init_config))
         .route("/api/dag", get(get_dag))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
@@ -907,6 +908,97 @@ async fn put_config(
         error: None,
         source_count: sources.len(),
     }))
+}
+
+/// What `POST /api/config/init` did.
+#[derive(Debug, Serialize)]
+pub struct InitConfigResponse {
+    /// True when this call wrote the file. False when one was already
+    /// there (its text comes back untouched) or when `error` says why
+    /// initializing would be wrong.
+    pub created: bool,
+    /// Absolute path of `<root>/config.toml`, written or not.
+    pub path: String,
+    /// The config text now on disk — the scaffold we just wrote, the
+    /// file that was already there, or empty when `error` is set.
+    pub text: String,
+    /// Why nothing was written, when that is a decision rather than an
+    /// I/O failure (an I/O failure is a 5xx). Today the one case is a
+    /// pre-TOML `config.yaml` waiting to be migrated.
+    pub error: Option<String>,
+}
+
+/// `POST /api/config/init` — initialize an empty data library: write
+/// the starter `config.toml` into a root that has none.
+///
+/// This is the onboarding action behind the UI's first-run screen. It
+/// exists as its own endpoint rather than the UI PUT-ing the scaffold
+/// back because "only if it isn't there yet" has to be decided where
+/// the file is: `create_new` makes the check and the write one
+/// operation, so a config that appeared in between — a second window,
+/// a migration, an agent editing the root — is never clobbered.
+///
+/// A root holding a pre-TOML `config.yaml` is refused. Writing a
+/// `config.toml` next to it would retire the migration hint
+/// ([`legacy_yaml_hint`] goes quiet as soon as a TOML config exists)
+/// and leave the user with an empty library plus a file full of
+/// sources nothing reads.
+async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
+    let path = s.config_path();
+    if let Some((yaml, cmd)) = legacy_yaml_hint(&s.root) {
+        return Ok(Json(InitConfigResponse {
+            created: false,
+            path: path.display().to_string(),
+            text: String::new(),
+            error: Some(format!(
+                "this data root has a pre-TOML config at {yaml}. Convert it \
+                 instead of starting empty: {cmd}"
+            )),
+        }));
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            eprintln!("init_config: mkdir {}: {e}", parent.display());
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    let text = scaffold_toml();
+    // `create_new` is the whole point: the existence check and the
+    // write are one syscall, so this can never overwrite a config that
+    // arrived between them.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            use std::io::Write;
+            f.write_all(text.as_bytes()).map_err(|e| {
+                eprintln!("init_config: write {}: {e}", path.display());
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            Ok(Json(InitConfigResponse {
+                created: true,
+                path: path.display().to_string(),
+                text,
+                error: None,
+            }))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(Json(InitConfigResponse {
+                created: false,
+                path: path.display().to_string(),
+                text: std::fs::read_to_string(&path).unwrap_or_default(),
+                error: None,
+            }))
+        }
+        Err(e) => {
+            eprintln!("init_config: create {}: {e}", path.display());
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 /// `GET /api/config/scaffold` — a minimal starter `config.toml` for this

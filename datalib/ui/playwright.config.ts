@@ -69,6 +69,29 @@ const fixtureRoot = ensureFixtureRoot();
 const BACKEND_PORT = cachedPort("FW_E2E_BACKEND_PORT");
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
+// A second backend, on an empty data root, for the first-run
+// onboarding spec. It has to be its own server: the onboarding screen
+// is gated on the data root having no `config.toml`, and the fixture
+// root above has one — there is no way to reach the empty-root state
+// from a server already pointed at a populated one.
+//
+// Fresh `mkdtemp` per config load, so the spec that initializes it
+// still sees an uninitialized root on the next run (including
+// `--runs_per_test=N`, where bazel re-launches this process per run).
+// Cached in env for the same reason the ports are: worker subprocesses
+// re-import this file and must not mint a second directory.
+function emptyRoot(): string {
+  const existing = process.env.FW_E2E_EMPTY_ROOT;
+  if (existing) return existing;
+  const root = mkdtempSync(path.join(tmpdir(), "datalib-e2e-empty-"));
+  process.env.FW_E2E_EMPTY_ROOT = root;
+  return root;
+}
+const EMPTY_ROOT = emptyRoot();
+const EMPTY_PORT = cachedPort("FW_E2E_EMPTY_PORT");
+const EMPTY_URL = `http://127.0.0.1:${EMPTY_PORT}`;
+process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
+
 // The backend requires its API token on every route (see
 // datalib/backend/http/src/auth.rs). Pin one via DATALIB_TOKEN rather
 // than letting the binary mint a random one we'd have to read back out
@@ -160,6 +183,19 @@ export default defineConfig({
       timeout: 30_000,
       env: {
         DATALIB_BIND: `127.0.0.1:${BACKEND_PORT}`,
+        DATALIB_TOKEN: API_TOKEN,
+      },
+    },
+    {
+      // The empty-root backend behind `first-run.spec.ts`. Same binary,
+      // same token (so `use.extraHTTPHeaders` authenticates both), a
+      // data root the backend creates on demand and never populates.
+      command: `${JSON.stringify(backendBin)} ${JSON.stringify(EMPTY_ROOT)} --no-open`,
+      url: `${EMPTY_URL}/api/health?token=${API_TOKEN}`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        DATALIB_BIND: `127.0.0.1:${EMPTY_PORT}`,
         DATALIB_TOKEN: API_TOKEN,
       },
     },

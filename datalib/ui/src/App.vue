@@ -1,15 +1,46 @@
 <script setup lang="ts">
+import { onMounted, ref } from "vue";
 import { RouterView, RouterLink } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
+import FirstRunView from "@/views/FirstRunView.vue";
+import { fetchConfig, type ConfigResponse } from "@/api";
+
+// First-run gate. A data root with no `config.toml` has no
+// `unified_index` applet — that applet is declared *in* the config —
+// so every view in the app fails, and the grid failed loudest:
+// `502 {"error":"no applet \"unified_index\""}` as a new user's first
+// impression. While the root is uninitialized we show the onboarding
+// screen instead of the routed view, and the tabs with it: none of them
+// can do anything yet.
+//
+// `null` while the check is in flight — render nothing rather than
+// flash a view that is about to be replaced. A failed check (backend
+// blip, offline) falls through to the app: the gate exists to explain
+// an empty folder, not to become a second way for the app not to load.
+const firstRunConfig = ref<ConfigResponse | null>(null);
+const checked = ref(false);
+
+async function checkConfig() {
+  try {
+    const cfg = await fetchConfig();
+    firstRunConfig.value = cfg.exists ? null : cfg;
+  } catch {
+    firstRunConfig.value = null;
+  } finally {
+    checked.value = true;
+  }
+}
+
+onMounted(checkConfig);
 </script>
 
 <template>
   <main class="datalib-shell" data-feedback-root>
     <header class="datalib-header">
       <h1>datalib</h1>
-      <nav class="datalib-tabs" aria-label="Navigation">
+      <nav v-if="!firstRunConfig" class="datalib-tabs" aria-label="Navigation">
         <RouterLink class="datalib-tab" to="/">Explore</RouterLink>
         <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink>
         <RouterLink class="datalib-tab" to="/sources2">Manager2</RouterLink>
@@ -20,7 +51,12 @@ import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
       <SyncProgressChrome />
     </header>
 
-    <RouterView />
+    <FirstRunView
+      v-if="firstRunConfig"
+      :config="firstRunConfig"
+      @initialized="firstRunConfig = null"
+    />
+    <RouterView v-else-if="checked" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the Manage tab's config editor. -->

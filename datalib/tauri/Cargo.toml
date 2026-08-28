@@ -30,3 +30,11 @@ tauri-plugin-dialog = "2"
 # `capabilities/reveal-local-files.json` for why that matters.
 tauri-plugin-opener = "2"
 anyhow = "1.0"
+# The launcher's recent-roots file (`src/launcher.rs`). Already in the
+# lock as a transitive tauri dep; named directly here because the
+# launcher reads and writes that file itself.
+serde_json = "1.0"
+
+[dev-dependencies]
+# `src/launcher.rs`'s unit tests. Also already in the lock.
+tempfile = "3"

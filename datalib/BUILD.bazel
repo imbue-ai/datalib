@@ -1,9 +1,5 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
-# `datalib/tauri/` has no BUILD file of its own, so its files belong to
-# this package. NODE_VERSION here is read by //tools:version_pins_test.
-exports_files(["tauri/stage-runtime.sh"])
-
 # Backend-only: launch datalib_http_bin and open browser at /api/health.
 sh_binary(
     name = "serve",

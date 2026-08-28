@@ -1,0 +1,229 @@
+<!doctype html>
+<!--
+  The launcher: what the desktop app shows when it was opened without a
+  data root.
+
+  It used to show a bare native folder picker — a "choose a folder"
+  sheet with no window behind it and nothing saying what the folder was
+  for, which is an impossible first screen for someone who has never
+  seen the app. This page explains what a data library is, offers the
+  roots already opened before, and names the exact folder the "create"
+  button would make.
+
+  This is the ONLY page the shell bundles. Once a root is chosen the
+  window is replaced by one pointing at the spawned `datalib-http`,
+  which serves the real (rust-embed'd Vue) UI — see src/main.rs.
+
+  Every decision here is in `src/launcher.rs` (recents, whether a
+  folder is a data library, where a new one goes), which is unit-tested
+  by //datalib/tauri:launcher_test. This file is presentation: it asks
+  for state, renders it, and invokes one command per button.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Datalib</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1a1a1a;
+        --muted: #6b6b6b;
+        --border: #d8d8d8;
+        --card: #fafafa;
+        --accent: #2563eb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1b1e;
+          --fg: #e6e6e6;
+          --muted: #9aa0a6;
+          --border: #2f3136;
+          --card: #232428;
+          --accent: #6ea8fe;
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: system-ui, sans-serif;
+      }
+      main {
+        max-width: 34rem;
+        margin: 0 auto;
+        padding: 2.25rem 1.5rem 2rem;
+      }
+      h1 {
+        margin: 0 0 0.35rem;
+        font-size: 1.4rem;
+      }
+      p {
+        line-height: 1.5;
+        margin: 0.55rem 0;
+      }
+      .lede {
+        color: var(--muted);
+      }
+      h2 {
+        margin: 1.6rem 0 0.5rem;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      button {
+        font: inherit;
+        color: var(--fg);
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.6rem 0.8rem;
+        cursor: pointer;
+        text-align: left;
+        width: 100%;
+        display: block;
+        margin: 0.4rem 0;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.6;
+      }
+      button .title {
+        display: block;
+        font-weight: 600;
+      }
+      button .sub {
+        display: block;
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-top: 0.15rem;
+        overflow-wrap: anywhere;
+      }
+      .quit {
+        width: auto;
+        background: none;
+        border: none;
+        color: var(--muted);
+        padding: 0.4rem 0;
+        margin-top: 1.2rem;
+      }
+      .quit:hover {
+        color: var(--fg);
+        border: none;
+      }
+      .error {
+        color: #b91c1c;
+      }
+      @media (prefers-color-scheme: dark) {
+        .error {
+          color: #f87171;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Datalib</h1>
+      <p class="lede">
+        Datalib keeps a searchable mirror of your own data — chats, mail,
+        documents — in one folder on this machine. That folder is called a
+        data library, and everything the app shows comes out of it. Nothing
+        is uploaded anywhere.
+      </p>
+
+      <p id="error" class="error" role="alert" hidden></p>
+
+      <section id="recents" hidden>
+        <h2>Recent</h2>
+        <div id="recents-list"></div>
+      </section>
+
+      <h2>Open a data library</h2>
+      <button id="pick">
+        <span class="title">Open an existing data library…</span>
+        <span class="sub">Choose a folder you have already set up.</span>
+      </button>
+
+      <h2>Start fresh</h2>
+      <button id="create">
+        <span class="title">Create an empty data library</span>
+        <span class="sub" id="create-path"></span>
+      </button>
+
+      <button class="quit" id="quit">Quit</button>
+    </main>
+
+    <script>
+      // `withGlobalTauri` (tauri.conf.json) is what puts this here; the
+      // launcher has no bundler and no module graph.
+      const invoke = window.__TAURI__.core.invoke;
+
+      const errorEl = document.getElementById("error");
+      function fail(e) {
+        errorEl.textContent = String((e && e.message) || e);
+        errorEl.hidden = false;
+        setBusy(false);
+      }
+
+      // Every button starts a backend and swaps this window out, so a
+      // second click while that is in flight would start a second one.
+      function setBusy(on) {
+        for (const b of document.querySelectorAll("button")) b.disabled = on;
+      }
+
+      async function open(command, args) {
+        setBusy(true);
+        errorEl.hidden = true;
+        try {
+          await invoke(command, args);
+          // On success the shell replaces this window; nothing to do.
+        } catch (e) {
+          fail(e);
+        }
+      }
+
+      function recentButton(root) {
+        const b = document.createElement("button");
+        const name = document.createElement("span");
+        name.className = "title";
+        // Shown as the folder's own name, with the full path under it —
+        // several libraries can share a leaf name.
+        name.textContent = root.name;
+        const path = document.createElement("span");
+        path.className = "sub";
+        path.textContent = root.path;
+        b.append(name, path);
+        b.addEventListener("click", () => open("launcher_open", { path: root.path }));
+        return b;
+      }
+
+      async function render() {
+        const state = await invoke("launcher_state");
+        document.getElementById("create-path").textContent =
+          "A new, empty folder at " + state.default_new_root + ".";
+        if (state.recents.length > 0) {
+          const list = document.getElementById("recents-list");
+          for (const r of state.recents) list.append(recentButton(r));
+          document.getElementById("recents").hidden = false;
+        }
+      }
+
+      document
+        .getElementById("pick")
+        .addEventListener("click", () => open("launcher_pick"));
+      document
+        .getElementById("create")
+        .addEventListener("click", () => open("launcher_create"));
+      document
+        .getElementById("quit")
+        .addEventListener("click", () => invoke("launcher_quit"));
+
+      render().catch(fail);
+    </script>
+  </body>
+</html>

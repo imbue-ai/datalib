@@ -1,8 +1,10 @@
 //! Datalib Tauri shell.
 //!
-//! A thin process manager around the real backend: on startup a native
-//! folder picker asks for the data root (skipped when one is supplied
-//! via CLI arg / `$DATALIB_DATA_ROOT`), then the shell spawns the
+//! A thin process manager around the real backend: on startup the
+//! launcher window (`launcher-dist/index.html`) asks which data
+//! library to open — recent ones, an existing folder, or a new empty
+//! one — skipped when a root is supplied via CLI arg /
+//! `$DATALIB_DATA_ROOT`. Then the shell spawns the
 //! bundled **`datalib-http` binary** — the exact same binary the
 //! web packaging runs — as a child process on an ephemeral 127.0.0.1
 //! port and opens the main window at its URL. That server serves both
@@ -28,7 +30,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+mod launcher;
+
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
@@ -43,6 +47,111 @@ struct HttpChild(Mutex<Option<Child>>);
 #[tauri::command]
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+// --- Launcher commands -----------------------------------------------------
+//
+// The four things the launcher window can ask for. Each of the three
+// that open a library ends in `boot`, which replaces this window with
+// the app; the launcher never learns a path it did not already show.
+//
+// Returning `serde_json::Value` rather than a `#[derive(Serialize)]`
+// struct keeps `serde`'s derive out of this crate for one payload
+// consumed by one hand-written page.
+
+/// What the launcher renders: the remembered libraries, and where a new
+/// one would go.
+#[tauri::command]
+fn launcher_state(app: AppHandle) -> serde_json::Value {
+    let recents: Vec<serde_json::Value> = home_dir(&app)
+        .map(|home| launcher::load_recents(&launcher::recents_file(&home)))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": launcher::display_name(&p),
+                "path": p.to_string_lossy(),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "recents": recents,
+        "default_new_root": new_root_path(&app).to_string_lossy(),
+    })
+}
+
+/// Open a library the launcher listed. The path is checked rather than
+/// trusted: the entry may have gone stale between render and click.
+#[tauri::command]
+fn launcher_open(app: AppHandle, path: String) -> Result<(), String> {
+    let root = PathBuf::from(path);
+    if !launcher::is_data_root(&root) {
+        return Err(format!(
+            "{} is no longer a data library — it may have been moved or deleted.",
+            root.display()
+        ));
+    }
+    tauri::async_runtime::spawn(boot(app, root));
+    Ok(())
+}
+
+/// The native folder picker, now reached deliberately from a window
+/// that has already said what the folder is for. Any folder is
+/// accepted: an empty one gets the app's own first-run screen (see
+/// `ui/src/views/FirstRunView.vue`), which is a better place to explain
+/// initialization than a rejection dialog here.
+#[tauri::command]
+fn launcher_pick(app: AppHandle) {
+    app.dialog()
+        .file()
+        .set_title("Open a Datalib data library")
+        .pick_folder(move |choice| match choice {
+            Some(file_path) => match file_path.into_path() {
+                Ok(root) => {
+                    tauri::async_runtime::spawn(boot(app, root));
+                }
+                Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
+            },
+            // Canceling returns to the launcher, which is still up —
+            // unlike the old flow, where canceling the picker exited
+            // the app because there was nothing behind it.
+            None => {}
+        });
+}
+
+/// Create the empty library the launcher named and open it. Only the
+/// directory is made here; the config inside it is the app's own
+/// first-run screen, which explains itself before writing.
+#[tauri::command]
+fn launcher_create(app: AppHandle) -> Result<(), String> {
+    let root = new_root_path(&app);
+    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+    tauri::async_runtime::spawn(boot(app, root));
+    Ok(())
+}
+
+#[tauri::command]
+fn launcher_quit(app: AppHandle) {
+    app.exit(0);
+}
+
+/// The user's home directory, as Tauri resolves it.
+fn home_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().home_dir().ok()
+}
+
+/// Where a new library goes. `document_dir` is the platform's real
+/// Documents directory (localized, relocatable), with `~/Documents` as
+/// the fallback and the home directory itself as the last resort.
+fn new_root_path(app: &AppHandle) -> PathBuf {
+    let documents = app.path().document_dir().ok().or_else(|| {
+        let home = home_dir(app)?;
+        Some(home.join("Documents"))
+    });
+    match documents {
+        Some(d) => launcher::default_new_root(&d),
+        None => PathBuf::from("Datalib"),
+    }
 }
 
 fn main() {
@@ -62,20 +171,27 @@ fn main() {
         // from localhost as an external URL, and Tauri withholds IPC
         // from remote origins by default).
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![version])
+        .invoke_handler(tauri::generate_handler![
+            version,
+            launcher_state,
+            launcher_open,
+            launcher_pick,
+            launcher_create,
+            launcher_quit
+        ])
         .manage(HttpChild(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
             // A data root supplied non-interactively (positional arg or
-            // `$DATALIB_DATA_ROOT`) skips the picker and boots
+            // `$DATALIB_DATA_ROOT`) skips the launcher and boots
             // straight into it — mirrors `datalib_http_bin <root>`
-            // and makes the app scriptable/testable. Otherwise fall back
-            // to the native folder picker.
+            // and makes the app scriptable/testable. Otherwise the
+            // launcher window asks which library to open.
             match explicit_data_root() {
                 Some(root) => {
                     tauri::async_runtime::spawn(boot(handle, root));
                 }
-                None => prompt_for_data_root(handle),
+                None => show_launcher(&handle)?,
             }
             Ok(())
         })
@@ -150,23 +266,33 @@ fn explicit_data_root() -> Option<PathBuf> {
     Some(PathBuf::from(expanded))
 }
 
-/// Show the folder picker. Picking a folder boots the backend and opens
-/// the main window; canceling exits the app (there is nothing to show
-/// without a data root).
-fn prompt_for_data_root(app: AppHandle) {
-    app.dialog()
-        .file()
-        .set_title("Select your Datalib data root")
-        .pick_folder(move |choice| match choice {
-            Some(file_path) => match file_path.into_path() {
-                Ok(root) => {
-                    tauri::async_runtime::spawn(boot(app, root));
-                }
-                Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
-            },
-            None => app.exit(0),
-        });
+/// Open the launcher window: the app's first screen when it was
+/// started without a data root.
+///
+/// This replaced an immediate native folder picker. The picker asked
+/// for a folder with no window behind it and nothing saying what the
+/// folder was for — and canceling it quit the app, since there was
+/// nothing else on screen. The launcher explains what a data library
+/// is, offers the ones already opened, and can make a new one; the
+/// picker is still there, one button in.
+///
+/// This is the only window that loads the bundled `frontendDist`
+/// (`launcher-dist/`). Every other window points at the spawned
+/// backend.
+fn show_launcher(app: &AppHandle) -> tauri::Result<()> {
+    WebviewWindowBuilder::new(app, LAUNCHER_WINDOW, WebviewUrl::App("index.html".into()))
+        .title("Datalib")
+        .inner_size(620.0, 700.0)
+        .resizable(true)
+        .build()?;
+    Ok(())
 }
+
+/// Label of the launcher window. Also named in
+/// `capabilities/default.json`, which is what lets it call commands at
+/// all — a window missing from every capability gets no IPC, and the
+/// page's first `invoke` fails with nothing on screen to say why.
+const LAUNCHER_WINDOW: &str = "launcher";
 
 /// Locate the `datalib-http` binary to spawn. Dev override
 /// `$DATALIB_HTTP_BIN` wins (point it at a fresh Bazel build
@@ -194,6 +320,7 @@ fn resolve_http_bin(app: &AppHandle) -> Option<PathBuf> {
 }
 
 async fn boot(app: AppHandle, root: PathBuf) {
+    remember(&app, &root);
     let url = match tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         move || start_backend(&app, root)
@@ -201,11 +328,11 @@ async fn boot(app: AppHandle, root: PathBuf) {
     .await
     {
         Ok(Ok(url)) => url,
-        Ok(Err(e)) => return fatal(&app, format!("could not start the backend: {e:#}")),
-        Err(e) => return fatal(&app, format!("backend startup task panicked: {e}")),
+        Ok(Err(e)) => return boot_failed(&app, format!("could not start the backend: {e:#}")),
+        Err(e) => return boot_failed(&app, format!("backend startup task panicked: {e}")),
     };
     let Ok(url) = url.parse::<Url>() else {
-        return fatal(&app, format!("backend produced an unusable URL: {url}"));
+        return boot_failed(&app, format!("backend produced an unusable URL: {url}"));
     };
     // Serialized rather than kept as a `url::Origin`: that type is
     // not re-exported by tauri, and naming it would mean adding a
@@ -245,7 +372,47 @@ async fn boot(app: AppHandle, root: PathBuf) {
         })
         .build();
     if let Err(e) = window {
-        return fatal(&app, format!("could not open the main window: {e}"));
+        return boot_failed(&app, format!("could not open the main window: {e}"));
+    }
+    // The app is up; the launcher has nothing left to offer. Closed
+    // only here, at the end, so every failure above still has a window
+    // to return to.
+    if let Some(w) = app.get_webview_window(LAUNCHER_WINDOW) {
+        let _ = w.close();
+    }
+}
+
+/// A boot that did not produce a window.
+///
+/// Reached from the launcher, this is recoverable: say what went wrong
+/// and put the user back in front of the other choices — a data root on
+/// an unmounted volume should cost one dialog, not the session. The
+/// launcher is reloaded rather than merely revealed because its buttons
+/// disable themselves on click, expecting to be replaced by the app.
+///
+/// With no launcher — booting an explicit `$DATALIB_DATA_ROOT` or CLI
+/// root — there is nothing to return to, and the old behavior stands:
+/// dialog, then exit.
+fn boot_failed(app: &AppHandle, msg: String) {
+    let Some(launcher) = app.get_webview_window(LAUNCHER_WINDOW) else {
+        return fatal(app, msg);
+    };
+    eprintln!("{msg}");
+    let _ = launcher.eval("location.reload()");
+    app.dialog()
+        .message(msg)
+        .title("Datalib could not open that data library")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+/// Add `root` to the launcher's recent list. Best-effort: a home
+/// directory we cannot resolve or write to costs the user a
+/// convenience, never a launch.
+fn remember(app: &AppHandle, root: &Path) {
+    let Some(home) = home_dir(app) else { return };
+    if let Err(e) = launcher::record_recent(&launcher::recents_file(&home), root) {
+        eprintln!("could not record the recent data root: {e}");
     }
 }
 
