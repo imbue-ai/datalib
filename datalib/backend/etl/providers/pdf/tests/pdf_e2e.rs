@@ -32,10 +32,20 @@ fn fixture_dir() -> PathBuf {
     up
 }
 
+/// The stanza name this harness renders under. Both the render's
+/// `source_name` argument and the `<stanza>/` prefix of every path it
+/// writes, exactly as the step wires them (`processor.rs`).
+const STANZA: &str = "logs";
+
 struct Harness {
     _tmp: tempfile::TempDir,
     raw_dir: PathBuf,
     root: PathBuf,
+    /// The *data* root — the prefix `grid_index::apply_one` strips off
+    /// `md_path` to produce the stored path. The real layout is mirrored
+    /// here (`<data_root>/<stanza>/rendered_md/`) rather than flattened,
+    /// so a test can compare a stored `qmd_path` against it.
+    data_root: PathBuf,
     out_dir: PathBuf,
 }
 
@@ -43,12 +53,14 @@ impl Harness {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let raw_dir = tmp.path().join("raw");
-        let out_dir = tmp.path().join("rendered_md");
+        let data_root = tmp.path().join("data");
+        let out_dir = datalib_etl::layout::rendered_md_root(&data_root, STANZA);
         std::fs::create_dir_all(&raw_dir).unwrap();
         Self {
             root: fixture_dir(),
             _tmp: tmp,
             raw_dir,
+            data_root,
             out_dir,
         }
     }
@@ -57,7 +69,7 @@ impl Harness {
         let db = RawDb::open(&download::db_path_for(&self.raw_dir)).await?;
         download::fetch(download::FetchOptions {
             db,
-            source_name: "logs".to_string(),
+            source_name: STANZA.to_string(),
             root: self.root.clone(),
             ignore: vec![],
             max_bytes: None,
@@ -83,7 +95,7 @@ impl Harness {
         let s = render::render(
             &self.raw_dir,
             &self.out_dir,
-            "logs",
+            STANZA,
             &datalib_etl::progress::Progress::noop(),
             prior,
             &mut sink,
@@ -336,6 +348,55 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
         !body1.contains("Addendum filed"),
         "v1 must not carry v2 content"
     );
+    Ok(())
+}
+
+/// Regression: `grid_rows.qmd_path` must be the *data-root*-relative
+/// path, byte-equal to what `grid_index::apply_one` stores in
+/// `markdowns.md_path` for the same file.
+///
+/// It used to be the out-dir-relative `docs/<blake3>.md`, which is what
+/// `GridIndex::new` keyed its rows by while `rows_for_hit` looked hits
+/// up by their data-root-relative path. The two could never match, so
+/// every qmd hit inside a PDF resolved to zero grid rows and was
+/// dropped — PDFs were simply absent from free-text search, with only
+/// an applet-side `qmd hit resolved to no grid rows` error to show for
+/// it. Comparing against the path derived from `md_path` (rather than
+/// against a hardcoded string) is the point: it is the same derivation
+/// the index performs, so the two cannot drift apart again.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
+    let h = Harness::new();
+    h.scan().await?;
+    let (_, emitted) = h.render(&HashMap::new()).await?;
+    assert!(
+        !emitted.is_empty(),
+        "nothing rendered; the test proves nothing"
+    );
+
+    for m in &emitted {
+        // Exactly what `apply_one` does to reach `markdowns.md_path`.
+        let stored_md_path = m
+            .md_path
+            .strip_prefix(&h.data_root)
+            .expect("rendered files must live under the data root")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            stored_md_path.starts_with(&format!("{STANZA}/rendered_md/")),
+            "md_path {stored_md_path} is not under the stanza's rendered_md tree"
+        );
+        assert!(!m.rows.is_empty(), "a rendered doc must emit rows");
+        for r in &m.rows {
+            assert_eq!(
+                r.qmd_path.as_deref(),
+                Some(stored_md_path.as_str()),
+                "{} row {} points at a different path than its markdown",
+                r.kind,
+                r.uuid
+            );
+        }
+    }
     Ok(())
 }
 

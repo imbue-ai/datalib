@@ -195,6 +195,33 @@ class IngestedTngPipelineTest(unittest.TestCase):
             out[kind] = int(n)
         return out
 
+    def _qmd_path_mismatches(self) -> list[str]:
+        """Rows whose `qmd_path` disagrees with their markdown's path.
+
+        The two columns name the same file and must name it the same
+        way: `GridIndex` (unified_index/src/qmd/mapping.rs) keys grid
+        rows by `norm_path(qmd_path)` and looks each qmd hit up by the
+        hit's own data-root-relative path — the same spelling
+        `apply_one` stores in `markdowns.md_path`. A provider that
+        stamps any other form still renders correct markdown and still
+        gets indexed by qmd, so nothing else goes red; its documents
+        just vanish from free-text search, because every hit in them
+        resolves to zero grid rows and is dropped. `pdf` shipped that
+        way — it wrote the out-dir-relative `docs/<blake3>.md` while
+        every other provider wrote `<stanza>/rendered_md/...`.
+
+        Rows with no markdown row to join against are left to the
+        NULL-`qmd_path` check above; this one is about disagreement.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT DISTINCT g.provider, g.qmd_path, m.md_path "
+            "FROM grid_rows g JOIN markdowns m "
+            "  ON m.markdown_uuid = g.markdown_uuid "
+            "WHERE m.md_path IS NOT NULL "
+            "  AND (g.qmd_path IS NULL OR g.qmd_path <> m.md_path);",
+        )
+
     def _signal_cursor(self) -> list[str]:
         """Signal's `ingested_backups` rows as `<snapshot_dir>|<blake3>`."""
         return self._query(
@@ -281,6 +308,31 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "0",
             "every pdf row needs a qmd_path to be reachable from search",
         )
+        # Cross-provider: `grid_rows.qmd_path` must be byte-equal to
+        # its markdown's `markdowns.md_path`. Asserted over the whole
+        # index rather than per-provider so a new source inherits the
+        # check for free — this is the invariant the qmd hit→row
+        # mapping is built on.
+        self.assertEqual(
+            self._qmd_path_mismatches(),
+            [],
+            "every grid row's qmd_path must equal its markdown's md_path",
+        )
+        # ...and the join must actually have matched something, or the
+        # emptiness above would prove nothing.
+        self.assertGreater(
+            int(
+                self._scalar(
+                    self._index_db,
+                    "SELECT COUNT(*) FROM grid_rows g JOIN markdowns m "
+                    "  ON m.markdown_uuid = g.markdown_uuid "
+                    "WHERE g.provider = 'pdf' AND m.md_path IS NOT NULL;",
+                )
+            ),
+            0,
+            "the qmd_path/md_path join must cover pdf rows",
+        )
+
         # The index is committed, so its version history is non-empty.
         self.assertGreater(
             int(self._scalar(self._index_db, "SELECT COUNT(*) FROM dolt_log;")),

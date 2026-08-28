@@ -286,20 +286,36 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(512)")]
     pub slack_link: Option<String>,
     /// Path to the rendered Markdown file for this row's
-    /// conversation/thread, relative to the data root. All paths are
-    /// rooted under `rendered_md/<provider>/...`. Set on every row
-    /// (chat-level rows point at their own .md; message/block rows
-    /// inherit their parent thread's). The chat preview pane uses this to
+    /// conversation/thread/document, **relative to the data root** —
+    /// every path is `<stanza>/rendered_md/...`, where `<stanza>` is the
+    /// config name of the source that produced it (not the provider
+    /// type; one provider can back several stanzas). Set on every row
+    /// (document-level rows point at their own .md; message/page/block
+    /// rows inherit their parent's). The chat preview pane uses this to
     /// load the conversation directly — no glob, no frontmatter scan.
     /// (Column name retained as `qmd_path` for historical reasons.)
     ///
-    /// Per-provider mapping:
-    ///   anthropic: rendered_md/anthropic/{account_uuid}/{org_uuid}/llm_chats/{conversation_uuid}/index.md
-    ///   openai: rendered_md/openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.md
-    ///   slack: rendered_md/slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.md
-    ///   github: rendered_md/github/{owner}/{repo}/pr-{number}__{slug(title)}/index.md (PR), or .../threads/{thread_uuid}__{slug}.md (comment threads)
-    ///   gitlab: rendered_md/gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.md (MR), or .../threads/{discussion_uuid}__{slug}.md (discussion threads)
-    ///   notion: rendered_md/notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.md (pages + headings); .../comments/{thread_short_id}__{snippet}.md (comment threads)
+    /// **Invariant: for a given `markdown_uuid`, this must be
+    /// byte-equal to that markdown's `markdowns.md_path`.** Both name
+    /// the same file in the same data-root-relative spelling, and the
+    /// qmd hit→row mapping depends on it: `GridIndex::new`
+    /// (`unified_index/src/qmd/mapping.rs`) keys grid rows by
+    /// `norm_path(qmd_path)` and looks each hit up by its own
+    /// data-root-relative path. A renderer that stamps a shorter,
+    /// out-dir-relative path here still writes correct markdown and
+    /// still gets indexed by qmd — but every hit inside its documents
+    /// resolves to zero grid rows and is silently dropped from search
+    /// results. `pdf` did exactly this until it was fixed; the
+    /// cross-provider assertion lives in
+    /// `//tests/fixtures:ingested_tng_test`.
+    ///
+    /// Per-provider suffix under `<stanza>/rendered_md/` (checked
+    /// against the tree 2026-08-28):
+    ///   chat-shaped providers (anthropic, openai, slack, …): {conversation_uuid}/all.md
+    ///   github: {owner}/{repo}/pr-{number}/index.md — every PR row shares it
+    ///   gitlab: {group}/{project}/mr-{iid}/index.md — every MR row shares it
+    ///   notion: pages/{page_id}/index.md (pages + headings), pages/{page_id}/threads/{discussion}.md (comment threads)
+    ///   pdf: docs/{blake3}.md — the document row and all its page rows
     #[col(sql = "VARCHAR(512)")]
     pub qmd_path: Option<String>,
     /// Canonical URL pointing back to the original source on the
