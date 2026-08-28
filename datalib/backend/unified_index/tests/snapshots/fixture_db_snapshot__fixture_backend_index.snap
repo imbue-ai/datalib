@@ -1,5 +1,5 @@
 ---
-source: datalib/backend/core/tests/fixture_db_snapshot.rs
+source: datalib/backend/unified_index/tests/fixture_db_snapshot.rs
 expression: snapshot
 ---
 {
@@ -1044,7 +1044,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/captains_log_copy.pdf",
@@ -1169,7 +1169,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/captains_log_v2.pdf",
@@ -1319,7 +1319,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/captains_log_v2.pdf",
@@ -1669,7 +1669,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/warp_core_manual.pdf",
@@ -2194,7 +2194,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/warp_core_manual.pdf",
@@ -3269,7 +3269,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/captains_log_v2.pdf",
@@ -4569,7 +4569,7 @@ expression: snapshot
       "notion_page_uuid": null,
       "project": null,
       "provider": "pdf",
-      "qmd_path": "docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
+      "qmd_path": "tng_pdfs/rendered_md/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
       "slack_link": null,
       "source_label": "PDF",
       "source_url": "file://…/captains_log_copy.pdf",
