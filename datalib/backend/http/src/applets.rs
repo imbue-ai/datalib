@@ -7,17 +7,29 @@
 //! long-lived HTTP server this gateway starts. It is run once:
 //!
 //! ```text
-//! <command> -p <port> --frontend-dir <root>/system/frontend/<id> [--params <json>]
+//! <command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params <json>]
 //! ```
 //!
-//! and owes two things, in order: write its components into that
-//! directory, then bind the port. The gateway waits for the port and
-//! then scans the store, so **"the port accepts" is the signal that
-//! the write finished** — an applet that bound first would race the
-//! scan and intermittently come up with no components.
+//! and owes three things, in order: write its components into that
+//! directory, bind a port, then print `DATALIB_APPLET_PORT=<port>` to
+//! stdout. The gateway waits for that line and then scans the store,
+//! so **the line is the signal that the write finished** — an applet
+//! that announced first would race the scan and intermittently come up
+//! with no components.
 //!
-//! There is no protocol version, no handshake, and no registration
-//! call.
+//! The port travels in that direction — child to gateway, not gateway
+//! to child — because it is the only spelling that ties readiness to
+//! *this* child. Picking a port here means binding one, dropping it,
+//! and racing the child for it; the wait that followed could then only
+//! ask "is anything accepting on that port?", which another process
+//! that won the race answers just as well. That is not hypothetical:
+//! under a loaded `bazelisk test //...` the gateway adopted a
+//! stranger's listener, scanned the store before its own applet had
+//! written a byte, and reported no error while the real child exited
+//! with `EADDRINUSE`.
+//!
+//! Beyond that one line there is no protocol version, no handshake,
+//! and no registration call.
 //!
 //! ## Applets are not a component mechanism
 //!
@@ -85,11 +97,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use datalib_dag::config::AppletEntry;
 use serde::Serialize;
@@ -104,7 +116,18 @@ pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 
-/// How long an applet gets to write its components and bind its port.
+/// The prefix of the one line an applet prints to **stdout** once it
+/// has written its components and bound its port: the readiness
+/// signal, carrying the port the gateway proxies to.
+///
+/// The applet side spells this literally (`datalib-applet`'s
+/// `announce_port`), the same way it spells [`ENV_APPLET_ID`] — the
+/// two cannot drift silently, since every applet round-trip test
+/// starts a real child and fails outright if they disagree.
+pub const APPLET_PORT_LINE: &str = "DATALIB_APPLET_PORT=";
+
+/// How long an applet gets to write its components, bind its port, and
+/// report it.
 ///
 /// A bound is required because this runs during boot, after the
 /// listener is already accepting: without one, a single applet that
@@ -639,11 +662,22 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    /// Start one applet and wait for it to bind.
+    /// Start one applet and wait for it to report the port it bound.
     ///
-    /// Returns the port. The wait is what makes the caller's subsequent
-    /// store scan safe: the applet writes its directory before binding,
-    /// so a live port means the files are there.
+    /// Returns that port. The wait is what makes the caller's
+    /// subsequent store scan safe: the applet writes its directory,
+    /// binds, and only then prints the line, so having read the line
+    /// means the files are there.
+    ///
+    /// The port comes back *from the child* rather than being picked
+    /// here, and that is the whole point. Choosing one in this process
+    /// means binding it, releasing it, and hoping the child wins the
+    /// race for it — and the readiness check that followed ("something
+    /// accepts on that port") could not tell this applet apart from
+    /// whoever else had grabbed it. Under load that actually happened:
+    /// the gateway adopted a stranger's listener, scanned the store
+    /// before the applet had written a byte, and served an empty
+    /// gallery while the real child died of `EADDRINUSE` unreported.
     fn start(
         &self,
         entry: &AppletEntry,
@@ -651,11 +685,12 @@ impl Supervisor {
         binary_dir: Option<&Path>,
         frontend_dir: &Path,
     ) -> Result<u16, String> {
-        let port = free_port().map_err(|e| format!("applet {:?}: no free port: {e}", entry.id))?;
         let mut cmd = base_command(entry, data_root, binary_dir)
             .map_err(|e| format!("applet {:?}: {e:#}", entry.id))?;
+        // `0` means "any port": the child asks the OS for one and
+        // reports what it got.
         cmd.arg("-p")
-            .arg(port.to_string())
+            .arg("0")
             .arg("--frontend-dir")
             .arg(frontend_dir);
         if let Some(params) = entry
@@ -668,9 +703,11 @@ impl Supervisor {
             );
         }
         cmd.stdin(Stdio::null());
-        // Capture stderr so a server that dies on startup can say why.
-        // Without this the only symptom is a readiness timeout, which
-        // names the port and nothing about the cause.
+        // stdout is the readiness channel; stderr is the log, captured
+        // so a server that dies on startup can say why. Without the
+        // latter the only symptom is a readiness failure, which names
+        // the applet and nothing about the cause.
+        cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
         let mut child = cmd
@@ -685,8 +722,10 @@ impl Supervisor {
         // a failed applet does not necessarily close it. A `sh` wrapper
         // whose own child is still alive would otherwise block the
         // reader — and with it this whole function — until that
-        // grandchild exited.
+        // grandchild exited. `stderr_eof` is how the failure path waits
+        // for the tail to be complete without giving up that property.
         let tail = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (stderr_eof_tx, stderr_eof) = std::sync::mpsc::channel::<()>();
         if let Some(stderr) = child.stderr.take() {
             let tail = tail.clone();
             let id = entry.id.clone();
@@ -702,26 +741,86 @@ impl Supervisor {
                         }
                     }
                 }
+                let _ = stderr_eof_tx.send(());
             });
         }
 
-        if let Err(e) = wait_ready(port, START_TIMEOUT) {
-            // Kill *and reap*: `std::process::Child` has no reaping
-            // Drop, so a bare `kill` leaves a zombie for the gateway's
-            // lifetime.
-            let _ = child.kill();
-            let _ = child.wait();
-            let collected = tail.lock().map(|t| t.join("\n")).unwrap_or_default();
-            let detail = if collected.trim().is_empty() {
-                String::new()
-            } else {
-                format!("; stderr: {}", tail_lines(&collected, 20))
-            };
-            return Err(format!(
-                "applet {:?}: did not start listening on {port}: {e}{detail}",
-                entry.id
-            ));
+        // Read stdout on its own detached thread, for the same reason,
+        // and forward the first `DATALIB_APPLET_PORT=` line here. The
+        // thread keeps draining afterwards: a chatty applet that filled
+        // the pipe would otherwise block on its own logging forever.
+        let (ready_tx, ready) = std::sync::mpsc::channel::<Option<u16>>();
+        if let Some(stdout) = child.stdout.take() {
+            let id = entry.id.clone();
+            std::thread::spawn(move || {
+                let reader = std::io::BufReader::new(stdout);
+                let mut announced = false;
+                for line in reader.lines().map_while(Result::ok) {
+                    let port = (!announced)
+                        .then(|| line.trim().strip_prefix(APPLET_PORT_LINE))
+                        .flatten()
+                        .and_then(|p| p.trim().parse::<u16>().ok())
+                        .filter(|p| *p != 0);
+                    match port {
+                        Some(port) => {
+                            announced = true;
+                            let _ = ready_tx.send(Some(port));
+                        }
+                        // Anything else on stdout is just output. An
+                        // applet is not required to keep it clean.
+                        None => eprintln!("applet {id}: {line}"),
+                    }
+                }
+                if !announced {
+                    let _ = ready_tx.send(None);
+                }
+            });
         }
+
+        let port = match ready.recv_timeout(START_TIMEOUT) {
+            Ok(Some(port)) => port,
+            // `None` is EOF with nothing announced — the applet
+            // exited, or closed stdout, before it was ready. Either
+            // way it is not something this gateway can proxy to.
+            // `Err` is the timeout, or the reader thread going away.
+            outcome => {
+                // Kill *and reap*: `std::process::Child` has no reaping
+                // Drop, so a bare `kill` leaves a zombie for the
+                // gateway's lifetime.
+                let _ = child.kill();
+                let _ = child.wait();
+                // An applet that closed stdout has usually just died,
+                // and its last words — the reason — may still be in the
+                // stderr pipe. Wait for that reader to finish so the
+                // message is complete rather than whatever had arrived
+                // by now. Bounded, because a surviving grandchild can
+                // hold the pipe open; skipped entirely on the timeout
+                // path, where the child is hung rather than dying and
+                // there is nothing more to come.
+                if matches!(
+                    outcome,
+                    Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                ) {
+                    let _ = stderr_eof.recv_timeout(Duration::from_secs(2));
+                }
+                let collected = tail.lock().map(|t| t.join("\n")).unwrap_or_default();
+                let detail = if collected.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("; stderr: {}", tail_lines(&collected, 20))
+                };
+                let why = match outcome {
+                    Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        "exited without reporting a listening port".to_string()
+                    }
+                    _ => format!(
+                        "did not report a listening port within {}s",
+                        START_TIMEOUT.as_secs()
+                    ),
+                };
+                return Err(format!("applet {:?}: {why}{detail}", entry.id));
+            }
+        };
 
         if let Ok(mut map) = self.running.lock() {
             map.insert(entry.id.clone(), Running { port, child });
@@ -784,34 +883,6 @@ impl Drop for Supervisor {
 // and keep running. Putting each child in its own process group and
 // signalling the group is the fix; it is not done here because idle
 // shutdown will need the same plumbing.
-
-/// Ask the OS for a free port by binding one and letting it go. There
-/// is a race between release and the applet's bind, which is why the
-/// alternative (pass `-p 0` and have the applet report back) is the
-/// better long-term shape — it needs a readiness channel this protocol
-/// deliberately does not have yet.
-fn free_port() -> std::io::Result<u16> {
-    let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let port = l.local_addr()?.port();
-    drop(l);
-    Ok(port)
-}
-
-fn wait_ready(port: u16, timeout: Duration) -> Result<(), String> {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let deadline = Instant::now() + timeout;
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                last = e.to_string();
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-    }
-    Err(last)
-}
 
 // ---------------------------------------------------------------------------
 // The proxy

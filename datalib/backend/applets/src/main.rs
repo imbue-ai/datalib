@@ -13,22 +13,33 @@
 //! and the gateway appends the rest:
 //!
 //! ```text
-//! datalib-applet <name> -p <port> --frontend-dir <dir> [--params <json>]
+//! datalib-applet <name> -p 0 --frontend-dir <dir> [--params <json>]
 //! ```
 //!
 //! One invocation, one process. The applet **writes its frontend
-//! directory, then binds the port** — in that order, because the
-//! gateway takes "the port accepts" as its signal that the write
-//! finished and the store is safe to scan. An applet that bound first
-//! would race the scan and intermittently come up with no components.
+//! directory, then binds, then announces the port it bound** — in that
+//! order, because the gateway takes the announcement as its signal
+//! that the write finished and the store is safe to scan. An applet
+//! that announced first would race the scan and intermittently come up
+//! with no components.
 //!
 //! ## What an applet owes
 //!
-//! Two things, in order: leave files in the directory it is handed — a
-//! `<sha256>.js` and a `<name>.json` per component, described in
-//! `docs/dev/applets.md` — and then answer HTTP on the port. Nothing is
-//! read from stdout; stderr is the log, and the gateway surfaces its
-//! tail when an applet fails to come up.
+//! Three things, in order: leave files in the directory it is handed —
+//! a `<sha256>.js` and a `<name>.json` per component, described in
+//! `docs/dev/applets.md` — bind a port, and print
+//! `DATALIB_APPLET_PORT=<port>` to stdout. Then answer HTTP there.
+//!
+//! The gateway passes `-p 0`, so the port is the OS's choice and the
+//! announcement is how the gateway learns it. That direction is
+//! load-bearing: a port the gateway picked would have to be released
+//! before the applet could bind it, and "something is accepting on
+//! that port" cannot tell this applet apart from whoever won the race
+//! for it.
+//!
+//! Everything else on stdout is ignored, and stderr is the log: the
+//! gateway forwards it and surfaces its tail when an applet fails to
+//! come up.
 //!
 //! ## Printing
 //!
@@ -61,7 +72,9 @@ struct Cli {
     /// without one; the gateway always passes it.
     #[arg(long, global = true)]
     frontend_dir: Option<PathBuf>,
-    /// Port to serve on. Loopback only; the gateway picks it.
+    /// Port to serve on. Loopback only. `0` — what the gateway passes
+    /// — means "any": the OS picks, and [`announce_port`] reports back
+    /// which one it picked.
     #[arg(short = 'p', long, global = true)]
     port: Option<u16>,
     /// The config entry's `params`, as JSON.
@@ -84,6 +97,26 @@ enum Which {
     UnifiedIndex,
 }
 
+/// Tell the gateway which port this applet bound.
+///
+/// Called *after* the frontend directory is written and the listener is
+/// up, because the gateway reads this line as "both of those are done"
+/// and scans the store on the strength of it.
+///
+/// The prefix is `datalib_http::applets::APPLET_PORT_LINE`, spelled
+/// literally here so this binary stays free of a dependency on the
+/// gateway — the same trade `DATALIB_APPLET_ID` makes. A disagreement
+/// is not silent: no applet would ever start.
+pub fn announce_port(port: u16) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    // Best effort on both counts: a gateway that has already given up
+    // leaves us writing to a closed pipe, and there is nothing useful
+    // to do about it that killing the process would not do worse.
+    let _ = writeln!(out, "DATALIB_APPLET_PORT={port}");
+    let _ = out.flush();
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("datalib-applet: {e:#}");
@@ -98,8 +131,8 @@ fn run() -> Result<()> {
         None => serde_json::Value::Null,
     };
     // Write, then serve. The order is the contract: the gateway waits
-    // for the port and then scans the store, so binding early would
-    // race the scan.
+    // for `announce_port` and then scans the store, so announcing
+    // early would race the scan.
     match cli.applet {
         Which::Slack => {
             if let Some(dir) = &cli.frontend_dir {

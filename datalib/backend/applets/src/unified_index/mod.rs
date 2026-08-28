@@ -74,7 +74,8 @@ struct Index {
 }
 
 /// Serve until killed. The gateway supervises the process; there is
-/// nothing to write before binding, so this binds immediately.
+/// nothing to write before binding, so this binds immediately and
+/// announces straight away.
 pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let root = match params.get("data_root").and_then(|v| v.as_str()) {
         Some(p) => PathBuf::from(p),
@@ -118,7 +119,12 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("bind {addr}"))?;
-        eprintln!("datalib-applet unified_index: listening on {addr}");
+        // `port` may be 0 ("any"), so the bound one is the listener's.
+        let bound = listener.local_addr().context("read the bound address")?;
+        eprintln!("datalib-applet unified_index: listening on {bound}");
+        // There was nothing to write first, so binding is all this one
+        // owes before the gateway may look.
+        crate::announce_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
 }

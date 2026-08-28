@@ -383,7 +383,14 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
 
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .with_context(|| format!("bind 127.0.0.1:{port}"))?;
-    eprintln!("datalib-applet slack: listening on 127.0.0.1:{port}, tree {tree}");
+    // `port` may be 0 ("any"), so the bound one is the listener's.
+    let bound = listener
+        .local_addr()
+        .context("read the bound address")?
+        .port();
+    eprintln!("datalib-applet slack: listening on 127.0.0.1:{bound}, tree {tree}");
+    // Written and bound, in that order — now the gateway may look.
+    crate::announce_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
