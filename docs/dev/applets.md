@@ -70,14 +70,25 @@ reachable to repair it.
 One invocation, one process:
 
 ```
-<command> -p <port> --frontend-dir <root>/system/frontend/<id> [--params <json>]
+<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params <json>]
 ```
 
-**Write the directory, then bind the port** — in that order. The
-gateway waits for the port and then scans the store, so "the port
-accepts" is its signal that the write finished. An applet that bound
-first would race the scan and intermittently come up with no
-components.
+**Write the directory, bind a port, then print
+`DATALIB_APPLET_PORT=<port>` to stdout** — in that order. The gateway
+waits for that line and then scans the store, so the line is its signal
+that the write finished. An applet that announced first would race the
+scan and intermittently come up with no components.
+
+`-p 0` means "any port": the OS picks and the announcement reports
+which. The port travels child-to-gateway, not the other way, and that
+direction is load-bearing. A port the gateway picked would have to be
+bound here, released, and then raced for by the child — and the only
+readiness question left to ask would be "is anything accepting on that
+port?", which whoever else won the race answers just as convincingly.
+That is not hypothetical: under a loaded `bazelisk test //...` the
+gateway adopted a stranger's listener, scanned the store before its own
+applet had written a byte, and served an empty gallery with no error
+while the real child died of `EADDRINUSE`.
 
 The directory's last segment is the namespace, and it is the only
 channel by which a command learns which instance it is. Two instances
@@ -85,9 +96,9 @@ of one binary differ only in configuration, so the argument a gallery
 entry passes — usually the instance's own id — has to come from
 outside.
 
-Nothing is read from stdout. stderr is the log: the gateway forwards it
-line by line and keeps the tail, which becomes the error message if the
-applet never binds.
+Everything on stdout other than that one line is ignored. stderr is the
+log: the gateway forwards it line by line and keeps the tail, which
+becomes the error message if the applet never announces.
 
 That is the whole contract. There is no protocol version, no handshake,
 and no registration call.
@@ -108,7 +119,9 @@ Starts run in parallel, so boot is bounded by the slowest applet rather
 than their sum, and each is capped at 20 seconds. The cap matters
 because this happens after the HTTP listener is already accepting:
 without it, one hanging applet would leave a browser tab whose requests
-queue forever with nothing logged.
+queue forever with nothing logged. An applet that *exits* costs nothing
+like that long — closing stdout without announcing is end-of-story, and
+the gateway says so immediately.
 
 ## The frontend store
 
@@ -277,7 +290,11 @@ The gateway forwards an applet's stderr line by line as it arrives and
 keeps the tail, rather than reading the pipe to EOF when the applet
 fails. That matters because the pipe is held by the child *and* by
 anything it spawned: a wrapper script whose own child is still alive
-would otherwise block the start path until that grandchild exited.
+would otherwise block the start path until that grandchild exited. An
+applet that exits without announcing is the one case where the tail is
+worth waiting for — its last words are the reason — so the start path
+waits for that reader to finish there, and only there, bounded by two
+seconds for the same grandchild reason.
 
 ## An applet that contributes no components
 

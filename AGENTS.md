@@ -61,7 +61,8 @@ are relative to the repo root.
 - [`docs/dev/applets.md`](docs/dev/applets.md) — **how to write an
   applet**: the second kind of config entry, a server contributing card
   components plus the endpoints behind them. Covers the
-  one-invocation contract (`-p` + `--frontend-dir`: write, then bind),
+  one-invocation contract (`-p 0` + `--frontend-dir`: write, bind,
+  then announce the port on stdout),
   the `system/frontend/<namespace>/` store that any program (or person)
   can write into, and why two instances of one command share a
   component but not its arguments.
