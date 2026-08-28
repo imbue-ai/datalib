@@ -313,8 +313,16 @@ pub struct GridRow {
     /// github     github/rendered_md/{owner}/{repo}/pr-{number}/index.md
     /// gitlab     gitlab/rendered_md/{group}/{project}/mr-{iid}/index.md
     /// notion     notion/rendered_md/pages/{page_uuid}/index.md
-    /// pdf        tng_pdfs/rendered_md/docs/{sha256}.md
+    /// pdf        tng_pdfs/rendered_md/docs/{blake3}.md
     /// ```
+    ///
+    /// **Invariant: for a given `markdown_uuid`, this must be
+    /// byte-equal to that markdown's `markdowns.md_path`.** Both name
+    /// the same file in the same spelling. `pdf` violated it — it wrote
+    /// the out-dir-relative `docs/{blake3}.md`, so every qmd hit inside
+    /// a PDF resolved to zero grid rows — until the prefix was fixed;
+    /// the cross-provider assertion now lives in
+    /// `//tests/fixtures:ingested_tng_test`.
     ///
     /// Prefer `markdowns.md_path` (via `markdown_uuid`) when you need
     /// the file itself: it carries the same path, has one writer, and

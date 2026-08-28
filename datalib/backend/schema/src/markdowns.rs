@@ -63,10 +63,16 @@ pub struct MarkdownRow {
     /// column.
     #[col(sql = "VARCHAR(40)")]
     pub updated_at: Option<String>,
-    /// Path to the rendered markdown file, relative to
-    /// `<root>/rendered_md/`. NULL until the renderer has produced
+    /// Path to the rendered markdown file, relative to the **data
+    /// root** — `<stanza>/rendered_md/...`, derived by
+    /// `grid_index::apply_one` stripping the data root off the absolute
+    /// path the renderer wrote. NULL until the renderer has produced
     /// output. The backend's `/api/chat/{markdown_uuid}` endpoint
     /// resolves this column to find the file to serve.
+    ///
+    /// Every `grid_rows.qmd_path` pointing at this markdown must be
+    /// byte-equal to this value; see that column's docs for why the qmd
+    /// hit→row mapping depends on it.
     #[col(sql = "VARCHAR(1024)")]
     pub md_path: Option<String>,
     /// SHA-256 (hex) over the canonical tuple list of grid_rows that feed

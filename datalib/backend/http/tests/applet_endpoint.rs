@@ -278,9 +278,9 @@ async fn a_failing_applet_is_reported_without_hiding_the_others() {
     );
 }
 
-/// An applet that never binds must not hang the boot: the start runs
-/// after the listener is already accepting, so an unbounded wait would
-/// leave a tab whose requests queue with nothing logged.
+/// An applet that never comes up must not hang the boot: the start
+/// runs after the listener is already accepting, so an unbounded wait
+/// would leave a tab whose requests queue with nothing logged.
 #[tokio::test]
 async fn an_applet_that_never_binds_is_bounded() {
     let tmp = tempfile::tempdir().unwrap();
@@ -301,7 +301,43 @@ async fn an_applet_that_never_binds_is_bounded() {
         started.elapsed()
     );
     let err = view["applet_errors"]["hang"].as_str().unwrap();
-    assert!(err.contains("did not start listening"), "{err}");
+    assert!(err.contains("did not report a listening port"), "{err}");
+}
+
+/// Readiness is the applet's own announcement, not an open port.
+///
+/// This is the shape of a real flake. The gateway used to pick a port,
+/// release it, and then treat "something accepts there" as "my applet
+/// is up" — which a stranger who had won the race for that port
+/// answered just as convincingly, so the store got scanned before the
+/// applet had written a byte and the gallery came up empty with no
+/// error. Here the applet genuinely binds, genuinely serves, and has
+/// genuinely written its namespace; only its announcement is thrown
+/// away. The gateway must still refuse to call it started, because a
+/// port it cannot hear about is a port it has no business proxying to.
+#[tokio::test]
+async fn a_listening_applet_that_never_announces_is_not_adopted() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    // `exec … >/dev/null` sends the readiness line to the void while
+    // leaving the applet itself entirely healthy.
+    let mute = write_script(
+        tmp.path(),
+        "mute.sh",
+        &format!("#!/bin/sh\nexec {} \"$@\" >/dev/null\n", applet_command()),
+    );
+    let cfg = format!(
+        "[[applets]]\nid = \"mute\"\ncommand = \"sh {}\"\n[applets.params]\ntree = \"slack/rendered_md\"\n",
+        mute.display()
+    );
+    let app = router(state_with(tmp.path(), &cfg).await);
+    let (_, view) = get_json(&app, "/api/frontend").await;
+
+    let err = view["applet_errors"]["mute"].as_str().unwrap_or_default();
+    assert!(err.contains("listening port"), "{view}");
+    // …and nothing is proxied to it, however alive it looked.
+    let (status, _) = get_json(&app, "/applet/mute/channels").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
 }
 
 /// A config edit shows up without restarting the server.
