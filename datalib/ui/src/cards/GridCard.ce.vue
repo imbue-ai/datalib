@@ -140,13 +140,24 @@ function currentMarkdownUuids(): string[] {
   return [...seen];
 }
 
+// True when either index-state column is on screen. Both are hidden by
+// default, and asking about a document costs a file read + a SHA-256
+// server-side, so this is what keeps the feature free for everyone who
+// isn't using it.
+function qmdColumnsVisible(): boolean {
+  if (!gridApi) return false;
+  return ["qmd_indexed", "qmd_embedded"].some(
+    (id) => gridApi!.getColumn(id)?.isVisible() ?? false,
+  );
+}
+
 async function refreshQmdState() {
-  const uuids = currentMarkdownUuids();
+  // With both columns hidden we still ask — with an empty uuid list.
+  // That costs two SQL queries and no file I/O, and keeps the "N of M
+  // documents searchable" line under the grid current, which is the
+  // only thing on screen that hints the columns exist.
+  const uuids = qmdColumnsVisible() ? currentMarkdownUuids() : [];
   qmdInflight?.abort();
-  if (uuids.length === 0) {
-    qmdState.value = new Map();
-    return;
-  }
   const seq = ++qmdSeq;
   const ctrl = new AbortController();
   qmdInflight = ctrl;
@@ -156,6 +167,9 @@ async function refreshQmdState() {
     if (seq !== qmdSeq) return;
     const m = new Map<string, QmdDocState>();
     for (const [uuid, st] of Object.entries(r.docs)) m.set(uuid, st);
+    // Empty when the columns are hidden — which is also the state the
+    // valueGetters need to see, so an un-hide refetches rather than
+    // painting whatever the last visible result set held.
     qmdState.value = m;
     qmdSummary.value = r.summary;
     refreshIndexCells();
@@ -768,12 +782,26 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   // the gap between them is exactly what a user hunting a missing
   // result needs to see.
   //
+  // Hidden by default: this answers "why didn't search find X?", which
+  // is a question you go looking for, not one worth two columns of
+  // width on every ordinary search. Turn them on in the Columns tool
+  // panel; the choice persists in the card's URL state like any other
+  // column. The summary line under the grid stays visible either way,
+  // so the index's health is still on screen — and is how you find out
+  // the columns exist.
+  //
+  // Visibility also gates the work: `refreshQmdState` skips the
+  // per-document half of the request while both are hidden, so a grid
+  // nobody has asked doesn't pay for a file read + SHA-256 per document
+  // on every search.
+  //
   // Not `field`-backed — the value comes from `qmdState`, keyed by the
   // row's markdown_uuid — so `colId` is set explicitly for
   // refreshCells / column state.
   {
     colId: "qmd_indexed",
     headerName: "Indexed",
+    hide: true,
     headerTooltip:
       "Whether this row's rendered document is in the qmd keyword index, at its current content",
     width: 100,
@@ -785,6 +813,7 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   {
     colId: "qmd_embedded",
     headerName: "Embedded",
+    hide: true,
     headerTooltip:
       "Whether this document has a complete set of embedding vectors — semantic search cannot reach it until it does",
     width: 110,
@@ -1126,6 +1155,13 @@ const gridOptions: GridOptions<SearchRow> = {
   // user never touched.
   onColumnVisible: (e) => {
     if (e.source === "toolPanelUi" || e.source === "contextMenu") updateCols();
+    // Turning an index-state column on is the first moment we owe the
+    // user per-document answers. Guarded on an empty map so hiding and
+    // re-showing doesn't refetch state we already hold for these rows;
+    // the `rows` watcher covers the case where the result set moved.
+    if (qmdColumnsVisible() && qmdState.value.size === 0 && rows.value.length > 0) {
+      refreshQmdState();
+    }
   },
   onColumnResized: (e) => {
     if (e.finished && e.source === "uiColumnResized") updateCols();
