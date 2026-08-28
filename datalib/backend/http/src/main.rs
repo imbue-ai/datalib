@@ -82,6 +82,13 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("data root: {} (created)", root.display());
     }
 
+    // Claim the root before anything under `system/` is written —
+    // including the token below, which a refused server would
+    // otherwise clobber on its way out. Held for the life of the
+    // process; the kernel releases it if we die.
+    let mut root_lock =
+        datalib_http::lock::DataRootLock::acquire(&root).map_err(|e| anyhow::anyhow!("{e}"))?;
+
     // Minted before the announcement below because the announced URL
     // carries it: the browser (and the Tauri webview) authenticate by
     // loading `<url>?token=…` once, then ride the session cookie.
@@ -90,6 +97,9 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let base_url = format!("http://{}", listener.local_addr()?);
     let url = format!("{base_url}/?token={}", api_token.value());
+    // Record where we ended up, so a later would-be owner's refusal can
+    // point at this server instead of just saying "taken".
+    root_lock.announce(&base_url);
     eprintln!("datalib-http listening on {base_url}");
     eprintln!("open: {url}");
     eprintln!("api token: {}", api_token.token_file().display());

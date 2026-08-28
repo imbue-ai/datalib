@@ -43,6 +43,7 @@ pub mod auth;
 pub mod boot;
 mod embed;
 pub mod frontend;
+pub mod lock;
 pub mod worker;
 
 pub use auth::ApiToken;
