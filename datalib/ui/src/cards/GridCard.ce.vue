@@ -37,8 +37,10 @@ import {
 import { AllEnterpriseModule } from "ag-grid-enterprise";
 import {
   fetchAccounts,
+  fetchQmdState,
   fetchSearch,
   type AccountsMap,
+  type QmdDocState,
   type SearchRow,
 } from "@/api";
 import FeedbackModal from "@/components/FeedbackModal.vue";
@@ -108,6 +110,130 @@ const error = ref<string | null>(null);
 // instead of silently getting worse results.
 const qmdError = ref<string | null>(null);
 const accounts = ref<AccountsMap>({});
+
+// --- qmd index state (the Indexed / Embedded columns) ---------------
+//
+// Kept in a Map OUTSIDE `rows`, keyed by markdown_uuid, and read by the
+// two columns' valueGetters. Deliberately not merged into the row
+// objects: index state changes on a different clock from search results
+// (it moves while an indexing run is in flight), and reassigning
+// `rows` to carry it would blow away selection, scroll position, and
+// the adaptive column pass on every refresh. `refreshCells` on two
+// columns is the whole update.
+const qmdState = ref<Map<string, QmdDocState>>(new Map());
+// Collection-wide totals, shown next to the row count.
+const qmdSummary = ref<{ documents: number; embedded: number } | null>(null);
+let qmdInflight: AbortController | null = null;
+// Monotonic request id. A slow response must never overwrite a newer
+// one's state — without this guard, switching queries quickly can leave
+// the badges describing a result set the user has already left.
+let qmdSeq = 0;
+
+// Distinct markdown_uuids behind the current result set. Many grid rows
+// (one per message) share a single rendered document, so this is
+// typically far smaller than `rows`.
+function currentMarkdownUuids(): string[] {
+  const seen = new Set<string>();
+  for (const r of rows.value) {
+    if (r.markdown_uuid) seen.add(r.markdown_uuid);
+  }
+  return [...seen];
+}
+
+async function refreshQmdState() {
+  const uuids = currentMarkdownUuids();
+  qmdInflight?.abort();
+  if (uuids.length === 0) {
+    qmdState.value = new Map();
+    return;
+  }
+  const seq = ++qmdSeq;
+  const ctrl = new AbortController();
+  qmdInflight = ctrl;
+  try {
+    const r = await fetchQmdState(uuids, ctrl.signal);
+    // Superseded while in flight — drop it rather than clobber newer state.
+    if (seq !== qmdSeq) return;
+    const m = new Map<string, QmdDocState>();
+    for (const [uuid, st] of Object.entries(r.docs)) m.set(uuid, st);
+    qmdState.value = m;
+    qmdSummary.value = r.summary;
+    refreshIndexCells();
+  } catch (e) {
+    if ((e as { name?: string }).name === "AbortError") return;
+    // Non-fatal: the columns fall back to "unknown". fetchQmdState has
+    // already raised a toast for anything the user should see.
+    if (seq === qmdSeq) {
+      qmdState.value = new Map();
+      refreshIndexCells();
+    }
+  }
+}
+
+// Spelled out on hover: the summary counts CONTENT, not files — two
+// documents with identical bytes are one entry in the index.
+const qmdSummaryTitle = computed(() => {
+  const s = qmdSummary.value;
+  if (!s) return "";
+  const pending = s.documents - s.embedded;
+  return pending > 0
+    ? `${pending.toLocaleString()} indexed document(s) are still waiting on embeddings; ` +
+        `semantic search cannot reach them yet.`
+    : "Every indexed document has embeddings.";
+});
+
+// Repaint just the two index columns. The valueGetters read
+// `qmdState`, which AG Grid has no way to observe on its own.
+function refreshIndexCells() {
+  if (!gridApi) return;
+  gridApi.refreshCells({ columns: ["qmd_indexed", "qmd_embedded"], force: true });
+}
+
+// Tri-state cell: true → ✅, false → ❌, null/unknown → an em dash. The
+// third state is not decoration — "no rendered document" and "the index
+// is unreadable" are different from "not indexed", and showing a red ❌
+// for them would assert something we did not check.
+function indexFlag(v: boolean | null | undefined): string {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "unknown";
+}
+
+// The index state for a row's document, or undefined before the first
+// /qmd_state response lands.
+function qmdDocState(row: SearchRow | null | undefined): QmdDocState | undefined {
+  if (!row?.markdown_uuid) return undefined;
+  return qmdState.value.get(row.markdown_uuid);
+}
+
+function qmdFlagTooltip(
+  row: SearchRow | null | undefined,
+  which: "indexed" | "embedded",
+): string {
+  if (!row) return "";
+  if (!row.markdown_uuid) return "This row has no rendered document.";
+  const st = qmdState.value.get(row.markdown_uuid);
+  if (!st) return "Checking the qmd index…";
+  if (st.note) return st.note;
+  const v = which === "indexed" ? st.indexed : st.embedded;
+  if (v === null) return "Unknown.";
+  if (which === "indexed") {
+    return v
+      ? "This document's current content is in the qmd keyword index."
+      : "Not in the qmd index — either never indexed, or re-rendered since the last indexing run.";
+  }
+  return v
+    ? "Embedded: semantic search can reach this document."
+    : "No complete set of embedding vectors yet — semantic search will not find this document.";
+}
+
+function flagCellRenderer(p: { value: unknown }): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "qmd-flag";
+  span.textContent =
+    p.value === "yes" ? "\u2705" : p.value === "no" ? "\u274c" : "\u2014";
+  return span;
+}
 const selectedRow = ref<SearchRow | null>(null);
 // Selected row uuid as persisted state — survives reloads so the
 // deep-linked column highlights the same row.
@@ -575,6 +701,9 @@ watch(rows, () => {
   applyAdaptiveVisibility();
   applyDefaultSort();
   tryRestoreSelection();
+  // Fire-and-forget: the badges fill in a beat after the rows land
+  // rather than holding the result set hostage to a second request.
+  refreshQmdState();
 });
 
 onMounted(async () => {
@@ -633,6 +762,37 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     },
   },
   { field: "kind", headerName: "Type", width: 110 },
+  // Two columns rather than one combined "search state": `qmd update`
+  // and `qmd embed` are separate passes, so "in the keyword index" and
+  // "reachable by semantic search" are genuinely different facts, and
+  // the gap between them is exactly what a user hunting a missing
+  // result needs to see.
+  //
+  // Not `field`-backed — the value comes from `qmdState`, keyed by the
+  // row's markdown_uuid — so `colId` is set explicitly for
+  // refreshCells / column state.
+  {
+    colId: "qmd_indexed",
+    headerName: "Indexed",
+    headerTooltip:
+      "Whether this row's rendered document is in the qmd keyword index, at its current content",
+    width: 100,
+    valueGetter: (p) => indexFlag(qmdDocState(p.data)?.indexed),
+    cellRenderer: flagCellRenderer,
+    tooltipValueGetter: (p) => qmdFlagTooltip(p.data, "indexed"),
+    cellStyle: { "text-align": "center" } as Record<string, string>,
+  },
+  {
+    colId: "qmd_embedded",
+    headerName: "Embedded",
+    headerTooltip:
+      "Whether this document has a complete set of embedding vectors — semantic search cannot reach it until it does",
+    width: 110,
+    valueGetter: (p) => indexFlag(qmdDocState(p.data)?.embedded),
+    cellRenderer: flagCellRenderer,
+    tooltipValueGetter: (p) => qmdFlagTooltip(p.data, "embedded"),
+    cellStyle: { "text-align": "center" } as Record<string, string>,
+  },
   { field: "channel", headerName: "Channel", width: 130 },
   {
     field: "when",
@@ -1006,7 +1166,13 @@ const gridOptions: GridOptions<SearchRow> = {
       </button>
     </div>
 
-    <div class="status">{{ rows.length }} rows (of {{ total }})</div>
+    <div class="status">
+      {{ rows.length }} rows (of {{ total }})
+      <span v-if="qmdSummary" class="qmd-summary" :title="qmdSummaryTitle">
+        · {{ qmdSummary.embedded.toLocaleString() }} of
+        {{ qmdSummary.documents.toLocaleString() }} documents searchable
+      </span>
+    </div>
 
     <p v-if="qmdError" class="qmd-error" role="alert">
       qmd search failed — results below are from a degraded SQL-LIKE
@@ -1043,6 +1209,11 @@ const gridOptions: GridOptions<SearchRow> = {
 </template>
 
 <style scoped>
+.qmd-summary {
+  opacity: 0.75;
+  cursor: help;
+}
+
 .grid-column {
   display: flex;
   flex-direction: column;
@@ -1156,6 +1327,14 @@ const gridOptions: GridOptions<SearchRow> = {
 </style>
 
 <style>
+/* Built by a cellRenderer, so it never receives the scoped-style
+   attribute — same reason `.source-icon` and `.datalib-clamp-2` live in
+   this unscoped block. */
+.qmd-flag {
+  display: inline-block;
+  font-size: 0.95em;
+  line-height: 1;
+}
 .source-icon {
   width: 20px;
   height: 20px;
