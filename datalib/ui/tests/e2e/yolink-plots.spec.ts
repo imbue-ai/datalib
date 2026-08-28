@@ -46,6 +46,39 @@ type Figure = {
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
+/** Scroll the `<name>.html` iframe into view, wait for its frame to
+ *  navigate, and return it.
+ *
+ *  Both halves are load-bearing, and only under WebKit:
+ *
+ *   * The renderer emits `loading="lazy"` (render/render.rs), so a
+ *     frame below the fold does not navigate at all until it nears the
+ *     viewport. Chromium's lazy-load threshold reaches far enough down
+ *     the page to cover all three 520px-tall plots at this viewport
+ *     size; WebKit's does not, and `volume` never loaded. Scrolling is
+ *     what a reader does anyway.
+ *   * Even for a frame that is loading, the `<iframe>` element existing
+ *     does not mean the frame has navigated yet, so `page.frames()` has
+ *     to be polled rather than sampled once.
+ */
+async function plotFrame(
+  page: import("@playwright/test").Page,
+  iframe: import("@playwright/test").Locator,
+  name: string,
+) {
+  await iframe.scrollIntoViewIfNeeded();
+  const matches = () => page.frames().filter((f) => f.url().endsWith(`${name}.html`));
+  await expect
+    .poll(() => matches().length, {
+      message: `the ${name} frame should have loaded`,
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
+  const frame = matches()[0];
+  await frame.waitForLoadState("domcontentloaded");
+  return frame;
+}
+
 /** The `<script id="figure" type="application/json">` block a plot page
  *  inlines. Empty is a failure, not an empty figure — it would mean the
  *  frame loaded something that isn't our page. */
@@ -75,11 +108,13 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
 
   // One iframe per physical quantity the fixture covers, each pointing
   // at the asset route rather than at the renderer's relative path.
+  const plotIframe = (quantity: string) =>
+    page.locator(
+      `iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`,
+    );
   for (const quantity of ["temperature", "humidity", "volume"]) {
     await expect(
-      page.locator(
-        `iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`,
-      ),
+      plotIframe(quantity),
       `plots/${quantity}.html should be iframed via the asset route`,
     ).toHaveCount(1);
   }
@@ -88,12 +123,10 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
 
   // The frame really loaded the generated page — not a 404, not an
   // error document.
-  const temperature = page.frames().find((f) => f.url().endsWith("temperature.html"));
-  expect(temperature, "the temperature frame should have loaded").toBeTruthy();
-  await temperature!.waitForLoadState("domcontentloaded");
-  expect(await temperature!.title()).toBe("Temperature");
+  const temperature = await plotFrame(page, plotIframe("temperature"), "temperature");
+  expect(await temperature.title()).toBe("Temperature");
 
-  const figure: Figure = JSON.parse(await figureJson(temperature!));
+  const figure: Figure = JSON.parse(await figureJson(temperature));
 
   // Every temperature-capable device is its own series on the one plot.
   expect(figure.data.map((t) => t.name)).toEqual([
@@ -114,10 +147,8 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
 
   // The volume plot is the two-axis case: per-sample consumption on the
   // left, the lifetime totalizer overlaid on the right.
-  const volume = page.frames().find((f) => f.url().endsWith("volume.html"));
-  expect(volume, "the volume frame should have loaded").toBeTruthy();
-  await volume!.waitForLoadState("domcontentloaded");
-  const volFigure: Figure = JSON.parse(await figureJson(volume!));
+  const volume = await plotFrame(page, plotIframe("volume"), "volume");
+  const volFigure: Figure = JSON.parse(await figureJson(volume));
   expect(volFigure.layout.yaxis2).toBeDefined();
   const total = volFigure.data.find((t) =>
     t.name.includes("meter total"),

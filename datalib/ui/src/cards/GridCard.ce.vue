@@ -1328,8 +1328,19 @@ const gridOptions: GridOptions<SearchRow> = {
      height:100%. WebKit (Safari + the Tauri WKWebView) resolves a
      percentage height against a flex-sized parent with no explicit
      height as `auto`, collapsing the grid to its row-group panel
-     (~50px) while Chromium gives it the full flexed height — the
-     Chromium-only e2e suite never sees this. */
+     (~50px) while Chromium gives it the full flexed height.
+
+     tests/e2e/grid-populated.spec.ts asserts this grid's painted height
+     under the suite's `webkit` project, but note what that does and
+     does not prove: reverting this rule to `height: 100%` today does
+     NOT fail that spec, because `.card-app-root` above us is
+     `position: absolute` and hands the whole chain a definite height,
+     so the percentage resolves after all. The assertion guards the
+     surface (it fails the moment that stops being true); the rule stays
+     because it is correct independent of what an ancestor happens to
+     do. The same pattern under `.m2-grid` in views/Manager2View.vue —
+     flex-sized, no positioned ancestor — did collapse, to 2px, and its
+     spec does fail without the fix. */
   position: absolute;
   inset: 0;
   transition: filter 120ms ease-out;
