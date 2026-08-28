@@ -22,7 +22,7 @@
 // job attributes its outcome to every source it named. The design's
 // `step_runs` table is what makes these honest; until then the column
 // says so on hover.
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -64,7 +64,20 @@ const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const configText = ref("");
 const configPath = ref("");
+// Two independent verdicts on the config, and both matter.
+//
+// `parseError` is our own TOML parse — it is what stops the grid from
+// showing nonsense, and it is all we have while the Advanced editor
+// holds unsaved text.
+//
+// `configError` is the *backend's*, from `GET /api/config`, produced by
+// the real loader: it catches everything the runner would reject —
+// duplicate step ids, reserved stanza names, bad artifact patterns,
+// cycles — none of which is a TOML syntax error, so none of which our
+// parse can see. When the file on disk is broken this is the message
+// worth showing.
 const parseError = ref<string | null>(null);
+const configError = ref<string | null>(null);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
@@ -76,7 +89,6 @@ const sources = ref<ConfiguredSource[]>([]);
 // that a text editor is not the first thing you meet.
 const configOpen = ref(false);
 const configDirty = ref(false);
-const editorEl = ref<HTMLTextAreaElement | null>(null);
 
 // Resolved once — the desktop bridge either exists for this window or
 // it doesn't, and the label depends only on the platform.
@@ -170,12 +182,58 @@ function formatBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
+/// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
+/// button's own colour through hover, disabled and the dark theme.
+const ICON_PATHS: Record<string, string> = {
+  run: "M8 5v14l11-7z",
+  edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+  reveal: "M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z",
+  trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+};
+
+/// An icon button for the Actions cell.
+///
+/// The label is the native `title` tooltip *and* the accessible name —
+/// an icon with neither is a guess, and this row has four of them. When
+/// disabled the tooltip becomes the reason, which is the thing worth
+/// reading.
+function iconButton(
+  icon: keyof typeof ICON_PATHS,
+  label: string,
+  disabledWhy: string | null,
+  danger: boolean,
+  onClick: () => void,
+): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.className = `m2-icon-btn${danger ? " danger" : ""}`;
+  b.title = disabledWhy ?? label;
+  b.setAttribute("aria-label", label);
+  if (disabledWhy) b.disabled = true;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "15");
+  svg.setAttribute("height", "15");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICON_PATHS[icon]);
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  b.appendChild(svg);
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return b;
+}
+
 const columnDefs: ColDef<Row>[] = [
   {
     headerName: "Name",
     field: "name",
-    flex: 2,
-    minWidth: 180,
+    // The only flexing column: it absorbs slack on a wide window, and
+    // stops shrinking at a width a stanza name still fits in.
+    flex: 1,
+    minWidth: 200,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const url = iconUrl(p.data?.icon);
       const wrap = document.createElement("span");
@@ -192,19 +250,19 @@ const columnDefs: ColDef<Row>[] = [
       return wrap;
     },
   },
-  { headerName: "Type", field: "label", flex: 1, minWidth: 110 },
+  { headerName: "Type", field: "label", width: 130, minWidth: 130 },
   {
     headerName: "Last synced",
     field: "lastSynced",
-    flex: 1,
-    minWidth: 150,
+    width: 175,
+    minWidth: 175,
     valueFormatter: (p) => (p.value ? new Date(p.value as string).toLocaleString() : "—"),
   },
   {
     headerName: "Last status",
     field: "lastStatus",
-    flex: 1,
-    minWidth: 130,
+    width: 140,
+    minWidth: 140,
     tooltipValueGetter: (p: { data?: Row }) =>
       p.data?.approximate
         ? "From a run covering several sources — per-source status needs the step_runs table."
@@ -222,7 +280,7 @@ const columnDefs: ColDef<Row>[] = [
     headerName: "Bytes on disk",
     field: "bytes",
     type: "numericColumn",
-    flex: 1,
+    width: 140,
     minWidth: 140,
     // The breakdown is what answers "why is this 40 GB?" — attachments
     // routinely dwarf both the entity store and the rendered markdown.
@@ -247,40 +305,34 @@ const columnDefs: ColDef<Row>[] = [
     sortable: false,
     filter: false,
     flex: 1,
-    minWidth: canReveal ? 350 : 250,
+    width: canReveal ? 132 : 102,
+    minWidth: canReveal ? 132 : 102,
+    resizable: false,
     valueGetter: (p: ValueGetterParams<Row>) => p.data?.name,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
-      const mk = (text: string, cls: string, disabledWhy: string | null, fn: () => void) => {
-        const b = document.createElement("button");
-        b.textContent = text;
-        b.className = `m2-btn ${cls}`;
-        if (disabledWhy) {
-          b.disabled = true;
-          b.title = disabledWhy;
-        }
-        b.addEventListener("click", (e) => {
-          e.stopPropagation();
-          fn();
-        });
-        wrap.appendChild(b);
-      };
       const row = p.data!;
-      mk("Run", "", null, () => runSource(row.name));
-      mk("Edit", "", row.editBlocked, () => openEdit(row.name));
+      wrap.appendChild(iconButton("run", "Sync now", null, false, () => runSource(row.name)));
+      wrap.appendChild(
+        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.name)),
+      );
       // Absent rather than disabled in a plain browser — the same
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
-        mk(
-          revealLabel,
-          "muted",
-          row.storage?.present ? null : "Nothing on disk yet — this source hasn't synced.",
-          () => reveal(row.name),
+        wrap.appendChild(
+          iconButton(
+            "reveal",
+            revealLabel,
+            row.storage?.present ? null : "Nothing on disk yet — this source hasn't synced.",
+            false,
+            () => reveal(row.name),
+          ),
         );
       }
-      mk("Config", "muted", null, () => showInConfig(row.name));
-      mk("Delete", "danger", null, () => deleteSource(row.name));
+      wrap.appendChild(
+        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.name)),
+      );
       return wrap;
     },
   },
@@ -306,6 +358,7 @@ async function loadConfig() {
     let cfg = await fetchConfig();
     if (!cfg.exists) cfg = await fetchConfigScaffold();
     configPath.value = cfg.path;
+    configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
     // The poll must never overwrite what someone is typing into the
     // Advanced editor. Their text wins until they save or discard.
     if (configDirty.value) return;
@@ -408,29 +461,6 @@ async function reveal(name: string) {
   }
 }
 
-/// Open the Advanced editor and select this source's stanza in it.
-///
-/// A textarea doesn't scroll to its own selection, so estimate the
-/// target line's offset from the line count and the computed line
-/// height — the same approach the Manage tab's "Locate config" uses.
-async function showInConfig(name: string) {
-  const source = sources.value.find((s) => s.name === name);
-  if (!source) return;
-  configOpen.value = true;
-  await nextTick();
-  const el = editorEl.value;
-  if (!el) return;
-  el.focus();
-  // A zero range means the step has no tables of its own to select —
-  // an inline `steps = [{…}]` entry. Leave the cursor alone rather
-  // than selecting some unrelated span.
-  if (source.end === 0) return;
-  el.setSelectionRange(source.start, source.end);
-  const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 16;
-  const line = configText.value.slice(0, source.start).split("\n").length - 1;
-  el.scrollTop = Math.max(0, line * lineHeight - el.clientHeight / 3);
-}
-
 function onConfigEdit() {
   configDirty.value = true;
   banner.value = null;
@@ -495,29 +525,39 @@ onUnmounted(() => {
           <code>{{ configPath }}</code>
         </p>
       </div>
-      <button class="m2-add" :disabled="busy || !!parseError" @click="openAdd">
+      <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
         + Add Data Source
       </button>
     </header>
 
     <p v-if="loadError" class="m2-msg bad">Could not load the config: {{ loadError }}</p>
     <p v-if="parseError" class="m2-msg bad">
-      The config doesn’t parse, so nothing here can be trusted: {{ parseError }}
+      The config doesn’t parse, so the table below can’t be trusted: {{ parseError }}
     </p>
+    <div v-else-if="configError" class="m2-msg bad m2-invalid">
+      <b>datalib won’t run this config.</b>
+      <span>{{ configError }}</span>
+      <span class="m2-invalid-why">
+        It parses as TOML, so the table below still reflects it — but nothing will sync, and
+        applets won’t start, until this is fixed. Open <b>Advanced</b> below to edit it.
+      </span>
+      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+    </div>
     <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
       <AgGridVue
+        class="m2-ag"
         :theme="gridTheme"
         :columnDefs="columnDefs"
         :rowData="rows"
         :getRowId="(p: { data: Row }) => p.data.name"
-        :domLayout="'autoHeight'"
         :tooltipShowDelay="200"
         @grid-ready="onGridReady"
       />
     </div>
 
+    <div class="m2-foot">
     <p v-if="rows.length === 0 && !parseError" class="m2-empty">
       No data sources configured yet. <b>Add Data Source</b> walks you through one.
     </p>
@@ -538,7 +578,6 @@ onUnmounted(() => {
         <code>common.download_params</code> that would make a row’s Edit button refuse.
       </p>
       <textarea
-        ref="editorEl"
         v-model="configText"
         class="m2-editor"
         spellcheck="false"
@@ -556,6 +595,7 @@ onUnmounted(() => {
         </span>
       </div>
     </details>
+    </div>
 
     <SourceWizard
       v-if="wizardOpen"
@@ -568,8 +608,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.m2 { padding: 16px 20px 40px; }
-.m2-head { display: flex; align-items: flex-start; gap: 16px; }
+/* The shell is a viewport-height flex column, so this view can claim
+   the leftover and bound itself — which is what lets the grid scroll on
+   its own instead of growing the page. `min-height: 0` is the part that
+   makes a flex child actually shrink rather than overflow. */
+.m2 {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  box-sizing: border-box;
+}
+.m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
 .m2-head h2 { margin: 0 0 4px; font-size: 19px; }
 .m2-path { margin: 0; color: var(--datalib-muted); font-size: 12px; }
 .m2-add {
@@ -588,8 +639,41 @@ onUnmounted(() => {
 .m2-msg { margin: 12px 0 0; font-size: 13px; }
 .m2-msg.bad { color: var(--datalib-log-error); }
 .m2-msg.good { color: var(--datalib-muted); }
+.m2-invalid {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--datalib-log-error);
+  border-radius: 5px;
+  max-width: 90ch;
+}
+.m2-invalid > span { color: var(--datalib-fg); }
+.m2-invalid-why { color: var(--datalib-muted) !important; font-size: 12.5px; line-height: 1.55; }
 
-.m2-grid { margin-top: 16px; }
+.m2-grid {
+  margin-top: 16px;
+  /* A definite height is what makes AG Grid scroll internally — both
+     ways. `min-height` keeps it usable when the Advanced editor is
+     open and competing for the same space. */
+  flex: 1 1 auto;
+  min-height: 180px;
+}
+/* Without `domLayout: autoHeight` the grid sizes to its container, so
+   its own element has to fill the box we just gave it — otherwise it
+   collapses to nothing and renders neither headers nor rows. */
+.m2-ag {
+  height: 100%;
+}
+/* Everything under the grid scrolls as one block, so opening the
+   Advanced editor never pushes the table off screen. */
+.m2-foot {
+  flex: 0 0 auto;
+  max-height: 52vh;
+  overflow-y: auto;
+}
 .m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
 .m2-advanced {
   margin-top: 24px;
@@ -650,7 +734,35 @@ onUnmounted(() => {
 .m2-status-done { color: var(--datalib-muted); }
 .m2-status-running { color: var(--datalib-accent); font-weight: 600; }
 
-.m2-actions { display: inline-flex; gap: 6px; }
+.m2-actions {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  height: 100%;
+}
+.m2-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--datalib-muted);
+  cursor: pointer;
+}
+.m2-icon-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+  border-color: var(--datalib-border);
+  color: var(--datalib-fg);
+}
+.m2-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.m2-icon-btn.danger:hover:not(:disabled) {
+  color: var(--datalib-log-error);
+  border-color: var(--datalib-log-error);
+}
 .m2-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);

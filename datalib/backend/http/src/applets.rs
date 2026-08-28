@@ -499,7 +499,22 @@ impl AppletRegistry {
                     .unwrap_or_else(|| "it is not running".to_string());
                 return Err(format!("applet {id:?}: {why}"));
             }
-            None => return Err(format!("no applet {id:?}")),
+            // Not in the list. That has two very different causes, and
+            // they used to produce the same message: the applet really
+            // isn't configured, or the config could not be read at all
+            // — which yields an empty list and so reports every applet
+            // as missing. Saying "no applet \"unified_index\"" when the
+            // truth is "your config.toml has a syntax error" sends
+            // people looking in exactly the wrong place.
+            None => {
+                return Err(match config_load_error(&self.data_root) {
+                    Some(why) => format!(
+                        "applet {id:?} is unavailable because {} could not be loaded: {why}",
+                        datalib_dag::config::root_config_path(&self.data_root).display()
+                    ),
+                    None => format!("no applet {id:?}"),
+                })
+            }
         };
         forward(port, method, path_and_query, content_type, body)
     }
@@ -592,6 +607,23 @@ fn reconcile(
     errors
 }
 
+/// Why the data root's config cannot be loaded, or `None` when it loads
+/// — or simply isn't there yet, which is the normal state of a fresh
+/// root rather than an error.
+///
+/// Only called on a failure path, so re-reading the file here costs
+/// nothing worth caching and keeps the reason next to the request that
+/// needs it.
+fn config_load_error(data_root: &Path) -> Option<String> {
+    let path = datalib_dag::config::root_config_path(data_root);
+    if !path.exists() {
+        return None;
+    }
+    datalib_dag::config::load(&path)
+        .err()
+        .map(|e| format!("{e:#}"))
+}
+
 /// Read and validate the applet list out of a data root's config.
 fn load_entries(
     data_root: &Path,
@@ -613,8 +645,17 @@ fn load_entries(
             }
         }
         // No config yet is the normal state of a fresh data root; it is
-        // not an error and must not stop the server.
-        Err(_) => (Vec::new(), binary_dir),
+        // not an error and must not stop the server. A config that
+        // exists but doesn't load is a different thing entirely, and
+        // silently yielding no applets is how that became a mystery —
+        // say it once here, and `config_load_error` says it again on
+        // the request that trips over it.
+        Err(e) => {
+            if datalib_dag::config::root_config_path(data_root).exists() {
+                eprintln!("applets: config could not be loaded, none will start: {e:#}");
+            }
+            (Vec::new(), binary_dir)
+        }
     }
 }
 
