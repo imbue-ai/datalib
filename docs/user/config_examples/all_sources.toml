@@ -31,6 +31,13 @@
 # each: `email` (JMAP vs. Gmail API vs. Takeout .mbox) and `carddav`
 # contacts (CardDAV server vs. local .vcf files).
 #
+# A step may also carry an optional `label = "…"` — free text the UI's
+# sources grid shows in place of the directory name. It is the one
+# renameable part of a source: the name itself is the folder under
+# `data_root` and the path the search index already holds for every
+# document in it, so it is chosen once, while the label can change
+# whenever the source stops being what you first called it.
+#
 # There is no global `defaults` block in the steps format —
 # cross-source knobs (`blob_size_limit_bytes`, `download_params`, …)
 # are set per source under the download step's `params.common` (see

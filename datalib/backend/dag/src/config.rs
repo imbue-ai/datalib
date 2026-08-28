@@ -9,6 +9,7 @@
 //!
 //! [[steps]]
 //! id = "slack.download"
+//! label = "Work Slack"            # optional, and read only by the UI
 //! command = "datalib-step download slack_api"
 //! outputs = ["slack/raw"]
 //! # `params` is the provider's own config subtree. As a sub-table it
@@ -57,6 +58,12 @@
 //! stays reproducible. Any executable that understands those flags
 //! (and optionally the NDJSON stdout protocol) can be a step — see
 //! docs/dev/step_protocol.md.
+//!
+//! A source has no `name` field, and never had one on this format: its
+//! name is the first path segment of its outputs, which is the same
+//! string as its directory under the data root. That makes renaming a
+//! source a migration rather than an edit, so `label` carries the part
+//! of a name that is safe to change — see [`StepEntry::label`].
 //!
 //! TOML has no anchors, so a params subtree shared between a download
 //! and a render step is written out twice. In practice the two halves
@@ -151,6 +158,32 @@ impl AppletEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepEntry {
     pub id: String,
+    /// A human label for this step, free to change at any time.
+    ///
+    /// The runner never reads it: it is not passed to the child, and it
+    /// is deliberately absent from [`StepSpec::fingerprint_material`],
+    /// so relabelling a step does not make it stale and does not
+    /// re-run anything. Its one consumer is the UI's sources grid,
+    /// which shows it in place of the source's directory name
+    /// (`datalib/ui/src/config/sourceSteps.ts`).
+    ///
+    /// This exists because a source's *name* is not a name at all — it
+    /// is the first path segment of its outputs, so it is the stanza
+    /// directory on disk, the prefix inside `markdowns.md_path` and
+    /// `grid_rows.qmd_path`, and the stem of both step ids. Changing it
+    /// is a migration. The label is the half that was missing: the part
+    /// a person can rewrite whenever the source stops being what they
+    /// first called it, with nothing on disk moving.
+    ///
+    /// A source is a group of steps rather than a config entry of its
+    /// own, so the label belongs to a step and the grid takes the first
+    /// one its steps declare. The wizard writes it on the download
+    /// step, and only when it differs from the name — a label that
+    /// merely respells the directory would be the second, silent
+    /// spelling of one string that got the applet `title` key deleted
+    /// (00633dd5).
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(default)]
     pub inputs: Vec<String>,
     #[serde(default)]
@@ -727,6 +760,35 @@ mod tests {
             toml::from_str(r#"steps = [{id = "x", outputs = ["x/raw"], command = ""}]"#).unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("empty command"), "{err}");
+    }
+
+    /// The whole point of `label`: it is not part of what the step is,
+    /// so relabelling a source cannot make it stale. If this ever
+    /// fails, every rename in the UI silently re-runs a download.
+    #[test]
+    fn a_label_changes_neither_argv_nor_fingerprint() {
+        let bare: DagConfig = toml::from_str(
+            r#"steps = [{id = "slack.download", command = "datalib-step download slack_api", outputs = ["slack/raw"]}]"#,
+        )
+        .unwrap();
+        let labelled: DagConfig = toml::from_str(
+            r#"steps = [{id = "slack.download", label = "Work Slack", command = "datalib-step download slack_api", outputs = ["slack/raw"]}]"#,
+        )
+        .unwrap();
+        assert_eq!(labelled.steps[0].label.as_deref(), Some("Work Slack"));
+
+        let bare = to_specs(&bare).unwrap();
+        let labelled = to_specs(&labelled).unwrap();
+        match (&bare[0].run, &labelled[0].run) {
+            (StepRun::Subprocess { argv: a, .. }, StepRun::Subprocess { argv: b, .. }) => {
+                assert_eq!(a, b, "a label must not reach the child's argv")
+            }
+            other => panic!("expected subprocesses, got {other:?}"),
+        }
+        assert_eq!(
+            bare[0].fingerprint_material(),
+            labelled[0].fingerprint_material(),
+        );
     }
 
     #[test]

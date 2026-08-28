@@ -89,9 +89,16 @@ const editing = ref<{ source: ConfiguredSource; entry: CatalogEntry } | null>(nu
 const takenNames = computed(() => new Set(sources.value.map((s) => s.name)));
 
 type Row = {
+  /// Identity: the stanza directory, the step-id stem, and what every
+  /// action here is keyed on.
   name: string;
-  type: string | null;
+  /// What to show. Equal to `name` until someone sets a `label =` on
+  /// the source's download step.
   label: string;
+  type: string | null;
+  /// The catalog's name for the provider ("Slack"), shown under Type —
+  /// a property of the source's type, not of this source.
+  typeLabel: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
   /// Null when the wizard can round-trip this source; otherwise why not.
@@ -143,8 +150,9 @@ const rows = computed<Row[]>(() =>
       bytes: size && size.present ? size.total_bytes : null,
       storage: size,
       name: s.name,
+      label: s.label,
       type: s.type,
-      label: entry?.label ?? s.type ?? "unknown",
+      typeLabel: entry?.label ?? s.type ?? "unknown",
       icon: entry?.icon ?? null,
       entry,
       editBlocked,
@@ -173,9 +181,14 @@ function formatBytes(n: number): string {
 const columnDefs: ColDef<Row>[] = [
   {
     headerName: "Name",
-    field: "name",
+    field: "label",
     flex: 2,
     minWidth: 180,
+    // The label leads and the directory name follows it, muted,
+    // whenever they differ. Showing only the label would hide which
+    // folder this is — the whole reason the name stays fixed is that
+    // the on-disk layout is meant to be legible, and a grid that
+    // stopped naming it would give that away for a prettier row.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const url = iconUrl(p.data?.icon);
       const wrap = document.createElement("span");
@@ -187,12 +200,19 @@ const columnDefs: ColDef<Row>[] = [
         wrap.appendChild(img);
       }
       const text = document.createElement("span");
-      text.textContent = p.data?.name ?? "";
+      text.textContent = p.data?.label ?? "";
       wrap.appendChild(text);
+      if (p.data && p.data.label !== p.data.name) {
+        const dir = document.createElement("span");
+        dir.className = "m2-cell-dir";
+        dir.textContent = p.data.name;
+        dir.title = `Stored in ${p.data.name}/ under the data root`;
+        wrap.appendChild(dir);
+      }
       return wrap;
     },
   },
-  { headerName: "Type", field: "label", flex: 1, minWidth: 110 },
+  { headerName: "Type", field: "typeLabel", flex: 1, minWidth: 110 },
   {
     headerName: "Last synced",
     field: "lastSynced",
@@ -644,6 +664,7 @@ onUnmounted(() => {
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-cell-source img { width: 16px; height: 16px; }
+.m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 
 .m2-status { text-transform: capitalize; }
 .m2-status-failed { color: var(--datalib-log-error); font-weight: 600; }

@@ -22,6 +22,9 @@ export type SourcePhase = "download" | "render";
 
 export type SourceStep = {
   id: string;
+  /// The step's `label =`, when it declares one. Free text, and read
+  /// nowhere but here — see `StepEntry::label` in dag/src/config.rs.
+  label: string | null;
   phase: SourcePhase;
   /// The `datalib-step download|render <type>` word, when the command
   /// is a `datalib-step` invocation; null for a custom executable.
@@ -34,8 +37,13 @@ export type SourceStep = {
 
 export type ConfiguredSource = {
   /// The stanza name — its directory under the data root, and the stem
-  /// of its step ids.
+  /// of its step ids. Identity: changing it moves data on disk and
+  /// strands the index's `qmd_path`s, so the wizard holds it fixed.
   name: string;
+  /// What to call this source on screen. The first `label =` any of its
+  /// steps declares, falling back to `name` — so a source that never
+  /// set one is displayed exactly as it always was.
+  label: string;
   /// The source's type, taken from whichever phase declares one.
   type: string | null;
   steps: SourceStep[];
@@ -85,6 +93,7 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
   steps.forEach((raw, i) => {
     const step = raw as {
       id?: unknown;
+      label?: unknown;
       command?: unknown;
       outputs?: unknown;
       params?: unknown;
@@ -101,6 +110,10 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
       const [start, end] = ranges.get(i) ?? [0, 0];
       const entry: SourceStep = {
         id: typeof step?.id === "string" ? step.id : "",
+        label:
+          typeof step?.label === "string" && step.label.trim() !== ""
+            ? step.label.trim()
+            : null,
         phase,
         type: stepType(typeof step?.command === "string" ? step.command : ""),
         params:
@@ -119,6 +132,7 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
       } else {
         byName.set(name, {
           name,
+          label: name,
           type: entry.type,
           steps: [entry],
           start,
@@ -128,7 +142,14 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
       break; // one stanza per step; the first stanza-shaped output wins
     }
   });
-  return [...byName.values()];
+  // Resolved once the group is complete: the first step that declares a
+  // label names the source, and a source with no label anywhere is
+  // displayed by its name, exactly as before labels existed.
+  const sources = [...byName.values()];
+  for (const source of sources) {
+    source.label = source.steps.find((s) => s.label)?.label ?? source.name;
+  }
+  return sources;
 }
 
 /// `datalib-step download slack_api` → `slack_api`. Null for anything
@@ -263,20 +284,44 @@ function tomlValue(field: Field, value: unknown): string {
 
 /// TOML basic string. Dates are quoted too: a bare `2026-01-01` parses
 /// as a TOML date, and the providers validate a *string*.
+///
+/// Control characters are escaped rather than passed through: a raw
+/// newline or tab inside a basic string is a parse error, so a label or
+/// a pasted value containing one would write a `config.toml` that no
+/// longer loads.
 function quote(s: string): string {
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const escaped = s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    // Everything else TOML calls a control char, as \uXXXX.
+    .replace(/[\u0000-\u001f\u007f]/g, (c) =>
+      `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+  return `"${escaped}"`;
 }
 
 /// The download + render step pair for one source, with a divider so
 /// sources stay visually separated in the raw file.
+///
+/// `label` rides on the download step alone, and only when it says
+/// something the name doesn't. A `label` that respells the directory
+/// would be a second, silent spelling of one string — which is what got
+/// the applet `title` key deleted (00633dd5) — and it would also churn
+/// every existing config the first time someone opened its Edit form.
 export function buildStepPair(
   entry: CatalogEntry,
   name: string,
+  label: string,
   values: FieldValues,
 ): string {
   const divider = `# ── ${name} ${"─".repeat(Math.max(4, 66 - name.length))}`;
+  const labelLine =
+    label.trim() && label.trim() !== name ? `\nlabel = ${quote(label.trim())}` : "";
   const download = `[[steps]]
-id = "${name}.download"
+id = "${name}.download"${labelLine}
 command = "datalib-step download ${entry.type}"
 outputs = ["${name}/raw"]
 ${paramsToml(entry, values, "download")}`;

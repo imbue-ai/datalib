@@ -820,6 +820,76 @@ Enforcing this in the loader rather than the UI is the point. The config
 file is the source of truth, so a rule the UI enforces alone is a rule
 that a hand-edit silently breaks.
 
+### The name is fixed; `label` is the part that isn't
+
+*(Built, 2026-08-28.)*
+
+A source's name is its identity in seven places, and only two of them
+move when you `mv` the directory. The other five have to be rewritten:
+`system/dag_state.json` keys, `markdowns.md_path`, `markdowns.source_name`,
+`grid_rows.qmd_path`, and any applet's `params.tree`. The last three are
+the dangerous ones, because `grid_index` skips a document whose
+`source_fingerprint` still matches — and that fingerprint is the
+*renderer's input hash*, which does not include the output path. So a
+bare rename leaves every `qmd_path` pointing at a directory that no
+longer exists, the preview pane 404s, and qmd hits resolve to zero grid
+rows, with nothing logged.
+
+That is why the wizard holds the name read-only. What it did *not* have
+until now was the other half: a name you can change. `label` is that
+half — an optional free-text key on a step, shown by the sources grid in
+place of the directory name:
+
+```toml
+[[steps]]
+id = "slack.download"
+label = "Work Slack"
+command = "datalib-step download slack_api"
+outputs = ["slack/raw"]
+```
+
+Four properties make it safe to offer, and each is pinned by a test:
+
+- **Nothing on disk moves and no step re-runs.** `label` never reaches
+  the child's argv and is absent from `StepSpec::fingerprint_material`,
+  so relabelling cannot make a step stale
+  (`a_label_changes_neither_argv_nor_fingerprint`).
+- **A source that never sets one is unchanged.** `listConfiguredSources`
+  reports `label = name` in that case, and the wizard writes no key when
+  the label is blank or merely respells the name — so opening the Edit
+  form on an existing source doesn't churn its config.
+- **The directory stays visible.** The grid shows the label, then the
+  directory name beside it in muted text whenever the two differ. Hiding
+  it would trade away the legible on-disk layout that made the name
+  permanent in the first place.
+- **The grid, not the runner, reads it.** This is the lesson of
+  `00633dd5`, which deleted the applet `title` key: it was documented as
+  the gallery's label, and nothing anywhere read it. A key with no
+  consumer is a doc that lies.
+
+A source is a group of steps rather than a config entry of its own, so
+the label belongs to a step and the grid takes the first one its steps
+declare. The wizard writes it on the download step.
+
+**What is and isn't unique.** Labels may collide freely — two workspaces
+both called "Slack" is a legitimate thing to want, and the muted
+directory name is what tells them apart. Step *ids* must be unique
+(`config::validate_steps`, again in `Graph::build`), and output *paths*
+may not overlap across steps (`Graph::build`'s single-writer check).
+There is no name-uniqueness rule as such, because there is no name
+field: two sources cannot share a name only because they would then both
+declare `<name>/raw`, and `PUT /api/config` builds the graph, so that
+collision is refused at save time rather than at run time.
+
+Renaming for real — moving the directory and repairing the five
+references above — remains unbuilt. It wants to be one operation
+(config rewrite + `mv` + `dag_state.json` remap + two `UPDATE`s in a
+single dolt commit), and it is cheaper than it looks: rendered markdown
+is position-independent (relative `blobs/` links, no source name in
+frontmatter), `markdown_uuid` is upstream-derived so filed feedback
+survives, and qmd keys `content_vectors` by content hash, so a move
+costs no re-embedding.
+
 ### Delete means "remove from config"
 
 Delete drops the source's two steps from the config and stops there. The

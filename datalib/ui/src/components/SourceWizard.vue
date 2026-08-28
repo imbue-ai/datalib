@@ -5,8 +5,11 @@
 // One component serves both verbs — the design's point is that create
 // and edit are the same descriptor driven two ways (docs/dev/
 // source_wizard.md). In edit mode the type is fixed and the name is
-// read-only: renaming a source would move its directory on disk and
-// orphan its raw store, which is a migration, not a form field.
+// read-only: the name is the source's directory on disk and the prefix
+// inside every `qmd_path` the index holds, so changing it is a
+// migration, not a form field. Label is the field that *is* editable
+// here, and always — it exists so that a name being permanent stops
+// being a problem.
 //
 // What this does NOT do yet, and the design says it eventually must:
 // no credential screen (needs the latchkey endpoints), no live channel
@@ -48,6 +51,14 @@ const stage = ref<Stage>(props.editing ? "configure" : "pick");
 const query = ref("");
 const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 const name = ref(props.editing?.source.name ?? "");
+/// Blank means "no label" — `listConfiguredSources` reports the name in
+/// that case, so the field shows the name as its placeholder rather
+/// than pre-filling one, and clearing it removes the key.
+const label = ref(
+  props.editing && props.editing.source.label !== props.editing.source.name
+    ? props.editing.source.label
+    : "",
+);
 const values = ref<FieldValues>({});
 const nameTouched = ref(false);
 
@@ -145,7 +156,9 @@ const missingRequired = computed(() =>
 const canSubmit = computed(() => !nameError.value && missingRequired.value.length === 0);
 
 const body = computed(() =>
-  chosen.value ? buildStepPair(chosen.value, name.value.trim(), values.value) : "",
+  chosen.value
+    ? buildStepPair(chosen.value, name.value.trim(), label.value, values.value)
+    : "",
 );
 
 function listText(field: Field): string {
@@ -226,6 +239,19 @@ function submit() {
         </p>
 
         <label class="wiz-field">
+          <span class="wiz-label">Label</span>
+          <input
+            v-model="label"
+            class="wiz-input"
+            :placeholder="name || '…'"
+          />
+          <small class="wiz-help">
+            What this source is called on screen. Change it whenever you like — nothing on disk
+            moves, and no step re-runs. Leave it blank to be shown as <code>{{ name || "…" }}</code>.
+          </small>
+        </label>
+
+        <label class="wiz-field">
           <span class="wiz-label">Name</span>
           <input
             v-model="name"
@@ -235,7 +261,9 @@ function submit() {
             @input="nameTouched = true"
           />
           <small v-if="isEdit" class="wiz-help">
-            Renaming would move the source’s directory and orphan its raw store, so it’s fixed here.
+            Fixed: the name is this source’s folder on disk and the path the search index has
+            already recorded for every document in it, so changing it is a migration rather than
+            an edit. Use Label above for a name you can change.
           </small>
           <small v-else class="wiz-help">
             Becomes <code>{{ name || "…" }}/raw</code> under the data root, and the stem of both step ids.
