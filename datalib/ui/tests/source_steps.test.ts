@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendSource,
   buildStepPair,
+  emptyTableDiagnosis,
   listConfiguredSources,
   paramsAreRepresentable,
   removeSource,
@@ -290,5 +291,59 @@ describe("suggestName", () => {
   it("suffixes past every taken name", () => {
     expect(suggestName(new Set(["slack"]), "slack")).toBe("slack-2");
     expect(suggestName(new Set(["slack", "slack-2"]), "slack")).toBe("slack-3");
+  });
+});
+
+// Reported from the desktop app: Manager2's table empty against a
+// config the backend reads 15 sources from, with no error shown. The
+// same backend binary and the same data root render all 15 in a
+// browser, so the disagreement is on the browser side — and a silent
+// empty table gives an investigation nothing to work with.
+describe("emptyTableDiagnosis", () => {
+  const base = {
+    parsedCount: 0,
+    serverSourceCount: 0,
+    textLength: 0,
+    exists: true,
+    path: "/root/config.toml",
+  };
+
+  it("says nothing when the table has rows", () => {
+    expect(emptyTableDiagnosis({ ...base, parsedCount: 3, serverSourceCount: 3 })).toBeNull();
+  });
+
+  // The ordinary case: a fresh root. That gets the friendly empty
+  // state, not an alarm.
+  it("says nothing when the config genuinely declares nothing", () => {
+    expect(emptyTableDiagnosis({ ...base, textLength: 42 })).toBeNull();
+  });
+
+  // The reported symptom. Both counts come from the same file, so they
+  // cannot legitimately disagree.
+  it("calls out a table that parsed none of what the server counted", () => {
+    const why = emptyTableDiagnosis({
+      ...base,
+      serverSourceCount: 15,
+      textLength: 22309,
+    });
+    expect(why).toContain("15 sources");
+    expect(why).toContain("22309 characters");
+    expect(why).toContain("/root/config.toml");
+    expect(why).toContain("bug in this table");
+  });
+
+  // The other way the table can go silently empty: the file is there
+  // but its text never arrived, which `get_config` turns into an empty
+  // string via `unwrap_or_default`.
+  it("calls out a config that arrived empty despite existing", () => {
+    const why = emptyTableDiagnosis({ ...base, exists: true, textLength: 0 });
+    expect(why).toContain("arrived empty");
+    expect(why).toContain("did not reach this page");
+  });
+
+  // A root with no config file yet is the fresh-install path, and the
+  // scaffold covers it — no alarm.
+  it("says nothing when there is no config file at all", () => {
+    expect(emptyTableDiagnosis({ ...base, exists: false })).toBeNull();
   });
 });

@@ -451,3 +451,47 @@ export function suggestName(taken: Set<string>, base: string): string {
   }
   return base;
 }
+
+
+/// Why the table is empty, when it shouldn't be.
+///
+/// The grid derives its rows from the config text in the browser, while
+/// `GET /api/config` reports what the *backend's* loader made of the
+/// same file. Those two must agree. When they don't — the server counts
+/// sources and the table shows none — the bug is on this side, and the
+/// empty state has to say so instead of offering a friendly "nothing
+/// configured yet" that sends someone looking at their own config.
+///
+/// This exists because that exact disagreement was reported from the
+/// desktop app and could not be reproduced against the same backend in
+/// a browser. A silent empty table gives an investigation nothing to
+/// go on; this makes the next occurrence self-describing.
+export function emptyTableDiagnosis(input: {
+  /// Entries the browser parsed out of the config text.
+  parsedCount: number;
+  /// `source_count` from `GET /api/config` — the backend's own loader.
+  serverSourceCount: number;
+  /// Length of the config text the browser is holding.
+  textLength: number;
+  /// Whether the file exists on disk, per the backend.
+  exists: boolean;
+  path: string;
+}): string | null {
+  const { parsedCount, serverSourceCount, textLength, exists, path } = input;
+  if (parsedCount > 0) return null;
+
+  if (exists && textLength === 0) {
+    return (
+      `${path} exists but arrived empty, so there is nothing to show. ` +
+      `That is not a config problem — the file did not reach this page.`
+    );
+  }
+  if (serverSourceCount > 0) {
+    return (
+      `The server reads ${serverSourceCount} source${serverSourceCount === 1 ? "" : "s"} from ` +
+      `${path}, but this table parsed none out of the ${textLength} characters it received. ` +
+      `That disagreement is a bug in this table, not in your config — please report it.`
+    );
+  }
+  return null;
+}
