@@ -54,6 +54,15 @@ are relative to the repo root.
 - [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
   views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
   — the dactal view bridge.
+- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
+  — **read before adding a source to the Add/Edit wizard**: a field
+  that asks for a file or folder must offer a native OS picker, not a
+  text box. How the three layers fit (Tauri capability → `pickPath` →
+  the button), the checklist for a new path field, and why the
+  browser-served case can't have one. The wizard's own design is
+  [`docs/dev/source_wizard.md`](docs/dev/source_wizard.md) (a
+  proposal, only partly built — read its banner); the descriptors you
+  actually edit are `datalib/ui/src/config/catalog.ts`.
 - [`docs/dev/qmd_index_ui.md`](docs/dev/qmd_index_ui.md) — the grid's
   `Indexed` / `Embedded` columns and the `qmd_state` endpoint behind
   them (built), plus the design for selective re-indexing and live
