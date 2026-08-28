@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // Manager2 — the Manage tab inverted, per docs/dev/source_wizard.md.
 //
-// A grid of configured sources is the page; "Add Data Source" sits
-// above it; each row carries Run / Edit / Delete, plus Reveal in the
-// desktop app. The raw config editor is here but collapsed — demoted,
-// not removed, because it stays the source of truth and the wizard's
-// "edit as TOML" escape hatch has to lead somewhere.
+// A grid of everything the config declares is the page — sources, the
+// shared index steps, and applets — because the thing being managed is
+// the pipeline, not only the data. "Add Data Source" sits above it;
+// each row carries Run / Edit / Delete, plus Reveal in the desktop app,
+// with each action disabled per kind and saying why. The raw config
+// editor is here but collapsed — demoted, not removed, because it stays
+// the source of truth and the wizard's "edit as TOML" escape hatch has
+// to lead somewhere.
 //
 // Everything is derived from the config text, which stays the single
 // source of truth: rows come from parsing it, and add/edit/delete
@@ -40,14 +43,16 @@ import {
   fetchConfigScaffold,
   saveConfig,
   fetchAllJobs,
-  fetchSourceStorage,
+  fetchPipelineStorage,
+  fetchFrontend,
   enqueueJob,
   openJobStream,
   type SyncJob,
-  type SourceStorage,
+  type OutputStorage,
 } from "@/api";
 import {
   listConfiguredSources,
+  type EntryKind,
   appendSource,
   removeSource,
   replaceSource,
@@ -82,7 +87,11 @@ const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
-const storage = ref<SourceStorage[]>([]);
+const storage = ref<OutputStorage[]>([]);
+/// applet id → why it failed to start, from `GET /api/frontend`. An
+/// applet that won't come up is otherwise only visible as a 502 from
+/// whatever tab needed it.
+const appletErrors = ref<Record<string, string>>({});
 const sources = ref<ConfiguredSource[]>([]);
 
 // The Advanced disclosure. Closed on load: the point of this tab is
@@ -98,23 +107,41 @@ const revealLabel = revealActionLabel();
 const wizardOpen = ref(false);
 const editing = ref<{ source: ConfiguredSource; entry: CatalogEntry } | null>(null);
 
-const takenNames = computed(() => new Set(sources.value.map((s) => s.name)));
+// Only source names gate the wizard: an applet id and a stanza name
+// live in different namespaces and may safely coincide.
+const takenNames = computed(
+  () => new Set(sources.value.filter((s) => s.kind === "source").map((s) => s.name)),
+);
 
 type Row = {
   name: string;
+  kind: EntryKind;
+  kindLabel: string;
   type: string | null;
   label: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
-  /// Null when the wizard can round-trip this source; otherwise why not.
+  /// Null when the action applies to this row; otherwise the reason it
+  /// doesn't, which becomes the disabled button's tooltip.
+  runBlocked: string | null;
   editBlocked: string | null;
+  revealBlocked: string | null;
   lastSynced: string | null;
   lastStatus: string;
   approximate: boolean;
-  /// Null when the source has no directory yet — rendered as "—", not
-  /// "0 B", which would read as "synced and empty".
+  /// Null when nothing is on disk yet — rendered as "—", not "0 B",
+  /// which would read as "ran, and produced nothing".
   bytes: number | null;
-  storage: SourceStorage | undefined;
+  /// Storage rows for this entry's declared outputs.
+  outputs: OutputStorage[];
+  /// Absolute path to reveal: the first output that exists.
+  revealPath: string | null;
+};
+
+const KIND_LABEL: Record<EntryKind, string> = {
+  source: "Source",
+  step: "Step",
+  applet: "Applet",
 };
 
 /// Most recent job naming this source. `source_name` is a comma-joined
@@ -136,33 +163,73 @@ function jobFor(name: string): { job: SyncJob; exact: boolean } | null {
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
     const entry = s.type ? catalogFor(s.type) : undefined;
-    const hit = jobFor(s.name);
+    const hit = s.kind === "applet" ? null : jobFor(s.name);
+    const outputs = s.outputs
+      .map((path) => storage.value.find((x) => x.path === path))
+      .filter((x): x is OutputStorage => !!x);
+    const onDisk = outputs.filter((o) => o.present);
+
+    // Run: the DAG schedules steps, so a source and a plain step can
+    // both be targeted; an applet is spawned by the gateway on demand
+    // and has nothing to enqueue.
+    const runBlocked =
+      s.kind === "applet"
+        ? "Applets aren't scheduled — the server starts one when something asks for it."
+        : null;
+
+    // Edit: the wizard's forms describe source types. Everything else
+    // is hand-written config, and the honest answer is to say so.
     let editBlocked: string | null = null;
-    if (!entry) {
+    if (s.kind === "applet") {
+      editBlocked = "No form for applets — edit this one in Advanced below.";
+    } else if (s.kind === "step") {
+      editBlocked = "This is a shared pipeline step, not a source; it has no form.";
+    } else if (!entry) {
       editBlocked = "This source's step isn't a datalib-step command the catalog knows.";
     } else if (!entry.wizard) {
-      editBlocked = `No guided form for ${entry.label} yet — edit it in the Manage tab.`;
+      editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
     } else {
       const rep = paramsAreRepresentable(s, entry);
       if (!rep.ok) {
         editBlocked =
           `The form doesn't model ${rep.unknown.join(", ")}, and saving would drop it. ` +
-          `Edit this one in the Manage tab.`;
+          `Edit this one in Advanced below.`;
       }
     }
-    const size = storage.value.find((x) => x.name === s.name);
+
+    const revealBlocked =
+      s.kind === "applet"
+        ? "An applet owns no files — it serves endpoints."
+        : onDisk.length === 0
+          ? "Nothing on disk yet — this hasn't produced anything."
+          : null;
+
+    // An applet's health is its own thing: it isn't scheduled, so the
+    // job queue says nothing about it. `GET /api/frontend` does.
+    let lastStatus: string;
+    if (s.kind === "applet") {
+      lastStatus = appletErrors.value[s.name] ? "failed" : "running";
+    } else {
+      lastStatus = hit ? hit.job.state : "never run";
+    }
+
     return {
-      bytes: size && size.present ? size.total_bytes : null,
-      storage: size,
       name: s.name,
+      kind: s.kind,
+      kindLabel: KIND_LABEL[s.kind],
       type: s.type,
-      label: entry?.label ?? s.type ?? "unknown",
+      label: entry?.label ?? s.type ?? (s.kind === "source" ? "unknown" : "—"),
       icon: entry?.icon ?? null,
       entry,
+      runBlocked,
       editBlocked,
+      revealBlocked,
       lastSynced: hit?.job.finished_at ?? hit?.job.started_at ?? null,
-      lastStatus: hit ? hit.job.state : "never run",
+      lastStatus,
       approximate: hit ? !hit.exact : false,
+      bytes: onDisk.length ? outputs.reduce((n, o) => n + o.bytes, 0) : null,
+      outputs,
+      revealPath: onDisk[0]?.abs ?? null,
     };
   }),
 );
@@ -250,6 +317,18 @@ const columnDefs: ColDef<Row>[] = [
       return wrap;
     },
   },
+  {
+    headerName: "Kind",
+    field: "kindLabel",
+    width: 90,
+    minWidth: 90,
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const span = document.createElement("span");
+      span.className = `m2-kind m2-kind-${p.data?.kind}`;
+      span.textContent = p.data?.kindLabel ?? "";
+      return span;
+    },
+  },
   { headerName: "Type", field: "label", width: 130, minWidth: 130 },
   {
     headerName: "Last synced",
@@ -263,10 +342,16 @@ const columnDefs: ColDef<Row>[] = [
     field: "lastStatus",
     width: 140,
     minWidth: 140,
-    tooltipValueGetter: (p: { data?: Row }) =>
-      p.data?.approximate
+    tooltipValueGetter: (p: { data?: Row }) => {
+      const row = p.data;
+      if (!row) return undefined;
+      if (row.kind === "applet") {
+        return appletErrors.value[row.name] ?? "The gateway has this applet up.";
+      }
+      return row.approximate
         ? "From a run covering several sources — per-source status needs the step_runs table."
-        : undefined,
+        : undefined;
+    },
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const span = document.createElement("span");
       span.className = `m2-status m2-status-${p.data?.lastStatus.replace(/\s+/g, "-")}`;
@@ -285,17 +370,21 @@ const columnDefs: ColDef<Row>[] = [
     // The breakdown is what answers "why is this 40 GB?" — attachments
     // routinely dwarf both the entity store and the rendered markdown.
     tooltipValueGetter: (p: { data?: Row }) => {
-      const s = p.data?.storage;
-      if (!s || !s.present) return "Nothing on disk yet — this source hasn't synced.";
-      const parts = [
-        `entities ${formatBytes(s.raw_bytes)}`,
-        `attachments ${formatBytes(s.blobs_bytes)}`,
-        `markdown ${formatBytes(s.rendered_bytes)}`,
-      ];
-      if (s.raw_elsewhere) {
-        parts.push("plus a raw store held outside the data root, which isn't counted");
-      }
-      return parts.join(" · ");
+      const row = p.data;
+      if (!row) return undefined;
+      if (row.kind === "applet") return "An applet owns no artifacts.";
+      const present = row.outputs.filter((o) => o.present);
+      if (present.length === 0) return "Nothing on disk yet — this hasn't produced anything.";
+      // Per declared output, with the entities/attachments split where
+      // the backend found one. That split is the answer to "why is this
+      // so big" far more often than the total is.
+      return present
+        .map((o) =>
+          o.parts?.length
+            ? `${o.path}: ${o.parts.map((x) => `${x.label} ${formatBytes(x.bytes)}`).join(", ")}`
+            : `${o.path}: ${formatBytes(o.bytes)}`,
+        )
+        .join(" · ");
     },
     valueFormatter: (p) => (p.value === null ? "—" : formatBytes(p.value as number)),
   },
@@ -313,7 +402,9 @@ const columnDefs: ColDef<Row>[] = [
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
       const row = p.data!;
-      wrap.appendChild(iconButton("run", "Sync now", null, false, () => runSource(row.name)));
+      wrap.appendChild(
+        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.name)),
+      );
       wrap.appendChild(
         iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.name)),
       );
@@ -321,13 +412,7 @@ const columnDefs: ColDef<Row>[] = [
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
         wrap.appendChild(
-          iconButton(
-            "reveal",
-            revealLabel,
-            row.storage?.present ? null : "Nothing on disk yet — this source hasn't synced.",
-            false,
-            () => reveal(row.name),
-          ),
+          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.name)),
         );
       }
       wrap.appendChild(
@@ -379,9 +464,19 @@ async function loadJobs() {
 
 async function loadStorage() {
   try {
-    storage.value = await fetchSourceStorage();
+    storage.value = await fetchPipelineStorage();
   } catch {
     // Same: a missing size column beats an error banner over the grid.
+  }
+}
+
+async function loadAppletHealth() {
+  try {
+    const view = await fetchFrontend();
+    appletErrors.value = view.applet_errors ?? {};
+  } catch {
+    // Leave the last known state; an applet row without a status beats
+    // claiming it failed because one fetch did.
   }
 }
 
@@ -444,16 +539,24 @@ async function deleteSource(name: string) {
   const source = sources.value.find((s) => s.name === name);
   if (!source) return;
   const ok = window.confirm(
-    `Remove "${name}" from the config?\n\n` +
-      `Its data stays on disk and stays searchable — only the sync stops. ` +
-      `Re-adding it later resumes from what's already downloaded.`,
+    source.kind === "applet"
+      ? `Remove the "${name}" applet from the config?\n\n` +
+          `The server stops it. Anything in the app that its components or endpoints ` +
+          `serve will stop working until you add it back.`
+      : source.kind === "step"
+        ? `Remove the "${name}" step from the config?\n\n` +
+            `Its outputs stay on disk but stop being refreshed. For a shared index step ` +
+            `that means search results go stale.`
+        : `Remove "${name}" from the config?\n\n` +
+            `Its data stays on disk and stays searchable — only the sync stops. ` +
+            `Re-adding it later resumes from what's already downloaded.`,
   );
   if (!ok) return;
   await writeConfig(removeSource(configText.value, source), `Removed ${name}.`);
 }
 
 async function reveal(name: string) {
-  const path = rows.value.find((r) => r.name === name)?.storage?.path;
+  const path = rows.value.find((r) => r.name === name)?.revealPath;
   if (!path) return;
   const ok = await revealInFileManager(path);
   if (!ok) {
@@ -478,7 +581,11 @@ async function discardConfigEdits() {
 
 async function runSource(name: string) {
   const source = sources.value.find((s) => s.name === name);
-  const target = source?.steps.find((s) => s.phase === "download")?.id
+  // A source is targeted through its download step (the render step
+  // follows from the artifact edges); a plain step by its own id.
+  const target =
+    source?.stepId
+    ?? source?.steps.find((s) => s.phase === "download")?.id
     ?? source?.steps[0]?.id
     ?? name;
   busy.value = true;
@@ -498,7 +605,7 @@ let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), loadJobs(), loadStorage()]);
+  await Promise.all([loadConfig(), loadJobs(), loadStorage(), loadAppletHealth()]);
   stream = openJobStream(() => void loadJobs());
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
@@ -506,6 +613,7 @@ onMounted(async () => {
     void loadConfig();
     void loadJobs();
     void loadStorage();
+    void loadAppletHealth();
   }, 5000);
 });
 
@@ -520,7 +628,7 @@ onUnmounted(() => {
   <section class="m2">
     <header class="m2-head">
       <div>
-        <h2>Data sources</h2>
+        <h2>Pipeline</h2>
         <p class="m2-path">
           <code>{{ configPath }}</code>
         </p>
@@ -559,15 +667,18 @@ onUnmounted(() => {
 
     <div class="m2-foot">
     <p v-if="rows.length === 0 && !parseError" class="m2-empty">
-      No data sources configured yet. <b>Add Data Source</b> walks you through one.
+      Nothing configured yet. <b>Add Data Source</b> walks you through one.
     </p>
 
     <p class="m2-note">
-      Account and document-count columns aren’t here yet — each needs a backend endpoint the
-      design calls for. “Bytes on disk” is a directory walk; hover a value for the split between
-      entities, attachments and rendered markdown. “Last status” comes from the job queue, which
-      records whole runs rather than individual sources, so a <code>~</code> marks a status
-      inferred from a run that covered several.
+      Every row is something <code>config.toml</code> declares: your <b>sources</b>, the shared
+      index <b>steps</b> that make them searchable, and the <b>applets</b> the app spawns to serve
+      them. Actions that don’t apply to a kind are disabled and say why. Account and
+      document-count columns aren’t here yet — each needs a backend endpoint the design calls for.
+      “Bytes on disk” is a directory walk over each row’s declared outputs; hover a value for the
+      breakdown. “Last status” comes from the job queue, which records whole runs rather than
+      individual steps, so a <code>~</code> marks a status inferred from a run that covered
+      several.
     </p>
 
     <details class="m2-advanced" :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
@@ -729,7 +840,18 @@ onUnmounted(() => {
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-cell-source img { width: 16px; height: 16px; }
 
+.m2-kind {
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--datalib-border);
+  color: var(--datalib-muted);
+}
+.m2-kind-source { color: var(--datalib-fg); border-color: var(--datalib-fg); }
+
 .m2-status { text-transform: capitalize; }
+.m2-status-running { color: var(--datalib-accent); font-weight: 600; }
 .m2-status-failed { color: var(--datalib-log-error); font-weight: 600; }
 .m2-status-done { color: var(--datalib-muted); }
 .m2-status-running { color: var(--datalib-accent); font-weight: 600; }

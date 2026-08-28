@@ -54,34 +54,73 @@ outputs = ["slack/rendered_md"]
 
 describe("listConfiguredSources", () => {
   it("groups a download/render pair into one source", () => {
-    const sources = listConfiguredSources(TWO_STEP_SOURCE);
-    expect(sources.map((s) => s.name)).toEqual(["slack"]);
-    expect(sources[0].type).toBe("slack_api");
-    expect(sources[0].steps.map((s) => s.phase).sort()).toEqual(["download", "render"]);
+    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
+    expect(slack.name).toBe("slack");
+    expect(slack.type).toBe("slack_api");
+    expect(slack.steps.map((s) => s.phase).sort()).toEqual(["download", "render"]);
+    expect(slack.outputs.sort()).toEqual(["slack/raw", "slack/rendered_md"]);
   });
 
   // The aggregate index steps write under a reserved top-level
-  // directory, not a stanza. Counting them as sources would put
-  // `unified_index` in the grid with a Delete button next to it.
-  it("does not mistake the index steps for sources", () => {
-    const names = listConfiguredSources(TWO_STEP_SOURCE).map((s) => s.name);
-    expect(names).not.toContain("unified_index");
+  // directory, not a stanza. They are steps in their own right — rows
+  // in the grid — but calling one a *source* would put `unified_index`
+  // in the source namespace and let the wizard collide with it.
+  it("lists the index steps as steps, not sources", () => {
+    const entries = listConfiguredSources(TWO_STEP_SOURCE);
+    const sources = entries.filter((e) => e.kind === "source").map((e) => e.name);
+    const steps = entries.filter((e) => e.kind === "step").map((e) => e.name);
+    expect(sources).toEqual(["slack"]);
+    expect(steps).toEqual(["grid_index", "qmd_index"]);
+    expect(entries.find((e) => e.name === "grid_index")!.outputs).toEqual(["unified_index/grid"]);
   });
 
-  it("ignores applets, which declare no artifacts", () => {
+  // An applet is configured, so it is a row — but it owns no artifacts
+  // and is never scheduled, which is what the kind has to carry.
+  it("lists applets, with no outputs and no step id", () => {
     const withApplet = `${TWO_STEP_SOURCE}
 [[applets]]
 id = "unified_index"
 command = "datalib-applet unified_index"
 `;
-    expect(listConfiguredSources(withApplet).map((s) => s.name)).toEqual(["slack"]);
+    const applet = listConfiguredSources(withApplet).find((e) => e.kind === "applet")!;
+    expect(applet.name).toBe("unified_index");
+    expect(applet.type).toBe("unified_index");
+    expect(applet.outputs).toEqual([]);
+    expect(applet.stepId).toBeNull();
+  });
+
+  // Sources first: the table opens on what someone came to look at.
+  it("orders sources before steps before applets", () => {
+    const withApplet = `${TWO_STEP_SOURCE}
+[[applets]]
+id = "an_applet"
+command = "datalib-applet slack"
+`;
+    expect(listConfiguredSources(withApplet).map((e) => e.kind)).toEqual([
+      "source",
+      "step",
+      "step",
+      "applet",
+    ]);
+  });
+
+  // An applet id and a stanza name are separate namespaces, so the two
+  // may coincide without either shadowing the other.
+  it("keeps an applet and a source of the same name apart", () => {
+    const clash = `${TWO_STEP_SOURCE}
+[[applets]]
+id = "slack"
+command = "datalib-applet slack"
+`;
+    const named = listConfiguredSources(clash).filter((e) => e.name === "slack");
+    expect(named.map((e) => e.kind)).toEqual(["source", "applet"]);
   });
 
   it("throws with the parser's message and line on malformed TOML", () => {
     expect(() => listConfiguredSources('[[steps]\nid = "x"')).toThrowError(/line \d+/);
   });
 
-  it("returns nothing for a config with no steps at all", () => {
+  it("returns nothing for a config that declares nothing", () => {
     expect(listConfiguredSources('data_root = "~/datalib"')).toEqual([]);
   });
 
@@ -95,8 +134,22 @@ command = "my-exporter --flag"
 outputs = ["custom/raw"]
 `;
     const [source] = listConfiguredSources(custom);
+    expect(source.kind).toBe("source");
     expect(source.name).toBe("custom");
     expect(source.type).toBeNull();
+  });
+
+  // A step writing somewhere that isn't a stanza is a step, and its own
+  // id is what `--sync` would target.
+  it("carries the step id for a non-source step", () => {
+    const [step] = listConfiguredSources(`[[steps]]
+id = "grid_index"
+command = "datalib-step grid_index"
+inputs = ["**/rendered_md"]
+outputs = ["unified_index/grid"]
+`);
+    expect(step.kind).toBe("step");
+    expect(step.stepId).toBe("grid_index");
   });
 
   // Duplicate step ids are rejected by `validate_steps` on save, so
@@ -122,7 +175,7 @@ outputs = ["slack/raw"]
 
 describe("paramsAreRepresentable", () => {
   it("accepts params the descriptor models", () => {
-    const [slack] = listConfiguredSources(TWO_STEP_SOURCE);
+    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
     expect(paramsAreRepresentable(slack, SLACK)).toEqual({ ok: true });
   });
 
@@ -133,7 +186,7 @@ describe("paramsAreRepresentable", () => {
       "channels = [\"general\"]",
       "channels = [\"general\"]\n[steps.params.common.download_params]\nmaximum_sequential_failed_requests = 100",
     );
-    const [slack] = listConfiguredSources(withExtra);
+    const slack = listConfiguredSources(withExtra).find((s) => s.kind === "source")!;
     const verdict = paramsAreRepresentable(slack, SLACK);
     expect(verdict.ok).toBe(false);
     if (!verdict.ok) {
@@ -188,7 +241,7 @@ describe("buildStepPair", () => {
 
 describe("removeSource / replaceSource", () => {
   it("takes the divider comment with the source", () => {
-    const [slack] = listConfiguredSources(TWO_STEP_SOURCE);
+    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
     const after = removeSource(TWO_STEP_SOURCE, slack);
     expect(after).not.toContain("slack");
     expect(after).not.toContain("── slack");
@@ -198,15 +251,18 @@ describe("removeSource / replaceSource", () => {
   });
 
   it("leaves a config that still parses, with one fewer source", () => {
-    const [slack] = listConfiguredSources(TWO_STEP_SOURCE);
-    expect(listConfiguredSources(removeSource(TWO_STEP_SOURCE, slack))).toEqual([]);
+    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
+    const after = listConfiguredSources(removeSource(TWO_STEP_SOURCE, slack));
+    // The index steps survive: deleting a source must not take the
+    // shared pipeline with it.
+    expect(after.map((e) => e.name)).toEqual(["grid_index", "qmd_index"]);
   });
 
   it("replaces in place rather than duplicating", () => {
-    const [slack] = listConfiguredSources(TWO_STEP_SOURCE);
+    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
     const body = buildStepPair(SLACK, "slack", { "sync.channels": ["random"] });
     const after = replaceSource(TWO_STEP_SOURCE, slack, body);
-    const sources = listConfiguredSources(after);
+    const sources = listConfiguredSources(after).filter((s) => s.kind === "source");
     expect(sources.map((s) => s.name)).toEqual(["slack"]);
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
@@ -215,7 +271,12 @@ describe("removeSource / replaceSource", () => {
   it("appends where a new source can safely go", () => {
     const body = buildStepPair(SLACK, "extra", {});
     const after = appendSource(TWO_STEP_SOURCE, body);
-    expect(listConfiguredSources(after).map((s) => s.name).sort()).toEqual(["extra", "slack"]);
+    expect(
+      listConfiguredSources(after)
+        .filter((s) => s.kind === "source")
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(["extra", "slack"]);
   });
 });
 

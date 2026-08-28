@@ -433,25 +433,24 @@ export type SyncJob = {
   pid?: number | null;
 };
 
-export type SourceStorage = {
-  name: string;
-  /// Absolute path of the stanza directory, for the desktop app's
-  /// reveal-in-file-manager IPC.
+export type StoragePart = { label: string; bytes: number };
+
+/// Bytes for one declared output path. Keyed on the path rather than on
+/// a source, because the grid groups steps into rows and that grouping
+/// rule lives in `config/sourceSteps.ts` alone.
+export type OutputStorage = {
   path: string;
-  raw_bytes: number;
-  blobs_bytes: number;
-  rendered_bytes: number;
-  total_bytes: number;
-  /// The stanza directory doesn't exist yet — never synced. Distinct
-  /// from a real zero, so the UI shows "—" rather than "0 B".
+  /// Absolute, for the desktop app's reveal-in-file-manager IPC.
+  abs: string;
+  /// The directory doesn't exist yet. Distinct from a real zero, so the
+  /// UI shows "—" rather than "0 B".
   present: boolean;
-  /// A step sets `params.common.raw_path`, so the raw store may sit
-  /// outside the data root and isn't counted.
-  raw_elsewhere: boolean;
+  bytes: number;
+  parts?: StoragePart[];
 };
 
-export function fetchSourceStorage(signal?: AbortSignal): Promise<SourceStorage[]> {
-  return getJson<SourceStorage[]>("/api/sources/storage", signal);
+export function fetchPipelineStorage(signal?: AbortSignal): Promise<OutputStorage[]> {
+  return getJson<OutputStorage[]>("/api/pipeline/storage", signal);
 }
 
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
