@@ -29,6 +29,7 @@ import {
   type FieldValues,
 } from "@/config/sourceSteps";
 import { iconUrl } from "@/config/icons";
+import { isDesktopApp, pickPath } from "@/desktop";
 
 const props = defineProps<{
   /// Names already in the config, so a new source can't collide.
@@ -159,6 +160,35 @@ function setListText(field: Field, text: string) {
     .filter(Boolean);
 }
 
+/// A path field gets a native picker in the desktop app and a bare
+/// text box in a browser, which is the best a browser can do: it never
+/// hands back a filesystem path, and the path here is one on the
+/// machine running the backend. See docs/dev/wizard_file_pickers.md.
+const canPick = isDesktopApp();
+
+/// Keyed by field target: a dialog that was denied rather than
+/// canceled, which has no signal of its own and would otherwise look
+/// like a dead button.
+const pickFailed = ref<Record<string, string>>({});
+
+async function browse(f: Field) {
+  if (f.kind !== "path") return;
+  const result = await pickPath({
+    picks: f.picks ?? "dir",
+    title: f.pickTitle ?? f.label,
+    // Re-editing a source reopens near its current value.
+    startAt: String(values.value[f.target] ?? ""),
+    extensions: f.extensions,
+  });
+  if (result.outcome === "picked") {
+    values.value[f.target] = result.path;
+    delete pickFailed.value[f.target];
+  } else if (result.outcome === "unavailable") {
+    pickFailed.value[f.target] = result.reason;
+  }
+  // Canceled: leave the field exactly as it was, and say nothing.
+}
+
 function submit() {
   if (!canSubmit.value || !chosen.value) return;
   emit("submit", { name: name.value.trim(), body: body.value, entry: chosen.value });
@@ -270,14 +300,26 @@ function submit() {
             :value="values[f.target] as string"
             @input="values[f.target] = ($event.target as HTMLInputElement).value"
           />
-          <input
-            v-else-if="f.kind === 'path'"
-            class="wiz-input wiz-path"
-            :placeholder="f.placeholder"
-            :value="values[f.target] as string"
-            spellcheck="false"
-            @input="values[f.target] = ($event.target as HTMLInputElement).value"
-          />
+          <!-- Typed path + native picker. The input stays even in the
+               app: paste is a legitimate way in, and in a browser it is
+               the only one. docs/dev/wizard_file_pickers.md. -->
+          <span v-else-if="f.kind === 'path'" class="wiz-pathrow">
+            <input
+              class="wiz-input wiz-path"
+              :placeholder="f.placeholder"
+              :value="values[f.target] as string"
+              spellcheck="false"
+              @input="values[f.target] = ($event.target as HTMLInputElement).value"
+            />
+            <button
+              v-if="canPick"
+              type="button"
+              class="btn ghost wiz-browse"
+              @click="browse(f)"
+            >
+              {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
+            </button>
+          </span>
           <input
             v-else-if="f.kind === 'string_list'"
             class="wiz-input"
@@ -295,6 +337,10 @@ function submit() {
           />
 
           <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
+          <small v-if="pickFailed[f.target]" class="wiz-error">
+            Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
+            instead.
+          </small>
         </label>
 
         <details class="wiz-review">
@@ -449,6 +495,10 @@ function submit() {
   margin-left: 6px;
 }
 .wiz-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+/* The input takes the slack so the button keeps its label on one line. */
+.wiz-pathrow { display: flex; gap: 8px; align-items: center; }
+.wiz-pathrow .wiz-input { flex: 1; min-width: 0; }
+.wiz-browse { white-space: nowrap; }
 .wiz-foot-note { margin-right: auto; font-size: 12px; color: var(--datalib-muted); }
 
 .wiz-review { margin-top: 8px; }

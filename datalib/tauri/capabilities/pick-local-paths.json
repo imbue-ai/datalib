@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pick-local-paths",
+  "description": "Lets the Add/Edit Data Source wizard open a native file/folder picker for a source's path field (`ui/src/desktop.ts::pickPath`, reached from `ui/src/components/SourceWizard.vue`). Without it those fields are a text box the user types a path into by hand, which is the failure the picker exists to remove — see `docs/dev/wizard_file_pickers.md`. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json and open-external-urls.json: this app serves its UI from `datalib-http` and loads it as an external URL, and Tauri withholds IPC from a remote origin unless it is listed. The trailing `/**` is load-bearing — `http://127.0.0.1:*` alone constrains the pathname to empty and matches no route, and an unmatched pattern denies the call SILENTLY (a picker button that does nothing), so verify this in the app rather than in a browser tab. Only `dialog:allow-open` is granted, deliberately not `dialog:default`: that set also carries `allow-save`, `allow-message`, `allow-ask` and `allow-confirm`, and nothing in the webview needs to name a file to write or to put up a native modal. The dialog plugin documents that a chosen path is added to the filesystem and asset-protocol scopes; that is inert here, since neither `tauri-plugin-fs` nor the asset protocol is enabled — the path travels back as a string and its only use is a value in `config.toml`.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "dialog:allow-open"
+  ]
+}
