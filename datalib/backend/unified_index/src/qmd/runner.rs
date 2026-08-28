@@ -65,7 +65,8 @@ impl QmdRunner {
         let idx = cfg.index_path();
         if !idx.exists() {
             return Err(anyhow!(
-                "qmd index not found at {} (run datalib-qmd-indexer --root {})",
+                "qmd index not found at {} — run a sync to build it \
+                 (or: DATALIB_DAG_DATA_ROOT={} datalib-step qmd_index)",
                 idx.display(),
                 cfg.qmd_root.display()
             ));
