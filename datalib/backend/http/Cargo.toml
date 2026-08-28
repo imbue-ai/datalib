@@ -35,6 +35,8 @@ sha2 = "0.10"
 shlex = "1"
 anyhow = { workspace = true }
 axum = { workspace = true }
+# `flock(2)` for the one-server-per-data-root claim (src/lock.rs).
+libc = "0.2"
 chrono = { workspace = true }
 futures = "0.3"
 tokio = { workspace = true }
@@ -45,4 +47,3 @@ uuid = { workspace = true }
 sqlx = { workspace = true }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
-libc = "0.2"

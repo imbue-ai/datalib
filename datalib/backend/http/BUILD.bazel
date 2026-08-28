@@ -30,6 +30,7 @@ rust_library(
         "src/frontend.rs",
         "src/embed.rs",
         "src/lib.rs",
+        "src/lock.rs",
         "src/worker.rs",
     ],
     crate_name = "datalib_http",
