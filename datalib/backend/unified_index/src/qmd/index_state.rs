@@ -201,7 +201,14 @@ impl QmdIndexReader {
 /// SHA-256 of a file's bytes, hex-encoded — the same digest qmd stores
 /// in `documents.hash` (`store.ts:2365`, over the UTF-8 text it read;
 /// identical to the raw bytes for the valid UTF-8 our renderers emit).
-pub fn file_content_hash(path: &Path) -> std::io::Result<String> {
+///
+/// SHA-256 and not blake3, which is what this repo hashes its *own*
+/// content with (`blob_cas::blake3_hex`, `fswalk::hash_file`, the pdf
+/// provider's `blake3`). This digest is not ours to choose: it is the
+/// join key into an index a vendored dependency writes. Hence the
+/// algorithm in the name — the same reason `wa_media_files` carries a
+/// `sha256` (WhatsApp's key) and a `blake3` (our CAS key) side by side.
+pub fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path)?;
     let mut h = Sha256::new();
@@ -269,7 +276,7 @@ pub async fn resolve_markdown_states(
     let hashed = tokio::task::spawn_blocking(move || {
         to_hash
             .into_iter()
-            .map(|(uuid, path)| (uuid, file_content_hash(&path)))
+            .map(|(uuid, path)| (uuid, file_sha256_hex(&path)))
             .collect::<Vec<_>>()
     })
     .await
@@ -505,13 +512,13 @@ mod tests {
     }
 
     #[test]
-    fn content_hash_is_sha256_of_the_bytes() {
+    fn file_sha256_hex_is_sha256_of_the_bytes() {
         let td = tempfile::tempdir().unwrap();
         let p = td.path().join("x.md");
         std::fs::write(&p, b"hello\n").unwrap();
         // sha256("hello\n")
         assert_eq!(
-            file_content_hash(&p).unwrap(),
+            file_sha256_hex(&p).unwrap(),
             "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
         );
     }

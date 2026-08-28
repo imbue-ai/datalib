@@ -22,7 +22,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::qmd::index_state::{file_content_hash, resolve_markdown_states};
+use datalib_unified_index::qmd::index_state::{file_sha256_hex, resolve_markdown_states};
 use datalib_unified_index::qmd::QmdIndexReader;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
@@ -129,7 +129,7 @@ async fn every_rendered_document_is_reported_indexed_and_embedded() {
 
     let hashes: Vec<String> = files
         .iter()
-        .map(|p| file_content_hash(p).expect("hash a rendered file"))
+        .map(|p| file_sha256_hex(p).expect("hash a rendered file"))
         .collect();
     let states = reader
         .states_for_hashes(&hashes)
