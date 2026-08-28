@@ -54,6 +54,10 @@ are relative to the repo root.
 - [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
   views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
   — the dactal view bridge.
+- [`docs/dev/qmd_index_ui.md`](docs/dev/qmd_index_ui.md) — the grid's
+  `Indexed` / `Embedded` columns and the `qmd_state` endpoint behind
+  them (built), plus the design for selective re-indexing and live
+  index progress (proposal — the file marks which is which).
 - [`docs/dev/applets.md`](docs/dev/applets.md) — **how to write an
   applet**: the second kind of config entry, a server contributing card
   components plus the endpoints behind them. Covers the

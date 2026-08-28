@@ -16,10 +16,12 @@
 //! every stanza's `rendered_md/`.
 
 pub mod daemon;
+pub mod index_state;
 pub mod mapping;
 pub mod runner;
 
 pub use daemon::{QmdDaemon, QmdDaemonConfig};
+pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
 pub use mapping::{GridIndex, GridRowRef, QmdHit, QueryMode};
 pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
 

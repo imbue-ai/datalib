@@ -150,6 +150,60 @@ export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
 }
 
+// --- qmd index state -------------------------------------------------------
+//
+// What the qmd index currently holds for a set of rendered documents,
+// behind the grid's `Indexed` / `Embedded` columns. Two separate
+// booleans because `qmd update` and `qmd embed` are separate passes: a
+// document can be findable by keyword and still invisible to semantic
+// search for as long as the embed pass takes.
+//
+// `null` means "we could not determine this" (no rendered file, file
+// unreadable, index unavailable) — distinct from `false`, which is a
+// positive claim that the document is absent from the index. The grid
+// renders the two differently, because a red ❌ we can't back up is
+// worse than an honest blank.
+export type QmdDocState = {
+  indexed: boolean | null;
+  embedded: boolean | null;
+  // Present when either field is null, or when an otherwise-fine
+  // document is not indexed. Shown as the cell's tooltip.
+  note?: string;
+};
+
+export type QmdStateResponse = {
+  // False for a data root that has never synced — there is no
+  // index.sqlite, so every document is legitimately un-indexed.
+  index_present: boolean;
+  summary: { documents: number; embedded: number };
+  // markdown_uuid → state. Every requested uuid appears.
+  docs: Record<string, QmdDocState>;
+  errors?: string[];
+};
+
+// Ask which of these rendered documents the qmd index holds. POST
+// because the uuid list is as long as the grid's result set; the
+// backend dedupes and caps it.
+export async function fetchQmdState(
+  markdownUuids: string[],
+  signal?: AbortSignal,
+): Promise<QmdStateResponse> {
+  const r = await fetch(`${UNIFIED_INDEX}/qmd_state`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ markdown_uuids: markdownUuids }),
+    signal,
+  });
+  if (!r.ok) {
+    throw new Error(`POST ${UNIFIED_INDEX}/qmd_state → ${r.status}`);
+  }
+  const data = (await r.json()) as QmdStateResponse;
+  if (data.errors && data.errors.length > 0) {
+    for (const e of data.errors) pushToast(e);
+  }
+  return data;
+}
+
 export type Health = {
   ok: boolean;
   version: string;
@@ -378,6 +432,27 @@ export type SyncJob = {
   parent_job_id?: string | null;
   pid?: number | null;
 };
+
+export type SourceStorage = {
+  name: string;
+  /// Absolute path of the stanza directory, for the desktop app's
+  /// reveal-in-file-manager IPC.
+  path: string;
+  raw_bytes: number;
+  blobs_bytes: number;
+  rendered_bytes: number;
+  total_bytes: number;
+  /// The stanza directory doesn't exist yet — never synced. Distinct
+  /// from a real zero, so the UI shows "—" rather than "0 B".
+  present: boolean;
+  /// A step sets `params.common.raw_path`, so the raw store may sit
+  /// outside the data root and isn't counted.
+  raw_elsewhere: boolean;
+};
+
+export function fetchSourceStorage(signal?: AbortSignal): Promise<SourceStorage[]> {
+  return getJson<SourceStorage[]>("/api/sources/storage", signal);
+}
 
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);

@@ -12,6 +12,7 @@ import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
       <nav class="datalib-tabs" aria-label="Navigation">
         <RouterLink class="datalib-tab" to="/">Explore</RouterLink>
         <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink>
+        <RouterLink class="datalib-tab" to="/sources2">Manager2</RouterLink>
       </nav>
       <div class="datalib-spacer" />
       <!-- Lightweight sync indicator in the header's flexible space —

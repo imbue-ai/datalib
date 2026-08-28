@@ -177,6 +177,7 @@ pub fn router(state: AppState) -> Router {
             get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
         )
         .route("/api/sync/sources", get(sync_sources))
+        .route("/api/sources/storage", get(sources_storage))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
         .route("/api/sync/jobs/{id}", get(sync_job_get))
@@ -1052,6 +1053,128 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
         Err(_) => return Json(Vec::new()),
     };
     Json(sources.into_iter().map(|id| SourceInfo { id }).collect())
+}
+
+/// Bytes on disk per configured source, for the Manage grid's storage
+/// column.
+///
+/// Deliberately a plain directory walk rather than anything that opens
+/// a store: the numbers people want ("why is this 40 GB?") are file
+/// sizes, and asking doltlite would mean counting rows in every table
+/// of every source on every poll — the cost that got the download
+/// report deleted in 6dae9185.
+///
+/// Split three ways because the total alone doesn't answer the
+/// question: attachments (`blobs.doltlite_db`) routinely dwarf both the
+/// entity store beside them and the markdown rendered from them.
+#[derive(Debug, Serialize)]
+pub struct SourceStorage {
+    /// Stanza name — the source's directory under the data root.
+    pub name: String,
+    /// Absolute path of that directory. Sent so the UI can hand it to
+    /// the desktop app's reveal-in-file-manager IPC without having to
+    /// reassemble it from the data root and the name — the server is
+    /// the side that knows where the root actually is.
+    pub path: String,
+    /// `<root>/<name>/raw/`, excluding the blob CAS below.
+    pub raw_bytes: u64,
+    /// `<root>/<name>/raw/blobs.doltlite_db`.
+    pub blobs_bytes: u64,
+    /// `<root>/<name>/rendered_md/`.
+    pub rendered_bytes: u64,
+    pub total_bytes: u64,
+    /// The stanza directory doesn't exist yet — never synced. Distinct
+    /// from a real zero so the UI can show "—" rather than "0 B".
+    pub present: bool,
+    /// Some step of this source sets `params.common.raw_path`, so its
+    /// raw store may sit outside the data root and is not counted here.
+    /// Reported rather than resolved: resolving would mean duplicating
+    /// the provider-side `~`/relative handling in this crate.
+    pub raw_elsewhere: bool,
+}
+
+/// Recursive byte total of a directory tree.
+///
+/// Symlinks are counted as their own (tiny) entry and never followed —
+/// following them risks both cycles and double-counting a tree that
+/// another source already reported.
+fn dir_size(path: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.path().symlink_metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            total += dir_size(&entry.path());
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
+fn file_size(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+async fn sources_storage(State(s): State<AppState>) -> Json<Vec<SourceStorage>> {
+    let Ok((cfg, _root)) = datalib_dag::config::load(&s.config_path()) else {
+        return Json(Vec::new());
+    };
+
+    // Stanza names, derived the way the config loader derives them: the
+    // first segment of a `<name>/raw` or `<name>/rendered_md` output.
+    // That excludes the aggregate index steps, whose outputs are
+    // `unified_index/grid` and `unified_index/qmd`.
+    let mut names: std::collections::BTreeMap<String, bool> = Default::default();
+    for step in &cfg.steps {
+        let elsewhere = step
+            .params
+            .as_ref()
+            .and_then(|p| p.get("common"))
+            .and_then(|c| c.get("raw_path"))
+            .is_some();
+        for out in &step.outputs {
+            let mut segments = out.split('/');
+            let (Some(name), Some(suffix), None) =
+                (segments.next(), segments.next(), segments.next())
+            else {
+                continue;
+            };
+            if suffix != "raw" && suffix != "rendered_md" {
+                continue;
+            }
+            let entry = names.entry(name.to_string()).or_insert(false);
+            *entry |= elsewhere;
+            break;
+        }
+    }
+
+    let root = s.root.as_path();
+    let out = names
+        .into_iter()
+        .map(|(name, raw_elsewhere)| {
+            let stanza = root.join(&name);
+            let raw = stanza.join("raw");
+            let blobs_bytes = file_size(&raw.join("blobs.doltlite_db"));
+            let raw_bytes = dir_size(&raw).saturating_sub(blobs_bytes);
+            let rendered_bytes = dir_size(&stanza.join("rendered_md"));
+            SourceStorage {
+                present: stanza.is_dir(),
+                total_bytes: raw_bytes + blobs_bytes + rendered_bytes,
+                path: stanza.to_string_lossy().into_owned(),
+                name,
+                raw_bytes,
+                blobs_bytes,
+                rendered_bytes,
+                raw_elsewhere,
+            }
+        })
+        .collect();
+    Json(out)
 }
 
 async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {

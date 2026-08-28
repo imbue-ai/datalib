@@ -286,36 +286,48 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(512)")]
     pub slack_link: Option<String>,
     /// Path to the rendered Markdown file for this row's
-    /// conversation/thread/document, **relative to the data root** —
-    /// every path is `<stanza>/rendered_md/...`, where `<stanza>` is the
-    /// config name of the source that produced it (not the provider
-    /// type; one provider can back several stanzas). Set on every row
-    /// (document-level rows point at their own .md; message/page/block
-    /// rows inherit their parent's). The chat preview pane uses this to
-    /// load the conversation directly — no glob, no frontmatter scan.
-    /// (Column name retained as `qmd_path` for historical reasons.)
+    /// conversation/thread, **relative to the data root**. Set on every
+    /// row (chat-level rows point at their own .md; message/block rows
+    /// inherit their parent thread's). The chat preview pane uses this
+    /// to load the conversation directly — no glob, no frontmatter
+    /// scan. (Column name retained as `qmd_path` for historical
+    /// reasons.)
+    ///
+    /// Shape: `<source_name>/rendered_md/<renderer-specific tail>`,
+    /// where `<source_name>` is the config step's name — NOT the
+    /// provider type, and NOT a leading `rendered_md/`. That prefix is
+    /// load-bearing beyond the preview pane: `GridIndex` keys rows by
+    /// this path to resolve qmd search hits back to grid rows
+    /// (`datalib_unified_index::qmd::mapping`), and a row whose path
+    /// doesn't match what qmd reports is silently dropped from
+    /// free-text results.
+    ///
+    /// The tail is each renderer's own business; verified examples from
+    /// the TNG fixture (`//tests/fixtures:ingested_tng`, 2026-08-27):
+    ///
+    /// ```text
+    /// anthropic  anthropic-api/rendered_md/{conversation_uuid}/all.md
+    /// openai     chatgpt-api/rendered_md/{conversation_id}/all.md
+    /// slack      slack/rendered_md/{thread_uuid}/all.md
+    /// beeper     beeper/rendered_md/{network}/{chat_uuid}/{YYYY-MM}.md
+    /// github     github/rendered_md/{owner}/{repo}/pr-{number}/index.md
+    /// gitlab     gitlab/rendered_md/{group}/{project}/mr-{iid}/index.md
+    /// notion     notion/rendered_md/pages/{page_uuid}/index.md
+    /// pdf        tng_pdfs/rendered_md/docs/{blake3}.md
+    /// ```
     ///
     /// **Invariant: for a given `markdown_uuid`, this must be
     /// byte-equal to that markdown's `markdowns.md_path`.** Both name
-    /// the same file in the same data-root-relative spelling, and the
-    /// qmd hit→row mapping depends on it: `GridIndex::new`
-    /// (`unified_index/src/qmd/mapping.rs`) keys grid rows by
-    /// `norm_path(qmd_path)` and looks each hit up by its own
-    /// data-root-relative path. A renderer that stamps a shorter,
-    /// out-dir-relative path here still writes correct markdown and
-    /// still gets indexed by qmd — but every hit inside its documents
-    /// resolves to zero grid rows and is silently dropped from search
-    /// results. `pdf` did exactly this until it was fixed; the
-    /// cross-provider assertion lives in
+    /// the same file in the same spelling. `pdf` violated it — it wrote
+    /// the out-dir-relative `docs/{blake3}.md`, so every qmd hit inside
+    /// a PDF resolved to zero grid rows — until the prefix was fixed;
+    /// the cross-provider assertion now lives in
     /// `//tests/fixtures:ingested_tng_test`.
     ///
-    /// Per-provider suffix under `<stanza>/rendered_md/` (checked
-    /// against the tree 2026-08-28):
-    ///   chat-shaped providers (anthropic, openai, slack, …): {conversation_uuid}/all.md
-    ///   github: {owner}/{repo}/pr-{number}/index.md — every PR row shares it
-    ///   gitlab: {group}/{project}/mr-{iid}/index.md — every MR row shares it
-    ///   notion: pages/{page_id}/index.md (pages + headings), pages/{page_id}/threads/{discussion}.md (comment threads)
-    ///   pdf: docs/{blake3}.md — the document row and all its page rows
+    /// Prefer `markdowns.md_path` (via `markdown_uuid`) when you need
+    /// the file itself: it carries the same path, has one writer, and
+    /// is the column the index-state columns and `/api/chat` resolve
+    /// through.
     #[col(sql = "VARCHAR(512)")]
     pub qmd_path: Option<String>,
     /// Canonical URL pointing back to the original source on the

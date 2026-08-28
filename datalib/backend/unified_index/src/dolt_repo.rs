@@ -398,6 +398,46 @@ impl IndexRepo for DoltRepo {
         Ok(out)
     }
 
+    async fn md_paths_for(
+        &self,
+        markdown_uuids: &[String],
+    ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError> {
+        let mut out = std::collections::HashMap::with_capacity(markdown_uuids.len());
+        // Chunked to stay under SQLite's bind-variable ceiling; the
+        // grid asks about one batch per result set, not per row.
+        for chunk in markdown_uuids.chunks(400) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT markdown_uuid, md_path FROM markdowns \
+                  WHERE md_path IS NOT NULL AND markdown_uuid IN ({placeholders})"
+            );
+            let mut q = sqlx::query(&sql);
+            for u in chunk {
+                q = q.bind(u);
+            }
+            let rows = match q.fetch_all(&self.pool).await {
+                Ok(rows) => rows,
+                // A data root whose renderers have never run has no
+                // `markdowns` table; that is "nothing rendered yet",
+                // not a failure.
+                Err(e) if is_missing_table(&e, "markdowns") => return Ok(out),
+                Err(e) => return Err(RepoError::Internal(e.to_string())),
+            };
+            for row in rows {
+                let uuid: String = match row.try_get("markdown_uuid") {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let rel: String = match row.try_get("md_path") {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                out.insert(uuid, self.root.as_ref().join(rel));
+            }
+        }
+        Ok(out)
+    }
+
     async fn qmd_path_for_markdown(
         &self,
         markdown_uuid: &str,
