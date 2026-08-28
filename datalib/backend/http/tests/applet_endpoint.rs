@@ -526,6 +526,55 @@ async fn no_applets_and_no_store_is_an_empty_view() {
     assert_eq!(view["namespaces"], serde_json::json!({}));
 }
 
+/// A config that exists but doesn't load yields an empty applet list,
+/// which used to be indistinguishable from "you never configured that
+/// applet" — so a syntax error in `config.toml` reported itself as
+/// `no applet "unified_index"` and sent people looking in the wrong
+/// place entirely.
+#[tokio::test]
+async fn an_unloadable_config_says_so_instead_of_blaming_the_applet() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let app = router(state_with(tmp.path(), &config_for(&["unified_index"])).await);
+
+    // Break the file under the running server, the way a hand edit does.
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        "[[applets]\nid = \"oops\"\n",
+    )
+    .unwrap();
+
+    let (status, body) = get_json(&app, "/applet/unified_index/search").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error.contains("could not be loaded"),
+        "the reason must name the config, got: {error}"
+    );
+    assert!(
+        error.contains("config.toml"),
+        "the message must name the file to fix, got: {error}"
+    );
+}
+
+/// The other half of the pair: with a config that loads fine, an applet
+/// nobody declared is still reported as simply absent.
+#[tokio::test]
+async fn a_genuinely_missing_applet_still_reads_as_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let app = router(state_with(tmp.path(), &config_for(&["present"])).await);
+
+    let (status, body) = get_json(&app, "/applet/absent/search").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("no applet"), "{error}");
+    assert!(
+        !error.contains("could not be loaded"),
+        "a valid config must not be blamed, got: {error}"
+    );
+}
+
 /// A hand-written component needs no applet, no config, and no
 /// restart — the store is just files.
 #[tokio::test]

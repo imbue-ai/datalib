@@ -16,6 +16,7 @@
 //! data_root/system/jobs.doltlite_db                 sync job queue + history
 //! data_root/system/media/…                          served attachments
 //! data_root/system/job-logs/…                       sync job logs
+//! data_root/system/lock                             one-server-per-root claim
 //! ```
 //!
 //! Two groups, split by who may write them and whether they are worth
@@ -60,6 +61,11 @@ pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 /// from [`FEEDBACK_DB`] so a job update and a feedback commit cannot
 /// land in each other's dolt history.
 pub const JOBS_DB: &str = "jobs.doltlite_db";
+/// The server's exclusive claim on this root, relative to `system/`.
+/// Held with `flock(2)` for the life of the process; its contents are
+/// advisory, naming the holder so a refused server can say where the
+/// running one is.
+pub const LOCK_FILE: &str = "lock";
 
 // Stanza names a source may not take live with the code that enforces
 // them: `datalib_dag::config::RESERVED_STANZA_NAMES`, checked by
@@ -114,6 +120,12 @@ pub fn feedback_db(data_root: &Path) -> PathBuf {
 /// `data_root/system/jobs.doltlite_db`.
 pub fn jobs_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(JOBS_DB)
+}
+
+/// `data_root/system/lock` — the advisory lock a running server holds
+/// for as long as it owns this root. See `datalib_http::lock`.
+pub fn lock_file(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(LOCK_FILE)
 }
 
 /// Body of the `CACHEDIR.TAG` files we drop into derived directories. The

@@ -138,6 +138,24 @@ did not check. The API returns `indexed`/`embedded` as
 `boolean | null` for exactly this reason, plus a `note` the cell shows
 as its tooltip.
 
+**Both columns ship hidden.** They answer "why didn't search find X?",
+which is a question you go looking for — not one worth two columns of
+width on every ordinary search. The Columns tool panel turns them on and
+the choice persists in the card's URL state like any other column. What
+stays on screen either way is the summary line under the row count
+("51 of 51 documents searchable"), which keeps the index's health
+visible and is how a user finds out the columns exist.
+
+Visibility also gates the cost, which is the part worth knowing before
+changing it: a `/qmd_state` call reads and hashes one file per document,
+so while both columns are hidden the client sends an **empty** uuid list
+— two SQL queries, no file I/O — and asks for per-document answers only
+once a column is on. That makes un-hiding a fetch trigger in its own
+right, and a version that gated the request but never re-ran it on
+un-hide would leave the columns permanently blank while passing every
+assertion that only looked at the default state. The e2e spec pins both
+halves.
+
 Two states that were in the original design and did **not** ship:
 
 * `stale` — folded into `Indexed: ❌`, because the hash join can't tell

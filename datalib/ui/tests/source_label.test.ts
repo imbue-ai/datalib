@@ -77,6 +77,45 @@ describe("reading a label", () => {
   });
 });
 
+describe("labels on the other kinds of entry", () => {
+  // The Pipeline table lists sources, the shared index steps, and
+  // applets. A label is a property of a *step*, so the fan-ins can carry
+  // one too; applets cannot — `AppletEntry` is deny_unknown_fields with
+  // no `label` key — and fall back to their id.
+  const OTHER = `data_root = "/tmp/data"
+
+[[steps]]
+id = "grid_index"
+label = "Search index"
+command = "datalib-step grid_index"
+inputs = ["**/rendered_md"]
+outputs = ["unified_index/grid"]
+
+[[steps]]
+id = "qmd_index"
+command = "datalib-step qmd_index"
+inputs = ["**/rendered_md"]
+outputs = ["unified_index/qmd"]
+
+[[applets]]
+id = "unified_index"
+command = "datalib-applet unified_index"
+`;
+
+  it("labels a shared index step, and leaves an unlabelled one alone", () => {
+    const byName = new Map(listConfiguredSources(OTHER).map((e) => [e.name, e]));
+    expect(byName.get("grid_index")?.kind).toBe("step");
+    expect(byName.get("grid_index")?.label).toBe("Search index");
+    expect(byName.get("qmd_index")?.label).toBe("qmd_index");
+  });
+
+  it("shows an applet by its id", () => {
+    const applet = listConfiguredSources(OTHER).find((e) => e.kind === "applet");
+    expect(applet?.name).toBe("unified_index");
+    expect(applet?.label).toBe("unified_index");
+  });
+});
+
 describe("writing a label", () => {
   /// Round-trip through the same splice the Edit button performs, so
   /// what's asserted is what the config file would actually hold.

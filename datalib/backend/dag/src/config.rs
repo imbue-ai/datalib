@@ -163,9 +163,10 @@ pub struct StepEntry {
     /// The runner never reads it: it is not passed to the child, and it
     /// is deliberately absent from [`StepSpec::fingerprint_material`],
     /// so relabelling a step does not make it stale and does not
-    /// re-run anything. Its one consumer is the UI's sources grid,
-    /// which shows it in place of the source's directory name
-    /// (`datalib/ui/src/config/sourceSteps.ts`).
+    /// re-run anything. Its consumers are both grids: the Pipeline
+    /// table shows it in place of the entry's name, and the unified
+    /// index grid's "Source name" column shows it beside the rows that
+    /// step produced (`datalib/ui/src/config/sourceSteps.ts`).
     ///
     /// This exists because a source's *name* is not a name at all — it
     /// is the first path segment of its outputs, so it is the stanza
@@ -182,6 +183,13 @@ pub struct StepEntry {
     /// merely respells the directory would be the second, silent
     /// spelling of one string that got the applet `title` key deleted
     /// (00633dd5).
+    ///
+    /// Any step may carry one, not just a source's: the shared
+    /// `grid_index` / `qmd_index` fan-ins show up in the same table and
+    /// are labelled the same way. [`AppletEntry`] deliberately has no
+    /// counterpart — an applet's own `params` already carry whatever
+    /// label it wants (see that type's docs), and it is displayed by
+    /// its `id`.
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default)]

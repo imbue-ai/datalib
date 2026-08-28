@@ -837,8 +837,8 @@ rows, with nothing logged.
 
 That is why the wizard holds the name read-only. What it did *not* have
 until now was the other half: a name you can change. `label` is that
-half — an optional free-text key on a step, shown by the sources grid in
-place of the directory name:
+half — an optional free-text key on a step, shown by the Pipeline table
+in place of the entry's name:
 
 ```toml
 [[steps]]
@@ -869,7 +869,12 @@ Four properties make it safe to offer, and each is pinned by a test:
 
 A source is a group of steps rather than a config entry of its own, so
 the label belongs to a step and the grid takes the first one its steps
-declare. The wizard writes it on the download step.
+declare. The wizard writes it on the download step. Any step may carry
+one — the shared `grid_index` / `qmd_index` fan-ins are rows in the same
+table and are labelled the same way. Applets are the exception:
+`AppletEntry` is `deny_unknown_fields` with no `label`, deliberately,
+since an applet already takes its display label through its own
+`params`; it is shown by its `id`.
 
 **The label reaches the unified index grid too**, as a "Source name"
 column beside the provider icon — because "Slack" in the Source column

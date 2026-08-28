@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // Manager2 — the Manage tab inverted, per docs/dev/source_wizard.md.
 //
-// A grid of configured sources is the page; "Add Data Source" sits
-// above it; each row carries Run / Edit / Delete, plus Reveal in the
-// desktop app. The raw config editor is here but collapsed — demoted,
-// not removed, because it stays the source of truth and the wizard's
-// "edit as TOML" escape hatch has to lead somewhere.
+// A grid of everything the config declares is the page — sources, the
+// shared index steps, and applets — because the thing being managed is
+// the pipeline, not only the data. "Add Data Source" sits above it;
+// each row carries Run / Edit / Delete, plus Reveal in the desktop app,
+// with each action disabled per kind and saying why. The raw config
+// editor is here but collapsed — demoted, not removed, because it stays
+// the source of truth and the wizard's "edit as TOML" escape hatch has
+// to lead somewhere.
 //
 // Everything is derived from the config text, which stays the single
 // source of truth: rows come from parsing it, and add/edit/delete
@@ -22,7 +25,7 @@
 // job attributes its outcome to every source it named. The design's
 // `step_runs` table is what makes these honest; until then the column
 // says so on hover.
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -40,18 +43,21 @@ import {
   fetchConfigScaffold,
   saveConfig,
   fetchAllJobs,
-  fetchSourceStorage,
+  fetchPipelineStorage,
+  fetchFrontend,
   enqueueJob,
   openJobStream,
   type SyncJob,
-  type SourceStorage,
+  type OutputStorage,
 } from "@/api";
 import {
   listConfiguredSources,
+  type EntryKind,
   appendSource,
   removeSource,
   replaceSource,
   paramsAreRepresentable,
+  emptyTableDiagnosis,
   type ConfiguredSource,
 } from "@/config/sourceSteps";
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
@@ -64,19 +70,40 @@ const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const configText = ref("");
 const configPath = ref("");
+// Two independent verdicts on the config, and both matter.
+//
+// `parseError` is our own TOML parse — it is what stops the grid from
+// showing nonsense, and it is all we have while the Advanced editor
+// holds unsaved text.
+//
+// `configError` is the *backend's*, from `GET /api/config`, produced by
+// the real loader: it catches everything the runner would reject —
+// duplicate step ids, reserved stanza names, bad artifact patterns,
+// cycles — none of which is a TOML syntax error, so none of which our
+// parse can see. When the file on disk is broken this is the message
+// worth showing.
 const parseError = ref<string | null>(null);
+const configError = ref<string | null>(null);
+// What the backend's own loader made of the same file. Held so the
+// empty state can cross-check itself against it — see
+// `emptyTableDiagnosis`.
+const serverSourceCount = ref(0);
+const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
-const storage = ref<SourceStorage[]>([]);
+const storage = ref<OutputStorage[]>([]);
+/// applet id → why it failed to start, from `GET /api/frontend`. An
+/// applet that won't come up is otherwise only visible as a 502 from
+/// whatever tab needed it.
+const appletErrors = ref<Record<string, string>>({});
 const sources = ref<ConfiguredSource[]>([]);
 
 // The Advanced disclosure. Closed on load: the point of this tab is
 // that a text editor is not the first thing you meet.
 const configOpen = ref(false);
 const configDirty = ref(false);
-const editorEl = ref<HTMLTextAreaElement | null>(null);
 
 // Resolved once — the desktop bridge either exists for this window or
 // it doesn't, and the label depends only on the platform.
@@ -86,30 +113,60 @@ const revealLabel = revealActionLabel();
 const wizardOpen = ref(false);
 const editing = ref<{ source: ConfiguredSource; entry: CatalogEntry } | null>(null);
 
-const takenNames = computed(() => new Set(sources.value.map((s) => s.name)));
+// Only source names gate the wizard: an applet id and a stanza name
+// live in different namespaces and may safely coincide.
+/// Non-null when the table is empty for a reason worth shouting about
+/// rather than the ordinary "you haven't added anything yet".
+const emptyDiagnosis = computed(() =>
+  emptyTableDiagnosis({
+    parsedCount: sources.value.length,
+    serverSourceCount: serverSourceCount.value,
+    textLength: configText.value.length,
+    exists: configExists.value,
+    path: configPath.value,
+  }),
+);
+
+const takenNames = computed(
+  () => new Set(sources.value.filter((s) => s.kind === "source").map((s) => s.name)),
+);
 
 type Row = {
   /// Identity: the stanza directory, the step-id stem, and what every
   /// action here is keyed on.
   name: string;
-  /// What to show. Equal to `name` until someone sets a `label =` on
-  /// the source's download step.
-  label: string;
+  kind: EntryKind;
+  kindLabel: string;
   type: string | null;
+  /// What to show in the Name column. Equal to `name` until someone
+  /// sets a `label =` on one of this entry's steps.
+  label: string;
   /// The catalog's name for the provider ("Slack"), shown under Type —
-  /// a property of the source's type, not of this source.
+  /// a property of the entry's type, not of this entry.
   typeLabel: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
-  /// Null when the wizard can round-trip this source; otherwise why not.
+  /// Null when the action applies to this row; otherwise the reason it
+  /// doesn't, which becomes the disabled button's tooltip.
+  runBlocked: string | null;
   editBlocked: string | null;
+  revealBlocked: string | null;
   lastSynced: string | null;
   lastStatus: string;
   approximate: boolean;
-  /// Null when the source has no directory yet — rendered as "—", not
-  /// "0 B", which would read as "synced and empty".
+  /// Null when nothing is on disk yet — rendered as "—", not "0 B",
+  /// which would read as "ran, and produced nothing".
   bytes: number | null;
-  storage: SourceStorage | undefined;
+  /// Storage rows for this entry's declared outputs.
+  outputs: OutputStorage[];
+  /// Absolute path to reveal: the first output that exists.
+  revealPath: string | null;
+};
+
+const KIND_LABEL: Record<EntryKind, string> = {
+  source: "Source",
+  step: "Step",
+  applet: "Applet",
 };
 
 /// Most recent job naming this source. `source_name` is a comma-joined
@@ -131,34 +188,74 @@ function jobFor(name: string): { job: SyncJob; exact: boolean } | null {
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
     const entry = s.type ? catalogFor(s.type) : undefined;
-    const hit = jobFor(s.name);
+    const hit = s.kind === "applet" ? null : jobFor(s.name);
+    const outputs = s.outputs
+      .map((path) => storage.value.find((x) => x.path === path))
+      .filter((x): x is OutputStorage => !!x);
+    const onDisk = outputs.filter((o) => o.present);
+
+    // Run: the DAG schedules steps, so a source and a plain step can
+    // both be targeted; an applet is spawned by the gateway on demand
+    // and has nothing to enqueue.
+    const runBlocked =
+      s.kind === "applet"
+        ? "Applets aren't scheduled — the server starts one when something asks for it."
+        : null;
+
+    // Edit: the wizard's forms describe source types. Everything else
+    // is hand-written config, and the honest answer is to say so.
     let editBlocked: string | null = null;
-    if (!entry) {
+    if (s.kind === "applet") {
+      editBlocked = "No form for applets — edit this one in Advanced below.";
+    } else if (s.kind === "step") {
+      editBlocked = "This is a shared pipeline step, not a source; it has no form.";
+    } else if (!entry) {
       editBlocked = "This source's step isn't a datalib-step command the catalog knows.";
     } else if (!entry.wizard) {
-      editBlocked = `No guided form for ${entry.label} yet — edit it in the Manage tab.`;
+      editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
     } else {
       const rep = paramsAreRepresentable(s, entry);
       if (!rep.ok) {
         editBlocked =
           `The form doesn't model ${rep.unknown.join(", ")}, and saving would drop it. ` +
-          `Edit this one in the Manage tab.`;
+          `Edit this one in Advanced below.`;
       }
     }
-    const size = storage.value.find((x) => x.name === s.name);
+
+    const revealBlocked =
+      s.kind === "applet"
+        ? "An applet owns no files — it serves endpoints."
+        : onDisk.length === 0
+          ? "Nothing on disk yet — this hasn't produced anything."
+          : null;
+
+    // An applet's health is its own thing: it isn't scheduled, so the
+    // job queue says nothing about it. `GET /api/frontend` does.
+    let lastStatus: string;
+    if (s.kind === "applet") {
+      lastStatus = appletErrors.value[s.name] ? "failed" : "running";
+    } else {
+      lastStatus = hit ? hit.job.state : "never run";
+    }
+
     return {
-      bytes: size && size.present ? size.total_bytes : null,
-      storage: size,
       name: s.name,
-      label: s.label,
+      kind: s.kind,
+      kindLabel: KIND_LABEL[s.kind],
       type: s.type,
-      typeLabel: entry?.label ?? s.type ?? "unknown",
+      label: s.label,
+      typeLabel: entry?.label ?? s.type ?? (s.kind === "source" ? "unknown" : "—"),
       icon: entry?.icon ?? null,
       entry,
+      runBlocked,
       editBlocked,
+      revealBlocked,
       lastSynced: hit?.job.finished_at ?? hit?.job.started_at ?? null,
-      lastStatus: hit ? hit.job.state : "never run",
+      lastStatus,
       approximate: hit ? !hit.exact : false,
+      bytes: onDisk.length ? outputs.reduce((n, o) => n + o.bytes, 0) : null,
+      outputs,
+      revealPath: onDisk[0]?.abs ?? null,
     };
   }),
 );
@@ -178,12 +275,58 @@ function formatBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
+/// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
+/// button's own colour through hover, disabled and the dark theme.
+const ICON_PATHS: Record<string, string> = {
+  run: "M8 5v14l11-7z",
+  edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+  reveal: "M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z",
+  trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+};
+
+/// An icon button for the Actions cell.
+///
+/// The label is the native `title` tooltip *and* the accessible name —
+/// an icon with neither is a guess, and this row has four of them. When
+/// disabled the tooltip becomes the reason, which is the thing worth
+/// reading.
+function iconButton(
+  icon: keyof typeof ICON_PATHS,
+  label: string,
+  disabledWhy: string | null,
+  danger: boolean,
+  onClick: () => void,
+): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.className = `m2-icon-btn${danger ? " danger" : ""}`;
+  b.title = disabledWhy ?? label;
+  b.setAttribute("aria-label", label);
+  if (disabledWhy) b.disabled = true;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "15");
+  svg.setAttribute("height", "15");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICON_PATHS[icon]);
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  b.appendChild(svg);
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return b;
+}
+
 const columnDefs: ColDef<Row>[] = [
   {
     headerName: "Name",
     field: "label",
-    flex: 2,
-    minWidth: 180,
+    // The only flexing column: it absorbs slack on a wide window, and
+    // stops shrinking at a width a stanza name still fits in.
+    flex: 1,
+    minWidth: 200,
     // The label leads and the directory name follows it, muted,
     // whenever they differ. Showing only the label would hide which
     // folder this is — the whole reason the name stays fixed is that
@@ -212,23 +355,41 @@ const columnDefs: ColDef<Row>[] = [
       return wrap;
     },
   },
-  { headerName: "Type", field: "typeLabel", flex: 1, minWidth: 110 },
+  {
+    headerName: "Kind",
+    field: "kindLabel",
+    width: 90,
+    minWidth: 90,
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const span = document.createElement("span");
+      span.className = `m2-kind m2-kind-${p.data?.kind}`;
+      span.textContent = p.data?.kindLabel ?? "";
+      return span;
+    },
+  },
+  { headerName: "Type", field: "typeLabel", width: 130, minWidth: 130 },
   {
     headerName: "Last synced",
     field: "lastSynced",
-    flex: 1,
-    minWidth: 150,
+    width: 175,
+    minWidth: 175,
     valueFormatter: (p) => (p.value ? new Date(p.value as string).toLocaleString() : "—"),
   },
   {
     headerName: "Last status",
     field: "lastStatus",
-    flex: 1,
-    minWidth: 130,
-    tooltipValueGetter: (p: { data?: Row }) =>
-      p.data?.approximate
+    width: 140,
+    minWidth: 140,
+    tooltipValueGetter: (p: { data?: Row }) => {
+      const row = p.data;
+      if (!row) return undefined;
+      if (row.kind === "applet") {
+        return appletErrors.value[row.name] ?? "The gateway has this applet up.";
+      }
+      return row.approximate
         ? "From a run covering several sources — per-source status needs the step_runs table."
-        : undefined,
+        : undefined;
+    },
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const span = document.createElement("span");
       span.className = `m2-status m2-status-${p.data?.lastStatus.replace(/\s+/g, "-")}`;
@@ -242,22 +403,26 @@ const columnDefs: ColDef<Row>[] = [
     headerName: "Bytes on disk",
     field: "bytes",
     type: "numericColumn",
-    flex: 1,
+    width: 140,
     minWidth: 140,
     // The breakdown is what answers "why is this 40 GB?" — attachments
     // routinely dwarf both the entity store and the rendered markdown.
     tooltipValueGetter: (p: { data?: Row }) => {
-      const s = p.data?.storage;
-      if (!s || !s.present) return "Nothing on disk yet — this source hasn't synced.";
-      const parts = [
-        `entities ${formatBytes(s.raw_bytes)}`,
-        `attachments ${formatBytes(s.blobs_bytes)}`,
-        `markdown ${formatBytes(s.rendered_bytes)}`,
-      ];
-      if (s.raw_elsewhere) {
-        parts.push("plus a raw store held outside the data root, which isn't counted");
-      }
-      return parts.join(" · ");
+      const row = p.data;
+      if (!row) return undefined;
+      if (row.kind === "applet") return "An applet owns no artifacts.";
+      const present = row.outputs.filter((o) => o.present);
+      if (present.length === 0) return "Nothing on disk yet — this hasn't produced anything.";
+      // Per declared output, with the entities/attachments split where
+      // the backend found one. That split is the answer to "why is this
+      // so big" far more often than the total is.
+      return present
+        .map((o) =>
+          o.parts?.length
+            ? `${o.path}: ${o.parts.map((x) => `${x.label} ${formatBytes(x.bytes)}`).join(", ")}`
+            : `${o.path}: ${formatBytes(o.bytes)}`,
+        )
+        .join(" · ");
     },
     valueFormatter: (p) => (p.value === null ? "—" : formatBytes(p.value as number)),
   },
@@ -267,40 +432,30 @@ const columnDefs: ColDef<Row>[] = [
     sortable: false,
     filter: false,
     flex: 1,
-    minWidth: canReveal ? 350 : 250,
+    width: canReveal ? 132 : 102,
+    minWidth: canReveal ? 132 : 102,
+    resizable: false,
     valueGetter: (p: ValueGetterParams<Row>) => p.data?.name,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
-      const mk = (text: string, cls: string, disabledWhy: string | null, fn: () => void) => {
-        const b = document.createElement("button");
-        b.textContent = text;
-        b.className = `m2-btn ${cls}`;
-        if (disabledWhy) {
-          b.disabled = true;
-          b.title = disabledWhy;
-        }
-        b.addEventListener("click", (e) => {
-          e.stopPropagation();
-          fn();
-        });
-        wrap.appendChild(b);
-      };
       const row = p.data!;
-      mk("Run", "", null, () => runSource(row.name));
-      mk("Edit", "", row.editBlocked, () => openEdit(row.name));
+      wrap.appendChild(
+        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.name)),
+      );
+      wrap.appendChild(
+        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.name)),
+      );
       // Absent rather than disabled in a plain browser — the same
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
-        mk(
-          revealLabel,
-          "muted",
-          row.storage?.present ? null : "Nothing on disk yet — this source hasn't synced.",
-          () => reveal(row.name),
+        wrap.appendChild(
+          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.name)),
         );
       }
-      mk("Config", "muted", null, () => showInConfig(row.name));
-      mk("Delete", "danger", null, () => deleteSource(row.name));
+      wrap.appendChild(
+        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.name)),
+      );
       return wrap;
     },
   },
@@ -326,11 +481,24 @@ async function loadConfig() {
     let cfg = await fetchConfig();
     if (!cfg.exists) cfg = await fetchConfigScaffold();
     configPath.value = cfg.path;
+    configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
+    serverSourceCount.value = cfg.source_count;
+    configExists.value = cfg.exists;
     // The poll must never overwrite what someone is typing into the
     // Advanced editor. Their text wins until they save or discard.
     if (configDirty.value) return;
     configText.value = cfg.text;
     reparse();
+    if (sources.value.length === 0 && cfg.source_count > 0) {
+      // The inspector is the only channel when someone hits this in the
+      // desktop app and can't copy text out of a banner.
+      console.warn(
+        "manager2: parsed 0 entries from a config the server reads",
+        cfg.source_count,
+        "sources from —",
+        { path: cfg.path, textLength: cfg.text.length, parsedOk: cfg.parsed_ok },
+      );
+    }
   } catch (e) {
     loadError.value = (e as Error).message;
   }
@@ -346,9 +514,19 @@ async function loadJobs() {
 
 async function loadStorage() {
   try {
-    storage.value = await fetchSourceStorage();
+    storage.value = await fetchPipelineStorage();
   } catch {
     // Same: a missing size column beats an error banner over the grid.
+  }
+}
+
+async function loadAppletHealth() {
+  try {
+    const view = await fetchFrontend();
+    appletErrors.value = view.applet_errors ?? {};
+  } catch {
+    // Leave the last known state; an applet row without a status beats
+    // claiming it failed because one fetch did.
   }
 }
 
@@ -411,44 +589,29 @@ async function deleteSource(name: string) {
   const source = sources.value.find((s) => s.name === name);
   if (!source) return;
   const ok = window.confirm(
-    `Remove "${name}" from the config?\n\n` +
-      `Its data stays on disk and stays searchable — only the sync stops. ` +
-      `Re-adding it later resumes from what's already downloaded.`,
+    source.kind === "applet"
+      ? `Remove the "${name}" applet from the config?\n\n` +
+          `The server stops it. Anything in the app that its components or endpoints ` +
+          `serve will stop working until you add it back.`
+      : source.kind === "step"
+        ? `Remove the "${name}" step from the config?\n\n` +
+            `Its outputs stay on disk but stop being refreshed. For a shared index step ` +
+            `that means search results go stale.`
+        : `Remove "${name}" from the config?\n\n` +
+            `Its data stays on disk and stays searchable — only the sync stops. ` +
+            `Re-adding it later resumes from what's already downloaded.`,
   );
   if (!ok) return;
   await writeConfig(removeSource(configText.value, source), `Removed ${name}.`);
 }
 
 async function reveal(name: string) {
-  const path = rows.value.find((r) => r.name === name)?.storage?.path;
+  const path = rows.value.find((r) => r.name === name)?.revealPath;
   if (!path) return;
   const ok = await revealInFileManager(path);
   if (!ok) {
     banner.value = { ok: false, text: `Could not open ${path} in the file manager.` };
   }
-}
-
-/// Open the Advanced editor and select this source's stanza in it.
-///
-/// A textarea doesn't scroll to its own selection, so estimate the
-/// target line's offset from the line count and the computed line
-/// height — the same approach the Manage tab's "Locate config" uses.
-async function showInConfig(name: string) {
-  const source = sources.value.find((s) => s.name === name);
-  if (!source) return;
-  configOpen.value = true;
-  await nextTick();
-  const el = editorEl.value;
-  if (!el) return;
-  el.focus();
-  // A zero range means the step has no tables of its own to select —
-  // an inline `steps = [{…}]` entry. Leave the cursor alone rather
-  // than selecting some unrelated span.
-  if (source.end === 0) return;
-  el.setSelectionRange(source.start, source.end);
-  const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 16;
-  const line = configText.value.slice(0, source.start).split("\n").length - 1;
-  el.scrollTop = Math.max(0, line * lineHeight - el.clientHeight / 3);
 }
 
 function onConfigEdit() {
@@ -468,7 +631,11 @@ async function discardConfigEdits() {
 
 async function runSource(name: string) {
   const source = sources.value.find((s) => s.name === name);
-  const target = source?.steps.find((s) => s.phase === "download")?.id
+  // A source is targeted through its download step (the render step
+  // follows from the artifact edges); a plain step by its own id.
+  const target =
+    source?.stepId
+    ?? source?.steps.find((s) => s.phase === "download")?.id
     ?? source?.steps[0]?.id
     ?? name;
   busy.value = true;
@@ -488,7 +655,7 @@ let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), loadJobs(), loadStorage()]);
+  await Promise.all([loadConfig(), loadJobs(), loadStorage(), loadAppletHealth()]);
   stream = openJobStream(() => void loadJobs());
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
@@ -496,6 +663,7 @@ onMounted(async () => {
     void loadConfig();
     void loadJobs();
     void loadStorage();
+    void loadAppletHealth();
   }, 5000);
 });
 
@@ -510,44 +678,62 @@ onUnmounted(() => {
   <section class="m2">
     <header class="m2-head">
       <div>
-        <h2>Data sources</h2>
+        <h2>Pipeline</h2>
         <p class="m2-path">
           <code>{{ configPath }}</code>
         </p>
       </div>
-      <button class="m2-add" :disabled="busy || !!parseError" @click="openAdd">
+      <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
         + Add Data Source
       </button>
     </header>
 
     <p v-if="loadError" class="m2-msg bad">Could not load the config: {{ loadError }}</p>
     <p v-if="parseError" class="m2-msg bad">
-      The config doesn’t parse, so nothing here can be trusted: {{ parseError }}
+      The config doesn’t parse, so the table below can’t be trusted: {{ parseError }}
     </p>
+    <div v-else-if="configError" class="m2-msg bad m2-invalid">
+      <b>datalib won’t run this config.</b>
+      <span>{{ configError }}</span>
+      <span class="m2-invalid-why">
+        It parses as TOML, so the table below still reflects it — but nothing will sync, and
+        applets won’t start, until this is fixed. Open <b>Advanced</b> below to edit it.
+      </span>
+      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+    </div>
     <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
       <AgGridVue
+        class="m2-ag"
         :theme="gridTheme"
         :columnDefs="columnDefs"
         :rowData="rows"
         :getRowId="(p: { data: Row }) => p.data.name"
-        :domLayout="'autoHeight'"
         :tooltipShowDelay="200"
         @grid-ready="onGridReady"
       />
     </div>
 
-    <p v-if="rows.length === 0 && !parseError" class="m2-empty">
-      No data sources configured yet. <b>Add Data Source</b> walks you through one.
+    <div class="m2-foot">
+    <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
+      <b>This table is empty, and it shouldn’t be.</b>
+      <span>{{ emptyDiagnosis }}</span>
+      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+    </div>
+    <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
+      Nothing configured yet. <b>Add Data Source</b> walks you through one.
     </p>
 
     <p class="m2-note">
-      Account and document-count columns aren’t here yet — each needs a backend endpoint the
-      design calls for. “Bytes on disk” is a directory walk; hover a value for the split between
-      entities, attachments and rendered markdown. “Last status” comes from the job queue, which
-      records whole runs rather than individual sources, so a <code>~</code> marks a status
-      inferred from a run that covered several.
+      Every row is something <code>config.toml</code> declares: your <b>sources</b>, the shared
+      index <b>steps</b> that make them searchable, and the <b>applets</b> the app spawns to serve
+      them. Actions that don’t apply to a kind are disabled and say why. Account and
+      document-count columns aren’t here yet — each needs a backend endpoint the design calls for.
+      “Bytes on disk” is a directory walk over each row’s declared outputs; hover a value for the
+      breakdown. “Last status” comes from the job queue, which records whole runs rather than
+      individual steps, so a <code>~</code> marks a status inferred from a run that covered
+      several.
     </p>
 
     <details class="m2-advanced" :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
@@ -558,7 +744,6 @@ onUnmounted(() => {
         <code>common.download_params</code> that would make a row’s Edit button refuse.
       </p>
       <textarea
-        ref="editorEl"
         v-model="configText"
         class="m2-editor"
         spellcheck="false"
@@ -576,6 +761,7 @@ onUnmounted(() => {
         </span>
       </div>
     </details>
+    </div>
 
     <SourceWizard
       v-if="wizardOpen"
@@ -588,8 +774,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.m2 { padding: 16px 20px 40px; }
-.m2-head { display: flex; align-items: flex-start; gap: 16px; }
+/* The shell is a viewport-height flex column, so this view can claim
+   the leftover and bound itself — which is what lets the grid scroll on
+   its own instead of growing the page. `min-height: 0` is the part that
+   makes a flex child actually shrink rather than overflow. */
+.m2 {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  box-sizing: border-box;
+}
+.m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
 .m2-head h2 { margin: 0 0 4px; font-size: 19px; }
 .m2-path { margin: 0; color: var(--datalib-muted); font-size: 12px; }
 .m2-add {
@@ -608,8 +805,41 @@ onUnmounted(() => {
 .m2-msg { margin: 12px 0 0; font-size: 13px; }
 .m2-msg.bad { color: var(--datalib-log-error); }
 .m2-msg.good { color: var(--datalib-muted); }
+.m2-invalid {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--datalib-log-error);
+  border-radius: 5px;
+  max-width: 90ch;
+}
+.m2-invalid > span { color: var(--datalib-fg); }
+.m2-invalid-why { color: var(--datalib-muted) !important; font-size: 12.5px; line-height: 1.55; }
 
-.m2-grid { margin-top: 16px; }
+.m2-grid {
+  margin-top: 16px;
+  /* A definite height is what makes AG Grid scroll internally — both
+     ways. `min-height` keeps it usable when the Advanced editor is
+     open and competing for the same space. */
+  flex: 1 1 auto;
+  min-height: 180px;
+}
+/* Without `domLayout: autoHeight` the grid sizes to its container, so
+   its own element has to fill the box we just gave it — otherwise it
+   collapses to nothing and renders neither headers nor rows. */
+.m2-ag {
+  height: 100%;
+}
+/* Everything under the grid scrolls as one block, so opening the
+   Advanced editor never pushes the table off screen. */
+.m2-foot {
+  flex: 0 0 auto;
+  max-height: 52vh;
+  overflow-y: auto;
+}
 .m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
 .m2-advanced {
   margin-top: 24px;
@@ -666,12 +896,51 @@ onUnmounted(() => {
 .m2-cell-source img { width: 16px; height: 16px; }
 .m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 
+.m2-kind {
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--datalib-border);
+  color: var(--datalib-muted);
+}
+.m2-kind-source { color: var(--datalib-fg); border-color: var(--datalib-fg); }
+
 .m2-status { text-transform: capitalize; }
+.m2-status-running { color: var(--datalib-accent); font-weight: 600; }
 .m2-status-failed { color: var(--datalib-log-error); font-weight: 600; }
 .m2-status-done { color: var(--datalib-muted); }
 .m2-status-running { color: var(--datalib-accent); font-weight: 600; }
 
-.m2-actions { display: inline-flex; gap: 6px; }
+.m2-actions {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  height: 100%;
+}
+.m2-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--datalib-muted);
+  cursor: pointer;
+}
+.m2-icon-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+  border-color: var(--datalib-border);
+  color: var(--datalib-fg);
+}
+.m2-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.m2-icon-btn.danger:hover:not(:disabled) {
+  color: var(--datalib-log-error);
+  border-color: var(--datalib-log-error);
+}
 .m2-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);

@@ -1,12 +1,23 @@
-// Per-*source* view of a DAG config, for the Manager2 grid.
+// Per-*entry* view of a DAG config, for the Manager2 grid.
 //
-// `configSources.ts` lists fringe *steps* — what `--sync` accepts. This
-// module groups steps into the thing a person configured: a source
-// stanza, identified the same way the backend identifies one, by the
-// first path segment of a `<name>/raw` or `<name>/rendered_md` output
-// (`datalib_dag::config::validate_steps`). That deliberately excludes
-// the aggregate index steps, whose outputs are `unified_index/grid` and
-// `unified_index/qmd`.
+// The grid is a picture of the pipeline, not just of the data, so every
+// row here is something the config declares. Three kinds:
+//
+//   source  a `<name>/raw` + `<name>/rendered_md` pair, grouped into one
+//           row by its stanza name — identified the way the backend
+//           identifies one (`datalib_dag::config::validate_steps`)
+//   step    any other `[[steps]]` entry, one row each. In practice the
+//           shared `grid_index` / `qmd_index` fan-ins, which write
+//           `unified_index/` — often the largest thing on a real data
+//           root, and invisible while this listed sources only.
+//   applet  an `[[applets]]` entry: a server the http gateway spawns on
+//           demand. Never scheduled and owns no artifacts, so most row
+//           actions don't apply to it — but it is configured, it can
+//           fail to start, and that failure should be visible here
+//           rather than as a 502 in another tab.
+//
+// `configSources.ts` is the older, narrower thing: fringe *step ids*,
+// which is what `--sync` accepts.
 //
 // Writes are whole-text: a source's steps occupy a contiguous-ish set
 // of character ranges, and add/delete splice the text the editor holds.
@@ -35,18 +46,31 @@ export type SourceStep = {
   end: number;
 };
 
+export type EntryKind = "source" | "step" | "applet";
+
 export type ConfiguredSource = {
-  /// The stanza name — its directory under the data root, and the stem
-  /// of its step ids. Identity: changing it moves data on disk and
-  /// strands the index's `qmd_path`s, so the wizard holds it fixed.
+  /// A source's stanza name (its directory under the data root and the
+  /// stem of its step ids), or for the other kinds the entry's own id.
+  /// Identity: changing a source's name moves data on disk and strands
+  /// the index's `qmd_path`s, so the wizard holds it fixed.
   name: string;
-  /// What to call this source on screen. The first `label =` any of its
-  /// steps declares, falling back to `name` — so a source that never
+  kind: EntryKind;
+  /// What to call this entry on screen. The first `label =` any of its
+  /// steps declares, falling back to `name` — so an entry that never
   /// set one is displayed exactly as it always was.
   label: string;
-  /// The source's type, taken from whichever phase declares one.
+  /// The source's type, taken from whichever phase declares one. Null
+  /// for kinds that have none.
   type: string | null;
   steps: SourceStep[];
+  /// Declared output paths across every step of this entry — what the
+  /// storage endpoint's rows are keyed on. Empty for an applet, which
+  /// owns no artifacts.
+  outputs: string[];
+  /// The `id` the DAG runner schedules, for a single-step entry. Null
+  /// for a source (whose two steps are targeted by their own ids) and
+  /// for an applet (never scheduled).
+  stepId: string | null;
   /// Union span of every step, for delete.
   start: number;
   end: number;
@@ -57,8 +81,12 @@ const PHASE_BY_SUFFIX: Record<string, SourcePhase> = {
   rendered_md: "render",
 };
 
-/// Parse the config text and group its steps into sources. Throws with
+/// Parse the config text and list everything it declares. Throws with
 /// the parser's message (and line, when it has one) on malformed TOML.
+///
+/// Order is sources first (the common case, and what the Add button
+/// produces), then other steps, then applets — so the table opens on
+/// what someone came to look at.
 export function listConfiguredSources(text: string): ConfiguredSource[] {
   let ast;
   try {
@@ -68,88 +96,163 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
     const at = err.lineNumber !== undefined ? ` (line ${err.lineNumber})` : "";
     throw new Error(`${err.message ?? String(e)}${at}`);
   }
-  const steps = (getStaticTOMLValue(ast) as { steps?: unknown }).steps;
-  if (!Array.isArray(steps)) return [];
+  const root = getStaticTOMLValue(ast) as { steps?: unknown; applets?: unknown };
 
-  // Every step index's character range. `[steps.params]` is a sibling
-  // node in the AST rather than a child of the step's own table, so the
-  // span has to be widened to cover it — same derivation as
-  // configSources.ts.
-  const ranges = new Map<number, [number, number]>();
-  for (const node of ast.body[0].body) {
-    if (node.type !== "TOMLTable") continue;
-    const [key, index] = node.resolvedKey;
-    if (key !== "steps" || typeof index !== "number") continue;
-    const prev = ranges.get(index);
-    ranges.set(
-      index,
-      prev
-        ? [Math.min(prev[0], node.range[0]), Math.max(prev[1], node.range[1])]
-        : [node.range[0], node.range[1]],
-    );
-  }
+  // Every entry's character range, per array. `[steps.params]` is a
+  // sibling node in the AST rather than a child of the step's own
+  // table, so the span has to be widened to cover it — same derivation
+  // as configSources.ts.
+  const ranges = (key: string) => {
+    const out = new Map<number, [number, number]>();
+    for (const node of ast.body[0].body) {
+      if (node.type !== "TOMLTable") continue;
+      const [k, index] = node.resolvedKey;
+      if (k !== key || typeof index !== "number") continue;
+      const prev = out.get(index);
+      out.set(
+        index,
+        prev
+          ? [Math.min(prev[0], node.range[0]), Math.max(prev[1], node.range[1])]
+          : [node.range[0], node.range[1]],
+      );
+    }
+    return out;
+  };
 
+  const sources: ConfiguredSource[] = [];
+  const plainSteps: ConfiguredSource[] = [];
   const byName = new Map<string, ConfiguredSource>();
-  steps.forEach((raw, i) => {
-    const step = raw as {
-      id?: unknown;
-      label?: unknown;
-      command?: unknown;
-      outputs?: unknown;
-      params?: unknown;
-    } | null;
-    const outputs = Array.isArray(step?.outputs) ? (step!.outputs as unknown[]) : [];
-    for (const out of outputs) {
-      if (typeof out !== "string") continue;
-      const segments = out.split("/");
-      if (segments.length !== 2) continue;
-      const phase = PHASE_BY_SUFFIX[segments[1]];
-      if (!phase) continue;
-      const name = segments[0];
 
-      const [start, end] = ranges.get(i) ?? [0, 0];
-      const entry: SourceStep = {
-        id: typeof step?.id === "string" ? step.id : "",
-        label:
-          typeof step?.label === "string" && step.label.trim() !== ""
-            ? step.label.trim()
-            : null,
-        phase,
-        type: stepType(typeof step?.command === "string" ? step.command : ""),
-        params:
-          step?.params && typeof step.params === "object"
-            ? (step.params as Record<string, unknown>)
-            : {},
-        start,
-        end,
-      };
-      const existing = byName.get(name);
-      if (existing) {
-        existing.steps.push(entry);
-        existing.type = existing.type ?? entry.type;
-        existing.start = Math.min(existing.start, start || existing.start);
-        existing.end = Math.max(existing.end, end);
-      } else {
-        byName.set(name, {
-          name,
-          label: name,
-          type: entry.type,
-          steps: [entry],
+  if (Array.isArray(root.steps)) {
+    const stepRanges = ranges("steps");
+    root.steps.forEach((raw, i) => {
+      const step = raw as {
+        id?: unknown;
+        label?: unknown;
+        command?: unknown;
+        outputs?: unknown;
+        params?: unknown;
+      } | null;
+      const id = typeof step?.id === "string" ? step.id : "";
+      // Blank is the same as absent: `listConfiguredSources` reports the
+      // name in both cases, so a whitespace label never blanks a row.
+      const label =
+        typeof step?.label === "string" && step.label.trim() !== ""
+          ? step.label.trim()
+          : null;
+      const outputs = (Array.isArray(step?.outputs) ? (step!.outputs as unknown[]) : []).filter(
+        (o): o is string => typeof o === "string",
+      );
+      const [start, end] = stepRanges.get(i) ?? [0, 0];
+      const type = stepType(typeof step?.command === "string" ? step.command : "");
+      const params =
+        step?.params && typeof step.params === "object"
+          ? (step.params as Record<string, unknown>)
+          : {};
+
+      // Is this a source stanza's step? Only `<name>/raw` and
+      // `<name>/rendered_md` say so — which is what keeps
+      // `unified_index/grid` out of the source bucket.
+      const stanza = outputs
+        .map((out) => out.split("/"))
+        .find((segs) => segs.length === 2 && PHASE_BY_SUFFIX[segs[1]]);
+
+      if (stanza) {
+        const name = stanza[0];
+        const entry: SourceStep = {
+          id,
+          label,
+          phase: PHASE_BY_SUFFIX[stanza[1]],
+          type,
+          params,
           start,
           end,
-        });
+        };
+        const existing = byName.get(name);
+        if (existing) {
+          existing.steps.push(entry);
+          existing.outputs.push(...outputs);
+          existing.type = existing.type ?? type;
+          existing.start = Math.min(existing.start, start || existing.start);
+          existing.end = Math.max(existing.end, end);
+        } else {
+          const source: ConfiguredSource = {
+            name,
+            // Filled in by the resolution pass at the end of this function.
+            label: "",
+            kind: "source",
+            type,
+            steps: [entry],
+            outputs: [...outputs],
+            stepId: null,
+            start,
+            end,
+          };
+          byName.set(name, source);
+          sources.push(source);
+        }
+        return;
       }
-      break; // one stanza per step; the first stanza-shaped output wins
-    }
-  });
-  // Resolved once the group is complete: the first step that declares a
-  // label names the source, and a source with no label anywhere is
-  // displayed by its name, exactly as before labels existed.
-  const sources = [...byName.values()];
-  for (const source of sources) {
-    source.label = source.steps.find((s) => s.label)?.label ?? source.name;
+
+      plainSteps.push({
+        name: id || `step ${i + 1}`,
+        // Filled in by the resolution pass at the end of this function.
+        label: "",
+        kind: "step",
+        type,
+        // A non-source step has no download/render phase; call it
+        // download so the phase-keyed helpers have something to key on.
+        steps: [{ id, label, phase: "download", type, params, start, end }],
+        outputs,
+        stepId: id || null,
+        start,
+        end,
+      });
+    });
   }
-  return sources;
+
+  const applets: ConfiguredSource[] = [];
+  if (Array.isArray(root.applets)) {
+    const appletRanges = ranges("applets");
+    root.applets.forEach((raw, i) => {
+      const applet = raw as { id?: unknown; command?: unknown } | null;
+      const id = typeof applet?.id === "string" ? applet.id : `applet ${i + 1}`;
+      const [start, end] = appletRanges.get(i) ?? [0, 0];
+      applets.push({
+        name: id,
+        // Filled in by the resolution pass at the end of this function.
+        label: "",
+        kind: "applet",
+        // The word after `datalib-applet`, when it is one — the same
+        // shape as a step's provider word, and what names the applet.
+        type: appletType(typeof applet?.command === "string" ? applet.command : ""),
+        steps: [],
+        outputs: [],
+        stepId: null,
+        start,
+        end,
+      });
+    });
+  }
+
+  const entries = [...sources, ...plainSteps, ...applets];
+  // Resolved once each group is complete: the first step declaring a
+  // label names the entry, and one with no label anywhere is displayed
+  // by its name, exactly as before labels existed. Applets carry no
+  // steps and no `label` key, so they always fall back to their id.
+  for (const entry of entries) {
+    entry.label = entry.steps.find((s) => s.label)?.label ?? entry.name;
+  }
+  return entries;
+}
+
+/// `datalib-applet unified_index` → `unified_index`. Null for anything
+/// else, which is legitimate — an applet may be any executable.
+function appletType(command: string): string | null {
+  const words = command.trim().split(/\s+/);
+  if (words.length < 2) return null;
+  if (!/(^|\/)datalib-applet$/.test(words[0])) return null;
+  return words[1];
 }
 
 /// `datalib-step download slack_api` → `slack_api`. Null for anything
@@ -402,4 +505,48 @@ export function suggestName(taken: Set<string>, base: string): string {
     if (!taken.has(candidate)) return candidate;
   }
   return base;
+}
+
+
+/// Why the table is empty, when it shouldn't be.
+///
+/// The grid derives its rows from the config text in the browser, while
+/// `GET /api/config` reports what the *backend's* loader made of the
+/// same file. Those two must agree. When they don't — the server counts
+/// sources and the table shows none — the bug is on this side, and the
+/// empty state has to say so instead of offering a friendly "nothing
+/// configured yet" that sends someone looking at their own config.
+///
+/// This exists because that exact disagreement was reported from the
+/// desktop app and could not be reproduced against the same backend in
+/// a browser. A silent empty table gives an investigation nothing to
+/// go on; this makes the next occurrence self-describing.
+export function emptyTableDiagnosis(input: {
+  /// Entries the browser parsed out of the config text.
+  parsedCount: number;
+  /// `source_count` from `GET /api/config` — the backend's own loader.
+  serverSourceCount: number;
+  /// Length of the config text the browser is holding.
+  textLength: number;
+  /// Whether the file exists on disk, per the backend.
+  exists: boolean;
+  path: string;
+}): string | null {
+  const { parsedCount, serverSourceCount, textLength, exists, path } = input;
+  if (parsedCount > 0) return null;
+
+  if (exists && textLength === 0) {
+    return (
+      `${path} exists but arrived empty, so there is nothing to show. ` +
+      `That is not a config problem — the file did not reach this page.`
+    );
+  }
+  if (serverSourceCount > 0) {
+    return (
+      `The server reads ${serverSourceCount} source${serverSourceCount === 1 ? "" : "s"} from ` +
+      `${path}, but this table parsed none out of the ${textLength} characters it received. ` +
+      `That disagreement is a bug in this table, not in your config — please report it.`
+    );
+  }
+  return null;
 }

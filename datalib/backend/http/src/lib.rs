@@ -43,6 +43,7 @@ pub mod auth;
 pub mod boot;
 mod embed;
 pub mod frontend;
+pub mod lock;
 pub mod worker;
 
 pub use auth::ApiToken;
@@ -177,7 +178,7 @@ pub fn router(state: AppState) -> Router {
             get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
         )
         .route("/api/sync/sources", get(sync_sources))
-        .route("/api/sources/storage", get(sources_storage))
+        .route("/api/pipeline/storage", get(pipeline_storage))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
         .route("/api/sync/jobs/{id}", get(sync_job_get))
@@ -1055,8 +1056,8 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     Json(sources.into_iter().map(|id| SourceInfo { id }).collect())
 }
 
-/// Bytes on disk per configured source, for the Manage grid's storage
-/// column.
+/// Bytes on disk per declared output path, for the Manage grid's
+/// storage column.
 ///
 /// Deliberately a plain directory walk rather than anything that opens
 /// a store: the numbers people want ("why is this 40 GB?") are file
@@ -1064,40 +1065,42 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
 /// of every source on every poll — the cost that got the download
 /// report deleted in 6dae9185.
 ///
-/// Split three ways because the total alone doesn't answer the
-/// question: attachments (`blobs.doltlite_db`) routinely dwarf both the
-/// entity store beside them and the markdown rendered from them.
+/// Keyed on the **declared output path**, not on a source, because the
+/// grid groups steps into rows and that grouping rule should live in
+/// exactly one place. A source row sums its two outputs; an index step
+/// row has one. Duplicating "what counts as a source" here would give
+/// it a second home to drift from.
 #[derive(Debug, Serialize)]
-pub struct SourceStorage {
-    /// Stanza name — the source's directory under the data root.
-    pub name: String,
-    /// Absolute path of that directory. Sent so the UI can hand it to
-    /// the desktop app's reveal-in-file-manager IPC without having to
-    /// reassemble it from the data root and the name — the server is
-    /// the side that knows where the root actually is.
+pub struct OutputStorage {
+    /// The path as the config declares it, data-root-relative.
     pub path: String,
-    /// `<root>/<name>/raw/`, excluding the blob CAS below.
-    pub raw_bytes: u64,
-    /// `<root>/<name>/raw/blobs.doltlite_db`.
-    pub blobs_bytes: u64,
-    /// `<root>/<name>/rendered_md/`.
-    pub rendered_bytes: u64,
-    pub total_bytes: u64,
-    /// The stanza directory doesn't exist yet — never synced. Distinct
-    /// from a real zero so the UI can show "—" rather than "0 B".
+    /// Resolved absolute path, for the desktop app's reveal IPC. The
+    /// server is the side that knows where the root is.
+    pub abs: String,
+    /// The directory doesn't exist yet — nothing has written it.
+    /// Distinct from a real zero, so the UI can show "—" rather than
+    /// "0 B", which would read as "ran, and produced nothing".
     pub present: bool,
-    /// Some step of this source sets `params.common.raw_path`, so its
-    /// raw store may sit outside the data root and is not counted here.
-    /// Reported rather than resolved: resolving would mean duplicating
-    /// the provider-side `~`/relative handling in this crate.
-    pub raw_elsewhere: bool,
+    pub bytes: u64,
+    /// A breakdown worth showing, when the path has one. A raw store
+    /// splits into entity rows and attachment blobs, and the split is
+    /// the answer to "why is this so big" far more often than the
+    /// total is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<StoragePart>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StoragePart {
+    pub label: String,
+    pub bytes: u64,
 }
 
 /// Recursive byte total of a directory tree.
 ///
 /// Symlinks are counted as their own (tiny) entry and never followed —
 /// following them risks both cycles and double-counting a tree that
-/// another source already reported.
+/// another output already reported.
 fn dir_size(path: &std::path::Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else {
         return 0;
@@ -1120,60 +1123,51 @@ fn file_size(path: &std::path::Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-async fn sources_storage(State(s): State<AppState>) -> Json<Vec<SourceStorage>> {
+async fn pipeline_storage(State(s): State<AppState>) -> Json<Vec<OutputStorage>> {
     let Ok((cfg, _root)) = datalib_dag::config::load(&s.config_path()) else {
         return Json(Vec::new());
     };
+    let root = s.root.as_path();
 
-    // Stanza names, derived the way the config loader derives them: the
-    // first segment of a `<name>/raw` or `<name>/rendered_md` output.
-    // That excludes the aggregate index steps, whose outputs are
-    // `unified_index/grid` and `unified_index/qmd`.
-    let mut names: std::collections::BTreeMap<String, bool> = Default::default();
+    // Declared outputs, deduped and in config order. A pattern with a
+    // glob (`**/rendered_md` on the index steps' *inputs*) never
+    // reaches here — only outputs are walked, and those are concrete.
+    let mut seen: std::collections::BTreeSet<&str> = Default::default();
+    let mut out = Vec::new();
     for step in &cfg.steps {
-        let elsewhere = step
-            .params
-            .as_ref()
-            .and_then(|p| p.get("common"))
-            .and_then(|c| c.get("raw_path"))
-            .is_some();
-        for out in &step.outputs {
-            let mut segments = out.split('/');
-            let (Some(name), Some(suffix), None) =
-                (segments.next(), segments.next(), segments.next())
-            else {
-                continue;
-            };
-            if suffix != "raw" && suffix != "rendered_md" {
+        for path in &step.outputs {
+            if path.contains('*') || !seen.insert(path.as_str()) {
                 continue;
             }
-            let entry = names.entry(name.to_string()).or_insert(false);
-            *entry |= elsewhere;
-            break;
+            let abs = root.join(path);
+            let bytes = dir_size(&abs);
+            // A per-source raw store is the one place a split earns its
+            // keep: `blobs.doltlite_db` routinely dwarfs the entity
+            // store beside it.
+            let blobs = file_size(&abs.join("blobs.doltlite_db"));
+            let parts = if blobs > 0 {
+                vec![
+                    StoragePart {
+                        label: "entities".into(),
+                        bytes: bytes.saturating_sub(blobs),
+                    },
+                    StoragePart {
+                        label: "attachments".into(),
+                        bytes: blobs,
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            out.push(OutputStorage {
+                present: abs.is_dir(),
+                path: path.clone(),
+                abs: abs.to_string_lossy().into_owned(),
+                bytes,
+                parts,
+            });
         }
     }
-
-    let root = s.root.as_path();
-    let out = names
-        .into_iter()
-        .map(|(name, raw_elsewhere)| {
-            let stanza = root.join(&name);
-            let raw = stanza.join("raw");
-            let blobs_bytes = file_size(&raw.join("blobs.doltlite_db"));
-            let raw_bytes = dir_size(&raw).saturating_sub(blobs_bytes);
-            let rendered_bytes = dir_size(&stanza.join("rendered_md"));
-            SourceStorage {
-                present: stanza.is_dir(),
-                total_bytes: raw_bytes + blobs_bytes + rendered_bytes,
-                path: stanza.to_string_lossy().into_owned(),
-                name,
-                raw_bytes,
-                blobs_bytes,
-                rendered_bytes,
-                raw_elsewhere,
-            }
-        })
-        .collect();
     Json(out)
 }
 

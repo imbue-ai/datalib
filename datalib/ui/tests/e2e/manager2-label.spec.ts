@@ -13,7 +13,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Data sources" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
 }
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -73,8 +73,12 @@ test("a label is editable, the name is not, and clearing it drops the key", asyn
   await expect(page.getByText("Added claude.")).toBeVisible();
 
   // --- The grid shows the label, and still names the directory ------
-  const row = page.locator(".ag-row", { hasText: "Personal Claude" });
+  // Addressed by row id (`getRowId` is the entry's name), not by
+  // position: the table lists steps and applets too, so `.first()`
+  // is whichever entry happens to sort first.
+  const row = page.locator('.ag-row[row-id="claude"]');
   await expect(row).toBeVisible();
+  await expect(row).toContainText("Personal Claude");
   await expect(row.locator(".m2-cell-dir")).toHaveText("claude");
   // It really is in the file, on the download step.
   await expect(editor).toHaveValue(/label = "Personal Claude"/);
@@ -91,5 +95,8 @@ test("a label is editable, the name is not, and clearing it drops the key", asyn
   await expect(page.getByText("Saved claude.")).toBeVisible();
   await expect(editor).not.toHaveValue(/label = /);
   await expect(page.locator(".ag-row", { hasText: "Personal Claude" })).toHaveCount(0);
-  await expect(page.locator(".ag-row").first()).toContainText("claude");
+  // The row is still there, now displayed by its directory name — and
+  // with no muted second name, because there is nothing to disambiguate.
+  await expect(row).toContainText("claude");
+  await expect(row.locator(".m2-cell-dir")).toHaveCount(0);
 });

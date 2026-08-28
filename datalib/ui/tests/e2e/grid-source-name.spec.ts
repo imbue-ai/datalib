@@ -31,7 +31,7 @@ async function openGrid(page: Page) {
 /// which PUTs through the same validating endpoint everything else uses.
 async function writeConfig(page: Page, text: string): Promise<void> {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Data sources" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
   await page.getByText("Advanced — edit config.toml directly").click();
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -46,7 +46,7 @@ let original = "";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Data sources" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
   original = await page.locator(".m2-editor").inputValue();
 });
 
