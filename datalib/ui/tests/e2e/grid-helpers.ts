@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 // Scroll a (possibly virtualized-away) row into view via the grid api
 // the GridCard exposes on window, then click it. Returns after the
@@ -32,4 +32,34 @@ export async function clickRowByUuid(page: Page, uuid: string) {
   await page
     .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
     .click();
+}
+
+// Assert that an AG Grid actually *painted*, not merely mounted.
+//
+// The failure this exists for: WebKit resolves a child's percentage
+// `height` against the parent's *specified* height, so when the parent
+// gets its height from flex resolution and declares none of its own,
+// `height: 100%` computes to `auto` and the grid's root wrapper
+// collapses to its border (~2px). Every row and header is still in the
+// DOM — `.ag-row` locators match, `toHaveCount` passes — and nothing is
+// on screen. Chromium resolves against the flexed height and looks
+// fine, which is how the same bug shipped twice (`.grid` in
+// cards/GridCard.ce.vue, `.m2-ag` in views/Manager2View.vue).
+//
+// So the assertion has to be geometric. 100px is comfortably above the
+// collapsed states we've actually seen (2px of border; ~50px when only
+// the row-group panel survives) and comfortably below any real grid,
+// which fills a viewport-height flex column.
+export async function expectGridPainted(
+  grid: Locator,
+  what: string,
+  timeout = 10_000,
+) {
+  await expect(grid).toBeVisible({ timeout });
+  await expect
+    .poll(async () => (await grid.boundingBox())?.height ?? 0, {
+      message: `${what}: .ag-root-wrapper must have real height, not a collapsed box`,
+      timeout,
+    })
+    .toBeGreaterThan(100);
 }

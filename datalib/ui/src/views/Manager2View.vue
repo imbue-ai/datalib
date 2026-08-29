@@ -817,8 +817,8 @@ onUnmounted(() => {
    that has no explicit `height` as `auto`, which collapsed this grid to
    its 2px of border — headers and rows present in the DOM, nothing
    painted — while Chromium gives it the full flexed height. Same bug,
-   same fix as `.grid` in cards/GridCard.ce.vue; the e2e suite is
-   Chromium-only, so neither one is caught by a test. */
+   same fix as `.grid` in cards/GridCard.ce.vue. Pinned by
+   tests/e2e/manager2-grid.spec.ts under the suite's `webkit` project. */
 .m2-ag {
   position: absolute;
   inset: 0;

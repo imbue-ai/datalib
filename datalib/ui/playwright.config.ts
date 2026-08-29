@@ -165,6 +165,44 @@ export default defineConfig({
       name: "chromium",
       use: { browserName: "chromium" },
     },
+    {
+      // The desktop app runs in a WKWebView, not Chromium, and WebKit's
+      // layout differs in ways that have twice shipped an invisible AG
+      // Grid: it resolves a child's percentage `height` against the
+      // parent's *specified* height, so `height: 100%` under a
+      // flex-sized parent with no `height` of its own computes to
+      // `auto` and the grid collapses to its border. Rows and headers
+      // stay in the DOM, so every locator-and-count assertion in this
+      // suite passes while nothing is painted (see `expectGridPainted`
+      // in tests/e2e/grid-helpers.ts, which is the assertion shape that
+      // does catch it).
+      //
+      // Only the grid-bearing specs are re-run here — this project
+      // exists to cover layout the engines disagree about, not to
+      // double-run application logic that is engine-independent.
+      // `first-run.spec.ts` is excluded for a second reason: it
+      // initializes the empty data root, which is minted once per
+      // config load, so it cannot run twice in one session.
+      name: "webkit",
+      use: { browserName: "webkit" },
+      testMatch: [
+        // Explore / GridCard — the search grid.
+        /grid-populated\.spec\.ts/,
+        /grid-context-menu\.spec\.ts/,
+        /contents-cell-clamp\.spec\.ts/,
+        /row-click-scroll\.spec\.ts/,
+        /row-msg-index-alignment\.spec\.ts/,
+        /score-sort-order\.spec\.ts/,
+        /search-qmd-routing\.spec\.ts/,
+        /selected-message-outline\.spec\.ts/,
+        /qmd-index-columns\.spec\.ts/,
+        /url-sync\.spec\.ts/,
+        /yolink-plots\.spec\.ts/,
+        /gallery\.spec\.ts/,
+        // /sources2 — the Manager2 Pipeline table.
+        /manager2-grid\.spec\.ts/,
+      ],
+    },
   ],
   webServer: [
     {
