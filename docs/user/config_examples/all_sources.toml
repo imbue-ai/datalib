@@ -691,9 +691,8 @@ inputs = ["pdfs/raw"]
 # UI of its own), so there is no render step — query the raw store directly.
 # See datalib/backend/etl/providers/media/DOWNLOAD.md.
 [[steps]]
-id = "media.download"
+id = "media/raw"
 command = "datalib-step download media"
-outputs = ["media/raw"]
 [steps.params]
 # Gitignore-shaped patterns, on top of any .gitignore files in the tree.
 # ignore = ["**/.Trash/**", "**/Thumbnails/**"]
