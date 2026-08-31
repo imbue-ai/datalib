@@ -51,15 +51,16 @@
 data_root = "~/tmp/dr-dag"
 
 # ── slack ──────────────────────────────────────────────────────────
-# `label` is optional and read only by the UI's sources grid, which
-# shows it in place of the directory name. A source has no `name` key —
-# its name is the first segment of its outputs, so it is also its folder
-# on disk and the prefix the index recorded for every document under it,
-# and changing that is a migration. The label is the half you can
-# rewrite whenever you like: nothing moves, and no step re-runs.
+# Every step has two names. Its `id` is the identity: unique, path-safe,
+# and the string the directory structure is formed from — so changing it
+# moves data on disk and strands the paths the index recorded, which is
+# a migration rather than an edit. Its `name` is what a person types and
+# what every screen shows; optional, read only by the UI, and free to
+# change at any moment because nothing depends on it. An unnamed step is
+# displayed by its id.
 [[steps]]
 id = "slack.download"
-label = "Work Slack"
+name = "Work Slack"
 command = "datalib-step download slack_api"
 outputs = ["slack/raw"]
 [steps.params.sync]

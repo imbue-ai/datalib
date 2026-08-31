@@ -44,7 +44,7 @@ import {
   type QmdDocState,
   type SearchRow,
 } from "@/api";
-import { listConfiguredSources } from "@/config/sourceSteps";
+import { listConfiguredSources, slugify } from "@/config/sourceSteps";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -123,13 +123,13 @@ const accounts = ref<AccountsMap>({});
 // `rows` to carry it would blow away selection, scroll position, and
 // the adaptive column pass on every refresh. `refreshCells` on two
 // columns is the whole update.
-// Stanza name → the `label` its steps declare in config.toml, for the
-// "Source name" column. Config-side, not index-side, and deliberately
-// so: a label is free text a person edits at any time, while the index
-// is rebuilt by a pipeline step. Baking labels into `grid_rows` would
-// make relabelling a source a re-indexing job. Sources with no label
-// are simply absent here and the column falls back to the stanza.
-const sourceLabels = ref<Map<string, string>>(new Map());
+// Source id → the `name` its steps declare in config.toml, for the
+// "Source" column. Config-side, not index-side, and deliberately so: a
+// name is free text a person edits at any time, while the index is
+// rebuilt by a pipeline step. Baking names into `grid_rows` would make
+// renaming a source a re-indexing job. Sources with no name are simply
+// absent here and the column falls back to the id.
+const sourceNames = ref<Map<string, string>>(new Map());
 
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
 // Collection-wide totals, shown next to the row count.
@@ -151,29 +151,29 @@ function currentMarkdownUuids(): string[] {
   return [...seen];
 }
 
-/// Read the labels out of `config.toml`. Once, on mount: the config
-/// changes on human time, and a stale label is a cosmetic miss, not a
-/// wrong row. A failure leaves the map empty, which shows stanza names
-/// — the same thing the column showed before labels existed.
-async function loadSourceLabels() {
+/// Read the names out of `config.toml`. Once, on mount: the config
+/// changes on human time, and a stale name is a cosmetic miss, not a
+/// wrong row. A failure leaves the map empty, which shows source ids —
+/// the same thing the column showed before names existed.
+async function loadSourceNames() {
   try {
     const cfg = await fetchConfig();
     const m = new Map<string, string>();
     for (const src of listConfiguredSources(cfg.text)) {
-      if (src.label !== src.name) m.set(src.name, src.label);
+      if (src.name !== src.id) m.set(src.id, src.name);
     }
-    sourceLabels.value = m;
+    sourceNames.value = m;
     gridApi?.refreshCells({ columns: ["source_name"], force: true });
   } catch {
-    /* labels are cosmetic; the column falls back to the stanza name */
+    /* names are cosmetic; the column falls back to the source id */
   }
 }
 
-/// What the "Source name" column shows: the configured label when there
-/// is one, else the stanza directory the row's document lives under.
-function sourceLabelFor(row: SearchRow | null | undefined): string {
+/// What the "Source" column shows: the configured name when there is
+/// one, else the id — the directory the row's document lives under.
+function sourceNameFor(row: SearchRow | null | undefined): string {
   if (!row?.source_name) return "";
-  return sourceLabels.value.get(row.source_name) ?? row.source_name;
+  return sourceNames.value.get(row.source_name) ?? row.source_name;
 }
 
 // True when either index-state column is on screen. Both are hidden by
@@ -405,8 +405,8 @@ const FILTER_COLUMNS: Record<
   string,
   { key: string; header: string; uuidCol?: keyof SearchRow }
 > = {
-  source: { key: "source", header: "Source" },
-  source_name: { key: "source_name", header: "Source name" },
+  source: { key: "source", header: "Provider" },
+  source_name: { key: "source_name", header: "Source" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
   author: { key: "author", header: "Author", uuidCol: "author" },
@@ -466,19 +466,6 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Slugify a human-readable label for use as the non-load-bearing prefix in a
-// Notion-shaped `slug-uuid` token. Conservative: ASCII alnum + hyphens only,
-// max 40 chars, leading/trailing hyphens stripped. The backend ignores the
-// slug entirely — it's just for token/URL self-description.
-function slugifyForToken(label: string): string {
-  const ascii = label
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return ascii.slice(0, 40).replace(/-+$/, "");
-}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -487,7 +474,7 @@ const UUID_RE =
 // label available) or `uuid` is not UUID-shaped, falls back to just `uuid`.
 function formatSlugUuid(slug: string, uuid: string): string {
   if (!UUID_RE.test(uuid)) return uuid;
-  const s = slugifyForToken(slug);
+  const s = slugify(slug);
   return s.length === 0 ? uuid : `${s}-${uuid}`;
 }
 
@@ -763,7 +750,7 @@ onMounted(async () => {
   } catch {
     /* accounts mapping is best-effort */
   }
-  void loadSourceLabels();
+  void loadSourceNames();
   runSearch(query.value);
 });
 
@@ -799,7 +786,10 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   },
   {
     field: "source",
-    headerName: "Source",
+    headerName: "Provider",
+    headerTooltip:
+      "Which service this came from. A property of the source's *type* — two Slack " +
+      "workspaces share it; the Source column is what separates them.",
     width: 90,
     cellRenderer: (params: { value: unknown }) => {
       const v = typeof params.value === "string" ? params.value : "";
@@ -814,27 +804,27 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     },
   },
   // The configured source, as opposed to the provider icon left of it:
-  // two Slack workspaces are one "Source" and two of these.
+  // two Slack workspaces are one "Provider" and two of these.
   //
   // `field` and `valueGetter` disagree on purpose. The cell shows the
-  // label from config.toml, but `buildFilterCtx` reads `row[colId]` off
-  // the raw row, so right-click "Keep only" emits the stanza name —
-  // which is what `source_name:` matches. Filtering on a label would be
-  // wrong twice over: labels are mutable, and two sources may share one.
+  // name from config.toml, but `buildFilterCtx` reads `row[colId]` off
+  // the raw row, so right-click "Keep only" emits the source *id* —
+  // which is what `source_name:` matches. Filtering on a name would be
+  // wrong twice over: names are mutable, and two sources may share one.
   {
     field: "source_name",
     colId: "source_name",
-    headerName: "Source name",
+    headerName: "Source",
     headerTooltip:
-      "The configured source this row came from — its directory under the data root, " +
-      "shown by the label config.toml gives it",
+      "The configured source this row came from — its id is its directory under the " +
+      "data root; the cell shows the name config.toml gives it",
     width: 130,
-    valueGetter: (p) => sourceLabelFor(p.data),
+    valueGetter: (p) => sourceNameFor(p.data),
     tooltipValueGetter: (p) => {
-      const name = p.data?.source_name ?? "";
-      if (!name) return "";
-      const label = sourceLabels.value.get(name);
-      return label ? `${label} — stored in ${name}/` : `Stored in ${name}/`;
+      const id = p.data?.source_name ?? "";
+      if (!id) return "";
+      const name = sourceNames.value.get(id);
+      return name ? `${name} — stored in ${id}/` : `Stored in ${id}/`;
     },
   },
   { field: "kind", headerName: "Type", width: 110 },

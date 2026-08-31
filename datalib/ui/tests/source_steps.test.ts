@@ -15,7 +15,6 @@ import {
   paramsAreRepresentable,
   removeSource,
   replaceSource,
-  suggestName,
 } from "../src/config/sourceSteps";
 import { catalogFor } from "../src/config/catalog";
 
@@ -56,7 +55,7 @@ outputs = ["slack/rendered_md"]
 describe("listConfiguredSources", () => {
   it("groups a download/render pair into one source", () => {
     const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    expect(slack.name).toBe("slack");
+    expect(slack.id).toBe("slack");
     expect(slack.type).toBe("slack_api");
     expect(slack.steps.map((s) => s.phase).sort()).toEqual(["download", "render"]);
     expect(slack.outputs.sort()).toEqual(["slack/raw", "slack/rendered_md"]);
@@ -68,11 +67,11 @@ describe("listConfiguredSources", () => {
   // in the source namespace and let the wizard collide with it.
   it("lists the index steps as steps, not sources", () => {
     const entries = listConfiguredSources(TWO_STEP_SOURCE);
-    const sources = entries.filter((e) => e.kind === "source").map((e) => e.name);
-    const steps = entries.filter((e) => e.kind === "step").map((e) => e.name);
+    const sources = entries.filter((e) => e.kind === "source").map((e) => e.id);
+    const steps = entries.filter((e) => e.kind === "step").map((e) => e.id);
     expect(sources).toEqual(["slack"]);
     expect(steps).toEqual(["grid_index", "qmd_index"]);
-    expect(entries.find((e) => e.name === "grid_index")!.outputs).toEqual(["unified_index/grid"]);
+    expect(entries.find((e) => e.id === "grid_index")!.outputs).toEqual(["unified_index/grid"]);
   });
 
   // An applet is configured, so it is a row — but it owns no artifacts
@@ -84,7 +83,7 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 `;
     const applet = listConfiguredSources(withApplet).find((e) => e.kind === "applet")!;
-    expect(applet.name).toBe("unified_index");
+    expect(applet.id).toBe("unified_index");
     expect(applet.type).toBe("unified_index");
     expect(applet.outputs).toEqual([]);
     expect(applet.stepId).toBeNull();
@@ -105,16 +104,16 @@ command = "datalib-applet slack"
     ]);
   });
 
-  // An applet id and a stanza name are separate namespaces, so the two
+  // An applet id and a source id are separate namespaces, so the two
   // may coincide without either shadowing the other.
-  it("keeps an applet and a source of the same name apart", () => {
+  it("keeps an applet and a source of the same id apart", () => {
     const clash = `${TWO_STEP_SOURCE}
 [[applets]]
 id = "slack"
 command = "datalib-applet slack"
 `;
-    const named = listConfiguredSources(clash).filter((e) => e.name === "slack");
-    expect(named.map((e) => e.kind)).toEqual(["source", "applet"]);
+    const clashing = listConfiguredSources(clash).filter((e) => e.id === "slack");
+    expect(clashing.map((e) => e.kind)).toEqual(["source", "applet"]);
   });
 
   it("throws with the parser's message and line on malformed TOML", () => {
@@ -136,7 +135,7 @@ outputs = ["custom/raw"]
 `;
     const [source] = listConfiguredSources(custom);
     expect(source.kind).toBe("source");
-    expect(source.name).toBe("custom");
+    expect(source.id).toBe("custom");
     expect(source.type).toBeNull();
   });
 
@@ -256,7 +255,7 @@ describe("removeSource / replaceSource", () => {
     const after = listConfiguredSources(removeSource(TWO_STEP_SOURCE, slack));
     // The index steps survive: deleting a source must not take the
     // shared pipeline with it.
-    expect(after.map((e) => e.name)).toEqual(["grid_index", "qmd_index"]);
+    expect(after.map((e) => e.id)).toEqual(["grid_index", "qmd_index"]);
   });
 
   it("replaces in place rather than duplicating", () => {
@@ -264,7 +263,7 @@ describe("removeSource / replaceSource", () => {
     const body = buildStepPair(SLACK, "slack", "", { "sync.channels": ["random"] });
     const after = replaceSource(TWO_STEP_SOURCE, slack, body);
     const sources = listConfiguredSources(after).filter((s) => s.kind === "source");
-    expect(sources.map((s) => s.name)).toEqual(["slack"]);
+    expect(sources.map((s) => s.id)).toEqual(["slack"]);
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
   });
@@ -275,24 +274,15 @@ describe("removeSource / replaceSource", () => {
     expect(
       listConfiguredSources(after)
         .filter((s) => s.kind === "source")
-        .map((s) => s.name)
+        .map((s) => s.id)
         .sort(),
     ).toEqual(["extra", "slack"]);
   });
 });
 
-describe("suggestName", () => {
-  it("keeps the default when it is free", () => {
-    expect(suggestName(new Set(), "slack")).toBe("slack");
-  });
-
-  // What stops "Add Data Source" producing a second `slack` that the
-  // loader would then reject.
-  it("suffixes past every taken name", () => {
-    expect(suggestName(new Set(["slack"]), "slack")).toBe("slack-2");
-    expect(suggestName(new Set(["slack", "slack-2"]), "slack")).toBe("slack-3");
-  });
-});
+// `suggestId` — what stops "Add Data Source" producing a second `slack`
+// the loader would reject — is covered in source_name.test.ts, next to
+// the slugify rules that feed it.
 
 // Reported from the desktop app: Manager2's table empty against a
 // config the backend reads 15 sources from, with no error shown. The

@@ -9,7 +9,7 @@
 //!
 //! [[steps]]
 //! id = "slack.download"
-//! label = "Work Slack"            # optional, and read only by the UI
+//! name = "Work Slack"             # optional, and read only by the UI
 //! command = "datalib-step download slack_api"
 //! outputs = ["slack/raw"]
 //! # `params` is the provider's own config subtree. As a sub-table it
@@ -59,11 +59,10 @@
 //! (and optionally the NDJSON stdout protocol) can be a step — see
 //! docs/dev/step_protocol.md.
 //!
-//! A source has no `name` field, and never had one on this format: its
-//! name is the first path segment of its outputs, which is the same
-//! string as its directory under the data root. That makes renaming a
-//! source a migration rather than an edit, so `label` carries the part
-//! of a name that is safe to change — see [`StepEntry::label`].
+//! A step's `id` is its identity: unique, path-safe, and the string the
+//! directory structure is formed from, which makes changing it a
+//! migration rather than an edit. `name` carries the half that is safe
+//! to change — see [`StepEntry::name`].
 //!
 //! TOML has no anchors, so a params subtree shared between a download
 //! and a render step is written out twice. In practice the two halves
@@ -158,40 +157,38 @@ impl AppletEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepEntry {
     pub id: String,
-    /// A human label for this step, free to change at any time.
+    /// What to call this step on screen. Free text, freely changed.
     ///
     /// The runner never reads it: it is not passed to the child, and it
     /// is deliberately absent from [`StepSpec::fingerprint_material`],
-    /// so relabelling a step does not make it stale and does not
-    /// re-run anything. Its consumers are both grids: the Pipeline
-    /// table shows it in place of the entry's name, and the unified
-    /// index grid's "Source name" column shows it beside the rows that
-    /// step produced (`datalib/ui/src/config/sourceSteps.ts`).
+    /// so renaming a step does not make it stale and does not re-run
+    /// anything. Its consumers are both grids — the Pipeline table
+    /// shows it in place of the step's `id`, and the unified index
+    /// grid shows it beside the rows that step produced
+    /// (`datalib/ui/src/config/sourceSteps.ts`).
     ///
-    /// This exists because a source's *name* is not a name at all — it
-    /// is the first path segment of its outputs, so it is the stanza
-    /// directory on disk, the prefix inside `markdowns.md_path` and
-    /// `grid_rows.qmd_path`, and the stem of both step ids. Changing it
-    /// is a migration. The label is the half that was missing: the part
-    /// a person can rewrite whenever the source stops being what they
-    /// first called it, with nothing on disk moving.
+    /// **`name` and `id` are the two halves of one identity, and only
+    /// this half is malleable.** The `id` is the identity: it is
+    /// path-safe, unique, and the directory structure is formed from
+    /// it, so changing it moves data on disk and strands the paths the
+    /// index recorded — a migration, not an edit. The `name` is what a
+    /// person types and what they see; it carries no meaning to any
+    /// program. The wizard derives an `id` from the `name` once, at
+    /// creation, and never again.
     ///
-    /// A source is a group of steps rather than a config entry of its
-    /// own, so the label belongs to a step and the grid takes the first
-    /// one its steps declare. The wizard writes it on the download
-    /// step, and only when it differs from the name — a label that
-    /// merely respells the directory would be the second, silent
-    /// spelling of one string that got the applet `title` key deleted
-    /// (00633dd5).
+    /// Written only when it differs from the `id`. A name that merely
+    /// respells the id would be the second, silent spelling of one
+    /// string, which is what got the applet `title` key deleted
+    /// (00633dd5) — so an unnamed step is displayed by its id, and its
+    /// config stays as it was.
     ///
-    /// Any step may carry one, not just a source's: the shared
-    /// `grid_index` / `qmd_index` fan-ins show up in the same table and
-    /// are labelled the same way. [`AppletEntry`] deliberately has no
-    /// counterpart — an applet's own `params` already carry whatever
-    /// label it wants (see that type's docs), and it is displayed by
-    /// its `id`.
+    /// Any step may carry one: the shared `grid_index` / `qmd_index`
+    /// fan-ins are rows in the same table and are named the same way.
+    /// [`AppletEntry`] deliberately has no counterpart — an applet's
+    /// own `params` already carry whatever label it wants (see that
+    /// type's docs), and it is displayed by its `id`.
     #[serde(default)]
-    pub label: Option<String>,
+    pub name: Option<String>,
     #[serde(default)]
     pub inputs: Vec<String>,
     #[serde(default)]
@@ -770,32 +767,32 @@ mod tests {
         assert!(err.contains("empty command"), "{err}");
     }
 
-    /// The whole point of `label`: it is not part of what the step is,
-    /// so relabelling a source cannot make it stale. If this ever
-    /// fails, every rename in the UI silently re-runs a download.
+    /// The whole point of `name`: it is not part of what the step is,
+    /// so renaming one cannot make it stale. If this ever fails, every
+    /// rename in the UI silently re-runs a download.
     #[test]
-    fn a_label_changes_neither_argv_nor_fingerprint() {
+    fn a_name_changes_neither_argv_nor_fingerprint() {
         let bare: DagConfig = toml::from_str(
             r#"steps = [{id = "slack.download", command = "datalib-step download slack_api", outputs = ["slack/raw"]}]"#,
         )
         .unwrap();
-        let labelled: DagConfig = toml::from_str(
-            r#"steps = [{id = "slack.download", label = "Work Slack", command = "datalib-step download slack_api", outputs = ["slack/raw"]}]"#,
+        let named: DagConfig = toml::from_str(
+            r#"steps = [{id = "slack.download", name = "Work Slack", command = "datalib-step download slack_api", outputs = ["slack/raw"]}]"#,
         )
         .unwrap();
-        assert_eq!(labelled.steps[0].label.as_deref(), Some("Work Slack"));
+        assert_eq!(named.steps[0].name.as_deref(), Some("Work Slack"));
 
         let bare = to_specs(&bare).unwrap();
-        let labelled = to_specs(&labelled).unwrap();
-        match (&bare[0].run, &labelled[0].run) {
+        let named = to_specs(&named).unwrap();
+        match (&bare[0].run, &named[0].run) {
             (StepRun::Subprocess { argv: a, .. }, StepRun::Subprocess { argv: b, .. }) => {
-                assert_eq!(a, b, "a label must not reach the child's argv")
+                assert_eq!(a, b, "a name must not reach the child's argv")
             }
             other => panic!("expected subprocesses, got {other:?}"),
         }
         assert_eq!(
             bare[0].fingerprint_material(),
-            labelled[0].fingerprint_material(),
+            named[0].fingerprint_material()
         );
     }
 

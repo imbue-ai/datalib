@@ -1,20 +1,19 @@
-// The unified index grid's "Source name" column, and the `source_name:`
+// The unified index grid's "Source" column, and the `source_name:`
 // filter behind it.
 //
-// The column answers a question the provider-icon "Source" column
-// cannot: which *configured source* did this row come from. Two Slack
-// workspaces are one provider and two sources. The value on the row is
-// the stanza directory (derived server-side from `qmd_path`); the text
-// in the cell is the `label` that stanza's steps declare in
-// config.toml, joined client-side. That join is the thing worth an
-// end-to-end test — it crosses the backend, the config file and the
-// grid, and it is the reason relabelling a source never needs a
-// re-index.
+// The column answers a question the "Provider" column cannot: which
+// *configured source* did this row come from. Two Slack workspaces are
+// one provider and two sources. The value on the row is the source's id
+// (derived server-side from `qmd_path`); the text in the cell is the
+// `name` that source's steps declare in config.toml, joined
+// client-side. That join is the thing worth an end-to-end test — it
+// crosses the backend, the config file and the grid, and it is the
+// reason renaming a source never needs a re-index.
 //
 // The fixture data root's config.toml declares no sources, so the
-// column shows raw stanza names until this spec adds one. It restores
-// the file before finishing: the root is shared by every spec in the
-// run (workers: 1, fullyParallel: false).
+// column shows raw ids until this spec adds one. It restores the file
+// in afterEach: the root is shared by every spec in the run
+// (workers: 1, fullyParallel: false).
 import { test, expect, type Page } from "@playwright/test";
 
 const SOURCE_CELLS = '.ag-center-cols-container [col-id="source_name"]';
@@ -54,14 +53,14 @@ test.afterEach(async ({ page }) => {
   if (original) await writeConfig(page, original);
 });
 
-test("the Source name column shows the configured label, and source_name: filters by stanza", async ({
+test("the Source column shows the configured name, and source_name: filters by id", async ({
   page,
 }) => {
-  // --- With no config entry, the column falls back to the stanza ----
+  // --- With no config entry, the column falls back to the id -------
   await openGrid(page);
   await expect(page.locator(SOURCE_CELLS, { hasText: "slack" }).first()).toBeVisible();
 
-  // --- `source_name:` narrows to one stanza ------------------------
+  // --- `source_name:` narrows to one source ------------------------
   // Every visible cell must read `slack` — the filter is a whole-segment
   // prefix test on qmd_path, not a substring match on anything.
   await page.getByTestId("search-input").fill("source_name:slack type:all");
@@ -83,13 +82,13 @@ test("the Source name column shows the configured label, and source_name: filter
     })
     .toEqual(["anthropic-api"]);
 
-  // --- A label in the config renames the column's text -------------
+  // --- A name in the config changes the column's text --------------
   await writeConfig(
     page,
     `${original.replace(/\s*$/, "")}\n
 [[steps]]
 id = "slack.download"
-label = "Work Slack"
+name = "Work Slack"
 command = "datalib-step download slack_api"
 outputs = ["slack/raw"]
 
@@ -110,8 +109,8 @@ outputs = ["slack/rendered_md"]
     })
     .toEqual(["Work Slack"]);
 
-  // The filter token still carries the stanza, not the label: the index
-  // has never heard of labels, and two sources may share one.
+  // The filter token still carries the id, not the name: the index has
+  // never heard of names, and two sources may share one.
   await page.getByTestId("search-input").fill("source_name:Work Slack type:all");
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

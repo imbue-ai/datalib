@@ -820,107 +820,113 @@ Enforcing this in the loader rather than the UI is the point. The config
 file is the source of truth, so a rule the UI enforces alone is a rule
 that a hand-edit silently breaks.
 
-### The name is fixed; `label` is the part that isn't
+### Two names: `id` is the identity, `name` is what you type
 
-*(Built, 2026-08-28.)*
+*(Built, 2026-08-31.)*
 
-A source's name is its identity in seven places, and only two of them
-move when you `mv` the directory. The other five have to be rewritten:
-`system/dag_state.json` keys, `markdowns.md_path`, `markdowns.source_name`,
-`grid_rows.qmd_path`, and any applet's `params.tree`. The last three are
-the dangerous ones, because `grid_index` skips a document whose
-`source_fingerprint` still matches — and that fingerprint is the
-*renderer's input hash*, which does not include the output path. So a
-bare rename leaves every `qmd_path` pointing at a directory that no
-longer exists, the preview pane 404s, and qmd hits resolve to zero grid
-rows, with nothing logged.
+Every entry has exactly two names, and only one of them is permanent:
 
-That is why the wizard holds the name read-only. What it did *not* have
-until now was the other half: a name you can change. `label` is that
-half — an optional free-text key on a step, shown by the Pipeline table
-in place of the entry's name:
+| | What it is | Changeable |
+|---|---|---|
+| `id` | Identity. Path-safe, unique, and the string the directory structure is formed from — the stanza under the data root, the stem of both step ids, the prefix inside `markdowns.md_path` and `grid_rows.qmd_path`. | Only by migration |
+| `name` | What a person types and what every screen shows. Free text, meaningless to every program. | Freely |
 
 ```toml
 [[steps]]
-id = "slack.download"
-label = "Work Slack"
+id = "work-slack.download"
+name = "Work Slack"
 command = "datalib-step download slack_api"
-outputs = ["slack/raw"]
+outputs = ["work-slack/raw"]
 ```
 
-Four properties make it safe to offer, and each is pinned by a test:
+**Why the id can't just be renamed.** A source's id appears in seven
+places, and only two of them move when you `mv` the directory. The other
+five have to be rewritten: `system/dag_state.json` keys,
+`markdowns.md_path`, `markdowns.source_name`, `grid_rows.qmd_path`, and
+any applet's `params.tree`. The last three are the dangerous ones,
+because `grid_index` skips a document whose `source_fingerprint` still
+matches — and that fingerprint is the *renderer's input hash*, which does
+not include the output path. So a bare rename leaves every `qmd_path`
+pointing at a directory that no longer exists, the preview pane 404s,
+and qmd hits resolve to zero grid rows, with nothing logged.
 
-- **Nothing on disk moves and no step re-runs.** `label` never reaches
-  the child's argv and is absent from `StepSpec::fingerprint_material`,
-  so relabelling cannot make a step stale
-  (`a_label_changes_neither_argv_nor_fingerprint`).
-- **A source that never sets one is unchanged.** `listConfiguredSources`
-  reports `label = name` in that case, and the wizard writes no key when
-  the label is blank or merely respells the name — so opening the Edit
-  form on an existing source doesn't churn its config.
-- **The directory stays visible.** The grid shows the label, then the
-  directory name beside it in muted text whenever the two differ. Hiding
-  it would trade away the legible on-disk layout that made the name
-  permanent in the first place.
-- **The grid, not the runner, reads it.** This is the lesson of
-  `00633dd5`, which deleted the applet `title` key: it was documented as
-  the gallery's label, and nothing anywhere read it. A key with no
-  consumer is a doc that lies.
+**The wizard derives the id from the name, once.** Type "Work Slack" and
+the Id field fills in `work-slack` — `slugify` (NFKD, drop combining
+marks, lowercase, runs of non-alphanumerics to `-`, capped at 40) then
+`suggestId`, which suffixes `-2`, `-3` past anything taken or reserved.
+Word order is preserved: `work-slack`, never `slack-work`. Typing into
+the Id field directly stops the derivation — a suggestion never
+overwrites a choice. On edit the Id is read-only and the Name is free.
 
-A source is a group of steps rather than a config entry of its own, so
-the label belongs to a step and the grid takes the first one its steps
-declare. The wizard writes it on the download step. Any step may carry
-one — the shared `grid_index` / `qmd_index` fan-ins are rows in the same
-table and are labelled the same way. Applets are the exception:
-`AppletEntry` is `deny_unknown_fields` with no `label`, deliberately,
-since an applet already takes its display label through its own
-`params`; it is shown by its `id`.
+Four properties make this safe to offer, and each is pinned by a test:
 
-**The label reaches the unified index grid too**, as a "Source name"
-column beside the provider icon — because "Slack" in the Source column
-is a property of the source *type*, and says nothing about which of two
-Slack workspaces a row came from. The join is client-side and that is
-the whole point:
+- **Nothing moves and nothing re-runs.** `name` never reaches the
+  child's argv and is absent from `StepSpec::fingerprint_material`, so
+  renaming cannot make a step stale
+  (`a_name_changes_neither_argv_nor_fingerprint`).
+- **An entry that sets none is unchanged.** `listConfiguredSources`
+  reports `name = id` in that case, and the wizard writes no key when
+  the name is blank or merely respells the id — so opening the Edit form
+  on an existing entry doesn't churn its config.
+- **The id stays visible.** The table shows the name, then the id muted
+  beside it when the two differ. Hiding it would trade away the legible
+  on-disk layout that made the id permanent in the first place.
+- **Something reads it.** That is the lesson of `00633dd5`, which
+  deleted the applet `title` key: documented as the gallery's label,
+  read by nothing. A key with no consumer is a doc that lies.
 
-- `SearchRow.source_name` is the stanza, derived server-side as the
+A slug that comes out empty — a name in a non-Latin script, or pure
+punctuation — falls back to the catalog's `defaultName` rather than
+inventing something unrecognizable.
+
+Any step may carry a `name`: the shared `grid_index` / `qmd_index`
+fan-ins are rows in the same table and are named the same way. Applets
+are the exception — `AppletEntry` is `deny_unknown_fields` with no
+`name`, deliberately, since an applet already takes its display label
+through its own `params` — so they are shown by their `id`.
+
+**The name reaches the unified index grid too**, as a "Source" column
+beside the provider icon (which is now labelled "Provider", because that
+is what it always was). The join is client-side and that is the point:
+
+- `SearchRow.source_name` is the source's id, derived server-side as the
   first segment of the row's `qmd_path`
   (`dolt_repo::source_name_from_qmd_path`) — the same derivation
   `datalib-step` uses to name a source from its outputs and `grid_index`
-  uses when it walks one directory per stanza.
-- The label comes from `config.toml`, read once on mount by `GridCard`
-  and joined by that name. It is deliberately *not* an index column: a
-  label is free text edited at any moment, while `grid_rows` is written
-  by a pipeline step, so storing it there would make relabelling a
+  uses when it walks one directory per source.
+- The name comes from `config.toml`, read once on mount by `GridCard`
+  and joined by that id. It is deliberately *not* an index column: a
+  name is free text edited at any moment, while `grid_rows` is written
+  by a pipeline step, so storing it there would make renaming a
   re-indexing job — exactly the cost this feature exists to avoid.
-- The cell shows the label; the row still carries the stanza, so
-  right-click "Keep only" emits `source_name:<stanza>`. Filtering on a
-  label would be wrong twice over: labels are mutable, and two sources
-  may share one.
+- The cell shows the name; the row still carries the id, so right-click
+  "Keep only" emits `source_name:<id>`. Filtering on a name would be
+  wrong twice over: names are mutable, and two sources may share one.
 
 `source_name:` is the one filter with no column behind it. `build_where`
 matches it as `INSTR(qmd_path, ?) = 1` with a trailing separator on the
-needle — `LIKE 'slack_work/%'` would be wrong, since a source name may
-legally contain `_` and LIKE reads that as a wildcard, so
-`source_name:slack_work` would also return a `slackXwork` stanza.
+needle — `LIKE 'slack_work/%'` would be wrong, since an id may legally
+contain `_` and LIKE reads that as a wildcard, so
+`source_name:slack_work` would also return a `slackXwork` source.
 
-**What is and isn't unique.** Labels may collide freely — two workspaces
-both called "Slack" is a legitimate thing to want, and the muted
-directory name is what tells them apart. Step *ids* must be unique
+**What is and isn't unique.** Names may collide freely — two workspaces
+both called "Slack" is a legitimate thing to want, and the muted id is
+what tells them apart. Step *ids* must be unique
 (`config::validate_steps`, again in `Graph::build`), and output *paths*
 may not overlap across steps (`Graph::build`'s single-writer check).
-There is no name-uniqueness rule as such, because there is no name
-field: two sources cannot share a name only because they would then both
-declare `<name>/raw`, and `PUT /api/config` builds the graph, so that
-collision is refused at save time rather than at run time.
+There is no id-uniqueness rule as such at the source level, because a
+source is not a config entity: two sources cannot share an id only
+because they would then both declare `<id>/raw`, and `PUT /api/config`
+builds the graph, so that collision is refused at save time rather than
+at run time.
 
-Renaming for real — moving the directory and repairing the five
-references above — remains unbuilt. It wants to be one operation
-(config rewrite + `mv` + `dag_state.json` remap + two `UPDATE`s in a
-single dolt commit), and it is cheaper than it looks: rendered markdown
-is position-independent (relative `blobs/` links, no source name in
-frontmatter), `markdown_uuid` is upstream-derived so filed feedback
-survives, and qmd keys `content_vectors` by content hash, so a move
-costs no re-embedding.
+Renaming an id for real — moving the directory and repairing the five
+references above — remains unbuilt. It wants to be one operation (config
+rewrite + `mv` + `dag_state.json` remap + two `UPDATE`s in a single dolt
+commit), and it is cheaper than it looks: rendered markdown is
+position-independent (relative `blobs/` links, no id in frontmatter),
+`markdown_uuid` is upstream-derived so filed feedback survives, and qmd
+keys `content_vectors` by content hash, so a move costs no re-embedding.
 
 ### Delete means "remove from config"
 
