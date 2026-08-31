@@ -12,9 +12,9 @@
 import { describe, expect, it } from "vitest";
 import {
   appendSource,
-  buildStepPair,
-  listConfiguredSources,
-  removeSource,
+  buildStep,
+  listSteps,
+  removeSteps,
   slugify,
   suggestId,
 } from "../src/config/sourceSteps";
@@ -36,36 +36,44 @@ command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
 `;
 
-/// The single source in a config, asserted to be the only entry.
-const one = (text: string) => {
-  const entries = listConfiguredSources(text);
-  expect(entries).toHaveLength(1);
-  return entries[0];
+/// The fetch step in a config, which is where a source's name lands.
+const fetchStep = (text: string) => {
+  const step = listSteps(text).find((e) => e.id === "slack/raw");
+  expect(step, `no slack/raw in:\n${text}`).toBeTruthy();
+  return step!;
 };
 
 const withName = (text: string, step: string, name: string) =>
   text.replace(`id = "${step}"`, `id = "${step}"\nname = "${name}"`);
 
 describe("reading a name", () => {
-  it("falls back to the id when no step declares one", () => {
-    const source = one(UNNAMED);
-    expect(source.id).toBe("slack");
-    expect(source.name).toBe("slack");
+  it("falls back to the id when the step declares none", () => {
+    const step = fetchStep(UNNAMED);
+    expect(step.id).toBe("slack/raw");
+    expect(step.name).toBe("slack/raw");
   });
 
-  it("takes the name off whichever step carries it", () => {
-    const source = one(withName(UNNAMED, "slack/raw", "Work Slack"));
-    expect(source.id).toBe("slack");
-    expect(source.name).toBe("Work Slack");
+  it("takes the name the step carries", () => {
+    const step = fetchStep(withName(UNNAMED, "slack/raw", "Work Slack"));
+    expect(step.id).toBe("slack/raw");
+    expect(step.name).toBe("Work Slack");
   });
 
-  it("takes the first when both steps carry one", () => {
-    const both = withName(withName(UNNAMED, "slack/raw", "Work Slack"), "slack/rendered_md", "Ignored");
-    expect(one(both).name).toBe("Work Slack");
+  /// Each step is named independently now — there is no source to
+  /// inherit from, and two siblings can drift apart on purpose.
+  it("names each step separately", () => {
+    const both = withName(
+      withName(UNNAMED, "slack/raw", "Work Slack"),
+      "slack/rendered_md",
+      "Work Slack markdown",
+    );
+    const by = new Map(listSteps(both).map((e) => [e.id, e.name]));
+    expect(by.get("slack/raw")).toBe("Work Slack");
+    expect(by.get("slack/rendered_md")).toBe("Work Slack markdown");
   });
 
   it("ignores a blank name rather than showing an empty cell", () => {
-    expect(one(withName(UNNAMED, "slack/raw", "   ")).name).toBe("slack");
+    expect(fetchStep(withName(UNNAMED, "slack/raw", "   ")).name).toBe("slack/raw");
   });
 });
 
@@ -93,14 +101,14 @@ command = "datalib-applet unified_index"
 `;
 
   it("names a shared index step, and leaves an unnamed one alone", () => {
-    const byId = new Map(listConfiguredSources(OTHER).map((e) => [e.id, e]));
+    const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
     expect(byId.get("unified_index/grid")?.kind).toBe("step");
     expect(byId.get("unified_index/grid")?.name).toBe("Search index");
     expect(byId.get("unified_index/qmd")?.name).toBe("unified_index/qmd");
   });
 
   it("shows an applet by its id", () => {
-    const applet = listConfiguredSources(OTHER).find((e) => e.kind === "applet");
+    const applet = listSteps(OTHER).find((e) => e.kind === "applet");
     expect(applet?.id).toBe("unified_index");
     expect(applet?.name).toBe("unified_index");
   });
@@ -109,32 +117,37 @@ command = "datalib-applet unified_index"
 describe("writing a name", () => {
   /// Round-trip through the same splice the Edit button performs, so
   /// what's asserted is what the config file would actually hold.
-  const save = (text: string, id: string, name: string) => {
-    const existing = listConfiguredSources(text).find((s) => s.id === id);
-    const body = buildStepPair(SLACK, id, name, { "sync.media": true });
-    return existing ? appendSource(removeSource(text, existing), body) : appendSource(text, body);
+  const save = (text: string, name: string) => {
+    const existing = listSteps(text).find((s) => s.id === "slack/raw");
+    const body = buildStep({
+      entry: SLACK,
+      id: "slack/raw",
+      name,
+      phase: "download",
+      values: { "sync.media": true },
+    });
+    return existing ? appendSource(removeSteps(text, [existing]), body) : appendSource(text, body);
   };
 
   it("round-trips through the config text", () => {
-    const next = save(UNNAMED, "slack", "Work Slack");
+    const next = save(UNNAMED, "Work Slack");
     expect(next).toContain('name = "Work Slack"');
-    expect(one(next).name).toBe("Work Slack");
-    // The id is untouched: still the directory and the step-id stem.
-    expect(one(next).id).toBe("slack");
-    expect(next).toContain('id = "slack/raw"');
+    expect(fetchStep(next).name).toBe("Work Slack");
+    // The id is untouched: still the tree the step writes.
+    expect(fetchStep(next).id).toBe("slack/raw");
   });
 
   it("writes no key at all when there is nothing to say", () => {
-    expect(save(UNNAMED, "slack", "")).not.toContain("name =");
+    expect(save(UNNAMED, "")).not.toContain("name =");
     // A name that only respells the id is not a name.
-    expect(save(UNNAMED, "slack", "slack")).not.toContain("name =");
-    expect(save(UNNAMED, "slack", "  slack  ")).not.toContain("name =");
+    expect(save(UNNAMED, "slack/raw")).not.toContain("name =");
+    expect(save(UNNAMED, "  slack/raw  ")).not.toContain("name =");
   });
 
   it("clearing a name removes the key", () => {
-    const cleared = save(save(UNNAMED, "slack", "Work Slack"), "slack", "");
+    const cleared = save(save(UNNAMED, "Work Slack"), "");
     expect(cleared).not.toContain("name =");
-    expect(one(cleared).name).toBe("slack");
+    expect(fetchStep(cleared).name).toBe("slack/raw");
   });
 
   it("survives quotes, backslashes and a pasted newline", () => {
@@ -142,13 +155,12 @@ describe("writing a name", () => {
     // The real assertion is that the file still parses — an unescaped
     // newline inside a TOML basic string would take the whole config
     // down, not just this key.
-    expect(one(save(UNNAMED, "slack", nasty)).name).toBe(nasty);
+    expect(fetchStep(save(UNNAMED, nasty)).name).toBe(nasty);
   });
 
-  it("lands on the download step, before its params tables", () => {
-    const next = save(UNNAMED, "slack", "Work Slack");
+  it("lands before the step's params tables", () => {
+    const next = save(UNNAMED, "Work Slack");
     expect(next.indexOf("name =")).toBeLessThan(next.indexOf("[steps.params"));
-    expect(next.indexOf("name =")).toBeLessThan(next.indexOf('id = "slack/rendered_md"'));
   });
 });
 

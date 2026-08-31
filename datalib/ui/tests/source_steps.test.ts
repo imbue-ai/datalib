@@ -1,20 +1,21 @@
-// Tests for the per-source view of a DAG config that drives the
-// Manager2 grid, and for the text it writes back.
+// `listSteps` and the splice-based writers behind the Pipeline table.
 //
-// The cases that matter most here are the malformed ones. The grid is
-// derived from a file anyone can hand-edit (or an agent can PUT), so
-// "what does this do with a config that is wrong in some particular
-// way" is the question, not the happy path.
-
+// The table is one row per config entry — no grouping. A fetch step and
+// the render step that reads it are two rows, two forms and two things
+// to run; what relates them is a shared id stem, which is a display
+// fact and the seed for proposing a sibling's id, never how anything is
+// resolved.
 import { describe, expect, it } from "vitest";
 import {
   appendSource,
-  buildStepPair,
-  emptyTableDiagnosis,
-  listConfiguredSources,
+  buildStep,
+  listSteps,
   paramsAreRepresentable,
-  removeSource,
-  replaceSource,
+  phaseOf,
+  removeSteps,
+  renderIdFor,
+  replaceStep,
+  stemOf,
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
@@ -23,26 +24,26 @@ import { catalogFor } from "../src/config/catalog";
 const SLACK = catalogFor("slack_api")!;
 const LIGHTROOM = catalogFor("lightroom")!;
 
-/** A config with one ordinary source plus both shared index steps. */
-const TWO_STEP_SOURCE = `data_root = "~/datalib"
+/** One source's two steps plus both shared index steps. */
+const PAIR = `data_root = "~/datalib"
 
 [[steps]]
 id = "unified_index/grid"
 command = "datalib-step grid_index"
-inputs = [\"slack/rendered_md\"]
+inputs = ["slack/rendered_md"]
 
 [[steps]]
 id = "unified_index/qmd"
 command = "datalib-step qmd_index"
-inputs = [\"slack/rendered_md\"]
+inputs = ["slack/rendered_md"]
 
 # ── slack ─────────────────────────────────────────────────────────────
 [[steps]]
 id = "slack/raw"
+name = "Work Slack"
 command = "datalib-step download slack_api"
 [steps.params.sync]
 channels = ["general"]
-media = true
 
 [[steps]]
 id = "slack/rendered_md"
@@ -50,311 +51,252 @@ command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
 `;
 
-describe("listConfiguredSources", () => {
-  it("groups a download/render pair into one source", () => {
-    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    expect(slack.id).toBe("slack");
-    expect(slack.type).toBe("slack_api");
-    expect(slack.steps.map((s) => s.phase).sort()).toEqual(["download", "render"]);
-    expect(slack.outputs.sort()).toEqual(["slack/raw", "slack/rendered_md"]);
+describe("listSteps", () => {
+  it("gives every entry its own row, in file order", () => {
+    expect(listSteps(PAIR).map((s) => s.id)).toEqual([
+      "unified_index/grid",
+      "unified_index/qmd",
+      "slack/raw",
+      "slack/rendered_md",
+    ]);
   });
 
-  // The aggregate index steps write under a reserved top-level
-  // directory, not a stanza. They are steps in their own right — rows
-  // in the grid — but calling one a *source* would put `unified_index`
-  // in the source namespace and let the wizard collide with it.
-  it("lists the index steps as steps, not sources", () => {
-    const entries = listConfiguredSources(TWO_STEP_SOURCE);
-    const sources = entries.filter((e) => e.kind === "source").map((e) => e.id);
-    const steps = entries.filter((e) => e.kind === "step").map((e) => e.id);
-    expect(sources).toEqual(["slack"]);
-    expect(steps).toEqual(["unified_index/grid", "unified_index/qmd"]);
-    expect(entries.find((e) => e.id === "unified_index/grid")!.outputs).toEqual(["unified_index/grid"]);
+  // The distinction the Kind column shows, and what gates every row
+  // action. Derived from the id's shape and nothing else.
+  it("classifies a step by the shape of its id", () => {
+    expect(phaseOf("slack/raw")).toBe("fetch");
+    expect(phaseOf("slack/rendered_md")).toBe("render");
+    expect(phaseOf("unified_index/grid")).toBe("index");
+    expect(phaseOf("unified_index/qmd")).toBe("index");
+    // A custom executable writing its own tree is a step and nothing more.
+    expect(phaseOf("exports/csv")).toBe("other");
+    expect(phaseOf("solo")).toBe("other");
   });
 
-  // An applet is configured, so it is a row — but it owns no artifacts
-  // and is never scheduled, which is what the kind has to carry.
-  it("lists applets, with no outputs and no step id", () => {
-    const withApplet = `${TWO_STEP_SOURCE}
+  it("reads name, type and inputs off each step", () => {
+    const by = new Map(listSteps(PAIR).map((s) => [s.id, s]));
+    expect(by.get("slack/raw")!.name).toBe("Work Slack");
+    expect(by.get("slack/raw")!.type).toBe("slack_api");
+    expect(by.get("slack/raw")!.inputs).toEqual([]);
+    // An unnamed step is shown by its id.
+    expect(by.get("slack/rendered_md")!.name).toBe("slack/rendered_md");
+    expect(by.get("slack/rendered_md")!.inputs).toEqual(["slack/raw"]);
+  });
+
+  it("lists applets, after the steps, with no inputs", () => {
+    const withApplet = `${PAIR}
 [[applets]]
 id = "unified_index"
 command = "datalib-applet unified_index"
 `;
-    const applet = listConfiguredSources(withApplet).find((e) => e.kind === "applet")!;
-    expect(applet.id).toBe("unified_index");
-    expect(applet.type).toBe("unified_index");
-    expect(applet.outputs).toEqual([]);
-    expect(applet.stepId).toBeNull();
-  });
-
-  // Sources first: the table opens on what someone came to look at.
-  it("orders sources before steps before applets", () => {
-    const withApplet = `${TWO_STEP_SOURCE}
-[[applets]]
-id = "an_applet"
-command = "datalib-applet slack"
-`;
-    expect(listConfiguredSources(withApplet).map((e) => e.kind)).toEqual([
-      "source",
-      "step",
-      "step",
-      "applet",
-    ]);
-  });
-
-  // An applet id and a source id are separate namespaces, so the two
-  // may coincide without either shadowing the other.
-  it("keeps an applet and a source of the same id apart", () => {
-    const clash = `${TWO_STEP_SOURCE}
-[[applets]]
-id = "slack"
-command = "datalib-applet slack"
-`;
-    const clashing = listConfiguredSources(clash).filter((e) => e.id === "slack");
-    expect(clashing.map((e) => e.kind)).toEqual(["source", "applet"]);
+    const entries = listSteps(withApplet);
+    expect(entries.at(-1)!.kind).toBe("applet");
+    expect(entries.at(-1)!.id).toBe("unified_index");
+    expect(entries.at(-1)!.type).toBe("unified_index");
+    expect(entries.at(-1)!.inputs).toEqual([]);
   });
 
   it("throws with the parser's message and line on malformed TOML", () => {
-    expect(() => listConfiguredSources('[[steps]\nid = "x"')).toThrowError(/line \d+/);
+    expect(() => listSteps('[[steps]\nid = "x"')).toThrowError(/line \d+/);
   });
 
   it("returns nothing for a config that declares nothing", () => {
-    expect(listConfiguredSources('data_root = "~/datalib"')).toEqual([]);
+    expect(listSteps('data_root = "~/datalib"')).toEqual([]);
   });
 
-  // A step whose command isn't a `datalib-step download|render` — any
-  // executable may be a step — has no catalog entry, and the grid has
-  // to cope rather than crash.
+  // Any executable may be a step, so a command the catalog doesn't know
+  // has to produce a row rather than a crash.
   it("reports a null type for a custom executable", () => {
-    const custom = `[[steps]]
-id = "custom/raw"
-command = "my-exporter --flag"
-`;
-    const [source] = listConfiguredSources(custom);
-    expect(source.kind).toBe("source");
-    expect(source.id).toBe("custom");
-    expect(source.type).toBeNull();
-  });
-
-  // A step writing somewhere that isn't a stanza is a step, and its own
-  // id is what `--sync` would target.
-  it("carries the step id for a non-source step", () => {
-    const [step] = listConfiguredSources(`[[steps]]
-id = "unified_index/grid"
-command = "datalib-step grid_index"
-inputs = [\"slack/rendered_md\"]
-`);
-    expect(step.kind).toBe("step");
-    expect(step.stepId).toBe("unified_index/grid");
-  });
-
-  // Duplicate step ids are rejected by `validate_steps` on save, so
-  // this can only arrive by hand-editing the file. It must not throw:
-  // the grid still has to render, and the backend's own error banner
-  // is what tells the user the config is unrunnable.
-  it("survives duplicate step ids by collapsing them into one row", () => {
-    const dupe = `[[steps]]
-id = "slack/raw"
-command = "datalib-step download slack_api"
-
-[[steps]]
-id = "slack/raw"
-command = "datalib-step download slack_api"
-`;
-    const sources = listConfiguredSources(dupe);
-    expect(sources.map((s) => s.name)).toEqual(["slack"]);
-    expect(sources[0].steps).toHaveLength(2);
+    const [step] = listSteps('[[steps]]\nid = "custom/out"\ncommand = "my-exporter --flag"\n');
+    expect(step.id).toBe("custom/out");
+    expect(step.phase).toBe("other");
+    expect(step.type).toBeNull();
   });
 });
 
-describe("paramsAreRepresentable", () => {
-  it("accepts params the descriptor models", () => {
-    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    expect(paramsAreRepresentable(slack, SLACK)).toEqual({ ok: true });
+describe("stems and siblings", () => {
+  it("stemOf takes the first segment", () => {
+    expect(stemOf("work-slack/raw")).toBe("work-slack");
+    expect(stemOf("a/b/c")).toBe("a");
+    expect(stemOf("solo")).toBe("solo");
   });
 
-  // The property the Edit button rests on: a knob no field models must
-  // be *named*, so the grid can refuse rather than silently drop it.
-  it("names the params it cannot model, phase included", () => {
-    const withExtra = TWO_STEP_SOURCE.replace(
-      "channels = [\"general\"]",
-      "channels = [\"general\"]\n[steps.params.common.download_params]\nmaximum_sequential_failed_requests = 100",
-    );
-    const slack = listConfiguredSources(withExtra).find((s) => s.kind === "source")!;
-    const verdict = paramsAreRepresentable(slack, SLACK);
-    expect(verdict.ok).toBe(false);
-    if (!verdict.ok) {
-      expect(verdict.unknown).toContain(
-        "download.common.download_params.maximum_sequential_failed_requests",
-      );
-    }
+  // The one place a `/` is split off an id to mint another. Both the
+  // chained "also render this?" and the standalone row action come
+  // through here, because two code paths minting one string is how they
+  // drift apart.
+  it("renderIdFor names the sibling under the same stem", () => {
+    expect(renderIdFor("work-slack/raw")).toBe("work-slack/rendered_md");
+    expect(renderIdFor("slack-2/raw")).toBe("slack-2/rendered_md");
   });
 });
 
-describe("buildStepPair", () => {
-  it("writes a download/render pair with the params it was given", () => {
-    const body = buildStepPair(SLACK, "slack", "", {
-      "sync.channels": ["general", "random"],
-      "sync.media": true,
-      "sync.all_channels": false,
-      "sync.since": "",
-    });
+describe("buildStep", () => {
+  const fetch = (values = {}) =>
+    buildStep({ entry: SLACK, id: "slack/raw", name: "Work Slack", phase: "download", values });
+
+  it("writes a fetch step with its params and no inputs", () => {
+    const body = fetch({ "sync.channels": ["general", "random"], "sync.since": "" });
     expect(body).toContain('id = "slack/raw"');
-    expect(body).toContain('id = "slack/rendered_md"');
+    expect(body).toContain('name = "Work Slack"');
+    expect(body).toContain("command = \"datalib-step download slack_api\"");
     expect(body).toContain('channels = ["general", "random"]');
+    expect(body).not.toContain("inputs =");
     // An empty optional stays out of the file rather than landing as "".
     expect(body).not.toContain("since");
   });
 
-  // Download-only providers render nothing, so a render step would
-  // declare an output no one writes.
-  it("omits the render step for a download-only provider", () => {
-    const body = buildStepPair(LIGHTROOM, "lightroom", "", {
-      "common.input_path": "~/Pictures/cat.lrcat",
+  it("writes a render step that names what it reads", () => {
+    const body = buildStep({
+      entry: SLACK,
+      id: "slack/rendered_md",
+      name: "",
+      phase: "render",
+      inputs: ["slack/raw"],
+      values: {},
     });
-    expect(body).toContain('id = "lightroom/raw"');
-    expect(body).not.toContain("lightroom/rendered_md");
+    expect(body).toContain('id = "slack/rendered_md"');
+    expect(body).toContain('command = "datalib-step render slack_api"');
+    expect(body).toContain('inputs = ["slack/raw"]');
+    // No name given → no key, so the row falls back to the id.
+    expect(body).not.toContain("name =");
   });
 
-  // TOML allows a super-table after its sub-table, but a generated file
-  // people are meant to read shouldn't make them work that out.
+  // Only download-phase params land on a download step, and vice versa.
+  // Getting this wrong writes a config the step's own deny_unknown
+  // render config rejects at run time.
+  it("writes only the phase's own params", () => {
+    const values = { "sync.channels": ["general"] };
+    expect(fetch(values)).toContain("channels");
+    const render = buildStep({
+      entry: SLACK,
+      id: "slack/rendered_md",
+      name: "",
+      phase: "render",
+      values,
+    });
+    expect(render).not.toContain("channels");
+  });
+
   it("emits a parent table before its children", () => {
-    const body = buildStepPair(LIGHTROOM, "lightroom", "", {
-      "common.input_path": "~/Pictures/cat.lrcat",
-      "skip_xmp": true,
+    const body = buildStep({
+      entry: LIGHTROOM,
+      id: "lightroom/raw",
+      name: "",
+      phase: "download",
+      values: { "common.input_path": "~/Pictures/cat.lrcat", skip_xmp: true },
     });
     expect(body.indexOf("[steps.params]")).toBeLessThan(body.indexOf("[steps.params.common]"));
   });
 
   // A bare `2026-01-01` is a TOML date; the providers validate a string.
   it("quotes dates", () => {
-    const body = buildStepPair(SLACK, "slack", "", { "sync.since": "2026-01-01" });
-    expect(body).toContain('since = "2026-01-01"');
+    expect(fetch({ "sync.since": "2026-01-01" })).toContain('since = "2026-01-01"');
   });
 });
 
-describe("removeSource / replaceSource", () => {
-  it("takes the divider comment with the source", () => {
-    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    const after = removeSource(TWO_STEP_SOURCE, slack);
+describe("paramsAreRepresentable", () => {
+  it("accepts params the descriptor models", () => {
+    const step = listSteps(PAIR).find((s) => s.id === "slack/raw")!;
+    expect(paramsAreRepresentable(step, SLACK)).toEqual({ ok: true });
+  });
+
+  // A hand-written knob the form can't show would be dropped on save,
+  // so the grid disables Edit instead of losing it silently.
+  it("names the params it cannot model", () => {
+    const [step] = listSteps(`[[steps]]
+id = "slack/raw"
+command = "datalib-step download slack_api"
+[steps.params.common]
+download_params = { maximum_sequential_failed_requests = 3 }
+`);
+    const rep = paramsAreRepresentable(step, SLACK);
+    expect(rep.ok).toBe(false);
+    if (!rep.ok) {
+      expect(rep.unknown).toContain("common.download_params.maximum_sequential_failed_requests");
+    }
+  });
+});
+
+describe("removeSteps / replaceStep", () => {
+  it("takes the divider comment with the step", () => {
+    const fetch = listSteps(PAIR).find((s) => s.id === "slack/raw")!;
+    const after = removeSteps(PAIR, [fetch]);
     expect(after).not.toContain("── slack");
     expect(after).not.toContain('id = "slack/raw"');
-    // The index steps and the top-level key are untouched.
+    // Its render step and the index steps are untouched.
+    expect(after).toContain('id = "slack/rendered_md"');
     expect(after).toContain('id = "unified_index/grid"');
     expect(after).toContain('data_root = "~/datalib"');
   });
 
-  /// Deleting a source is two edits, not one: its steps go, and so do
-  /// the fan-in inputs naming them. An input pointing at a step that
-  /// no longer exists is a config the runner refuses outright — so
-  /// removing without unwiring produces a file that will not load.
-  it("needs unwireFromFanIns to leave a loadable config", () => {
-    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    const cut = removeSource(TWO_STEP_SOURCE, slack);
-    expect(cut).toContain('"slack/rendered_md"');
-
-    const clean = unwireFromFanIns(cut, "slack/rendered_md");
-    expect(clean).not.toContain("slack");
-    expect(clean).toContain('id = "unified_index/grid"');
+  /// Deleting a fetch step alone leaves its render step naming an input
+  /// that no longer exists, which the loader refuses outright — a whole
+  /// config broken by a partial delete. Manager2 deletes the pair.
+  it("removes a pair together, leaving a config that still parses", () => {
+    const both = listSteps(PAIR).filter((s) => s.id.startsWith("slack/"));
+    expect(both).toHaveLength(2);
+    const after = unwireFromFanIns(removeSteps(PAIR, both), "slack/rendered_md");
+    expect(after).not.toContain("slack");
+    expect(listSteps(after).map((s) => s.id)).toEqual([
+      "unified_index/grid",
+      "unified_index/qmd",
+    ]);
   });
 
-  /// The mirror: adding a source has to name it in the fan-ins, or it
-  /// renders and is never indexed — invisible in search, with nothing
-  /// on screen to say why.
-  it("wireIntoFanIns adds an id once, to every index step", () => {
-    const wired = wireIntoFanIns(TWO_STEP_SOURCE, "email/rendered_md");
+  it("replaces one step without touching its sibling", () => {
+    const fetch = listSteps(PAIR).find((s) => s.id === "slack/raw")!;
+    const body = buildStep({
+      entry: SLACK,
+      id: "slack/raw",
+      name: "Work Slack",
+      phase: "download",
+      values: { "sync.channels": ["random"] },
+    });
+    const after = replaceStep(PAIR, fetch, body);
+    expect(after).toContain('channels = ["random"]');
+    expect(after).not.toContain('channels = ["general"]');
+    // Still exactly four entries, and the render step is as it was.
+    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+      "slack/raw",
+      "slack/rendered_md",
+      "unified_index/grid",
+      "unified_index/qmd",
+    ]);
+  });
+
+  it("appends where a new step can safely go", () => {
+    const body = buildStep({
+      entry: SLACK,
+      id: "extra/raw",
+      name: "",
+      phase: "download",
+      values: {},
+    });
+    expect(listSteps(appendSource(PAIR, body)).map((s) => s.id)).toContain("extra/raw");
+  });
+});
+
+describe("fan-in wiring", () => {
+  // Adding a render step without naming it in the index steps renders
+  // happily and is never indexed — invisible in search, with nothing on
+  // screen to say why.
+  it("adds an id once, to every index step", () => {
+    const wired = wireIntoFanIns(PAIR, "email/rendered_md");
     expect(wired.match(/"email\/rendered_md"/g)).toHaveLength(2);
-    // Idempotent: re-saving an edit must not duplicate the entry.
     expect(wireIntoFanIns(wired, "email/rendered_md")).toBe(wired);
-    // And it leaves the rest of the file alone.
     expect(wired).toContain('data_root = "~/datalib"');
     expect(wired).toContain("── slack");
   });
 
-  it("leaves a config that still parses, with one fewer source", () => {
-    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    const after = listConfiguredSources(removeSource(TWO_STEP_SOURCE, slack));
-    // The index steps survive: deleting a source must not take the
-    // shared pipeline with it.
-    expect(after.map((e) => e.id)).toEqual(["unified_index/grid", "unified_index/qmd"]);
-  });
-
-  it("replaces in place rather than duplicating", () => {
-    const slack = listConfiguredSources(TWO_STEP_SOURCE).find((s) => s.kind === "source")!;
-    const body = buildStepPair(SLACK, "slack", "", { "sync.channels": ["random"] });
-    const after = replaceSource(TWO_STEP_SOURCE, slack, body);
-    const sources = listConfiguredSources(after).filter((s) => s.kind === "source");
-    expect(sources.map((s) => s.id)).toEqual(["slack"]);
-    expect(after).toContain('channels = ["random"]');
-    expect(after).not.toContain('channels = ["general"]');
-  });
-
-  it("appends where a new source can safely go", () => {
-    const body = buildStepPair(SLACK, "extra", "", {});
-    const after = appendSource(TWO_STEP_SOURCE, body);
-    expect(
-      listConfiguredSources(after)
-        .filter((s) => s.kind === "source")
-        .map((s) => s.id)
-        .sort(),
-    ).toEqual(["extra", "slack"]);
-  });
-});
-
-// `suggestId` — what stops "Add Data Source" producing a second `slack`
-// the loader would reject — is covered in source_name.test.ts, next to
-// the slugify rules that feed it.
-
-// Reported from the desktop app: Manager2's table empty against a
-// config the backend reads 15 sources from, with no error shown. The
-// same backend binary and the same data root render all 15 in a
-// browser, so the disagreement is on the browser side — and a silent
-// empty table gives an investigation nothing to work with.
-describe("emptyTableDiagnosis", () => {
-  const base = {
-    parsedCount: 0,
-    serverSourceCount: 0,
-    textLength: 0,
-    exists: true,
-    path: "/root/config.toml",
-  };
-
-  it("says nothing when the table has rows", () => {
-    expect(emptyTableDiagnosis({ ...base, parsedCount: 3, serverSourceCount: 3 })).toBeNull();
-  });
-
-  // The ordinary case: a fresh root. That gets the friendly empty
-  // state, not an alarm.
-  it("says nothing when the config genuinely declares nothing", () => {
-    expect(emptyTableDiagnosis({ ...base, textLength: 42 })).toBeNull();
-  });
-
-  // The reported symptom. Both counts come from the same file, so they
-  // cannot legitimately disagree.
-  it("calls out a table that parsed none of what the server counted", () => {
-    const why = emptyTableDiagnosis({
-      ...base,
-      serverSourceCount: 15,
-      textLength: 22309,
-    });
-    expect(why).toContain("15 sources");
-    expect(why).toContain("22309 characters");
-    expect(why).toContain("/root/config.toml");
-    expect(why).toContain("bug in this table");
-  });
-
-  // The other way the table can go silently empty: the file is there
-  // but its text never arrived, which `get_config` turns into an empty
-  // string via `unwrap_or_default`.
-  it("calls out a config that arrived empty despite existing", () => {
-    const why = emptyTableDiagnosis({ ...base, exists: true, textLength: 0 });
-    expect(why).toContain("arrived empty");
-    expect(why).toContain("did not reach this page");
-  });
-
-  // A root with no config file yet is the fresh-install path, and the
-  // scaffold covers it — no alarm.
-  it("says nothing when there is no config file at all", () => {
-    expect(emptyTableDiagnosis({ ...base, exists: false })).toBeNull();
+  it("removes an id from every index step, and only from their inputs", () => {
+    const bare = unwireFromFanIns(PAIR, "slack/rendered_md");
+    // Both fan-ins now read nothing...
+    expect(bare.match(/inputs = \[\]/g)).toHaveLength(2);
+    // ...but the render step itself is untouched. Unwiring is about
+    // edges; removing the step is `removeSteps`, and the two are
+    // separate because deleting a source needs both.
+    expect(bare).toContain('id = "slack/rendered_md"');
+    expect(bare).toContain('id = "unified_index/grid"');
   });
 });

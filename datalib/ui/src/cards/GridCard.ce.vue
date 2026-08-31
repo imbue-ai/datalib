@@ -44,7 +44,7 @@ import {
   type QmdDocState,
   type SearchRow,
 } from "@/api";
-import { listConfiguredSources, slugify } from "@/config/sourceSteps";
+import { listSteps, slugify, stemOf } from "@/config/sourceSteps";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -158,9 +158,17 @@ function currentMarkdownUuids(): string[] {
 async function loadSourceNames() {
   try {
     const cfg = await fetchConfig();
+    // A row's `source_name` is the *stem* of the tree its document
+    // lives under (`work-slack`), not a step id — so the join is
+    // stem → name, and the name is the first one declared under that
+    // stem in file order. For an ordinary pair that is the fetch step,
+    // which is the one a person named and thinks of as the source; a
+    // config with only a render step falls back to that step's name.
     const m = new Map<string, string>();
-    for (const src of listConfiguredSources(cfg.text)) {
-      if (src.name !== src.id) m.set(src.id, src.name);
+    for (const step of listSteps(cfg.text)) {
+      if (step.kind !== "step" || step.name === step.id) continue;
+      const stem = stemOf(step.id);
+      if (!m.has(stem)) m.set(stem, step.name);
     }
     sourceNames.value = m;
     gridApi?.refreshCells({ columns: ["source_name"], force: true });
