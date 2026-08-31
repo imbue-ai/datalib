@@ -57,6 +57,7 @@ pub mod artifact;
 pub mod config;
 pub mod events;
 pub mod graph;
+pub mod lock;
 pub mod scheduler;
 pub mod state;
 pub mod step;

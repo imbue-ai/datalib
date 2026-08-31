@@ -36,8 +36,10 @@ use tokio::task::JoinSet;
 
 use crate::events::{Event, EventSink, NoopSink, StepProgress};
 use crate::graph::Graph;
-use crate::state::{DagState, StepState};
-use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome, StepRun, StepSpec};
+use crate::state::{CurrentRun, DagState, LastRun, StepState};
+use crate::step::{
+    ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
+};
 use crate::version::tree_version;
 
 #[derive(Debug, Clone)]
@@ -226,6 +228,29 @@ impl Runner {
         });
         let mut state = DagState::load(&self.data_root).context("load dag state")?;
 
+        // Open the run record before anything runs, so a UI polling
+        // mid-plan sees "started, nothing finished" rather than an empty
+        // file. One clock for the whole run — the same value the steps
+        // get in `DATALIB_DAG_NOW`, so a run's timestamps agree with
+        // what its steps stamped into their own stores.
+        let started_at = self
+            .child_env
+            .get(crate::subprocess::ENV_NOW)
+            .cloned()
+            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+        state.current_run = Some(CurrentRun {
+            run_id: started_at.clone(),
+            started_at: started_at.clone(),
+            finished_at: None,
+            plan: graph
+                .topo
+                .iter()
+                .map(|&i| graph.steps[i].id.clone())
+                .collect(),
+            states: Default::default(),
+        });
+        state.save(&self.data_root).context("save dag state")?;
+
         let n = graph.steps.len();
         // Current version of every concrete artifact, filled in as
         // producers reach a terminal state. Every artifact has a
@@ -267,15 +292,24 @@ impl Runner {
                             versions.insert(out.as_str().to_string(), v);
                             changed_now.insert(out.as_str().to_string(), false);
                         }
-                        self.finish(graph, &mut status, i, st, None);
+                        self.finish(graph, &mut state, &mut status, i, st, None, 0);
                         release_dependents(graph, &mut remaining_deps, &mut ready, i);
                     }
                     Decision::Block { on } => {
-                        self.finish(graph, &mut status, i, StepStatus::Blocked { on }, None);
+                        self.finish(
+                            graph,
+                            &mut state,
+                            &mut status,
+                            i,
+                            StepStatus::Blocked { on },
+                            None,
+                            0,
+                        );
                         release_dependents(graph, &mut remaining_deps, &mut ready, i);
                     }
                     Decision::Run { ctx } => {
                         running += 1;
+                        mark_running(&mut state, &graph.steps[i].id, &now_stamp());
                         let run = graph.steps[i].run.clone();
                         let retry = self.retry.clone();
                         let sink = self.sink.clone();
@@ -337,6 +371,15 @@ impl Runner {
                                     output_versions: resolved.into_iter().collect(),
                                     succeeded: true,
                                     fingerprint: graph.fingerprints[i].clone(),
+                                    // Carried over rather than defaulted:
+                                    // this replaces the whole entry, and
+                                    // `started_at` was recorded when the
+                                    // step was dispatched. `finish` fills
+                                    // in the rest a moment from now.
+                                    last_run: state
+                                        .steps
+                                        .get(&spec.id)
+                                        .and_then(|s| s.last_run.clone()),
                                 },
                             );
                             StepStatus::Succeeded { changed }
@@ -376,13 +419,27 @@ impl Runner {
                     }
                 }
             };
-            self.finish(graph, &mut status, i, st, errors[i].clone());
+            self.finish(
+                graph,
+                &mut state,
+                &mut status,
+                i,
+                st,
+                errors[i].clone(),
+                attempts,
+            );
             release_dependents(graph, &mut remaining_deps, &mut ready, i);
             // Persist after every terminal step so a crash mid-run
             // keeps the completed steps' bookkeeping.
             state.save(&self.data_root).context("save dag state")?;
         }
 
+        // Close the run: a reader distinguishes "finished" from "still
+        // going" by this field alone, so it has to land before the last
+        // save rather than after it.
+        if let Some(run) = state.current_run.as_mut() {
+            run.finished_at = Some(now_stamp());
+        }
         state.save(&self.data_root).context("save dag state")?;
 
         let steps = graph
@@ -576,21 +633,65 @@ impl Runner {
         }
     }
 
+    /// Terminal state for one step: emit it, record it in `status`, and
+    /// write it into the run record.
+    ///
+    /// Every path a step can end on goes through here — succeeded,
+    /// skipped, blocked, failed, not-selected — which is what makes the
+    /// run record complete rather than best-effort.
+    #[allow(clippy::too_many_arguments)]
     fn finish(
         &self,
         graph: &Graph,
+        state: &mut DagState,
         status: &mut [Option<StepStatus>],
         i: usize,
         st: StepStatus,
         error: Option<String>,
+        attempts: u32,
     ) {
+        let id = &graph.steps[i].id;
         self.sink.emit(&Event::StepFinish {
-            step: graph.steps[i].id.clone(),
+            step: id.clone(),
             status: st.as_str().to_string(),
-            error,
+            error: error.clone(),
         });
+        let stamp = now_stamp();
+        if let Some(run) = state.current_run.as_mut() {
+            run.states.insert(id.clone(), st.as_str().to_string());
+        }
+        let entry = state.steps.entry(id.clone()).or_default();
+        let last = entry.last_run.get_or_insert_with(|| LastRun {
+            started_at: stamp.clone(),
+            ..Default::default()
+        });
+        last.finished_at = Some(stamp);
+        last.status = st.as_str().to_string();
+        last.attempts = attempts;
+        last.error = error;
         status[i] = Some(st);
     }
+}
+
+/// A wall-clock stamp in the tree's convention: local time with an
+/// explicit offset, per AGENTS.md.
+fn now_stamp() -> String {
+    datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs()
+}
+
+/// Open a step's run record when the scheduler dispatches it, so a
+/// reader can tell "running" from "not reached yet".
+fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
+    if let Some(run) = state.current_run.as_mut() {
+        run.states.insert(id.clone(), "running".to_string());
+    }
+    state.steps.entry(id.clone()).or_default().last_run = Some(LastRun {
+        started_at: stamp.to_string(),
+        finished_at: None,
+        status: String::new(),
+        attempts: 0,
+        error: None,
+    });
 }
 
 fn step_summary(r: &StepReport) -> crate::events::StepSummary {
@@ -945,6 +1046,109 @@ mod tests {
             rep2.step("unified_index/grid").status,
             StepStatus::SkippedUpToDate
         );
+    }
+
+    /// The run record is the only thing that makes a run visible to
+    /// anyone who did not spawn it — a terminal `datalib-dag` and the
+    /// UI's worker write the same file, so the UI can show either.
+    ///
+    /// What it must carry: the plan before anything runs, a terminal
+    /// state for *every* step (including the ones that were skipped or
+    /// blocked, which never "ran"), a `finished_at` that distinguishes
+    /// a completed run from a crashed one, and per-step timings that
+    /// don't need a whole-run timestamp smeared across every source.
+    #[tokio::test]
+    async fn a_run_records_its_plan_and_every_step_outcome() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let r = runner(fx.root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        let run = st.current_run.expect("a run leaves a record");
+        assert!(run.finished_at.is_some(), "a completed run is closed");
+        assert_eq!(run.plan.len(), g.steps.len(), "the plan is the whole graph");
+        for id in &run.plan {
+            assert_eq!(
+                run.states.get(id).map(String::as_str),
+                Some("succeeded"),
+                "{id} has no state in the run record"
+            );
+        }
+
+        for id in &run.plan {
+            let last = st.steps[id].last_run.as_ref().expect("{id}: no last_run");
+            assert_eq!(last.status, "succeeded");
+            assert!(last.finished_at.is_some());
+            assert!(!last.started_at.is_empty());
+        }
+
+        // Second run: everything downstream is up to date, and a skip is
+        // a terminal state like any other — the record says so rather
+        // than leaving last run's answer in place.
+        assert!(r.run(&g).await.unwrap().all_ok());
+        let st = DagState::load(fx.root.path()).unwrap();
+        let run = st.current_run.expect("second run recorded");
+        assert_eq!(
+            run.states["slack/rendered_md"], "skipped_up_to_date",
+            "a skipped step is recorded as skipped, not left as succeeded"
+        );
+        assert_eq!(
+            st.steps["slack/rendered_md"]
+                .last_run
+                .as_ref()
+                .unwrap()
+                .status,
+            "skipped_up_to_date"
+        );
+    }
+
+    /// A failure has to be legible without reading the log: the record
+    /// carries the status, the attempt count and the message.
+    #[tokio::test]
+    async fn a_failed_step_records_its_error_and_blocks_its_dependent() {
+        let fx = Fixture::new();
+        let failing = StepSpec::new(
+            "email/rendered_md",
+            StepRun::in_process(|_ctx| async {
+                Err(StepError::new(
+                    FailureKind::Data,
+                    anyhow::anyhow!("bad json"),
+                ))
+            }),
+        )
+        .input("email/raw");
+        let g = Graph::build(vec![
+            download(
+                "email",
+                fx.email_content.clone(),
+                fx.runs["email/raw"].clone(),
+            ),
+            failing,
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(|_ctx| async { Ok(StepOutcome::default()) }),
+            )
+            .input("email/rendered_md"),
+        ])
+        .unwrap();
+        let _ = runner(fx.root.path()).run(&g).await.unwrap();
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        let run = st.current_run.unwrap();
+        assert_eq!(run.states["email/rendered_md"], "failed");
+        assert_eq!(run.states["unified_index/grid"], "blocked");
+
+        let failed = st.steps["email/rendered_md"].last_run.as_ref().unwrap();
+        assert_eq!(failed.status, "failed");
+        assert!(failed.error.as_deref().unwrap().contains("bad json"));
+        assert_eq!(failed.attempts, 1, "a Data failure is not retried");
+
+        // A step that never ran still gets a record — "blocked, and on
+        // what" is the answer the table needs.
+        let blocked = st.steps["unified_index/grid"].last_run.as_ref().unwrap();
+        assert_eq!(blocked.status, "blocked");
+        assert!(blocked.finished_at.is_some());
     }
 
     #[tokio::test]

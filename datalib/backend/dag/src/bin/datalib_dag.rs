@@ -42,6 +42,10 @@
 //! scheduler then drains, emits the run summary, and exits 130.
 //! Exit codes: 0 all ok, 2 some step failed/blocked, 130 cancelled,
 //! 1 setup error.
+//!
+//! Only one runner may hold a data root at a time (`system/runner-lock`,
+//! `flock(2)`), so a sync started from a terminal and one started by the
+//! app refuse rather than interleave. The refusal names the holder.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -129,6 +133,37 @@ async fn main() -> Result<()> {
     let (cfg, data_root) = config::load(&config_path)?;
     let specs = config::to_specs(&cfg)?;
     let graph = Graph::build(specs)?;
+
+    // One runner per data root, taken before anything is written.
+    //
+    // Two runners interleave `system/dag_state.json` — rewritten after
+    // every terminal step — and interleave the raw stores their steps
+    // write, whose doltlite working set is shared across processes. So
+    // a sync started from a terminal while the app is syncing, or two
+    // terminals, would corrupt bookkeeping quietly rather than loudly.
+    //
+    // Held until the process exits, however it exits: `flock(2)` is
+    // released by the kernel, so a crashed run leaves nothing to clean
+    // up. `_lock` and not `_` — binding to `_` would drop it here and
+    // release the claim before the run starts.
+    let _lock = datalib_dag::lock::FileLock::acquire_runner(&data_root).map_err(|e| {
+        if e.is_held() {
+            anyhow::anyhow!(
+                "another datalib-dag is already running against {}{}.\n\
+                 Two runners on one data root overwrite each other's scheduler state and \
+                 each other's raw stores. Wait for it to finish, or point this one at a \
+                 different root.\n(lock: {})",
+                data_root.display(),
+                match e.holder() {
+                    Some(h) => format!(" — {h}"),
+                    None => String::new(),
+                },
+                e.path().display()
+            )
+        } else {
+            anyhow::anyhow!("{e}")
+        }
+    })?;
 
     // Run-wide environment for every step subprocess: PATH with the
     // binary dir prepended (so commands can say `datalib-step` bare),

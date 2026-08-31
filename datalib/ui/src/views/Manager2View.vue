@@ -19,12 +19,16 @@
 // endpoints) and Documents (must come from the unified_index applet —
 // the layout now forbids datalib-http reading that tree).
 //
-// "Last synced" / "Last status" are best-effort. There is no per-source
-// run record yet — `sync_jobs` is per *run*, and a run routinely spans
-// several sources via a comma-joined `source_name` — so a multi-source
-// job attributes its outcome to every source it named. The design's
-// `step_runs` table is what makes these honest; until then the column
-// says so on hover.
+// "Last synced" / "Last status" come from the *runner's* own per-step
+// record (`GET /api/dag`), not from the job queue. The queue is per
+// *run*, and a run routinely covers several steps, so it could only
+// ever attribute one timestamp and one status to all of them — which is
+// what the old `~` marker was apologizing for.
+//
+// Reading the runner's record has a second consequence worth knowing:
+// a sync started from a terminal shows up here, because `datalib-dag`
+// writes that record whoever spawned it. The SSE stream only carries
+// runs this server started, which is why this polls as well.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
@@ -43,10 +47,13 @@ import {
   fetchConfigScaffold,
   saveConfig,
   fetchAllJobs,
+  fetchDag,
   fetchPipelineStorage,
   fetchFrontend,
   enqueueJob,
   openJobStream,
+  type DagRun,
+  type DagStep,
   type SyncJob,
   type OutputStorage,
 } from "@/api";
@@ -100,6 +107,12 @@ const banner = ref<{ ok: boolean; text: string } | null>(null);
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
 const storage = ref<OutputStorage[]>([]);
+/// The runner's own per-step record, from `GET /api/dag`. What makes
+/// "last synced" and "last status" exact per step — and what makes a
+/// run started from a terminal visible here at all, since the runner
+/// writes it whoever spawned it.
+const dagSteps = ref<Record<string, DagStep>>({});
+const dagRun = ref<DagRun | null>(null);
 /// applet id → why it failed to start, from `GET /api/frontend`. An
 /// applet that won't come up is otherwise only visible as a 502 from
 /// whatever tab needed it.
@@ -178,7 +191,9 @@ type Row = {
   revealBlocked: string | null;
   lastSynced: string | null;
   lastStatus: string;
-  approximate: boolean;
+  /// Why the status is what it is — a failure message, or how a run
+  /// came to be interrupted. Null when the status speaks for itself.
+  statusDetail: string | null;
   /// Null when nothing is on disk yet — rendered as "—", not "0 B",
   /// which would read as "ran, and produced nothing".
   bytes: number | null;
@@ -199,26 +214,45 @@ const PHASE_LABEL: Record<StepPhase, string> = {
   other: "Step",
 };
 
-/// Most recent job naming this source. `source_name` is a comma-joined
-/// list of step ids for a multi-source run, and an all-sources run
-/// leaves it null — which is why `approximate` exists.
-function jobFor(name: string): { job: SyncJob; exact: boolean } | null {
-  for (const job of jobs.value) {
-    if (!job.source_name) {
-      return { job, exact: false };
-    }
-    const ids = job.source_name.split(",").map((s) => s.trim());
-    if (ids.some((id) => id === name || id.startsWith(`${name}.`))) {
-      return { job, exact: ids.length === 1 };
-    }
+/// What a step is doing right now, or did last — read off the runner's
+/// record rather than inferred from the job queue.
+///
+/// The queue records whole *runs*, so a run naming several steps could
+/// only ever attribute one timestamp and one status to all of them;
+/// that is what the old `~` marker was apologizing for. The runner
+/// knows per step, and now says so.
+///
+/// A run whose record has no `finished_at` and whose lock nobody holds
+/// is a run that died. Its steps say `interrupted` rather than spinning
+/// forever.
+function stepStatus(id: string): { label: string; at: string | null; detail?: string } {
+  const step = dagSteps.value[id];
+  const run = dagRun.value;
+  const live = run?.live ?? false;
+
+  const current = step?.current_state;
+  if (current && run && !run.finished_at) {
+    if (live) return { label: current, at: step?.last_run?.started_at ?? run.started_at };
+    return {
+      label: "interrupted",
+      at: step?.last_run?.started_at ?? run.started_at,
+      detail: `Started ${run.started_at} and never finished — no runner holds this root now, so it was killed or crashed.`,
+    };
   }
-  return null;
+
+  const last = step?.last_run;
+  if (!last) return { label: "never run", at: null };
+  return {
+    label: last.status || "running",
+    at: last.finished_at ?? last.started_at,
+    detail: last.error ?? undefined,
+  };
 }
 
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
     const entry = s.type ? catalogFor(s.type) : undefined;
-    const hit = s.kind === "applet" ? null : jobFor(s.id);
+    const run = s.kind === "applet" ? null : stepStatus(s.id);
     // A step writes exactly one tree, and it is the step's id.
     const outputs =
       s.kind === "applet"
@@ -277,13 +311,13 @@ const rows = computed<Row[]>(() =>
           : null;
 
     // An applet's health is its own thing: it isn't scheduled, so the
-    // job queue says nothing about it. `GET /api/frontend` does.
-    let lastStatus: string;
-    if (s.kind === "applet") {
-      lastStatus = appletErrors.value[s.id] ? "failed" : "running";
-    } else {
-      lastStatus = hit ? hit.job.state : "never run";
-    }
+    // runner's record says nothing about it. `GET /api/frontend` does.
+    const lastStatus =
+      s.kind === "applet"
+        ? appletErrors.value[s.id]
+          ? "failed"
+          : "running"
+        : run!.label;
 
     return {
       id: s.id,
@@ -299,9 +333,9 @@ const rows = computed<Row[]>(() =>
       editBlocked,
       renderBlocked,
       revealBlocked,
-      lastSynced: hit?.job.finished_at ?? hit?.job.started_at ?? null,
+      lastSynced: run?.at ?? null,
       lastStatus,
-      approximate: hit ? !hit.exact : false,
+      statusDetail: run?.detail ?? null,
       bytes: onDisk.length ? outputs.reduce((n, o) => n + o.bytes, 0) : null,
       outputs,
       revealPath: onDisk[0]?.abs ?? null,
@@ -438,16 +472,15 @@ const columnDefs: ColDef<Row>[] = [
       if (row.kind === "applet") {
         return appletErrors.value[row.id] ?? "The gateway has this applet up.";
       }
-      return row.approximate
-        ? "From a run covering several sources — per-source status needs the step_runs table."
-        : undefined;
+      return row.statusDetail ?? undefined;
     },
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const span = document.createElement("span");
-      span.className = `m2-status m2-status-${p.data?.lastStatus.replace(/\s+/g, "-")}`;
-      span.textContent = p.data?.approximate
-        ? `${p.data.lastStatus} ~`
-        : (p.data?.lastStatus ?? "");
+      const label = p.data?.lastStatus ?? "";
+      // `skipped_up_to_date` is the runner's word; "up to date" is what
+      // it means to someone looking at a table.
+      span.className = `m2-status m2-status-${label.replace(/[\s_]+/g, "-")}`;
+      span.textContent = label.replace(/_/g, " ").replace("skipped up to date", "up to date");
       return span;
     },
   },
@@ -582,6 +615,25 @@ async function loadJobs() {
     jobs.value = await fetchAllJobs(100);
   } catch {
     // The grid is still useful without status; leave the columns empty.
+  }
+}
+
+/// The runner's per-step record. Polled rather than pushed: the SSE
+/// stream only carries runs *this server* started, and the whole point
+/// of reading the runner's own file is that a terminal `datalib-dag`
+/// shows up here too.
+async function loadDag() {
+  try {
+    const dag = await fetchDag();
+    dagSteps.value = Object.fromEntries(dag.steps.map((st) => [st.id, st]));
+    dagRun.value = dag.run;
+    // Statuses live in a `cellRenderer`, and AG Grid reuses a cell whose
+    // row id hasn't changed — so the painted status would otherwise
+    // stay at whatever it was when the row first rendered.
+    gridApi?.refreshCells({ columns: ["lastStatus", "lastSynced"], force: true });
+  } catch {
+    // A missing record reads as "never run", which is what a fresh root
+    // looks like anyway.
   }
 }
 
@@ -800,13 +852,18 @@ let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), loadJobs(), loadStorage(), loadAppletHealth()]);
-  stream = openJobStream(() => void loadJobs());
+  await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
+  stream = openJobStream(() => {
+    void loadJobs();
+    // A step finishing is exactly when its record moves.
+    void loadDag();
+  });
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
   poll = setInterval(() => {
     void loadConfig();
     void loadJobs();
+    void loadDag();
     void loadStorage();
     void loadAppletHealth();
   }, 5000);
@@ -876,9 +933,9 @@ onUnmounted(() => {
       them. Actions that don’t apply to a kind are disabled and say why. Account and
       document-count columns aren’t here yet — each needs a backend endpoint the design calls for.
       “Bytes on disk” is a directory walk over each row’s declared outputs; hover a value for the
-      breakdown. “Last status” comes from the job queue, which records whole runs rather than
-      individual steps, so a <code>~</code> marks a status inferred from a run that covered
-      several.
+      breakdown. “Last synced” and “Last status” are per step, read from the runner’s own
+      record — so a sync you start from a terminal shows up here too. A run whose record never
+      closed and whose lock nobody holds reads as <b>interrupted</b>: it was killed, not lost.
     </p>
 
     <details class="m2-advanced" :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
@@ -1062,11 +1119,21 @@ onUnmounted(() => {
 }
 .m2-kind-source { color: var(--datalib-fg); border-color: var(--datalib-fg); }
 
+/* The runner's status vocabulary. Anything unstyled falls through to
+   the default colour, which is the right outcome for a status this
+   sheet hasn't met. */
 .m2-status { text-transform: capitalize; }
 .m2-status-running { color: var(--datalib-accent); font-weight: 600; }
 .m2-status-failed { color: var(--datalib-log-error); font-weight: 600; }
+/* A run that died mid-step: not a failure anyone reported, but not a
+   success either, so it reads as a warning rather than an error. */
+.m2-status-interrupted { color: var(--datalib-log-warn); }
+.m2-status-blocked { color: var(--datalib-muted); }
+.m2-status-succeeded { color: var(--datalib-muted); }
+.m2-status-up-to-date { color: var(--datalib-muted); }
+.m2-status-not-selected { color: var(--datalib-muted); }
+.m2-status-never-run { color: var(--datalib-muted); }
 .m2-status-done { color: var(--datalib-muted); }
-.m2-status-running { color: var(--datalib-accent); font-weight: 600; }
 
 .m2-actions {
   display: inline-flex;
