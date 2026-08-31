@@ -64,6 +64,27 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # moved to `project_full_path`, so it silently produced nothing for
 # three months. A source that stops producing rows should fail here,
 # not disappear quietly.
+# Providers still minting `grid_rows.uuid` values that are not UUIDs.
+#
+# Both pass an upstream id through verbatim (or lightly prefixed)
+# instead of deriving a v5 under a datalib namespace: anthropic emits
+# `tu-{tool_use_id}` / `tr-{tool_use_id}` / `th-{msg_uuid}-{idx}` /
+# `pdesc-{project_uuid}` for its structural blocks, and openai passes
+# ChatGPT's `conversation_id` / `message_id` straight through.
+#
+# This is an ALLOWLIST, not a spec — it exists so the shape assertion
+# below can be exact for the 14 providers that are already clean while
+# these two get ported. Shrink it as each is moved onto `datalib_id`;
+# when it is empty, delete it and the branch that consults it.
+NON_UUID_PK_PROVIDERS = frozenset({"anthropic", "openai"})
+
+# Canonical 8-4-4-4-12 hex form. Deliberately not a version-specific
+# pattern: the point is that the column holds an opaque fixed-width
+# identifier we minted, not which v5 recipe produced it.
+UUID_SQL_REGEX = (
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
 EXPECTED_PROVIDERS = frozenset(
     {
         "anthropic",
@@ -222,6 +243,69 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "  AND (g.qmd_path IS NULL OR g.qmd_path <> m.md_path);",
         )
 
+    def _duplicate_uuids(self) -> list[str]:
+        """`grid_rows.uuid` values held by more than one row.
+
+        `grid_rows` declares `PRIMARY KEY (uuid)`, so this can only ever
+        come back empty from a store the index actually wrote — which is
+        exactly why it is worth asserting from the outside. A duplicate
+        here would mean the PK is not being enforced by doltlite, and
+        every collision guarantee in the pipeline rests on it being
+        enforced. Cheap check, load-bearing assumption.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT uuid, COUNT(*) FROM grid_rows GROUP BY uuid HAVING COUNT(*) > 1;",
+        )
+
+    def _non_uuid_pk_providers(self) -> frozenset[str]:
+        """Providers whose `grid_rows.uuid` is not UUID-shaped.
+
+        `uuid` is the primary key of the union table, the `id=` /
+        `data-section-uuid` anchor the renderer bakes into the markdown
+        body, and the value `feedback.target_uuids` stores unqualified.
+        A provider that passes an upstream string through instead of
+        minting its own is one upstream id-reuse away from colliding
+        with another source in a keyspace nothing can disambiguate
+        after the fact.
+
+        Asserted as an exact set against `NON_UUID_PK_PROVIDERS`, in
+        both directions: a *new* offender fails, and so does a provider
+        left on the allowlist after it has been cleaned up — so the
+        list cannot rot into a permanent exemption.
+        """
+        return frozenset(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT provider FROM grid_rows "
+                f"WHERE uuid NOT REGEXP '{UUID_SQL_REGEX}';",
+            )
+        )
+
+    def _cross_source_shared_markdowns(self) -> list[str]:
+        """`markdown_uuid`s claimed by more than one `source_name`.
+
+        The failure this catches is silent by construction:
+        `apply_markdown` DELETEs `grid_rows` by `markdown_uuid` before
+        inserting, so when two configured sources mint the same id the
+        sidecar applied second erases the first one's rows and rewrites
+        the `markdowns` row with its own `md_path` and `source_name`.
+        The run reports success and the row count looks plausible — one
+        source has simply vanished from the index.
+
+        `IdClaims` in `datalib_etl::grid_index` now fails the run when
+        it sees this, so in a green pipeline this is a second, external
+        witness rather than the primary check. It is asserted here
+        anyway because it reads the store rather than the code path:
+        if the in-process tracker is ever bypassed (a caller reaching
+        `apply_one` directly, a partial re-index), this still sees it.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT markdown_uuid, COUNT(DISTINCT source_name) FROM markdowns "
+            "GROUP BY markdown_uuid HAVING COUNT(DISTINCT source_name) > 1;",
+        )
+
     def _signal_cursor(self) -> list[str]:
         """Signal's `ingested_backups` rows as `<snapshot_dir>|<blake3>`."""
         return self._query(
@@ -331,6 +415,46 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ),
             0,
             "the qmd_path/md_path join must cover pdf rows",
+        )
+
+        # ── id-space guardrails ─────────────────────────────────
+        # Every row uuid is unique. The PK makes this true by
+        # construction; asserting it from outside the writer is what
+        # confirms the PK is real in doltlite, which is the assumption
+        # the whole collision story rests on.
+        self.assertEqual(self._duplicate_uuids(), [], "grid_rows.uuid must be unique")
+        # No two sources may claim one markdown. This is the overlap
+        # that used to erase a source's rows without an error.
+        self.assertEqual(
+            self._cross_source_shared_markdowns(),
+            [],
+            "a markdown_uuid claimed by two source_names means one "
+            "source's rows were silently overwritten",
+        )
+        # Exactly the known offenders still mint non-UUID primary keys.
+        # Equality (not a subset check) in both directions: a new
+        # offender fails, and so does a stale allowlist entry.
+        self.assertEqual(
+            self._non_uuid_pk_providers(),
+            NON_UUID_PK_PROVIDERS,
+            "providers minting non-UUID grid_rows.uuid values; shrink "
+            "NON_UUID_PK_PROVIDERS as each is ported, and do not grow it",
+        )
+        # The regex must actually be discriminating against this
+        # fixture — if it matched everything, the exact-set assertion
+        # above would pass for the wrong reason.
+        self.assertGreater(
+            int(
+                self._scalar(
+                    self._index_db,
+                    "SELECT COUNT(*) FROM grid_rows "
+                    f"WHERE uuid NOT REGEXP '{UUID_SQL_REGEX}';",
+                )
+            ),
+            0,
+            "the UUID-shape regex matched every row, so it proves nothing "
+            "— if every provider is genuinely clean now, delete "
+            "NON_UUID_PK_PROVIDERS and this check together",
         )
 
         # The index is committed, so its version history is non-empty.
