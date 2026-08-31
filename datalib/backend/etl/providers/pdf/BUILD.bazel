@@ -30,6 +30,7 @@ rust_library(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
         "@datalib_crates//:hex",
         "@datalib_crates//:lopdf",
         "@datalib_crates//:pdf-inspector",
