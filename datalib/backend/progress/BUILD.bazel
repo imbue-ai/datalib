@@ -1,0 +1,44 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The progress bus: a plain-SQLite file the runner writes and anything
+# can read. Deliberately a leaf crate with no datalib dependencies — the
+# runner takes it without taking `datalib_core`, and `datalib-http`
+# takes it to read what the runner wrote.
+rust_library(
+    name = "datalib_progress",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# The load-bearing experiment, run against the real engine: that
+# `doltlite_engine=sqlite` survives sqlx and reaches doltlite, so the bus
+# on disk is stock SQLite. Everything else here rests on it.
+rust_test(
+    name = "stock_sqlite_engine_test",
+    srcs = ["tests/stock_sqlite_engine.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_progress",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The bus end to end: publish, read back, and the coalescing rules.
+rust_test(
+    name = "bus_roundtrip_test",
+    srcs = ["tests/bus_roundtrip.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_progress",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
