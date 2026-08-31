@@ -41,7 +41,8 @@ use api::{call_slack, SlackCall, SlackError};
 use datalib_etl::events;
 use datalib_etl::scope_config;
 pub use db::{
-    block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb, TsBounds,
+    block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
+    TsBounds, UserDirectoryEntry,
 };
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
@@ -75,8 +76,15 @@ async fn call(method: &str, params: &BTreeMap<String, String>) -> Result<Value> 
     Ok(response)
 }
 
+/// `(team_id, self_user_id)` from `auth.test`. `self_user_id` is who
+/// the credential belongs to — needed to subtract the account itself
+/// out of a group DM's `members` when naming it. Optional because only
+/// the DM path needs it and a missing field must not sink a sync.
 #[instrument(skip_all)]
-async fn fetch_self(db: &RawDb, progress: &datalib_etl::progress::Progress) -> Result<String> {
+async fn fetch_self(
+    db: &RawDb,
+    progress: &datalib_etl::progress::Progress,
+) -> Result<(String, Option<String>)> {
     progress.set_message("auth.test");
     let t0 = std::time::Instant::now();
     let resp = call(M_AUTH_TEST, &empty_params()).await?;
@@ -86,12 +94,28 @@ async fn fetch_self(db: &RawDb, progress: &datalib_etl::progress::Progress) -> R
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("auth.test response missing team_id"))?
         .to_string();
+    let self_user_id = resp
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     info!(
         event = "slack_fetch_self_done",
         team_id = %team_id,
         elapsed_ms = t0.elapsed().as_millis() as u64,
     );
-    Ok(team_id)
+    Ok((team_id, self_user_id))
+}
+
+/// `types` for `conversations.list`. `im` / `mpim` are appended only
+/// when DMs are wanted: the parameter is what decides whether Slack
+/// hands us DM conversations at all, so leaving it at the channel pair
+/// is the enforcement point for `dms = false`, not just a filter.
+fn conversation_types(dms: bool) -> &'static str {
+    if dms {
+        "public_channel,private_channel,im,mpim"
+    } else {
+        "public_channel,private_channel"
+    }
 }
 
 #[instrument(skip(db, progress))]
@@ -99,9 +123,14 @@ async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
     include_archived: bool,
+    dms: bool,
     progress: &datalib_etl::progress::Progress,
-) -> Result<Vec<(String, Option<String>)>> {
-    let sweep_key = format!("channels:archived={include_archived}");
+) -> Result<Vec<FetchTarget>> {
+    // `dms` is part of the key, not just the request: turning DMs on
+    // asks for a strictly wider `types`, and a sweep recorded under the
+    // narrower one would suppress the refetch for up to MANIFEST_TTL —
+    // the run would then find no DM rows and quietly mirror nothing.
+    let sweep_key = format!("channels:archived={include_archived}:dms={dms}");
     if let Some(age) = db.manifest_sweep_age(&sweep_key).await? {
         if age < MANIFEST_TTL {
             let age_s = age.num_seconds().max(0);
@@ -115,7 +144,9 @@ async fn fetch_channels(
                 "conversations.list cached ({age_s}s old, TTL {}s)",
                 MANIFEST_TTL.num_seconds()
             ));
-            return db.channels_for_fetch(members_only, include_archived).await;
+            return db
+                .channels_for_fetch(members_only, include_archived, dms)
+                .await;
         }
     }
 
@@ -125,10 +156,7 @@ async fn fetch_channels(
         if include_archived { "false" } else { "true" }.to_string(),
     );
     params.insert("limit".to_string(), "200".to_string());
-    params.insert(
-        "types".to_string(),
-        "public_channel,private_channel".to_string(),
-    );
+    params.insert("types".to_string(), conversation_types(dms).to_string());
 
     let t0 = std::time::Instant::now();
     progress.set_message("conversations.list page 1");
@@ -161,7 +189,8 @@ async fn fetch_channels(
         elapsed_ms = t0.elapsed().as_millis() as u64,
     );
     db.record_manifest_sweep(&sweep_key).await?;
-    db.channels_for_fetch(members_only, include_archived).await
+    db.channels_for_fetch(members_only, include_archived, dms)
+        .await
 }
 
 #[instrument(skip_all)]
@@ -229,6 +258,135 @@ fn next_cursor(resp: &Value) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Which conversations this run walks.
+// ---------------------------------------------------------------------------
+
+/// A `dm_users` entry as written, normalized for matching: leading `@`
+/// dropped, trimmed, lowercased.
+fn normalize_dm_entry(spec: &str) -> String {
+    spec.trim().trim_start_matches('@').trim().to_lowercase()
+}
+
+/// The `dm_users` allowlist resolved against the mirrored user
+/// directory.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct DmAllowlist {
+    /// Slack user ids whose DMs are in scope.
+    user_ids: std::collections::BTreeSet<String>,
+    /// Entries that matched nobody. Warned about rather than ignored:
+    /// a typo'd handle otherwise mirrors nothing and looks identical to
+    /// "that person never DM'd you".
+    unmatched: Vec<String>,
+}
+
+/// Resolve `dm_users` entries to Slack user ids.
+///
+/// An entry matches a user id, handle, display name or real name,
+/// case-insensitively, with an optional leading `@`. One entry may
+/// legitimately resolve to several users (two people can share a
+/// display name); all of them are kept, since the alternative is
+/// silently dropping one person's DMs.
+fn resolve_dm_users(entries: &[String], users: &[UserDirectoryEntry]) -> DmAllowlist {
+    let mut out = DmAllowlist::default();
+    for spec in entries {
+        let want = normalize_dm_entry(spec);
+        if want.is_empty() {
+            continue;
+        }
+        let mut hit = false;
+        for u in users {
+            let candidates = [
+                Some(u.id.as_str()),
+                u.name.as_deref(),
+                u.display_name.as_deref(),
+                u.real_name.as_deref(),
+            ];
+            if candidates
+                .into_iter()
+                .flatten()
+                .any(|c| c.trim().to_lowercase() == want)
+            {
+                out.user_ids.insert(u.id.clone());
+                hit = true;
+            }
+        }
+        if !hit {
+            out.unmatched.push(spec.clone());
+        }
+    }
+    out
+}
+
+/// What [`select_targets`] decided.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TargetPlan {
+    /// `(channel_id, label)` for every conversation to walk. Channels
+    /// first, then DMs.
+    targets: Vec<(String, String)>,
+    /// How many of `targets` are DMs — the tail of the vec.
+    dm_targets: usize,
+}
+
+/// Split the listed conversations into the ones this run walks.
+///
+/// The two scoping knobs are independent, and that is the whole point:
+/// `channels` filters channels by name, `dm_users` filters DMs by
+/// person. Running the channel-name filter over DMs — which is what
+/// happens if you treat one list as covering both — drops every DM,
+/// because a DM has no name to match.
+///
+/// A group DM is in scope when *any* of its members is on the
+/// allowlist: allowlisting Riker means "the conversations I have with
+/// Riker", and the three-way with Riker and Data is one of them.
+fn select_targets(
+    listed: &[FetchTarget],
+    channels: Option<&[String]>,
+    dm_allow: Option<&DmAllowlist>,
+    user_labels: &BTreeMap<String, String>,
+    self_user_id: Option<&str>,
+) -> TargetPlan {
+    let mut plan = TargetPlan::default();
+
+    let by_name: BTreeMap<&str, &FetchTarget> = listed
+        .iter()
+        .filter(|t| !t.is_dm)
+        .filter_map(|t| t.name.as_deref().map(|n| (n, t)))
+        .collect();
+
+    match channels {
+        Some(specs) => {
+            for spec in specs {
+                let name = spec.trim().trim_start_matches('#');
+                if let Some(t) = by_name.get(name) {
+                    plan.targets.push((t.id.clone(), name.to_string()));
+                }
+            }
+        }
+        None => {
+            for t in listed.iter().filter(|t| !t.is_dm) {
+                let label = t.name.clone().unwrap_or_else(|| t.id.clone());
+                plan.targets.push((t.id.clone(), label));
+            }
+        }
+    }
+
+    for t in listed.iter().filter(|t| t.is_dm) {
+        let counterparts = schema_raw::dm_counterparts(&t.dm_user_ids, self_user_id);
+        if let Some(allow) = dm_allow {
+            if !counterparts.iter().any(|u| allow.user_ids.contains(u)) {
+                continue;
+            }
+        }
+        let label =
+            schema_raw::dm_display_name(&counterparts, t.name.as_deref(), &t.id, user_labels);
+        plan.targets.push((t.id.clone(), label));
+        plan.dm_targets += 1;
+    }
+
+    plan
+}
+
+// ---------------------------------------------------------------------------
 // Config-change adjustments.
 // ---------------------------------------------------------------------------
 
@@ -254,6 +412,12 @@ const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 /// - `channels` / `members_only` — a newly listed channel has no rows,
 ///   so `channel_latest_ts` is `None` and it cold-starts from `since`
 ///   without any help from us.
+/// - `dms` / `dm_users` — same reason, one level up. Turning DMs on
+///   lists conversations that have no message rows at all, so each one
+///   cold-starts from `since` on its own. (What *does* need help is the
+///   `conversations.list` sweep TTL, which would otherwise serve the
+///   pre-DM listing for up to six hours — handled by keying the sweep
+///   marker on `dms`, in `fetch_channels`.)
 /// - `refresh_window_days` — already re-applied on every run.
 /// - `conv`-style one-offs and paths — not scope-affecting.
 fn scope_config_blob(opts: &FetchOptions) -> Value {
@@ -818,6 +982,13 @@ pub struct FetchOptions {
     pub refresh_window_days: i64,
     pub members_only: bool,
     pub media: bool,
+    /// Mirror direct messages (1:1 and group). Off by default — see
+    /// `SlackApiSync::dms`.
+    pub dms: bool,
+    /// Restrict DMs to conversations with these people. Only consulted
+    /// when `dms` is on; `SlackApiSync::validate` rejects the other
+    /// combination before it gets here.
+    pub dm_users: Option<Vec<String>>,
     pub blob_size_limit_bytes: Option<u64>,
     pub progress: datalib_etl::progress::Progress,
     pub control: datalib_etl::control::DownloadControl,
@@ -833,6 +1004,8 @@ impl Default for FetchOptions {
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             members_only: true,
             media: true,
+            dms: false,
+            dm_users: None,
             blob_size_limit_bytes: None,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
@@ -880,6 +1053,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "refresh_window_days": opts.refresh_window_days,
         "members_only": opts.members_only,
         "media": opts.media,
+        "dms": opts.dms,
+        "dm_users": opts.dm_users,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
     });
     let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
@@ -924,39 +1099,67 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let setup = opts.progress.child("setup");
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
-        let team_id = fetch_self(&db, &setup).await?;
-        let visible_channels =
-            fetch_channels(&db, opts.members_only, opts.channels.is_some(), &setup).await?;
+        let (team_id, self_user_id) = fetch_self(&db, &setup).await?;
+        // Users before channels: a DM is identified by its counterpart,
+        // so both the `dm_users` allowlist and the DM progress labels
+        // need the user directory to already be mirrored.
         fetch_users(&db, &setup).await?;
+        let listed = fetch_channels(
+            &db,
+            opts.members_only,
+            opts.channels.is_some(),
+            opts.dms,
+            &setup,
+        )
+        .await?;
         setup.finish(&format!(
             "setup done in {}ms",
             t_setup.elapsed().as_millis() as u64
         ));
 
-        let targets: Vec<(String, String)> = match &opts.channels {
-            Some(names) => {
-                let by_name: BTreeMap<String, String> = visible_channels
-                    .iter()
-                    .filter_map(|(id, name)| name.as_ref().map(|n| (n.clone(), id.clone())))
-                    .collect();
-                names
-                    .iter()
-                    .filter_map(|spec| {
-                        let name = spec.trim_start_matches('#').to_string();
-                        by_name.get(&name).map(|id| (id.clone(), name))
-                    })
-                    .collect()
-            }
-            None => visible_channels
+        // Only loaded when DMs are in play — for a channels-only run it
+        // is a whole table scan nothing would read.
+        let (user_labels, dm_allow) = if opts.dms {
+            let directory = db.user_directory().await?;
+            let labels: BTreeMap<String, String> = directory
                 .iter()
-                .map(|(id, name)| (id.clone(), name.clone().unwrap_or_else(|| id.clone())))
-                .collect(),
+                .map(|u| (u.id.clone(), u.label()))
+                .collect();
+            let allow = opts.dm_users.as_ref().map(|entries| {
+                let resolved = resolve_dm_users(entries, &directory);
+                if !resolved.unmatched.is_empty() {
+                    // Silence here would be indistinguishable from
+                    // "you have no DMs with that person".
+                    warn!(
+                        event = "slack_dm_users_unmatched",
+                        entries = ?resolved.unmatched,
+                        directory_size = directory.len(),
+                        "no mirrored user matches these `dm_users` entries — \
+                         their DMs will not be mirrored",
+                    );
+                }
+                resolved
+            });
+            (labels, allow)
+        } else {
+            (BTreeMap::new(), None)
         };
+
+        let plan = select_targets(
+            &listed,
+            opts.channels.as_deref(),
+            dm_allow.as_ref(),
+            &user_labels,
+            self_user_id.as_deref(),
+        );
         info!(
             event = "slack_export_planned",
-            channels = targets.len(),
+            channels = plan.targets.len() - plan.dm_targets,
+            dms = opts.dms,
+            dm_targets = plan.dm_targets,
             media = opts.media,
         );
+        let targets = plan.targets;
 
         opts.progress.set_length(Some(targets.len() as u64));
         for (cid, name) in &targets {
@@ -1224,6 +1427,8 @@ mod tests {
             channels: Some(vec!["general".into()]),
             refresh_window_days: 30,
             members_only: false,
+            dms: true,
+            dm_users: Some(vec!["picard".into()]),
             ..Default::default()
         };
         let blob = scope_config_blob(&o);
@@ -1234,6 +1439,273 @@ mod tests {
         assert!(!obj.contains_key("channels"));
         assert!(!obj.contains_key("refresh_window_days"));
         assert!(!obj.contains_key("members_only"));
+        // Same reason for the DM knobs: a newly listed DM has no rows,
+        // so it cold-starts from `since` unaided. What a widened `dms`
+        // *does* need is a fresh `conversations.list` sweep, which is
+        // handled by the sweep key, not by this blob.
+        assert!(!obj.contains_key("dms"));
+        assert!(!obj.contains_key("dm_users"));
         assert_eq!(obj.len(), 3, "unexpected keys in blob: {obj:?}");
+    }
+
+    // ── DM scoping ───────────────────────────────────────────────────
+
+    /// The enforcement point for `dms = false` is the request, not a
+    /// local filter: without `im,mpim` Slack never returns a DM at all.
+    #[test]
+    fn dm_types_are_requested_only_when_dms_are_on() {
+        assert_eq!(
+            conversation_types(false),
+            "public_channel,private_channel",
+            "a DM must not even be listed when dms is off"
+        );
+        assert_eq!(
+            conversation_types(true),
+            "public_channel,private_channel,im,mpim"
+        );
+    }
+
+    fn user(id: &str, name: &str, real: Option<&str>, display: Option<&str>) -> UserDirectoryEntry {
+        UserDirectoryEntry {
+            id: id.into(),
+            name: Some(name.into()),
+            real_name: real.map(String::from),
+            display_name: display.map(String::from),
+        }
+    }
+
+    fn directory() -> Vec<UserDirectoryEntry> {
+        vec![
+            user("U1", "picard", Some("Jean-Luc Picard"), Some("Captain")),
+            user("U2", "riker", Some("William Riker"), Some("Number One")),
+            user("U3", "data", None, None),
+        ]
+    }
+
+    fn allow(entries: &[&str]) -> DmAllowlist {
+        let owned: Vec<String> = entries.iter().map(|s| s.to_string()).collect();
+        resolve_dm_users(&owned, &directory())
+    }
+
+    #[test]
+    fn dm_users_match_every_kind_of_name() {
+        // Handle, id, display name, real name — and the `@` a person
+        // will type out of habit.
+        for spec in ["picard", "@picard", "U1", "Captain", "Jean-Luc Picard"] {
+            let a = allow(&[spec]);
+            assert_eq!(
+                a.user_ids.iter().cloned().collect::<Vec<_>>(),
+                vec!["U1".to_string()],
+                "{spec:?} should resolve to U1"
+            );
+            assert!(a.unmatched.is_empty(), "{spec:?}: {:?}", a.unmatched);
+        }
+    }
+
+    #[test]
+    fn dm_user_matching_is_case_insensitive() {
+        assert_eq!(allow(&["  @PICARD "]).user_ids.len(), 1);
+        assert_eq!(allow(&["jean-luc picard"]).user_ids.len(), 1);
+    }
+
+    /// A typo'd handle otherwise mirrors nothing and is indistinguishable
+    /// from "you have no DMs with that person".
+    #[test]
+    fn unmatched_dm_users_are_reported() {
+        let a = allow(&["picard", "@q"]);
+        assert_eq!(a.user_ids.iter().cloned().collect::<Vec<_>>(), vec!["U1"]);
+        assert_eq!(a.unmatched, vec!["@q".to_string()]);
+    }
+
+    /// A user with no real_name or display_name is still reachable by
+    /// handle — `users.list` leaves both unset for plenty of accounts.
+    #[test]
+    fn dm_user_with_only_a_handle_resolves() {
+        assert_eq!(
+            allow(&["data"])
+                .user_ids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["U3"]
+        );
+    }
+
+    fn channel_target(id: &str, name: &str) -> FetchTarget {
+        FetchTarget {
+            id: id.into(),
+            name: Some(name.into()),
+            is_dm: false,
+            dm_user_ids: Vec::new(),
+        }
+    }
+
+    /// A 1:1 DM: no name, one counterpart in `user`.
+    fn im(id: &str, user_id: &str) -> FetchTarget {
+        FetchTarget {
+            id: id.into(),
+            name: None,
+            is_dm: true,
+            dm_user_ids: vec![user_id.into()],
+        }
+    }
+
+    /// A group DM: Slack's composite handle plus a `members` array that
+    /// includes the account itself (U1 here). Shape confirmed against
+    /// the live API.
+    fn mpim(id: &str, name: &str, members: &[&str]) -> FetchTarget {
+        FetchTarget {
+            id: id.into(),
+            name: Some(name.into()),
+            is_dm: true,
+            dm_user_ids: members.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn labels() -> BTreeMap<String, String> {
+        directory()
+            .into_iter()
+            .map(|u| (u.id.clone(), u.label()))
+            .collect()
+    }
+
+    /// The account doing the mirroring — U1, Picard.
+    const SELF: Option<&str> = Some("U1");
+
+    fn listed() -> Vec<FetchTarget> {
+        vec![
+            channel_target("C1", "general"),
+            im("D1", "U2"),
+            im("D3", "U3"),
+            mpim("G1", "mpdm-picard--riker--data-1", &["U1", "U2", "U3"]),
+        ]
+    }
+
+    fn walked(plan: &TargetPlan) -> Vec<&str> {
+        plan.targets.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    /// The point of the separate namespace: `channels` scopes channels
+    /// and nothing else. Running the channel-name filter over DMs — the
+    /// natural mistake if the two shared one list — drops every DM,
+    /// because a DM has no name to match.
+    #[test]
+    fn channels_filter_does_not_touch_dms() {
+        let all = listed();
+        let names = vec!["general".to_string()];
+        let plan = select_targets(&all, Some(&names), None, &labels(), SELF);
+        assert_eq!(walked(&plan), vec!["C1", "D1", "D3", "G1"]);
+        assert_eq!(plan.dm_targets, 3);
+    }
+
+    #[test]
+    fn no_allowlist_walks_every_dm_including_group_dms() {
+        let plan = select_targets(&listed(), None, None, &labels(), SELF);
+        assert_eq!(walked(&plan), vec!["C1", "D1", "D3", "G1"]);
+    }
+
+    /// The 1:1 DM with Riker, and — because `members` is on the wire —
+    /// the group DM he is in. Allowlisting a person means "the
+    /// conversations I have with that person", both shapes included.
+    #[test]
+    fn allowlist_keeps_conversations_with_the_named_person() {
+        let a = allow(&["riker"]);
+        let plan = select_targets(&listed(), None, Some(&a), &labels(), SELF);
+        assert_eq!(walked(&plan), vec!["C1", "D1", "G1"]);
+        assert_eq!(plan.dm_targets, 2);
+    }
+
+    /// An allowlist that resolved to nobody must mirror no DMs — not
+    /// fall open to all of them.
+    #[test]
+    fn allowlist_matching_nobody_walks_no_dms() {
+        let a = allow(&["@q"]);
+        assert!(a.user_ids.is_empty());
+        let plan = select_targets(&listed(), None, Some(&a), &labels(), SELF);
+        assert_eq!(walked(&plan), vec!["C1"]);
+        assert_eq!(plan.dm_targets, 0);
+    }
+
+    /// Allowlisting *yourself* must not sweep in every group DM you are
+    /// in — `members` includes you, so the match runs against
+    /// counterparts, not raw participants.
+    #[test]
+    fn allowlisting_yourself_does_not_match_every_group_dm() {
+        let a = allow(&["picard"]);
+        let plan = select_targets(&listed(), None, Some(&a), &labels(), SELF);
+        assert_eq!(
+            walked(&plan),
+            vec!["C1"],
+            "self is not a counterpart in any of these DMs"
+        );
+    }
+
+    #[test]
+    fn dm_labels_read_as_people() {
+        let plan = select_targets(&listed(), None, None, &labels(), SELF);
+        let by_id: BTreeMap<&str, &str> = plan
+            .targets
+            .iter()
+            .map(|(id, label)| (id.as_str(), label.as_str()))
+            .collect();
+        assert_eq!(by_id["C1"], "general");
+        assert_eq!(by_id["D1"], "@William Riker");
+        // The account itself is subtracted, so a group DM reads as who
+        // you are talking *to* — not `@…, Jean-Luc Picard, …`.
+        // U3 has no real_name, so the label falls back to the handle —
+        // the same rule the renderer uses.
+        assert_eq!(by_id["G1"], "@William Riker, data");
+    }
+
+    /// A DM with someone `users.list` didn't return still gets walked —
+    /// an unknown counterpart is a labelling problem, not a reason to
+    /// drop their messages.
+    #[test]
+    fn dm_with_an_unknown_user_falls_back_to_the_id() {
+        let all = vec![im("D9", "U404")];
+        let plan = select_targets(&all, None, None, &labels(), SELF);
+        assert_eq!(plan.targets, vec![("D9".to_string(), "@U404".to_string())]);
+    }
+
+    /// A store written before `dm_user_ids` existed has DM rows with no
+    /// participants. They must still be walked and still be nameable —
+    /// Slack's own composite handle, then the raw id.
+    #[test]
+    fn dm_without_stored_participants_still_gets_a_label() {
+        let legacy_group = mpim("G9", "mpdm-riker--data-1", &[]);
+        let nameless = FetchTarget {
+            id: "D9".into(),
+            name: None,
+            is_dm: true,
+            dm_user_ids: Vec::new(),
+        };
+        let plan = select_targets(&[legacy_group, nameless], None, None, &labels(), SELF);
+        assert_eq!(
+            plan.targets,
+            vec![
+                ("G9".to_string(), "@mpdm-riker--data-1".to_string()),
+                ("D9".to_string(), "D9".to_string()),
+            ]
+        );
+    }
+
+    /// `dm_counterparts` is what reconciles the two wire shapes: an
+    /// `im`'s `user` excludes you, an `mpim`'s `members` includes you.
+    #[test]
+    fn counterparts_subtract_self_but_never_to_nothing() {
+        let members = vec!["U1".to_string(), "U2".to_string()];
+        assert_eq!(
+            schema_raw::dm_counterparts(&members, Some("U1")),
+            vec!["U2".to_string()]
+        );
+        // A DM with yourself: subtracting would leave an unnameable
+        // conversation, so the full list stands.
+        let just_me = vec!["U1".to_string()];
+        assert_eq!(
+            schema_raw::dm_counterparts(&just_me, Some("U1")),
+            vec!["U1".to_string()]
+        );
+        // `auth.test` without a `user_id` must not drop anyone.
+        assert_eq!(schema_raw::dm_counterparts(&members, None), members);
     }
 }

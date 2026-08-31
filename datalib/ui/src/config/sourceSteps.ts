@@ -312,6 +312,7 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
   // Group by the table each target sits in (`sync.channels` → `sync`).
   const tables = new Map<string, string[]>();
   for (const field of fieldsFor(entry, phase)) {
+    if (!fieldIsActive(field, values)) continue;
     const value = values[field.target];
     if (!isSet(field, value)) continue;
     const dot = field.target.lastIndexOf(".");
@@ -339,6 +340,16 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
       `[steps.params${table ? `.${table}` : ""}]\n${lines.join("\n")}`,
     )
     .join("\n\n");
+}
+
+/// Is this field's gate open? A field with no `requires` always is.
+///
+/// Gates both the form row and the TOML the form writes, so the wizard
+/// cannot emit a value whose enabling switch is off — for `slack_api`
+/// that combination is a hard config error, not a shrug. See
+/// `Field.requires`.
+export function fieldIsActive(field: Field, values: FieldValues): boolean {
+  return field.requires === undefined || !!values[field.requires];
 }
 
 function isSet(field: Field, value: unknown): boolean {

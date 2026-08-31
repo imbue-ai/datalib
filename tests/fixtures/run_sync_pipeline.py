@@ -456,7 +456,15 @@ def _source_config(
         # Disable media so extract doesn't fall back to the direct
         # `latchkey curl -v` path for file downloads (not on PATH in
         # the bazel sandbox, and the fixtures don't exercise media).
-        source["sync"] = {"media": False}
+        #
+        # `dms` is ON here even though it is off by default, because
+        # this is the pipeline that exercises the real download step
+        # against playback: `conversations.list` is keyed on its
+        # `types` param, so only a dms-enabled run reaches the fixture's
+        # `im` / `mpim` envelope at all. Leaving it off would mean the
+        # DM surfaces are in the fixture but never mirrored, rendered,
+        # indexed, or asserted on.
+        source["sync"] = {"media": False, "dms": True}
     elif type_str == "beeper":
         # `sources` here is the canonical-network list that filters
         # which rooms get ingested. `beeper_data_dir` points at the

@@ -2,6 +2,83 @@
 source: datalib/backend/etl/providers/slack/tests/slack_render.rs
 expression: bundle
 ---
+=== slack_api/rendered_md/06a28161-9405-53fa-b2af-46e9be976cdc/all.md ===
+---
+title: "@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all)"
+provider: slack
+source_label: "Slack"
+chat_uuid: 06a28161-9405-53fa-b2af-46e9be976cdc
+markdown_uuid: 06a28161-9405-53fa-b2af-46e9be976cdc
+period: all
+display: "@William T. Riker, Worf"
+account: T_NCC1701D
+item_count: 1
+source_fingerprint: 209a2372c0faddd16eead3a46f4a0c567005e52584a06cb82437b78de5a5abf4
+---
+
+<h1 class="page-title" data-page-title-uuid="06a28161-9405-53fa-b2af-46e9be976cdc">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-ceea0712-5812-517a-adc3-3134ddb2d320" data-section-uuid="ceea0712-5812-517a-adc3-3134ddb2d320" class="msg msg--slack">
+
+## 2369-05-28 15:21:44 UTC — Jean-Luc Picard <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+
+Noted, Mr. Worf. Phasers on stun.
+
+</div>
+
+
+=== slack_api/rendered_md/072a1212-3520-55f2-a9f2-c2411b6db065/all.md ===
+---
+title: "@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all)"
+provider: slack
+source_label: "Slack"
+chat_uuid: 072a1212-3520-55f2-a9f2-c2411b6db065
+markdown_uuid: 072a1212-3520-55f2-a9f2-c2411b6db065
+period: all
+display: "@Lt. Cmdr. Data"
+account: T_NCC1701D
+item_count: 1
+source_fingerprint: f939ab2fdbc56d6de9ad82b663388d261641f001bea72bbe8d036f0371d76030
+---
+
+<h1 class="page-title" data-page-title-uuid="072a1212-3520-55f2-a9f2-c2411b6db065">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-3c3b2aa9-ed9b-5863-9f60-a692b24c1299" data-section-uuid="3c3b2aa9-ed9b-5863-9f60-a692b24c1299" class="msg msg--slack">
+
+## 2369-05-28 15:21:42 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+
+Sir, I have completed my analysis of the Romulan signature.
+
+- <span id="m-26daef5b-c742-522f-8d21-e738304a3949" data-section-uuid="26daef5b-c742-522f-8d21-e738304a3949">👍 Jean-Luc Picard</span>
+
+</div>
+
+
+=== slack_api/rendered_md/072ba749-eb7a-5e35-9c71-d48b72f39965/all.md ===
+---
+title: "@William T. Riker, Worf: I must object to beaming down unarmed. (all)"
+provider: slack
+source_label: "Slack"
+chat_uuid: 072ba749-eb7a-5e35-9c71-d48b72f39965
+markdown_uuid: 072ba749-eb7a-5e35-9c71-d48b72f39965
+period: all
+display: "@William T. Riker, Worf"
+account: T_NCC1701D
+item_count: 1
+source_fingerprint: 32093494b689cb88f670cf0d30b6991e6b24ff8365aa5f87bf7a8a2834eb65d2
+---
+
+<h1 class="page-title" data-page-title-uuid="072ba749-eb7a-5e35-9c71-d48b72f39965">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-c2642afd-62c0-5e96-aa6c-d4aeefc35543" data-section-uuid="c2642afd-62c0-5e96-aa6c-d4aeefc35543" class="msg msg--slack">
+
+## 2369-05-28 15:21:43 UTC — Worf <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+
+I must object to beaming down unarmed.
+
+</div>
+
+
 === slack_api/rendered_md/18661749-ed35-5c92-aa13-7cb73be53387/all.md ===
 ---
 title: "#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all)"
@@ -23,6 +100,31 @@ source_fingerprint: 2ec659881efea6ba5976ddc16a793d715ceac1e09aced7ee8bfc87dc08aa
 ## 2369-05-28 15:20:00 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
+
+</div>
+
+
+=== slack_api/rendered_md/2bb55fa4-cad1-5bcc-8cde-27c9a3e1c14a/all.md ===
+---
+title: "@William T. Riker: Thank you, Number One. Make it so. (all)"
+provider: slack
+source_label: "Slack"
+chat_uuid: 2bb55fa4-cad1-5bcc-8cde-27c9a3e1c14a
+markdown_uuid: 2bb55fa4-cad1-5bcc-8cde-27c9a3e1c14a
+period: all
+display: "@William T. Riker"
+account: T_NCC1701D
+item_count: 1
+source_fingerprint: 4ce49e20346ed979fe0ca3c701a54349506c1f988878ae78b394feb05c7fe432
+---
+
+<h1 class="page-title" data-page-title-uuid="2bb55fa4-cad1-5bcc-8cde-27c9a3e1c14a">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-c5b3d039-2226-51ec-8cce-d25ce9d8f590" data-section-uuid="c5b3d039-2226-51ec-8cce-d25ce9d8f590" class="msg msg--slack">
+
+## 2369-05-28 15:21:41 UTC — Jean-Luc Picard <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+
+Thank you, Number One. Make it so.
 
 </div>
 
@@ -128,6 +230,31 @@ source_fingerprint: 0ba45c943114b16ea457532986b4b21b50308ba7f44b756e6be70dab13b5
 ## 2369-05-28 15:15:00 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Warp core efficiency at 99.7%.
+
+</div>
+
+
+=== slack_api/rendered_md/b3501992-537b-5135-888f-1a02fddafab8/all.md ===
+---
+title: "@William T. Riker: Captain, the away team roster is ready for your review. (all)"
+provider: slack
+source_label: "Slack"
+chat_uuid: b3501992-537b-5135-888f-1a02fddafab8
+markdown_uuid: b3501992-537b-5135-888f-1a02fddafab8
+period: all
+display: "@William T. Riker"
+account: T_NCC1701D
+item_count: 1
+source_fingerprint: cf49da27a234ef6127f2d890c322934bf5a70cd687cd34d6ead04632c8d8a72d
+---
+
+<h1 class="page-title" data-page-title-uuid="b3501992-537b-5135-888f-1a02fddafab8">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-f5025272-19a6-52f6-897a-d9256494d8cd" data-section-uuid="f5025272-19a6-52f6-897a-d9256494d8cd" class="msg msg--slack">
+
+## 2369-05-28 15:21:40 UTC — William T. Riker <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+
+Captain, the away team roster is ready for your review.
 
 </div>
 

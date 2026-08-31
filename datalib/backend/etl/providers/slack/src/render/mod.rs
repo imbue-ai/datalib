@@ -62,17 +62,65 @@ pub struct User {
 
 impl User {
     pub fn label(&self) -> String {
-        self.real_name
-            .clone()
-            .or_else(|| self.name.clone())
-            .unwrap_or_else(|| self.user_id.clone())
+        crate::user_label(
+            self.real_name.as_deref(),
+            self.name.as_deref(),
+            &self.user_id,
+        )
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Channel {
     pub channel_id: String,
+    /// `general` for a channel, an `mpdm-…` composite handle for a
+    /// group DM, `None` for a 1:1 DM — Slack gives one no name.
     pub name: Option<String>,
+    /// A direct message surface (`is_im` or `is_mpim`).
+    pub is_dm: bool,
+    /// Who is in this DM, as Slack listed them — self included for a
+    /// group DM. Empty for a channel. See
+    /// [`crate::download::schema_raw::ChannelRow::dm_user_ids`].
+    pub dm_user_ids: Vec<String>,
+}
+
+impl Channel {
+    /// How this conversation is titled in rendered markdown and in the
+    /// grid's `conversation_name`.
+    ///
+    /// A channel keeps the `#name` it has always had — including the
+    /// `#<channel_id>` fallback for a channel whose name we never
+    /// captured, which is why the fallback lives here rather than at
+    /// the call site.
+    ///
+    /// A DM is named after the people in it, `@`-sigilled: a 1:1 DM has
+    /// no name to put after a `#`, and `#D0123ABCD` is not something
+    /// anyone can read. The account itself is subtracted, so a DM reads
+    /// as who you are talking *to*. The naming itself is
+    /// [`crate::download::schema_raw::dm_display_name`], shared with
+    /// the downloader's progress lines so the two can't disagree.
+    ///
+    /// `users` maps user id → display label ([`User::label`]).
+    pub fn display(
+        &self,
+        users: &std::collections::BTreeMap<String, String>,
+        self_user_id: Option<&str>,
+    ) -> String {
+        if !self.is_dm {
+            return format!(
+                "#{}",
+                self.name.clone().unwrap_or_else(|| self.channel_id.clone())
+            );
+        }
+        let counterparts =
+            crate::download::schema_raw::dm_counterparts(&self.dm_user_ids, self_user_id);
+        crate::download::schema_raw::dm_display_name(
+            &counterparts,
+            self.name.as_deref(),
+            &self.channel_id,
+            users,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,4 +171,103 @@ pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&
         }
     }
     url
+}
+
+#[cfg(test)]
+mod channel_display_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// U1 is the account doing the mirroring.
+    const SELF: Option<&str> = Some("U1");
+
+    fn labels() -> BTreeMap<String, String> {
+        [
+            ("U1", "Jean-Luc Picard"),
+            ("U2", "William Riker"),
+            ("U3", "Data"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    fn dm(id: &str, name: Option<&str>, participants: &[&str]) -> Channel {
+        Channel {
+            channel_id: id.into(),
+            name: name.map(String::from),
+            is_dm: true,
+            dm_user_ids: participants.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Channels render exactly as they always have — including the
+    /// id fallback. This is what keeps the render goldens byte-stable
+    /// across the DM change.
+    #[test]
+    fn a_channel_is_hash_name() {
+        let c = Channel {
+            channel_id: "C1".into(),
+            name: Some("general".into()),
+            ..Default::default()
+        };
+        assert_eq!(c.display(&labels(), SELF), "#general");
+
+        let unnamed = Channel {
+            channel_id: "C2".into(),
+            ..Default::default()
+        };
+        assert_eq!(unnamed.display(&labels(), SELF), "#C2");
+    }
+
+    /// The reason DMs need their own branch: a 1:1 DM has no name, so
+    /// the channel path would title every one of them `#D0123ABCD`.
+    #[test]
+    fn a_dm_is_at_the_person() {
+        assert_eq!(
+            dm("D1", None, &["U2"]).display(&labels(), SELF),
+            "@William Riker"
+        );
+    }
+
+    /// A group DM's `members` includes the account itself. Titling it
+    /// with your own name in the list is not what anyone means by "who
+    /// is this conversation with".
+    #[test]
+    fn a_group_dm_names_the_others() {
+        assert_eq!(
+            dm(
+                "G1",
+                Some("mpdm-picard--riker--data-1"),
+                &["U1", "U2", "U3"]
+            )
+            .display(&labels(), SELF),
+            "@William Riker, Data"
+        );
+    }
+
+    #[test]
+    fn a_dm_with_an_unknown_user_falls_back_to_the_user_id() {
+        assert_eq!(dm("D9", None, &["U404"]).display(&labels(), SELF), "@U404");
+    }
+
+    /// A store written before `dm_user_ids` existed, or a shape without
+    /// participants: Slack's own composite handle, then the raw id.
+    #[test]
+    fn a_dm_without_participants_falls_back_to_the_handle_then_the_id() {
+        assert_eq!(
+            dm("G1", Some("mpdm-picard--riker--data-1"), &[]).display(&labels(), SELF),
+            "@mpdm-picard--riker--data-1"
+        );
+        assert_eq!(dm("D9", None, &[]).display(&labels(), SELF), "D9");
+    }
+
+    /// A DM with yourself still has to be nameable.
+    #[test]
+    fn a_note_to_self_keeps_your_own_name() {
+        assert_eq!(
+            dm("D0", None, &["U1"]).display(&labels(), SELF),
+            "@Jean-Luc Picard"
+        );
+    }
 }

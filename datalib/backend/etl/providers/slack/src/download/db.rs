@@ -36,8 +36,9 @@ use datalib_etl::event_tape::EventTape;
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
-    full_ddl, slack_message_uuid, slack_thread_uuid, ChannelRow, MessageRow, UserRow, WorkspaceRow,
-    CHANNEL_VOLATILE_PATHS, DATA_TABLES, USER_VOLATILE_PATHS,
+    full_ddl, join_dm_user_ids, parse_dm_user_ids, slack_message_uuid, slack_thread_uuid,
+    ChannelRow, MessageRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, DATA_TABLES,
+    USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -300,6 +301,9 @@ impl RawDb {
             // stores `volatile`, and the tape still sees the full
             // original `payload`.
             let (base, volatile) = dr::split_volatile(payload, CHANNEL_VOLATILE_PATHS);
+            let flag = |k: &str| payload.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_im = flag("is_im");
+            let is_dm = is_im || flag("is_mpim");
             rows.push(ChannelRow {
                 id_and_payload: WirePayload {
                     id: id.to_string(),
@@ -317,6 +321,10 @@ impl RawDb {
                     .get("is_archived")
                     .and_then(|v| v.as_bool())
                     .map(|b| b as i64),
+                is_dm: Some(is_dm as i64),
+                dm_user_ids: is_dm
+                    .then(|| join_dm_user_ids(&dm_participants(payload, is_im)))
+                    .flatten(),
             });
             tape_pairs.push((id, payload));
             if let Some(v) = volatile {
@@ -339,15 +347,35 @@ impl RawDb {
         dr::load_payloads(&self.pool, "channels").await
     }
 
-    /// Channels we should iterate during a fetch run.
+    /// Conversations we should iterate during a fetch run.
+    ///
+    /// `include_archived` applies to everything — an `im` carries
+    /// `is_archived` like a channel does. `members_only` cannot: a 1:1
+    /// DM has no `is_member` field at all, so applying that predicate
+    /// to DM rows would drop every one of them. Hence the `is_dm`
+    /// split, and hence `include_dms` as the only DM-side gate here.
+    ///
+    /// Which DMs, specifically, is [`super::select_targets`]'s job: it
+    /// applies the `dm_users` allowlist against the participant list,
+    /// in Rust, where it is a pure function this crate can unit-test.
+    ///
+    /// `is_dm IS NULL` reads as "channel": rows written before the
+    /// column existed are all channels, because DMs were never listed.
     pub async fn channels_for_fetch(
         &self,
         members_only: bool,
         include_archived: bool,
-    ) -> Result<Vec<(String, Option<String>)>> {
-        let mut sql = String::from("SELECT id, name FROM channels WHERE payload IS NOT NULL");
+        include_dms: bool,
+    ) -> Result<Vec<FetchTarget>> {
+        let mut sql = String::from(
+            "SELECT id, name, is_dm, dm_user_ids FROM channels WHERE payload IS NOT NULL",
+        );
+        if !include_dms {
+            sql.push_str(" AND (is_dm IS NULL OR is_dm = 0)");
+        }
         if members_only {
-            sql.push_str(" AND is_member = 1");
+            // Channels only: a 1:1 DM has no `is_member` to be 1.
+            sql.push_str(" AND (is_dm = 1 OR is_member = 1)");
         }
         if !include_archived {
             sql.push_str(" AND (is_archived IS NULL OR is_archived = 0)");
@@ -361,8 +389,43 @@ impl RawDb {
             .into_iter()
             .filter_map(|r| {
                 let id: String = r.try_get("id").ok()?;
-                let name: Option<String> = r.try_get("name").ok();
-                Some((id, name))
+                Some(FetchTarget {
+                    id,
+                    name: r.try_get("name").ok().flatten(),
+                    is_dm: r.try_get::<Option<i64>, _>("is_dm").ok().flatten() == Some(1),
+                    dm_user_ids: parse_dm_user_ids(
+                        r.try_get::<Option<String>, _>("dm_user_ids")
+                            .ok()
+                            .flatten()
+                            .as_deref(),
+                    ),
+                })
+            })
+            .collect())
+    }
+
+    /// Every mirrored user's ids and names, for resolving the
+    /// `dm_users` allowlist and labelling DM progress lines. Typed
+    /// columns only — no payload parse, since this runs before the
+    /// walk on every DM-enabled run.
+    pub async fn user_directory(&self) -> Result<Vec<UserDirectoryEntry>> {
+        let rows = sqlx::query("SELECT id, name, real_name, display_name FROM users")
+            .fetch_all(&self.pool)
+            .await
+            .context("select user_directory")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                let id: String = r.try_get("id").ok()?;
+                if id.is_empty() {
+                    return None;
+                }
+                Some(UserDirectoryEntry {
+                    id,
+                    name: r.try_get("name").ok().flatten(),
+                    real_name: r.try_get("real_name").ok().flatten(),
+                    display_name: r.try_get("display_name").ok().flatten(),
+                })
             })
             .collect())
     }
@@ -536,6 +599,64 @@ impl RawDb {
     /// doltlite pool.
     pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
         datalib_etl::blob_cas::load_blake3_index(&self.pool, "slack_attachments", "file_id").await
+    }
+}
+
+/// Participant ids out of one conversation payload. An `im` names
+/// exactly one counterpart in `user`; an `mpim` lists everyone — the
+/// account included — in `members`. Verified against the live API
+/// 2026-08-31; see [`super::schema_raw::ChannelRow::dm_user_ids`].
+pub fn dm_participants(payload: &Value, is_im: bool) -> Vec<String> {
+    if is_im {
+        return payload
+            .get("user")
+            .and_then(|v| v.as_str())
+            .map(|u| vec![u.to_string()])
+            .unwrap_or_default();
+    }
+    payload
+        .get("members")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One conversation the fetch run may walk, as
+/// [`RawDb::channels_for_fetch`] found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchTarget {
+    pub id: String,
+    /// `#general`'s bare name, or an `mpim`'s `mpdm-…` composite
+    /// handle. Always `None` for a 1:1 DM — Slack gives it no name.
+    pub name: Option<String>,
+    pub is_dm: bool,
+    /// Who is in this DM, as Slack listed them — self included for an
+    /// `mpim`. Empty for a channel. See
+    /// [`super::schema_raw::ChannelRow::dm_user_ids`].
+    pub dm_user_ids: Vec<String>,
+}
+
+/// One user's ids and names, for resolving `dm_users` entries and
+/// labelling DMs.
+#[derive(Debug, Clone)]
+pub struct UserDirectoryEntry {
+    pub id: String,
+    pub name: Option<String>,
+    pub real_name: Option<String>,
+    pub display_name: Option<String>,
+}
+
+impl UserDirectoryEntry {
+    /// The most human of this user's names — the same rule the
+    /// renderer titles messages with, so a DM's download-time progress
+    /// line and its rendered title agree.
+    pub fn label(&self) -> String {
+        crate::user_label(self.real_name.as_deref(), self.name.as_deref(), &self.id)
     }
 }
 
@@ -724,19 +845,83 @@ mod tests {
         )
         .await
         .unwrap();
-        let mem_only = db.channels_for_fetch(true, false).await.unwrap();
+        let mem_only = db.channels_for_fetch(true, false, false).await.unwrap();
+        assert_eq!(ids(&mem_only), vec!["C1"]);
+        let with_archived = db.channels_for_fetch(true, true, false).await.unwrap();
+        assert_eq!(ids(&with_archived), vec!["C1", "C3"]);
+    }
+
+    fn ids(targets: &[FetchTarget]) -> Vec<&str> {
+        targets.iter().map(|t| t.id.as_str()).collect()
+    }
+
+    /// The trap this column exists to avoid: a DM has no `is_member`
+    /// and no `is_archived`, so the channel predicates would reject
+    /// every one of them regardless of what the config asked for.
+    #[tokio::test]
+    async fn dms_are_selected_by_their_own_predicate() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.upsert_channel(&json!({"id": "C1", "name": "a", "is_member": true}))
+            .await
+            .unwrap();
+        // Exactly what conversations.list returns for a 1:1 DM: no
+        // name, no is_member, no is_archived.
+        db.upsert_channel(&json!({"id": "D1", "is_im": true, "user": "U2", "is_archived": false}))
+            .await
+            .unwrap();
+        // A live mpim looks like a private channel that also carries
+        // `members` — including the account itself.
+        db.upsert_channel(&json!({
+            "id": "G1", "is_mpim": true, "is_member": true, "is_archived": false,
+            "name": "mpdm-a--b--c-1", "members": ["U1", "U2", "U3"],
+        }))
+        .await
+        .unwrap();
+
+        // DMs off: the channel filters apply and nothing else appears.
         assert_eq!(
-            mem_only.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(),
+            ids(&db.channels_for_fetch(true, false, false).await.unwrap()),
             vec!["C1"]
         );
-        let with_archived = db.channels_for_fetch(true, true).await.unwrap();
-        assert_eq!(
-            with_archived
-                .iter()
-                .map(|(i, _)| i.as_str())
-                .collect::<Vec<_>>(),
-            vec!["C1", "C3"]
-        );
+
+        // DMs on: both surfaces come back, and `members_only` does not
+        // suppress them.
+        let with_dms = db.channels_for_fetch(true, false, true).await.unwrap();
+        assert_eq!(ids(&with_dms), vec!["C1", "D1", "G1"]);
+        let im = with_dms.iter().find(|t| t.id == "D1").unwrap();
+        assert!(im.is_dm);
+        assert_eq!(im.dm_user_ids, vec!["U2".to_string()]);
+        assert_eq!(im.name, None);
+        let mpim = with_dms.iter().find(|t| t.id == "G1").unwrap();
+        assert!(mpim.is_dm);
+        // A group DM's participants come from `members`, stored
+        // verbatim — self included, subtracted at read time.
+        assert_eq!(mpim.dm_user_ids, vec!["U1", "U2", "U3"]);
+        assert_eq!(mpim.name.as_deref(), Some("mpdm-a--b--c-1"));
+        let channel = with_dms.iter().find(|t| t.id == "C1").unwrap();
+        assert!(!channel.is_dm);
+        assert!(channel.dm_user_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_directory_round_trips() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.upsert_users(&[
+            json!({"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"}),
+            json!({"id": "U2", "name": "riker", "profile": {"display_name": "Number One"}}),
+        ])
+        .await
+        .unwrap();
+        let dir = db.user_directory().await.unwrap();
+        assert_eq!(dir.len(), 2);
+        let u1 = dir.iter().find(|u| u.id == "U1").unwrap();
+        assert_eq!(u1.label(), "Jean-Luc Picard");
+        let u2 = dir.iter().find(|u| u.id == "U2").unwrap();
+        assert_eq!(u2.display_name.as_deref(), Some("Number One"));
+        // No real_name: falls back to the handle, same as render's User::label.
+        assert_eq!(u2.label(), "riker");
     }
 
     #[tokio::test]

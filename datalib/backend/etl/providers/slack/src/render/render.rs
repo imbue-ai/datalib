@@ -140,6 +140,13 @@ fn build_chats(
     parsed: &ParsedSlack,
     user_labels: &BTreeMap<String, String>,
 ) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
+    // Who this mirror belongs to, from `auth.test`. Used to subtract
+    // the account itself out of a group DM's participant list when
+    // naming it — see `Channel::display`.
+    let self_user_id = parsed
+        .workspace
+        .as_ref()
+        .and_then(|w| w.self_user_id.as_deref());
     let mut chats = Vec::with_capacity(parsed.threads.len());
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
 
@@ -149,11 +156,13 @@ fn build_chats(
             .iter()
             .find(|m| m.is_thread_root)
             .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
-        let cname = parsed
-            .channels
-            .get(&root.channel_id)
-            .and_then(|c| c.name.clone())
-            .unwrap_or_else(|| root.channel_id.clone());
+        // `#general` for a channel, `@Jean-Luc Picard` for a DM, and
+        // `#<channel_id>` when the channel row never arrived — the same
+        // fallback this line has always had. See `Channel::display`.
+        let cname = match parsed.channels.get(&root.channel_id) {
+            Some(c) => c.display(user_labels, self_user_id),
+            None => format!("#{}", root.channel_id),
+        };
         let thread_uuid = bucket.thread_uuid.clone();
 
         let items: Vec<NormalizedChatItem> = bucket
@@ -164,12 +173,12 @@ fn build_chats(
 
         // "#channel: <root snippet>" preserves the old scannable H1; the
         // bare "#channel" remains the conversation_name (via `display`).
-        let title = format!("#{cname}: {}", thread_title(&root.text, user_labels));
+        let title = format!("{cname}: {}", thread_title(&root.text, user_labels));
 
         chats.push(NormalizedChat {
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),
-            display: format!("#{cname}"),
+            display: cname,
             title: Some(title),
             account: Some(root.team_id.clone()),
             project: None,

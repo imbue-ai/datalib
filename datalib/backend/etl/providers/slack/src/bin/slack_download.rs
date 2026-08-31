@@ -69,6 +69,19 @@ struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     media: bool,
 
+    /// Also mirror direct messages — 1:1 DMs and group DMs. Off unless
+    /// asked for: DMs are the most sensitive thing in a workspace.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    dms: bool,
+
+    /// Restrict `--dms` to conversations with these people. Repeat the
+    /// flag. Each value is a Slack user id or any of that user's names
+    /// (handle, display name, real name), with an optional leading `@`.
+    /// Group DMs are skipped while this is set — see the provider's
+    /// DOWNLOAD.md.
+    #[arg(long = "dm-user", value_name = "PERSON")]
+    dm_users: Vec<String>,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -84,6 +97,17 @@ async fn main() -> Result<()> {
         Some(args.channels.clone())
     };
 
+    // Same rule the config path enforces in `SlackApiSync::validate`:
+    // naming people to mirror DMs with, while DMs are off, would either
+    // silently mirror nothing or silently turn the feature on.
+    if !args.dms && !args.dm_users.is_empty() {
+        anyhow::bail!(
+            "--dm-user was given {} time(s) but --dms is false, so no direct messages \
+             would be mirrored. Pass --dms true, or drop --dm-user.",
+            args.dm_users.len(),
+        );
+    }
+
     let opts = FetchOptions {
         db_path: args.out.clone(),
         channels,
@@ -91,6 +115,8 @@ async fn main() -> Result<()> {
         refresh_window_days: args.refresh_window_days,
         members_only: args.members_only,
         media: args.media,
+        dms: args.dms,
+        dm_users: (!args.dm_users.is_empty()).then(|| args.dm_users.clone()),
         ..Default::default()
     };
 
@@ -101,6 +127,7 @@ async fn main() -> Result<()> {
         out = %args.out.display(),
         channels = ?opts.channels,
         media = opts.media,
+        dms = opts.dms,
     );
     let summary = slack::fetch(opts).instrument(span).await?;
 

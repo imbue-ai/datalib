@@ -42,6 +42,7 @@ import {
 } from "@/config/catalog";
 import {
   buildStep,
+  fieldIsActive,
   fieldPhaseOf,
   fieldsFor,
   getParam,
@@ -139,8 +140,14 @@ const idTouched = ref(!!props.renderFor);
 
 /// The fields this dialog shows. Empty for most render steps, which is
 /// why one is usually a checkbox below rather than a dialog of its own.
+///
+/// Also drops fields whose `requires` gate is shut. `buildStep` applies
+/// the same gate when it writes the TOML, and the two have to agree —
+/// otherwise the review pane shows a setting the form isn't offering.
 const shownFields = computed(() =>
-  chosen.value ? fieldsFor(chosen.value, phase.value) : [],
+  chosen.value
+    ? fieldsFor(chosen.value, phase.value).filter((f) => fieldIsActive(f, values.value))
+    : [],
 );
 
 /// Does this provider's render step have anything to configure? The

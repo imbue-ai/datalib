@@ -300,7 +300,22 @@ async fn load_users(pool: &SqlitePool) -> Result<BTreeMap<String, User>> {
 }
 
 async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
-    let rows = sqlx::query("SELECT id, name FROM channels")
+    // The DM columns landed after the first stores were written, and
+    // this pool is read-only — it never runs `doltlite_raw::open`'s
+    // schema reconcile, so a store the current downloader has not
+    // touched still lacks them. Naming a missing column in the SELECT
+    // fails at prepare time and sinks the render step, so probe first
+    // and fall back to the columns that have always been there. Such a
+    // store has no DMs in it anyway: they could not have been listed.
+    let has_dm_columns = datalib_etl::doltlite_raw::column_exists(pool, "channels", "is_dm")
+        .await?
+        && datalib_etl::doltlite_raw::column_exists(pool, "channels", "dm_user_ids").await?;
+    let sql = if has_dm_columns {
+        "SELECT id, name, is_dm, dm_user_ids FROM channels"
+    } else {
+        "SELECT id, name FROM channels"
+    };
+    let rows = sqlx::query(sql)
         .fetch_all(pool)
         .await
         .context("select channels")?;
@@ -316,6 +331,13 @@ async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
             Channel {
                 channel_id: id,
                 name,
+                is_dm: r.try_get::<Option<i64>, _>("is_dm").ok().flatten() == Some(1),
+                dm_user_ids: crate::download::schema_raw::parse_dm_user_ids(
+                    r.try_get::<Option<String>, _>("dm_user_ids")
+                        .ok()
+                        .flatten()
+                        .as_deref(),
+                ),
             },
         );
     }
@@ -622,11 +644,20 @@ fn ingest_channel(c: &Value, out: &mut BTreeMap<String, Channel>) {
     if id.is_empty() {
         return;
     }
+    let flag = |k: &str| c.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_im = flag("is_im");
+    let is_dm = is_im || flag("is_mpim");
     out.insert(
         id.clone(),
         Channel {
             channel_id: id,
             name: opt_str(c, "name"),
+            is_dm,
+            dm_user_ids: if is_dm {
+                crate::download::db::dm_participants(c, is_im)
+            } else {
+                Vec::new()
+            },
         },
     );
 }
@@ -719,5 +750,57 @@ mod no_data_tests {
         assert!(parsed.threads.is_empty());
         assert!(parsed.channels.is_empty());
         assert!(parsed.workspace.is_none());
+    }
+}
+
+#[cfg(test)]
+mod legacy_schema_tests {
+    use super::*;
+
+    /// Render must survive a raw store written before the DM columns
+    /// existed.
+    ///
+    /// The render pool is opened `read_only(true)` and never runs
+    /// `doltlite_raw::open`'s schema reconcile, so those stores really
+    /// do still lack `is_dm` / `dm_user_ids` — and a SELECT naming a
+    /// missing column fails at *prepare* time, which no amount of
+    /// `try_get` tolerance downstream can catch. This is the one shape
+    /// of that bug that a test can pin: build the old table by hand and
+    /// read it.
+    #[tokio::test]
+    async fn load_channels_tolerates_a_store_without_the_dm_columns() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("legacy.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        // The `channels` shape as it was before this change.
+        sqlx::query(
+            "CREATE TABLE channels (id TEXT PRIMARY KEY, payload BLOB, name TEXT,
+                                    is_member INTEGER, is_archived INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO channels (id, name, is_member) VALUES ('C1', 'bridge', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let channels = load_channels(&pool)
+            .await
+            .expect("must not fail to prepare");
+        let c = channels.get("C1").expect("C1");
+        assert_eq!(c.name.as_deref(), Some("bridge"));
+        // Such a store could never have listed a DM, so "not a DM" is
+        // the truthful reading of the absent columns.
+        assert!(!c.is_dm);
+        assert!(c.dm_user_ids.is_empty());
+        assert_eq!(c.display(&BTreeMap::new(), None), "#bridge");
     }
 }

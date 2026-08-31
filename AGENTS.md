@@ -575,6 +575,128 @@ insta_update(
 )
 ```
 
+### "Why was CI slow?" — read the BuildBuddy invocation
+
+Both `test.yml` jobs post to our BuildBuddy org at `imbue.buildbuddy.io`
+(configured by `.github/actions/prepare-bazel`; the key lands in the
+gitignored `.bazelrc.user`, and `--config=buildbuddy` in `.bazelrc`
+turns it on). **On `main` the whole build is essentially a cache
+replay** — so any run that takes noticeably longer is telling you what
+it had to rebuild, and that is the question worth asking.
+
+Every bazel invocation prints its own dashboard link. Pull it out of
+the job log:
+
+```bash
+gh api "repos/imbue-ai/datalib/actions/runs/<run-id>/jobs" \
+  --jq '.jobs[] | select(.name=="bazel test //...") | .id'
+gh api "repos/imbue-ai/datalib/actions/jobs/<job-id>/logs" > /tmp/ci.log
+grep -oE 'https://imbue\.buildbuddy\.io/invocation/[a-f0-9-]+' /tmp/ci.log | sort -u
+```
+
+The log is only served **after the job finishes** — while it is running
+the API returns "still in progress", so poll
+`gh api repos/imbue-ai/datalib/actions/jobs/<id> --jq .status` in the
+background rather than blocking on it.
+
+Three lines in that log answer "what work was actually done", and
+comparing them against a `main` run is usually the whole diagnosis:
+
+```bash
+grep -E 'INFO: Elapsed time|processes:|Executed [0-9]+ out of' /tmp/ci.log
+```
+
+  * `N processes: A remote cache hit, B internal, C local, D
+    processwrapper-sandbox` — **`D` is the real signal.** Sandboxed
+    actions are the ones that actually compiled or ran; cache hits and
+    `internal` are free.
+  * `Executed N out of M tests` — how many tests really ran. On a warm
+    `main` this is **0**.
+  * `Critical Path` — the serial floor. Wall-clock can't go below it.
+
+Worked example, the three runs compared while diagnosing #208:
+
+| run | elapsed | critical path | sandboxed | tests executed |
+|---|---|---|---|---|
+| `main` @ `d01e30b8` | 175s | 46s | 0 | **0 of 114** |
+| a one-provider PR | 142s | 74s | 27 | **8 of 114** |
+| #208 (touched shared `datalib_etl`) | **1016s** | **310s** | **322** | **59 of 115** |
+
+The cause is blast radius, and you can measure it before pushing —
+which is the point of writing this down. `rdeps` says how much of the
+tree a file's crate is upstream of:
+
+```bash
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'   # 67 test targets
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl/providers/slack:datalib_etl_slack))'  # 12
+bazelisk query 'kind(".*_test", rdeps(//..., //tests/fixtures:ingested_tng))'       # 3, incl. the 42s e2e suite
+```
+
+#208 added a 20-line helper to `datalib/backend/etl/src/doltlite_raw.rs`
+— the crate 130 targets depend on — so ~300 actions that are normally
+cache hits had to be rebuilt and 59 test targets re-run. **This is a
+one-time cost, not a regression:** once the commit is on `main` the
+cache is warm and later PRs drop back to ~3m. It is worth knowing about
+mainly so you can (a) not panic, and (b) decide deliberately whether a
+small helper really belongs in a shared crate — the `rdeps` number is
+the price tag.
+
+Not exercised here, so treat as a pointer rather than a recipe:
+BuildBuddy also has a REST API and a side-by-side invocation compare in
+its web UI. Both need an API key (`https://imbue.buildbuddy.io/settings`),
+which CI has and a local checkout does not by default.
+
+#### Locally you are probably *not* on the remote cache
+
+Two things hide this, so check rather than assume:
+
+  * `.bazelrc` gives everyone a **machine-wide disk cache**
+    (`build --disk_cache=~/Library/Caches/bazel-disk-cache`). It is an
+    absolute path, so every checkout and every worktree shares it, and
+    it makes local builds feel fast — but only for actions *you* have
+    built before. Nothing CI built ever lands in it.
+  * The remote cache needs `.bazelrc.user`, which is **gitignored and
+    per-workspace**. `try-import %workspace%/.bazelrc.user` resolves to
+    the *worktree* root, not the main checkout, so a file you created
+    once in `datalib/` is invisible to every `.claude/worktrees/*`
+    clone. Both facts together mean a tree can look configured and not
+    be. Confirm with:
+
+```bash
+grep -c buildbuddy .bazelrc.user 2>/dev/null || echo "no .bazelrc.user in THIS workspace"
+```
+
+The `processes:` line settles it either way. A run on the remote cache
+names it — CI's reads `4070 remote cache hit, …`. A local run without
+`.bazelrc.user` never does; it reports only local buckets, e.g.
+`1 process: 63 action cache hit, 1 internal` or `… 2 disk cache hit,
+26 darwin-sandbox`. **The tell is the absence of `remote cache hit`,
+not the presence of any particular local bucket** — which of them
+appears varies with what the run had to do.
+
+Keep one real file outside the repo and symlink it in, so a new
+worktree is one command rather than a re-paste of the key:
+
+```bash
+mkdir -p ~/.config/datalib && chmod 700 ~/.config/datalib
+cat > ~/.config/datalib/bazelrc.user <<'EOF'
+common --remote_header=x-buildbuddy-api-key=<your-key>
+build --config=buildbuddy
+EOF
+chmod 600 ~/.config/datalib/bazelrc.user
+
+# link it into the main checkout and every worktree
+for d in . .claude/worktrees/*/; do
+    ln -sfn ~/.config/datalib/bazelrc.user "$d/.bazelrc.user"
+done
+```
+
+Don't put `build --config=buildbuddy` in `$HOME/.bazelrc`: the home rc
+applies to *every* bazel workspace on the machine, and the
+`buildbuddy` config is only defined in this repo's `.bazelrc`, so
+unrelated projects would fail with "Config value 'buildbuddy' is not
+defined in any .rc file".
+
 ## Common commands
 
 ```bash
