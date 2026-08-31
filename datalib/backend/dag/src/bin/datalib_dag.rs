@@ -238,58 +238,76 @@ async fn main() -> Result<()> {
     // means every way of starting a sync gets it — the http server's
     // worker shells out to this binary too — while a library caller
     // embedding `Runner` is not forced to own a file.
-    let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
-    match ProgressBusSink::start(&data_root, &run_id) {
-        Some(bus) => sinks.push(Arc::new(bus)),
-        None => {
-            // This binary has no tracing subscriber and no indicatif
-            // bars, so the macro's usual objection does not apply and
-            // `tracing::warn!` would go nowhere at all. The NDJSON
-            // reader tolerates non-JSON lines (worker.rs skips what it
-            // cannot parse), so a plain line is safe here.
-            #[allow(clippy::disallowed_macros)]
-            {
-                eprintln!("datalib-dag: progress bus unavailable; no live progress this run");
+    //
+    // The bus owns a writer thread, and this binary ends in
+    // `std::process::exit`, which runs no destructors. So the bus gets
+    // an explicit scope that computes the exit code, and the exit
+    // happens *after* that scope closes.
+    //
+    // That is the nursery discipline from Nathaniel J. Smith's "Notes
+    // on structured concurrency, or: Go statement considered harmful"
+    // (https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/):
+    // a spawned thing's lifetime is bracketed by a scope its parent
+    // cannot leave early, so there is no path out that forgets it. The
+    // first version of this called a `finish()` by hand instead, which
+    // is precisely the unstructured spawn the essay argues against —
+    // and it was already wrong, because the `?` on `runner.run` below
+    // skips it. `//tests/fixtures:progress_bus_e2e_test` is what caught
+    // the empty bus, and is what would catch it coming back.
+    let code = {
+        let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
+        match ProgressBusSink::start(&data_root, &run_id) {
+            Some(bus) => sinks.push(Arc::new(bus)),
+            None => {
+                // This binary has no tracing subscriber and no indicatif
+                // bars, so the macro's usual objection does not apply and
+                // `tracing::warn!` would go nowhere at all. The NDJSON
+                // reader tolerates non-JSON lines (worker.rs skips what it
+                // cannot parse), so a plain line is safe here.
+                #[allow(clippy::disallowed_macros)]
+                {
+                    eprintln!("datalib-dag: progress bus unavailable; no live progress this run");
+                }
             }
         }
-    }
-    let mut runner = Runner::new(&data_root)
-        .sink(Arc::new(FanOutSink(sinks)))
-        .child_env(child_env);
-    if let Some(p) = parallelism {
-        runner.parallelism = p;
-    }
-    if !sync_only.is_empty() {
-        runner = runner.only_fringe(sync_only);
-    }
-    let report = runner.run(&graph).await?;
+        let mut runner = Runner::new(&data_root)
+            .sink(Arc::new(FanOutSink(sinks)))
+            .child_env(child_env);
+        if let Some(p) = parallelism {
+            runner.parallelism = p;
+        }
+        if !sync_only.is_empty() {
+            runner = runner.only_fringe(sync_only);
+        }
+        let report = runner.run(&graph).await?;
 
-    #[allow(clippy::disallowed_macros)]
-    for s in &report.steps {
-        println!(
-            "{:<32} {:?}{}",
-            s.id,
-            s.status,
-            s.error
-                .as_deref()
-                .map(|e| format!("  ({e})"))
-                .unwrap_or_default()
-        );
-    }
-    let cancelled = report.steps.iter().any(|s| {
-        matches!(
-            s.status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
-        )
-    });
-    let code = if cancelled {
-        130
-    } else if report.all_ok() {
-        0
-    } else {
-        2
-    };
+        #[allow(clippy::disallowed_macros)]
+        for s in &report.steps {
+            println!(
+                "{:<32} {:?}{}",
+                s.id,
+                s.status,
+                s.error
+                    .as_deref()
+                    .map(|e| format!("  ({e})"))
+                    .unwrap_or_default()
+            );
+        }
+        let cancelled = report.steps.iter().any(|s| {
+            matches!(
+                s.status,
+                StepStatus::Failed {
+                    kind: FailureKind::Cancelled
+                }
+            )
+        });
+        if cancelled {
+            130
+        } else if report.all_ok() {
+            0
+        } else {
+            2
+        }
+    }; // every sink drops here, so the bus flushes and joins before we exit
     std::process::exit(code);
 }
