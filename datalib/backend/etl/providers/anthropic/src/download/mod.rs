@@ -854,15 +854,25 @@ fn credential_hint(e: ClaudeError) -> anyhow::Error {
     let lk = datalib_etl::latchkey::latchkey_cli_hint();
     anyhow::anyhow!(
         "claude.ai credentials are not set up: {s}\n\
-         One-time latchkey setup:\n\
-         1. Register the service:\n\
+         The credential is the `sessionKey` cookie. Copy the one your\n\
+         browser already has:\n\
+         1. Register the service (once):\n\
               {lk} services register claude-ai --base-api-url=\"https://claude.ai/\"\n\
-         2. Open https://claude.ai logged in; in DevTools → Application → Cookies →\n\
-            claude.ai, copy the `sessionKey` value to the clipboard.\n\
+         2. Open https://claude.ai signed in; DevTools -> Application ->\n\
+            Cookies -> claude.ai, copy the `sessionKey` value.\n\
          3. Store it (`$(pbpaste)` keeps the secret out of shell history):\n\
               {lk} auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"\n\
          4. Smoke-test:\n\
-              {lk} curl -s https://claude.ai/api/organizations | head -c 200\n\
+              {lk} curl -s https://claude.ai/api/organizations\n\
+\n\
+         There is also a browser login — register with\n\
+         `--login-url=\"https://claude.ai/login\" --login-flow=cookie-capture\n\
+         --login-flow-params='{{\"cookieKeys\": [\"sessionKey\"]}}'`, then\n\
+         `{lk} auth browser claude-ai`. It works, but it signs in a second\n\
+         time, and claude.ai appears to invalidate the older session when it\n\
+         does: observed 2026-08-31, the captured cookie and the browser you\n\
+         normally use kept evicting each other, logging both out repeatedly.\n\
+         Prefer the paste above until that is understood.\n\
          See docs/user/getting_your_data.md for the full walkthrough."
     )
 }

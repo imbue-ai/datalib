@@ -93,3 +93,55 @@ pub async fn run(
         None => Ok(vec![]),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The step marks the whole `unified_index/` tree as derived cache, and
+    /// leaves `system/` alone.
+    ///
+    /// This is the cheap pin on which directory `mark_derived_cache` is
+    /// called with. `layout`'s own test covers the helper — tempdir, tag
+    /// written, idempotent — but nothing there says which path this step
+    /// passes it, and that argument is a one-line edit away from silently
+    /// tagging the wrong tree. Until this existed the only assertion on it
+    /// lived in the manual live-sync golden, which needs credentials for
+    /// sixteen live sources: a refactor moved the call from
+    /// `unified_index/grid/` to `unified_index/` and the mismatch sat
+    /// undetected because that golden had not been run green since.
+    ///
+    /// Deliberately asserts the tag is at the parent rather than merely
+    /// present somewhere: one tag covering `grid/` and `qmd/` together is the
+    /// property the layout intends, and "somewhere at or below" would pass
+    /// for the per-index tagging this replaced.
+    #[tokio::test]
+    async fn grid_index_marks_the_index_tree_as_derived_cache() {
+        let td = tempfile::tempdir().unwrap();
+        let data_root = td.path();
+
+        run(
+            data_root,
+            Some("2026-01-01T00:00:00+00:00"),
+            &Emitter::new("test".into()),
+        )
+        .await
+        .expect("grid_index over an empty data root should succeed");
+
+        assert!(
+            data_root.join("unified_index/CACHEDIR.TAG").is_file(),
+            "unified_index/ must be tagged, so one tag covers grid/ and qmd/"
+        );
+        assert!(
+            !data_root.join("unified_index/grid/CACHEDIR.TAG").exists(),
+            "the per-index tag was replaced by the one on the parent"
+        );
+        // `system/` is operational history — feedback, the job queue — and is
+        // not rebuildable from raw, so it must never be swept up by
+        // `--exclude-caches`.
+        assert!(
+            !data_root.join("system/CACHEDIR.TAG").exists(),
+            "system/ must never be tagged as cache"
+        );
+    }
+}

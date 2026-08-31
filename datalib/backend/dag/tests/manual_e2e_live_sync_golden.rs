@@ -559,14 +559,18 @@ fn manual_e2e_live_sync_golden() {
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-stanza `rendered_md/` tags
     // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
-    // walk below). The backend index is always produced here; qmd is skipped in
-    // this test so its tag may be absent. `system/` must NOT be tagged —
-    // job logs are operational history, not rebuildable from raw.
+    // walk below). `system/` must NOT be tagged — job logs are operational
+    // history, not rebuildable from raw.
+    //
+    // One tag at `unified_index/`, not one per index: a CACHEDIR.TAG covers
+    // everything beneath it, so this excludes `grid/` and `qmd/` together and
+    // does not depend on which of them a given run happened to produce. Both
+    // index steps write it (`grid_index.rs`, `qmd_index.rs`); the cheap pin on
+    // that is `grid_index_marks_the_index_tree_as_derived_cache` in
+    // datalib_step, so a regression does not wait for a live run to surface.
     assert!(
-        data_root
-            .join("unified_index/grid/CACHEDIR.TAG")
-            .is_file(),
-        "unified_index/grid/ must carry a CACHEDIR.TAG marking it as derived cache"
+        data_root.join("unified_index/CACHEDIR.TAG").is_file(),
+        "unified_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
     );
     assert!(
         !data_root.join("system/CACHEDIR.TAG").exists(),
