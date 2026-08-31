@@ -1064,6 +1064,27 @@ pub struct DagStepInfo {
     /// there is one: `running`, `succeeded`, `blocked`, … `None` means
     /// the scheduler has not reached it yet.
     pub current_state: Option<String>,
+    /// How far in, for the run currently in flight. `None` when the
+    /// step has not reported anything — which is not the same as zero,
+    /// and should be drawn as a spinner rather than an empty bar.
+    pub progress: Option<DagStepProgress>,
+}
+
+/// A step's live position, from `system/progress.sqlite`.
+///
+/// Separate from `current_state` on purpose: state is the scheduler's,
+/// recorded durably in `system/dag_state.json`, while this is the
+/// step's own running commentary and survives only as long as the run.
+#[derive(Debug, Serialize)]
+pub struct DagStepProgress {
+    /// Work units completed.
+    pub done: Option<i64>,
+    /// Total expected. `None` is *indeterminate* — a paginated API walk
+    /// that cannot know its length up front — not zero.
+    pub total: Option<i64>,
+    /// The step's own words: "conversations.list", "3 of 9 channels".
+    pub msg: Option<String>,
+    pub updated_at: String,
 }
 
 /// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
@@ -1131,6 +1152,21 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         .map(|r| r.states.clone())
         .unwrap_or_default();
 
+    // Live progress, but only when the bus describes the run we are
+    // reporting. The bus is remade at the start of every run, so in the
+    // window between a run opening its record and the runner recreating
+    // the file, the rows on disk still belong to the run before — and
+    // painting those bars onto this run's steps is worse than showing
+    // no bars at all.
+    let bus = datalib_progress::snapshot(&s.root).await;
+    let progress: std::collections::HashMap<String, datalib_progress::ProgressRow> =
+        match (&run, &bus.run_id) {
+            (Some(r), Some(bus_run)) if &r.run_id == bus_run => {
+                bus.steps.into_iter().map(|p| (p.step.clone(), p)).collect()
+            }
+            _ => Default::default(),
+        };
+
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
         let commands: std::collections::HashMap<String, String> = cfg
@@ -1164,6 +1200,12 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         })
                     }),
                     current_state: states.get(&sp.id).cloned(),
+                    progress: progress.get(&sp.id).map(|p| DagStepProgress {
+                        done: p.done,
+                        total: p.total,
+                        msg: p.msg.clone(),
+                        updated_at: p.updated_at.clone(),
+                    }),
                 }
             })
             .collect())

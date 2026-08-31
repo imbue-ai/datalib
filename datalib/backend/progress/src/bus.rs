@@ -112,32 +112,50 @@ async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         .await
 }
 
+/// The whole bus, as a reader sees it.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Snapshot {
+    /// Which run these rows describe. `None` for an empty or absent
+    /// bus. A reader comparing this against the run it is displaying is
+    /// how it avoids painting one run's bars onto another: the bus is
+    /// remade at the start of every run, so between a run starting and
+    /// the runner reaching its first step, the rows still on disk
+    /// belong to the run before.
+    pub run_id: Option<String>,
+    pub steps: Vec<ProgressRow>,
+}
+
 /// Everything a reader needs, in one query.
-pub async fn snapshot(data_root: &Path) -> Vec<ProgressRow> {
+pub async fn snapshot(data_root: &Path) -> Snapshot {
     let path = progress_path(data_root);
     if !path.exists() {
-        return Vec::new();
+        return Snapshot::default();
     }
     let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+        return Snapshot::default();
     };
     let rows = sqlx::query(
-        "SELECT step, state, done, total, msg, updated_at FROM step_progress ORDER BY step",
+        "SELECT step, run_id, state, done, total, msg, updated_at \
+         FROM step_progress ORDER BY step",
     )
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
     pool.close().await;
-    rows.iter()
-        .map(|r| ProgressRow {
-            step: r.get("step"),
-            state: r.get("state"),
-            done: r.get("done"),
-            total: r.get("total"),
-            msg: r.get("msg"),
-            updated_at: r.get("updated_at"),
-        })
-        .collect()
+    Snapshot {
+        run_id: rows.first().map(|r| r.get("run_id")),
+        steps: rows
+            .iter()
+            .map(|r| ProgressRow {
+                step: r.get("step"),
+                state: r.get("state"),
+                done: r.get("done"),
+                total: r.get("total"),
+                msg: r.get("msg"),
+                updated_at: r.get("updated_at"),
+            })
+            .collect(),
+    }
 }
 
 type Pending = Arc<Mutex<BTreeMap<String, ProgressRow>>>;

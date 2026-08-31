@@ -412,6 +412,20 @@ export type DagStep = {
   // "succeeded", "blocked", … Null means the scheduler hasn't reached
   // it, which reads as queued.
   current_state: string | null;
+  // How far into the current run, from the progress bus
+  // (system/progress.sqlite). Null when the step has reported nothing —
+  // which is not zero, and should read as a spinner rather than an
+  // empty bar.
+  progress: DagStepProgress | null;
+};
+
+// A step's live position. `total: null` means indeterminate: a
+// paginated walk that cannot know its length up front.
+export type DagStepProgress = {
+  done: number | null;
+  total: number | null;
+  msg: string | null;
+  updated_at: string;
 };
 
 export type DagStepRun = {

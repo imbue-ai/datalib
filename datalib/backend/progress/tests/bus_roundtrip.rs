@@ -25,7 +25,7 @@ async fn what_is_published_is_readable() {
         w.update(at("slack/rendered_md", "pending", None, "waiting"));
     }
 
-    let rows = snapshot(td.path()).await;
+    let rows = snapshot(td.path()).await.steps;
     assert_eq!(rows.len(), 2, "{rows:?}");
     let fetch = rows.iter().find(|r| r.step == "slack/raw").unwrap();
     assert_eq!(fetch.state, "running");
@@ -45,7 +45,7 @@ async fn ticks_coalesce_to_the_newest() {
             w.update(at("slack/raw", "running", Some(i), &format!("tick {i}")));
         }
     }
-    let rows = snapshot(td.path()).await;
+    let rows = snapshot(td.path()).await.steps;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].done, Some(499));
     assert_eq!(rows[0].msg.as_deref(), Some("tick 499"));
@@ -63,7 +63,7 @@ async fn a_finished_step_is_not_resurrected_by_a_late_tick() {
         w.update(at("slack/raw", "succeeded", Some(9), "done"));
         w.update(at("slack/raw", "running", Some(7), "a straggler"));
     }
-    let rows = snapshot(td.path()).await;
+    let rows = snapshot(td.path()).await.steps;
     assert_eq!(rows[0].state, "succeeded");
     assert_eq!(rows[0].msg.as_deref(), Some("done"));
 }
@@ -77,13 +77,13 @@ async fn each_run_starts_clean() {
         let w = ProgressWriter::start(td.path(), "run-1").unwrap();
         w.update(at("gone/raw", "succeeded", Some(1), "old"));
     }
-    assert_eq!(snapshot(td.path()).await.len(), 1);
+    assert_eq!(snapshot(td.path()).await.steps.len(), 1);
 
     {
         let w = ProgressWriter::start(td.path(), "run-2").unwrap();
         w.update(at("slack/raw", "running", Some(1), "new"));
     }
-    let rows = snapshot(td.path()).await;
+    let rows = snapshot(td.path()).await.steps;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].step, "slack/raw");
 }
@@ -93,7 +93,7 @@ async fn each_run_starts_clean() {
 #[tokio::test]
 async fn a_root_with_no_bus_reads_empty() {
     let td = tempfile::tempdir().unwrap();
-    assert!(snapshot(td.path()).await.is_empty());
+    assert!(snapshot(td.path()).await.steps.is_empty());
 }
 
 /// The property the whole design is for: a reader can read *while* the
@@ -108,7 +108,7 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
     for i in 0..40 {
         w.update(at("slack/raw", "running", Some(i), "working"));
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        for row in snapshot(td.path()).await {
+        for row in snapshot(td.path()).await.steps {
             if let Some(d) = row.done {
                 seen.insert(d);
             }

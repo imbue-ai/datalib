@@ -125,7 +125,7 @@ mod tests {
                 sink.emit(e);
             }
         } // dropping the sink drops the writer, which flushes and joins
-        snapshot(td.path()).await
+        snapshot(td.path()).await.steps
     }
 
     fn inc(step: &str, delta: u64) -> Event {

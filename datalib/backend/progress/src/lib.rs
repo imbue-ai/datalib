@@ -61,7 +61,7 @@
 
 pub mod bus;
 
-pub use bus::{open_or_create, snapshot, ProgressWriter};
+pub use bus::{open_or_create, snapshot, ProgressWriter, Snapshot};
 
 use std::path::{Path, PathBuf};
 
