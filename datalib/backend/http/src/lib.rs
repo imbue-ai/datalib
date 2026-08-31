@@ -974,7 +974,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                     id: sp.id.clone(),
                     command: commands.get(&sp.id).cloned().unwrap_or_default(),
                     inputs: sp.inputs.iter().map(|a| a.as_str().to_string()).collect(),
-                    outputs: sp.outputs.iter().map(|a| a.as_str().to_string()).collect(),
+                    outputs: vec![sp.output().as_str().to_string()],
                     deps: graph.deps[i]
                         .iter()
                         .map(|&d| graph.steps[d].id.clone())
@@ -998,29 +998,27 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 }
 
 /// Starter DAG config: the shared fan-in steps that every source's
-/// rendered markdown feeds. Non-empty on purpose — `index`/`qmd` are
-/// source-independent and belong in every pipeline; their wildcard
-/// input matches nothing until the first source's steps are added
-/// (which the UI's "Add a source" buttons append as a
-/// `<name>.download` + `<name>.render` pair). `data_root` is omitted:
-/// it defaults to this file's own directory, keeping the root
-/// self-contained.
+/// rendered markdown feeds. Non-empty on purpose — the two index steps
+/// are source-independent and belong in every pipeline. They start with
+/// no inputs, which is a valid graph that indexes nothing; adding a
+/// source appends its render step's id here (the UI's "Add a source"
+/// flow does that for you). `data_root` is omitted: it defaults to this
+/// file's own directory, keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── shared fan-in steps ────────────────────────────────────────────────
-# Every source's rendered markdown feeds these.
+# Every source's rendered markdown feeds these. A step's id is the tree
+# it writes; `inputs` names the steps it reads, by id.
 
 [[steps]]
-id = \"grid_index\"
+id = \"unified_index/grid\"
 command = \"datalib-step grid_index\"
-inputs = [\"**/rendered_md\"]
-outputs = [\"unified_index/grid\"]
+inputs = []
 
 [[steps]]
-id = \"qmd_index\"
+id = \"unified_index/qmd\"
 command = \"datalib-step qmd_index\"
-inputs = [\"**/rendered_md\"]
-outputs = [\"unified_index/qmd\"]
+inputs = []
 
 # ── the app's own surface ──────────────────────────────────────────────
 # `unified_index` serves the grid: the app has no search, no document
@@ -1129,14 +1127,15 @@ async fn pipeline_storage(State(s): State<AppState>) -> Json<Vec<OutputStorage>>
     };
     let root = s.root.as_path();
 
-    // Declared outputs, deduped and in config order. A pattern with a
-    // glob (`**/rendered_md` on the index steps' *inputs*) never
-    // reaches here — only outputs are walked, and those are concrete.
+    // One tree per step, and it is the step's id. Deduped and in config
+    // order — a duplicate id is refused by the loader, so `seen` only
+    // guards against being called on a config that never got there.
     let mut seen: std::collections::BTreeSet<&str> = Default::default();
     let mut out = Vec::new();
     for step in &cfg.steps {
-        for path in &step.outputs {
-            if path.contains('*') || !seen.insert(path.as_str()) {
+        {
+            let path = &step.id;
+            if !seen.insert(path.as_str()) {
                 continue;
             }
             let abs = root.join(path);
@@ -1340,9 +1339,11 @@ mod tests {
         let text = scaffold_toml();
         let sources = validate_config_text(&text)
             .unwrap_or_else(|e| panic!("scaffold rejected: {e:#}\n---\n{text}"));
-        // The two fan-in steps both declare inputs, so neither is a
-        // source — a scaffolded root has nothing to sync yet.
-        assert!(sources.is_empty(), "{sources:?}");
+        // The fan-ins have no inputs to name yet, so on a scaffolded
+        // root they *are* the fringe. They are what `--sync` can target
+        // until the first source is added — and running them against
+        // nothing is a no-op, not an error.
+        assert_eq!(sources, ["unified_index/grid", "unified_index/qmd"]);
     }
 
     /// TOML is the only format the server accepts; a legacy config
@@ -1350,9 +1351,8 @@ mod tests {
     #[test]
     fn only_toml_is_accepted() {
         assert_eq!(
-            validate_config_text("[[steps]]\nid = \"x\"\ncommand = \"s\"\noutputs = [\"x/raw\"]\n")
-                .unwrap(),
-            ["x"]
+            validate_config_text("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n").unwrap(),
+            ["x/raw"]
         );
         assert!(validate_config_text("steps:\n  - id: x\n    command: s\n").is_err());
         assert!(validate_config_text("sources:\n  - name: x\n").is_err());

@@ -56,6 +56,8 @@ import {
   appendSource,
   removeSource,
   replaceSource,
+  unwireFromFanIns,
+  wireIntoFanIns,
   paramsAreRepresentable,
   emptyTableDiagnosis,
   type ConfiguredSource,
@@ -572,9 +574,15 @@ function openEdit(id: string) {
 
 async function onWizardSubmit(payload: { id: string; name: string; body: string }) {
   const current = editing.value;
-  const next = current
+  let next = current
     ? replaceSource(configText.value, current.source, payload.body)
     : appendSource(configText.value, payload.body);
+  // The fan-ins name their inputs, so a new source has to be wired into
+  // them or it renders and is never indexed. Idempotent, so re-saving an
+  // edit doesn't duplicate the entry.
+  if (payload.body.includes(`id = "${payload.id}/rendered_md"`)) {
+    next = wireIntoFanIns(next, `${payload.id}/rendered_md`);
+  }
   // Banners are for a person, so they say the name; the id is what the
   // config and the disk use.
   const shown = payload.name || payload.id;
@@ -603,7 +611,13 @@ async function deleteSource(id: string) {
             `Re-adding it later resumes from what's already downloaded.`,
   );
   if (!ok) return;
-  await writeConfig(removeSource(configText.value, source), `Removed ${name}.`);
+  // Unwire before removing: an input naming a step that no longer
+  // exists is a config the runner refuses outright.
+  let next = configText.value;
+  for (const step of source.steps) {
+    if (step.phase === "render") next = unwireFromFanIns(next, step.id);
+  }
+  await writeConfig(removeSource(next, source), `Removed ${name}.`);
 }
 
 async function reveal(id: string) {

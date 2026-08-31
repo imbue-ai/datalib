@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn an_already_migrated_config_says_so() {
         for toml in [
-            "[[steps]]\nid = \"x\"\ncommand = \"c\"\noutputs = [\"x/raw\"]\n",
+            "[[steps]]\nid = \"x/raw\"\ncommand = \"c\"\n",
             // Valid YAML *and* valid TOML — the ambiguous case.
             "data_root = \"/tmp/x\"\n",
         ] {
@@ -148,10 +148,14 @@ mod tests {
         let out = convert(STANZA).unwrap();
         assert!(out.contains("[[steps]]"), "{out}");
         assert!(out.contains("[steps.params.sync]"), "{out}");
-        assert!(out.contains(r#"id = "slack.download""#), "{out}");
+        // Ids come out in the current spelling: the tree the step
+        // writes, not the legacy `<name>.<phase>`.
+        assert!(out.contains(r#"id = "slack/raw""#), "{out}");
+        assert!(out.contains(r#"id = "slack/rendered_md""#), "{out}");
+        assert!(!out.contains("slack.download"), "{out}");
 
         let out = convert(STEPS).unwrap();
-        assert!(out.contains(r#"id = "slack.download""#), "{out}");
+        assert!(out.contains(r#"id = "slack/raw""#), "{out}");
     }
 
     /// YAML anchors have no TOML equivalent, so a shared params subtree
@@ -191,13 +195,13 @@ mod tests {
              common:\n        input_path: ~/backups/claude-export\n",
         )
         .unwrap();
-        assert!(out.contains(r#"id = "claude-export.render""#), "{out}");
+        assert!(out.contains(r#"id = "claude-export/rendered_md""#), "{out}");
         assert!(
             out.contains(r#"input_path = "~/backups/claude-export""#),
             "input_path dropped:\n{out}"
         );
         // ...and it stays render-only: no download step to consume it.
-        assert!(!out.contains("claude-export.download"), "{out}");
+        assert!(!out.contains(r#"id = "claude-export/raw""#), "{out}");
     }
 
     /// A managed source keeps `input_path` on the *download* step,
@@ -210,8 +214,8 @@ mod tests {
              hostname: api.fastmail.com\n",
         )
         .unwrap();
-        let dl = out.find("mail.download").unwrap();
-        let rn = out.find("mail.render").unwrap();
+        let dl = out.find(r#"id = "mail/raw""#).unwrap();
+        let rn = out.find(r#"id = "mail/rendered_md""#).unwrap();
         let input_at = out.find("input_path").unwrap();
         assert!(dl < input_at && input_at < rn, "input_path moved:\n{out}");
     }

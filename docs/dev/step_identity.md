@@ -1,13 +1,14 @@
 # Step identity: the id *is* the path
 
-**Status: proposal.** Nothing in this file is built. Phase 1 (the
+**Status: built (2026-08-31).** A step's `id` is the path it writes,
+`inputs` name step ids instead of artifact paths, and the places that
+recovered an identity by splitting a string are gone. Phase 1 (the
 `name` / `id` split in the wizard and the config) shipped separately —
 see [`source_wizard.md`](source_wizard.md#two-names-id-is-the-identity-name-is-what-you-type).
 
-This proposes the format change: a step's `id` becomes the path it
-writes, `inputs` name step ids instead of artifact paths, and the six
-places that currently recover an identity by splitting a string all go
-away.
+This file was written as the design and kept as the explanation. Where
+it says "proposal" below, read "what was done"; the two places the build
+diverged from the plan are marked.
 
 ## Where we are
 
@@ -144,10 +145,24 @@ still drive change propagation.
 `common.input_path` (a *param*, usually outside the data root) at the
 staged data instead. So the machinery serves a shape nothing ships.
 
-Proposal: delete it. An input naming no declared step becomes an error
-with a message pointing at `common.input_path`. If the capability is
-wanted back later it returns as an explicit `staged_inputs = [path]`
-key, which is honest about being a path rather than a step reference.
+Deleted, as proposed. An input naming no declared step is now an error
+whose message points at `common.input_path`. If the capability is wanted
+back later it returns as an explicit `staged_inputs = [path]` key, which
+is honest about being a path rather than a step reference.
+
+**Divergence from the plan.** Three scheduler tests covered this. The
+first and third — a staged tree's change propagating, and subset-sync
+skipping a step with an external input — tested only the removed
+capability and were deleted. The second tested a property that still
+holds (an input that *disappears* versions as `absent`, which differs
+from a hash, so the consumer re-runs and can drop stale output) and was
+rewritten against a declared producer whose tree the user deletes.
+
+The behavior change worth naming: a render-only source is now a step
+with no inputs, and an input-less step always runs. Previously its
+staged tree was hashed and the step skipped when unchanged. The step's
+own incrementality (render cursors, per-doc fingerprints) absorbs most
+of that, but it is a real difference.
 
 ## Migration
 
@@ -219,6 +234,12 @@ Those docs get rewritten as part of this change, not footnoted.
 
 - **Artifact kinds** (`produces` / `consumes`), which would let a fan-in
   say "every markdown tree" without a list or a glob.
+- **Telling `grid_index` a document's source as data.** It still learns
+  it by walking one directory per source, which now reads the id off the
+  directory name — the same string, since the directory *is* the id. A
+  `SidecarHeader` field or a per-tree marker would make it explicit;
+  deferred along with the `grid_rows.source_id` column it would feed,
+  since the grid's Source column works today off `qmd_path`.
 - **`step_runs`** — a per-step run record so the table can show what is
   running, queued, and waiting on what. Today `sync_jobs` is per *run*,
   which is why the table shows `~`. Separate from this change; see the

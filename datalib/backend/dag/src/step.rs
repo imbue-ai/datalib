@@ -24,23 +24,27 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifact::ArtifactPat;
+use crate::artifact::ArtifactPath;
 use crate::events::StepProgress;
 
 pub type StepId = String;
 
-/// A step declaration. Edges in the DAG are derived from the overlap
-/// of one step's `outputs` with another's `inputs`; nothing else links
-/// steps together.
+/// A step declaration.
+///
+/// A step's `id` **is** the tree it writes, relative to the data root,
+/// so it needs no `outputs`: `output()` returns the path derived from
+/// the id. Edges are the ids a step names in `inputs` — nothing is
+/// derived by matching paths against each other. See
+/// `docs/dev/step_identity.md`.
 #[derive(Debug, Clone)]
 pub struct StepSpec {
+    /// Identity, and the tree this step writes: `<data_root>/<id>/`.
+    /// Unique across the config, which is what makes single-writer true
+    /// by construction.
     pub id: StepId,
-    /// Artifacts this step reads. May contain `*`/`**` wildcards
-    /// ("everything any download step produced").
-    pub inputs: Vec<ArtifactPat>,
-    /// Artifacts this step produces. Concrete paths only; a step MUST
-    /// write only under these, and no two steps' outputs may overlap.
-    pub outputs: Vec<ArtifactPat>,
+    /// The ids of the steps this one reads. Every entry must name a
+    /// declared step; the loader refuses anything else.
+    pub inputs: Vec<ArtifactPath>,
     /// How to run it. In-process today; a spawned subprocess under the
     /// same contract.
     pub run: StepRun,
@@ -54,10 +58,10 @@ pub struct StepSpec {
 
 impl StepSpec {
     /// Everything about this step except the *contents* of what it
-    /// reads, as the bytes its fingerprint is taken over: the command it
-    /// runs, its environment overrides, and the artifact patterns it
-    /// declares — inputs included, since editing an `inputs =` line
-    /// changes what the step is.
+    /// reads, as the bytes its fingerprint is taken over: its id (which
+    /// is also the tree it writes), the command it runs, its
+    /// environment overrides, and the step ids it declares as inputs —
+    /// since editing an `inputs =` line changes what the step is.
     ///
     /// This is what makes a config edit invalidate a step. A step whose
     /// `params` changed has different argv (the runner appends
@@ -71,11 +75,6 @@ impl StepSpec {
         m.push('\u{1}');
         for i in &self.inputs {
             m.push_str(i.as_str());
-            m.push('\u{2}');
-        }
-        m.push('\u{1}');
-        for o in &self.outputs {
-            m.push_str(o.as_str());
             m.push('\u{2}');
         }
         m.push('\u{1}');
@@ -104,10 +103,15 @@ impl StepSpec {
         Self {
             id: id.into(),
             inputs: Vec::new(),
-            outputs: Vec::new(),
             run,
             code_version: None,
         }
+    }
+
+    /// The one tree this step writes, which is its id. Panics only on
+    /// an id that never passed the loader's validation.
+    pub fn output(&self) -> ArtifactPath {
+        ArtifactPath::parse(&self.id).expect("step id is a valid artifact path")
     }
 
     /// Declare a version for the step's own behavior. See
@@ -117,15 +121,9 @@ impl StepSpec {
         self
     }
 
-    pub fn input(mut self, pat: &str) -> Self {
+    pub fn input(mut self, id: &str) -> Self {
         self.inputs
-            .push(ArtifactPat::parse(pat).expect("input pattern"));
-        self
-    }
-
-    pub fn output(mut self, pat: &str) -> Self {
-        self.outputs
-            .push(ArtifactPat::parse(pat).expect("output path"));
+            .push(ArtifactPath::parse(id).expect("input step id"));
         self
     }
 }
@@ -175,20 +173,20 @@ pub struct StepCtx {
     /// Concrete input artifacts, resolved from the step's input
     /// patterns (producer outputs + external artifacts), relative to
     /// `data_root`.
-    pub inputs: Vec<ArtifactPat>,
+    pub inputs: Vec<ArtifactPath>,
     /// The subset of `inputs` whose version differs from the one this
     /// step consumed at its last success. Empty when the step has no
     /// last success to compare against — it is running because it has
     /// never completed, or because its own definition changed, so
     /// "what moved" has no meaning and the step should do all its work.
-    pub changed_inputs: Vec<ArtifactPat>,
+    pub changed_inputs: Vec<ArtifactPath>,
     /// Progress/log emitter, already tagged with this step's id.
     pub progress: StepProgress,
 }
 
 impl StepCtx {
     /// Absolute path of an artifact under `data_root`.
-    pub fn path(&self, artifact: &ArtifactPat) -> PathBuf {
+    pub fn path(&self, artifact: &ArtifactPath) -> PathBuf {
         self.data_root.join(artifact.as_str())
     }
 
@@ -210,13 +208,13 @@ impl StepCtx {
 /// or a render cursor's hash all qualify; a timestamp does not.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactState {
-    pub path: ArtifactPat,
+    pub path: ArtifactPath,
     /// Content version the step vouches for.
     pub version: String,
 }
 
 impl ArtifactState {
-    pub fn versioned(path: &ArtifactPat, version: impl Into<String>) -> Self {
+    pub fn versioned(path: &ArtifactPath, version: impl Into<String>) -> Self {
         Self {
             path: path.clone(),
             version: version.into(),

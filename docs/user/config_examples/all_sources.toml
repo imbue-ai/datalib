@@ -62,16 +62,14 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 # Every source's rendered markdown feeds these two fan-ins: the SQL
 # index behind the grid UI, and the qmd semantic-search index.
 [[steps]]
-id = "grid_index"
+id = "unified_index/grid"
 command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]
+inputs = ["claude-api/rendered_md", "claude-export/rendered_md", "chatgpt/rendered_md", "slack/rendered_md", "github/rendered_md", "gitlab/rendered_md", "notion/rendered_md", "fastmail/rendered_md", "gmail/rendered_md", "gmail-takeout/rendered_md", "icloud-contacts/rendered_md", "vcard-contacts/rendered_md", "beeper/rendered_md", "perseus/rendered_md", "yolink/rendered_md", "signal/rendered_md", "whatsapp/rendered_md", "linkedin/rendered_md", "google-takeout/rendered_md", "sms-backup-restore/rendered_md", "pdfs/rendered_md"]
 
 [[steps]]
-id = "qmd_index"
+id = "unified_index/qmd"
 command = "datalib-step qmd_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/qmd"]
+inputs = ["claude-api/rendered_md", "claude-export/rendered_md", "chatgpt/rendered_md", "slack/rendered_md", "github/rendered_md", "gitlab/rendered_md", "notion/rendered_md", "fastmail/rendered_md", "gmail/rendered_md", "gmail-takeout/rendered_md", "icloud-contacts/rendered_md", "vcard-contacts/rendered_md", "beeper/rendered_md", "perseus/rendered_md", "yolink/rendered_md", "signal/rendered_md", "whatsapp/rendered_md", "linkedin/rendered_md", "google-takeout/rendered_md", "sms-backup-restore/rendered_md", "pdfs/rendered_md"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -79,9 +77,8 @@ outputs = ["unified_index/qmd"]
 # latchkey at runtime (see first_time_user.md). An empty `sync` fetches
 # every conversation across every org; the knobs bound the work.
 [[steps]]
-id = "claude-api.download"
+id = "claude-api/raw"
 command = "datalib-step download claude_api"
-outputs = ["claude-api/raw"]
 
 # [steps.params.common]
 # raw_path = "/mnt/big/datalib-raw/claude-api"  # optional: store our raw copy elsewhere
@@ -103,10 +100,9 @@ refresh_most_recent_n_chat_count = 3  # force-refetch top-N by updated_at
 # ]
 
 [[steps]]
-id = "claude-api.render"
+id = "claude-api/rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["claude-api/raw"]
-outputs = ["claude-api/rendered_md"]
 
 # Render-only view of a Claude data export already on disk. No
 # network, no credentials, and no download step — the unpacked export
@@ -115,9 +111,8 @@ outputs = ["claude-api/rendered_md"]
 # this is a fringe step (its real input lives outside the data root),
 # so it runs every sync; per-document fingerprints keep re-runs cheap.
 [[steps]]
-id = "claude-export.render"
+id = "claude-export/rendered_md"
 command = "datalib-step render claude_export"
-outputs = ["claude-export/rendered_md"]
 [steps.params.common]
 raw_path = "~/backups/claude-export"
 
@@ -125,9 +120,8 @@ raw_path = "~/backups/claude-export"
 
 # ChatGPT conversation mirror. Credentials via latchkey.
 [[steps]]
-id = "chatgpt.download"
+id = "chatgpt/raw"
 command = "datalib-step download chatgpt_api"
-outputs = ["chatgpt/raw"]
 [steps.params.sync]
 since = "2025-01-01"   # only sync conversations updated at/after this
                        # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
@@ -137,19 +131,17 @@ sleep_between = 0.5    # seconds between requests (be polite)
 # conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
 
 [[steps]]
-id = "chatgpt.render"
+id = "chatgpt/rendered_md"
 command = "datalib-step render chatgpt_api"
 inputs = ["chatgpt/raw"]
-outputs = ["chatgpt/rendered_md"]
 
 # --- Slack --------------------------------------------------------------
 
 # Slack workspace mirror. Credentials via latchkey. Omit `channels`
 # (or set `all_channels = true`) to mirror every channel the account sees.
 [[steps]]
-id = "slack.download"
+id = "slack/raw"
 command = "datalib-step download slack_api"
-outputs = ["slack/raw"]
 
 [steps.params.common]
 blob_size_limit_bytes = 1000000  # skip file/media uploads larger than 1 MB
@@ -178,10 +170,9 @@ channels = ["project-data-liberation", "general"]
                             # here means no refresh pass.
 
 [[steps]]
-id = "slack.render"
+id = "slack/rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
-outputs = ["slack/rendered_md"]
 
 # --- GitHub -------------------------------------------------------------
 
@@ -189,9 +180,8 @@ outputs = ["slack/rendered_md"]
 # discovery is skipped and only those PRs are fetched; entries are
 # paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
 [[steps]]
-id = "github.download"
+id = "github/raw"
 command = "datalib-step download github_api"
-outputs = ["github/raw"]
 [steps.params.sync]
 refresh_window_days = 30
 max_prs = 50
@@ -201,19 +191,17 @@ pull_requests = [
 ]
 
 [[steps]]
-id = "github.render"
+id = "github/rendered_md"
 command = "datalib-step render github_api"
 inputs = ["github/raw"]
-outputs = ["github/rendered_md"]
 
 # --- GitLab -------------------------------------------------------------
 
 # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
 # are `namespace/project!IID` or a gitlab.com MR URL.
 [[steps]]
-id = "gitlab.download"
+id = "gitlab/raw"
 command = "datalib-step download gitlab_api"
-outputs = ["gitlab/raw"]
 [steps.params.sync]
 refresh_window_days = 30
 max_mrs = 50
@@ -223,19 +211,17 @@ merge_requests = [
 ]
 
 [[steps]]
-id = "gitlab.render"
+id = "gitlab/rendered_md"
 command = "datalib-step render gitlab_api"
 inputs = ["gitlab/raw"]
-outputs = ["gitlab/rendered_md"]
 
 # --- Notion -------------------------------------------------------------
 
 # Notion mirror. Credentials via latchkey. At least one of `inbox`
 # (enabled) or `subtrees.pages` must be present.
 [[steps]]
-id = "notion.download"
+id = "notion/raw"
 command = "datalib-step download notion_api"
-outputs = ["notion/raw"]
 
 [steps.params.sync]
 refresh_window_days = 7
@@ -251,10 +237,9 @@ pages = [
 ]
 
 [[steps]]
-id = "notion.render"
+id = "notion/rendered_md"
 command = "datalib-step render notion_api"
 inputs = ["notion/raw"]
-outputs = ["notion/rendered_md"]
 
 # --- Email: two input modes ---------------------------------------------
 
@@ -262,9 +247,8 @@ outputs = ["notion/rendered_md"]
 # presence of `sync` selects JMAP mode; `hostname` is required.
 # Credentials via latchkey.
 [[steps]]
-id = "fastmail.download"
+id = "fastmail/raw"
 command = "datalib-step download email"
-outputs = ["fastmail/raw"]
 
 [steps.params]
 # Mailbox label filter. Labels are POSIX-like paths into the folder
@@ -281,10 +265,9 @@ hostname = "api.fastmail.com"
 full_resync = false
 
 [[steps]]
-id = "fastmail.render"
+id = "fastmail/rendered_md"
 command = "datalib-step render email"
 inputs = ["fastmail/raw"]
-outputs = ["fastmail/rendered_md"]
 [steps.params]
 # Webmail each message's `↗` outlink points at: `fastmail` for a
 # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
@@ -307,9 +290,8 @@ only_render_labels = []
 # deletions, and label changes as explicit events. Throughput is capped by
 # quota rather than bytes: ~300 messages/minute regardless of size.
 [[steps]]
-id = "gmail.download"
+id = "gmail/raw"
 command = "datalib-step download email"
-outputs = ["gmail/raw"]
 
 [steps.params]
 # Same exact-match label paths as every other mode. System labels are
@@ -337,10 +319,9 @@ only_extract_labels = []
 # message_budget = 20000
 
 [[steps]]
-id = "gmail.render"
+id = "gmail/rendered_md"
 command = "datalib-step render email"
 inputs = ["gmail/raw"]
-outputs = ["gmail/rendered_md"]
 [steps.params]
 outlink_format = "gmail"
 only_render_labels = []
@@ -349,9 +330,8 @@ only_render_labels = []
 # file-backed mbox mode, reading the file at `common.input_path`. The
 # `mbox` block just labels the synthesized account row.
 [[steps]]
-id = "gmail-takeout.download"
+id = "gmail-takeout/raw"
 command = "datalib-step download email"
-outputs = ["gmail-takeout/raw"]
 
 [steps.params]
 # Same label filter as JMAP mode — here it matches the Gmail labels
@@ -369,10 +349,9 @@ email_address = "alice@gmail.com"
 is_personal = true
 
 [[steps]]
-id = "gmail-takeout.render"
+id = "gmail-takeout/rendered_md"
 command = "datalib-step render email"
 inputs = ["gmail-takeout/raw"]
-outputs = ["gmail-takeout/rendered_md"]
 [steps.params]
 outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
 only_render_labels = []    # render only threads touching these labels; empty = all
@@ -383,52 +362,46 @@ only_render_labels = []    # render only threads touching these labels; empty = 
 # mode; `server_url` is required. Credentials via latchkey. Omit
 # `addressbooks` to sync every addressbook under the principal.
 [[steps]]
-id = "icloud-contacts.download"
+id = "icloud-contacts/raw"
 command = "datalib-step download carddav"
-outputs = ["icloud-contacts/raw"]
 [steps.params.sync]
 server_url = "https://contacts.icloud.com/"
 addressbooks = ["Contacts"]
 
 [[steps]]
-id = "icloud-contacts.render"
+id = "icloud-contacts/rendered_md"
 command = "datalib-step render carddav"
 inputs = ["icloud-contacts/raw"]
-outputs = ["icloud-contacts/rendered_md"]
 
 # Mode B — local vCard files. No `sync` block → reads `.vcf` files from
 # the directory at `common.input_path`.
 [[steps]]
-id = "vcard-contacts.download"
+id = "vcard-contacts/raw"
 command = "datalib-step download carddav"
-outputs = ["vcard-contacts/raw"]
 [steps.params.common]
 input_path = "~/backups/contacts_vcf"
 
 [[steps]]
-id = "vcard-contacts.render"
+id = "vcard-contacts/rendered_md"
 command = "datalib-step render carddav"
 inputs = ["vcard-contacts/raw"]
-outputs = ["vcard-contacts/rendered_md"]
 
 # --- Beeper -------------------------------------------------------------
 
 # Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
 # chat networks to ingest (at least one required).
 [[steps]]
-id = "beeper.download"
+id = "beeper/raw"
 command = "datalib-step download beeper"
-outputs = ["beeper/raw"]
 [steps.params.sync]
 sources = ["signal", "googlechat"]
 media = true
 # beeper_data_dir = "~/Library/Application Support/BeeperTexts"  # macOS default
 
 [[steps]]
-id = "beeper.render"
+id = "beeper/rendered_md"
 command = "datalib-step render beeper"
 inputs = ["beeper/raw"]
-outputs = ["beeper/rendered_md"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
@@ -439,19 +412,17 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 # Perseus renders straight from the staged tree, so the render step
 # carries `common.input_path` too.
 [[steps]]
-id = "perseus.download"
+id = "perseus/raw"
 command = "datalib-step download perseus"
-outputs = ["perseus/raw"]
 [steps.params.common]
 input_path = "~/backups/perseus"
 [steps.params.sync]
 files = []
 
 [[steps]]
-id = "perseus.render"
+id = "perseus/rendered_md"
 command = "datalib-step render perseus"
 inputs = ["perseus/raw"]
-outputs = ["perseus/rendered_md"]
 [steps.params]
 # alignment_pairs = [   # edition pairs to sentence-align, e.g.
 #   ["perseus-grc2", "perseus-eng2"],
@@ -466,9 +437,8 @@ input_path = "~/backups/perseus"
 # and both IDs are exactly 32 lowercase-hex chars.
 # REDACT: family_device_id + device_udid are non-rotatable read secrets.
 [[steps]]
-id = "yolink.download"
+id = "yolink/raw"
 command = "datalib-step download yolink"
-outputs = ["yolink/raw"]
 
 [steps.params.sync]
 window_days = 7
@@ -493,10 +463,9 @@ device_udid = "fedcba9876543210fedcba9876543210"
 # Because there is one page, incrementality is just the raw store's HEAD:
 # if the download step appended nothing, the render is a no-op. No knobs.
 [[steps]]
-id = "yolink.render"
+id = "yolink/rendered_md"
 command = "datalib-step render yolink"
 inputs = ["yolink/raw"]
-outputs = ["yolink/rendered_md"]
 
 # --- Signal (Android backup) --------------------------------------------
 
@@ -504,18 +473,16 @@ outputs = ["yolink/rendered_md"]
 # using the AEP read from the named env var at download time. See
 # docs/user/getting_your_data.md for pulling the backup off the phone.
 [[steps]]
-id = "signal.download"
+id = "signal/raw"
 command = "datalib-step download signal_backup"
-outputs = ["signal/raw"]
 [steps.params.sync]
 snapshot_dir = "~/backups/SignalBackups"
 aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
 
 [[steps]]
-id = "signal.render"
+id = "signal/rendered_md"
 command = "datalib-step render signal_backup"
 inputs = ["signal/raw"]
-outputs = ["signal/rendered_md"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
@@ -525,18 +492,16 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 # `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
 # key is hex-encoded in the named env var.
 [[steps]]
-id = "whatsapp.download"
+id = "whatsapp/raw"
 command = "datalib-step download whatsapp_backup"
-outputs = ["whatsapp/raw"]
 [steps.params.sync]
 backup_dir = "~/backups/WhatsApp"
 key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"   # default if omitted
 
 [[steps]]
-id = "whatsapp.render"
+id = "whatsapp/rendered_md"
 command = "datalib-step render whatsapp_backup"
 inputs = ["whatsapp/raw"]
-outputs = ["whatsapp/rendered_md"]
 
 # --- LinkedIn (data export) ---------------------------------------------
 
@@ -550,9 +515,8 @@ outputs = ["whatsapp/rendered_md"]
 # `download_params` override below bounds that: stop the photo sweep after
 # 20 consecutive failures (LinkedIn rate-limits bursts).
 [[steps]]
-id = "linkedin.download"
+id = "linkedin/raw"
 command = "datalib-step download linkedin"
-outputs = ["linkedin/raw"]
 
 [steps.params]
 fetch_photos = true
@@ -563,10 +527,9 @@ input_path = "~/backups/LinkedInDataExport"
 maximum_sequential_failed_requests = 20
 
 [[steps]]
-id = "linkedin.render"
+id = "linkedin/rendered_md"
 command = "datalib-step render linkedin"
 inputs = ["linkedin/raw"]
-outputs = ["linkedin/rendered_md"]
 
 # --- Google Takeout (data export) ---------------------------------------
 
@@ -583,9 +546,8 @@ outputs = ["linkedin/rendered_md"]
 # NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
 # it is NOT one of the feeds here.
 [[steps]]
-id = "google-takeout.download"
+id = "google-takeout/raw"
 command = "datalib-step download google_takeout"
-outputs = ["google-takeout/raw"]
 
 [steps.params.common]
 input_path = "~/backups/Takeout"
@@ -602,10 +564,9 @@ youtube_subscriptions = false     # raw store only
 gemini_apps = false               # raw store only
 
 [[steps]]
-id = "google-takeout.render"
+id = "google-takeout/rendered_md"
 command = "datalib-step render google_takeout"
 inputs = ["google-takeout/raw"]
-outputs = ["google-takeout/rendered_md"]
 
 # --- SMS Backup & Restore (Android export) ------------------------------
 
@@ -615,17 +576,15 @@ outputs = ["google-takeout/rendered_md"]
 # (MMS attachment bytes go to the CAS); render emits one chat per
 # phone number.
 [[steps]]
-id = "sms-backup-restore.download"
+id = "sms-backup-restore/raw"
 command = "datalib-step download sms_backup_restore"
-outputs = ["sms-backup-restore/raw"]
 [steps.params.common]
 input_path = "~/backups/SMSBackupRestore"
 
 [[steps]]
-id = "sms-backup-restore.render"
+id = "sms-backup-restore/rendered_md"
 command = "datalib-step render sms_backup_restore"
 inputs = ["sms-backup-restore/raw"]
-outputs = ["sms-backup-restore/rendered_md"]
 
 # --- fsindex (directory-tree scanner) -----------------------------------
 
@@ -640,9 +599,8 @@ outputs = ["sms-backup-restore/rendered_md"]
 # Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
 # into directories that opt in via `stamp_me_with_uuid`.
 [[steps]]
-id = "fsindex-home.download"
+id = "fsindex-home/raw"
 command = "datalib-step download fsindex"
-outputs = ["fsindex-home/raw"]
 [steps.params]
 # stamp = false   # default; true → write UUID breadcrumbs into the tree
 [steps.params.common]
@@ -665,9 +623,8 @@ input_path = "~/Documents"
 #   doltlite <root>/pdfs/raw/entities.doltlite_db \
 #     "SELECT COUNT(*) FROM pdf_documents WHERE needs_ocr = 1;"
 [[steps]]
-id = "pdfs.download"
+id = "pdfs/raw"
 command = "datalib-step download pdf"
-outputs = ["pdfs/raw"]
 [steps.params]
 # Gitignore-shaped patterns, on top of any .gitignore files in the tree.
 # ignore = ["node_modules/**", "**/.Trash/**"]
@@ -680,10 +637,9 @@ input_path = "~/Documents"
 # the raw store (`pdf_scan_meta`), so it always converts exactly the
 # tree the download step walked.
 [[steps]]
-id = "pdfs.render"
+id = "pdfs/rendered_md"
 command = "datalib-step render pdf"
 inputs = ["pdfs/raw"]
-outputs = ["pdfs/rendered_md"]
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
@@ -703,9 +659,8 @@ outputs = ["pdfs/rendered_md"]
 # SQLite file (Quicken for Mac, Apple Photos, …) works with the same step,
 # minus the `id_global` default below.
 [[steps]]
-id = "lightroom.download"
+id = "lightroom/raw"
 command = "datalib-step download lightroom"
-outputs = ["lightroom/raw"]
 [steps.params]
 # Drop the per-image XMP packet and the flattened search indexes. They are
 # the bulkiest columns in a catalog and are wholly derived from columns

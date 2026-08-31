@@ -72,8 +72,9 @@ test("the id derives from the name, then stops being editable", async ({ page })
   await wizard(page).getByText("Review the TOML this writes").click();
   const preview = wizard(page).locator(".wiz-review pre");
   await expect(preview).toContainText('name = "Personal Claude"');
-  await expect(preview).toContainText('id = "personal-claude.download"');
-  await expect(preview).toContainText('outputs = ["personal-claude/raw"]');
+  await expect(preview).toContainText('id = "personal-claude/raw"');
+  await expect(preview).toContainText('id = "personal-claude/rendered_md"');
+  await expect(preview).toContainText('inputs = ["personal-claude/raw"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Personal Claude.")).toBeVisible();
@@ -125,6 +126,6 @@ test("typing an id stops the name from driving it", async ({ page }) => {
 
   await wizard(page).getByText("Review the TOML this writes").click();
   await expect(wizard(page).locator(".wiz-review pre")).toContainText(
-    'outputs = ["my-archive/raw"]',
+    'id = "my-archive/raw"',
   );
 });

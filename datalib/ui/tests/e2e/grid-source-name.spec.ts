@@ -87,16 +87,14 @@ test("the Source column shows the configured name, and source_name: filters by i
     page,
     `${original.replace(/\s*$/, "")}\n
 [[steps]]
-id = "slack.download"
+id = "slack/raw"
 name = "Work Slack"
 command = "datalib-step download slack_api"
-outputs = ["slack/raw"]
 
 [[steps]]
-id = "slack.render"
+id = "slack/rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
-outputs = ["slack/rendered_md"]
 `,
   );
 

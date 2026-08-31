@@ -74,9 +74,9 @@ export type ConfiguredSource = {
   /// for kinds that have none.
   type: string | null;
   steps: SourceStep[];
-  /// Declared output paths across every step of this entry — what the
-  /// storage endpoint's rows are keyed on. Empty for an applet, which
-  /// owns no artifacts.
+  /// The trees this entry writes — its steps' ids, which is the same
+  /// thing. What the storage endpoint's rows are keyed on. Empty for an
+  /// applet, which owns no artifacts.
   outputs: string[];
   /// The `id` the DAG runner schedules, for a single-step entry. Null
   /// for a source (whose two steps are targeted by their own ids) and
@@ -141,7 +141,6 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
         id?: unknown;
         name?: unknown;
         command?: unknown;
-        outputs?: unknown;
         params?: unknown;
       } | null;
       const id = typeof step?.id === "string" ? step.id : "";
@@ -151,9 +150,8 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
         typeof step?.name === "string" && step.name.trim() !== ""
           ? step.name.trim()
           : null;
-      const outputs = (Array.isArray(step?.outputs) ? (step!.outputs as unknown[]) : []).filter(
-        (o): o is string => typeof o === "string",
-      );
+      // A step writes exactly one tree, and it is the step's id.
+      const outputs = id ? [id] : [];
       const [start, end] = stepRanges.get(i) ?? [0, 0];
       const type = stepType(typeof step?.command === "string" ? step.command : "");
       const params =
@@ -161,12 +159,12 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
           ? (step.params as Record<string, unknown>)
           : {};
 
-      // Is this a source stanza's step? Only `<name>/raw` and
-      // `<name>/rendered_md` say so — which is what keeps
-      // `unified_index/grid` out of the source bucket.
-      const stanza = outputs
-        .map((out) => out.split("/"))
-        .find((segs) => segs.length === 2 && PHASE_BY_SUFFIX[segs[1]]);
+      // Is this a source's step? A step's id is the tree it writes, and
+      // only `<stem>/raw` / `<stem>/rendered_md` are source trees —
+      // which is what keeps `unified_index/grid` out of the source
+      // bucket.
+      const segs = id.split("/");
+      const stanza = segs.length === 2 && PHASE_BY_SUFFIX[segs[1]] ? segs : undefined;
 
       if (stanza) {
         // The stanza is the *entry's* id; `name` above is this step's
@@ -439,9 +437,8 @@ export function buildStepPair(
   const nameLine =
     name.trim() && name.trim() !== id ? `\nname = ${quote(name.trim())}` : "";
   const download = `[[steps]]
-id = "${id}.download"${nameLine}
+id = "${id}/raw"${nameLine}
 command = "datalib-step download ${entry.type}"
-outputs = ["${id}/raw"]
 ${paramsToml(entry, values, "download")}`;
 
   // Download-only providers (lightroom, fsindex) render nothing, so
@@ -450,12 +447,58 @@ ${paramsToml(entry, values, "download")}`;
 
   const renderParams = paramsToml(entry, values, "render");
   const render = `[[steps]]
-id = "${id}.render"
+id = "${id}/rendered_md"
 command = "datalib-step render ${entry.type}"
-inputs = ["${id}/raw"]
-outputs = ["${id}/rendered_md"]${renderParams ? `\n${renderParams}` : ""}`;
+inputs = ["${id}/raw"]${renderParams ? `\n${renderParams}` : ""}`;
 
   return `${divider}\n${download.trimEnd()}\n\n${render}`;
+}
+
+/// Wire a render step into every fan-in that consumes rendered markdown.
+///
+/// The fan-ins name their inputs by id, so a source added without this
+/// renders happily and is never indexed — invisible in search, with
+/// nothing on screen to say why. The old `**/rendered_md` glob made
+/// this automatic; naming steps is the trade, and the wizard paying it
+/// is what keeps the config honest rather than implicit.
+///
+/// Textual, like every other write here: it rewrites the `inputs = [
+/// … ]` line of each step whose id is a `unified_index/…` tree, leaving
+/// the rest of the file — comments included — exactly as it was. A
+/// config with no fan-ins is left alone.
+export function wireIntoFanIns(text: string, renderStepId: string): string {
+  return text.replace(
+    // `id = "unified_index/…"` followed, within its own table, by an
+    // `inputs = [...]` line.
+    /(id\s*=\s*"unified_index\/[^"]*"[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g,
+    (whole, head: string, body: string, tail: string) => {
+      const ids = body
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (ids.includes(`"${renderStepId}"`)) return whole;
+      ids.push(`"${renderStepId}"`);
+      return `${head}${ids.join(", ")}${tail}`;
+    },
+  );
+}
+
+/// Drop a render step from every fan-in's inputs. The mirror of
+/// [`wireIntoFanIns`]: an input naming a step that no longer exists is
+/// a config the runner refuses outright, so deleting a source has to
+/// take its edges with it.
+export function unwireFromFanIns(text: string, renderStepId: string): string {
+  return text.replace(
+    /(id\s*=\s*"unified_index\/[^"]*"[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g,
+    (_whole, head: string, body: string, tail: string) => {
+      const ids = body
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .filter((t) => t !== `"${renderStepId}"`);
+      return `${head}${ids.join(", ")}${tail}`;
+    },
+  );
 }
 
 /// Append a step pair to the config text. Always at the end: the DAG

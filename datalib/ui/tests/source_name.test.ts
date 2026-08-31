@@ -25,17 +25,15 @@ const SLACK = catalogFor("slack_api") as CatalogEntry;
 const UNNAMED = `data_root = "/tmp/data"
 
 [[steps]]
-id = "slack.download"
+id = "slack/raw"
 command = "datalib-step download slack_api"
-outputs = ["slack/raw"]
 [steps.params]
 sync = {}
 
 [[steps]]
-id = "slack.render"
+id = "slack/rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
-outputs = ["slack/rendered_md"]
 `;
 
 /// The single source in a config, asserted to be the only entry.
@@ -56,18 +54,18 @@ describe("reading a name", () => {
   });
 
   it("takes the name off whichever step carries it", () => {
-    const source = one(withName(UNNAMED, "slack.download", "Work Slack"));
+    const source = one(withName(UNNAMED, "slack/raw", "Work Slack"));
     expect(source.id).toBe("slack");
     expect(source.name).toBe("Work Slack");
   });
 
   it("takes the first when both steps carry one", () => {
-    const both = withName(withName(UNNAMED, "slack.download", "Work Slack"), "slack.render", "Ignored");
+    const both = withName(withName(UNNAMED, "slack/raw", "Work Slack"), "slack/rendered_md", "Ignored");
     expect(one(both).name).toBe("Work Slack");
   });
 
   it("ignores a blank name rather than showing an empty cell", () => {
-    expect(one(withName(UNNAMED, "slack.download", "   ")).name).toBe("slack");
+    expect(one(withName(UNNAMED, "slack/raw", "   ")).name).toBe("slack");
   });
 });
 
@@ -79,17 +77,15 @@ describe("names on the other kinds of entry", () => {
   const OTHER = `data_root = "/tmp/data"
 
 [[steps]]
-id = "grid_index"
+id = "unified_index/grid"
 name = "Search index"
 command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]
+inputs = ["slack/rendered_md"]
 
 [[steps]]
-id = "qmd_index"
+id = "unified_index/qmd"
 command = "datalib-step qmd_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/qmd"]
+inputs = ["slack/rendered_md"]
 
 [[applets]]
 id = "unified_index"
@@ -98,9 +94,9 @@ command = "datalib-applet unified_index"
 
   it("names a shared index step, and leaves an unnamed one alone", () => {
     const byId = new Map(listConfiguredSources(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("grid_index")?.kind).toBe("step");
-    expect(byId.get("grid_index")?.name).toBe("Search index");
-    expect(byId.get("qmd_index")?.name).toBe("qmd_index");
+    expect(byId.get("unified_index/grid")?.kind).toBe("step");
+    expect(byId.get("unified_index/grid")?.name).toBe("Search index");
+    expect(byId.get("unified_index/qmd")?.name).toBe("unified_index/qmd");
   });
 
   it("shows an applet by its id", () => {
@@ -125,8 +121,7 @@ describe("writing a name", () => {
     expect(one(next).name).toBe("Work Slack");
     // The id is untouched: still the directory and the step-id stem.
     expect(one(next).id).toBe("slack");
-    expect(next).toContain('outputs = ["slack/raw"]');
-    expect(next).toContain('id = "slack.download"');
+    expect(next).toContain('id = "slack/raw"');
   });
 
   it("writes no key at all when there is nothing to say", () => {
@@ -153,7 +148,7 @@ describe("writing a name", () => {
   it("lands on the download step, before its params tables", () => {
     const next = save(UNNAMED, "slack", "Work Slack");
     expect(next.indexOf("name =")).toBeLessThan(next.indexOf("[steps.params"));
-    expect(next.indexOf("name =")).toBeLessThan(next.indexOf('id = "slack.render"'));
+    expect(next.indexOf("name =")).toBeLessThan(next.indexOf('id = "slack/rendered_md"'));
   });
 });
 

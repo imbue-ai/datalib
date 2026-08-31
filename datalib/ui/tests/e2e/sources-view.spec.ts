@@ -84,8 +84,8 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
     const t = el as HTMLTextAreaElement;
     return t.value.slice(t.selectionStart, t.selectionEnd);
   });
-  expect(selected).toContain('id = "perseus.download"');
-  expect(selected).not.toContain('id = "perseus.render"');
+  expect(selected).toContain('id = "perseus/raw"');
+  expect(selected).not.toContain('id = "perseus/rendered_md"');
   expect(selected).not.toContain("chatgpt");
 
   // Unsaved edits never reached the server; a reload restores the file.
@@ -123,7 +123,7 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
   // same output is an ownership conflict the graph build rejects.
   await editor.fill(
     '[[steps]]\nid = "a"\ncommand = "c"\noutputs = ["x/raw"]\n\n' +
-      '[[steps]]\nid = "b"\ncommand = "c"\noutputs = ["x/raw"]\n',
+      '[[steps]]\nid = "x/raw"\ncommand = "c"\noutputs = ["x/raw"]\n',
   );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();

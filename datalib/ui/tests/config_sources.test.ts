@@ -5,29 +5,25 @@ const FULL = `# Datalib config for this data root.
 data_root = "/tmp/data"
 
 [[steps]]
-id = "grid_index"
+id = "unified_index/grid"
 command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]
+inputs = ["claude/rendered_md"]
 
 # my main claude account
 [[steps]]
-id = "claude.download"
+id = "claude/raw"
 command = "datalib-step download claude_api"
-outputs = ["claude/raw"]
 [steps.params]
 sync = {}
 
 [[steps]]
-id = "claude.render"
+id = "claude/rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["claude/raw"]
-outputs = ["claude/rendered_md"]
 
 [[steps]]
-id = "custom"
+id = "custom/out"
 command = "my-exporter --flag"
-outputs = ["custom/out"]
 `;
 
 describe("listSources", () => {
@@ -35,7 +31,7 @@ describe("listSources", () => {
     const rows = listSources(FULL);
     // grid_index and claude.render declare inputs → infrastructure;
     // any input-less step is a source, whatever its command runs.
-    expect(rows.map((r) => r.id)).toEqual(["claude.download", "custom"]);
+    expect(rows.map((r) => r.id)).toEqual(["claude/raw", "custom/out"]);
   });
 
   it("returns ranges that select the step entry", () => {
@@ -45,7 +41,7 @@ describe("listSources", () => {
     // The range is widened past the step's own table to cover its
     // [steps.params] sub-table, which is a sibling in the document.
     expect(claude).toContain("sync = {}");
-    expect(claude).not.toContain("claude.render");
+    expect(claude).not.toContain("claude/rendered_md");
     const custom = FULL.slice(rows[1].start, rows[1].end);
     expect(custom.startsWith("[[steps]]")).toBe(true);
     expect(custom).toContain("my-exporter --flag");
@@ -53,9 +49,9 @@ describe("listSources", () => {
 
   it("treats an empty inputs list as input-less", () => {
     const rows = listSources(
-      '[[steps]]\nid = "x"\ncommand = "fetch-x"\ninputs = []\noutputs = ["x/raw"]\n',
+      '[[steps]]\nid = "x/raw"\ncommand = "fetch-x"\ninputs = []\noutputs = ["x/raw"]\n',
     );
-    expect(rows.map((r) => r.id)).toEqual(["x"]);
+    expect(rows.map((r) => r.id)).toEqual(["x/raw"]);
   });
 
   it("handles empty, scaffold, and stepless files", () => {
@@ -68,9 +64,9 @@ describe("listSources", () => {
     // An inline step has no table of its own, so it lists with a zero
     // range ("not locatable") rather than pointing at something else.
     const rows = listSources(
-      'steps = [{id = "inline", command = "c", outputs = ["i/raw"]}]\n',
+      'steps = [{id = "i/raw", command = "c", outputs = ["i/raw"]}]\n',
     );
-    expect(rows.map((r) => r.id)).toEqual(["inline"]);
+    expect(rows.map((r) => r.id)).toEqual(["i/raw"]);
     expect(rows[0]).toMatchObject({ start: 0, end: 0 });
   });
 
