@@ -1,13 +1,16 @@
 //! Parsing of the runner-appended step declaration flags.
 //!
 //! With per-provider step types the params carry no `type:`
-//! discriminator (the nested subcommand names the provider) and
-//! no `name:` either — `--params` is the provider's own config
-//! subtree verbatim, deserialized by [`crate::dispatch::plan`], and
-//! the source name is derived from the step's declared outputs: the
-//! first path component of the first `--outputs` entry (`slack/raw` →
-//! `slack`), which is exactly the `<name>/…` directory prefix the
-//! step writes under.
+//! discriminator (the nested subcommand names the provider) and no
+//! `name:` either — `--params` is the provider's own config subtree
+//! verbatim, deserialized by [`crate::dispatch::plan`].
+//!
+//! The source name comes from the step's own id, which the runner puts
+//! in `DATALIB_DAG_STEP` and which *is* the tree the step writes
+//! (`slack/raw`). Nothing is derived: the step is told where it lives.
+//! This used to split the first `--outputs` entry on `/` to reconstruct
+//! a prefix and then rebuild the same path from it — see
+//! `docs/dev/step_identity.md`.
 
 use anyhow::{Context, Result};
 
@@ -29,25 +32,35 @@ pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
     }
 }
 
-/// The source name this step works under, derived from `--outputs`:
-/// the first path component of the first declared output.
-pub fn name_from_outputs(outputs: Option<&str>) -> Result<String> {
-    let outputs = outputs.context(
-        "download/render need `outputs:` declared in the DAG config \
-         (passed as --outputs) to derive the source name",
-    )?;
-    let outs: Vec<String> =
-        serde_json::from_str(outputs).context("parse --outputs as a JSON string array")?;
-    let first = outs
-        .first()
-        .context("--outputs is empty — declare e.g. `outputs: [slack/raw]`")?;
-    let name = first.split('/').next().unwrap_or_default();
+/// The tree this step owns, relative to the data root: its config `id`,
+/// as the runner passes it in `DATALIB_DAG_STEP`.
+///
+/// Providers still want a bare *name* for their store layout and their
+/// commit messages, which is the id's first segment — `slack/raw` →
+/// `slack`. That is a display convenience, not identity: nothing
+/// resolves anything by it.
+pub fn tree_from_env() -> Result<String> {
+    let id = std::env::var(STEP_ID_ENV).with_context(|| {
+        format!(
+            "{STEP_ID_ENV} is not set. `datalib-step` expects to be run by `datalib-dag`, \
+             which sets it to the step's config id — the tree the step writes."
+        )
+    })?;
     anyhow::ensure!(
-        !name.trim().is_empty() && !name.contains('*'),
-        "cannot derive a source name from output {first:?} \
-         (expected `<name>/raw` or `<name>/rendered_md`)"
+        !id.trim().is_empty(),
+        "{STEP_ID_ENV} is empty; it must be the step's config id"
     );
-    Ok(name.to_string())
+    Ok(id)
+}
+
+/// The runner's name for the environment variable carrying a step's
+/// config id. Mirrors `datalib_dag::subprocess::ENV_STEP`; not imported
+/// because `datalib-step` deliberately does not depend on the runner.
+pub const STEP_ID_ENV: &str = "DATALIB_DAG_STEP";
+
+/// The bare source name for a step id: its first path segment.
+pub fn source_name(tree: &str) -> &str {
+    tree.split('/').next().unwrap_or(tree)
 }
 
 #[cfg(test)]
@@ -72,23 +85,11 @@ mod tests {
     }
 
     #[test]
-    fn name_comes_from_the_first_output() {
-        assert_eq!(
-            name_from_outputs(Some(r#"["slack/raw"]"#)).unwrap(),
-            "slack"
-        );
-        assert_eq!(
-            name_from_outputs(Some(r#"["slack/rendered_md","other/x"]"#)).unwrap(),
-            "slack"
-        );
-    }
-
-    #[test]
-    fn underivable_names_are_rejected() {
-        assert!(name_from_outputs(None).is_err());
-        assert!(name_from_outputs(Some("[]")).is_err());
-        assert!(name_from_outputs(Some(r#"["**/rendered_md"]"#)).is_err());
-        assert!(name_from_outputs(Some(r#"["/abs/path"]"#)).is_err());
-        assert!(name_from_outputs(Some("not json")).is_err());
+    fn source_name_is_the_first_segment() {
+        assert_eq!(source_name("slack/raw"), "slack");
+        assert_eq!(source_name("slack/rendered_md"), "slack");
+        assert_eq!(source_name("work-slack/raw"), "work-slack");
+        // A single-segment id is its own name.
+        assert_eq!(source_name("solo"), "solo");
     }
 }

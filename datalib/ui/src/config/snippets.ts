@@ -40,16 +40,14 @@ function stepPair(
   const preambleBlock = preamble ? `${preamble}# ${"─".repeat(70)}\n` : "";
   return `${divider}
 ${preambleBlock}[[steps]]
-id = "${name}.download"
+id = "${name}/raw"
 command = "datalib-step download ${type}"
-outputs = ["${name}/raw"]
 ${params}
 
 [[steps]]
-id = "${name}.render"
+id = "${name}/rendered_md"
 command = "datalib-step render ${type}"
-inputs = ["${name}/raw"]
-outputs = ["${name}/rendered_md"]`;
+inputs = ["${name}/raw"]`;
 }
 
 export type Snippet = { label: string; body: (latchkeyCli: string) => string };

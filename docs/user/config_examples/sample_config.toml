@@ -13,33 +13,29 @@ data_root = "~/datalib"
 # Shared fan-in steps: the SQL index behind the grid UI and the qmd
 # semantic-search index, each fed by every source's rendered markdown.
 [[steps]]
-id = "grid_index"
+id = "unified_index/grid"
 command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]
+inputs = ["gmail-takeout/rendered_md", "slack/rendered_md", "anthropic-api/rendered_md"]
 
 [[steps]]
-id = "qmd_index"
+id = "unified_index/qmd"
 command = "datalib-step qmd_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/qmd"]
+inputs = ["gmail-takeout/rendered_md", "slack/rendered_md", "anthropic-api/rendered_md"]
 
 # Google Takeout Gmail export. No JMAP `sync` block in the params —
 # that puts the email provider in file-backed mbox mode, reading the
 # file at `common.input_path` instead of talking to a mail server.
 # Point this at the .mbox unpacked from your Takeout zip.
 [[steps]]
-id = "gmail-takeout.download"
+id = "gmail-takeout/raw"
 command = "datalib-step download email"
-outputs = ["gmail-takeout/raw"]
 [steps.params.common]
 input_path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 
 [[steps]]
-id = "gmail-takeout.render"
+id = "gmail-takeout/rendered_md"
 command = "datalib-step render email"
 inputs = ["gmail-takeout/raw"]
-outputs = ["gmail-takeout/rendered_md"]
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
 # (see the "Register Slack with latchkey" section in the first-time
@@ -47,9 +43,8 @@ outputs = ["gmail-takeout/rendered_md"]
 # omit it (or set `all_channels = true`) to mirror every channel the
 # account can see. `media = true` pulls file attachments into blobs.
 [[steps]]
-id = "slack.download"
+id = "slack/raw"
 command = "datalib-step download slack_api"
-outputs = ["slack/raw"]
 
 [steps.params.common]
 blob_size_limit_bytes = 1000000  # 1 MB — skip larger file uploads
@@ -69,10 +64,9 @@ channels = ["project-data-liberation"]
                          # bound how far back the mirror goes.
 
 [[steps]]
-id = "slack.render"
+id = "slack/rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
-outputs = ["slack/rendered_md"]
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
 # `latchkey` at runtime (see the "Register Claude web with latchkey"
@@ -80,9 +74,8 @@ outputs = ["slack/rendered_md"]
 # conversation across every org the account can see; uncomment the
 # knobs below to bound the work on incremental re-runs.
 [[steps]]
-id = "anthropic-api.download"
+id = "anthropic-api/raw"
 command = "datalib-step download claude_api"
-outputs = ["anthropic-api/raw"]
 [steps.params.sync]
 # refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
 # since = "2025-01-01"      # only sync conversations updated at/after this
@@ -90,10 +83,9 @@ outputs = ["anthropic-api/raw"]
 # project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)
 
 [[steps]]
-id = "anthropic-api.render"
+id = "anthropic-api/rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["anthropic-api/raw"]
-outputs = ["anthropic-api/rendered_md"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

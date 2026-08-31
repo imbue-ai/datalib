@@ -56,6 +56,8 @@ import {
   appendSource,
   removeSource,
   replaceSource,
+  unwireFromFanIns,
+  wireIntoFanIns,
   paramsAreRepresentable,
   emptyTableDiagnosis,
   type ConfiguredSource,
@@ -127,16 +129,23 @@ const emptyDiagnosis = computed(() =>
   }),
 );
 
-const takenNames = computed(
-  () => new Set(sources.value.filter((s) => s.kind === "source").map((s) => s.name)),
+const takenIds = computed(
+  () => new Set(sources.value.filter((s) => s.kind === "source").map((s) => s.id)),
 );
 
 type Row = {
-  name: string;
+  /// Identity: the stanza directory, the step-id stem, and what every
+  /// action here is keyed on.
+  id: string;
   kind: EntryKind;
   kindLabel: string;
   type: string | null;
-  label: string;
+  /// What to show in the Name column. Equal to `id` until someone sets
+  /// a `name =` on one of this entry's steps.
+  name: string;
+  /// The catalog's name for the provider ("Slack"), shown under Type —
+  /// a property of the entry's type, not of this entry.
+  typeLabel: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
   /// Null when the action applies to this row; otherwise the reason it
@@ -181,7 +190,7 @@ function jobFor(name: string): { job: SyncJob; exact: boolean } | null {
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
     const entry = s.type ? catalogFor(s.type) : undefined;
-    const hit = s.kind === "applet" ? null : jobFor(s.name);
+    const hit = s.kind === "applet" ? null : jobFor(s.id);
     const outputs = s.outputs
       .map((path) => storage.value.find((x) => x.path === path))
       .filter((x): x is OutputStorage => !!x);
@@ -226,17 +235,18 @@ const rows = computed<Row[]>(() =>
     // job queue says nothing about it. `GET /api/frontend` does.
     let lastStatus: string;
     if (s.kind === "applet") {
-      lastStatus = appletErrors.value[s.name] ? "failed" : "running";
+      lastStatus = appletErrors.value[s.id] ? "failed" : "running";
     } else {
       lastStatus = hit ? hit.job.state : "never run";
     }
 
     return {
-      name: s.name,
+      id: s.id,
       kind: s.kind,
       kindLabel: KIND_LABEL[s.kind],
       type: s.type,
-      label: entry?.label ?? s.type ?? (s.kind === "source" ? "unknown" : "—"),
+      name: s.name,
+      typeLabel: entry?.label ?? s.type ?? (s.kind === "source" ? "unknown" : "—"),
       icon: entry?.icon ?? null,
       entry,
       runBlocked,
@@ -319,6 +329,11 @@ const columnDefs: ColDef<Row>[] = [
     // stops shrinking at a width a stanza name still fits in.
     flex: 1,
     minWidth: 200,
+    // The label leads and the directory name follows it, muted,
+    // whenever they differ. Showing only the label would hide which
+    // folder this is — the whole reason the name stays fixed is that
+    // the on-disk layout is meant to be legible, and a grid that
+    // stopped naming it would give that away for a prettier row.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const url = iconUrl(p.data?.icon);
       const wrap = document.createElement("span");
@@ -332,6 +347,13 @@ const columnDefs: ColDef<Row>[] = [
       const text = document.createElement("span");
       text.textContent = p.data?.name ?? "";
       wrap.appendChild(text);
+      if (p.data && p.data.name !== p.data.id) {
+        const dir = document.createElement("span");
+        dir.className = "m2-cell-dir";
+        dir.textContent = p.data.id;
+        dir.title = `Id — stored in ${p.data.id}/ under the data root`;
+        wrap.appendChild(dir);
+      }
       return wrap;
     },
   },
@@ -347,7 +369,7 @@ const columnDefs: ColDef<Row>[] = [
       return span;
     },
   },
-  { headerName: "Type", field: "label", width: 130, minWidth: 130 },
+  { headerName: "Type", field: "typeLabel", width: 130, minWidth: 130 },
   {
     headerName: "Last synced",
     field: "lastSynced",
@@ -364,7 +386,7 @@ const columnDefs: ColDef<Row>[] = [
       const row = p.data;
       if (!row) return undefined;
       if (row.kind === "applet") {
-        return appletErrors.value[row.name] ?? "The gateway has this applet up.";
+        return appletErrors.value[row.id] ?? "The gateway has this applet up.";
       }
       return row.approximate
         ? "From a run covering several sources — per-source status needs the step_runs table."
@@ -415,26 +437,26 @@ const columnDefs: ColDef<Row>[] = [
     width: canReveal ? 132 : 102,
     minWidth: canReveal ? 132 : 102,
     resizable: false,
-    valueGetter: (p: ValueGetterParams<Row>) => p.data?.name,
+    valueGetter: (p: ValueGetterParams<Row>) => p.data?.id,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
       const row = p.data!;
       wrap.appendChild(
-        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.name)),
+        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.id)),
       );
       wrap.appendChild(
-        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.name)),
+        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.id)),
       );
       // Absent rather than disabled in a plain browser — the same
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
         wrap.appendChild(
-          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.name)),
+          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.id)),
         );
       }
       wrap.appendChild(
-        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.name)),
+        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.id)),
       );
       return wrap;
     },
@@ -541,8 +563,8 @@ function openAdd() {
   wizardOpen.value = true;
 }
 
-function openEdit(name: string) {
-  const source = sources.value.find((s) => s.name === name);
+function openEdit(id: string) {
+  const source = sources.value.find((s) => s.id === id);
   if (!source?.type) return;
   const entry = catalogFor(source.type);
   if (!entry) return;
@@ -550,24 +572,31 @@ function openEdit(name: string) {
   wizardOpen.value = true;
 }
 
-async function onWizardSubmit(payload: { name: string; body: string }) {
+async function onWizardSubmit(payload: { id: string; name: string; body: string }) {
   const current = editing.value;
-  const next = current
+  let next = current
     ? replaceSource(configText.value, current.source, payload.body)
     : appendSource(configText.value, payload.body);
-  const ok = await writeConfig(
-    next,
-    current ? `Saved ${payload.name}.` : `Added ${payload.name}.`,
-  );
+  // The fan-ins name their inputs, so a new source has to be wired into
+  // them or it renders and is never indexed. Idempotent, so re-saving an
+  // edit doesn't duplicate the entry.
+  if (payload.body.includes(`id = "${payload.id}/rendered_md"`)) {
+    next = wireIntoFanIns(next, `${payload.id}/rendered_md`);
+  }
+  // Banners are for a person, so they say the name; the id is what the
+  // config and the disk use.
+  const shown = payload.name || payload.id;
+  const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (ok) {
     wizardOpen.value = false;
     editing.value = null;
   }
 }
 
-async function deleteSource(name: string) {
-  const source = sources.value.find((s) => s.name === name);
+async function deleteSource(id: string) {
+  const source = sources.value.find((s) => s.id === id);
   if (!source) return;
+  const name = source.name;
   const ok = window.confirm(
     source.kind === "applet"
       ? `Remove the "${name}" applet from the config?\n\n` +
@@ -582,11 +611,17 @@ async function deleteSource(name: string) {
             `Re-adding it later resumes from what's already downloaded.`,
   );
   if (!ok) return;
-  await writeConfig(removeSource(configText.value, source), `Removed ${name}.`);
+  // Unwire before removing: an input naming a step that no longer
+  // exists is a config the runner refuses outright.
+  let next = configText.value;
+  for (const step of source.steps) {
+    if (step.phase === "render") next = unwireFromFanIns(next, step.id);
+  }
+  await writeConfig(removeSource(next, source), `Removed ${name}.`);
 }
 
-async function reveal(name: string) {
-  const path = rows.value.find((r) => r.name === name)?.revealPath;
+async function reveal(id: string) {
+  const path = rows.value.find((r) => r.id === id)?.revealPath;
   if (!path) return;
   const ok = await revealInFileManager(path);
   if (!ok) {
@@ -609,20 +644,20 @@ async function discardConfigEdits() {
   banner.value = null;
 }
 
-async function runSource(name: string) {
-  const source = sources.value.find((s) => s.name === name);
+async function runSource(id: string) {
+  const source = sources.value.find((s) => s.id === id);
   // A source is targeted through its download step (the render step
   // follows from the artifact edges); a plain step by its own id.
   const target =
     source?.stepId
     ?? source?.steps.find((s) => s.phase === "download")?.id
     ?? source?.steps[0]?.id
-    ?? name;
+    ?? id;
   busy.value = true;
   banner.value = null;
   try {
     await enqueueJob({ kind: "all", source_name: target });
-    banner.value = { ok: true, text: `Queued a sync for ${name}.` };
+    banner.value = { ok: true, text: `Queued a sync for ${source?.name ?? id}.` };
     await loadJobs();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -689,7 +724,7 @@ onUnmounted(() => {
         :theme="gridTheme"
         :columnDefs="columnDefs"
         :rowData="rows"
-        :getRowId="(p: { data: Row }) => p.data.name"
+        :getRowId="(p: { data: Row }) => p.data.id"
         :tooltipShowDelay="200"
         @grid-ready="onGridReady"
       />
@@ -745,7 +780,7 @@ onUnmounted(() => {
 
     <SourceWizard
       v-if="wizardOpen"
-      :taken-names="takenNames"
+      :taken-ids="takenIds"
       :editing="editing"
       @close="wizardOpen = false; editing = null"
       @submit="onWizardSubmit"
@@ -884,6 +919,7 @@ onUnmounted(() => {
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-cell-source img { width: 16px; height: 16px; }
+.m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 
 .m2-kind {
   font-size: 11px;

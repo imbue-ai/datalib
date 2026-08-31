@@ -4,9 +4,14 @@
 //
 // One component serves both verbs — the design's point is that create
 // and edit are the same descriptor driven two ways (docs/dev/
-// source_wizard.md). In edit mode the type is fixed and the name is
-// read-only: renaming a source would move its directory on disk and
-// orphan its raw store, which is a migration, not a form field.
+// source_wizard.md).
+//
+// Two fields carry the identity, and only one of them is permanent.
+// **Name** is what you type and what every screen shows; it is free
+// text and always editable. **Id** is the directory on disk and the
+// prefix inside every `qmd_path` the index holds, so changing it is a
+// migration rather than an edit — it is derived from the name once, at
+// creation, and read-only forever after.
 //
 // What this does NOT do yet, and the design says it eventually must:
 // no credential screen (needs the latchkey endpoints), no live channel
@@ -24,7 +29,8 @@ import {
 import {
   buildStepPair,
   getParam,
-  suggestName,
+  slugify,
+  suggestId,
   type ConfiguredSource,
   type FieldValues,
 } from "@/config/sourceSteps";
@@ -32,15 +38,15 @@ import { iconUrl } from "@/config/icons";
 import { isDesktopApp, pickPath } from "@/desktop";
 
 const props = defineProps<{
-  /// Names already in the config, so a new source can't collide.
-  takenNames: Set<string>;
+  /// Ids already in the config, so a new source can't collide.
+  takenIds: Set<string>;
   /// Present → edit that source instead of creating one.
   editing?: { source: ConfiguredSource; entry: CatalogEntry } | null;
 }>();
 
 const emit = defineEmits<{
   (e: "close"): void;
-  (e: "submit", payload: { name: string; body: string; entry: CatalogEntry }): void;
+  (e: "submit", payload: { id: string; name: string; body: string; entry: CatalogEntry }): void;
 }>();
 
 type Stage = "pick" | "configure";
@@ -48,9 +54,20 @@ type Stage = "pick" | "configure";
 const stage = ref<Stage>(props.editing ? "configure" : "pick");
 const query = ref("");
 const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
-const name = ref(props.editing?.source.name ?? "");
+/// Blank means "no name" — `listConfiguredSources` reports the id in
+/// that case, so the field shows the id as its placeholder rather than
+/// pre-filling one, and clearing it removes the key.
+const name = ref(
+  props.editing && props.editing.source.name !== props.editing.source.id
+    ? props.editing.source.name
+    : "",
+);
+const id = ref(props.editing?.source.id ?? "");
 const values = ref<FieldValues>({});
-const nameTouched = ref(false);
+/// Once the id has been typed into directly, the name stops driving it.
+/// A derived id is a convenience, never something that overwrites a
+/// choice the user made.
+const idTouched = ref(false);
 
 const isEdit = computed(() => !!props.editing);
 
@@ -93,11 +110,22 @@ if (props.editing) seedValues(props.editing.entry, props.editing.source);
 function choose(entry: CatalogEntry) {
   if (!entry.wizard) return;
   chosen.value = entry;
-  name.value = suggestName(props.takenNames, entry.defaultName);
-  nameTouched.value = false;
+  // No name typed yet, so the id starts from the catalog's default.
+  // Typing a name re-derives it, until the id is touched directly.
+  id.value = suggestId(props.takenIds, "", entry.defaultName);
+  idTouched.value = false;
   seedValues(entry);
   stage.value = "configure";
 }
+
+/// Name → id, one way, while creating and while the id is untouched.
+/// A name that slugifies to nothing (punctuation only, or a non-Latin
+/// script) leaves the catalog default in place rather than producing
+/// something unrecognizable.
+watch(name, (next) => {
+  if (isEdit.value || idTouched.value || !chosen.value) return;
+  id.value = suggestId(props.takenIds, slugify(next), chosen.value.defaultName);
+});
 
 function onPickKeydown(e: KeyboardEvent) {
   if (e.key === "ArrowDown") {
@@ -115,20 +143,20 @@ function onPickKeydown(e: KeyboardEvent) {
   }
 }
 
-/// A source name becomes a directory component and a step-id stem, so
-/// it has to be a portable path segment. Mirrors the rules
-/// `migrate_config`'s `validate_source_name` applies on the YAML path;
-/// the reserved names match `dag::config::RESERVED_STANZA_NAMES`.
+/// An id becomes a directory component and a step-id stem, so it has to
+/// be a portable path segment. Mirrors the rules `migrate_config`'s
+/// `validate_source_name` applies on the YAML path; the reserved ids
+/// match `dag::config::RESERVED_STANZA_NAMES`.
 const RESERVED = new Set(["system", "unified_index"]);
-const nameError = computed(() => {
-  const n = name.value.trim();
-  if (!n) return "A name is required.";
+const idError = computed(() => {
+  const n = id.value.trim();
+  if (!n) return "An id is required.";
   if (RESERVED.has(n)) return `"${n}" is reserved — it names a directory the pipeline owns.`;
-  if (n === "." || n === "..") return "Name must not be '.' or '..'.";
-  if (n.startsWith("-")) return "Name must not start with '-'.";
+  if (n === "." || n === "..") return "The id must not be '.' or '..'.";
+  if (n.startsWith("-")) return "The id must not start with '-'.";
   if (!/^[A-Za-z0-9._-]+$/.test(n))
-    return "Use only letters, digits, '.', '_' and '-' — the name becomes a directory.";
-  if (!isEdit.value && props.takenNames.has(n)) return `"${n}" is already configured.`;
+    return "Use only letters, digits, '.', '_' and '-' — the id becomes a directory.";
+  if (!isEdit.value && props.takenIds.has(n)) return `"${n}" is already configured.`;
   return null;
 });
 
@@ -143,10 +171,12 @@ const missingRequired = computed(() =>
     .map((f) => f.label),
 );
 
-const canSubmit = computed(() => !nameError.value && missingRequired.value.length === 0);
+const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
 
 const body = computed(() =>
-  chosen.value ? buildStepPair(chosen.value, name.value.trim(), values.value) : "",
+  chosen.value
+    ? buildStepPair(chosen.value, id.value.trim(), name.value, values.value)
+    : "",
 );
 
 function listText(field: Field): string {
@@ -191,7 +221,12 @@ async function browse(f: Field) {
 
 function submit() {
   if (!canSubmit.value || !chosen.value) return;
-  emit("submit", { name: name.value.trim(), body: body.value, entry: chosen.value });
+  emit("submit", {
+    id: id.value.trim(),
+    name: name.value.trim(),
+    body: body.value,
+    entry: chosen.value,
+  });
 }
 </script>
 
@@ -199,7 +234,7 @@ function submit() {
   <div class="wiz-backdrop" @click.self="emit('close')">
     <div class="wiz" role="dialog" aria-modal="true" :aria-label="isEdit ? 'Edit data source' : 'Add data source'">
       <header class="wiz-head">
-        <h2>{{ isEdit ? `Edit ${name}` : "Add a data source" }}</h2>
+        <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
         <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -260,17 +295,37 @@ function submit() {
           <input
             v-model="name"
             class="wiz-input"
+            :placeholder="id || '…'"
+          />
+          <small class="wiz-help">
+            What this is called on screen. Change it whenever you like — nothing on disk moves and
+            no step re-runs. Leave it blank to be shown as <code>{{ id || "…" }}</code>.
+          </small>
+        </label>
+
+        <label class="wiz-field">
+          <span class="wiz-label">Id</span>
+          <input
+            v-model="id"
+            class="wiz-input"
             :disabled="isEdit"
             spellcheck="false"
-            @input="nameTouched = true"
+            @input="idTouched = true"
           />
           <small v-if="isEdit" class="wiz-help">
-            Renaming would move the source’s directory and orphan its raw store, so it’s fixed here.
+            Fixed: the id is this source’s folder on disk and the path the search index has already
+            recorded for every document in it, so changing it is a migration rather than an edit.
+            Use Name above for something you can change.
           </small>
           <small v-else class="wiz-help">
-            Becomes <code>{{ name || "…" }}/raw</code> under the data root, and the stem of both step ids.
+            Suggested from the name, and yours to override. Creates
+            <code>{{ id || "…" }}/raw</code>
+            <template v-if="chosen?.renderStep !== false">
+              and <code>{{ id || "…" }}/rendered_md</code>
+            </template>
+            under the data root, and the stem of the step ids.
           </small>
-          <small v-if="nameError && (nameTouched || isEdit)" class="wiz-error">{{ nameError }}</small>
+          <small v-if="idError && (idTouched || isEdit)" class="wiz-error">{{ idError }}</small>
         </label>
 
         <label v-for="f in chosen.fields ?? []" :key="f.target" class="wiz-field">

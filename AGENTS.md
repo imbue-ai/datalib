@@ -17,6 +17,11 @@ are relative to the repo root.
   — how the sync pipeline works: the `datalib-dag` runner, step contract,
   scheduler (edge derivation, skipping, retry, subtree poisoning), and
   the implementation decisions.
+- [`docs/dev/step_identity.md`](docs/dev/step_identity.md) — *proposal*:
+  making a step's `id` the path it writes, so `inputs` name step ids and
+  the six places that recover an identity by splitting a string go away.
+  Nothing in it is built; the `name` / `id` split that did ship is in
+  `source_wizard.md`.
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
   write a custom step command**: the config entry, the `--params` /
   `--inputs` / `--outputs` flags, `DATALIB_DAG_*` env vars, the
