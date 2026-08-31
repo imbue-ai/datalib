@@ -14,6 +14,15 @@ anyhow = { workspace = true }
 # will use, so both columns are comparable at a glance.
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 tracing = "0.1"
+# Only for QuickTime/BMFF creation times, which are seconds since
+# 1904-01-01 and need a real calendar to render as ISO-8601.
+chrono = { workspace = true }
+# Audio tags and audio properties. See the workspace manifest for why
+# this covers metadata but not the payload hash.
+lofty = { workspace = true }
+# EXIF, for stills and for the capture-side fields video shares with
+# them. Crate is `kamadak-exif`; the lib it exposes is `exif`.
+kamadak-exif = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

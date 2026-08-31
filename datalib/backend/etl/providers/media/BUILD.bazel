@@ -11,6 +11,9 @@ rust_library(
     deps = [
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:kamadak-exif",
+        "@datalib_crates//:lofty",
         "@datalib_crates//:tracing",
     ],
 )

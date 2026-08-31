@@ -130,6 +130,25 @@ url = "2"
 # (trailer `/ID`, the XMP metadata stream). pdf-inspector exposes
 # neither.
 lopdf = { version = "0.44", default-features = false }
+
+# Audio tags + audio properties for the `media` provider: ID3v2, Vorbis
+# comments, MP4 `ilst` atoms and RIFF INFO behind one API, plus
+# bitrate/sample-rate/channel/duration. Pure Rust, no build.rs. We read
+# tags only — `media` never writes to the tree it scans.
+#
+# It deliberately does NOT cover the payload hash: no tagging library
+# exposes "the byte ranges that are not metadata", which is the whole
+# point of `media_items.payload_blake3`. That walk is ours
+# (`download/payload/`), and it is why this crate is a convenience and
+# not the foundation.
+lofty = "0.25"
+
+# EXIF/TIFF metadata for the `media` provider's image and video rows.
+# The `exif` crate name is `kamadak-exif` on crates.io. Pure Rust, one
+# dependency, and it parses the TIFF IFD structure that JPEG APP1, PNG
+# `eXIf`, and DNG/TIFF all embed — so one reader covers every stills
+# format we index.
+kamadak-exif = "0.6"
 async-trait = "0.1"
 # Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
 # (see //tools/prost_toolchain), so we don't depend on `prost-build`
