@@ -44,16 +44,32 @@
 //! so two files can claim one `DocumentID`. That is the same trap
 //! fsindex documented for its `.fsindex.yaml` breadcrumbs under the
 //! heading "The UUID is not unique," and we take the same position:
-//! these columns are **indexed secondary hints, not keys**. "Show me
-//! every version of this document" is
+//! these columns are **indexed secondary hints, not keys**.
+//!
+//! `content_blake3` is the answer to the same question that does not
+//! depend on the producer having cooperated. It is a hash over the
+//! document's content — every object reachable from the catalog, with
+//! the Info dictionary, the XMP packet and the trailer `/ID` excluded —
+//! so it is present for every parseable PDF rather than 3 in 20, and
+//! `cp` cannot make two different documents claim one value. Retitle a
+//! PDF or add an XMP tag and `blake3` moves while `content_blake3`
+//! holds. "Show me every version of this document" is therefore
 //!
 //! ```sql
 //! SELECT blake3, title, doc_modified_at FROM pdf_documents
-//!  WHERE xmp_document_id = ? ORDER BY doc_modified_at;
+//!  WHERE content_blake3 = ? ORDER BY doc_modified_at;
 //! ```
 //!
 //! and the time axis comes free from `dolt_log` / `dolt_diff` over the
 //! blake3-keyed rows, so no separate version table is needed.
+//!
+//! It is a *better* hint, not a key. A writer that renumbers objects —
+//! Acrobat "Save As", `qpdf --linearize`, Ghostscript — changes it even
+//! though nothing visual moved, so it splits where it should have
+//! merged. That direction is the safe one and is why the PK stays
+//! `blake3`: a false split costs a duplicate row, where a false merge
+//! would hide a document. See [`super::content_hash`] for the full
+//! account of what survives and what does not.
 //!
 //! We deliberately do **not** stamp identity into the PDFs themselves.
 //! fsindex stamps directories and explicitly refuses to stamp files;
@@ -89,6 +105,7 @@ pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
     author                   TEXT NULL,
     doc_created_at           TEXT NULL,
     doc_modified_at          TEXT NULL,
+    content_blake3           TEXT NULL,
     pdf_id_permanent         TEXT NULL,
     xmp_document_id          TEXT NULL,
     xmp_instance_id          TEXT NULL,
@@ -101,6 +118,12 @@ pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
 /// are at document scale (thousands of rows, not tens of millions), so
 /// the index-size argument that rules them out there does not apply.
 pub const PDF_DOCUMENTS_INDEXES: &[&str] = &[
+    // The Ship-of-Theseus lookup this table now actually supports:
+    // every byte-variant of one document. Unlike the two below it, this
+    // column is populated for every parseable PDF, so the index earns
+    // its keep rather than covering the 3-in-20 that carry XMP.
+    "CREATE INDEX IF NOT EXISTS idx_pdf_documents_content \
+     ON pdf_documents (content_blake3)",
     "CREATE INDEX IF NOT EXISTS idx_pdf_documents_xmp_doc \
      ON pdf_documents (xmp_document_id)",
     "CREATE INDEX IF NOT EXISTS idx_pdf_documents_pdf_id \
@@ -204,6 +227,13 @@ pub struct PdfDocumentRow {
     pub author: Option<String>,
     pub doc_created_at: Option<String>,
     pub doc_modified_at: Option<String>,
+    /// Hash over the document's *content* — every object reachable from
+    /// the catalog, metadata stripped — so retitling a PDF or letting a
+    /// tool regenerate its trailer `/ID` does not read as a new
+    /// document. `None` when the file is encrypted or unparseable. See
+    /// [`super::content_hash`], and §"Ship of Theseus" below for why it
+    /// is still a hint and not the key.
+    pub content_blake3: Option<String>,
     pub pdf_id_permanent: Option<String>,
     pub xmp_document_id: Option<String>,
     pub xmp_instance_id: Option<String>,
@@ -229,6 +259,7 @@ impl BulkUpsertable for PdfDocumentRow {
         "author",
         "doc_created_at",
         "doc_modified_at",
+        "content_blake3",
         "pdf_id_permanent",
         "xmp_document_id",
         "xmp_instance_id",
@@ -257,6 +288,7 @@ impl BulkUpsertable for PdfDocumentRow {
             .bind(self.author.as_deref())
             .bind(self.doc_created_at.as_deref())
             .bind(self.doc_modified_at.as_deref())
+            .bind(self.content_blake3.as_deref())
             .bind(self.pdf_id_permanent.as_deref())
             .bind(self.xmp_document_id.as_deref())
             .bind(self.xmp_instance_id.as_deref())

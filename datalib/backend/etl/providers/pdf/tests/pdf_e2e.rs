@@ -116,13 +116,13 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     let h = Harness::new();
     let s = h.scan().await?;
 
-    // 6 .pdf files in the tree; readme.txt must not be among them.
-    assert_eq!(s.pdfs_seen, 6, "walker should find exactly the .pdf files");
+    // 7 .pdf files in the tree; readme.txt must not be among them.
+    assert_eq!(s.pdfs_seen, 7, "walker should find exactly the .pdf files");
 
     // captains_log.pdf and archive/captains_log_copy.pdf are byte-identical,
-    // so the 6 paths collapse to 5 distinct contents — minus the corrupt
-    // one, which fails to identify. 4 real documents, 3 of them
-    // convertible (the scanned blueprint is not).
+    // so the 7 paths collapse to 6 distinct contents — minus the corrupt
+    // one, which fails to identify. 5 real documents, 3 of them
+    // convertible (neither scanned blueprint is).
     let db = h.db().await;
     let n_docs: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents")
         .fetch_one(db.pool())
@@ -147,13 +147,93 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     .get("c");
     assert_eq!(dupes, 2, "both copies should resolve to the same document");
 
-    // The image-only page is recorded, not silently dropped.
-    assert_eq!(s.needs_ocr, 1, "the scanned blueprint must be recorded");
+    // The image-only pages are recorded, not silently dropped. Two of
+    // them now: the blueprint and its retitled twin.
+    assert_eq!(s.needs_ocr, 2, "both scanned blueprints must be recorded");
     let scanned: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents WHERE needs_ocr = 1")
         .fetch_one(db.pool())
         .await?
         .get("c");
-    assert_eq!(scanned, 1);
+    assert_eq!(scanned, 2);
+    Ok(())
+}
+
+/// The payoff of `download::content_hash`, asserted against the store
+/// rather than against the pure function: two files that differ only in
+/// their metadata land as two rows sharing one content identity.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_metadata_only_variant_shares_one_content_hash() -> Result<()> {
+    let h = Harness::new();
+    h.scan().await?;
+    let db = h.db().await;
+
+    let rows = sqlx::query(
+        "SELECT p.id AS path, d.blake3 AS blake3, d.content_blake3 AS content_blake3,
+                d.title AS title
+           FROM pdf_paths p JOIN pdf_documents d ON d.blake3 = p.blake3
+          WHERE p.id LIKE 'holodeck/scanned_blueprint%'
+          ORDER BY p.id",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    assert_eq!(rows.len(), 2, "the blueprint and its retitled twin");
+
+    let file_hashes: Vec<String> = rows.iter().map(|r| r.get("blake3")).collect();
+    let titles: Vec<Option<String>> = rows.iter().map(|r| r.get("title")).collect();
+    let content: Vec<Option<String>> = rows.iter().map(|r| r.get("content_blake3")).collect();
+
+    // The premise. Without these two the equality below would be
+    // trivially true and would prove nothing.
+    assert_ne!(
+        file_hashes[0], file_hashes[1],
+        "the files really must differ in their bytes"
+    );
+    assert_ne!(titles[0], titles[1], "and really must differ in metadata");
+
+    assert!(content[0].is_some(), "content hash must be populated");
+    assert_eq!(
+        content[0], content[1],
+        "a retitle and a fresh /ID must not change content identity \
+         (titles {titles:?}, file hashes {file_hashes:?})"
+    );
+    Ok(())
+}
+
+/// Every document we could parse gets a content hash; the ones we could
+/// not are NULL rather than absent or wrong.
+#[tokio::test(flavor = "multi_thread")]
+async fn content_hash_is_populated_for_every_parseable_document() -> Result<()> {
+    let h = Harness::new();
+    h.scan().await?;
+    let db = h.db().await;
+
+    let missing: i64 =
+        sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents WHERE content_blake3 IS NULL")
+            .fetch_one(db.pool())
+            .await?
+            .get("c");
+    assert_eq!(
+        missing, 0,
+        "every fixture document is parseable and unencrypted"
+    );
+
+    // Distinct documents must not collide. The two blueprints share a
+    // content hash by design, so the corpus has one fewer content
+    // identity than it has documents.
+    let docs: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents")
+        .fetch_one(db.pool())
+        .await?
+        .get("c");
+    let identities: i64 =
+        sqlx::query("SELECT COUNT(DISTINCT content_blake3) AS c FROM pdf_documents")
+            .fetch_one(db.pool())
+            .await?
+            .get("c");
+    assert_eq!(
+        identities,
+        docs - 1,
+        "only the retitled blueprint may share an identity ({identities} of {docs})"
+    );
     Ok(())
 }
 

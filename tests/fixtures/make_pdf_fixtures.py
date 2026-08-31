@@ -174,9 +174,14 @@ def simple_doc(
     return build(objs, trailer_extra)
 
 
-def scanned_doc() -> bytes:
+def scanned_doc(*, title: str | None = None, doc_id: str | None = None) -> bytes:
     """A page whose only content is an image XObject — no text operators,
-    which is exactly what the classifier keys on to say `Scanned`."""
+    which is exactly what the classifier keys on to say `Scanned`.
+
+    `title` / `doc_id` exist so a caller can mint a variant that differs
+    from another *only* in metadata. The image and content stream stay
+    byte-identical, which is what makes the two share a content hash.
+    """
     # 2x2 grayscale, uncompressed. Enough to be a real image XObject.
     img = bytes([0x00, 0xFF, 0xFF, 0x00])
     content = b"q 612 0 0 792 0 0 cm /Im0 Do Q"
@@ -194,7 +199,13 @@ def scanned_doc() -> bytes:
             "/ColorSpace /DeviceGray /BitsPerComponent 8",
         ),
     ]
-    return build(objs)
+    trailer_extra = b""
+    if title:
+        objs.append(b"<< /Title (" + title.encode("latin-1", "replace") + b") >>")
+        trailer_extra += f" /Info {len(objs)} 0 R".encode()
+    if doc_id:
+        trailer_extra += f" /ID [<{doc_id}> <{doc_id}>]".encode()
+    return build(objs, trailer_extra)
 
 
 FIXTURES: dict[str, bytes] = {}
@@ -276,7 +287,23 @@ def main() -> int:
 
     # Image-only: classified `scanned`, recorded with needs_ocr, and NOT
     # rendered — so it costs the qmd indexer nothing.
-    FIXTURES["holodeck/scanned_blueprint.pdf"] = scanned_doc()
+    FIXTURES["holodeck/scanned_blueprint.pdf"] = scanned_doc(
+        title="Holodeck Blueprint", doc_id="feedfacefeedfacefeedfacefeedface"
+    )
+
+    # (4) The `content_blake3` case: the SAME blueprint, retitled and
+    # re-stamped with a fresh trailer /ID — the shape a metadata edit
+    # leaves behind. Two `pdf_documents` rows (the bytes differ, so the
+    # PK differs) that must share one content hash.
+    #
+    # Built on the scanned document deliberately: it is the one fixture
+    # that never renders, so this pair costs the qmd indexer nothing.
+    # Doing the same to a text document would add a page to embed on
+    # every full fixture build.
+    FIXTURES["holodeck/scanned_blueprint_retitled.pdf"] = scanned_doc(
+        title="Holodeck Blueprint (annotated 2364)",
+        doc_id="0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    )
 
     # Not a PDF despite the extension. Counted as an error and skipped,
     # not fatal to the scan.

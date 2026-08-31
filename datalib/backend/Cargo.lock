@@ -1468,6 +1468,7 @@ name = "datalib-etl-pdf"
 version = "0.29.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "datalib-etl",
  "datalib-index-lib",
  "datalib-obs",

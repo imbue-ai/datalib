@@ -16,6 +16,9 @@ datalib-time = { path = "../../../time" }
 datalib-obs = { path = "../../../obs" }
 sqlx = { workspace = true }
 anyhow = { workspace = true }
+# The content hash (`download/content_hash.rs`). Same digest the
+# file-bytes key uses, so both columns are comparable at a glance.
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "time"] }
