@@ -2,17 +2,36 @@
 // The "Add Data Source" / "Edit" flow: pick a type, fill its form,
 // review the TOML that will be written.
 //
-// One component serves both verbs — the design's point is that create
-// and edit are the same descriptor driven two ways (docs/dev/
-// source_wizard.md). In edit mode the type is fixed and the name is
-// read-only: renaming a source would move its directory on disk and
-// orphan its raw store, which is a migration, not a form field.
+// **It configures one step.** A fetch step and the render step that
+// reads it are two separate rows, two separate forms, and two separate
+// things to run — there is no "source" object here.
 //
+// Adding the render step is offered at the end of a fetch step's flow,
+// and *how* depends on whether there is anything to ask. Only
+// `signal_backup` declares a render-phase field today, so for every
+// other provider the render step has no configuration at all: it gets a
+// checkbox here rather than a second dialog, because a dialog with
+// nothing in it is a dialog that shouldn't exist. When the provider
+// does have render knobs, this same component opens again for the
+// render step, pre-filled and pointed at the step just written.
+//
+// One component serves create and edit — the design's point is that
+// they are the same descriptor driven two ways (docs/dev/
+// source_wizard.md).
+//
+// Two fields carry the identity, and only one of them is permanent.
+// **Name** is what you type and what every screen shows; it is free
+// text and always editable. **Id** is the directory on disk and the
+// prefix inside every `qmd_path` the index holds, so changing it is a
+// migration rather than an edit — it is derived from the name once, at
+// creation, and read-only forever after.
+//
+
 // What this does NOT do yet, and the design says it eventually must:
 // no credential screen (needs the latchkey endpoints), no live channel
 // picker (needs `datalib-step probe`), and edit regenerates the step
-// pair rather than surgically editing values — which is why the caller
-// only offers Edit when `paramsAreRepresentable` said yes.
+// rather than surgically editing values — which is why the caller only
+// offers Edit when `paramsAreRepresentable` said yes.
 import { computed, ref, watch } from "vue";
 import {
   CATALOG,
@@ -22,37 +41,152 @@ import {
   type Field,
 } from "@/config/catalog";
 import {
-  buildStepPair,
+  buildStep,
+  fieldIsActive,
+  fieldPhaseOf,
+  fieldsFor,
   getParam,
-  suggestName,
-  type ConfiguredSource,
+  renderIdFor,
+  slugify,
+  suggestId,
+  type ConfiguredStep,
   type FieldValues,
 } from "@/config/sourceSteps";
+import type { FieldPhase } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import { isDesktopApp, pickPath } from "@/desktop";
 
 const props = defineProps<{
-  /// Names already in the config, so a new source can't collide.
-  takenNames: Set<string>;
-  /// Present → edit that source instead of creating one.
-  editing?: { source: ConfiguredSource; entry: CatalogEntry } | null;
+  /// Id stems already in the config, so a new step can't collide with
+  /// a tree that exists. A stem rather than a full id: creating
+  /// `work-slack/raw` reserves `work-slack/` for its render sibling
+  /// too.
+  takenIds: Set<string>;
+  /// Present → edit that step instead of creating one.
+  editing?: { step: ConfiguredStep; entry: CatalogEntry } | null;
+  /// Present → create the render step that reads this fetch step,
+  /// pre-filled from it. The chained half of "also render this?".
+  renderFor?: { fetchId: string; fetchName: string; entry: CatalogEntry } | null;
 }>();
 
 const emit = defineEmits<{
   (e: "close"): void;
-  (e: "submit", payload: { name: string; body: string; entry: CatalogEntry }): void;
+  (
+    e: "submit",
+    payload: {
+      id: string;
+      name: string;
+      body: string;
+      entry: CatalogEntry;
+      phase: FieldPhase;
+      /// Set when this step reads another — the render step's fetch
+      /// step. The caller wires fan-ins off it.
+      inputs: string[];
+      /// The fetch step just written, when the caller should now open a
+      /// second dialog to render it — only for providers whose render
+      /// step has options. Null otherwise.
+      offerRenderFor: { fetchId: string; fetchName: string } | null;
+      /// The render step to write alongside this one, when the user
+      /// left the checkbox ticked and there was nothing to ask about.
+      /// Null when a render step is not being created here.
+      alsoRender: { id: string; body: string } | null;
+    },
+  ): void;
 }>();
 
 type Stage = "pick" | "configure";
 
-const stage = ref<Stage>(props.editing ? "configure" : "pick");
-const query = ref("");
-const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
-const name = ref(props.editing?.source.name ?? "");
-const values = ref<FieldValues>({});
-const nameTouched = ref(false);
+/// Which of the three ways this dialog was opened. Only `create` shows
+/// the type picker: editing knows its type, and a chained render step
+/// inherits its fetch step's.
+const mode = computed<"create" | "edit" | "render">(() =>
+  props.editing ? "edit" : props.renderFor ? "render" : "create",
+);
+const isEdit = computed(() => mode.value === "edit");
 
-const isEdit = computed(() => !!props.editing);
+/// Which half of the descriptor's fields this dialog writes, and which
+/// `datalib-step` subcommand the step gets.
+const phase = computed<FieldPhase>(() => {
+  if (props.editing) return fieldPhaseOf(props.editing.step);
+  return props.renderFor ? "render" : "download";
+});
+
+const stage = ref<Stage>(props.editing || props.renderFor ? "configure" : "pick");
+const query = ref("");
+const chosen = ref<CatalogEntry | null>(
+  props.editing?.entry ?? props.renderFor?.entry ?? null,
+);
+
+/// Blank means "no name" — a step with none is shown by its id, so the
+/// field takes the id as its placeholder rather than pre-filling one,
+/// and clearing it removes the key.
+const name = ref(
+  props.editing && props.editing.step.name !== props.editing.step.id
+    ? props.editing.step.name
+    : props.renderFor
+      ? `${props.renderFor.fetchName} (render markdown)`
+      : "",
+);
+const id = ref(
+  props.editing?.step.id ?? (props.renderFor ? renderIdFor(props.renderFor.fetchId) : ""),
+);
+const values = ref<FieldValues>({});
+/// Once the id has been typed into directly, the name stops driving it.
+/// A derived id is a convenience, never something that overwrites a
+/// choice the user made. A chained render step starts touched: its id
+/// is the sibling of a step that already exists, not a guess from a
+/// name.
+const idTouched = ref(!!props.renderFor);
+
+/// The fields this dialog shows. Empty for most render steps, which is
+/// why one is usually a checkbox below rather than a dialog of its own.
+///
+/// Also drops fields whose `requires` gate is shut. `buildStep` applies
+/// the same gate when it writes the TOML, and the two have to agree —
+/// otherwise the review pane shows a setting the form isn't offering.
+const shownFields = computed(() =>
+  chosen.value
+    ? fieldsFor(chosen.value, phase.value).filter((f) => fieldIsActive(f, values.value))
+    : [],
+);
+
+/// Does this provider's render step have anything to configure? The
+/// question that decides checkbox-or-dialog.
+const renderHasOptions = computed(
+  () => !!chosen.value && fieldsFor(chosen.value, "render").length > 0,
+);
+
+/// Can a render step be offered at all here — a new fetch step, for a
+/// provider that produces markdown?
+const canOfferRender = computed(
+  () =>
+    mode.value === "create" &&
+    phase.value === "download" &&
+    !!chosen.value &&
+    chosen.value.renderStep !== false,
+);
+
+/// Ticked by default: rendering is what makes the data searchable, and
+/// a fetch step on its own is the unusual choice. Only shown when the
+/// render step has nothing to ask about.
+const alsoRender = ref(true);
+
+/// The render step's TOML, for the review pane, so the checkbox shows
+/// its consequence rather than asserting it.
+const alsoRenderPreview = computed(() => {
+  if (!chosen.value || !canOfferRender.value || renderHasOptions.value || !alsoRender.value) {
+    return "";
+  }
+  const fetchName = name.value.trim() || stepId.value;
+  return `\n\n${buildStep({
+    entry: chosen.value,
+    id: renderIdFor(stepId.value),
+    name: `${fetchName} (render markdown)`,
+    phase: "render",
+    inputs: [stepId.value],
+    values: values.value,
+  })}`;
+});
 
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
@@ -66,14 +200,10 @@ const flat = computed(() => groups.value.flatMap((g) => g.entries));
 const cursor = ref(0);
 watch(query, () => (cursor.value = 0));
 
-function seedValues(entry: CatalogEntry, source?: ConfiguredSource) {
+function seedValues(entry: CatalogEntry, step?: ConfiguredStep) {
   const next: FieldValues = {};
   for (const field of entry.fields ?? []) {
-    const existing = source
-      ? source.steps
-          .map((s) => getParam(s.params, field.target))
-          .find((v) => v !== undefined)
-      : undefined;
+    const existing = step ? getParam(step.params, field.target) : undefined;
     if (existing !== undefined) {
       next[field.target] =
         field.kind === "string_list" ? (existing as string[]) ?? [] : existing;
@@ -88,16 +218,28 @@ function seedValues(entry: CatalogEntry, source?: ConfiguredSource) {
   values.value = next;
 }
 
-if (props.editing) seedValues(props.editing.entry, props.editing.source);
+if (props.editing) seedValues(props.editing.entry, props.editing.step);
+else if (props.renderFor) seedValues(props.renderFor.entry);
 
 function choose(entry: CatalogEntry) {
   if (!entry.wizard) return;
   chosen.value = entry;
-  name.value = suggestName(props.takenNames, entry.defaultName);
-  nameTouched.value = false;
+  // No name typed yet, so the id starts from the catalog's default.
+  // Typing a name re-derives it, until the id is touched directly.
+  id.value = suggestId(props.takenIds, "", entry.defaultName);
+  idTouched.value = false;
   seedValues(entry);
   stage.value = "configure";
 }
+
+/// Name → id, one way, while creating and while the id is untouched.
+/// A name that slugifies to nothing (punctuation only, or a non-Latin
+/// script) leaves the catalog default in place rather than producing
+/// something unrecognizable.
+watch(name, (next) => {
+  if (mode.value !== "create" || idTouched.value || !chosen.value) return;
+  id.value = suggestId(props.takenIds, slugify(next), chosen.value.defaultName);
+});
 
 function onPickKeydown(e: KeyboardEvent) {
   if (e.key === "ArrowDown") {
@@ -115,22 +257,46 @@ function onPickKeydown(e: KeyboardEvent) {
   }
 }
 
-/// A source name becomes a directory component and a step-id stem, so
-/// it has to be a portable path segment. Mirrors the rules
-/// `migrate_config`'s `validate_source_name` applies on the YAML path;
-/// the reserved names match `dag::config::RESERVED_STANZA_NAMES`.
+/// The id the *user* edits is the stem: creating a fetch step means
+/// choosing `work-slack`, and the steps written under it are
+/// `work-slack/raw` and (later) `work-slack/rendered_md`. So the field
+/// validates a single path segment, and the step ids are built from it.
+///
+/// Mirrors the rules `migrate_config`'s `validate_source_name` applies
+/// on the YAML path, and the segment rules `dag::config` enforces on a
+/// step id. `system` is reserved by the loader; `unified_index` is not
+/// any more (the index steps own it by *being* it) but proposing it
+/// would collide, so the wizard still declines to.
 const RESERVED = new Set(["system", "unified_index"]);
-const nameError = computed(() => {
-  const n = name.value.trim();
-  if (!n) return "A name is required.";
+const idError = computed(() => {
+  const n = stem.value;
+  if (!n) return "An id is required.";
   if (RESERVED.has(n)) return `"${n}" is reserved — it names a directory the pipeline owns.`;
-  if (n === "." || n === "..") return "Name must not be '.' or '..'.";
-  if (n.startsWith("-")) return "Name must not start with '-'.";
+  if (n === "." || n === "..") return "The id must not be '.' or '..'.";
+  if (n.startsWith("-")) return "The id must not start with '-'.";
   if (!/^[A-Za-z0-9._-]+$/.test(n))
-    return "Use only letters, digits, '.', '_' and '-' — the name becomes a directory.";
-  if (!isEdit.value && props.takenNames.has(n)) return `"${n}" is already configured.`;
+    return "Use only letters, digits, '.', '_' and '-' — the id becomes a directory.";
+  if (mode.value === "create" && props.takenIds.has(n))
+    return `"${n}" is already configured.`;
   return null;
 });
+
+/// The stem the user typed. In edit and render mode the id field holds
+/// a full step id (`work-slack/raw`), so the stem is its first segment;
+/// while creating, the field *is* the stem.
+const stem = computed(() => {
+  const raw = id.value.trim();
+  return mode.value === "create" ? raw : raw.split("/")[0];
+});
+
+/// The step id actually written: `<stem>/raw` or `<stem>/rendered_md`
+/// while creating, and the id as-is when editing or chaining (both of
+/// which start from a real step id).
+const stepId = computed(() =>
+  mode.value === "create"
+    ? `${stem.value}/${phase.value === "render" ? "rendered_md" : "raw"}`
+    : id.value.trim(),
+);
 
 /// Fields the provider's Rust struct declares non-optional — a
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
@@ -143,10 +309,29 @@ const missingRequired = computed(() =>
     .map((f) => f.label),
 );
 
-const canSubmit = computed(() => !nameError.value && missingRequired.value.length === 0);
+const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
+
+/// What this step reads. A fetch step names nothing — its real input is
+/// a remote service, or a path in its own params. A render step names
+/// the fetch step it was chained from, or (when editing) whatever it
+/// already declared.
+const inputs = computed<string[]>(() => {
+  if (props.renderFor) return [props.renderFor.fetchId];
+  if (props.editing) return props.editing.step.inputs;
+  return [];
+});
 
 const body = computed(() =>
-  chosen.value ? buildStepPair(chosen.value, name.value.trim(), values.value) : "",
+  chosen.value
+    ? buildStep({
+        entry: chosen.value,
+        id: stepId.value,
+        name: name.value,
+        phase: phase.value,
+        inputs: inputs.value,
+        values: values.value,
+      })
+    : "",
 );
 
 function listText(field: Field): string {
@@ -191,15 +376,56 @@ async function browse(f: Field) {
 
 function submit() {
   if (!canSubmit.value || !chosen.value) return;
-  emit("submit", { name: name.value.trim(), body: body.value, entry: chosen.value });
+  const fetchName = name.value.trim() || stepId.value;
+
+  // The render step comes one of two ways, never both. With options, a
+  // second dialog the caller opens; without, the checkbox above, and
+  // the step is written here alongside the fetch step.
+  const offer =
+    canOfferRender.value && renderHasOptions.value
+      ? { fetchId: stepId.value, fetchName }
+      : null;
+  const alsoBody =
+    canOfferRender.value && !renderHasOptions.value && alsoRender.value
+      ? {
+          id: renderIdFor(stepId.value),
+          body: buildStep({
+            entry: chosen.value,
+            id: renderIdFor(stepId.value),
+            name: `${fetchName} (render markdown)`,
+            phase: "render",
+            inputs: [stepId.value],
+            values: values.value,
+          }),
+        }
+      : null;
+
+  emit("submit", {
+    id: stepId.value,
+    name: name.value.trim(),
+    body: body.value,
+    entry: chosen.value,
+    phase: phase.value,
+    inputs: inputs.value,
+    offerRenderFor: offer,
+    alsoRender: alsoBody,
+  });
 }
 </script>
 
 <template>
   <div class="wiz-backdrop" @click.self="emit('close')">
-    <div class="wiz" role="dialog" aria-modal="true" :aria-label="isEdit ? 'Edit data source' : 'Add data source'">
+    <div class="wiz" role="dialog" aria-modal="true" :aria-label="mode === 'edit' ? 'Edit step' : mode === 'render' ? 'Add render step' : 'Add data source'">
       <header class="wiz-head">
-        <h2>{{ isEdit ? `Edit ${name}` : "Add a data source" }}</h2>
+        <h2>
+          {{
+            mode === "edit"
+              ? `Edit ${name || id}`
+              : mode === "render"
+                ? "Render to markdown"
+                : "Add a data source"
+          }}
+        </h2>
         <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -246,10 +472,18 @@ function submit() {
             <b>{{ chosen.label }}</b>
             <small>{{ chosen.blurb }}</small>
           </div>
-          <button v-if="!isEdit" class="btn ghost" @click="stage = 'pick'">Change</button>
+          <button v-if="mode === 'create'" class="btn ghost" @click="stage = 'pick'">
+            Change
+          </button>
         </div>
 
-        <p v-if="chosen.credentialService" class="wiz-cred">
+        <p v-if="mode === 'render'" class="wiz-cred">
+          A second step that turns what
+          <code>{{ renderFor?.fetchId }}</code> downloaded into markdown, and makes it
+          searchable. It runs on its own and can be re-run without re-downloading anything.
+        </p>
+
+        <p v-if="chosen.credentialService && phase === 'download'" class="wiz-cred">
           Credentials come from latchkey’s <code>{{ chosen.credentialService }}</code> service.
           Connecting from here isn’t wired up yet — if a sync fails on auth, the job log carries
           the exact command to run.
@@ -260,20 +494,51 @@ function submit() {
           <input
             v-model="name"
             class="wiz-input"
-            :disabled="isEdit"
-            spellcheck="false"
-            @input="nameTouched = true"
+            :placeholder="id || '…'"
           />
-          <small v-if="isEdit" class="wiz-help">
-            Renaming would move the source’s directory and orphan its raw store, so it’s fixed here.
+          <small class="wiz-help">
+            What this is called on screen. Change it whenever you like — nothing on disk moves and
+            no step re-runs. Leave it blank to be shown as <code>{{ id || "…" }}</code>.
           </small>
-          <small v-else class="wiz-help">
-            Becomes <code>{{ name || "…" }}/raw</code> under the data root, and the stem of both step ids.
-          </small>
-          <small v-if="nameError && (nameTouched || isEdit)" class="wiz-error">{{ nameError }}</small>
         </label>
 
-        <label v-for="f in chosen.fields ?? []" :key="f.target" class="wiz-field">
+        <label class="wiz-field">
+          <span class="wiz-label">Id</span>
+          <input
+            v-model="id"
+            class="wiz-input"
+            :disabled="mode !== 'create'"
+            spellcheck="false"
+            @input="idTouched = true"
+          />
+          <small v-if="isEdit" class="wiz-help">
+            Fixed: the id is this step’s folder on disk and the path the search index has already
+            recorded for every document in it, so changing it is a migration rather than an edit.
+            Use Name above for something you can change.
+          </small>
+          <small v-else-if="mode === 'render'" class="wiz-help">
+            Fixed: the sibling of the step it reads, so both live under
+            <code>{{ id.split("/")[0] }}/</code> on disk.
+          </small>
+          <small v-else class="wiz-help">
+            Suggested from the name, and yours to override. Creates
+            <code>{{ stepId }}</code> under the data root.
+            <template v-if="chosen?.renderStep !== false">
+              A render step, if you add one, becomes
+              <code>{{ stem || "…" }}/rendered_md</code> beside it.
+            </template>
+          </small>
+          <small v-if="idError && (idTouched || mode !== 'create')" class="wiz-error">
+            {{ idError }}
+          </small>
+        </label>
+
+        <p v-if="shownFields.length === 0 && mode !== 'create'" class="wiz-help wiz-nofields">
+          This step has no options — its id, its name and what it reads are its whole
+          configuration.
+        </p>
+
+        <label v-for="f in shownFields" :key="f.target" class="wiz-field">
           <span class="wiz-label">
             {{ f.label }}
             <em v-if="'required' in f && f.required" class="wiz-req">required</em>
@@ -343,9 +608,21 @@ function submit() {
           </small>
         </label>
 
+        <label v-if="canOfferRender && !renderHasOptions" class="wiz-check">
+          <input v-model="alsoRender" type="checkbox" />
+          <span>
+            <b>Also render this to markdown</b>
+            <small>
+              A second step, <code>{{ stem || "…" }}/rendered_md</code>, that turns what this
+              downloads into markdown and makes it searchable. It has no settings of its own,
+              runs separately, and can be added later from the row’s actions.
+            </small>
+          </span>
+        </label>
+
         <details class="wiz-review">
           <summary>Review the TOML this writes</summary>
-          <pre>{{ body }}</pre>
+          <pre>{{ body }}{{ alsoRenderPreview }}</pre>
         </details>
       </div>
 
@@ -360,7 +637,7 @@ function submit() {
           :disabled="!canSubmit"
           @click="submit"
         >
-          {{ isEdit ? "Save changes" : "Add source" }}
+          {{ mode === "edit" ? "Save changes" : mode === "render" ? "Add render step" : "Add source" }}
         </button>
       </footer>
     </div>
@@ -483,6 +760,18 @@ function submit() {
 
 .wiz-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
 .wiz-label { font-size: 12.5px; font-weight: 600; }
+.wiz-nofields { margin: 0; }
+.wiz-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 6px;
+}
+.wiz-check input { margin-top: 3px; }
+.wiz-check span { display: flex; flex-direction: column; gap: 3px; }
+.wiz-check small { color: var(--datalib-muted); }
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
 .wiz-req {

@@ -16,6 +16,9 @@ pub struct SlackConfig {
 
 impl SlackConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(sync) = &self.sync {
+            sync.validate()?;
+        }
         Ok(())
     }
 }
@@ -59,6 +62,41 @@ pub struct SlackApiSync {
     /// Download file attachments into blobs. Off = JSON metadata only.
     #[serde(default = "default_true")]
     pub media: bool,
+    /// Mirror direct messages — both 1:1 DMs and group DMs — alongside
+    /// channels. **Off unless set**, and deliberately so: DMs are the
+    /// most sensitive thing in a workspace, and an upgrade must not
+    /// start mirroring them because a new field appeared.
+    ///
+    /// Orthogonal to `channels` / `all_channels`, which scope the
+    /// channel half only. Setting `channels` and `dms = true` mirrors
+    /// those channels *and* your DMs; it does not filter DMs by
+    /// channel name (a DM has no channel name to match).
+    #[serde(default)]
+    pub dms: bool,
+    /// Restrict DM mirroring to conversations with these people. Unset
+    /// (with `dms = true`) means every DM the account can see.
+    ///
+    /// Entries name a *person*, not a conversation, because that is the
+    /// only handle a DM has: a Slack user id (`U024BE7LH`) or any of
+    /// that user's names — handle, display name, or real name — with an
+    /// optional leading `@`. Matching is case-insensitive. This is the
+    /// `@`-namespace counterpart to `channels`' `#`-namespace, which is
+    /// why it is a separate list rather than more entries in `channels`.
+    ///
+    /// An entry that matches nobody in the mirrored user directory is a
+    /// loud `warn!`, not a silent empty result.
+    ///
+    /// **Group DMs are skipped while this is set.** `conversations.list`
+    /// describes an `mpim` with a mangled composite handle
+    /// (`mpdm-alice--bob--carol-1`) and no member list, so "is this
+    /// group a conversation with Alice?" can't be answered without a
+    /// per-group extra call. Rather than guess by string-splitting a
+    /// name that may itself contain dashes, the allowlist covers 1:1
+    /// DMs only; leave it unset to mirror group DMs too.
+    ///
+    /// Requires `dms = true` — see [`SlackApiSync::validate`].
+    #[serde(default)]
+    pub dm_users: Option<Vec<String>>,
 }
 
 impl Default for SlackApiSync {
@@ -69,10 +107,97 @@ impl Default for SlackApiSync {
             since: None,
             all_channels: false,
             media: true,
+            dms: false,
+            dm_users: None,
         }
+    }
+}
+
+impl SlackApiSync {
+    /// `dm_users` without `dms = true` is rejected rather than silently
+    /// resolved either way. Both silent readings are bad: honoring the
+    /// list would start mirroring DMs from a config that never asked
+    /// to, and ignoring it would mirror nothing while the file plainly
+    /// says which people to mirror. Neither is discoverable from the
+    /// outcome, so this fails at config-load time with the fix in the
+    /// message.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.dms {
+            if let Some(users) = &self.dm_users {
+                if !users.is_empty() {
+                    anyhow::bail!(
+                        "`dm_users` lists {} entr{} but `dms` is false, so no direct \
+                         messages would be mirrored at all. Set `dms = true` to mirror \
+                         DMs with those people, or drop `dm_users` to turn DMs off.",
+                        users.len(),
+                        if users.len() == 1 { "y" } else { "ies" },
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 }
 
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type SlackRenderConfig = datalib_source_common::BareRenderConfig;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sync(dms: bool, dm_users: Option<Vec<&str>>) -> SlackApiSync {
+        SlackApiSync {
+            dms,
+            dm_users: dm_users.map(|v| v.into_iter().map(String::from).collect()),
+            ..Default::default()
+        }
+    }
+
+    /// The backward-compatible shape: a config written before this
+    /// field existed leaves DMs off.
+    #[test]
+    fn dms_default_off() {
+        assert!(!SlackApiSync::default().dms);
+        assert!(SlackApiSync::default().dm_users.is_none());
+        SlackApiSync::default().validate().unwrap();
+    }
+
+    #[test]
+    fn dm_users_without_dms_is_rejected() {
+        let err = sync(false, Some(vec!["alice"]))
+            .validate()
+            .expect_err("should reject");
+        let msg = err.to_string();
+        // The message has to name the fix, since neither silent reading
+        // of this combination is discoverable from the outcome.
+        assert!(msg.contains("dm_users"), "{msg}");
+        assert!(msg.contains("dms = true"), "{msg}");
+    }
+
+    #[test]
+    fn dm_users_with_dms_is_accepted() {
+        sync(true, Some(vec!["alice"])).validate().unwrap();
+    }
+
+    /// An empty list is the same as none — it asks for nothing, so it
+    /// can't be the "you forgot the switch" mistake the error catches.
+    #[test]
+    fn empty_dm_users_without_dms_is_fine() {
+        sync(false, Some(vec![])).validate().unwrap();
+    }
+
+    /// `validate()` on the whole config has to reach the `sync` table,
+    /// which is the wiring the step dispatcher actually calls.
+    #[test]
+    fn config_validate_reaches_sync() {
+        let cfg = SlackConfig {
+            sync: Some(sync(false, Some(vec!["alice"]))),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+        // No `sync` table at all = render-only/unmanaged; nothing to check.
+        SlackConfig::default().validate().unwrap();
+    }
+}

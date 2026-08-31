@@ -6,6 +6,17 @@
 > worker/UI drive syncs through them. Review notes from the original
 > addendum are folded in below as **Addendum** blocks, each with what the
 > prototype chose.
+>
+> **Superseded in part (2026-08):** this document's central claim — that
+> the DAG is *derived*, from the overlap of one step's output paths with
+> another's input globs — is no longer how it works. A step's `id` is now
+> the one tree it writes, `outputs` is gone from the config, and `inputs`
+> names producer step ids. Edges are declared, not computed; the glob
+> machinery, the single-writer pass and the synthesized staged-source
+> steps are all deleted. See
+> [`step_identity.md`](step_identity.md) for what replaced them and why.
+> Everything else here — the step contract, incrementality, the skip and
+> retry rules, subtree poisoning — is unchanged and still current.
 
 
 ## Motivation
@@ -114,6 +125,13 @@ struct NodeSpec {
 }
 
 ArtifactRef is a path or glob under data\_root. The DAG is not declared explicitly — it is derived from input/output overlap, the same way a build system derives its graph from declared deps. This keeps node definitions local: a node names its files; the scheduler computes the edges.
+
+> **Superseded (2026-08).** Derivation is gone. A step's `id` *is* the
+> tree it writes, so `inputs` naming a producer's id is simultaneously a
+> step reference and an artifact path, and there is nothing left to
+> compute. The reason for the change was not elegance: six separate
+> places had grown their own string-splitting to recover "which source
+> is this" from a path. See [`step_identity.md`](step_identity.md).
 
 The contract a node honors, beyond reading inputs and writing outputs:
 

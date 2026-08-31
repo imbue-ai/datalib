@@ -95,6 +95,8 @@ impl DataProcessor for SlackDownload {
             refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
             members_only: !self.sync.all_channels && self.sync.channels.is_none(),
             media: self.sync.media,
+            dms: self.sync.dms,
+            dm_users: self.sync.dm_users.clone(),
             blob_size_limit_bytes: self.blob_size_limit_bytes,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),

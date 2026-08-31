@@ -130,8 +130,8 @@ Pick the surface that fits the question:
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values; fields include
-  `source:`, `kind:`, `channel:`, `author:`, `account:`, `project:`,
-  `before:`/`after:`, `convo:`), `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
+  `source:`, `source_name:`, `kind:`, `channel:`, `author:`, `account:`,
+  `project:`, `before:`/`after:`, `convo:`), `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
   `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 

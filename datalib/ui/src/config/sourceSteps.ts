@@ -1,15 +1,27 @@
 // Per-*entry* view of a DAG config, for the Manager2 grid.
 //
-// The grid is a picture of the pipeline, not just of the data, so every
-// row here is something the config declares. Three kinds:
+// The grid is a picture of the pipeline, so every row here is one thing
+// the config declares — one `[[steps]]` entry or one `[[applets]]`
+// entry, never a group of them.
 //
-//   source  a `<name>/raw` + `<name>/rendered_md` pair, grouped into one
-//           row by its stanza name — identified the way the backend
-//           identifies one (`datalib_dag::config::validate_steps`)
-//   step    any other `[[steps]]` entry, one row each. In practice the
-//           shared `grid_index` / `qmd_index` fan-ins, which write
-//           `unified_index/` — often the largest thing on a real data
-//           root, and invisible while this listed sources only.
+// **There is no "data source" here, deliberately.** A source used to be
+// a row: a `<name>/raw` + `<name>/rendered_md` pair fused into one
+// entry, edited by one form, run as one unit. It was never a config
+// entity — the grouping was invented here and reconstructed by
+// splitting paths — and it cost more than it bought. A fetch step and a
+// render step have separate options, separate outputs, separate disk
+// footprints and separate reasons to re-run; the runner has always
+// treated them as two steps. So does this now.
+//
+// What survives is a *display* relationship: two steps sharing an id
+// stem (`work-slack/raw`, `work-slack/rendered_md`) are siblings under
+// one directory, which the table shows and the wizard uses to propose
+// the second step's id. Nothing resolves anything by it.
+//
+// Two kinds of row:
+//
+//   step    a `[[steps]]` entry. `phase` classifies it for display —
+//           fetch, render, or index — from the shape of its id.
 //   applet  an `[[applets]]` entry: a server the http gateway spawns on
 //           demand. Never scheduled and owns no artifacts, so most row
 //           actions don't apply to it — but it is configured, it can
@@ -18,6 +30,17 @@
 //
 // `configSources.ts` is the older, narrower thing: fringe *step ids*,
 // which is what `--sync` accepts.
+//
+// Every entry has exactly two names, and the distinction is the whole
+// point:
+//
+//   id    identity. Path-safe, unique, and what the directory structure
+//         is formed from, so changing it moves data on disk and strands
+//         the paths the index recorded. Chosen once, at creation.
+//   name  what a person types and what the screen shows. Free text,
+//         freely changed, meaningless to every program. Derived from
+//         the id when a step declares none, so a config that never set
+//         one reads exactly as it always did.
 //
 // Writes are whole-text: a source's steps occupy a contiguous-ish set
 // of character ranges, and add/delete splice the text the editor holds.
@@ -29,56 +52,74 @@
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import type { CatalogEntry, Field, FieldPhase } from "./catalog";
 
-export type SourcePhase = "download" | "render";
+/// Which wave a step belongs to, for display and for picking the right
+/// half of a catalog entry's fields. Derived from the shape of the id,
+/// never from anything load-bearing.
+///
+///   fetch   `<stem>/raw` — brings data in
+///   render  `<stem>/rendered_md` — turns it into markdown
+///   index   anything under `unified_index/` — the shared fan-ins
+///   other   any other step: a custom executable doing its own thing
+export type StepPhase = "fetch" | "render" | "index" | "other";
 
-export type SourceStep = {
+export type EntryKind = "step" | "applet";
+
+export type ConfiguredStep = {
+  /// Identity, and the tree this step writes. Path-safe, unique, and
+  /// what the directory structure is formed from — so changing it moves
+  /// data on disk and strands the paths the index recorded, which is
+  /// why the wizard holds it fixed after creation.
   id: string;
-  phase: SourcePhase;
-  /// The `datalib-step download|render <type>` word, when the command
-  /// is a `datalib-step` invocation; null for a custom executable.
-  type: string | null;
-  params: Record<string, unknown>;
-  /// [start, end) character offsets covering this step's TOML tables.
-  start: number;
-  end: number;
-};
-
-export type EntryKind = "source" | "step" | "applet";
-
-export type ConfiguredSource = {
-  /// A source's stanza name (its directory under the data root and the
-  /// stem of its step ids), or for the other kinds the entry's own id.
-  name: string;
   kind: EntryKind;
-  /// The source's type, taken from whichever phase declares one. Null
-  /// for kinds that have none.
+  /// What to show: the step's `name =`, falling back to `id`. A step
+  /// that never set one is displayed exactly as it always was.
+  name: string;
+  phase: StepPhase;
+  /// The `datalib-step download|render <type>` word, when the command
+  /// is a `datalib-step` invocation; the word after `datalib-applet`
+  /// for an applet; null for anything else, which is a legitimate
+  /// config with no catalog entry.
   type: string | null;
-  steps: SourceStep[];
-  /// Declared output paths across every step of this entry — what the
-  /// storage endpoint's rows are keyed on. Empty for an applet, which
-  /// owns no artifacts.
-  outputs: string[];
-  /// The `id` the DAG runner schedules, for a single-step entry. Null
-  /// for a source (whose two steps are targeted by their own ids) and
-  /// for an applet (never scheduled).
-  stepId: string | null;
-  /// Union span of every step, for delete.
+  /// The ids this step declares as inputs.
+  inputs: string[];
+  params: Record<string, unknown>;
+  /// [start, end) character offsets covering this entry's TOML tables,
+  /// for splice-based edit and delete.
   start: number;
   end: number;
 };
 
-const PHASE_BY_SUFFIX: Record<string, SourcePhase> = {
-  raw: "download",
+/// The id stem two sibling steps share (`work-slack/raw` →
+/// `work-slack`). A display convenience and the seed for proposing a
+/// sibling's id — never how anything is resolved. Mirrors
+/// `ArtifactPath::stem` on the Rust side.
+export function stemOf(id: string): string {
+  const at = id.indexOf("/");
+  return at < 0 ? id : id.slice(0, at);
+}
+
+const PHASE_BY_LEAF: Record<string, StepPhase> = {
+  raw: "fetch",
   rendered_md: "render",
 };
 
-/// Parse the config text and list everything it declares. Throws with
-/// the parser's message (and line, when it has one) on malformed TOML.
+/// A step's phase, from the shape of its id.
+export function phaseOf(id: string): StepPhase {
+  const segs = id.split("/");
+  if (segs[0] === "unified_index") return "index";
+  if (segs.length === 2 && PHASE_BY_LEAF[segs[1]]) return PHASE_BY_LEAF[segs[1]];
+  return "other";
+}
+
+/// Parse the config text and list every entry it declares, one row per
+/// entry. Throws with the parser's message (and line, when it has one)
+/// on malformed TOML.
 ///
-/// Order is sources first (the common case, and what the Add button
-/// produces), then other steps, then applets — so the table opens on
-/// what someone came to look at.
-export function listConfiguredSources(text: string): ConfiguredSource[] {
+/// Steps in the order the file writes them, then applets. File order is
+/// what someone editing the config expects to see, and it puts sibling
+/// fetch/render steps adjacent for free, since that is how they are
+/// written.
+export function listSteps(text: string): ConfiguredStep[] {
   let ast;
   try {
     ast = parseTOML(text);
@@ -110,109 +151,76 @@ export function listConfiguredSources(text: string): ConfiguredSource[] {
     return out;
   };
 
-  const sources: ConfiguredSource[] = [];
-  const plainSteps: ConfiguredSource[] = [];
-  const byName = new Map<string, ConfiguredSource>();
+  const steps: ConfiguredStep[] = [];
 
   if (Array.isArray(root.steps)) {
     const stepRanges = ranges("steps");
     root.steps.forEach((raw, i) => {
       const step = raw as {
         id?: unknown;
+        name?: unknown;
         command?: unknown;
-        outputs?: unknown;
+        inputs?: unknown;
         params?: unknown;
       } | null;
       const id = typeof step?.id === "string" ? step.id : "";
-      const outputs = (Array.isArray(step?.outputs) ? (step!.outputs as unknown[]) : []).filter(
-        (o): o is string => typeof o === "string",
-      );
+      // Blank is the same as absent: the row falls back to the id in
+      // both cases, so a whitespace name never blanks a row.
+      const name =
+        typeof step?.name === "string" && step.name.trim() !== ""
+          ? step.name.trim()
+          : null;
       const [start, end] = stepRanges.get(i) ?? [0, 0];
-      const type = stepType(typeof step?.command === "string" ? step.command : "");
-      const params =
-        step?.params && typeof step.params === "object"
-          ? (step.params as Record<string, unknown>)
-          : {};
-
-      // Is this a source stanza's step? Only `<name>/raw` and
-      // `<name>/rendered_md` say so — which is what keeps
-      // `unified_index/grid` out of the source bucket.
-      const stanza = outputs
-        .map((out) => out.split("/"))
-        .find((segs) => segs.length === 2 && PHASE_BY_SUFFIX[segs[1]]);
-
-      if (stanza) {
-        const name = stanza[0];
-        const entry: SourceStep = {
-          id,
-          phase: PHASE_BY_SUFFIX[stanza[1]],
-          type,
-          params,
-          start,
-          end,
-        };
-        const existing = byName.get(name);
-        if (existing) {
-          existing.steps.push(entry);
-          existing.outputs.push(...outputs);
-          existing.type = existing.type ?? type;
-          existing.start = Math.min(existing.start, start || existing.start);
-          existing.end = Math.max(existing.end, end);
-        } else {
-          const source: ConfiguredSource = {
-            name,
-            kind: "source",
-            type,
-            steps: [entry],
-            outputs: [...outputs],
-            stepId: null,
-            start,
-            end,
-          };
-          byName.set(name, source);
-          sources.push(source);
-        }
-        return;
-      }
-
-      plainSteps.push({
-        name: id || `step ${i + 1}`,
+      steps.push({
+        // An entry with no `id` is malformed and the loader will say so;
+        // give it something addressable rather than an empty row.
+        id: id || `step ${i + 1}`,
         kind: "step",
-        type,
-        // A non-source step has no download/render phase; call it
-        // download so the phase-keyed helpers have something to key on.
-        steps: [{ id, phase: "download", type, params, start, end }],
-        outputs,
-        stepId: id || null,
+        name: name ?? (id || `step ${i + 1}`),
+        phase: phaseOf(id),
+        type: stepType(typeof step?.command === "string" ? step.command : ""),
+        inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
+          (v): v is string => typeof v === "string",
+        ),
+        params:
+          step?.params && typeof step.params === "object"
+            ? (step.params as Record<string, unknown>)
+            : {},
         start,
         end,
       });
     });
   }
 
-  const applets: ConfiguredSource[] = [];
+  const applets: ConfiguredStep[] = [];
   if (Array.isArray(root.applets)) {
     const appletRanges = ranges("applets");
     root.applets.forEach((raw, i) => {
-      const applet = raw as { id?: unknown; command?: unknown } | null;
+      const applet = raw as { id?: unknown; name?: unknown; command?: unknown } | null;
       const id = typeof applet?.id === "string" ? applet.id : `applet ${i + 1}`;
       const [start, end] = appletRanges.get(i) ?? [0, 0];
       applets.push({
-        name: id,
+        id,
         kind: "applet",
+        // `AppletEntry` has no `name` key — an applet takes its display
+        // label through its own `params` — so it is shown by its id.
+        name: id,
+        phase: "other",
         // The word after `datalib-applet`, when it is one — the same
         // shape as a step's provider word, and what names the applet.
         type: appletType(typeof applet?.command === "string" ? applet.command : ""),
-        steps: [],
-        outputs: [],
-        stepId: null,
+        inputs: [],
+        params: {},
         start,
         end,
       });
     });
   }
 
-  return [...sources, ...plainSteps, ...applets];
+  // Config order for steps, then applets. Steps in the order written is
+  // what a person editing the file expects to see; sibling fetch/render
+  // pairs land adjacent because that is how they are written.
+  return [...steps, ...applets];
 }
 
 /// `datalib-applet unified_index` → `unified_index`. Null for anything
@@ -259,32 +267,34 @@ function leafPaths(value: unknown, prefix = ""): string[] {
   return out;
 }
 
-/// Can the wizard round-trip this source without losing anything?
+/// Can the wizard round-trip this step without losing anything?
 ///
-/// Editing regenerates the step pair from the form, so any params key
-/// the descriptor doesn't model would be dropped. Rather than silently
-/// lose a hand-written `common.download_params` block, the grid
-/// disables Edit and points at the config editor. A form that quietly
-/// drops a setting is worse than no form.
+/// Editing regenerates the step from the form, so any params key the
+/// descriptor doesn't model would be dropped. Rather than silently lose
+/// a hand-written `common.download_params` block, the grid disables
+/// Edit and points at the config editor. A form that quietly drops a
+/// setting is worse than no form.
 export function paramsAreRepresentable(
-  source: ConfiguredSource,
+  step: ConfiguredStep,
   entry: CatalogEntry,
 ): { ok: true } | { ok: false; unknown: string[] } {
-  const unknown: string[] = [];
-  for (const step of source.steps) {
-    const known = new Set(fieldsFor(entry, step.phase).map((f) => f.target));
-    for (const path of leafPaths(step.params)) {
-      // Name the phase in the message: `common.input_path` means
-      // different things on a download and a render step, and the
-      // person reading this is about to go find it in the file.
-      if (!known.has(path)) unknown.push(`${step.phase}.${path}`);
-    }
-  }
+  const known = new Set(fieldsFor(entry, fieldPhaseOf(step)).map((f) => f.target));
+  const unknown = leafPaths(step.params).filter((path) => !known.has(path));
   return unknown.length === 0 ? { ok: true } : { ok: false, unknown };
 }
 
+/// Which half of a catalog entry's fields this step takes. A catalog
+/// `Field` is tagged `download` or `render`; a step that is neither
+/// (an index step, a custom executable) has no form, and `download` is
+/// the harmless default that yields nothing to show.
+export function fieldPhaseOf(step: ConfiguredStep): FieldPhase {
+  return step.phase === "render" ? "render" : "download";
+}
+
 /// A descriptor's fields for one phase. `phase` is optional on a field
-/// and defaults to `download`, which is where all but a handful sit.
+/// and defaults to `download`, which is where all but one sit — only
+/// `signal_backup` declares a render knob today, so a render step's
+/// form is usually a name and nothing else.
 export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
   return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
 }
@@ -302,6 +312,7 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
   // Group by the table each target sits in (`sync.channels` → `sync`).
   const tables = new Map<string, string[]>();
   for (const field of fieldsFor(entry, phase)) {
+    if (!fieldIsActive(field, values)) continue;
     const value = values[field.target];
     if (!isSet(field, value)) continue;
     const dot = field.target.lastIndexOf(".");
@@ -331,6 +342,16 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
     .join("\n\n");
 }
 
+/// Is this field's gate open? A field with no `requires` always is.
+///
+/// Gates both the form row and the TOML the form writes, so the wizard
+/// cannot emit a value whose enabling switch is off — for `slack_api`
+/// that combination is a hard config error, not a shrug. See
+/// `Field.requires`.
+export function fieldIsActive(field: Field, values: FieldValues): boolean {
+  return field.requires === undefined || !!values[field.requires];
+}
+
 function isSet(field: Field, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
@@ -356,36 +377,120 @@ function tomlValue(field: Field, value: unknown): string {
 
 /// TOML basic string. Dates are quoted too: a bare `2026-01-01` parses
 /// as a TOML date, and the providers validate a *string*.
+///
+/// Control characters are escaped rather than passed through: a raw
+/// newline or tab inside a basic string is a parse error, so a label or
+/// a pasted value containing one would write a `config.toml` that no
+/// longer loads.
 function quote(s: string): string {
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const escaped = s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    // Everything else TOML calls a control char, as \uXXXX.
+    .replace(/[\u0000-\u001f\u007f]/g, (c) =>
+      `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+  return `"${escaped}"`;
 }
 
-/// The download + render step pair for one source, with a divider so
-/// sources stay visually separated in the raw file.
-export function buildStepPair(
-  entry: CatalogEntry,
-  name: string,
-  values: FieldValues,
-): string {
-  const divider = `# ── ${name} ${"─".repeat(Math.max(4, 66 - name.length))}`;
-  const download = `[[steps]]
-id = "${name}.download"
-command = "datalib-step download ${entry.type}"
-outputs = ["${name}/raw"]
-${paramsToml(entry, values, "download")}`;
+/// One step, as a `[[steps]]` block with a divider above it.
+///
+/// `id` is the identity — the tree the step writes. `name` is written
+/// only when it says something the id doesn't: a `name` that respells
+/// the id would be a second, silent spelling of one string, which is
+/// what got the applet `title` key deleted (00633dd5), and it would
+/// churn every existing config the first time someone opened its Edit
+/// form.
+///
+/// `phase` picks which half of the descriptor's fields to write and
+/// which `datalib-step` subcommand to invoke. `inputs` is written when
+/// non-empty — a fetch step has none (its real input is a remote
+/// service or a path in its params), a render step names the fetch step
+/// it reads.
+export function buildStep(opts: {
+  entry: CatalogEntry;
+  id: string;
+  name: string;
+  phase: FieldPhase;
+  inputs?: string[];
+  values: FieldValues;
+}): string {
+  const { entry, id, name, phase, values } = opts;
+  const inputs = opts.inputs ?? [];
+  const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
+  const nameLine =
+    name.trim() && name.trim() !== id ? `\nname = ${quote(name.trim())}` : "";
+  const inputsLine = inputs.length
+    ? `\ninputs = [${inputs.map(quote).join(", ")}]`
+    : "";
+  const subcommand = phase === "render" ? "render" : "download";
+  const params = paramsToml(entry, values, phase);
+  const block = `[[steps]]
+id = ${quote(id)}${nameLine}
+command = "datalib-step ${subcommand} ${entry.type}"${inputsLine}${params ? `\n${params}` : ""}`;
+  return `${divider}\n${block.trimEnd()}`;
+}
 
-  // Download-only providers (lightroom, fsindex) render nothing, so
-  // they declare no render step at all.
-  if (entry.renderStep === false) return `${divider}\n${download.trimEnd()}`;
+/// The id of the render step that would read `fetchId`: its sibling
+/// under the same stem.
+///
+/// The one place a `/` is split off an id to mint another, and
+/// deliberately the only one — the chained wizard and the standalone
+/// "render this" action both come through here, because two code paths
+/// minting one string is how they drift. It proposes a default from a
+/// string the user just chose; nothing resolves identity by it.
+export function renderIdFor(fetchId: string): string {
+  return `${stemOf(fetchId)}/rendered_md`;
+}
 
-  const renderParams = paramsToml(entry, values, "render");
-  const render = `[[steps]]
-id = "${name}.render"
-command = "datalib-step render ${entry.type}"
-inputs = ["${name}/raw"]
-outputs = ["${name}/rendered_md"]${renderParams ? `\n${renderParams}` : ""}`;
+/// Wire a render step into every fan-in that consumes rendered markdown.
+///
+/// The fan-ins name their inputs by id, so a source added without this
+/// renders happily and is never indexed — invisible in search, with
+/// nothing on screen to say why. The old `**/rendered_md` glob made
+/// this automatic; naming steps is the trade, and the wizard paying it
+/// is what keeps the config honest rather than implicit.
+///
+/// Textual, like every other write here: it rewrites the `inputs = [
+/// … ]` line of each step whose id is a `unified_index/…` tree, leaving
+/// the rest of the file — comments included — exactly as it was. A
+/// config with no fan-ins is left alone.
+export function wireIntoFanIns(text: string, renderStepId: string): string {
+  return text.replace(
+    // `id = "unified_index/…"` followed, within its own table, by an
+    // `inputs = [...]` line.
+    /(id\s*=\s*"unified_index\/[^"]*"[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g,
+    (whole, head: string, body: string, tail: string) => {
+      const ids = body
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (ids.includes(`"${renderStepId}"`)) return whole;
+      ids.push(`"${renderStepId}"`);
+      return `${head}${ids.join(", ")}${tail}`;
+    },
+  );
+}
 
-  return `${divider}\n${download.trimEnd()}\n\n${render}`;
+/// Drop a render step from every fan-in's inputs. The mirror of
+/// [`wireIntoFanIns`]: an input naming a step that no longer exists is
+/// a config the runner refuses outright, so deleting a source has to
+/// take its edges with it.
+export function unwireFromFanIns(text: string, renderStepId: string): string {
+  return text.replace(
+    /(id\s*=\s*"unified_index\/[^"]*"[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g,
+    (_whole, head: string, body: string, tail: string) => {
+      const ids = body
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .filter((t) => t !== `"${renderStepId}"`);
+      return `${head}${ids.join(", ")}${tail}`;
+    },
+  );
 }
 
 /// Append a step pair to the config text. Always at the end: the DAG
@@ -397,14 +502,19 @@ export function appendSource(text: string, body: string): string {
   return `${text.replace(/\s*$/, "")}\n\n${body}\n`;
 }
 
-/// Remove a source's steps from the config text.
+/// Remove entries from the config text.
 ///
-/// Splices each step's range individually, back to front, so ranges
-/// stay valid as earlier text shifts. The divider comment above a step
-/// isn't part of any AST node, so it's swept by extending each cut back
-/// over immediately-preceding comment lines.
-export function removeSource(text: string, source: ConfiguredSource): string {
-  const cuts = source.steps
+/// Takes a list because deleting a fetch step usually means deleting
+/// the render step that reads it too: an input naming a step that no
+/// longer exists is a config the loader refuses outright, so a partial
+/// delete produces a file that will not load.
+///
+/// Splices each range back to front, so offsets stay valid as earlier
+/// text shifts. A divider comment above a step isn't part of any AST
+/// node, so it's swept by extending each cut back over
+/// immediately-preceding comment lines.
+export function removeSteps(text: string, steps: ConfiguredStep[]): string {
+  const cuts = steps
     .filter((s) => s.end > 0)
     .map((s) => [extendOverComments(text, s.start), s.end] as const)
     .sort((a, b) => b[0] - a[0]);
@@ -416,7 +526,7 @@ export function removeSource(text: string, source: ConfiguredSource): string {
 }
 
 /// Walk back from a step's start over blank lines and `#` comments, so
-/// deleting a source takes its banner with it.
+/// deleting a step takes its banner with it.
 function extendOverComments(text: string, start: number): number {
   let at = start;
   for (;;) {
@@ -431,25 +541,64 @@ function extendOverComments(text: string, start: number): number {
   return at;
 }
 
-/// Replace a source's steps with a freshly generated pair. Only safe
-/// when `paramsAreRepresentable` said so — see this module's header.
-export function replaceSource(
-  text: string,
-  source: ConfiguredSource,
-  body: string,
-): string {
-  return appendSource(removeSource(text, source), body);
+/// Replace one step with a freshly generated one. Only safe when
+/// `paramsAreRepresentable` said so — see this module's header.
+///
+/// The replacement is appended rather than spliced in place, since the
+/// end of the file is the only safe insertion point in TOML (every key
+/// after a `[[steps]]` header belongs to that table). A step therefore
+/// moves to the bottom when edited, which is cosmetic: the DAG reads
+/// `inputs`, not file order.
+export function replaceStep(text: string, step: ConfiguredStep, body: string): string {
+  return appendSource(removeSteps(text, [step]), body);
 }
 
-/// Names already taken, so the wizard can avoid proposing a collision
-/// that `validate_steps` would reject on save.
-export function suggestName(taken: Set<string>, base: string): string {
-  if (!taken.has(base)) return base;
+/// A human name reduced to something that can be a directory: NFKD
+/// normalize, drop combining marks, lowercase, every run of
+/// non-alphanumerics to a single `-`, trimmed, capped.
+///
+/// Word order is preserved — "Work Slack" is `work-slack`. The cap is
+/// 40 because this becomes a path component inside paths that already
+/// carry UUIDs.
+///
+/// Returns `""` when nothing survives, which is the normal outcome for
+/// a name written in a non-Latin script or made only of punctuation.
+/// Callers fall back to the catalog's default rather than inventing
+/// something — see [`suggestId`].
+export function slugify(name: string): string {
+  const ascii = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return ascii.slice(0, 40).replace(/-+$/, "");
+}
+
+/// The reserved top-level directories, mirroring
+/// `dag::config::RESERVED_STANZA_NAMES`. An id landing on one of these
+/// is suffixed like any other collision rather than rejected, so the
+/// wizard never proposes a name the loader would refuse.
+const RESERVED_IDS = new Set(["system", "unified_index"]);
+
+/// Propose an id for a new entry: `base` if it is free, else
+/// `base-2`, `base-3`, …
+///
+/// `taken` holds the ids already in the config. A source reserves its
+/// whole stanza, since its two steps are `<id>.download` / `<id>.render`
+/// writing `<id>/raw` and `<id>/rendered_md` — so the caller passes
+/// stanza ids, not step ids.
+///
+/// `fallback` is used when `base` is empty, which happens whenever the
+/// name slugifies to nothing.
+export function suggestId(taken: Set<string>, base: string, fallback: string): string {
+  const stem = base || fallback || "source";
+  if (!taken.has(stem) && !RESERVED_IDS.has(stem)) return stem;
   for (let n = 2; n < 1000; n++) {
-    const candidate = `${base}-${n}`;
-    if (!taken.has(candidate)) return candidate;
+    const candidate = `${stem}-${n}`;
+    if (!taken.has(candidate) && !RESERVED_IDS.has(candidate)) return candidate;
   }
-  return base;
+  return stem;
 }
 
 

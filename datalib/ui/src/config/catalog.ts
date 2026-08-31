@@ -30,6 +30,15 @@ type FieldBase = {
   label: string;
   help?: string;
   phase?: FieldPhase;
+  /// Only shown, and only written, while the `bool` field at this
+  /// target is on.
+  ///
+  /// This is not cosmetic. A provider may reject a combination its
+  /// struct can express — `slack_api` errors on `dm_users` set with
+  /// `dms = false`, because both silent readings of that are wrong —
+  /// and a form that can produce a config the backend refuses is a
+  /// form that fails at sync time instead of at fill-in time.
+  requires?: string;
 };
 
 export type Field =
@@ -135,6 +144,26 @@ export const CATALOG: CatalogEntry[] = [
         label: "Include channels you're not a member of",
         default: false,
         help: "Ignored when Channels is set.",
+      },
+      {
+        kind: "bool",
+        target: "sync.dms",
+        label: "Download direct messages",
+        default: false,
+        help:
+          "Your 1:1 and group DMs, alongside the channels above. Off by default — DMs are " +
+          "the most private thing in a workspace, so mirroring them is opt-in.",
+      },
+      {
+        kind: "string_list",
+        target: "sync.dm_users",
+        requires: "sync.dms",
+        label: "Only DMs with these people",
+        placeholder: "@riker, Jean-Luc Picard, U024BE7LH",
+        help:
+          "Names a person, not a conversation — a Slack handle, display name, real name or " +
+          "user id, with or without the @. A group DM counts as a conversation with everyone " +
+          "in it. Leave empty for every DM.",
       },
       {
         kind: "int",

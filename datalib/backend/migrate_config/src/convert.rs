@@ -40,8 +40,6 @@ struct StepOut {
     command: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     inputs: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    outputs: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     env: BTreeMap<String, String>,
     /// Serialized last so its `[steps.params.…]` headers land after the
@@ -94,29 +92,110 @@ fn divider(label: &str) -> String {
     format!("# \u{2500}\u{2500} {label} {pad}\n")
 }
 
+/// The pre-TOML steps schema, which this crate is now the only home
+/// for.
+///
+/// It used to be read straight into the live `DagConfig`, since only
+/// the parser differed. That stopped being true when a step's `id`
+/// became the tree it writes: the live schema has no `outputs`, and
+/// ids of the form `slack.download` are no longer valid. Both are
+/// converted here — see [`upgraded_id`].
+#[derive(Debug, serde::Deserialize)]
+struct LegacyStepsConfig {
+    #[serde(default)]
+    data_root: Option<PathBuf>,
+    #[serde(default)]
+    binary_dir: Option<PathBuf>,
+    #[serde(default)]
+    steps: Vec<LegacyStep>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LegacyStep {
+    id: String,
+    command: String,
+    #[serde(default)]
+    inputs: Vec<String>,
+    #[serde(default)]
+    outputs: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    params: Option<toml::Value>,
+}
+
+/// A legacy step's id, in the current spelling: the tree it declared
+/// writing. `slack.download` + `outputs: [slack/raw]` → `slack/raw`.
+///
+/// Falls back to the old id when the step declared no outputs, which
+/// only happens for a malformed config — the runner then rejects it by
+/// name, which is a better failure than inventing a path.
+fn upgraded_id(step: &LegacyStep) -> String {
+    step.outputs
+        .first()
+        .cloned()
+        .unwrap_or_else(|| step.id.clone())
+}
+
+/// A legacy step's `inputs`, as step ids.
+///
+/// A legacy input already names an artifact path, and a step's id *is*
+/// that path, so a concrete input converts to itself. A wildcard has no
+/// counterpart in a world where inputs name steps — `**/rendered_md`
+/// becomes the explicit list of render steps it used to match, which is
+/// the same edge set written down.
+fn upgraded_inputs(inputs: &[String], render_ids: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for i in inputs {
+        if i.contains('*') {
+            if i.ends_with("rendered_md") {
+                out.extend(render_ids.iter().cloned());
+            }
+            // Any other wildcard matched nothing we can name; dropping
+            // it is what the runner did with an unmatched wildcard too.
+            continue;
+        }
+        out.push(i.clone());
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// A pre-TOML steps config, re-emitted as TOML.
 pub fn steps_yaml_to_toml(text: &str) -> Result<String> {
-    // `DagConfig` is the *current* schema; only the parser differs. Its
     // `params: Option<toml::Value>` deserializes fine from a YAML
     // document — the one thing that doesn't survive is YAML `null`,
     // which TOML cannot express and which errors with its key path.
-    let cfg: datalib_dag::config::DagConfig =
+    let cfg: LegacyStepsConfig =
         serde_yaml::from_str(text).context("parse the legacy config as YAML")?;
+
+    // Old ids → new, so `inputs` can be rewritten from artifact paths
+    // to the ids of the steps that write them. A legacy input already
+    // names a path, and the new id *is* that path, so the mapping is
+    // the identity for anything that resolved — but a wildcard input
+    // (`**/rendered_md`) has no counterpart and must be expanded to the
+    // steps it used to match.
+    let render_ids: Vec<String> = cfg
+        .steps
+        .iter()
+        .map(upgraded_id)
+        .filter(|id| id.ends_with("/rendered_md"))
+        .collect();
 
     let mut out = String::from(
         "# Converted from config.yaml. Comments and formatting from that\n\
          # file are not carried over; review before relying on it.\n\n",
     );
     out.push_str(&header(cfg.data_root, cfg.binary_dir)?);
-    for e in cfg.steps {
+    for e in &cfg.steps {
         out.push('\n');
         out.push_str(&step_block(&StepOut {
-            id: e.id,
-            command: e.command,
-            inputs: e.inputs,
-            outputs: e.outputs,
-            env: e.env,
-            params: e.params,
+            id: upgraded_id(e),
+            command: e.command.clone(),
+            inputs: upgraded_inputs(&e.inputs, &render_ids),
+            env: e.env.clone(),
+            params: e.params.clone(),
         })?);
     }
     // A pre-TOML steps config predates applets entirely, so it never
@@ -152,20 +231,30 @@ pub fn stanza_yaml_to_toml(text: &str) -> Result<String> {
         out.push_str(&header(Some(cfg.data_root.clone()), None)?);
     }
 
+    // Every enabled source renders, so every enabled source feeds the
+    // fan-ins. A disabled one is emitted commented out, so naming it
+    // here would point at a step that isn't there.
+    let render_ids: Vec<String> = cfg
+        .sources
+        .iter()
+        .filter(|e| e.enabled)
+        .map(|e| format!("{}/rendered_md", e.name))
+        .collect();
+
     out.push('\n');
     out.push_str(&divider("shared fan-in steps"));
     out.push_str("# Every source's rendered markdown feeds these.\n");
     out.push_str(&step_block(&fanin(
-        "grid_index",
-        "datalib-step grid_index",
         "unified_index/grid",
+        "datalib-step grid_index",
+        &render_ids,
     ))?);
     if !cfg.qmd.skip {
         out.push('\n');
         out.push_str(&step_block(&fanin(
-            "qmd_index",
-            "datalib-step qmd_index",
             "unified_index/qmd",
+            "datalib-step qmd_index",
+            &render_ids,
         ))?);
     }
 
@@ -200,20 +289,26 @@ pub fn stanza_yaml_to_toml(text: &str) -> Result<String> {
         let mut block = format!("\n{}", divider(&name));
         if managed {
             block.push_str(&step_block(&StepOut {
-                id: format!("{name}.download"),
+                id: format!("{name}/raw"),
                 command: format!("datalib-step download {ty}"),
                 inputs: Vec::new(),
-                outputs: vec![format!("{name}/raw")],
                 env: BTreeMap::new(),
                 params: params_value(&val, &name)?,
             })?);
             block.push('\n');
         }
         block.push_str(&step_block(&StepOut {
-            id: format!("{name}.render"),
+            id: format!("{name}/rendered_md"),
             command: format!("datalib-step render {ty}"),
-            inputs: vec![format!("{name}/raw")],
-            outputs: vec![format!("{name}/rendered_md")],
+            // An unmanaged source has no download step to name, and
+            // renders straight from the tree its `common.input_path`
+            // points at — which is a param, not an artifact the DAG
+            // knows about. So it declares no inputs.
+            inputs: if managed {
+                vec![format!("{name}/raw")]
+            } else {
+                Vec::new()
+            },
             env: BTreeMap::new(),
             params: params_value(&render_val, &name)?,
         })?);
@@ -237,12 +332,17 @@ pub fn stanza_yaml_to_toml(text: &str) -> Result<String> {
 }
 
 /// One of the two source-independent fan-in steps.
-fn fanin(id: &str, command: &str, output: &str) -> StepOut {
+///
+/// Its inputs are the render steps by id. The legacy format wrote
+/// `**/rendered_md` here; a glob has no meaning once an input names a
+/// step, so the same edge set is written down instead. That is also why
+/// this takes the source list: the fan-ins are emitted before the
+/// sources, but they can only be *written* once their names are known.
+fn fanin(id: &str, command: &str, render_ids: &[String]) -> StepOut {
     StepOut {
         id: id.to_string(),
         command: command.to_string(),
-        inputs: vec!["**/rendered_md".to_string()],
-        outputs: vec![output.to_string()],
+        inputs: render_ids.to_vec(),
         env: BTreeMap::new(),
         params: None,
     }

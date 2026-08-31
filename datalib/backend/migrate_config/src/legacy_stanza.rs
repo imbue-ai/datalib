@@ -398,9 +398,12 @@ pub enum ConfigError {
 /// (`[A-Za-z0-9._-]`); reject path separators, `.`/`..`, and a leading `-`
 /// (which would read as a flag to CLI tools).
 fn validate_source_name(name: &str) -> Result<(), &'static str> {
-    // One list, shared with the live TOML path's `validate_steps` — the
-    // migrator and the runner must agree on what a stanza may be called.
-    if datalib_dag::config::RESERVED_STANZA_NAMES.contains(&name) {
+    // `system/` is the runner's and the server's own state; the live
+    // TOML path refuses a step id under it for the same reason.
+    // `unified_index` needs no rule here any more: the index steps' ids
+    // *are* `unified_index/grid` and `unified_index/qmd`, so a stanza
+    // claiming that stem collides as an ordinary duplicate id.
+    if name == datalib_dag::config::SYSTEM_DIR {
         return Err("name is reserved (it names a top-level directory the pipeline owns)");
     }
     if name == "." || name == ".." {

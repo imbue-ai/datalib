@@ -327,6 +327,54 @@ mod tests {
         assert!(err.contains("render config"), "{err}");
     }
 
+    /// Every slack config written before `dms` existed must keep
+    /// parsing, and must keep meaning "no direct messages". The struct
+    /// is `deny_unknown_fields`, so this is really two guarantees: the
+    /// old shape still deserializes, and the new field defaults off
+    /// rather than opting an existing mirror into DMs on upgrade.
+    #[test]
+    fn slack_config_without_dms_still_parses_and_leaves_dms_off() {
+        let cfg: datalib_etl_slack_config::SlackConfig = serde_json::from_value(
+            serde_json::json!({"sync": {"media": true, "channels": ["chat-qi"]}}),
+        )
+        .expect("a pre-dms config must still parse");
+        let sync = cfg.sync.expect("sync");
+        assert!(!sync.dms, "an upgrade must not start mirroring DMs");
+        assert!(sync.dm_users.is_none());
+    }
+
+    /// The one combination the provider refuses, refused where the
+    /// step actually reads its params — `plan` is what calls
+    /// `validate`, and a rule that isn't wired into it is not enforced.
+    #[test]
+    fn slack_dm_users_without_dms_fails_at_plan_time() {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            "slack_api",
+            Phase::Download,
+            "slack",
+            serde_json::json!({"sync": {"dm_users": ["@riker"]}}),
+            td.path(),
+        )
+        .unwrap_err();
+        // `{:#}` walks the cause chain, which is what `main.rs` prints
+        // (one line per `e.chain()` entry) — the bare `to_string()` is
+        // only the outermost "source ... (type=slack_api)" context.
+        let err = format!("{err:#}");
+        assert!(err.contains("dm_users"), "{err}");
+        assert!(err.contains("dms = true"), "{err}");
+
+        // …and is accepted with the switch on.
+        plan(
+            "slack_api",
+            Phase::Download,
+            "slack",
+            serde_json::json!({"sync": {"dms": true, "dm_users": ["@riker"]}}),
+            td.path(),
+        )
+        .expect("dms = true with an allowlist is the supported shape");
+    }
+
     #[test]
     fn render_knobs_are_rejected_on_download_and_read_on_render() {
         let td = tempfile::tempdir().unwrap();

@@ -57,13 +57,14 @@ pub mod artifact;
 pub mod config;
 pub mod events;
 pub mod graph;
+pub mod lock;
 pub mod scheduler;
 pub mod state;
 pub mod step;
 pub mod subprocess;
 pub mod version;
 
-pub use artifact::ArtifactPat;
+pub use artifact::ArtifactPath;
 pub use events::{Event, EventSink, NdjsonSink, StepProgress};
 pub use graph::Graph;
 pub use scheduler::{RunReport, Runner, StepReport, StepStatus};
