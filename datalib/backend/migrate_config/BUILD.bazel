@@ -93,6 +93,7 @@ rust_test(
     name = "config_examples_test",
     srcs = ["tests/config_examples.rs"],
     data = [
+        "//configs:dag_example.toml",
         "//docs/user/config_examples:all_sources.toml",
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",

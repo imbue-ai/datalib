@@ -84,6 +84,8 @@ fn first_chars(s: &str, n: usize) -> String {
 fn column_for_field(f: &Field) -> Option<&'static str> {
     match f {
         Field::Source => Some("source_label"),
+        // Not a column: see the `Field::SourceName` arm in `build_where`.
+        Field::SourceName => None,
         Field::Kind => Some("kind"),
         Field::Channel => Some("channel"),
         Field::Convo => Some("conversation_uuid"),
@@ -118,6 +120,23 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     for term in &q.terms {
+        // `source_name` is the one filter with no column behind it: the
+        // configured source is the first segment of `qmd_path`, so this
+        // is a prefix test. `INSTR(x, ?) = 1` rather than `LIKE 'x/%'`
+        // because a source name may legally contain `_`, which LIKE
+        // reads as a wildcard — `source_name:slack_work` would then also
+        // match a `slackXwork` stanza. INSTR takes the needle verbatim
+        // and exists in both SQLite and MySQL with this argument order.
+        if term.field == Field::SourceName {
+            let clause = if term.negate {
+                "(qmd_path IS NULL OR INSTR(qmd_path, ?) != 1)"
+            } else {
+                "INSTR(qmd_path, ?) = 1"
+            };
+            clauses.push(clause.into());
+            params.push(format!("{}/", term.value));
+            continue;
+        }
         let Some(col) = column_for_field(&term.field) else {
             continue;
         };
@@ -191,6 +210,41 @@ mod tests {
         let (sql, params) = build_where(&parse_query("source:Claude type:all"), "");
         assert_eq!(sql, " WHERE source_label = ?");
         assert_eq!(params, vec!["Claude"]);
+    }
+
+    /// `source:` and `source_name:` answer different questions:
+    /// the provider label vs. the configured source. Two Slack
+    /// workspaces are one `source` and two `source_name`s.
+    #[test]
+    fn source_name_filter_matches_the_qmd_path_prefix() {
+        let (sql, params) = build_where(&parse_query("source_name:slack type:all"), "");
+        assert_eq!(sql, " WHERE INSTR(qmd_path, ?) = 1");
+        assert_eq!(params, vec!["slack/"]);
+
+        let (sql, params) = build_where(&parse_query("-source_name:slack type:all"), "");
+        assert_eq!(sql, " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1)");
+        assert_eq!(params, vec!["slack/"]);
+    }
+
+    /// A source name may legally contain `_`, which LIKE reads as
+    /// "any one character". Under a `LIKE 'slack_work/%'` clause,
+    /// `source_name:slack_work` would also return every row from a
+    /// `slackXwork` stanza. INSTR takes its needle verbatim.
+    #[test]
+    fn source_name_filter_does_not_go_through_like() {
+        let (sql, params) = build_where(&parse_query("source_name:slack_work type:all"), "");
+        assert!(!sql.contains("LIKE"), "{sql}");
+        assert_eq!(params, vec!["slack_work/"]);
+    }
+
+    /// The trailing separator is what keeps the prefix a whole path
+    /// segment: without it, `source_name:slack` would also match a
+    /// separate `slack-personal` stanza.
+    #[test]
+    fn source_name_filter_matches_whole_segments_only() {
+        let (_, params) = build_where(&parse_query("source_name:slack type:all"), "");
+        assert_eq!(params, vec!["slack/"]);
+        assert!(!"slack-personal/rendered_md/x.md".starts_with("slack/"));
     }
 
     #[test]

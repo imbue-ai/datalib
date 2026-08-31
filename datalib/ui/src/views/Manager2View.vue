@@ -51,14 +51,20 @@ import {
   type OutputStorage,
 } from "@/api";
 import {
-  listConfiguredSources,
+  listSteps,
   type EntryKind,
   appendSource,
-  removeSource,
-  replaceSource,
+  phaseOf,
+  removeSteps,
+  renderIdFor,
+  replaceStep,
+  stemOf,
+  unwireFromFanIns,
+  wireIntoFanIns,
   paramsAreRepresentable,
   emptyTableDiagnosis,
-  type ConfiguredSource,
+  type ConfiguredStep,
+  type StepPhase,
 } from "@/config/sourceSteps";
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
@@ -98,7 +104,7 @@ const storage = ref<OutputStorage[]>([]);
 /// applet that won't come up is otherwise only visible as a 502 from
 /// whatever tab needed it.
 const appletErrors = ref<Record<string, string>>({});
-const sources = ref<ConfiguredSource[]>([]);
+const sources = ref<ConfiguredStep[]>([]);
 
 // The Advanced disclosure. Closed on load: the point of this tab is
 // that a text editor is not the first thing you meet.
@@ -111,7 +117,12 @@ const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
 const wizardOpen = ref(false);
-const editing = ref<{ source: ConfiguredSource; entry: CatalogEntry } | null>(null);
+const editing = ref<{ step: ConfiguredStep; entry: CatalogEntry } | null>(null);
+/// Set while the wizard is being used to add the render step for a
+/// fetch step that was just written (or picked from a row action).
+const renderFor = ref<{ fetchId: string; fetchName: string; entry: CatalogEntry } | null>(
+  null,
+);
 
 // Only source names gate the wizard: an applet id and a stanza name
 // live in different namespaces and may safely coincide.
@@ -127,22 +138,43 @@ const emptyDiagnosis = computed(() =>
   }),
 );
 
-const takenNames = computed(
-  () => new Set(sources.value.filter((s) => s.kind === "source").map((s) => s.name)),
+/// Stems already spoken for. A new step reserves a whole tree
+/// (`work-slack/` covers both `work-slack/raw` and its render sibling),
+/// so collisions are checked on the stem rather than the full id.
+const takenIds = computed(
+  () => new Set(sources.value.filter((s) => s.kind === "step").map((s) => stemOf(s.id))),
 );
 
+/// The render step that reads a given fetch step, if the config has
+/// one. What decides whether a fetch row offers "render to markdown",
+/// and what delete has to take with it.
+function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
+  return sources.value.find(
+    (s) => s.kind === "step" && s.inputs.includes(fetchId) && s.phase === "render",
+  );
+}
+
 type Row = {
-  name: string;
+  /// Identity: the tree this entry writes, and what every action here
+  /// is keyed on.
+  id: string;
   kind: EntryKind;
+  phase: StepPhase;
   kindLabel: string;
   type: string | null;
-  label: string;
+  /// What to show in the Name column. Equal to `id` until someone sets
+  /// a `name =` on one of this entry's steps.
+  name: string;
+  /// The catalog's name for the provider ("Slack"), shown under Type —
+  /// a property of the entry's type, not of this entry.
+  typeLabel: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
   /// Null when the action applies to this row; otherwise the reason it
   /// doesn't, which becomes the disabled button's tooltip.
   runBlocked: string | null;
   editBlocked: string | null;
+  renderBlocked: string | null;
   revealBlocked: string | null;
   lastSynced: string | null;
   lastStatus: string;
@@ -156,10 +188,15 @@ type Row = {
   revealPath: string | null;
 };
 
-const KIND_LABEL: Record<EntryKind, string> = {
-  source: "Source",
-  step: "Step",
-  applet: "Applet",
+/// What the Kind column says. A step is labelled by its phase rather
+/// than the word "step", because that is the distinction a reader
+/// actually wants: which of these brings data in, which turns it into
+/// markdown, which is shared index plumbing.
+const PHASE_LABEL: Record<StepPhase, string> = {
+  fetch: "Fetch",
+  render: "Render",
+  index: "Index",
+  other: "Step",
 };
 
 /// Most recent job naming this source. `source_name` is a comma-joined
@@ -181,10 +218,14 @@ function jobFor(name: string): { job: SyncJob; exact: boolean } | null {
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
     const entry = s.type ? catalogFor(s.type) : undefined;
-    const hit = s.kind === "applet" ? null : jobFor(s.name);
-    const outputs = s.outputs
-      .map((path) => storage.value.find((x) => x.path === path))
-      .filter((x): x is OutputStorage => !!x);
+    const hit = s.kind === "applet" ? null : jobFor(s.id);
+    // A step writes exactly one tree, and it is the step's id.
+    const outputs =
+      s.kind === "applet"
+        ? []
+        : [storage.value.find((x) => x.path === s.id)].filter(
+            (x): x is OutputStorage => !!x,
+          );
     const onDisk = outputs.filter((o) => o.present);
 
     // Run: the DAG schedules steps, so a source and a plain step can
@@ -195,15 +236,15 @@ const rows = computed<Row[]>(() =>
         ? "Applets aren't scheduled — the server starts one when something asks for it."
         : null;
 
-    // Edit: the wizard's forms describe source types. Everything else
+    // Edit: the wizard's forms describe provider steps. Everything else
     // is hand-written config, and the honest answer is to say so.
     let editBlocked: string | null = null;
     if (s.kind === "applet") {
       editBlocked = "No form for applets — edit this one in Advanced below.";
-    } else if (s.kind === "step") {
-      editBlocked = "This is a shared pipeline step, not a source; it has no form.";
+    } else if (s.phase === "index") {
+      editBlocked = "A shared index step has no options — its inputs are its whole config.";
     } else if (!entry) {
-      editBlocked = "This source's step isn't a datalib-step command the catalog knows.";
+      editBlocked = "This step isn't a datalib-step command the catalog knows.";
     } else if (!entry.wizard) {
       editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
     } else {
@@ -213,6 +254,19 @@ const rows = computed<Row[]>(() =>
           `The form doesn't model ${rep.unknown.join(", ")}, and saving would drop it. ` +
           `Edit this one in Advanced below.`;
       }
+    }
+
+    // "Render to markdown": offered on a fetch step that has no render
+    // step reading it yet, for a provider that renders at all.
+    let renderBlocked: string | null = null;
+    if (s.kind !== "step" || s.phase !== "fetch") {
+      renderBlocked = "Only a fetch step can have a render step added to it.";
+    } else if (!entry?.wizard) {
+      renderBlocked = "No guided form for this type — add the render step in Advanced below.";
+    } else if (entry.renderStep === false) {
+      renderBlocked = `${entry.label} produces no markdown to render.`;
+    } else if (renderSiblingOf(s.id)) {
+      renderBlocked = "This already has a render step.";
     }
 
     const revealBlocked =
@@ -226,21 +280,24 @@ const rows = computed<Row[]>(() =>
     // job queue says nothing about it. `GET /api/frontend` does.
     let lastStatus: string;
     if (s.kind === "applet") {
-      lastStatus = appletErrors.value[s.name] ? "failed" : "running";
+      lastStatus = appletErrors.value[s.id] ? "failed" : "running";
     } else {
       lastStatus = hit ? hit.job.state : "never run";
     }
 
     return {
-      name: s.name,
+      id: s.id,
       kind: s.kind,
-      kindLabel: KIND_LABEL[s.kind],
+      phase: s.phase,
+      kindLabel: s.kind === "applet" ? "Applet" : PHASE_LABEL[s.phase],
       type: s.type,
-      label: entry?.label ?? s.type ?? (s.kind === "source" ? "unknown" : "—"),
+      name: s.name,
+      typeLabel: entry?.label ?? s.type ?? "—",
       icon: entry?.icon ?? null,
       entry,
       runBlocked,
       editBlocked,
+      renderBlocked,
       revealBlocked,
       lastSynced: hit?.job.finished_at ?? hit?.job.started_at ?? null,
       lastStatus,
@@ -274,6 +331,9 @@ const ICON_PATHS: Record<string, string> = {
   edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
   reveal: "M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z",
   trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  // "add a render step": a document with a plus.
+  render:
+    "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 9h3v2h-3v3h-2v-3H8v-2h3V8h2v3z",
 };
 
 /// An icon button for the Actions cell.
@@ -319,6 +379,11 @@ const columnDefs: ColDef<Row>[] = [
     // stops shrinking at a width a stanza name still fits in.
     flex: 1,
     minWidth: 200,
+    // The label leads and the directory name follows it, muted,
+    // whenever they differ. Showing only the label would hide which
+    // folder this is — the whole reason the name stays fixed is that
+    // the on-disk layout is meant to be legible, and a grid that
+    // stopped naming it would give that away for a prettier row.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const url = iconUrl(p.data?.icon);
       const wrap = document.createElement("span");
@@ -332,6 +397,13 @@ const columnDefs: ColDef<Row>[] = [
       const text = document.createElement("span");
       text.textContent = p.data?.name ?? "";
       wrap.appendChild(text);
+      if (p.data && p.data.name !== p.data.id) {
+        const dir = document.createElement("span");
+        dir.className = "m2-cell-dir";
+        dir.textContent = p.data.id;
+        dir.title = `Id — stored in ${p.data.id}/ under the data root`;
+        wrap.appendChild(dir);
+      }
       return wrap;
     },
   },
@@ -347,7 +419,7 @@ const columnDefs: ColDef<Row>[] = [
       return span;
     },
   },
-  { headerName: "Type", field: "label", width: 130, minWidth: 130 },
+  { headerName: "Type", field: "typeLabel", width: 130, minWidth: 130 },
   {
     headerName: "Last synced",
     field: "lastSynced",
@@ -364,7 +436,7 @@ const columnDefs: ColDef<Row>[] = [
       const row = p.data;
       if (!row) return undefined;
       if (row.kind === "applet") {
-        return appletErrors.value[row.name] ?? "The gateway has this applet up.";
+        return appletErrors.value[row.id] ?? "The gateway has this applet up.";
       }
       return row.approximate
         ? "From a run covering several sources — per-source status needs the step_runs table."
@@ -412,29 +484,43 @@ const columnDefs: ColDef<Row>[] = [
     sortable: false,
     filter: false,
     flex: 1,
-    width: canReveal ? 132 : 102,
+    width: canReveal ? 162 : 132,
     minWidth: canReveal ? 132 : 102,
     resizable: false,
-    valueGetter: (p: ValueGetterParams<Row>) => p.data?.name,
+    valueGetter: (p: ValueGetterParams<Row>) => p.data?.id,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
       const row = p.data!;
       wrap.appendChild(
-        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.name)),
+        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.id)),
       );
       wrap.appendChild(
-        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.name)),
+        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.id)),
       );
+      // Only shown where it applies: a fetch step with no render step
+      // reading it yet. Absent rather than disabled everywhere else,
+      // which would put a dead button on every index and applet row.
+      if (row.phase === "fetch") {
+        wrap.appendChild(
+          iconButton(
+            "render",
+            "Render to markdown",
+            row.renderBlocked,
+            false,
+            () => openRenderFor(row.id),
+          ),
+        );
+      }
       // Absent rather than disabled in a plain browser — the same
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
         wrap.appendChild(
-          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.name)),
+          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.id)),
         );
       }
       wrap.appendChild(
-        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.name)),
+        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.id)),
       );
       return wrap;
     },
@@ -448,11 +534,18 @@ function onGridReady(e: GridReadyEvent<Row>) {
 
 function reparse() {
   try {
-    sources.value = listConfiguredSources(configText.value);
+    sources.value = listSteps(configText.value);
     parseError.value = null;
   } catch (e) {
     parseError.value = (e as Error).message;
   }
+  // The Actions cell is a `cellRenderer`, and AG Grid reuses a cell
+  // whose row id is unchanged — so a button's disabled state is baked
+  // in at first render and does not follow the row. That matters here:
+  // adding a render step must disable "Render to markdown" on the fetch
+  // row beside it, and the row id didn't change. Same repaint the qmd
+  // columns do in GridCard for the same reason.
+  gridApi?.refreshCells({ columns: ["actions"], force: true });
 }
 
 async function loadConfig() {
@@ -536,57 +629,133 @@ async function writeConfig(text: string, what: string) {
   }
 }
 
+function closeWizard() {
+  wizardOpen.value = false;
+  editing.value = null;
+  renderFor.value = null;
+}
+
 function openAdd() {
   editing.value = null;
+  renderFor.value = null;
   wizardOpen.value = true;
 }
 
-function openEdit(name: string) {
-  const source = sources.value.find((s) => s.name === name);
-  if (!source?.type) return;
-  const entry = catalogFor(source.type);
+function openEdit(id: string) {
+  const step = sources.value.find((s) => s.id === id);
+  if (!step?.type) return;
+  const entry = catalogFor(step.type);
   if (!entry) return;
-  editing.value = { source, entry };
+  renderFor.value = null;
+  editing.value = { step, entry };
   wizardOpen.value = true;
 }
 
-async function onWizardSubmit(payload: { name: string; body: string }) {
+/// Add the render step that reads an existing fetch step. The row
+/// action; the same dialog the chained "also render this?" opens.
+function openRenderFor(fetchId: string) {
+  const step = sources.value.find((s) => s.id === fetchId);
+  if (!step?.type) return;
+  const entry = catalogFor(step.type);
+  if (!entry) return;
+  editing.value = null;
+  renderFor.value = { fetchId, fetchName: step.name, entry };
+  wizardOpen.value = true;
+}
+
+async function onWizardSubmit(payload: {
+  id: string;
+  name: string;
+  body: string;
+  entry: CatalogEntry;
+  inputs: string[];
+  offerRenderFor: { fetchId: string; fetchName: string } | null;
+  alsoRender: { id: string; body: string } | null;
+}) {
   const current = editing.value;
-  const next = current
-    ? replaceSource(configText.value, current.source, payload.body)
+  let next = current
+    ? replaceStep(configText.value, current.step, payload.body)
     : appendSource(configText.value, payload.body);
+
+  // The render step written alongside a fetch step, when the wizard's
+  // checkbox was ticked. One save, so a failure leaves neither.
+  if (payload.alsoRender) next = appendSource(next, payload.alsoRender.body);
+
+  // The fan-ins name their inputs, so a render step added without this
+  // renders happily and is never indexed. Idempotent, so re-saving an
+  // edit doesn't duplicate the entry.
+  for (const id of [payload.id, payload.alsoRender?.id]) {
+    if (id && phaseOf(id) === "render") next = wireIntoFanIns(next, id);
+  }
+
+  // Banners are for a person, so they say the name; the id is what the
+  // config and the disk use.
+  const shown = payload.name || payload.id;
+  const what = current ? `Saved ${shown}.` : `Added ${shown}.`;
   const ok = await writeConfig(
     next,
-    current ? `Saved ${payload.name}.` : `Added ${payload.name}.`,
+    payload.alsoRender ? `${what.slice(0, -1)}, with a step to render it.` : what,
   );
-  if (ok) {
-    wizardOpen.value = false;
-    editing.value = null;
+  if (!ok) return;
+
+  // Providers whose render step *does* have options get a second dialog
+  // instead of the checkbox. Declining is a real answer — the fetch
+  // step stands on its own, and the row action adds one later.
+  const offer = payload.offerRenderFor;
+  closeWizard();
+  if (
+    offer &&
+    window.confirm(
+      `Added ${offer.fetchName}.\n\n` +
+        `Also render it to markdown? That is the step that makes it searchable — ` +
+        `you can add it later from the row's actions instead.`,
+    )
+  ) {
+    renderFor.value = { ...offer, entry: payload.entry };
+    wizardOpen.value = true;
   }
 }
 
-async function deleteSource(name: string) {
-  const source = sources.value.find((s) => s.name === name);
-  if (!source) return;
-  const ok = window.confirm(
-    source.kind === "applet"
+async function deleteSource(id: string) {
+  const step = sources.value.find((s) => s.id === id);
+  if (!step) return;
+  const name = step.name;
+
+  // Deleting a fetch step takes its render step too. Leaving the render
+  // step behind would leave an input naming a step that no longer
+  // exists, which the loader refuses outright — a whole config broken
+  // by a partial delete.
+  const sibling = step.phase === "fetch" ? renderSiblingOf(step.id) : undefined;
+  const doomed = sibling ? [step, sibling] : [step];
+
+  const what =
+    step.kind === "applet"
       ? `Remove the "${name}" applet from the config?\n\n` +
-          `The server stops it. Anything in the app that its components or endpoints ` +
-          `serve will stop working until you add it back.`
-      : source.kind === "step"
-        ? `Remove the "${name}" step from the config?\n\n` +
-            `Its outputs stay on disk but stop being refreshed. For a shared index step ` +
-            `that means search results go stale.`
-        : `Remove "${name}" from the config?\n\n` +
-            `Its data stays on disk and stays searchable — only the sync stops. ` +
-            `Re-adding it later resumes from what's already downloaded.`,
-  );
-  if (!ok) return;
-  await writeConfig(removeSource(configText.value, source), `Removed ${name}.`);
+        `The server stops it. Anything in the app that its components or endpoints ` +
+        `serve will stop working until you add it back.`
+      : step.phase === "index"
+        ? `Remove the "${name}" index step from the config?\n\n` +
+          `Its output stays on disk but stops being refreshed, so search results go stale.`
+        : sibling
+          ? `Remove "${name}" and the render step that reads it ("${sibling.name}")?\n\n` +
+            `Both have to go together: a render step whose input is gone is a config ` +
+            `datalib refuses to load.\n\n` +
+            `The data stays on disk. Re-adding later resumes from what's already there.`
+          : `Remove "${name}" from the config?\n\n` +
+            `Its data stays on disk — only this step stops running. Re-adding it later ` +
+            `resumes from what's already there.`;
+  if (!window.confirm(what)) return;
+
+  // Unwire before removing, for the same reason.
+  let next = configText.value;
+  for (const d of doomed) {
+    if (d.phase === "render") next = unwireFromFanIns(next, d.id);
+  }
+  await writeConfig(removeSteps(next, doomed), `Removed ${name}.`);
 }
 
-async function reveal(name: string) {
-  const path = rows.value.find((r) => r.name === name)?.revealPath;
+async function reveal(id: string) {
+  const path = rows.value.find((r) => r.id === id)?.revealPath;
   if (!path) return;
   const ok = await revealInFileManager(path);
   if (!ok) {
@@ -609,20 +778,16 @@ async function discardConfigEdits() {
   banner.value = null;
 }
 
-async function runSource(name: string) {
-  const source = sources.value.find((s) => s.name === name);
-  // A source is targeted through its download step (the render step
-  // follows from the artifact edges); a plain step by its own id.
-  const target =
-    source?.stepId
-    ?? source?.steps.find((s) => s.phase === "download")?.id
-    ?? source?.steps[0]?.id
-    ?? name;
+async function runSource(id: string) {
+  const step = sources.value.find((s) => s.id === id);
+  // One row, one step, one id — the runner takes it verbatim. There is
+  // no longer a pair to choose between.
+  const target = id;
   busy.value = true;
   banner.value = null;
   try {
     await enqueueJob({ kind: "all", source_name: target });
-    banner.value = { ok: true, text: `Queued a sync for ${name}.` };
+    banner.value = { ok: true, text: `Queued a sync for ${step?.name ?? id}.` };
     await loadJobs();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -689,7 +854,7 @@ onUnmounted(() => {
         :theme="gridTheme"
         :columnDefs="columnDefs"
         :rowData="rows"
-        :getRowId="(p: { data: Row }) => p.data.name"
+        :getRowId="(p: { data: Row }) => p.data.id"
         :tooltipShowDelay="200"
         @grid-ready="onGridReady"
       />
@@ -745,9 +910,10 @@ onUnmounted(() => {
 
     <SourceWizard
       v-if="wizardOpen"
-      :taken-names="takenNames"
+      :taken-ids="takenIds"
+      :render-for="renderFor"
       :editing="editing"
-      @close="wizardOpen = false; editing = null"
+      @close="closeWizard"
       @submit="onWizardSubmit"
     />
   </section>
@@ -884,6 +1050,7 @@ onUnmounted(() => {
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-cell-source img { width: 16px; height: 16px; }
+.m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 
 .m2-kind {
   font-size: 11px;

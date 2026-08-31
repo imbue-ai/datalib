@@ -71,7 +71,7 @@ struct WireOutcome {
 
 #[derive(Debug, Deserialize)]
 struct WireArtifactState {
-    path: crate::ArtifactPat,
+    path: crate::ArtifactPath,
     version: Option<String>,
 }
 
@@ -360,14 +360,13 @@ mod tests {
     async fn outcome_row_without_a_version_warns_and_falls_back_to_hashing() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
-            "legacy.download",
+            "legacy/raw",
             sh(r#"
                 mkdir -p "$DATALIB_DAG_DATA_ROOT/legacy/raw"
                 echo body > "$DATALIB_DAG_DATA_ROOT/legacy/raw/x.txt"
                 echo '{"event":"outcome","outputs":[{"path":"legacy/raw","changed":true}]}'
             "#),
-        )
-        .output("legacy/raw");
+        );
         let g = Graph::build(vec![spec]).unwrap();
         let rec = Arc::new(Recorder::default());
         let rep = Runner::new(root.path())
@@ -382,7 +381,7 @@ mod tests {
         );
         // Fell back to the content hash rather than recording nothing.
         // (Recorded versions carry the step fingerprint as a prefix.)
-        let version = &rep.step("legacy.download").outputs[0].1;
+        let version = &rep.step("legacy/raw").outputs[0].1;
         let hashed = version.rsplit(':').next().unwrap();
         assert_ne!(hashed, crate::version::ABSENT);
         assert_eq!(hashed.len(), 64, "blake3 hex, i.e. the fallback ran");
@@ -397,7 +396,7 @@ mod tests {
     async fn subprocess_step_events_outcome_and_env() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
-            "shell.download",
+            "shell/raw",
             sh(r#"
                 mkdir -p "$DATALIB_DAG_DATA_ROOT/shell/raw"
                 echo "hi from $DATALIB_DAG_STEP" > "$DATALIB_DAG_DATA_ROOT/shell/raw/x.txt"
@@ -407,8 +406,7 @@ mod tests {
                 echo '{"timestamp":"t","level":"ERROR","fields":{"message":"boom"}}' >&2
                 echo '{"event":"outcome","outputs":[{"path":"shell/raw","version":"v1"}]}'
             "#),
-        )
-        .output("shell/raw");
+        );
         let g = Graph::build(vec![spec]).unwrap();
         let rec = Arc::new(Recorder::default());
         let r = Runner::new(root.path()).sink(rec.clone());
@@ -417,22 +415,22 @@ mod tests {
         assert!(rep.all_ok(), "{rep:#?}");
         assert_eq!(
             std::fs::read_to_string(root.path().join("shell/raw/x.txt")).unwrap(),
-            "hi from shell.download\n"
+            "hi from shell/raw\n"
         );
         // The reported version was trusted verbatim.
         // The recorded version is the step's fingerprint plus what it
         // reported, so a change to the step itself reaches consumers.
         assert!(
-            rep.step("shell.download").outputs[0].1.ends_with(":v1"),
+            rep.step("shell/raw").outputs[0].1.ends_with(":v1"),
             "{}",
-            rep.step("shell.download").outputs[0].1
+            rep.step("shell/raw").outputs[0].1
         );
 
         let events = rec.0.lock().unwrap();
         // Progress event forwarded and re-tagged from "me" to the real id.
         assert!(events.iter().any(|e| matches!(
             e,
-            Event::ProgressMessage { step, msg } if step == "shell.download" && msg == "halfway"
+            Event::ProgressMessage { step, msg } if step == "shell/raw" && msg == "halfway"
         )));
         // Plain text forwarded as a log line.
         assert!(events.iter().any(|e| matches!(
@@ -455,7 +453,7 @@ mod tests {
     async fn child_env_reaches_steps_and_step_env_wins() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
-            "env.probe",
+            "env/out",
             StepRun::Subprocess {
                 argv: vec![
                     "/bin/sh".into(),
@@ -468,8 +466,7 @@ mod tests {
                 ],
                 env: [("OVERRIDE_ME".to_string(), "step".to_string())].into(),
             },
-        )
-        .output("env/out");
+        );
         let g = Graph::build(vec![spec]).unwrap();
         let r = Runner::new(root.path()).child_env(
             [
@@ -494,14 +491,13 @@ mod tests {
     async fn subprocess_failure_classification_and_stderr_tail() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
-            "bad.download",
+            "bad/raw",
             sh(r#"
                 echo '{"event":"outcome","failure":"rate_limited"}'
                 echo "429 too many requests" >&2
                 exit 3
             "#),
-        )
-        .output("bad/raw");
+        );
         let g = Graph::build(vec![spec]).unwrap();
         // One retry round-trip happens (rate_limited is retryable) —
         // zero backoff keeps the test fast.
@@ -511,7 +507,7 @@ mod tests {
             ..Default::default()
         });
         let rep = r.run(&g).await.unwrap();
-        let step = rep.step("bad.download");
+        let step = rep.step("bad/raw");
         assert_eq!(
             step.status,
             StepStatus::Failed {

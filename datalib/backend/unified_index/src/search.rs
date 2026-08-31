@@ -31,7 +31,21 @@ pub struct SearchRow {
     /// the upstream payload didn't carry one.
     pub org_name: String,
     pub entire_chat: String,
+    /// The provider's human label ("Slack", "Claude") — a property of
+    /// the source *type*, not of the configured source. Two Slack
+    /// workspaces both say "Slack" here; `source_name` is what tells
+    /// them apart.
     pub source: String,
+    /// The configured source this row came from: the first path segment
+    /// of the row's `qmd_path`, which is the stanza directory under the
+    /// data root and the name the config gives it (`slack/raw` →
+    /// `slack`). Empty when the row carries no `qmd_path`.
+    ///
+    /// The *label* a person put on that source in `config.toml` is
+    /// deliberately not here. It is config, mutable at any time, and the
+    /// index has never read the config — baking it in would mean
+    /// re-indexing on every relabel. The UI joins the two by this name.
+    pub source_name: String,
     pub kind: String,
     pub author: String,
     /// Slack channel display name for Slack rows; empty otherwise.

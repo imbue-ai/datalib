@@ -63,7 +63,7 @@ pub mod step;
 pub mod subprocess;
 pub mod version;
 
-pub use artifact::ArtifactPat;
+pub use artifact::ArtifactPath;
 pub use events::{Event, EventSink, NdjsonSink, StepProgress};
 pub use graph::Graph;
 pub use scheduler::{RunReport, Runner, StepReport, StepStatus};

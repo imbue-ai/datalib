@@ -23,7 +23,15 @@ pub enum Field {
     After,
     Subj,
     Type,
+    /// The provider's human label ("Slack") — one value per source
+    /// *type*, so it cannot separate two configured Slack workspaces.
     Source,
+    /// The configured source: the stanza directory a row's rendered
+    /// document lives under. Matched as a prefix of `qmd_path` rather
+    /// than as a column of its own — `grid_rows` has no `source_name`.
+    /// Note this filters on the *name*, never on the mutable `label`
+    /// the config may also carry: the index has never read the config.
+    SourceName,
     Kind,
     Channel,
     /// UUID-load-bearing filter on `conversation_uuid`. Token values follow
@@ -46,6 +54,7 @@ impl Field {
             "subj" => Field::Subj,
             "type" => Field::Type,
             "source" => Field::Source,
+            "source_name" => Field::SourceName,
             "kind" => Field::Kind,
             "channel" => Field::Channel,
             "convo" => Field::Convo,

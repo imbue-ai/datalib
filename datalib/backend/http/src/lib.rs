@@ -754,6 +754,27 @@ fn check_dag_config(cfg: &datalib_dag::config::DagConfig) -> anyhow::Result<Vec<
     Ok(graph.fringe_ids().into_iter().map(str::to_string).collect())
 }
 
+/// How many of those fringe steps are *data sources* — which is a
+/// different question from "what can `--sync` target", and the one the
+/// onboarding flow asks.
+///
+/// The shared index steps are fringe on a freshly scaffolded root, and
+/// legitimately so: they declare no inputs because no source exists to
+/// name yet, and syncing one is a valid (if empty) thing to do. But
+/// they are pipeline plumbing that every config carries, not data
+/// anybody configured — counting them would tell a user with an empty
+/// library that they have two sources, which is exactly the confusion
+/// `POST /api/config/init` exists to end.
+///
+/// Identified by the tree they write, since a step's id *is* that tree.
+/// This is a display rule, deliberately not a validity rule: nothing
+/// stops you writing a step under `unified_index/`, and the loader has
+/// no opinion about it.
+fn configured_source_count(fringe: &[String]) -> usize {
+    let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
+    fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConfigResponse {
     /// Absolute path of `<root>/config.toml` — shown in the UI so the
@@ -767,7 +788,9 @@ pub struct ConfigResponse {
     pub parsed_ok: bool,
     /// Loader error message when `parsed_ok` is false.
     pub error: Option<String>,
-    /// Number of configured sources (0 when invalid/missing).
+    /// Number of data sources the user has configured (0 when the
+    /// config is missing or invalid). See [`configured_source_count`]
+    /// for why this is not simply the fringe's length.
     pub source_count: usize,
     /// How the user should invoke the latchkey CLI on this install:
     /// the app-bundled launcher's absolute path (shell-quoted if
@@ -831,7 +854,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let legacy = legacy_yaml_hint(&s.root);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let (parsed_ok, error, source_count) = match load_dag_config(&path) {
-        Ok((_cfg, sources)) => (true, None, sources.len()),
+        Ok((_cfg, sources)) => (true, None, configured_source_count(&sources)),
         Err(e) => (false, Some(format!("{e:#}")), 0),
     };
     Json(ConfigResponse {
@@ -906,7 +929,7 @@ async fn put_config(
     Ok(Json(PutConfigResponse {
         ok: true,
         error: None,
-        source_count: sources.len(),
+        source_count: configured_source_count(&sources),
     }))
 }
 
@@ -986,14 +1009,12 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
                 error: None,
             }))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            Ok(Json(InitConfigResponse {
-                created: false,
-                path: path.display().to_string(),
-                text: std::fs::read_to_string(&path).unwrap_or_default(),
-                error: None,
-            }))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Json(InitConfigResponse {
+            created: false,
+            path: path.display().to_string(),
+            text: std::fs::read_to_string(&path).unwrap_or_default(),
+            error: None,
+        })),
         Err(e) => {
             eprintln!("init_config: create {}: {e}", path.display());
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1066,7 +1087,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                     id: sp.id.clone(),
                     command: commands.get(&sp.id).cloned().unwrap_or_default(),
                     inputs: sp.inputs.iter().map(|a| a.as_str().to_string()).collect(),
-                    outputs: sp.outputs.iter().map(|a| a.as_str().to_string()).collect(),
+                    outputs: vec![sp.output().as_str().to_string()],
                     deps: graph.deps[i]
                         .iter()
                         .map(|&d| graph.steps[d].id.clone())
@@ -1090,29 +1111,27 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 }
 
 /// Starter DAG config: the shared fan-in steps that every source's
-/// rendered markdown feeds. Non-empty on purpose — `index`/`qmd` are
-/// source-independent and belong in every pipeline; their wildcard
-/// input matches nothing until the first source's steps are added
-/// (which the UI's "Add a source" buttons append as a
-/// `<name>.download` + `<name>.render` pair). `data_root` is omitted:
-/// it defaults to this file's own directory, keeping the root
-/// self-contained.
+/// rendered markdown feeds. Non-empty on purpose — the two index steps
+/// are source-independent and belong in every pipeline. They start with
+/// no inputs, which is a valid graph that indexes nothing; adding a
+/// source appends its render step's id here (the UI's "Add a source"
+/// flow does that for you). `data_root` is omitted: it defaults to this
+/// file's own directory, keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── shared fan-in steps ────────────────────────────────────────────────
-# Every source's rendered markdown feeds these.
+# Every source's rendered markdown feeds these. A step's id is the tree
+# it writes; `inputs` names the steps it reads, by id.
 
 [[steps]]
-id = \"grid_index\"
+id = \"unified_index/grid\"
 command = \"datalib-step grid_index\"
-inputs = [\"**/rendered_md\"]
-outputs = [\"unified_index/grid\"]
+inputs = []
 
 [[steps]]
-id = \"qmd_index\"
+id = \"unified_index/qmd\"
 command = \"datalib-step qmd_index\"
-inputs = [\"**/rendered_md\"]
-outputs = [\"unified_index/qmd\"]
+inputs = []
 
 # ── the app's own surface ──────────────────────────────────────────────
 # `unified_index` serves the grid: the app has no search, no document
@@ -1221,14 +1240,15 @@ async fn pipeline_storage(State(s): State<AppState>) -> Json<Vec<OutputStorage>>
     };
     let root = s.root.as_path();
 
-    // Declared outputs, deduped and in config order. A pattern with a
-    // glob (`**/rendered_md` on the index steps' *inputs*) never
-    // reaches here — only outputs are walked, and those are concrete.
+    // One tree per step, and it is the step's id. Deduped and in config
+    // order — a duplicate id is refused by the loader, so `seen` only
+    // guards against being called on a config that never got there.
     let mut seen: std::collections::BTreeSet<&str> = Default::default();
     let mut out = Vec::new();
     for step in &cfg.steps {
-        for path in &step.outputs {
-            if path.contains('*') || !seen.insert(path.as_str()) {
+        {
+            let path = &step.id;
+            if !seen.insert(path.as_str()) {
                 continue;
             }
             let abs = root.join(path);
@@ -1432,9 +1452,34 @@ mod tests {
         let text = scaffold_toml();
         let sources = validate_config_text(&text)
             .unwrap_or_else(|e| panic!("scaffold rejected: {e:#}\n---\n{text}"));
-        // The two fan-in steps both declare inputs, so neither is a
-        // source — a scaffolded root has nothing to sync yet.
-        assert!(sources.is_empty(), "{sources:?}");
+        // The fan-ins have no inputs to name yet, so on a scaffolded
+        // root they *are* the fringe. They are what `--sync` can target
+        // until the first source is added — and running them against
+        // nothing is a no-op, not an error.
+        assert_eq!(sources, ["unified_index/grid", "unified_index/qmd"]);
+    }
+
+    /// A scaffolded root has no *sources*, even though its two index
+    /// steps are the fringe. Counting the fringe would tell someone
+    /// with an empty library that they already have two data sources —
+    /// the confusion `POST /api/config/init` exists to end.
+    #[test]
+    fn a_scaffolded_root_reports_no_sources() {
+        let fringe = validate_config_text(&scaffold_toml()).unwrap();
+        assert_eq!(fringe, ["unified_index/grid", "unified_index/qmd"]);
+        assert_eq!(configured_source_count(&fringe), 0);
+    }
+
+    /// ...and a real source counts, while the index steps beside it
+    /// still don't.
+    #[test]
+    fn a_source_counts_but_the_index_steps_never_do() {
+        let text = format!(
+            "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\n",
+            scaffold_toml()
+        );
+        let fringe = validate_config_text(&text).unwrap();
+        assert_eq!(configured_source_count(&fringe), 1);
     }
 
     /// TOML is the only format the server accepts; a legacy config
@@ -1442,9 +1487,8 @@ mod tests {
     #[test]
     fn only_toml_is_accepted() {
         assert_eq!(
-            validate_config_text("[[steps]]\nid = \"x\"\ncommand = \"s\"\noutputs = [\"x/raw\"]\n")
-                .unwrap(),
-            ["x"]
+            validate_config_text("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n").unwrap(),
+            ["x/raw"]
         );
         assert!(validate_config_text("steps:\n  - id: x\n    command: s\n").is_err());
         assert!(validate_config_text("sources:\n  - name: x\n").is_err());

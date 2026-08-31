@@ -254,9 +254,10 @@ impl Runner {
                 let Some(i) = ready.pop_front() else { break };
                 match self.decide(graph, &state, &status, &runnable, &versions, i) {
                     Decision::Skip { status: st } => {
-                        // Outputs keep their last-recorded versions.
+                        // The output keeps its last-recorded version.
                         let prev = state.steps.get(&graph.steps[i].id);
-                        for out in &graph.steps[i].outputs {
+                        {
+                            let out = graph.steps[i].output();
                             let v = match prev.and_then(|s| s.output_versions.get(out.as_str())) {
                                 Some(v) => v.clone(),
                                 // Succeeded before but no recorded
@@ -396,9 +397,7 @@ impl Runner {
                         .expect("all steps reached a terminal state"),
                     attempts: attempts_taken[i],
                     error: errors[i].clone(),
-                    outputs: spec
-                        .outputs
-                        .iter()
+                    outputs: std::iter::once(spec.output())
                         .map(|o| {
                             let path = o.as_str().to_string();
                             let now = versions
@@ -642,31 +641,29 @@ fn resolve_outputs(
     fingerprint: &str,
     reported: &[ArtifactState],
 ) -> Result<Vec<(String, String)>> {
+    let output = spec.output();
     let mut by_path: BTreeMap<&str, &ArtifactState> = BTreeMap::new();
     for r in reported {
-        if !spec.outputs.iter().any(|o| o.as_str() == r.path.as_str()) {
+        if r.path.as_str() != output.as_str() {
             anyhow::bail!(
-                "step {:?} reported on {:?}, which is not a declared output",
+                "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
                 spec.id,
-                r.path.as_str()
+                r.path.as_str(),
+                output.as_str()
             );
         }
         by_path.insert(r.path.as_str(), r);
     }
-    let mut out = Vec::new();
-    for o in &spec.outputs {
-        let path = o.as_str();
-        let v = match by_path.get(path) {
-            // The step vouched for a version: trust it. The mechanics
-            // behind it (row-set hash, dolt commit, cursor hash) stay
-            // the step's business.
-            Some(a) => a.version.clone(),
-            // Said nothing about this output: decide for ourselves.
-            None => tree_version(&data_root.join(path))?,
-        };
-        out.push((path.to_string(), format!("{fingerprint}:{v}")));
-    }
-    Ok(out)
+    let path = output.as_str();
+    let v = match by_path.get(path) {
+        // The step vouched for a version: trust it. The mechanics
+        // behind it (row-set hash, dolt commit, cursor hash) stay
+        // the step's business.
+        Some(a) => a.version.clone(),
+        // Said nothing about its output: decide for ourselves.
+        None => tree_version(&data_root.join(path))?,
+    };
+    Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
 }
 
 /// Mark dependents of `i` ready once all their deps are terminal.
@@ -745,33 +742,28 @@ mod tests {
         })
     }
 
-    /// A download step writing `content` to `<name>/raw/data.txt`
-    /// every invocation, honestly reporting whether it changed. Counts
+    /// A download step writing `content` to `<id>/data.txt` every
+    /// invocation, honestly reporting whether it changed. Counts
     /// invocations.
+    ///
+    /// Note what it no longer has to do: its id *is* the tree it
+    /// writes, so it reads `ctx.step_id` directly instead of stripping
+    /// a `.download` suffix off it to rebuild a path.
     fn download(name: &str, content: Arc<Mutex<String>>, runs: Arc<AtomicU32>) -> StepSpec {
-        let out = format!("{name}/raw");
         StepSpec::new(
-            format!("{name}.download"),
+            format!("{name}/raw"),
             StepRun::in_process(move |ctx: StepCtx| {
                 let content = content.clone();
                 let runs = runs.clone();
                 async move {
                     runs.fetch_add(1, Ordering::SeqCst);
-                    let dir = ctx.path_str(&format!(
-                        "{}/raw",
-                        ctx.step_id.strip_suffix(".download").unwrap()
-                    ));
+                    let dir = ctx.path_str(&ctx.step_id);
                     std::fs::create_dir_all(&dir).unwrap();
-                    let file = dir.join("data.txt");
                     let new = content.lock().unwrap().clone();
-                    std::fs::write(&file, &new).unwrap();
+                    std::fs::write(dir.join("data.txt"), &new).unwrap();
                     ctx.progress.set_length(Some(1));
                     ctx.progress.inc(1);
-                    let pat = crate::ArtifactPat::parse(&format!(
-                        "{}/raw",
-                        ctx.step_id.strip_suffix(".download").unwrap()
-                    ))
-                    .unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                     // Stands in for a real download reporting its raw
                     // store's dolt commit: derived from what was
                     // written, so an unchanged poll reports the same
@@ -783,24 +775,21 @@ mod tests {
                 }
             }),
         )
-        .output(&out)
     }
 
     /// A render step copying `<name>/raw/data.txt` →
     /// `<name>/rendered_md/data.md`, uppercased. Reports nothing (the
     /// scheduler content-hashes). Counts invocations.
     fn render(name: &str, runs: Arc<AtomicU32>) -> StepSpec {
-        let (inp, out) = (format!("{name}/raw"), format!("{name}/rendered_md"));
-        let name = name.to_string();
+        let inp = format!("{name}/raw");
         StepSpec::new(
-            format!("{name}.render"),
+            format!("{name}/rendered_md"),
             StepRun::in_process(move |ctx: StepCtx| {
                 let runs = runs.clone();
-                let name = name.clone();
                 async move {
                     runs.fetch_add(1, Ordering::SeqCst);
-                    let src = ctx.path_str(&format!("{name}/raw/data.txt"));
-                    let dir = ctx.path_str(&format!("{name}/rendered_md"));
+                    let src = ctx.path(&ctx.inputs[0]).join("data.txt");
+                    let dir = ctx.path_str(&ctx.step_id);
                     std::fs::create_dir_all(&dir).unwrap();
                     let text = std::fs::read_to_string(&src)
                         .map_err(|e| StepError::new(FailureKind::Data, e))?;
@@ -810,15 +799,14 @@ mod tests {
             }),
         )
         .input(&inp)
-        .output(&out)
     }
 
-    /// The fan-in index step: concatenates every `*/rendered_md`
-    /// tree's files into `out/index/index.txt`. Wildcard
-    /// input. Counts invocations and remembers `changed_inputs`.
+    /// The fan-in index step: concatenates every input tree's files
+    /// into `unified_index/grid/index.txt`. Its inputs are named, not
+    /// globbed. Counts invocations and remembers `changed_inputs`.
     fn index(runs: Arc<AtomicU32>, seen_changed: Arc<Mutex<Vec<String>>>) -> StepSpec {
         StepSpec::new(
-            "index",
+            "unified_index/grid",
             StepRun::in_process(move |ctx: StepCtx| {
                 let runs = runs.clone();
                 let seen_changed = seen_changed.clone();
@@ -845,15 +833,15 @@ mod tests {
                             combined.push('\n');
                         }
                     }
-                    let dir = ctx.path_str("out/index");
+                    let dir = ctx.path_str(&ctx.step_id);
                     std::fs::create_dir_all(&dir).unwrap();
                     std::fs::write(dir.join("index.txt"), combined).unwrap();
                     Ok(StepOutcome::default())
                 }
             }),
         )
-        .input("**/rendered_md")
-        .output("out/index")
+        .input("email/rendered_md")
+        .input("slack/rendered_md")
     }
 
     struct Fixture {
@@ -871,11 +859,11 @@ mod tests {
                 slack_content: Arc::new(Mutex::new("slack v1".to_string())),
                 email_content: Arc::new(Mutex::new("email v1".to_string())),
                 runs: [
-                    "slack.download",
-                    "email.download",
-                    "slack.render",
-                    "email.render",
-                    "index",
+                    "slack/raw",
+                    "email/raw",
+                    "slack/rendered_md",
+                    "email/rendered_md",
+                    "unified_index/grid",
                 ]
                 .into_iter()
                 .map(|k| (k, Arc::new(AtomicU32::new(0))))
@@ -889,17 +877,17 @@ mod tests {
                 download(
                     "slack",
                     self.slack_content.clone(),
-                    self.runs["slack.download"].clone(),
+                    self.runs["slack/raw"].clone(),
                 ),
-                render("slack", self.runs["slack.render"].clone()),
+                render("slack", self.runs["slack/rendered_md"].clone()),
                 download(
                     "email",
                     self.email_content.clone(),
-                    self.runs["email.download"].clone(),
+                    self.runs["email/raw"].clone(),
                 ),
-                render("email", self.runs["email.render"].clone()),
+                render("email", self.runs["email/rendered_md"].clone()),
                 index(
-                    self.runs["index"].clone(),
+                    self.runs["unified_index/grid"].clone(),
                     self.index_changed_inputs.clone(),
                 ),
             ])
@@ -920,11 +908,11 @@ mod tests {
         let rep1 = r.run(&g).await.unwrap();
         assert!(rep1.all_ok(), "{rep1:#?}");
         for id in [
-            "slack.download",
-            "slack.render",
-            "email.download",
-            "email.render",
-            "index",
+            "slack/raw",
+            "slack/rendered_md",
+            "email/raw",
+            "email/rendered_md",
+            "unified_index/grid",
         ] {
             assert_eq!(fx.run_count(id), 1, "{id} should have run once");
             assert!(
@@ -933,7 +921,7 @@ mod tests {
                 rep1.step(id).status
             );
         }
-        let idx = fx.root.path().join("out/index/index.txt");
+        let idx = fx.root.path().join("unified_index/grid/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V1\n"
@@ -944,16 +932,19 @@ mod tests {
         // skips.
         let rep2 = r.run(&g).await.unwrap();
         assert!(rep2.all_ok(), "{rep2:#?}");
-        assert_eq!(fx.run_count("slack.download"), 2);
-        assert_eq!(fx.run_count("email.download"), 2);
-        assert_eq!(fx.run_count("slack.render"), 1, "render must skip");
-        assert_eq!(fx.run_count("email.render"), 1, "render must skip");
-        assert_eq!(fx.run_count("index"), 1, "index must skip");
+        assert_eq!(fx.run_count("slack/raw"), 2);
+        assert_eq!(fx.run_count("email/raw"), 2);
+        assert_eq!(fx.run_count("slack/rendered_md"), 1, "render must skip");
+        assert_eq!(fx.run_count("email/rendered_md"), 1, "render must skip");
+        assert_eq!(fx.run_count("unified_index/grid"), 1, "index must skip");
         assert_eq!(
-            rep2.step("slack.render").status,
+            rep2.step("slack/rendered_md").status,
             StepStatus::SkippedUpToDate
         );
-        assert_eq!(rep2.step("index").status, StepStatus::SkippedUpToDate);
+        assert_eq!(
+            rep2.step("unified_index/grid").status,
+            StepStatus::SkippedUpToDate
+        );
     }
 
     #[tokio::test]
@@ -967,15 +958,15 @@ mod tests {
         let rep = r.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
 
-        assert_eq!(fx.run_count("slack.render"), 2, "slack chain reruns");
-        assert_eq!(fx.run_count("email.render"), 1, "email chain skips");
-        assert_eq!(fx.run_count("index"), 2, "fan-in reruns");
+        assert_eq!(fx.run_count("slack/rendered_md"), 2, "slack chain reruns");
+        assert_eq!(fx.run_count("email/rendered_md"), 1, "email chain skips");
+        assert_eq!(fx.run_count("unified_index/grid"), 2, "fan-in reruns");
         // The fan-in saw exactly which input moved.
         assert_eq!(
             *fx.index_changed_inputs.lock().unwrap(),
             vec!["slack/rendered_md".to_string()]
         );
-        let idx = fx.root.path().join("out/index/index.txt");
+        let idx = fx.root.path().join("unified_index/grid/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V2\n"
@@ -995,23 +986,26 @@ mod tests {
         // change alone.
         *fx.slack_content.lock().unwrap() = "slack v2".to_string();
         *fx.email_content.lock().unwrap() = "email v2".to_string();
-        let r2 = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
+        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
         let rep = r2.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
 
-        assert_eq!(fx.run_count("slack.download"), 2);
-        assert_eq!(fx.run_count("email.download"), 1, "email must not sync");
-        assert_eq!(rep.step("email.download").status, StepStatus::NotSelected);
-        assert_eq!(rep.step("email.render").status, StepStatus::NotSelected);
-        assert_eq!(fx.run_count("slack.render"), 2);
-        assert_eq!(fx.run_count("index"), 2);
+        assert_eq!(fx.run_count("slack/raw"), 2);
+        assert_eq!(fx.run_count("email/raw"), 1, "email must not sync");
+        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
+        assert_eq!(
+            rep.step("email/rendered_md").status,
+            StepStatus::NotSelected
+        );
+        assert_eq!(fx.run_count("slack/rendered_md"), 2);
+        assert_eq!(fx.run_count("unified_index/grid"), 2);
         // The index saw only the synced chain as changed, and the
         // output still carries email's OLD content.
         assert_eq!(
             *fx.index_changed_inputs.lock().unwrap(),
             vec!["slack/rendered_md".to_string()]
         );
-        let idx = fx.root.path().join("out/index/index.txt");
+        let idx = fx.root.path().join("unified_index/grid/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V2\n"
@@ -1020,9 +1014,9 @@ mod tests {
         // A full run afterwards picks up email's pending change.
         let rep = r.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(fx.run_count("email.download"), 2);
-        assert_eq!(fx.run_count("email.render"), 2);
-        assert_eq!(fx.run_count("slack.render"), 2, "slack unchanged now");
+        assert_eq!(fx.run_count("email/raw"), 2);
+        assert_eq!(fx.run_count("email/rendered_md"), 2);
+        assert_eq!(fx.run_count("slack/rendered_md"), 2, "slack unchanged now");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V2\nSLACK V2\n"
@@ -1041,109 +1035,33 @@ mod tests {
         let fx = Fixture::new();
         let g = fx.graph();
         // No prior run: nothing in this root has ever succeeded.
-        let r = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
+        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
         let rep = r.run(&g).await.unwrap();
 
         // The selected chain does its work.
-        assert_eq!(fx.run_count("slack.download"), 1);
-        assert_eq!(fx.run_count("slack.render"), 1);
+        assert_eq!(fx.run_count("slack/raw"), 1);
+        assert_eq!(fx.run_count("slack/rendered_md"), 1);
 
         // The unselected chain must not be touched at all — not the
         // download (that part already worked), and not the render.
-        assert_eq!(rep.step("email.download").status, StepStatus::NotSelected);
+        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
         assert_eq!(
-            fx.run_count("email.render"),
+            fx.run_count("email/rendered_md"),
             0,
             "render of an unselected chain must not be invoked: its raw \
              store does not exist yet"
         );
-        assert_eq!(rep.step("email.render").status, StepStatus::NotSelected);
+        assert_eq!(
+            rep.step("email/rendered_md").status,
+            StepStatus::NotSelected
+        );
 
         // ...so nothing is poisoned, and the fan-in still indexes the
         // chain the user asked to sync.
         assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(fx.run_count("index"), 1);
+        assert_eq!(fx.run_count("unified_index/grid"), 1);
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
-            "SLACK V1\n"
-        );
-    }
-
-    /// Out of scope means out of scope, even for a step whose input is
-    /// external — staged by the user, no producer in the graph. "Sync
-    /// slack" doesn't reach `takeout.render`, so it doesn't run, and
-    /// the fan-in still indexes what slack produced.
-    #[tokio::test]
-    async fn subset_sync_skips_an_out_of_scope_step_with_an_external_input() {
-        let fx = Fixture::new();
-        let runs = Arc::new(AtomicU32::new(0));
-        let staged = fx.root.path().join("takeout/staged_zip");
-        std::fs::create_dir_all(&staged).unwrap();
-        std::fs::write(staged.join("data.txt"), "takeout v1").unwrap();
-
-        let takeout = {
-            let runs = runs.clone();
-            StepSpec::new(
-                "takeout.render",
-                StepRun::in_process(move |ctx: StepCtx| {
-                    let runs = runs.clone();
-                    async move {
-                        runs.fetch_add(1, Ordering::SeqCst);
-                        let text =
-                            std::fs::read_to_string(ctx.path_str("takeout/staged_zip/data.txt"))
-                                .map_err(|e| StepError::new(FailureKind::Data, e))?;
-                        let dir = ctx.path_str("takeout/rendered_md");
-                        std::fs::create_dir_all(&dir).unwrap();
-                        std::fs::write(dir.join("data.md"), text.to_uppercase()).unwrap();
-                        Ok(StepOutcome::default())
-                    }
-                }),
-            )
-            .input("takeout/staged_zip")
-            .output("takeout/rendered_md")
-        };
-
-        let g = Graph::build(vec![
-            download(
-                "slack",
-                fx.slack_content.clone(),
-                fx.runs["slack.download"].clone(),
-            ),
-            render("slack", fx.runs["slack.render"].clone()),
-            download(
-                "email",
-                fx.email_content.clone(),
-                fx.runs["email.download"].clone(),
-            ),
-            render("email", fx.runs["email.render"].clone()),
-            takeout,
-            index(fx.runs["index"].clone(), fx.index_changed_inputs.clone()),
-        ])
-        .unwrap();
-        let ti = g
-            .steps
-            .iter()
-            .position(|s| s.id.as_str() == "takeout.render")
-            .unwrap();
-        assert!(
-            g.deps[ti]
-                .iter()
-                .any(|&d| g.steps[d].id.starts_with(crate::graph::STAGED_STEP_PREFIX)),
-            "fixture must exercise the staged-input path"
-        );
-
-        let r = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
-        let rep = r.run(&g).await.unwrap();
-        assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(
-            runs.load(Ordering::SeqCst),
-            0,
-            "a step no selected download feeds is out of scope"
-        );
-        assert_eq!(rep.step("takeout.render").status, StepStatus::NotSelected);
-        assert_eq!(fx.run_count("email.render"), 0);
-        assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
+            std::fs::read_to_string(fx.root.path().join("unified_index/grid/index.txt")).unwrap(),
             "SLACK V1\n"
         );
     }
@@ -1157,7 +1075,7 @@ mod tests {
     async fn subset_sync_leaves_pending_work_in_other_chains_alone() {
         let fx = Fixture::new();
         let failing_email_render = StepSpec::new(
-            "email.render",
+            "email/rendered_md",
             StepRun::in_process(|_ctx| async {
                 Err(StepError::new(
                     FailureKind::Data,
@@ -1165,22 +1083,24 @@ mod tests {
                 ))
             }),
         )
-        .input("email/raw")
-        .output("email/rendered_md");
+        .input("email/raw");
         let broken = Graph::build(vec![
             download(
                 "slack",
                 fx.slack_content.clone(),
-                fx.runs["slack.download"].clone(),
+                fx.runs["slack/raw"].clone(),
             ),
-            render("slack", fx.runs["slack.render"].clone()),
+            render("slack", fx.runs["slack/rendered_md"].clone()),
             download(
                 "email",
                 fx.email_content.clone(),
-                fx.runs["email.download"].clone(),
+                fx.runs["email/raw"].clone(),
             ),
             failing_email_render,
-            index(fx.runs["index"].clone(), fx.index_changed_inputs.clone()),
+            index(
+                fx.runs["unified_index/grid"].clone(),
+                fx.index_changed_inputs.clone(),
+            ),
         ])
         .unwrap();
 
@@ -1189,29 +1109,32 @@ mod tests {
         let rep1 = runner(fx.root.path()).run(&broken).await.unwrap();
         assert!(!rep1.all_ok());
         assert!(matches!(
-            rep1.step("email.render").status,
+            rep1.step("email/rendered_md").status,
             StepStatus::Failed { .. }
         ));
 
         // Run 2: sync slack only. The email chain is untouched — no
         // poll, no retry — and slack still reaches the index.
         let g = fx.graph();
-        let r2 = runner(fx.root.path()).only_fringe(["slack.download".to_string()]);
+        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
         let rep2 = r2.run(&g).await.unwrap();
         assert!(rep2.all_ok(), "{rep2:#?}");
-        assert_eq!(fx.run_count("email.download"), 1, "no poll");
-        assert_eq!(fx.run_count("email.render"), 0, "no retry");
-        assert_eq!(rep2.step("email.render").status, StepStatus::NotSelected);
+        assert_eq!(fx.run_count("email/raw"), 1, "no poll");
+        assert_eq!(fx.run_count("email/rendered_md"), 0, "no retry");
+        assert_eq!(
+            rep2.step("email/rendered_md").status,
+            StepStatus::NotSelected
+        );
         // The index was blocked in run 1 (email.render failed), so this
         // is its first run: slack reaches it, email contributes nothing.
-        assert_eq!(fx.run_count("index"), 1);
+        assert_eq!(fx.run_count("unified_index/grid"), 1);
 
         // Run 3 (full): the pending render is picked back up.
         let rep3 = runner(fx.root.path()).run(&g).await.unwrap();
         assert!(rep3.all_ok(), "{rep3:#?}");
-        assert_eq!(fx.run_count("email.render"), 1, "full run recovers it");
+        assert_eq!(fx.run_count("email/rendered_md"), 1, "full run recovers it");
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("out/index/index.txt")).unwrap(),
+            std::fs::read_to_string(fx.root.path().join("unified_index/grid/index.txt")).unwrap(),
             "EMAIL V1\nSLACK V1\n"
         );
     }
@@ -1230,7 +1153,7 @@ mod tests {
         // definition differs, which is what a params edit amounts to.
         let render_v = |tag: &'static str, runs: Arc<AtomicU32>| {
             StepSpec::new(
-                "slack.render",
+                "slack/rendered_md",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let runs = runs.clone();
                     async move {
@@ -1249,7 +1172,6 @@ mod tests {
                 }),
             )
             .input("slack/raw")
-            .output("slack/rendered_md")
             .code_version(tag)
         };
         let graph_with = |tag: &'static str, runs: Arc<AtomicU32>| {
@@ -1257,7 +1179,7 @@ mod tests {
                 download(
                     "slack",
                     fx.slack_content.clone(),
-                    fx.runs["slack.download"].clone(),
+                    fx.runs["slack/raw"].clone(),
                 ),
                 render_v(tag, runs),
             ])
@@ -1277,7 +1199,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rep2.step("slack.render").status,
+            rep2.step("slack/rendered_md").status,
             StepStatus::SkippedUpToDate
         );
         assert_eq!(runs.load(Ordering::SeqCst), 1, "idempotent re-run");
@@ -1291,11 +1213,11 @@ mod tests {
         assert!(rep3.all_ok(), "{rep3:#?}");
         assert!(
             matches!(
-                rep3.step("slack.render").status,
+                rep3.step("slack/rendered_md").status,
                 StepStatus::Succeeded { .. }
             ),
             "a config change must re-run the step: {:?}",
-            rep3.step("slack.render").status
+            rep3.step("slack/rendered_md").status
         );
         assert_eq!(runs.load(Ordering::SeqCst), 2);
         assert_eq!(
@@ -1315,9 +1237,9 @@ mod tests {
             download(
                 "slack",
                 fx.slack_content.clone(),
-                fx.runs["slack.download"].clone(),
+                fx.runs["slack/raw"].clone(),
             ),
-            render("slack", fx.runs["slack.render"].clone()),
+            render("slack", fx.runs["slack/rendered_md"].clone()),
         ])
         .unwrap();
         assert!(runner(fx.root.path()).run(&g1).await.unwrap().all_ok());
@@ -1325,7 +1247,7 @@ mod tests {
         let audit_runs = Arc::new(AtomicU32::new(0));
         let ar = audit_runs.clone();
         let audit = StepSpec::new(
-            "slack.audit",
+            "slack/audit",
             StepRun::in_process(move |ctx: StepCtx| {
                 let ar = ar.clone();
                 async move {
@@ -1337,16 +1259,15 @@ mod tests {
                 }
             }),
         )
-        .input("slack/raw")
-        .output("slack/audit");
+        .input("slack/raw");
 
         let g2 = Graph::build(vec![
             download(
                 "slack",
                 fx.slack_content.clone(),
-                fx.runs["slack.download"].clone(),
+                fx.runs["slack/raw"].clone(),
             ),
-            render("slack", fx.runs["slack.render"].clone()),
+            render("slack", fx.runs["slack/rendered_md"].clone()),
             audit,
         ])
         .unwrap();
@@ -1355,42 +1276,61 @@ mod tests {
         // The download re-polled and found nothing new...
         assert!(
             matches!(
-                rep.step("slack.download").status,
+                rep.step("slack/raw").status,
                 StepStatus::Succeeded { changed: 0 }
             ),
             "{:?}",
-            rep.step("slack.download").status
+            rep.step("slack/raw").status
         );
         // ...the existing render is up to date...
-        assert_eq!(rep.step("slack.render").status, StepStatus::SkippedUpToDate);
+        assert_eq!(
+            rep.step("slack/rendered_md").status,
+            StepStatus::SkippedUpToDate
+        );
         // ...and the new step still runs.
         assert_eq!(audit_runs.load(Ordering::SeqCst), 1);
         assert!(fx.root.path().join("slack/audit/a.txt").is_file());
     }
-
-    /// An input that was real and then went away. Its version moves
-    /// from a content hash to `absent`, which is a difference like any
-    /// other, so its consumer re-runs and gets a chance to drop the
-    /// output built from data that no longer exists.
+    /// A consumer must notice its input *disappearing*, not just
+    /// changing. A deleted tree versions as `absent`, which differs from
+    /// a content hash like any other change, so the consumer re-runs and
+    /// gets a chance to drop the output it built from data that is gone.
     #[tokio::test]
     async fn deleted_input_reruns_its_consumer() {
         let root = tempfile::tempdir().unwrap();
-        let staged = root.path().join("takeout/staged");
-        std::fs::create_dir_all(&staged).unwrap();
-        std::fs::write(staged.join("chat.json"), "v1").unwrap();
+
+        // Writes its tree on the first run only. After the user deletes
+        // it, the step still runs (no inputs, so always) but recreates
+        // nothing — which is how the tree stays absent.
+        let wrote = Arc::new(AtomicU32::new(0));
+        let w = wrote.clone();
+        let producer = StepSpec::new(
+            "takeout/raw",
+            StepRun::in_process(move |ctx: StepCtx| {
+                let w = w.clone();
+                async move {
+                    if w.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("chat.json"), "v1").unwrap();
+                    }
+                    Ok(StepOutcome::default())
+                }
+            }),
+        );
 
         let runs = Arc::new(AtomicU32::new(0));
         let rn = runs.clone();
-        let step = StepSpec::new(
-            "takeout.render",
+        let consumer = StepSpec::new(
+            "takeout/rendered_md",
             StepRun::in_process(move |ctx: StepCtx| {
                 let rn = rn.clone();
                 async move {
                     rn.fetch_add(1, Ordering::SeqCst);
-                    let dir = ctx.path_str("takeout/rendered_md");
+                    let dir = ctx.path_str(&ctx.step_id);
                     std::fs::create_dir_all(&dir).unwrap();
                     let out = std::path::Path::new(&dir).join("chat.md");
-                    match std::fs::read_to_string(ctx.path_str("takeout/staged/chat.json")) {
+                    match std::fs::read_to_string(ctx.path(&ctx.inputs[0]).join("chat.json")) {
                         Ok(text) => std::fs::write(out, text).unwrap(),
                         // Source gone: drop what we rendered from it.
                         Err(_) => {
@@ -1401,17 +1341,16 @@ mod tests {
                 }
             }),
         )
-        .input("takeout/staged")
-        .output("takeout/rendered_md");
+        .input("takeout/raw");
 
-        let g = Graph::build(vec![step]).unwrap();
+        let g = Graph::build(vec![producer, consumer]).unwrap();
         let r = runner(root.path());
         assert!(r.run(&g).await.unwrap().all_ok());
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         assert!(root.path().join("takeout/rendered_md/chat.md").is_file());
 
-        // The user deletes the staged export.
-        std::fs::remove_dir_all(&staged).unwrap();
+        // The user deletes the raw store off disk.
+        std::fs::remove_dir_all(root.path().join("takeout/raw")).unwrap();
 
         let rep = r.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
@@ -1428,7 +1367,7 @@ mod tests {
         // And it settles: still absent next run, so nothing re-runs.
         let rep = r.run(&g).await.unwrap();
         assert_eq!(
-            rep.step("takeout.render").status,
+            rep.step("takeout/rendered_md").status,
             StepStatus::SkippedUpToDate
         );
         assert_eq!(runs.load(Ordering::SeqCst), 2);
@@ -1440,7 +1379,7 @@ mod tests {
         // Break slack.render by removing its input mid-way: simplest is
         // a fresh graph where slack.render always fails.
         let failing_render = StepSpec::new(
-            "slack.render",
+            "slack/rendered_md",
             StepRun::in_process(|_ctx| async {
                 Err(StepError::new(
                     FailureKind::Data,
@@ -1448,48 +1387,50 @@ mod tests {
                 ))
             }),
         )
-        .input("slack/raw")
-        .output("slack/rendered_md");
+        .input("slack/raw");
         let g = Graph::build(vec![
             download(
                 "slack",
                 fx.slack_content.clone(),
-                fx.runs["slack.download"].clone(),
+                fx.runs["slack/raw"].clone(),
             ),
             failing_render,
             download(
                 "email",
                 fx.email_content.clone(),
-                fx.runs["email.download"].clone(),
+                fx.runs["email/raw"].clone(),
             ),
-            render("email", fx.runs["email.render"].clone()),
-            index(fx.runs["index"].clone(), fx.index_changed_inputs.clone()),
+            render("email", fx.runs["email/rendered_md"].clone()),
+            index(
+                fx.runs["unified_index/grid"].clone(),
+                fx.index_changed_inputs.clone(),
+            ),
         ])
         .unwrap();
 
         let rep = runner(fx.root.path()).run(&g).await.unwrap();
         assert!(!rep.all_ok());
         assert_eq!(
-            rep.step("slack.render").status,
+            rep.step("slack/rendered_md").status,
             StepStatus::Failed {
                 kind: FailureKind::Data
             }
         );
         // Data errors don't retry.
-        assert_eq!(rep.step("slack.render").attempts, 1);
+        assert_eq!(rep.step("slack/rendered_md").attempts, 1);
         // The sibling chain still ran to completion...
         assert!(matches!(
-            rep.step("email.render").status,
+            rep.step("email/rendered_md").status,
             StepStatus::Succeeded { .. }
         ));
         // ...but the fan-in below the failure is blocked, not run.
         assert_eq!(
-            rep.step("index").status,
+            rep.step("unified_index/grid").status,
             StepStatus::Blocked {
-                on: "slack.render".to_string()
+                on: "slack/rendered_md".to_string()
             }
         );
-        assert_eq!(fx.run_count("index"), 0);
+        assert_eq!(fx.run_count("unified_index/grid"), 0);
     }
 
     #[tokio::test]
@@ -1498,7 +1439,7 @@ mod tests {
         let attempts_seen = Arc::new(AtomicU32::new(0));
         let a = attempts_seen.clone();
         let flaky = StepSpec::new(
-            "flaky.download",
+            "flaky/raw",
             StepRun::in_process(move |ctx: StepCtx| {
                 let a = a.clone();
                 async move {
@@ -1515,12 +1456,11 @@ mod tests {
                     Ok(StepOutcome::default())
                 }
             }),
-        )
-        .output("flaky/raw");
+        );
         let g = Graph::build(vec![flaky]).unwrap();
         let rep = runner(root.path()).run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(rep.step("flaky.download").attempts, 3);
+        assert_eq!(rep.step("flaky/raw").attempts, 3);
     }
 
     #[tokio::test]
@@ -1530,7 +1470,7 @@ mod tests {
         let runs = Arc::new(AtomicU32::new(0));
         let (f, rn) = (fail_now.clone(), runs.clone());
         let dl = StepSpec::new(
-            "src.download",
+            "src/raw",
             StepRun::in_process(move |ctx: StepCtx| {
                 let (f, rn) = (f.clone(), rn.clone());
                 async move {
@@ -1541,7 +1481,7 @@ mod tests {
                     // the step is incremental and commits before dying.
                     std::fs::write(dir.join("data.txt"), "partial").unwrap();
                     if *f.lock().unwrap() {
-                        let pat = crate::ArtifactPat::parse("src/raw").unwrap();
+                        let pat = crate::ArtifactPath::parse("src/raw").unwrap();
                         return Err(
                             StepError::new(FailureKind::Auth, anyhow::anyhow!("HTTP 401"))
                                 .with_outputs(vec![ArtifactState::versioned(
@@ -1554,25 +1494,24 @@ mod tests {
                     Ok(StepOutcome::default())
                 }
             }),
-        )
-        .output("src/raw");
+        );
         let render_runs = Arc::new(AtomicU32::new(0));
         let g = Graph::build(vec![dl, render("src", render_runs.clone())]).unwrap();
 
         let r = runner(root.path());
         let rep1 = r.run(&g).await.unwrap();
         assert_eq!(
-            rep1.step("src.download").status,
+            rep1.step("src/raw").status,
             StepStatus::Failed {
                 kind: FailureKind::Auth
             }
         );
         // Auth doesn't retry.
-        assert_eq!(rep1.step("src.download").attempts, 1);
+        assert_eq!(rep1.step("src/raw").attempts, 1);
         assert_eq!(
-            rep1.step("src.render").status,
+            rep1.step("src/rendered_md").status,
             StepStatus::Blocked {
-                on: "src.download".to_string()
+                on: "src/raw".to_string()
             }
         );
 
@@ -1607,64 +1546,12 @@ mod tests {
         assert_eq!(starts.len(), 5, "every step started once: {starts:?}");
         assert!(events.iter().any(|e| matches!(
             e,
-            Event::ProgressInc { step, .. } if step == "slack.download"
+            Event::ProgressInc { step, .. } if step == "slack/raw"
         )));
         let finishes = events
             .iter()
             .filter(|e| matches!(e, Event::StepFinish { .. }))
             .count();
         assert_eq!(finishes, 5);
-    }
-
-    #[tokio::test]
-    async fn external_input_change_triggers_rerun() {
-        // A render-only pipeline over a user-staged tree (no download
-        // step) — the `--skip-extract` / pre-staged `input_path` shape.
-        let root = tempfile::tempdir().unwrap();
-        let staged = root.path().join("takeout/staged");
-        std::fs::create_dir_all(&staged).unwrap();
-        std::fs::write(staged.join("chat.json"), "v1").unwrap();
-
-        let runs = Arc::new(AtomicU32::new(0));
-        let rn = runs.clone();
-        let step = StepSpec::new(
-            "takeout.render",
-            StepRun::in_process(move |ctx: StepCtx| {
-                let rn = rn.clone();
-                async move {
-                    rn.fetch_add(1, Ordering::SeqCst);
-                    let dir = ctx.path_str("takeout/rendered_md");
-                    std::fs::create_dir_all(&dir).unwrap();
-                    let text =
-                        std::fs::read_to_string(ctx.path_str("takeout/staged/chat.json")).unwrap();
-                    std::fs::write(dir.join("chat.md"), text).unwrap();
-                    Ok(StepOutcome::default())
-                }
-            }),
-        )
-        .input("takeout/staged")
-        .output("takeout/rendered_md");
-
-        let g = Graph::build(vec![step]).unwrap();
-        let r = runner(root.path());
-        r.run(&g).await.unwrap();
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-
-        // Unchanged staged tree → skip.
-        let rep = r.run(&g).await.unwrap();
-        assert_eq!(
-            rep.step("takeout.render").status,
-            StepStatus::SkippedUpToDate
-        );
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-
-        // Edit the staged tree → rerun.
-        std::fs::write(staged.join("chat.json"), "v2").unwrap();
-        let rep = r.run(&g).await.unwrap();
-        assert!(matches!(
-            rep.step("takeout.render").status,
-            StepStatus::Succeeded { changed: 1 }
-        ));
-        assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 }
