@@ -898,6 +898,19 @@ fn credential_hint(e: ClaudeError) -> anyhow::Error {
          4. Smoke-test:\n\
               {lk} curl -s https://claude.ai/api/organizations\n\
 \n\
+         Already set it and still seeing this? Check the stored value's\n\
+         shape before re-pasting. Quoting `$(pbpaste)` in SINGLE quotes\n\
+         stores the literal 10 characters `$(pbpaste)` — the shell never\n\
+         expands it, and claude.ai answers `account_session_invalid`,\n\
+         which reads exactly like an expired key. A real sessionKey\n\
+         starts `sk-ant-sid01-` and is >100 chars. This prints only the\n\
+         length, never the secret (LATCHKEY_CURL must be unset — the\n\
+         impersonating shim drops `-v`):\n\
+              env -u LATCHKEY_CURL {lk} curl -v \\\n\
+                https://claude.ai/api/organizations 2>&1 >/dev/null |\\\n\
+                sed -n 's/.*sessionKey=\\([^;]*\\).*/\\1/p' |\\\n\
+                awk '{{print \"sessionKey length: \" length($0)}}'\n\
+\n\
          There is also a browser login — register with\n\
          `--login-url=\"https://claude.ai/login\" --login-flow=cookie-capture\n\
          --login-flow-params='{{\"cookieKeys\": [\"sessionKey\"]}}'`, then\n\
@@ -1353,6 +1366,47 @@ fn updated_at_in_scope(updated_at: Option<&str>, since: Option<&DateTime<Utc>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 403 from claude.ai reads as "expired key" but is equally the
+    /// signature of a *malformed stored* key — observed 2026-08-31, where
+    /// `auth set` had been run with `'$(pbpaste)'` in single quotes and
+    /// latchkey had been sending those 10 literal characters as the cookie
+    /// for hours. The hint has to name that case, because the symptom
+    /// (`account_session_invalid`) points the other way and re-pasting a
+    /// perfectly good browser key does not fix it.
+    #[test]
+    fn auth_hint_names_the_single_quote_trap_and_offers_a_shape_check() {
+        let hint = credential_hint(ClaudeError::Forbidden("HTTP 403".into())).to_string();
+        assert!(
+            hint.contains("SINGLE quotes"),
+            "hint must name the quoting trap; got:\n{hint}"
+        );
+        assert!(
+            hint.contains("sk-ant-sid01-"),
+            "hint must say what a real key looks like; got:\n{hint}"
+        );
+        // The shape check is only useful if it can actually run: the
+        // impersonating shim swallows `-v`, so the command must clear it.
+        assert!(
+            hint.contains("env -u LATCHKEY_CURL"),
+            "shape-check command must unset LATCHKEY_CURL; got:\n{hint}"
+        );
+        // ...and it must never suggest printing the secret itself.
+        assert!(
+            hint.contains("length"),
+            "shape check must report length, not the value; got:\n{hint}"
+        );
+    }
+
+    /// The embellishment is scoped: a claude.ai outage or a network blip is
+    /// not a credentials problem, and dumping setup instructions on one
+    /// sends you off fixing something that isn't broken.
+    #[test]
+    fn auth_hint_passes_through_non_setup_failures() {
+        let hint =
+            credential_hint(ClaudeError::Permanent("HTTP 502 bad gateway".into())).to_string();
+        assert_eq!(hint, "list orgs: HTTP 502 bad gateway");
+    }
 
     #[test]
     fn since_parses_date_and_rfc3339() {

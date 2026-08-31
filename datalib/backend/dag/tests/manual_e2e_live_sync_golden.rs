@@ -656,6 +656,20 @@ fn manual_e2e_live_sync_golden() {
     }, {
         assert_json_snapshot!("sync_summary_run2_incrementality", report);
     });
+    // On slack, read `messages` in that snapshot with care: it is the one
+    // count here that moves without anything being wrong. `rewrite_config`
+    // patches `refresh_window_days = 30` into the slack step, so run 2
+    // re-queries the trailing 30 days on top of its forward walk, and
+    // `messages` is however much DM/channel traffic happens to fall inside
+    // that window on the day of the bake. It was 15 on the 2026-08-31 bake,
+    // all of them in one DM; every other conversation's newest message
+    // predated the floor, so their refresh pass returned nothing.
+    //
+    // The counts that must stay at zero are the content deltas. If those are
+    // zero and only `messages` moved, incrementality is intact. To confirm
+    // from a run's own logs rather than by reasoning: `slack_history_page`
+    // prints one line per request, and the refresh pass is the one carrying
+    // `latest = <watermark>` — the forward walk has no `latest` at all.
 
     // ── Third run: --reset-and-redownload content stability ───────────
     //
@@ -1274,6 +1288,18 @@ fn summarize_file(path: &Path) -> SnapValue {
 /// Patch the DAG config with the two test-only tweaks: point `data_root` at
 /// this run's directory, and bump slack `refresh_window_days` so a fresh
 /// data_root re-downloads media.
+///
+/// **The refresh-window tweak also drives run 2's slack `messages` count, and
+/// it is the reason that count is not zero.** A config-driven slack step
+/// defaults to `refresh_window_days = 0` (only the CLI defaults to 30), so
+/// without this line run 2 would do a forward walk from the watermark and
+/// nothing else. With it, run 2 *additionally* re-queries the trailing 30
+/// days — `oldest = now - 30d, latest = watermark, inclusive = true` — and
+/// re-fetches every message in that window. Those messages come back
+/// byte-identical, so the content deltas stay at zero and incrementality is
+/// still what the snapshot proves; only `messages` and
+/// `messages_bookkeeping` move. See the note at the run-2 snapshot for what
+/// that means when the number changes.
 ///
 /// The pre-DAG version also forced `qmd.skip=true`; in the steps format that
 /// is expressed by the config simply not declaring a `qmd_index` step, so
