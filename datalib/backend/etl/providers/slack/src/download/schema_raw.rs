@@ -191,6 +191,39 @@ pub fn dm_counterparts(participants: &[String], self_user_id: Option<&str>) -> V
     }
 }
 
+/// What to call a DM: `@` plus the people in it — `@Jean-Luc Picard`,
+/// or `@William Riker, Data` for a group.
+///
+/// Shared by the downloader (progress lines, logs) and the renderer
+/// (document titles, the grid's `conversation_name`) so the two can't
+/// drift — a DM announced as one thing while syncing and titled
+/// another once rendered reads as two different conversations.
+///
+/// `counterparts` comes from [`dm_counterparts`]; `labels` maps user id
+/// → display name. The fallbacks matter: `name` is Slack's own
+/// `mpdm-…` handle, and it is not split back into people because a
+/// Slack handle may itself contain dashes. Reaching `channel_id` means
+/// a store written before `dm_user_ids` existed, or a DM with someone
+/// `users.list` didn't return.
+pub fn dm_display_name(
+    counterparts: &[String],
+    name: Option<&str>,
+    channel_id: &str,
+    labels: &std::collections::BTreeMap<String, String>,
+) -> String {
+    if !counterparts.is_empty() {
+        let names: Vec<&str> = counterparts
+            .iter()
+            .map(|u| labels.get(u).map(String::as_str).unwrap_or(u.as_str()))
+            .collect();
+        return format!("@{}", names.join(", "));
+    }
+    match name {
+        Some(n) => format!("@{n}"),
+        None => channel_id.to_string(),
+    }
+}
+
 /// Per-fetch volatile fields split out of the `channels` content
 /// payload into the `channels_bookkeeping.volatile_payload` sidecar
 /// (see [`datalib_etl::doltlite_raw::split_volatile`]). Slack bumps

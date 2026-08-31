@@ -270,13 +270,13 @@ fn normalize_dm_entry(spec: &str) -> String {
 /// The `dm_users` allowlist resolved against the mirrored user
 /// directory.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DmAllowlist {
-    /// Slack user ids whose 1:1 DM is in scope.
-    pub user_ids: std::collections::BTreeSet<String>,
+struct DmAllowlist {
+    /// Slack user ids whose DMs are in scope.
+    user_ids: std::collections::BTreeSet<String>,
     /// Entries that matched nobody. Warned about rather than ignored:
     /// a typo'd handle otherwise mirrors nothing and looks identical to
     /// "that person never DM'd you".
-    pub unmatched: Vec<String>,
+    unmatched: Vec<String>,
 }
 
 /// Resolve `dm_users` entries to Slack user ids.
@@ -377,37 +377,13 @@ fn select_targets(
                 continue;
             }
         }
-        plan.targets
-            .push((t.id.clone(), dm_label(t, &counterparts, user_labels)));
+        let label =
+            schema_raw::dm_display_name(&counterparts, t.name.as_deref(), &t.id, user_labels);
+        plan.targets.push((t.id.clone(), label));
         plan.dm_targets += 1;
     }
 
     plan
-}
-
-/// How a DM is named in progress lines and logs: `@` plus the people
-/// in it — `@Jean-Luc Picard`, or `@William Riker, Data` for a group.
-///
-/// Falls back to Slack's own `mpdm-…` handle, then the raw id, for a
-/// DM whose participants we couldn't resolve. That happens on a store
-/// written before `dm_user_ids` existed, and on a DM with someone
-/// `users.list` didn't return.
-fn dm_label(
-    t: &FetchTarget,
-    counterparts: &[String],
-    user_labels: &BTreeMap<String, String>,
-) -> String {
-    if !counterparts.is_empty() {
-        let names: Vec<String> = counterparts
-            .iter()
-            .map(|u| user_labels.get(u).cloned().unwrap_or_else(|| u.clone()))
-            .collect();
-        return format!("@{}", names.join(", "));
-    }
-    match &t.name {
-        Some(n) => format!("@{n}"),
-        None => t.id.clone(),
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -96,7 +96,9 @@ impl Channel {
     /// A DM is named after the people in it, `@`-sigilled: a 1:1 DM has
     /// no name to put after a `#`, and `#D0123ABCD` is not something
     /// anyone can read. The account itself is subtracted, so a DM reads
-    /// as who you are talking *to*.
+    /// as who you are talking *to*. The naming itself is
+    /// [`crate::download::schema_raw::dm_display_name`], shared with
+    /// the downloader's progress lines so the two can't disagree.
     ///
     /// `users` maps user id → display label ([`User::label`]).
     pub fn display(
@@ -112,21 +114,12 @@ impl Channel {
         }
         let counterparts =
             crate::download::schema_raw::dm_counterparts(&self.dm_user_ids, self_user_id);
-        if !counterparts.is_empty() {
-            let names: Vec<String> = counterparts
-                .iter()
-                .map(|u| users.get(u).cloned().unwrap_or_else(|| u.clone()))
-                .collect();
-            return format!("@{}", names.join(", "));
-        }
-        // Nothing resolvable: fall back to Slack's own composite
-        // handle (`mpdm-alice--bob--carol-1`), then the raw id. Ugly
-        // but truthful — splitting that handle back into people is
-        // guesswork, since a Slack handle may itself contain dashes.
-        match &self.name {
-            Some(n) => format!("@{n}"),
-            None => self.channel_id.clone(),
-        }
+        crate::download::schema_raw::dm_display_name(
+            &counterparts,
+            self.name.as_deref(),
+            &self.channel_id,
+            users,
+        )
     }
 }
 
