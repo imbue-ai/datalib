@@ -940,22 +940,74 @@ position-independent (relative `blobs/` links, no id in frontmatter),
 `markdown_uuid` is upstream-derived so filed feedback survives, and qmd
 keys `content_vectors` by content hash, so a move costs no re-embedding.
 
-### Delete means "remove from config"
+### One row per step, and no "data source" at all
 
-Delete drops the source's two steps from the config and stops there. The
-data on disk is untouched, and that turns out to be the well-behaved
-option rather than a compromise:
+*(Built, 2026-08-31.)*
 
-- `<data_root>/<name>/` keeps its raw stores and `rendered_md/` tree.
-- Both fan-in steps declare `inputs = ["**/rendered_md"]`, and
-  `build_grid_index` walks the data root **by directory**, not by
-  config — so the removed source's documents keep getting indexed and
+A source used to be a row: a `<name>/raw` + `<name>/rendered_md` pair
+fused into one entry, edited by one form, run as one unit. It was never
+a config entity — the grouping was invented in `sourceSteps.ts` and
+reconstructed by splitting paths — and it cost more than it bought. A
+fetch step and a render step have separate options, separate outputs,
+separate disk footprints and separate reasons to re-run; the runner has
+always treated them as two steps.
+
+So the table is one row per `[[steps]]` entry, and the Kind column says
+which wave each is — **Fetch**, **Render**, **Index** — derived from the
+shape of the id (`phaseOf`). Each row edits, runs, reveals and deletes
+on its own.
+
+What survives is a *display* relationship: two steps sharing an id stem
+are siblings under one directory. `stemOf` and `renderIdFor` are the
+only places that touch it, and they exist to propose a default, never to
+resolve anything.
+
+### Adding the render step: a checkbox, not a second dialog
+
+Only `signal_backup` declares a render-phase field. For every other
+provider the render step has nothing to configure, so it is offered as a
+checkbox at the bottom of the fetch step's form — ticked by default,
+with the TOML preview showing both steps so the checkbox demonstrates
+its consequence rather than asserting it. One save writes both.
+
+A provider that *does* have render options gets the second dialog
+instead, opened on the same component with `renderFor` set: name
+pre-filled `"<name> (render markdown)"`, id fixed at the sibling, and
+`inputs` pointing at the step just written.
+
+Either way it can be declined and added later: a fetch row carries a
+**Render to markdown** action, which mints the same id through the same
+`renderIdFor`. The action is absent on rows where it makes no sense and
+disabled with a reason where it nearly does ("This already has a render
+step", "Lightroom produces no markdown to render").
+
+One consequence to expect: **names drift.** Rename the fetch step and
+the render step keeps the name it was created with. That is correct —
+they are separate steps — and the muted id beside each keeps the table
+readable.
+
+### Delete takes the pair
+
+Delete drops a step's `[[steps]]` block from the config and stops there.
+The data on disk is untouched, which is the right default for a button
+one click away in a table.
+
+**A fetch step takes its render step with it.** Since `inputs` names
+step ids, a render step whose input no longer exists is a config the
+loader refuses outright — a whole app broken by a partial delete. So the
+confirm names both, and `removeSteps` cuts both, and `unwireFromFanIns`
+strips the render step from the index steps' inputs first. (The general
+version of that brittleness — one bad line taking the app down — is
+issue #209.)
+
+The data stays behind either way:
+
+- `<data_root>/<stem>/` keeps its raw store and `rendered_md/` tree.
+- `build_grid_index` walks the data root **by directory**, not by
+  config, so the removed source's documents keep getting indexed and
   stay searchable in Explore.
-- The raw store is intact, so re-adding the source later resumes
-  incrementally instead of re-downloading.
-
-That makes Delete non-destructive and reversible, which is the right
-default for a button sitting one click away in a table.
+- The raw store is intact, so re-adding later resumes incrementally
+  instead of re-downloading.
 
 Removing the *data* is a separate feature and isn't designed here. When
 someone does design it, note the prerequisite: **`grid_index` is
