@@ -64,6 +64,11 @@ blob_size_limit_bytes = 1000000  # 1 MB — skip larger file uploads
 [steps.params.sync]
 media = true
 channels = ["project-data-liberation"]
+# dms = true             # also mirror direct messages (1:1 and group).
+                         # Off unless set. `dm_users = ["@riker"]`
+                         # narrows them to conversations with particular
+                         # people — a separate list from `channels`,
+                         # since a DM has no channel name.
 # since = "2025-01-01"   # oldest message to mirror (default 2024-01-01).
                          # This — not `refresh_window_days` — is how you
                          # bound how far back the mirror goes.

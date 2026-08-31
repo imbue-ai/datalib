@@ -164,6 +164,25 @@ since = "2025-01-01"     # oldest message to mirror (YYYY-MM-DD or RFC 3339;
 media = true             # pull file attachments into blobs
 all_channels = false
 channels = ["project-data-liberation", "general"]
+dms = true               # also mirror direct messages, 1:1 and group.
+                         # OFF unless you set it — DMs are the most
+                         # private thing in a workspace, so mirroring
+                         # them is opt-in.
+dm_users = ["@riker", "Jean-Luc Picard"]
+                         # optional: restrict DMs to conversations with
+                         # these people. Names a *person*, not a
+                         # conversation — a handle, display name, real
+                         # name or user id (`U024BE7LH`), with or
+                         # without the `@`. A group DM counts as a
+                         # conversation with everyone in it. Omit to
+                         # mirror every DM. Requires `dms = true`;
+                         # setting it with `dms = false` is an error
+                         # rather than a silent no-op.
+                         #
+                         # This is a separate list from `channels` on
+                         # purpose: `channels` is the `#` namespace and
+                         # this is the `@` one. A DM has no channel
+                         # name, so one shared list would drop them all.
 # refresh_window_days = 30  # re-fetch the trailing 30 days of channels that
                             # already have history, to pick up edits and
                             # reactions. NOT a range bound — it only adds

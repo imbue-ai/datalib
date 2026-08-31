@@ -11,6 +11,7 @@ import {
   appendSource,
   buildStepPair,
   emptyTableDiagnosis,
+  fieldIsActive,
   listConfiguredSources,
   paramsAreRepresentable,
   removeSource,
@@ -237,6 +238,51 @@ describe("buildStepPair", () => {
   it("quotes dates", () => {
     const body = buildStepPair(SLACK, "slack", { "sync.since": "2026-01-01" });
     expect(body).toContain('since = "2026-01-01"');
+  });
+
+  // Off is a real setting, and it is the backward-compatible one — a
+  // config that omits `dms` gets DMs off, so writing it explicitly is
+  // what makes the wizard's answer visible in the file.
+  it("writes the direct-message switch even when it is off", () => {
+    const body = buildStepPair(SLACK, "slack", { "sync.dms": false });
+    expect(body).toContain("dms = false");
+  });
+
+  it("writes the DM allowlist when direct messages are on", () => {
+    const body = buildStepPair(SLACK, "slack", {
+      "sync.dms": true,
+      "sync.dm_users": ["@riker", "Jean-Luc Picard"],
+    });
+    expect(body).toContain("dms = true");
+    expect(body).toContain('dm_users = ["@riker", "Jean-Luc Picard"]');
+  });
+
+  // `SlackApiSync::validate` rejects `dm_users` with `dms = false`, so
+  // a form that emitted it would write a config the backend refuses.
+  // The gate has to drop the value, not just hide the input.
+  it("drops a gated field whose switch is off", () => {
+    const body = buildStepPair(SLACK, "slack", {
+      "sync.dms": false,
+      "sync.dm_users": ["@riker"],
+    });
+    expect(body).toContain("dms = false");
+    expect(body).not.toContain("dm_users");
+  });
+});
+
+describe("fieldIsActive", () => {
+  const dmUsers = SLACK.fields!.find((f) => f.target === "sync.dm_users")!;
+  const channels = SLACK.fields!.find((f) => f.target === "sync.channels")!;
+
+  it("gates a field on its `requires` target", () => {
+    expect(fieldIsActive(dmUsers, { "sync.dms": true })).toBe(true);
+    expect(fieldIsActive(dmUsers, { "sync.dms": false })).toBe(false);
+    // Unset reads as off, which is what a freshly opened form has.
+    expect(fieldIsActive(dmUsers, {})).toBe(false);
+  });
+
+  it("leaves an ungated field alone", () => {
+    expect(fieldIsActive(channels, {})).toBe(true);
   });
 });
 

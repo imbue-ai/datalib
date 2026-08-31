@@ -637,6 +637,26 @@ impl ColumnInfo {
     }
 }
 
+/// Does `table` have a `column`?
+///
+/// For **read-only** consumers of a raw store — the render side opens
+/// its pool with `read_only(true)` and never applies DDL, so it does
+/// not get [`open`]'s schema reconcile. A store written before a
+/// column was added therefore still lacks it, and a `SELECT` naming
+/// that column fails at prepare time and sinks the whole step. Probe
+/// first and widen the projection only when the column is really
+/// there; the alternative is a render that hard-fails on any store the
+/// current downloader hasn't touched yet.
+///
+/// A missing table reads as "no such column" rather than an error,
+/// matching [`table_columns`].
+pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
+    Ok(table_columns(pool, table)
+        .await?
+        .iter()
+        .any(|c| c.name == column))
+}
+
 /// Introspect a table's columns via `PRAGMA table_xinfo`. Returns an
 /// empty vec if the table does not exist (no error).
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {

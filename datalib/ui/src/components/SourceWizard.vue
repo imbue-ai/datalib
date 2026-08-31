@@ -23,6 +23,7 @@ import {
 } from "@/config/catalog";
 import {
   buildStepPair,
+  fieldIsActive,
   getParam,
   suggestName,
   type ConfiguredSource,
@@ -149,6 +150,14 @@ const body = computed(() =>
   chosen.value ? buildStepPair(chosen.value, name.value.trim(), values.value) : "",
 );
 
+/// Fields whose `requires` gate is open. A gated field disappears when
+/// its switch goes off, and `buildStepPair` drops its value from the
+/// TOML at the same time — the two have to agree, or the review pane
+/// would show a setting the form isn't offering.
+const visibleFields = computed(() =>
+  (chosen.value?.fields ?? []).filter((f) => fieldIsActive(f, values.value)),
+);
+
 function listText(field: Field): string {
   const v = values.value[field.target];
   return Array.isArray(v) ? (v as string[]).join(", ") : "";
@@ -273,7 +282,7 @@ function submit() {
           <small v-if="nameError && (nameTouched || isEdit)" class="wiz-error">{{ nameError }}</small>
         </label>
 
-        <label v-for="f in chosen.fields ?? []" :key="f.target" class="wiz-field">
+        <label v-for="f in visibleFields" :key="f.target" class="wiz-field">
           <span class="wiz-label">
             {{ f.label }}
             <em v-if="'required' in f && f.required" class="wiz-req">required</em>
