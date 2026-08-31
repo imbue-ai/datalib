@@ -139,26 +139,76 @@ Three checks stand between a bad recipe and silent data loss.
 
 ## Porting status
 
-`datalib_id` exists and the backpointer columns are populated where the
-information was already at hand. **No provider mints its ids through
-`entity_id` yet** — that is a breaking re-key and is deliberately
-separate.
+Three of sixteen row-emitting providers mint through `entity_id`. The
+`NON_UUID_PK_PROVIDERS` allowlist is empty and every row in the TNG
+fixture is UUID-shaped.
 
-| | Providers |
-|---|---|
-| Ported onto `datalib_id` | *(none yet)* |
-| Non-UUID primary keys | anthropic, openai — tracked by `NON_UUID_PK_PROVIDERS` |
-| Keyed on our `source_name` | signal, whatsapp, yolink, contacts |
-| `source_native_id` populated | anthropic, chatgpt, slack (chat-level), pdf, github, gitlab, yolink, plus everything through chat-common / contact-common |
-| `source_native_id` still NULL | every message-level row — per-item ids need a field on `NormalizedChatItem` and a pass through each provider's item builder |
+| Provider | Status | Scope |
+|---|---|---|
+| anthropic | ported | `ProviderGlobal` |
+| openai (chatgpt) | ported | `ProviderGlobal` |
+| slack | ported | `Upstream(team_id)` |
+| github, gitlab | pending | `Upstream(repo)` — recipe already carries it |
+| email (jmap) | pending | `Upstream(account_id)` — already carries it |
+| beeper | pending | `Upstream(store)` — already carries it |
+| notion | pending | `ProviderGlobal` — page ids are Notion UUIDs |
+| pdf, perseus | pending | `Content` |
+| linkedin, google_takeout, sms_backup_restore | pending | `ProviderGlobal` |
+| whatsapp | pending | `Upstream(account_jid)` — needs parse plumbing |
+| **signal, yolink, contacts** | **blocked** | see below |
 
-When porting a provider:
+The pending ones are mechanical: their recipes already carry the right
+discriminator, so the port is swapping the namespace and separator and
+populating the backpointer.
 
-1. Move its recipes onto `entity_id`, deleting its `*_UUID_NS` constant.
-2. Populate all three backpointer columns.
-3. Shrink `NON_UUID_PK_PROVIDERS` if it was listed.
-4. Add the round-trip assertion (`entity_id(...) == uuid`) to
-   `ingested_tng_test`, scoped to the providers that have moved —
-   nothing asserts it today because it would be vacuous.
-5. Re-key: existing data roots must be wiped and re-ingested. Filed
+### The blocked three
+
+All four `source_name`-keyed providers need an upstream identity to
+replace it with. Only whatsapp has one available today
+(`wa_chat.account_jid`, already in the raw store, just not surfaced by
+`parse`). The other three do not:
+
+- **signal** — the backup's `AccountData` frame carries `profileKey`,
+  `username`, `givenName`/`familyName`, but no ACI or e164. The chat
+  ids it keys on are autoincrements local to one backup file, so
+  something must discriminate two accounts. Candidates: a hash of
+  `profileKey` (stable, but rotates on re-registration, and it is a
+  secret we would be hashing into public ids), or extracting the self
+  recipient's ACI (more parse work, may not be present).
+- **yolink** — device rows can key on the config's `family_device_id`,
+  which is YoLink-issued. The per-source *timeseries page* has no
+  upstream entity at all: it is a document datalib invents for a
+  configured source, so its identity genuinely is the source.
+- **contacts** — `contact_uuid(account_id, …)` is called with
+  `source_name`. The CardDAV config has `server_url`, which is stable
+  against renames but is still our config rather than the server's own
+  principal id.
+
+These need a decision, not more code. The options are on the table:
+mint and persist a per-source instance id (breaks id reproducibility
+from data alone, which the fixture and insta goldens rely on), extract
+a real upstream id per provider (most work, best result), or add an
+explicit scope variant for "a document datalib invents per configured
+source" that names the rename hazard instead of hiding it.
+
+### When porting a provider
+
+1. Add an `ids` module returning an `Identity { uuid, natural_key,
+   entity_kind }`. Returning the pair is what keeps `source_native_id`
+   and `uuid` from drifting — build the key once and use it twice.
+   Use `datalib_id::composite_key` for tuple keys.
+2. Populate all three backpointer columns. For chat-common providers
+   that means `NormalizedChat::source_scope`,
+   `RenderProfile::chat_entity_kind`, and `source_ref` on every item
+   **and every reaction** (reactions get their own grid_rows and are
+   easy to miss — that was a real bug).
+3. Add the provider to `SCOPE_TAG_BY_PROVIDER` and `PORTED_PROVIDERS`
+   in `ingested_tng_test`.
+4. Re-key: existing data roots must be wiped and re-ingested. Filed
    feedback pointing at old ids does not survive.
+
+The round-trip check is not a formality. It caught three real bugs
+across the first three ports, each invisible to every other test: a
+composite key spelled `#` in the column and `\x1f` in the recipe; a
+Claude Project stamped `"conversation"` while minted as `"project"`;
+and slack's reaction rows carrying no backpointer at all.
