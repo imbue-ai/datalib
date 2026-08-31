@@ -841,12 +841,22 @@ onUnmounted(() => {
      open and competing for the same space. */
   flex: 1 1 auto;
   min-height: 180px;
+  position: relative;
 }
 /* Without `domLayout: autoHeight` the grid sizes to its container, so
    its own element has to fill the box we just gave it — otherwise it
-   collapses to nothing and renders neither headers nor rows. */
+   collapses to nothing and renders neither headers nor rows.
+   Fill the positioned .m2-grid absolutely rather than with
+   `height: 100%`. WebKit (Safari + the Tauri WKWebView the desktop app
+   runs in) resolves a percentage height against a flex-sized parent
+   that has no explicit `height` as `auto`, which collapsed this grid to
+   its 2px of border — headers and rows present in the DOM, nothing
+   painted — while Chromium gives it the full flexed height. Same bug,
+   same fix as `.grid` in cards/GridCard.ce.vue. Pinned by
+   tests/e2e/manager2-grid.spec.ts under the suite's `webkit` project. */
 .m2-ag {
-  height: 100%;
+  position: absolute;
+  inset: 0;
 }
 /* Everything under the grid scrolls as one block, so opening the
    Advanced editor never pushes the table off screen. */

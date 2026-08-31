@@ -614,6 +614,17 @@ misreports credential state.
 
 ## Local-path sources need a file picker we don't have
 
+> **Superseded in part, 2026-08-28.** The conclusion below — browse
+> endpoint first, native dialog as a later enhancement — was inverted,
+> and the native dialog is now **built**: in the desktop app every
+> `kind: "path"` field opens a real OS picker
+> ([`wizard_file_pickers.md`](wizard_file_pickers.md)). The premise
+> below is also wrong as written: the UI *does* have Tauri IPC
+> (`ui/src/desktop.ts`, `ui/src/externalLinks.ts`). What survives is
+> the browser-served half — `GET /api/fs/browse` still does not exist,
+> and is still the only way a plain browser can name a path on the
+> backend's filesystem.
+
 Over half the twenty types read from local disk (`pdf`, `fsindex`,
 `lightroom`, `linkedin`, `google_takeout`, `signal_backup`,
 `whatsapp_backup`, `sms_backup_restore`, `beeper`, `perseus`,
@@ -635,8 +646,9 @@ Rooted at `$HOME` by default with an explicit "browse elsewhere"
 escape, `accept` filtering by extension or dir-ness, and — the part
 that earns its keep — an `inspect` probe fired on selection so the
 screen can say *"4,182 PDFs, 3.1 GB, 96 need OCR"* before you commit.
-Adding a native Tauri dialog later is an enhancement layered on the
-same endpoint, not a replacement.
+The native Tauri dialog was *not* the later enhancement this
+paragraph took it for; it shipped first. See the note at the head of
+this section.
 
 ## The picker screen
 

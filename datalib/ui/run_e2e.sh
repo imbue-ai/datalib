@@ -11,8 +11,9 @@
 #   * `bazel test //datalib/ui:e2e_test`  (no BUILD_WORKSPACE_DIRECTORY)
 #       Hermetic-ish: Playwright runs from the runfiles tree, against
 #       the bazel-linked `:node_modules` (rules_js / pnpm-lock.yaml).
-#       Independent of host `pnpm install` state. Chromium binary still
-#       comes from `~/Library/Caches/ms-playwright` via env_inherit=HOME.
+#       Independent of host `pnpm install` state. Browser binaries
+#       (chromium + webkit) still come from
+#       `~/Library/Caches/ms-playwright` via env_inherit=HOME.
 set -eo pipefail
 
 # --- bazel runfiles bootstrap ---
@@ -43,7 +44,10 @@ if [[ -n "$WORKSPACE" ]]; then
   if [[ ! -d "$UI_DIR/node_modules" ]]; then
     (cd "$UI_DIR" && pnpm install)
   fi
-  (cd "$UI_DIR" && pnpm exec playwright install chromium >/dev/null)
+  # Both engines: the suite has a `webkit` project so the specs that
+  # render an AG Grid also run in the engine the Tauri desktop app
+  # actually uses (WKWebView).
+  (cd "$UI_DIR" && pnpm exec playwright install chromium webkit >/dev/null)
   PLAYWRIGHT_CMD=(pnpm exec playwright test)
 else
   # ─── `bazel test` mode ───────────────────────────────────────────────
@@ -101,7 +105,18 @@ else
   # so we link it in rather than copy.
   ln -s "$UI_DIR/node_modules" "$STAGE_DIR/node_modules"
   UI_DIR="$STAGE_DIR"
-  PLAYWRIGHT_CMD=(node "$STAGE_DIR/node_modules/@playwright/test/cli.js" test)
+  PLAYWRIGHT_CLI="$STAGE_DIR/node_modules/@playwright/test/cli.js"
+
+  # Browser binaries are not a bazel input — they come from the host's
+  # ~/Library/Caches/ms-playwright via env_inherit=HOME (see the
+  # hermeticity note in BUILD.bazel). Ask playwright to fetch anything
+  # missing rather than failing deep inside a spec with
+  # "Executable doesn't exist". It is a no-op once the revisions the
+  # pinned playwright wants are cached, which is why the target carries
+  # `requires-network`. `webkit` is the one the desktop app's WKWebView
+  # matches; `chromium` covers the rest of the suite.
+  node "$PLAYWRIGHT_CLI" install chromium webkit >/dev/null
+  PLAYWRIGHT_CMD=(node "$PLAYWRIGHT_CLI" test)
 fi
 
 # Resolve the bazel-built backend binary from runfiles and export it for

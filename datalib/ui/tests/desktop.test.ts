@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   filePathFromUrl,
   isDesktopApp,
+  pickPath,
   revealActionLabel,
   revealInFileManager,
 } from "../src/desktop";
@@ -114,5 +115,98 @@ describe("revealActionLabel", () => {
     vi.restoreAllMocks();
     setUA("Mozilla/5.0 (X11; Linux x86_64)");
     expect(revealActionLabel()).toBe("Show in File Manager");
+  });
+});
+
+describe("pickPath", () => {
+  const folder = { picks: "dir" as const, title: "Choose your WhatsApp backup folder" };
+
+  it("is unavailable in a browser rather than throwing", async () => {
+    // The wizard hides the button on `isDesktopApp()`, so this is the
+    // belt to that braces: a browser must never see a dialog attempt.
+    await expect(pickPath(folder)).resolves.toEqual({
+      outcome: "unavailable",
+      reason: "not running in the desktop app",
+    });
+  });
+
+  it("reaches the dialog plugin's open command with the folder options", async () => {
+    // Asserts THROUGH `@tauri-apps/plugin-dialog` for the same reason
+    // the reveal test does: the package owns the command name and the
+    // `{ options }` envelope, so a Tauri upgrade that renames either
+    // turns this red instead of leaving a button that does nothing.
+    const invoke = fakeTauri(() => Promise.resolve("/Users/x/backups/WhatsApp"));
+    await expect(pickPath(folder)).resolves.toEqual({
+      outcome: "picked",
+      path: "/Users/x/backups/WhatsApp",
+    });
+    const [cmd, args] = invoke.mock.calls[0];
+    expect(cmd).toBe("plugin:dialog|open");
+    expect(args).toEqual({
+      options: {
+        title: "Choose your WhatsApp backup folder",
+        directory: true,
+        multiple: false,
+        defaultPath: undefined,
+        filters: undefined,
+      },
+    });
+  });
+
+  it("passes an extension filter only for file pickers", async () => {
+    const invoke = fakeTauri(() => Promise.resolve("/Users/x/Catalog.lrcat"));
+    await pickPath({ picks: "file", title: "Choose your Lightroom catalog", extensions: ["lrcat"] });
+    expect((invoke.mock.calls[0][1] as any).options).toMatchObject({
+      directory: false,
+      filters: [{ name: "Supported files", extensions: ["lrcat"] }],
+    });
+  });
+
+  it("reports cancel distinctly from denial, so the field survives it", async () => {
+    // The platform dialog resolves null on cancel. Conflating that with
+    // a denied command would either clear the user's typed path or put
+    // an error under a field they simply changed their mind about.
+    fakeTauri(() => Promise.resolve(null));
+    await expect(pickPath(folder)).resolves.toEqual({ outcome: "canceled" });
+  });
+
+  it("reports an unauthorized command as unavailable, not as cancel", async () => {
+    // What a missing/mismatched capability looks like from the webview:
+    // a rejected invoke and no other signal. See
+    // tauri/capabilities/pick-local-paths.json.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fakeTauri(() => Promise.reject(new Error("not allowed")));
+    const result = await pickPath(folder);
+    expect(result.outcome).toBe("unavailable");
+  });
+
+  describe("start directory", () => {
+    const startAtOf = async (startAt: string) => {
+      const invoke = fakeTauri(() => Promise.resolve(null));
+      await pickPath({ ...folder, startAt });
+      return (invoke.mock.calls[0][1] as any).options.defaultPath;
+    };
+
+    it("opens at an absolute path the user already had", async () => {
+      await expect(startAtOf("/Users/x/backups/WhatsApp")).resolves.toBe(
+        "/Users/x/backups/WhatsApp",
+      );
+      await expect(startAtOf(String.raw`C:\Users\x\WhatsApp`)).resolves.toBe(
+        String.raw`C:\Users\x\WhatsApp`,
+      );
+    });
+
+    it("drops a `~` path, which no one expands on this route", async () => {
+      // Tauri hands defaultPath to the platform dialog verbatim — no
+      // shell — so `~/backups` is a RELATIVE path resolved against the
+      // process cwd, and the dialog would open somewhere arbitrary.
+      await expect(startAtOf("~/backups/WhatsApp")).resolves.toBeUndefined();
+    });
+
+    it("drops empty and half-typed values", async () => {
+      await expect(startAtOf("")).resolves.toBeUndefined();
+      await expect(startAtOf("   ")).resolves.toBeUndefined();
+      await expect(startAtOf("backups/WhatsApp")).resolves.toBeUndefined();
+    });
   });
 });

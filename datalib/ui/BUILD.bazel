@@ -81,9 +81,15 @@ js_run_binary(
 # auto-purge refusing without a TTY) can't break `bazel test //...`.
 #
 # Still NOT fully hermetic on two axes:
-#   * Chromium binary: comes from ~/Library/Caches/ms-playwright via
-#     env_inherit=HOME. Putting the browser into Bazel is its own
-#     project; see option (3) in the design discussion.
+#   * Browser binaries: chromium AND webkit come from
+#     ~/Library/Caches/ms-playwright via env_inherit=HOME, fetched on
+#     demand by the `playwright install` run_e2e.sh does before the
+#     suite (a no-op once cached — hence `requires-network`). Webkit is
+#     there because the suite has a `webkit` project: the Tauri desktop
+#     app runs in a WKWebView, and a Chromium-only suite has twice
+#     missed a WebKit-specific layout bug that left an AG Grid
+#     invisible. Putting the browsers into Bazel as real inputs is its
+#     own project; see option (3) in the design discussion.
 #   * `bazel run` mode: keeps using BUILD_WORKSPACE_DIRECTORY + the
 #     source-tree node_modules so devs can edit specs and re-run
 #     interactively. The hermetic node_modules is `test`-mode only.
@@ -131,9 +137,9 @@ sh_test(
     srcs = ["run_e2e.sh"],
     data = _E2E_DATA,
     deps = _E2E_DEPS,
-    # Needs network (Playwright may fetch browser binary) and the host's
-    # pnpm / node / Playwright cache, hence `no-sandbox` +
-    # `requires-network`. Do NOT re-add the `external` tag: this is a
+    # Needs network (Playwright fetches any missing browser binary —
+    # chromium and webkit) and the host's pnpm / node / Playwright
+    # cache, hence `no-sandbox` + `requires-network`. Do NOT re-add the `external` tag: this is a
     # routine UI integration test that must run on the default
     # `bazel test //...` path (and CI's
     # `--test_tag_filters=-manual,-external`). `requires-network`

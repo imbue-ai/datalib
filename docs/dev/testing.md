@@ -35,6 +35,45 @@ Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
 § "Updating insta snapshots" for the full pattern, including how to declare a
 `.update` for a new test.
 
+## The Playwright suite runs in two engines
+
+`//datalib/ui:e2e_test` has two projects (see
+[`/datalib/ui/playwright.config.ts`](/datalib/ui/playwright.config.ts)):
+
+* **`chromium`** — every spec.
+* **`webkit`** — the grid-bearing specs only, listed by `testMatch`.
+
+The second one exists because the Tauri desktop app renders in a
+**WKWebView**, not Chromium, and the two engines disagree about layout in a
+way that has shipped twice. WebKit resolves a child's percentage `height`
+against the parent's *specified* height, so `height: 100%` under a
+flex-sized parent that declares no height of its own computes to `auto` and
+an AG Grid root collapses — to 2px of border in the
+[`Manager2View`](/datalib/ui/src/views/Manager2View.vue) case. Chromium
+resolves against the flexed height and looks perfect.
+
+**What this means for how you assert.** Every row and header stays in the
+DOM through that collapse, so `.ag-row` locators match, `toHaveCount`
+passes, and the user sees nothing. A test only catches it if it measures
+geometry — `expectGridPainted` in
+[`/datalib/ui/tests/e2e/grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
+is that assertion (bounding-box height > 100px). Reach for it whenever a
+spec's real subject is "this is on screen".
+
+Adding a spec that renders a grid? Add its filename to the `webkit`
+project's `testMatch`, or it runs in Chromium only. Note that WebKit is
+also stricter about `loading="lazy"` iframes (it will not load one far
+below the fold — scroll it into view first;
+[`yolink-plots.spec.ts`](/datalib/ui/tests/e2e/yolink-plots.spec.ts) shows
+the shape).
+
+Browser binaries are **not** Bazel inputs — chromium and webkit both come
+from the host's `~/Library/Caches/ms-playwright` via `env_inherit = HOME`,
+and `run_e2e.sh` runs `playwright install chromium webkit` first so a cold
+cache self-heals. That network reach is what the target's
+`requires-network` tag is for. Making the browsers real Bazel inputs is a
+separate project.
+
 ## Bazel-fetched test data (`lightroom`)
 
 `//datalib/backend/etl/providers/lightroom:real_catalogs` ingests four real

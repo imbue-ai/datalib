@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { expectGridPainted } from "./grid-helpers";
 
 // Smoke test: the grid actually renders rows from the TNG fixture.
 //
@@ -29,4 +30,14 @@ test("the grid populates with rows from the fixture", async ({
     .locator('.ag-center-cols-container [role="row"]')
     .count();
   expect(rowCount).toBeGreaterThan(0);
+
+  // …and the grid they're in has real height. Rows stay in the DOM when
+  // a grid collapses (the WebKit percentage-height bug —
+  // see expectGridPainted), so the count above cannot tell the two
+  // apart. This one does not currently reproduce that collapse even
+  // with `.grid`'s fix reverted — an absolutely-positioned
+  // `.card-app-root` above it makes the percentage resolvable — so this
+  // is a forward guard on the surface, not a reproduction of the bug.
+  // manager2-grid.spec.ts is the spec that fails without its fix.
+  await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
 });

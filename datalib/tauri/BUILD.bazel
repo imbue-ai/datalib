@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+# NODE_VERSION in this script is read by //tools:version_pins_test.
+# (It used to be exported from //datalib, because this directory had no
+# BUILD file of its own; adding `launcher_test` below made it a package
+# and moved the label here.)
+exports_files(["stage-runtime.sh"])
+
+# The Tauri shell itself is NOT built by Bazel — it is a standalone
+# cargo workspace, deliberately, so crate_universe never has to resolve
+# the tauri dependency tree (see Cargo.toml's `[workspace]` table and
+# README.md).
+#
+# That leaves its logic outside `bazelisk test //...`, which AGENTS.md
+# calls the source of truth. `src/launcher.rs` is the part where that
+# matters — which data roots the welcome screen offers, and where a new
+# one goes — so it is written free of `tauri` and compiled a second
+# time here, as its own crate, purely to run the tests inside it. The
+# shipping build still compiles it as a module of the shell; this
+# target is the only thing that ever *runs* those tests.
+#
+# The rule for keeping this working: nothing in `launcher.rs` may
+# reference `tauri` or any other module of the shell.
+rust_test(
+    name = "launcher_test",
+    size = "small",
+    srcs = ["src/launcher.rs"],
+    crate_root = "src/launcher.rs",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)

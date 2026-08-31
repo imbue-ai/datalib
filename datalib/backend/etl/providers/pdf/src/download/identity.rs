@@ -44,6 +44,25 @@ pub fn extract(bytes: &[u8]) -> DocIdentity {
     let Ok(doc) = Document::load_mem(bytes) else {
         return DocIdentity::default();
     };
+    from_doc(&doc)
+}
+
+/// Identity fields *and* the content hash from a **single** parse.
+///
+/// Both readers want the same `Document`, and parsing is the expensive
+/// part of each — a large scanned PDF is tens of megabytes and lopdf
+/// inflates every object stream to build the object map. Doing it once
+/// here is why [`super::content_hash::from_doc`] exists alongside
+/// [`super::content_hash::compute`].
+pub fn extract_with_content_hash(bytes: &[u8]) -> (DocIdentity, Option<String>) {
+    let Ok(doc) = Document::load_mem(bytes) else {
+        return (DocIdentity::default(), None);
+    };
+    (from_doc(&doc), super::content_hash::from_doc(&doc))
+}
+
+/// Pull the identity fields out of an already-parsed document.
+pub fn from_doc(doc: &Document) -> DocIdentity {
     let mut out = DocIdentity {
         encrypted: doc.trailer.get(b"Encrypt").is_ok(),
         ..Default::default()
@@ -83,7 +102,7 @@ pub fn extract(bytes: &[u8]) -> DocIdentity {
     }
 
     // ── XMP metadata stream ──────────────────────────────────────────
-    if let Some(xmp) = xmp_bytes(&doc) {
+    if let Some(xmp) = xmp_bytes(doc) {
         let xmp = String::from_utf8_lossy(&xmp);
         out.xmp_document_id = xmp_field(&xmp, "xmpMM:DocumentID");
         out.xmp_instance_id = xmp_field(&xmp, "xmpMM:InstanceID");

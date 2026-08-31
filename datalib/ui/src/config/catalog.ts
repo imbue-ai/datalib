@@ -34,10 +34,32 @@ type FieldBase = {
 
 export type Field =
   | ({ kind: "text" } & FieldBase & { placeholder?: string; required?: boolean })
-  /// A path on the machine running the backend. Typed for now — the
-  /// design's file picker needs a `GET /api/fs/browse` endpoint, since
-  /// the UI has no Tauri IPC and is also served to a plain browser.
-  | ({ kind: "path" } & FieldBase & { placeholder?: string; required?: boolean; picks?: "file" | "dir" })
+  /// A path on the machine running the backend.
+  ///
+  /// **A path field must offer a native OS picker** — the rule, and
+  /// the checklist for adding one, are in
+  /// `docs/dev/wizard_file_pickers.md`. In the desktop app the wizard
+  /// opens a real dialog (`ui/src/desktop.ts::pickPath`); in a plain
+  /// browser it can't, and the typed input is all there is until a
+  /// `GET /api/fs/browse` endpoint exists — `<input type=file>` is no
+  /// substitute, since a browser never yields a filesystem path.
+  ///
+  /// `picks` is what decides which dialog opens, so a file/dir mismatch
+  /// here is the one error a picker can still let through. Both it and
+  /// `pickTitle` are required in practice; they are optional in the
+  /// type only because this table predates the picker.
+  | ({ kind: "path" } & FieldBase & {
+      placeholder?: string;
+      required?: boolean;
+      picks?: "file" | "dir";
+      /// Dialog title. Name the thing being chosen ("Choose your
+      /// WhatsApp backup folder"), not the widget ("Select folder").
+      pickTitle?: string;
+      /// `picks: "file"` only — extensions to filter on, no dot. The
+      /// typed input stays the escape hatch for anything the filter
+      /// wrongly excludes.
+      extensions?: string[];
+    })
   | ({ kind: "date" } & FieldBase)
   | ({ kind: "bool" } & FieldBase & { default?: boolean })
   | ({ kind: "int" } & FieldBase)
@@ -193,6 +215,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "path",
         picks: "dir",
+        pickTitle: "Choose your Signal backups folder",
         required: true,
         target: "sync.snapshot_dir",
         label: "Backup folder",
@@ -233,6 +256,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "path",
         picks: "dir",
+        pickTitle: "Choose your WhatsApp backup folder",
         required: true,
         target: "sync.backup_dir",
         label: "WhatsApp folder",
@@ -273,6 +297,8 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "path",
         picks: "file",
+        pickTitle: "Choose your Lightroom catalog",
+        extensions: ["lrcat"],
         required: true,
         target: "common.input_path",
         label: "Catalog file",
