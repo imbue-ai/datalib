@@ -96,6 +96,14 @@ pub struct NormalizedReaction {
     /// Unix milliseconds when the reaction was sent. Used for
     /// fingerprint stability.
     pub date_ms: i64,
+    /// What this reaction is upstream, for its grid_row's backpointer
+    /// columns. `None` for providers not yet ported onto `datalib_id`.
+    ///
+    /// Reactions get their own grid_rows, so they need their own
+    /// backpointer — they are not covered by the containing item's.
+    /// The round-trip check treats an unset one on a ported provider
+    /// as a failure, which is how the gap was found.
+    pub source_ref: Option<ItemSourceRef>,
 }
 
 /// One item in a chat doc — text message, attachment-bearing message,
@@ -224,6 +232,19 @@ pub struct NormalizedChat {
     /// route the moment they move onto `datalib_id`, and this column is
     /// what the grid's "Copy source ID(s)" action reads.
     pub external_id: Option<String>,
+    /// The `Scope::Upstream` value every row in this chat was minted
+    /// under — the exact provider-issued string fed to
+    /// `datalib_id::entity_id`, stamped into `grid_rows.source_scope`.
+    /// `None` for chats minted under `ProviderGlobal` or `Content`.
+    ///
+    /// Per-chat rather than per-item because a chat belongs to exactly
+    /// one workspace/account, and every row inside it inherits that.
+    ///
+    /// Related to `account` but not the same: `account` is a display
+    /// and filter value the UI shows, and a provider may prettify it.
+    /// This one must stay byte-exact, because the round-trip check
+    /// recomputes `uuid` from it.
+    pub source_scope: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`
     /// link in the page title and the chat-level grid_row's `source_url`.

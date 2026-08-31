@@ -1548,6 +1548,7 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-chat-common",
  "datalib-etl-macros",
+ "datalib-id",
  "datalib-index-lib",
  "datalib-obs",
  "datalib-schema",

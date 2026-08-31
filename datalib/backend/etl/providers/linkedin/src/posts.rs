@@ -203,6 +203,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             external_id: nonempty(&key).map(str::to_string),
             // Whole-post linkout on the thread header / chat-level row.
             source_url: nonempty(&thread.url).map(str::to_string),
+            source_scope: None,
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {

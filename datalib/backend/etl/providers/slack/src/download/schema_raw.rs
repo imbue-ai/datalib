@@ -53,7 +53,6 @@ use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
-use uuid::Uuid;
 
 /// Names of the entity / bookkeeping tables, in the order they should
 /// be iterated for full-table operations (truncate, full-DDL
@@ -244,40 +243,19 @@ pub struct SlackAttachmentRow {
     pub blake3: Option<String>,
 }
 
-/// Shared namespace for v5-derived Slack UUIDs.
-///
-/// FIXME: We don't need this complexity around the namespace, it can use be a plain old string.  Let's make a backwards incompatible change to the schema and remove this.
-const SLACK_UUID_NS: Uuid = Uuid::from_bytes([
-    0xa8, 0x9c, 0x7c, 0x4f, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a,
-]);
-
-/// UUIDv5 recipe for a Slack message's PK.
-///
-/// Recipe: `uuidv5(SLACK_UUID_NS, "slack:msg:{team_id}:{channel_id}:{ts}")`.
+/// Thin wrappers over [`crate::ids`], kept because both stages and
+/// several tests already import these names. The recipes, the
+/// namespace and the separator all live in `crate::ids` now — the
+/// `SLACK_UUID_NS` constant and its `:`-joined strings are gone, which
+/// is what this module's old FIXME asked for.
 pub fn slack_message_uuid(team_id: &str, channel_id: &str, ts: &str) -> String {
-    Uuid::new_v5(
-        &SLACK_UUID_NS,
-        format!("slack:msg:{team_id}:{channel_id}:{ts}").as_bytes(),
-    )
-    .to_string()
+    crate::ids::message(team_id, channel_id, ts).uuid
 }
 
-/// UUIDv5 recipe for a Slack thread's stable identifier.
-///
-/// Recipe: `uuidv5(SLACK_UUID_NS, "slack:thread:{team_id}:{channel_id}:{thread_ts}")`.
 pub fn slack_thread_uuid(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
-    Uuid::new_v5(
-        &SLACK_UUID_NS,
-        format!("slack:thread:{team_id}:{channel_id}:{thread_ts}").as_bytes(),
-    )
-    .to_string()
+    crate::ids::thread(team_id, channel_id, thread_ts).uuid
 }
 
-/// UUIDv5 recipe for an individual reaction (one per reacting user) on
-/// a message — its grid_row PK + markdown anchor.
-///
-/// Recipe: `uuidv5(SLACK_UUID_NS,
-/// "slack:reaction:{team_id}:{channel_id}:{ts}:{name}:{user}")`.
 pub fn slack_reaction_uuid(
     team_id: &str,
     channel_id: &str,
@@ -285,11 +263,7 @@ pub fn slack_reaction_uuid(
     name: &str,
     user: &str,
 ) -> String {
-    Uuid::new_v5(
-        &SLACK_UUID_NS,
-        format!("slack:reaction:{team_id}:{channel_id}:{ts}:{name}:{user}").as_bytes(),
-    )
-    .to_string()
+    crate::ids::reaction(team_id, channel_id, ts, name, user).uuid
 }
 
 /// Composite-key recipe for [`RepliesPagesRow`]'s primary key.

@@ -203,6 +203,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         // to chatgpt.com now that `uuid` is a minted v5.
         external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
+        source_scope: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

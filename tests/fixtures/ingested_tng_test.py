@@ -111,12 +111,16 @@ ID_SEP = "\x1f"
 SCOPE_TAG_BY_PROVIDER = {
     "anthropic": ("pg", ""),
     "openai": ("pg", ""),
+    # Slack scopes on `team_id`, which the row carries in `account`.
+    # Resolved per-row rather than from a constant here — see
+    # `_roundtrip_failures`.
+    "slack": ("up", None),
 }
 
 # Providers whose rows MUST round-trip. Separate from the table above so
 # a typo in a provider name shows up as "no rows checked" rather than as
 # a silent pass.
-PORTED_PROVIDERS = frozenset({"anthropic", "openai"})
+PORTED_PROVIDERS = frozenset({"anthropic", "openai", "slack"})
 
 
 def datalib_entity_id(provider, scope_tag, scope_val, entity_kind, natural_key):
@@ -377,14 +381,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
         rows = self._query(
             self._index_db,
             "SELECT provider, uuid, IFNULL(source_entity_kind, ''), "
-            "       IFNULL(source_native_id, '') "
+            "       IFNULL(source_native_id, ''), IFNULL(source_scope, '') "
             "FROM grid_rows "
             f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
             "ORDER BY uuid;",
         )
         failures = []
         for line in rows:
-            provider, row_uuid, entity_kind, native_id = line.split("|", 3)
+            provider, row_uuid, entity_kind, native_id, row_scope = line.split("|", 4)
             if not entity_kind or not native_id:
                 failures.append(
                     f"{provider} {row_uuid}: ported provider left "
@@ -393,6 +397,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 )
                 continue
             scope_tag, scope_val = SCOPE_TAG_BY_PROVIDER[provider]
+            # An `Upstream` scope's value is per-row, so the table
+            # stores None and the row supplies it. A ported provider
+            # that scopes upstream but leaves `source_scope` empty is
+            # itself the bug.
+            if scope_val is None:
+                if not row_scope:
+                    failures.append(
+                        f"{provider} {row_uuid}: upstream-scoped but "
+                        f"source_scope is empty"
+                    )
+                    continue
+                scope_val = row_scope
             want = datalib_entity_id(
                 provider, scope_tag, scope_val, entity_kind, native_id
             )

@@ -457,6 +457,7 @@ fn build_chat(
         project: None,
         external_id: Some(bucket.thread_id.clone()),
         source_url: thread_source_url,
+        source_scope: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

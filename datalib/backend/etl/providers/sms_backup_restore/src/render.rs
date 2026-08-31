@@ -205,6 +205,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             project: Some("SMS Backup".to_string()),
             external_id: Some(external_id),
             source_url: None,
+            source_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,
