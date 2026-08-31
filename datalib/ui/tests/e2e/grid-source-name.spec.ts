@@ -109,6 +109,11 @@ inputs = ["slack/raw"]
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
+  //
+  // Polled, not asserted once. The grid keeps the previous result set
+  // painted while a query is in flight — deliberately, so it doesn't
+  // flash empty on every keystroke — and a bare `toHaveCount(0)` races
+  // that, passing or failing on how fast the search came back.
   await page.getByTestId("search-input").fill("source_name:Work Slack type:all");
-  await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
+  await expect.poll(async () => page.locator(SOURCE_CELLS).count()).toBe(0);
 });
