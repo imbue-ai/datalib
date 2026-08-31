@@ -641,6 +641,57 @@ BuildBuddy also has a REST API and a side-by-side invocation compare in
 its web UI. Both need an API key (`https://imbue.buildbuddy.io/settings`),
 which CI has and a local checkout does not by default.
 
+#### Locally you are probably *not* on the remote cache
+
+Two things hide this, so check rather than assume:
+
+  * `.bazelrc` gives everyone a **machine-wide disk cache**
+    (`build --disk_cache=~/Library/Caches/bazel-disk-cache`). It is an
+    absolute path, so every checkout and every worktree shares it, and
+    it makes local builds feel fast — but only for actions *you* have
+    built before. Nothing CI built ever lands in it.
+  * The remote cache needs `.bazelrc.user`, which is **gitignored and
+    per-workspace**. `try-import %workspace%/.bazelrc.user` resolves to
+    the *worktree* root, not the main checkout, so a file you created
+    once in `datalib/` is invisible to every `.claude/worktrees/*`
+    clone. Both facts together mean a tree can look configured and not
+    be. Confirm with:
+
+```bash
+grep -c buildbuddy .bazelrc.user 2>/dev/null || echo "no .bazelrc.user in THIS workspace"
+```
+
+The `processes:` line settles it either way. A run on the remote cache
+names it — CI's reads `4070 remote cache hit, …`. A local run without
+`.bazelrc.user` never does; it reports only local buckets, e.g.
+`1 process: 63 action cache hit, 1 internal` or `… 2 disk cache hit,
+26 darwin-sandbox`. **The tell is the absence of `remote cache hit`,
+not the presence of any particular local bucket** — which of them
+appears varies with what the run had to do.
+
+Keep one real file outside the repo and symlink it in, so a new
+worktree is one command rather than a re-paste of the key:
+
+```bash
+mkdir -p ~/.config/datalib && chmod 700 ~/.config/datalib
+cat > ~/.config/datalib/bazelrc.user <<'EOF'
+common --remote_header=x-buildbuddy-api-key=<your-key>
+build --config=buildbuddy
+EOF
+chmod 600 ~/.config/datalib/bazelrc.user
+
+# link it into the main checkout and every worktree
+for d in . .claude/worktrees/*/; do
+    ln -sfn ~/.config/datalib/bazelrc.user "$d/.bazelrc.user"
+done
+```
+
+Don't put `build --config=buildbuddy` in `$HOME/.bazelrc`: the home rc
+applies to *every* bazel workspace on the machine, and the
+`buildbuddy` config is only defined in this repo's `.bazelrc`, so
+unrelated projects would fail with "Config value 'buildbuddy' is not
+defined in any .rc file".
+
 ## Common commands
 
 ```bash
