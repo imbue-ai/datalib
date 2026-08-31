@@ -678,6 +678,55 @@ command = "datalib-step render pdf"
 inputs = ["pdfs/raw"]
 outputs = ["pdfs/rendered_md"]
 
+# --- media (local music / photos / video / playlists) --------------------
+
+# File-backed: point `common.input_path` at a directory tree. Every audio,
+# image and video file under it is hashed, sniffed for what it really is
+# (the bytes decide, not the extension), and recorded with its metadata
+# hoisted into typed columns — artist/album/track for music, camera/lens/
+# exposure/GPS/capture-time for photos and video.
+#
+# Items are keyed on **content hash**, not path, so the same song synced to
+# three folders is one row with three locations.
+#
+# The column to know about is `media_items.payload_blake3`: a second hash
+# over just the signal — the MPEG frames, the JPEG scan, the DNG's sensor
+# strips — with tags, EXIF, ICC profiles and embedded previews excluded. So
+# retagging an MP3 or re-rendering a DNG preview in Lightroom moves the file
+# hash and leaves this one alone. "Every file that is the same recording" is:
+#   doltlite <root>/media/raw/entities.doltlite_db \
+#     "SELECT payload_blake3, COUNT(*) c FROM media_items
+#       WHERE payload_blake3 IS NOT NULL
+#       GROUP BY payload_blake3 HAVING c > 1;"
+# It is a hint, not a key: a re-encode splits it. NULL means "no recipe for
+# this container", never a fallback to the file hash.
+#
+# `.m3u` / `.m3u8` playlists get their own two tables, with every entry kept
+# in order and verbatim — including the ones pointing at tracks you deleted
+# years ago, which is the interesting half of the data.
+#
+# DOWNLOAD-ONLY: it renders nothing (media has no text, and this data wants a
+# UI of its own), so there is no render step — query the raw store directly.
+# See datalib/backend/etl/providers/media/DOWNLOAD.md.
+[[steps]]
+id = "media.download"
+command = "datalib-step download media"
+outputs = ["media/raw"]
+[steps.params]
+# Gitignore-shaped patterns, on top of any .gitignore files in the tree.
+# ignore = ["**/.Trash/**", "**/Thumbnails/**"]
+# No indexing ceiling by default — a multi-gigabyte video is normal.
+# max_bytes = 0                       # (0 is rejected; omit for no limit)
+# Give up on the payload hash above this and leave it NULL (default 8 GiB).
+# payload_max_bytes = 8589934592
+# playlists = true                    # default; false skips .m3u/.m3u8
+# Skip cloud placeholders (Dropbox online-only, macOS dataless files) rather
+# than triggering a multi-gigabyte materialization. Default true; turn it off
+# only on a filesystem that reports no block counts at all.
+# skip_dataless = true
+[steps.params.common]
+input_path = "~/Music"
+
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
 # File-backed: point `common.input_path` at a `.lrcat`, which is an ordinary
