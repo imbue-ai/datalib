@@ -76,7 +76,9 @@ pub struct GridRowBuilder {
     qmd_path: Option<String>,
     source_url: Option<String>,
     git_sha: Option<String>,
-    external_id: Option<String>,
+    source_native_id: Option<String>,
+    source_entity_kind: Option<String>,
+    source_scope: Option<String>,
     notion_page_uuid: Option<String>,
     notion_block_uuid: Option<String>,
     markdown_uuid: Option<String>,
@@ -127,7 +129,9 @@ impl GridRowBuilder {
     opt_setter!(qmd_path);
     opt_setter!(source_url);
     opt_setter!(git_sha);
-    opt_setter!(external_id);
+    opt_setter!(source_native_id);
+    opt_setter!(source_entity_kind);
+    opt_setter!(source_scope);
     opt_setter!(notion_page_uuid);
     opt_setter!(notion_block_uuid);
     opt_setter!(markdown_uuid);
@@ -184,7 +188,9 @@ impl GridRowBuilder {
             qmd_path: self.qmd_path,
             source_url: self.source_url,
             git_sha: self.git_sha,
-            external_id: self.external_id,
+            source_native_id: self.source_native_id,
+            source_entity_kind: self.source_entity_kind,
+            source_scope: self.source_scope,
             notion_page_uuid: self.notion_page_uuid,
             notion_block_uuid: self.notion_block_uuid,
             markdown_uuid: self.markdown_uuid,

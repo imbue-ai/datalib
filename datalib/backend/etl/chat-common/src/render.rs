@@ -6,6 +6,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// `grid_rows.source_entity_kind` for a chat/thread-level row.
+///
+/// The `entity_kind` component of the `datalib_id` recipe, in the
+/// upstream's vocabulary — distinct from `grid_rows.kind`, which is a
+/// display label for the grid's Kind column ('Chat', 'Slack Thread')
+/// and may be reworded without re-keying anything.
+pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
+
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
@@ -526,7 +534,14 @@ fn build_grid_rows(
             )
             .qmd_path(Some(md_rel.to_string()))
             .source_url(chat.source_url.clone())
-            .external_id(chat.external_id.clone())
+            .source_native_id(chat.external_id.clone())
+            // Chat-level rows are all the same upstream shape across
+            // every chat provider. Per-*item* native ids need a field
+            // on `NormalizedChatItem` and a pass through each
+            // provider's item builder; that lands with the per-provider
+            // `datalib_id` port, so message rows carry NULL here for
+            // now rather than a guess.
+            .source_entity_kind(Some(ENTITY_KIND_CONVERSATION.to_string()))
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
             .build()?,
     );

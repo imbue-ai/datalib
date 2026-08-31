@@ -173,7 +173,11 @@ fn build_chats(
             title: Some(title),
             account: Some(root.team_id.clone()),
             project: None,
-            external_id: None,
+            // `{channel_id}:{thread_ts}` — the tuple Slack's own API
+            // takes back (`conversations.replies`). Our `uuid` is a v5
+            // over the same tuple plus the team, so it cannot be
+            // reversed; this is the round-trip route.
+            external_id: Some(format!("{}:{}", root.channel_id, root.ts)),
             // Thread permalink → chat-level `↗` + chat grid source_url.
             source_url: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
             org_uuid: None,

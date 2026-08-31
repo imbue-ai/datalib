@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# The one place datalib mints an entity id. Every provider's
+# `grid_rows.uuid` / `markdown_uuid` / anchor uuid derives from
+# `entity_id` here, under a single root namespace, so the question
+# "could these two ids collide?" has one answer read off one file
+# instead of sixteen per-provider recipes. See `src/lib.rs` for the
+# scoping rules and `docs/dev/entity_ids.md` for the why.
+rust_library(
+    name = "datalib_id",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_id",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:uuid"],
+)
+
+rust_test(
+    name = "id_unittests",
+    size = "small",
+    crate = ":datalib_id",
+    edition = "2021",
+)

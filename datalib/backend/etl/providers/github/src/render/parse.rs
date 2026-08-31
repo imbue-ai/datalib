@@ -90,6 +90,23 @@ pub enum CommentSection {
     Inline,
 }
 
+impl CommentSection {
+    /// The raw-store entity name this section corresponds to — also
+    /// the `grid_rows.source_entity_kind` the render step stamps.
+    ///
+    /// GitHub numbers issue comments, reviews and review comments in
+    /// three independent sequences that overlap freely, and each is
+    /// fetched from a different API path. `source_native_id` alone is
+    /// therefore ambiguous; this is what disambiguates it.
+    pub fn entity(self) -> &'static str {
+        match self {
+            CommentSection::Review => ENTITY_PR_REVIEW,
+            CommentSection::General => ENTITY_ISSUE_COMMENT,
+            CommentSection::Inline => ENTITY_PR_REVIEW_COMMENT,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommentRow {
     pub uuid: String,

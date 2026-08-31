@@ -455,8 +455,29 @@ function formatSlugUuid(slug: string, uuid: string): string {
   return s.length === 0 ? uuid : `${s}-${uuid}`;
 }
 
-async function copyUuids(targets: SearchRow[]) {
-  const text = targets.map((r) => r.uuid).join(",");
+/// Put one id per target on the clipboard, comma-separated.
+///
+/// `pick` selects WHICH id space. The grid offers two separate actions
+/// rather than one that guesses, because the two ids are not
+/// interchangeable and are often both UUID-shaped: `uuid` is what
+/// resolves inside datalib (chat URLs, `feedback.target_uuids`, `id:`
+/// filters), while `source_native_id` is what resolves upstream
+/// (claude.ai, the GitHub API, `conversations.replies`). A single
+/// action returning whichever happened to exist would leave no way to
+/// tell which one you were holding.
+///
+/// This used to be moot: anthropic, chatgpt and notion passed the
+/// upstream id straight through as their primary key, so "Copy UUIDs"
+/// yielded a native id for those three and ours for the other
+/// thirteen — by accident, not by design. Porting them onto
+/// `datalib_id` turns `uuid` into a minted v5 and would have silently
+/// dropped the native id from the UI entirely.
+async function copyIds(targets: SearchRow[], pick: (r: SearchRow) => string) {
+  const text = targets
+    .map(pick)
+    .filter((v) => v.length > 0)
+    .join(",");
+  if (text.length === 0) return;
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -987,9 +1008,21 @@ const gridOptions: GridOptions<SearchRow> = {
     items.push({
       name: `Copy UUID${plural}`,
       action: () => {
-        void copyUuids(targets);
+        void copyIds(targets, (r) => r.uuid);
       },
     });
+    // Only offered when at least one selected row actually carries an
+    // upstream id — a provider that hasn't been ported onto
+    // `datalib_id` writes NULL here, and a menu item that silently
+    // copies nothing is worse than no menu item.
+    if (targets.some((r) => r.source_native_id)) {
+      items.push({
+        name: `Copy source ID${plural}`,
+        action: () => {
+          void copyIds(targets, (r) => r.source_native_id ?? "");
+        },
+      });
+    }
     // Local files (today: the `pdf` source) carry a `file://` URL, which
     // `window.open` cannot usefully follow from an http origin — a
     // browser blocks it silently. Split on the URL SCHEME rather than on

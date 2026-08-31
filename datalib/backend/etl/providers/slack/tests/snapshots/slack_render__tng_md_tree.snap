@@ -12,6 +12,7 @@ markdown_uuid: 18661749-ed35-5c92-aa13-7cb73be53387
 period: all
 display: "#bridge"
 account: T_NCC1701D
+external_id: C_BRIDGE:12604000800.000800
 item_count: 1
 source_fingerprint: 2ec659881efea6ba5976ddc16a793d715ceac1e09aced7ee8bfc87dc08aa391e
 ---
@@ -37,6 +38,7 @@ markdown_uuid: 8074b3b0-3bd4-5232-843f-c8278649d1a2
 period: all
 display: "#bridge"
 account: T_NCC1701D
+external_id: C_BRIDGE:12604000100.000100
 item_count: 3
 source_fingerprint: 4102db86633ac664f4f19f069e99cb30b6b508e01713270aa1c11297c0cf9264
 ---
@@ -82,6 +84,7 @@ markdown_uuid: a93e15fa-68d5-5d53-aa9a-590e01b83275
 period: all
 display: "#ten-forward"
 account: T_NCC1701D
+external_id: C_TENFWD:12604000600.000600
 item_count: 2
 source_fingerprint: 9656cd6d8de8b82c4a0d6cecad9a2216d8560df6b8325d709c584ee891be687a
 ---
@@ -117,6 +120,7 @@ markdown_uuid: b220c513-3e7b-5301-8b0d-13f9b8cf63fc
 period: all
 display: "#engineering"
 account: T_NCC1701D
+external_id: C_ENG:12604000500.000500
 item_count: 1
 source_fingerprint: 0ba45c943114b16ea457532986b4b21b50308ba7f44b756e6be70dab13b5b6ac
 ---
@@ -142,6 +146,7 @@ markdown_uuid: b5ff7879-d563-59d6-8e89-906b6975dca1
 period: all
 display: "#bridge"
 account: T_NCC1701D
+external_id: C_BRIDGE:12604000400.000400
 item_count: 1
 source_fingerprint: ab36fb6c36d5b268b3d26466273ce38486657e1d29b80c339939d7f334dda0bd
 ---
@@ -167,6 +172,7 @@ markdown_uuid: be617fe9-49d3-5fe1-b75d-0e210465c5bb
 period: all
 display: "#bridge"
 account: T_NCC1701D
+external_id: C_BRIDGE:12604000700.000700
 item_count: 1
 source_fingerprint: 125a9fe07f0b145889db3b2ba5b4e7abe496c5784e809408d732fcb945348313
 ---

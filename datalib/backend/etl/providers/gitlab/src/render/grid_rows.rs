@@ -140,7 +140,8 @@ pub fn rows_for_mr(stanza: &str, mr: &MergeRequestRow, notes: &[NoteRow]) -> Res
             .qmd_path(Some(qmd.clone()))
             .source_url(mr.web_url.clone())
             .git_sha(mr.head_sha.clone())
-            .external_id(Some(mr.mr_iid.to_string()))
+            .source_native_id(Some(mr.mr_iid.to_string()))
+            .source_entity_kind(Some("merge_request".to_string()))
             .markdown_uuid(Some(mr.uuid.clone()))
             .build()?,
     );
@@ -163,7 +164,8 @@ pub fn rows_for_mr(stanza: &str, mr: &MergeRequestRow, notes: &[NoteRow]) -> Res
                 .qmd_path(Some(qmd.clone()))
                 .source_url(n.web_url.clone())
                 .git_sha(n.commit_sha.clone())
-                .external_id(Some(n.external_id.to_string()))
+                .source_native_id(Some(n.external_id.to_string()))
+                .source_entity_kind(Some("note".to_string()))
                 .markdown_uuid(Some(mr.uuid.clone()))
                 .build()?,
         );

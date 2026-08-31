@@ -12,7 +12,7 @@
 //
 // All of the hierarchy + the version list is derived from one
 // structured search (`source:Perseus`). Each grid row carries an
-// `external_id` locator path — `"1"` (book), `"1.2"` (chapter),
+// `source_native_id` locator path — `"1"` (book), `"1.2"` (chapter),
 // `"1.2.3"` (section) — plus a `kind` naming the edition
 // (`"Chapter (perseus-grc2)"`, `"Section (1st1K-eng1)"`, …) and a
 // `conversation_name` of the form `"<b>.<c> <edition-title>"`. A chapter
@@ -175,7 +175,7 @@ export function perseusView(): CardRender {
     function ingest(
       rows: {
         kind: string;
-        external_id: string;
+        source_native_id: string;
         uuid: string;
         markdown_uuid: string | null;
         conversation_name: string;
@@ -199,7 +199,7 @@ export function perseusView(): CardRender {
         return c;
       };
       for (const r of rows) {
-        const parts = r.external_id.split(".");
+        const parts = r.source_native_id.split(".");
         // Skip TEI front/back matter (non-numeric locators like
         // "front"/"back") that some editions carry — they render as a
         // phantom "Book 0" with no content in most editions. Real

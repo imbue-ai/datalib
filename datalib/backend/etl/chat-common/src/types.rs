@@ -178,8 +178,14 @@ pub struct NormalizedChat {
     /// channel-network). Surfaced in `project`.
     pub project: Option<String>,
     /// Upstream id used by the source app (matrix room id, WhatsApp
-    /// JID, signal recipient identifier). Goes into the
-    /// chat-level grid_row's `external_id` and the .md frontmatter.
+    /// JID, Anthropic conversation UUID, Slack
+    /// `{channel_id}:{thread_ts}`). Goes into the chat-level grid_row's
+    /// `source_native_id` column and the .md frontmatter.
+    ///
+    /// Set it even when it currently equals the row's `uuid`: providers
+    /// that pass an upstream id through as the primary key lose that
+    /// route the moment they move onto `datalib_id`, and this column is
+    /// what the grid's "Copy source ID(s)" action reads.
     pub external_id: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`

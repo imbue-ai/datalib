@@ -355,19 +355,82 @@ pub struct GridRow {
     ///   gitlab.note: note.position.head_sha (if diff note) else null
     #[col(sql = "VARCHAR(64)")]
     pub git_sha: Option<String>,
-    /// Provider-native primary identifier for this entity (e.g. numeric
-    /// GitHub/GitLab id, PR number). Preserved alongside our uuid so we
-    /// can round-trip back to the provider's API.
+    /// The upstream's own identifier for this entity, within
+    /// `source_scope` — the *backpointer* half of the id pair. Our
+    /// `uuid` is minted by `datalib_id::entity_id`; this column
+    /// preserves the input it was minted from, so a row can be
+    /// round-tripped back to the provider's API (or its export) without
+    /// anyone having to reverse a one-way hash.
+    ///
+    /// Together with `source_entity_kind` and `source_scope` this is
+    /// the whole recipe, minus the provider (which is its own column):
+    /// once a provider is ported, `entity_id(provider, scope,
+    /// source_entity_kind, source_native_id) == uuid` holds by
+    /// construction, which makes the backpointer verifiable rather than
+    /// merely decorative.
+    ///
+    /// Nothing asserts that identity yet — no provider has been ported,
+    /// so the check would be vacuous. Add it to
+    /// `//tests/fixtures:ingested_tng_test` alongside the first port,
+    /// scoped to the providers that have moved.
+    ///
+    /// Null only for rows whose provider has not been ported onto
+    /// `datalib_id` yet. Formerly `external_id`, which named what it
+    /// was not rather than what it was, and was never populated by the
+    /// three providers that most needed it (anthropic, chatgpt and
+    /// slack all wrote NULL) precisely because those passed the
+    /// upstream id through as the primary key instead.
     ///
     /// Per-provider mapping:
     ///   github.pr: pull_request.number
-    ///   github.issue_comment: comment.id
-    ///   github.pr_review: review.id
-    ///   github.pr_review_comment: comment.id
+    ///   github.issue_comment / pr_review / pr_review_comment: the id
     ///   gitlab.mr: merge_request.iid
     ///   gitlab.note: note.id
+    ///   pdf.document: blake3; pdf.page: '{blake3}#{page_number}'
+    ///   email.thread: thread_id
+    ///   perseus: the locator path ('1', '1.2', '1.2.3')
     #[col(sql = "VARCHAR(128)")]
-    pub external_id: Option<String>,
+    pub source_native_id: Option<String>,
+    /// What *sort* of upstream thing this row is, in the provider's own
+    /// vocabulary — `"conversation"`, `"message"`, `"thinking_block"`,
+    /// `"tool_use"`, `"pr"`, `"page"`. The `entity_kind` component of
+    /// the `datalib_id::entity_id` recipe that produced `uuid`.
+    ///
+    /// Distinct from `kind`, which is a *display* label chosen for the
+    /// grid's Kind column and its icon ('LLM Thinking', 'GitHub PR').
+    /// Two providers may share a display kind while meaning different
+    /// upstream things, and a display label may be reworded without
+    /// re-keying anything; this column may not, because the id depends
+    /// on it.
+    ///
+    /// Carrying it explicitly is what keeps `source_native_id` a
+    /// *usable* backpointer: a bare `12345` is ambiguous between a
+    /// GitHub review and a review comment, and the two live in
+    /// different API namespaces.
+    ///
+    /// Null for rows whose provider has not been ported onto
+    /// `datalib_id` yet.
+    #[col(sql = "VARCHAR(32)")]
+    pub source_entity_kind: Option<String>,
+    /// The upstream account / workspace / organization
+    /// `source_native_id` is unique within — the `Scope::Upstream`
+    /// value fed to `datalib_id::entity_id`. NULL means the row was
+    /// minted under `Scope::ProviderGlobal` or `Scope::Content`, where
+    /// the natural key needs no further scoping.
+    ///
+    /// Deliberately a provider-issued value (Anthropic `org_uuid`,
+    /// Slack `team_id`, JMAP `account_id`) and never our config's
+    /// `source_name`: the name is editable from the Manage tab, so
+    /// keying on it means a rename silently re-keys every row the
+    /// source ever produced and orphans every `feedback.target_uuids`
+    /// entry pointing at them. See `datalib_id::Scope`.
+    ///
+    /// Overlaps `account` in spirit but not in contract: `account` is a
+    /// display/filter value the UI shows and may be a human-readable
+    /// name, while this is the exact opaque string the id was derived
+    /// from and must never be prettified.
+    #[col(sql = "VARCHAR(96)")]
+    pub source_scope: Option<String>,
     /// Notion-only. UUID of the page this row belongs to. For page rows
     /// this equals `uuid`; for heading / comment thread / comment rows it
     /// points at the containing page so the grid can filter every row

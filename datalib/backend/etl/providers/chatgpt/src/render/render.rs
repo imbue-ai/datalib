@@ -188,7 +188,10 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         title: Some(title),
         account: conv.account_id.clone(),
         project: None,
-        external_id: None,
+        // ChatGPT's own conversation id — see the note on the
+        // equivalent line in the anthropic renderer for why this is
+        // recorded even while it duplicates `uuid`.
+        external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
         org_uuid: None,
         org_name: None,

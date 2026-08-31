@@ -12,6 +12,7 @@ markdown_uuid: 68fa0001-fake-7000-8000-positronic0001
 period: all
 display: "Sonnet on a Cat Named Spot"
 account: user-FAKE0DATAANDROID0POSITRONIC1
+external_id: 68fa0001-fake-7000-8000-positronic0001
 item_count: 4
 source_fingerprint: 002150b21f0826ce07f33336f08f0d3d7cfddee7678c89481db114e08a20cf93
 ---
@@ -77,6 +78,7 @@ markdown_uuid: 68fa0002-fake-7000-8000-positronic0002
 period: all
 display: "Polynomial Fit for Sensor Calibration"
 account: user-FAKE0DATAANDROID0POSITRONIC1
+external_id: 68fa0002-fake-7000-8000-positronic0002
 item_count: 3
 source_fingerprint: 20c31d39b08489bf6aac846d7915885627058d7800ccd5d1978f986ffb03be71
 ---
@@ -124,6 +126,7 @@ markdown_uuid: 68fa0003-fake-7000-8000-positronic0003
 period: all
 display: "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
 account: user-FAKE0DATAANDROID0POSITRONIC1
+external_id: 68fa0003-fake-7000-8000-positronic0003
 item_count: 2
 source_fingerprint: a9c18269b2ffd2988edac53b097afe80d0331d2287e63bea2c250197933009a6
 ---

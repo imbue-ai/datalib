@@ -71,6 +71,7 @@ period: all
 display: "Klingon Diplomatic Greeting Drafting"
 account: 00000001-1701-4d00-8000-000000000001
 project: Bridge Operations
+external_id: c0000003-1701-4d00-8000-00000000c003
 item_count: 6
 source_fingerprint: aa22ca8c4bb10fb522e77cb4abd3ea009b7e38ab7617adaeb1c80c143118f63c
 ---
@@ -162,6 +163,7 @@ markdown_uuid: c0000004-1701-4d00-8000-00000000c004
 period: all
 display: "Tricorder Image Diagnostic"
 account: 00000003-1701-4d00-8000-000000000003
+external_id: c0000004-1701-4d00-8000-00000000c004
 item_count: 2
 source_fingerprint: 91f9ee23e19a87b6cb56d85d792b6262660d1c13fdc07354c21c2f1c877d84ab
 ---
@@ -197,6 +199,7 @@ markdown_uuid: c0000005-1701-4d00-8000-00000000c005
 period: all
 display: "Borg Encryption Signature Lookup"
 account: 00000001-1701-4d00-8000-000000000001
+external_id: c0000005-1701-4d00-8000-00000000c005
 item_count: 6
 source_fingerprint: 4df72f1fc91c57c23ac8976cea959166a655f8338720902f8772fc2011c48195
 ---

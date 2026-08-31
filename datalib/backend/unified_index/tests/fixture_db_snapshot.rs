@@ -177,7 +177,8 @@ async fn snapshot_grid_rows_and_documents() {
         "SELECT uuid, provider, kind, source_label, when_ts, author, account, \
                 project, channel, conversation_name, conversation_uuid, \
                 message_index, entire_chat, text, slack_link, qmd_path, \
-                source_url, git_sha, external_id, notion_page_uuid, \
+                source_url, git_sha, source_native_id, source_entity_kind, source_scope, \
+                notion_page_uuid, \
                 notion_block_uuid, markdown_uuid \
          FROM grid_rows ORDER BY uuid",
     )
@@ -212,7 +213,9 @@ async fn snapshot_grid_rows_and_documents() {
                     r.try_get::<Option<String>, _>("source_url").ok().flatten(),
                 ),
                 "git_sha": r.try_get::<Option<String>, _>("git_sha").ok().flatten(),
-                "external_id": r.try_get::<Option<String>, _>("external_id").ok().flatten(),
+                "source_native_id": r.try_get::<Option<String>, _>("source_native_id").ok().flatten(),
+                "source_entity_kind": r.try_get::<Option<String>, _>("source_entity_kind").ok().flatten(),
+                "source_scope": r.try_get::<Option<String>, _>("source_scope").ok().flatten(),
                 "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
                 "notion_block_uuid": r.try_get::<Option<String>, _>("notion_block_uuid").ok().flatten(),
                 "markdown_uuid": r.try_get::<Option<String>, _>("markdown_uuid").ok().flatten(),

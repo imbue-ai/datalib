@@ -46,13 +46,28 @@ pub struct SearchRow {
     /// For Notion rows: the page-level UUID the row belongs to. Empty
     /// otherwise. Used by right-click "Filter by Notion Page".
     pub notion_page_uuid: String,
-    /// Provider-assigned stable id for the underlying entity, verbatim
-    /// from the `external_id` grid_rows column. Empty when the producer
-    /// didn't set one. For Perseus this is the locator path (`"1"`,
-    /// `"1.2"`, `"1.2.3"` for book / chapter / section), which the
-    /// scaife control panel parses to build its book→chapter→section
-    /// tree.
-    pub external_id: String,
+    /// The upstream's own id for this entity, verbatim from the
+    /// `source_native_id` grid_rows column. Empty when the producer
+    /// didn't set one (a provider not yet ported onto `datalib_id`).
+    ///
+    /// This is what the grid's "Copy source ID(s)" action puts on the
+    /// clipboard, as distinct from "Copy UUID(s)" which copies `uuid`
+    /// — our id resolves inside datalib (URLs, feedback,
+    /// `id:` filters), this one resolves upstream. Keeping the two
+    /// actions separate is deliberate: the ids are often both
+    /// UUID-shaped, so a single action that silently returned
+    /// whichever existed would leave no way to tell which you had.
+    ///
+    /// For Perseus this is the locator path (`"1"`, `"1.2"`, `"1.2.3"`
+    /// for book / chapter / section), which the scaife control panel
+    /// parses to build its book→chapter→section tree.
+    pub source_native_id: String,
+    /// What sort of upstream thing the row is, in the provider's own
+    /// vocabulary (`"conversation"`, `"tool_use"`, `"pr"`). Empty when
+    /// the producer didn't set one. Disambiguates
+    /// `source_native_id` — a bare `12345` is ambiguous between a
+    /// GitHub review and a review comment.
+    pub source_entity_kind: String,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for pure structured queries (no free text) and for the SQL-LIKE
     /// fallback path. Surfaced to the UI as a sortable "Score" column.

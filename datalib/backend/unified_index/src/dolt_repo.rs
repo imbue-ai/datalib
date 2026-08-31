@@ -62,7 +62,8 @@ impl IndexRepo for DoltRepo {
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
                     org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-                    message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, external_id \
+                    message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, \
+                    source_native_id, source_entity_kind \
              FROM grid_rows{} \
              ORDER BY when_ts_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
              LIMIT ?",
@@ -115,7 +116,8 @@ impl IndexRepo for DoltRepo {
             let slack_link: String = r.try_get("slack_link").unwrap_or_default();
             let source_url: String = r.try_get("source_url").unwrap_or_default();
             let notion_page_uuid: String = r.try_get("notion_page_uuid").unwrap_or_default();
-            let external_id: String = r.try_get("external_id").unwrap_or_default();
+            let source_native_id: String = r.try_get("source_native_id").unwrap_or_default();
+            let source_entity_kind: String = r.try_get("source_entity_kind").unwrap_or_default();
 
             let snip = if kind == "Chat" {
                 text.clone()
@@ -143,7 +145,8 @@ impl IndexRepo for DoltRepo {
                 slack_link,
                 source_url,
                 notion_page_uuid,
-                external_id,
+                source_native_id,
+                source_entity_kind,
                 score: None,
             });
         }
@@ -259,7 +262,8 @@ impl IndexRepo for DoltRepo {
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
                     org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-                    message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, external_id \
+                    message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, \
+                    source_native_id, source_entity_kind \
              FROM grid_rows{}",
             where_sql
         );
@@ -303,7 +307,8 @@ impl IndexRepo for DoltRepo {
             let slack_link: String = r.try_get("slack_link").unwrap_or_default();
             let source_url: String = r.try_get("source_url").unwrap_or_default();
             let notion_page_uuid: String = r.try_get("notion_page_uuid").unwrap_or_default();
-            let external_id: String = r.try_get("external_id").unwrap_or_default();
+            let source_native_id: String = r.try_get("source_native_id").unwrap_or_default();
+            let source_entity_kind: String = r.try_get("source_entity_kind").unwrap_or_default();
             let snip = if kind == "Chat" {
                 text.clone()
             } else {
@@ -332,7 +337,8 @@ impl IndexRepo for DoltRepo {
                     slack_link,
                     source_url,
                     notion_page_uuid,
-                    external_id,
+                    source_native_id,
+                    source_entity_kind,
                     score: None,
                 },
             );

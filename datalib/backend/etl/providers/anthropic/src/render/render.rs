@@ -364,7 +364,15 @@ fn build_chat(
                 .cloned()
                 .unwrap_or_else(|| uuid.clone())
         }),
-        external_id: None,
+        // Anthropic's own conversation UUID. Today this is also our
+        // `uuid` (the renderer passes it through as the primary key),
+        // so recording it here looks redundant — it is not. Once this
+        // provider moves onto `datalib_id` and `uuid` becomes a minted
+        // v5, this column is the only remaining route back to
+        // claude.ai, and it is what the grid's "Copy source ID(s)"
+        // action reads. Setting it before the re-key means that action
+        // keeps working across it instead of silently going empty.
+        external_id: Some(conv_uuid.clone()),
         source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
