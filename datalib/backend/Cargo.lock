@@ -1449,9 +1449,14 @@ dependencies = [
  "anyhow",
  "blake3",
  "chrono",
+ "datalib-etl",
+ "datalib-time",
  "kamadak-exif",
  "lofty",
+ "serde",
+ "sqlx",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 

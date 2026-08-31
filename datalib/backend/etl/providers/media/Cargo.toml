@@ -9,10 +9,15 @@ name = "datalib_etl_media"
 path = "src/lib.rs"
 
 [dependencies]
+datalib-etl = { path = "../.." }
+datalib-time = { path = "../../../time" }
+sqlx = { workspace = true }
 anyhow = { workspace = true }
 # The payload hash (`download/payload/`). Same digest the file-bytes key
-# will use, so both columns are comparable at a glance.
+# uses, so both columns are comparable at a glance.
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "time"] }
 tracing = "0.1"
 # Only for QuickTime/BMFF creation times, which are seconds since
 # 1904-01-01 and need a real calendar to render as ISO-8601.
@@ -26,3 +31,4 @@ kamadak-exif = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

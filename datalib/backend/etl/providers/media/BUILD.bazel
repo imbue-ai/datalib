@@ -7,13 +7,19 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "datalib_etl_media",
     edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:chrono",
         "@datalib_crates//:kamadak-exif",
         "@datalib_crates//:lofty",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tracing",
     ],
 )
