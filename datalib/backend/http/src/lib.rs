@@ -754,6 +754,27 @@ fn check_dag_config(cfg: &datalib_dag::config::DagConfig) -> anyhow::Result<Vec<
     Ok(graph.fringe_ids().into_iter().map(str::to_string).collect())
 }
 
+/// How many of those fringe steps are *data sources* — which is a
+/// different question from "what can `--sync` target", and the one the
+/// onboarding flow asks.
+///
+/// The shared index steps are fringe on a freshly scaffolded root, and
+/// legitimately so: they declare no inputs because no source exists to
+/// name yet, and syncing one is a valid (if empty) thing to do. But
+/// they are pipeline plumbing that every config carries, not data
+/// anybody configured — counting them would tell a user with an empty
+/// library that they have two sources, which is exactly the confusion
+/// `POST /api/config/init` exists to end.
+///
+/// Identified by the tree they write, since a step's id *is* that tree.
+/// This is a display rule, deliberately not a validity rule: nothing
+/// stops you writing a step under `unified_index/`, and the loader has
+/// no opinion about it.
+fn configured_source_count(fringe: &[String]) -> usize {
+    let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
+    fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConfigResponse {
     /// Absolute path of `<root>/config.toml` — shown in the UI so the
@@ -767,7 +788,9 @@ pub struct ConfigResponse {
     pub parsed_ok: bool,
     /// Loader error message when `parsed_ok` is false.
     pub error: Option<String>,
-    /// Number of configured sources (0 when invalid/missing).
+    /// Number of data sources the user has configured (0 when the
+    /// config is missing or invalid). See [`configured_source_count`]
+    /// for why this is not simply the fringe's length.
     pub source_count: usize,
     /// How the user should invoke the latchkey CLI on this install:
     /// the app-bundled launcher's absolute path (shell-quoted if
@@ -831,7 +854,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let legacy = legacy_yaml_hint(&s.root);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let (parsed_ok, error, source_count) = match load_dag_config(&path) {
-        Ok((_cfg, sources)) => (true, None, sources.len()),
+        Ok((_cfg, sources)) => (true, None, configured_source_count(&sources)),
         Err(e) => (false, Some(format!("{e:#}")), 0),
     };
     Json(ConfigResponse {
@@ -906,7 +929,7 @@ async fn put_config(
     Ok(Json(PutConfigResponse {
         ok: true,
         error: None,
-        source_count: sources.len(),
+        source_count: configured_source_count(&sources),
     }))
 }
 
@@ -986,14 +1009,12 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
                 error: None,
             }))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            Ok(Json(InitConfigResponse {
-                created: false,
-                path: path.display().to_string(),
-                text: std::fs::read_to_string(&path).unwrap_or_default(),
-                error: None,
-            }))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Json(InitConfigResponse {
+            created: false,
+            path: path.display().to_string(),
+            text: std::fs::read_to_string(&path).unwrap_or_default(),
+            error: None,
+        })),
         Err(e) => {
             eprintln!("init_config: create {}: {e}", path.display());
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1436,6 +1457,29 @@ mod tests {
         // until the first source is added — and running them against
         // nothing is a no-op, not an error.
         assert_eq!(sources, ["unified_index/grid", "unified_index/qmd"]);
+    }
+
+    /// A scaffolded root has no *sources*, even though its two index
+    /// steps are the fringe. Counting the fringe would tell someone
+    /// with an empty library that they already have two data sources —
+    /// the confusion `POST /api/config/init` exists to end.
+    #[test]
+    fn a_scaffolded_root_reports_no_sources() {
+        let fringe = validate_config_text(&scaffold_toml()).unwrap();
+        assert_eq!(fringe, ["unified_index/grid", "unified_index/qmd"]);
+        assert_eq!(configured_source_count(&fringe), 0);
+    }
+
+    /// ...and a real source counts, while the index steps beside it
+    /// still don't.
+    #[test]
+    fn a_source_counts_but_the_index_steps_never_do() {
+        let text = format!(
+            "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\n",
+            scaffold_toml()
+        );
+        let fringe = validate_config_text(&text).unwrap();
+        assert_eq!(configured_source_count(&fringe), 1);
     }
 
     /// TOML is the only format the server accepts; a legacy config
