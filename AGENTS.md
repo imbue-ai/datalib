@@ -42,6 +42,11 @@ are relative to the repo root.
   union table behind the grid UI.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
   table.
+- [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
+  adding a provider or touching any `*_uuid` recipe**: the one rule for
+  minting `grid_rows.uuid`, why the scope is never our `source_name`
+  (nor `source_type`), the `source_native_id` backpointer, and the
+  per-provider porting status.
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting
   `.doltlite_db` files (CLI, `dolt_*` vtabs, rescue commits); tutorial in
   [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
@@ -529,7 +534,7 @@ insta-using `rust_test` in this tree has one declared via the
 
 ```bash
 # Hermetic snapshot tests — no host prereqs.
-bazel run //datalib/backend/core:fixture_db_snapshot_test.update
+bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
 bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update
 bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 
