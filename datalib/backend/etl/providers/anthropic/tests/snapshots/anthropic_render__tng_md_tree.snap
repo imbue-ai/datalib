@@ -2,83 +2,117 @@
 source: datalib/backend/etl/providers/anthropic/tests/anthropic_render.rs
 expression: bundle
 ---
-=== anthropic_api/rendered_md/70000001-1701-4d00-8000-000000000701/all.md ===
+=== anthropic_api/rendered_md/4f6192ca-a4c2-5ef6-bd64-377fdf35435d/all.md ===
 ---
-title: "Claude Project · Bridge Operations (all)"
+title: "Borg Encryption Signature Lookup (all)"
 provider: anthropic
 source_label: "Claude"
-chat_uuid: 70000001-1701-4d00-8000-000000000701
-markdown_uuid: 70000001-1701-4d00-8000-000000000701
+chat_uuid: 4f6192ca-a4c2-5ef6-bd64-377fdf35435d
+markdown_uuid: 4f6192ca-a4c2-5ef6-bd64-377fdf35435d
 period: all
-display: "Bridge Operations"
+display: "Borg Encryption Signature Lookup"
 account: 00000001-1701-4d00-8000-000000000001
-project: Bridge Operations
-item_count: 4
-source_fingerprint: 1333c53e90043ea04c6009aaf333f379e2c04c2a16f6fb8417885b5561275dfa
+external_id: c0000005-1701-4d00-8000-00000000c005
+item_count: 6
+source_fingerprint: f120a578f0519b520474274aefc123f1a59b8b6bba6bdeee50c9aa0958682dd1
 ---
 
-<h1 class="page-title" data-page-title-uuid="70000001-1701-4d00-8000-000000000701">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="4f6192ca-a4c2-5ef6-bd64-377fdf35435d">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-pdesc-70000001-1701-4d00-8000-000000000701" data-section-uuid="pdesc-70000001-1701-4d00-8000-000000000701" class="msg msg--anthropic">
+<div id="m-2efbbe54-0eda-58c9-9b48-a4a3a99a2753" data-section-uuid="2efbbe54-0eda-58c9-9b48-a4a3a99a2753" class="msg msg--anthropic">
 
-## 2364-03-01 09:00:00 UTC — Description
+## 2369-04-16 09:00:00 UTC — Human
 
-Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.
-
-</div>
-
-<div id="m-pinst-70000001-1701-4d00-8000-000000000701" data-section-uuid="pinst-70000001-1701-4d00-8000-000000000701" class="msg msg--anthropic">
-
-## 2364-03-01 09:00:00 UTC — Custom instructions
-
-Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.
+Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
 
 </div>
 
-<div id="m-7d000001-1701-4d00-8000-0000000007d1" data-section-uuid="7d000001-1701-4d00-8000-0000000007d1" class="msg msg--anthropic">
+<div id="m-6781c690-594e-529c-a13d-dd41053ef966" data-section-uuid="6781c690-594e-529c-a13d-dd41053ef966" class="msg msg--anthropic">
 
-## 2364-03-01 09:05:00 UTC — hailing-frequencies.md
+## 2369-04-16 09:00:10 UTC — claude-opus-4-7
 
-# Hailing frequencies
+<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
 
-Open on subspace band 3 unless the target is cloaked.
-
-- Klingon vessels: lead with rank, then ship name.
-- Romulan vessels: do not open first.
-
-
-</div>
-
-<div id="m-7d000002-1701-4d00-8000-0000000007d2" data-section-uuid="7d000002-1701-4d00-8000-0000000007d2" class="msg msg--anthropic">
-
-## 2364-03-02 11:30:00 UTC — escalation-ladder.txt
-
-Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
-Medical emergencies route directly to Sickbay (Crusher).
-
+```json
+{
+  "signature": "7-of-9-alpha",
+  "table": "borg_shield_signatures"
+}
+```
+</details>
 
 </div>
 
+<div id="m-784b5443-d672-51af-bebf-4627418e526c" data-section-uuid="784b5443-d672-51af-bebf-4627418e526c" class="msg msg--anthropic">
 
-=== anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md ===
+## 2369-04-16 09:00:30 UTC — claude-opus-4-7
+
+<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
+
+```json
+{
+  "relay": "backup-2",
+  "signature": "7-of-9-alpha",
+  "table": "borg_shield_signatures"
+}
+```
+</details>
+
+</div>
+
+<div id="m-40abff32-9a15-58d7-a598-82d5d869be80" data-section-uuid="40abff32-9a15-58d7-a598-82d5d869be80" class="msg msg--anthropic">
+
+## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+
+Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
+
+</div>
+
+<div id="m-eba51e2f-fa30-520f-9603-f6e49fbcdb1f" data-section-uuid="eba51e2f-fa30-520f-9603-f6e49fbcdb1f" class="msg msg--anthropic">
+
+## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+
+<details><summary>Tool result: starfleet_db_query (error)</summary>
+
+```
+ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
+```
+</details>
+
+</div>
+
+<div id="m-255ba5a6-9440-56fc-a870-fac457450581" data-section-uuid="255ba5a6-9440-56fc-a870-fac457450581" class="msg msg--anthropic">
+
+## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+
+<details><summary>Tool result: starfleet_db_query</summary>
+
+Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
+
+</details>
+
+</div>
+
+
+=== anthropic_api/rendered_md/8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9/all.md ===
 ---
 title: "Klingon Diplomatic Greeting Drafting (all)"
 provider: anthropic
 source_label: "Claude"
-chat_uuid: c0000003-1701-4d00-8000-00000000c003
-markdown_uuid: c0000003-1701-4d00-8000-00000000c003
+chat_uuid: 8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9
+markdown_uuid: 8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
 account: 00000001-1701-4d00-8000-000000000001
 project: Bridge Operations
 external_id: c0000003-1701-4d00-8000-00000000c003
 item_count: 6
-source_fingerprint: aa22ca8c4bb10fb522e77cb4abd3ea009b7e38ab7617adaeb1c80c143118f63c
+source_fingerprint: e71f2e05de8afba8171fef68404fd5db3f08517d8cbfd2edd6093c33220950b7
 ---
 
-<h1 class="page-title" data-page-title-uuid="c0000003-1701-4d00-8000-00000000c003">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-30000001-1701-4d00-8000-000000030001" data-section-uuid="30000001-1701-4d00-8000-000000030001" class="msg msg--anthropic">
+<div id="m-22cd627c-1f43-5b20-9658-2255ada1a772" data-section-uuid="22cd627c-1f43-5b20-9658-2255ada1a772" class="msg msg--anthropic">
 
 ## 2369-04-14 10:00:00 UTC — Human
 
@@ -86,7 +120,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-th-30000002-1701-4d00-8000-000000030002-0" data-section-uuid="th-30000002-1701-4d00-8000-000000030002-0" class="msg msg--anthropic">
+<div id="m-7290e876-b1eb-5623-86c8-bb4bea24cac3" data-section-uuid="7290e876-b1eb-5623-86c8-bb4bea24cac3" class="msg msg--anthropic">
 
 ## 2369-04-14 10:00:30 UTC — claude-opus-4-7
 
@@ -98,7 +132,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-tu-toolu_FAKE0001ngfedcba9876543210" data-section-uuid="tu-toolu_FAKE0001ngfedcba9876543210" class="msg msg--anthropic">
+<div id="m-6b86443a-0129-5587-b18b-feab02f63649" data-section-uuid="6b86443a-0129-5587-b18b-feab02f63649" class="msg msg--anthropic">
 
 ## 2369-04-14 10:00:32 UTC — claude-opus-4-7
 
@@ -113,7 +147,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-30000002-1701-4d00-8000-000000030002" data-section-uuid="30000002-1701-4d00-8000-000000030002" class="msg msg--anthropic">
+<div id="m-93d73572-6935-59a9-afc9-54856edaa0fd" data-section-uuid="93d73572-6935-59a9-afc9-54856edaa0fd" class="msg msg--anthropic">
 
 ## 2369-04-14 10:01:00 UTC — claude-opus-4-7
 
@@ -121,7 +155,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 </div>
 
-<div id="m-tr-toolu_FAKE0001ngfedcba9876543210" data-section-uuid="tr-toolu_FAKE0001ngfedcba9876543210" class="msg msg--anthropic">
+<div id="m-1e42b243-788e-5f46-b131-8286079d3711" data-section-uuid="1e42b243-788e-5f46-b131-8286079d3711" class="msg msg--anthropic">
 
 ## 2369-04-14 10:01:00 UTC — claude-opus-4-7
 
@@ -144,7 +178,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 </div>
 
-<div id="m-30000003-1701-4d00-8000-000000030003" data-section-uuid="30000003-1701-4d00-8000-000000030003" class="msg msg--anthropic">
+<div id="m-40df2839-ba53-5296-ad0c-cc394a2756a4" data-section-uuid="40df2839-ba53-5296-ad0c-cc394a2756a4" class="msg msg--anthropic">
 
 ## 2369-04-14 10:02:00 UTC — Human
 
@@ -153,24 +187,24 @@ Perfect. Make it so.
 </div>
 
 
-=== anthropic_api/rendered_md/c0000004-1701-4d00-8000-00000000c004/all.md ===
+=== anthropic_api/rendered_md/a291f856-67f6-5905-a4f8-1292e655ae76/all.md ===
 ---
 title: "Tricorder Image Diagnostic (all)"
 provider: anthropic
 source_label: "Claude"
-chat_uuid: c0000004-1701-4d00-8000-00000000c004
-markdown_uuid: c0000004-1701-4d00-8000-00000000c004
+chat_uuid: a291f856-67f6-5905-a4f8-1292e655ae76
+markdown_uuid: a291f856-67f6-5905-a4f8-1292e655ae76
 period: all
 display: "Tricorder Image Diagnostic"
 account: 00000003-1701-4d00-8000-000000000003
 external_id: c0000004-1701-4d00-8000-00000000c004
 item_count: 2
-source_fingerprint: 91f9ee23e19a87b6cb56d85d792b6262660d1c13fdc07354c21c2f1c877d84ab
+source_fingerprint: 6c835a7002549c2c7cf009c466cc260fd9bca412d4c96f301d2e8bce22c10e87
 ---
 
-<h1 class="page-title" data-page-title-uuid="c0000004-1701-4d00-8000-00000000c004">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="a291f856-67f6-5905-a4f8-1292e655ae76">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-40000001-1701-4d00-8000-000000040001" data-section-uuid="40000001-1701-4d00-8000-000000040001" class="msg msg--anthropic">
+<div id="m-903380da-6452-5f3f-b61b-57f4f470913a" data-section-uuid="903380da-6452-5f3f-b61b-57f4f470913a" class="msg msg--anthropic">
 
 ## 2369-04-15 08:30:00 UTC — Human
 
@@ -180,7 +214,7 @@ What's wrong with this medical-tricorder readout?
 
 </div>
 
-<div id="m-40000002-1701-4d00-8000-000000040002" data-section-uuid="40000002-1701-4d00-8000-000000040002" class="msg msg--anthropic">
+<div id="m-8fce1929-4160-50f0-9f81-7dfd3ab512e6" data-section-uuid="8fce1929-4160-50f0-9f81-7dfd3ab512e6" class="msg msg--anthropic">
 
 ## 2369-04-15 08:30:45 UTC — claude-opus-4-7
 
@@ -189,93 +223,60 @@ The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depress
 </div>
 
 
-=== anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md ===
+=== anthropic_api/rendered_md/b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d/all.md ===
 ---
-title: "Borg Encryption Signature Lookup (all)"
+title: "Claude Project · Bridge Operations (all)"
 provider: anthropic
 source_label: "Claude"
-chat_uuid: c0000005-1701-4d00-8000-00000000c005
-markdown_uuid: c0000005-1701-4d00-8000-00000000c005
+chat_uuid: b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d
+markdown_uuid: b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d
 period: all
-display: "Borg Encryption Signature Lookup"
+display: "Bridge Operations"
 account: 00000001-1701-4d00-8000-000000000001
-external_id: c0000005-1701-4d00-8000-00000000c005
-item_count: 6
-source_fingerprint: 4df72f1fc91c57c23ac8976cea959166a655f8338720902f8772fc2011c48195
+project: Bridge Operations
+external_id: 70000001-1701-4d00-8000-000000000701
+item_count: 4
+source_fingerprint: f3a92a62b5b113aad5817439b8a0a0844107b6ee6eeeba86c544ef3e375a8a54
 ---
 
-<h1 class="page-title" data-page-title-uuid="c0000005-1701-4d00-8000-00000000c005">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-50000001-1701-4d00-8000-000000050001" data-section-uuid="50000001-1701-4d00-8000-000000050001" class="msg msg--anthropic">
+<div id="m-a9ea471a-12c8-5d3d-994f-c90e4d328cf6" data-section-uuid="a9ea471a-12c8-5d3d-994f-c90e4d328cf6" class="msg msg--anthropic">
 
-## 2369-04-16 09:00:00 UTC — Human
+## 2364-03-01 09:00:00 UTC — Description
 
-Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
-
-</div>
-
-<div id="m-tu-toolu_FAKE0002borgsigfirstattempt0" data-section-uuid="tu-toolu_FAKE0002borgsigfirstattempt0" class="msg msg--anthropic">
-
-## 2369-04-16 09:00:10 UTC — claude-opus-4-7
-
-<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
-
-```json
-{
-  "signature": "7-of-9-alpha",
-  "table": "borg_shield_signatures"
-}
-```
-</details>
+Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.
 
 </div>
 
-<div id="m-tu-toolu_FAKE0003borgsigsecondtry00" data-section-uuid="tu-toolu_FAKE0003borgsigsecondtry00" class="msg msg--anthropic">
+<div id="m-66b1ca22-47dd-59cf-903a-0cbc7eeae035" data-section-uuid="66b1ca22-47dd-59cf-903a-0cbc7eeae035" class="msg msg--anthropic">
 
-## 2369-04-16 09:00:30 UTC — claude-opus-4-7
+## 2364-03-01 09:00:00 UTC — Custom instructions
 
-<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
-
-```json
-{
-  "relay": "backup-2",
-  "signature": "7-of-9-alpha",
-  "table": "borg_shield_signatures"
-}
-```
-</details>
+Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.
 
 </div>
 
-<div id="m-50000002-1701-4d00-8000-000000050002" data-section-uuid="50000002-1701-4d00-8000-000000050002" class="msg msg--anthropic">
+<div id="m-20874e2e-199e-576a-a5c2-7b884fe254bb" data-section-uuid="20874e2e-199e-576a-a5c2-7b884fe254bb" class="msg msg--anthropic">
 
-## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+## 2364-03-01 09:05:00 UTC — hailing-frequencies.md
 
-Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
+# Hailing frequencies
 
-</div>
+Open on subspace band 3 unless the target is cloaked.
 
-<div id="m-tr-toolu_FAKE0002borgsigfirstattempt0" data-section-uuid="tr-toolu_FAKE0002borgsigfirstattempt0" class="msg msg--anthropic">
+- Klingon vessels: lead with rank, then ship name.
+- Romulan vessels: do not open first.
 
-## 2369-04-16 09:01:30 UTC — claude-opus-4-7
-
-<details><summary>Tool result: starfleet_db_query (error)</summary>
-
-```
-ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
-```
-</details>
 
 </div>
 
-<div id="m-tr-toolu_FAKE0003borgsigsecondtry00" data-section-uuid="tr-toolu_FAKE0003borgsigsecondtry00" class="msg msg--anthropic">
+<div id="m-32e3bbf8-fb15-5acc-8a91-fd13dc26f2df" data-section-uuid="32e3bbf8-fb15-5acc-8a91-fd13dc26f2df" class="msg msg--anthropic">
 
-## 2369-04-16 09:01:30 UTC — claude-opus-4-7
+## 2364-03-02 11:30:00 UTC — escalation-ladder.txt
 
-<details><summary>Tool result: starfleet_db_query</summary>
+Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
+Medical emergencies route directly to Sickbay (Crusher).
 
-Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
-
-</details>
 
 </div>

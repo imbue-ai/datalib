@@ -137,6 +137,43 @@ pub struct NormalizedChatItem {
     /// default for anything that doesn't set it. Grid-only; doesn't change
     /// the markdown layout.
     pub kind_label: Option<String>,
+    /// What this item is upstream, for the message-level grid_row's
+    /// backpointer columns. `None` for providers not yet ported onto
+    /// `datalib_id`.
+    pub source_ref: Option<ItemSourceRef>,
+}
+
+/// The upstream's own identity for one chat item, carried through to
+/// the message-level grid_row's `source_native_id` /
+/// `source_entity_kind`.
+///
+/// One field rather than two loose `Option`s because neither half is
+/// useful alone: a native id with no kind is ambiguous (GitHub numbers
+/// three comment types in overlapping sequences), and a kind with no id
+/// points at nothing. Making them inseparable means a provider cannot
+/// half-populate the backpointer.
+#[derive(Debug, Clone, Serialize)]
+pub struct ItemSourceRef {
+    /// The upstream's identifier for this item, within the chat's
+    /// scope — an Anthropic `message_uuid`, a Slack `ts`, a JMAP
+    /// `email_id`. The `natural_key` fed to `datalib_id::entity_id`.
+    pub native_id: String,
+    /// The `entity_kind` component of the same recipe, in the
+    /// upstream's vocabulary (`"message"`, `"tool_use"`,
+    /// `"thinking_block"`). Distinct from `kind_label`, which is a
+    /// display string for the grid's Kind column: that one may be
+    /// reworded freely, this one may not, because `uuid` derives from
+    /// it.
+    pub entity_kind: String,
+}
+
+impl ItemSourceRef {
+    pub fn new(entity_kind: impl Into<String>, native_id: impl Into<String>) -> Self {
+        Self {
+            native_id: native_id.into(),
+            entity_kind: entity_kind.into(),
+        }
+    }
 }
 
 /// One rendered-markdown bucket: a slice of a chat covering a single

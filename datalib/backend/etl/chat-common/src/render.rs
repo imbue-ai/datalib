@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// `grid_rows.source_entity_kind` for a chat/thread-level row.
+/// Default `source_entity_kind` for a chat/thread-level row — the
+/// value most providers put in [`RenderProfile::chat_entity_kind`].
 ///
 /// The `entity_kind` component of the `datalib_id` recipe, in the
 /// upstream's vocabulary — distinct from `grid_rows.kind`, which is a
@@ -48,6 +49,22 @@ pub struct RenderProfile {
     /// Discriminator for reaction-level grid_rows. Reactions get their
     /// own rows so search can find them by emoji content.
     pub reaction_kind: String,
+    /// `grid_rows.source_entity_kind` for this profile's chat-level
+    /// rows — the `entity_kind` component of the `datalib_id` recipe
+    /// that minted their `uuid`.
+    ///
+    /// Per-profile rather than a chat-common constant because a
+    /// provider can render more than one shape of top-level page
+    /// through this path: anthropic runs conversations and Claude
+    /// *Projects* through two profiles, and a project page is not a
+    /// conversation. Hardcoding `"conversation"` here stamped a
+    /// backpointer on project rows that regenerated a different id —
+    /// caught by `ingested_tng_test`'s round-trip check, invisible
+    /// otherwise.
+    ///
+    /// Must match the kind the provider's `ids` module used; the
+    /// round-trip check is what enforces it.
+    pub chat_entity_kind: &'static str,
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
@@ -535,13 +552,7 @@ fn build_grid_rows(
             .qmd_path(Some(md_rel.to_string()))
             .source_url(chat.source_url.clone())
             .source_native_id(chat.external_id.clone())
-            // Chat-level rows are all the same upstream shape across
-            // every chat provider. Per-*item* native ids need a field
-            // on `NormalizedChatItem` and a pass through each
-            // provider's item builder; that lands with the per-provider
-            // `datalib_id` port, so message rows carry NULL here for
-            // now rather than a guess.
-            .source_entity_kind(Some(ENTITY_KIND_CONVERSATION.to_string()))
+            .source_entity_kind(Some(profile.chat_entity_kind.to_string()))
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
             .build()?,
     );
@@ -572,6 +583,8 @@ fn build_grid_rows(
                         .unwrap_or_else(|| profile.message_kind.clone()),
                 )
                 .source_label(profile.source_label.clone())
+                .source_native_id(item.source_ref.as_ref().map(|r| r.native_id.clone()))
+                .source_entity_kind(item.source_ref.as_ref().map(|r| r.entity_kind.clone()))
                 .when_ts(Some(iso_from_ms(item.date_ms)))
                 .author(Some(item.author_display.clone()))
                 .account(chat.account.clone())
@@ -771,6 +784,7 @@ mod tests {
                     system_note: None,
                     source_url: None,
                     kind_label: None,
+                    source_ref: None,
                 }],
             }],
         }
@@ -810,6 +824,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let chat = mk_chat();
@@ -848,6 +863,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
@@ -863,6 +879,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -912,6 +929,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -942,6 +960,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -982,6 +1001,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1009,6 +1029,7 @@ mod tests {
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
             render_version: 1,
         };
         let mut chat = mk_chat();

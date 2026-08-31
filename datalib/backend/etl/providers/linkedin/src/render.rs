@@ -22,7 +22,9 @@ use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use serde_json::Value;
 
@@ -39,6 +41,7 @@ fn profile() -> RenderProfile {
         chat_kind: "LinkedIn Chat".to_string(),
         message_kind: "LinkedIn Message".to_string(),
         reaction_kind: "LinkedIn Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -120,6 +123,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
                     system_note: None,
                     source_url: None,
                     kind_label: None,
+                    source_ref: None,
                 }
             })
             .collect();

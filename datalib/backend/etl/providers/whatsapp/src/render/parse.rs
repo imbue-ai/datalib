@@ -434,6 +434,7 @@ fn build_item(
         system_note: None,
         source_url: None,
         kind_label: None,
+        source_ref: None,
     }
 }
 

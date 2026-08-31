@@ -31,7 +31,9 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -60,6 +62,7 @@ fn profile() -> RenderProfile {
         chat_kind: "Slack Thread".to_string(),
         message_kind: "Slack Message".to_string(),
         reaction_kind: "Slack Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -224,6 +227,7 @@ fn build_item(
         // Per-message permalink (with thread_ts for replies).
         source_url: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
         kind_label: None,
+        source_ref: None,
     }
 }
 

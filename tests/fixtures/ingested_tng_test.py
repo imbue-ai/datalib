@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import unittest
+import uuid as uuidlib
 from pathlib import Path
 
 
@@ -66,17 +67,63 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # not disappear quietly.
 # Providers still minting `grid_rows.uuid` values that are not UUIDs.
 #
-# Both pass an upstream id through verbatim (or lightly prefixed)
-# instead of deriving a v5 under a datalib namespace: anthropic emits
+# Empty, and it must stay that way. It held `anthropic` and `openai`,
+# the two that passed an upstream id through verbatim (or lightly
+# prefixed) instead of deriving a v5: anthropic emitted
 # `tu-{tool_use_id}` / `tr-{tool_use_id}` / `th-{msg_uuid}-{idx}` /
-# `pdesc-{project_uuid}` for its structural blocks, and openai passes
-# ChatGPT's `conversation_id` / `message_id` straight through.
+# `pdesc-{project_uuid}` for its structural blocks, and openai used
+# ChatGPT's `conversation_id` / `message_id` directly. Both now mint
+# through `datalib_id::entity_id`.
 #
-# This is an ALLOWLIST, not a spec — it exists so the shape assertion
-# below can be exact for the 14 providers that are already clean while
-# these two get ported. Shrink it as each is moved onto `datalib_id`;
-# when it is empty, delete it and the branch that consults it.
-NON_UUID_PK_PROVIDERS = frozenset({"anthropic", "openai"})
+# Kept as an empty allowlist rather than deleted so the assertion below
+# stays an exact-set comparison: a provider that starts leaking an
+# upstream id into `grid_rows.uuid` fails here by name, and adding it
+# to this set is a deliberate act someone has to justify in review
+# rather than a silent drift.
+NON_UUID_PK_PROVIDERS: frozenset[str] = frozenset()
+
+# ── datalib_id recipe, reimplemented ────────────────────────────────
+#
+# Deliberately a second implementation rather than a call into the Rust
+# one. Asserting `entity_id(...) == uuid` by invoking the same function
+# that produced the uuid proves only that the function is
+# deterministic. Recomputing it here from the columns the renderer
+# stored pins the actual contract: that `source_native_id` and
+# `source_entity_kind` really are the inputs `uuid` was derived from,
+# and that the wire format hasn't drifted. A renderer that stamps a
+# plausible-looking but wrong backpointer fails here and nowhere else.
+#
+# Source of truth: datalib/backend/id/src/lib.rs. If that file's
+# namespace, separator or component order changes, this must change with
+# it — which is the point.
+DATALIB_ID_NS = uuidlib.UUID(bytes=b"datalib-id-ns-v1")
+ID_SEP = "\x1f"
+
+# Which `Scope` variant each ported provider mints under. Scope is a
+# provider-level design decision, not a per-row one, so a table is the
+# right shape — and it has to live here because `source_scope` is NULL
+# for both `ProviderGlobal` and `Content`, making the two
+# indistinguishable from the row alone.
+#
+# Grow this as providers are ported; a provider absent from it is
+# skipped by the round-trip check below, and `PORTED_PROVIDERS` keeps
+# that from being silent.
+SCOPE_TAG_BY_PROVIDER = {
+    "anthropic": ("pg", ""),
+    "openai": ("pg", ""),
+}
+
+# Providers whose rows MUST round-trip. Separate from the table above so
+# a typo in a provider name shows up as "no rows checked" rather than as
+# a silent pass.
+PORTED_PROVIDERS = frozenset({"anthropic", "openai"})
+
+
+def datalib_entity_id(provider, scope_tag, scope_val, entity_kind, natural_key):
+    """UUIDv5 over the five-component recipe, joined with \x1f."""
+    name = ID_SEP.join([provider, scope_tag, scope_val, entity_kind, natural_key])
+    return str(uuidlib.uuid5(DATALIB_ID_NS, name))
+
 
 # Canonical 8-4-4-4-12 hex form. Deliberately not a version-specific
 # pattern: the point is that the column holds an opaque fixed-width
@@ -112,6 +159,16 @@ EXPECTED_PROVIDERS = frozenset(
         "yolink",
     }
 )
+
+
+def _sql_in(names) -> str:
+    """Render a set of provider names as a SQL IN-list literal.
+
+    Provider names are compile-time constants in this file, never user
+    input, so quoting them inline is safe; the doltlite CLI takes one
+    SQL string and has nowhere to bind parameters.
+    """
+    return ", ".join(f"'{n}'" for n in sorted(names))
 
 
 def _argv():
@@ -306,6 +363,58 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "GROUP BY markdown_uuid HAVING COUNT(DISTINCT source_name) > 1;",
         )
 
+    def _roundtrip_failures(self) -> list[str]:
+        """Ported rows whose backpointer does not regenerate their uuid.
+
+        For every row from a provider in `SCOPE_TAG_BY_PROVIDER`,
+        recompute `entity_id(provider, scope, source_entity_kind,
+        source_native_id)` and compare to the stored `uuid`. A mismatch
+        means the backpointer is decorative — it names something that
+        would not produce this row — and the round-trip back to the
+        upstream API is broken in a way nothing else would notice,
+        because both columns still look perfectly plausible.
+        """
+        rows = self._query(
+            self._index_db,
+            "SELECT provider, uuid, IFNULL(source_entity_kind, ''), "
+            "       IFNULL(source_native_id, '') "
+            "FROM grid_rows "
+            f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
+            "ORDER BY uuid;",
+        )
+        failures = []
+        for line in rows:
+            provider, row_uuid, entity_kind, native_id = line.split("|", 3)
+            if not entity_kind or not native_id:
+                failures.append(
+                    f"{provider} {row_uuid}: ported provider left "
+                    f"source_entity_kind={entity_kind!r} "
+                    f"source_native_id={native_id!r}"
+                )
+                continue
+            scope_tag, scope_val = SCOPE_TAG_BY_PROVIDER[provider]
+            want = datalib_entity_id(
+                provider, scope_tag, scope_val, entity_kind, native_id
+            )
+            if want != row_uuid:
+                failures.append(
+                    f"{provider} {row_uuid}: ({entity_kind!r}, "
+                    f"{native_id!r}) regenerates {want}"
+                )
+        return failures
+
+    def _ported_provider_row_counts(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for line in self._query(
+            self._index_db,
+            "SELECT provider, COUNT(*) FROM grid_rows "
+            f"WHERE provider IN ({_sql_in(PORTED_PROVIDERS)}) "
+            "GROUP BY provider;",
+        ):
+            name, n = line.rsplit("|", 1)
+            out[name] = int(n)
+        return out
+
     def _signal_cursor(self) -> list[str]:
         """Signal's `ingested_backups` rows as `<snapshot_dir>|<blake3>`."""
         return self._query(
@@ -440,22 +549,39 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "providers minting non-UUID grid_rows.uuid values; shrink "
             "NON_UUID_PK_PROVIDERS as each is ported, and do not grow it",
         )
-        # The regex must actually be discriminating against this
-        # fixture — if it matched everything, the exact-set assertion
-        # above would pass for the wrong reason.
-        self.assertGreater(
-            int(
-                self._scalar(
-                    self._index_db,
-                    "SELECT COUNT(*) FROM grid_rows "
-                    f"WHERE uuid NOT REGEXP '{UUID_SQL_REGEX}';",
-                )
+        # Guard against the regex silently matching nothing — a typo
+        # that made it match zero rows would satisfy the empty-set
+        # assertion above for entirely the wrong reason. Every row must
+        # be UUID-shaped, and there must be rows.
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                f"SELECT COUNT(*) FROM grid_rows WHERE uuid REGEXP '{UUID_SQL_REGEX}';",
             ),
-            0,
-            "the UUID-shape regex matched every row, so it proves nothing "
-            "— if every provider is genuinely clean now, delete "
-            "NON_UUID_PK_PROVIDERS and this check together",
+            str(shape1["grid_rows"]),
+            "every grid_rows.uuid must match the UUID shape — if this "
+            "equals 0 the regex itself is broken, not the data",
         )
+
+        # Ported providers must round-trip: the backpointer columns
+        # regenerate the row's own uuid. See `datalib_entity_id` for why
+        # this is reimplemented rather than delegated.
+        self.assertEqual(
+            self._roundtrip_failures(),
+            [],
+            "a ported provider's (source_entity_kind, source_native_id) "
+            "must regenerate its uuid",
+        )
+        # ...and every ported provider must actually have rows, or the
+        # emptiness above proves nothing.
+        counts = self._ported_provider_row_counts()
+        self.assertEqual(
+            frozenset(counts),
+            PORTED_PROVIDERS,
+            "every ported provider must contribute rows to check",
+        )
+        for name, n in counts.items():
+            self.assertGreater(n, 0, f"{name} must have rows")
 
         # The index is committed, so its version history is non-empty.
         self.assertGreater(

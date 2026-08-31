@@ -29,11 +29,15 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    ItemKind, ItemSourceRef, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc,
 };
 
+use super::ids;
 use super::parse::{
     shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ProjectRow,
     ShreddedConversation,
@@ -53,6 +57,7 @@ fn profile() -> RenderProfile {
         // Per-item kind is always set via `kind_label`; nominal fallback.
         message_kind: "LLM Response".to_string(),
         reaction_kind: "Claude Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -71,6 +76,11 @@ fn project_profile() -> RenderProfile {
         message_kind: "Project Knowledge".to_string(),
         // Projects have no reactions; chat-common needs the field set.
         reaction_kind: "Claude Reaction".to_string(),
+        // A project page is not a conversation, and its id was minted
+        // as `KIND_PROJECT`. Leaving the chat-common default here
+        // stamped a `"conversation"` backpointer that regenerated a
+        // different uuid.
+        chat_entity_kind: ids::KIND_PROJECT,
         render_version: RENDER_VERSION,
     }
 }
@@ -292,9 +302,7 @@ fn build_chat(
                 continue;
             }
             let raw_obj = b.raw_json.as_object().cloned().unwrap_or_default();
-            let section_uuid =
-                section_uuid_for_block(&m.message_uuid, b.block_index, Some(btype), &raw_obj)
-                    .unwrap_or_else(|| format!("blk-{}-{}", m.message_uuid, b.block_index));
+            let block_id = block_identity(&m.message_uuid, b.block_index, btype, &raw_obj);
             let block_ms = b
                 .start_timestamp
                 .as_deref()
@@ -304,7 +312,7 @@ fn build_chat(
             let block_author = filter_nonempty(model.clone()).unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
-                message_uuid: section_uuid,
+                message_uuid: block_id.uuid.clone(),
                 author_id: btype.to_string(),
                 author_display: block_author,
                 date_ms: block_ms,
@@ -315,12 +323,17 @@ fn build_chat(
                 system_note: None,
                 source_url: None,
                 kind_label: Some(kind_for_block(btype).to_string()),
+                source_ref: Some(ItemSourceRef::new(
+                    block_id.entity_kind,
+                    block_id.natural_key.clone(),
+                )),
             });
         }
 
         // The message's own item: its text blocks + extracted-text
         // attachments + downloadable files. Always emitted (even empty)
         // so the per-message grid row survives.
+        let msg_id = ids::message(&m.message_uuid);
         let body = body_parts.join("\n\n");
         let kind = if norm_atts.is_empty() {
             ItemKind::Text
@@ -328,7 +341,7 @@ fn build_chat(
             ItemKind::Attachment
         };
         items.push(NormalizedChatItem {
-            message_uuid: m.message_uuid.clone(),
+            message_uuid: msg_id.uuid.clone(),
             author_id: sender.to_string(),
             author_display: author_display.clone(),
             date_ms: msg_ms,
@@ -339,6 +352,10 @@ fn build_chat(
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
+            source_ref: Some(ItemSourceRef::new(
+                ids::KIND_MESSAGE,
+                m.message_uuid.clone(),
+            )),
         });
     }
 
@@ -352,9 +369,10 @@ fn build_chat(
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
+    let chat_uuid = ids::conversation(&conv_uuid).uuid;
     NormalizedChat {
-        id: conv_uuid.clone(),
-        chat_uuid: conv_uuid.clone(),
+        id: chat_uuid.clone(),
+        chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),
         account: Some(conv.account_uuid.clone()),
@@ -364,21 +382,16 @@ fn build_chat(
                 .cloned()
                 .unwrap_or_else(|| uuid.clone())
         }),
-        // Anthropic's own conversation UUID. Today this is also our
-        // `uuid` (the renderer passes it through as the primary key),
-        // so recording it here looks redundant — it is not. Once this
-        // provider moves onto `datalib_id` and `uuid` becomes a minted
-        // v5, this column is the only remaining route back to
-        // claude.ai, and it is what the grid's "Copy source ID(s)"
-        // action reads. Setting it before the re-key means that action
-        // keeps working across it instead of silently going empty.
+        // Anthropic's own conversation UUID — the only remaining route
+        // back to claude.ai now that `uuid` is a minted v5, and what
+        // the grid's "Copy source ID(s)" action reads.
         external_id: Some(conv_uuid.clone()),
         source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
-            markdown_uuid: conv_uuid,
+            markdown_uuid: chat_uuid,
             items,
         }],
     }
@@ -387,12 +400,12 @@ fn build_chat(
 /// One page per Claude Project: its description, its custom
 /// instructions, and one section per knowledge document.
 ///
-/// Section ids follow the same prefix convention as the block ids
-/// (`tu-`/`tr-`/`th-`): `pdesc-`/`pinst-` for the two synthesized
-/// sections, and the document's own UUID for each knowledge doc. They
-/// only have to be stable and unique, not RFC-4122.
+/// The two synthesized sections and each knowledge document get their
+/// own minted ids ([`super::ids`]), keyed on the project UUID and the
+/// document UUID respectively.
 fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> NormalizedChat {
     let project_uuid = project.project_uuid.clone();
+    let page_uuid = ids::project(&project_uuid).uuid;
     let name = project
         .name
         .clone()
@@ -413,7 +426,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     if let Some(text) = project.description.clone().and_then(filter_nonempty) {
         items.push(project_item(
-            format!("pdesc-{project_uuid}"),
+            ids::project_description(&project_uuid),
             "Description",
             "Project Description",
             base_ms + 1,
@@ -422,7 +435,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
     }
     if let Some(text) = project.prompt_template.clone().and_then(filter_nonempty) {
         items.push(project_item(
-            format!("pinst-{project_uuid}"),
+            ids::project_instructions(&project_uuid),
             "Custom instructions",
             "Project Instructions",
             base_ms + 2,
@@ -449,8 +462,9 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
             .as_deref()
             .map(|c| clamp_doc_text(c, options.max_project_doc_bytes))
             .and_then(filter_nonempty);
+        let doc_id = ids::project_document(&doc.doc_uuid);
         items.push(NormalizedChatItem {
-            message_uuid: doc.doc_uuid.clone(),
+            message_uuid: doc_id.uuid.clone(),
             author_id: "project_doc".into(),
             author_display: label,
             date_ms: ms,
@@ -461,13 +475,17 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
             system_note: None,
             source_url: None,
             kind_label: Some("Project Knowledge".to_string()),
+            source_ref: Some(ItemSourceRef::new(
+                doc_id.entity_kind,
+                doc_id.natural_key.clone(),
+            )),
         });
     }
     items.sort_by_key(|i| i.date_ms);
 
     NormalizedChat {
-        id: project_uuid.clone(),
-        chat_uuid: project_uuid.clone(),
+        id: page_uuid.clone(),
+        chat_uuid: page_uuid.clone(),
         display: name.clone(),
         // Distinguishes a project page from a chat page at a glance;
         // without it chat-common derives the same "Claude · {name}"
@@ -477,13 +495,15 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
         // A project's own `project` column is itself, so the grid groups
         // the project page together with its conversations.
         project: Some(name),
-        external_id: None,
+        // The project's own UUID — same round-trip role as a
+        // conversation's, see `build_chat`.
+        external_id: Some(project_uuid.clone()),
         source_url: Some(format!("https://claude.ai/project/{project_uuid}")),
         org_uuid: project.org_uuid.clone(),
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
-            markdown_uuid: project_uuid,
+            markdown_uuid: page_uuid,
             items,
         }],
     }
@@ -516,14 +536,14 @@ fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
 
 /// One synthesized project section (description / custom instructions).
 fn project_item(
-    uuid: String,
+    id: ids::Identity,
     author_display: &str,
     kind_label: &str,
     date_ms: i64,
     text: String,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
-        message_uuid: uuid,
+        message_uuid: id.uuid,
         author_id: kind_label.to_string(),
         author_display: author_display.to_string(),
         date_ms,
@@ -534,6 +554,7 @@ fn project_item(
         system_note: None,
         source_url: None,
         kind_label: Some(kind_label.to_string()),
+        source_ref: Some(ItemSourceRef::new(id.entity_kind, id.natural_key)),
     }
 }
 
@@ -569,27 +590,40 @@ fn iso_to_ms(s: &str) -> Option<i64> {
 // Block / attachment rendering (the markdown that becomes item.text).
 // ─────────────────────────────────────────────────────────────────────
 
-/// The grid-row `uuid` (and the item's `message_uuid`) for a structural
-/// block. `tu-` for `tool_use`, `tr-` for the matching `tool_result`,
-/// `th-` for `thinking` (synthesized from `{msg_uuid}-{block_index}`).
-/// `None` for plain `text`, which lives in the parent message item.
-pub(crate) fn section_uuid_for_block(
+/// Identity for one structural block: its grid-row `uuid` (also the
+/// item's `message_uuid` and its `data-section-uuid` anchor), plus the
+/// upstream id and entity kind that produced it.
+///
+/// A `tool_use` is keyed on its own `id`, a `tool_result` on the
+/// `tool_use_id` it answers — that is how Anthropic links the pair —
+/// and both are scoped to the containing message. A `thinking` block
+/// has no upstream id, so its position within the message is the key.
+/// When a block is missing the id its type calls for, position is the
+/// fallback.
+///
+/// Replaces the old `tu-`/`tr-`/`th-`/`blk-` string prefixes; see
+/// [`super::ids`] for what those got wrong.
+pub(crate) fn block_identity(
     msg_uuid: &str,
     block_index: usize,
-    btype: Option<&str>,
+    btype: &str,
     raw_obj: &serde_json::Map<String, Value>,
-) -> Option<String> {
-    match btype {
-        Some("tool_use") => raw_obj
-            .get("id")
-            .and_then(Value::as_str)
-            .map(|id| format!("tu-{id}")),
-        Some("tool_result") => raw_obj
-            .get("tool_use_id")
-            .and_then(Value::as_str)
-            .map(|id| format!("tr-{id}")),
-        Some("thinking") => Some(format!("th-{msg_uuid}-{block_index}")),
-        _ => None,
+) -> ids::Identity {
+    let field = match btype {
+        "tool_use" => "id",
+        "tool_result" => "tool_use_id",
+        _ => "",
+    };
+    let upstream = (!field.is_empty())
+        .then(|| raw_obj.get(field).and_then(Value::as_str))
+        .flatten();
+    match (btype, upstream) {
+        ("tool_use", Some(id)) => ids::tool_use(msg_uuid, id),
+        ("tool_result", Some(id)) => ids::tool_result(msg_uuid, id),
+        ("thinking", _) => ids::thinking_block(msg_uuid, block_index),
+        // A tool block whose id field is absent. Position is all that
+        // is left, and it is still stable for a given message.
+        _ => ids::block_fallback(msg_uuid, block_index),
     }
 }
 

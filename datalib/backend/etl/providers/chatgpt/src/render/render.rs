@@ -22,11 +22,15 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    ItemKind, ItemSourceRef, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc,
 };
 
+use super::ids;
 use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
 };
@@ -44,6 +48,7 @@ fn profile() -> RenderProfile {
         // nominal fallback.
         message_kind: "LLM Response".to_string(),
         reaction_kind: "ChatGPT Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -161,8 +166,9 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
             ItemKind::Attachment
         };
 
+        let msg_id = ids::message(&m.message_id);
         items.push(NormalizedChatItem {
-            message_uuid: m.message_id.clone(),
+            message_uuid: msg_id.uuid.clone(),
             author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
             author_display,
             date_ms: ms,
@@ -173,6 +179,10 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
+            source_ref: Some(ItemSourceRef::new(
+                msg_id.entity_kind,
+                msg_id.natural_key.clone(),
+            )),
         });
     }
 
@@ -181,23 +191,23 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
+    let chat_uuid = ids::conversation(&conv_id).uuid;
     NormalizedChat {
-        id: conv_id.clone(),
-        chat_uuid: conv_id.clone(),
+        id: chat_uuid.clone(),
+        chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),
         account: conv.account_id.clone(),
         project: None,
-        // ChatGPT's own conversation id — see the note on the
-        // equivalent line in the anthropic renderer for why this is
-        // recorded even while it duplicates `uuid`.
+        // ChatGPT's own conversation id — the round-trip route back
+        // to chatgpt.com now that `uuid` is a minted v5.
         external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
-            markdown_uuid: conv_id,
+            markdown_uuid: chat_uuid,
             items,
         }],
     }

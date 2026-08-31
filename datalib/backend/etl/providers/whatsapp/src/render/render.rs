@@ -19,7 +19,7 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl_chat_common::{
-    render::{RenderProfile, RenderSummary},
+    render::{RenderProfile, RenderSummary, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
@@ -51,6 +51,7 @@ fn profile() -> RenderProfile {
         chat_kind: "WhatsApp Chat".to_string(),
         message_kind: "WhatsApp Message".to_string(),
         reaction_kind: "WhatsApp Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }

@@ -159,6 +159,36 @@ pub fn entity_id(provider: &str, scope: Scope<'_>, entity_kind: &str, natural_ke
     Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
 }
 
+/// Join the parts of a **composite natural key**.
+///
+/// A natural key is one recipe component; when the upstream identity is
+/// a tuple — an Anthropic `(message_uuid, tool_use_id)`, a Slack
+/// `(channel_id, ts)` — this is how the parts are joined.
+///
+/// Uses `#`, not the `\x1f` that separates recipe *components*,
+/// because this exact string is also what `grid_rows.source_native_id`
+/// stores and what the grid's "Copy source ID(s)" action puts on a
+/// user's clipboard. A control character there would be user-hostile.
+///
+/// **Feed the same string to [`entity_id`] and to
+/// `source_native_id`.** Building the key once and using it twice is
+/// what makes the round-trip
+/// (`entity_id(provider, scope, kind, source_native_id) == uuid`) hold;
+/// deriving the id from one spelling and storing another produces a
+/// backpointer that looks plausible and regenerates nothing.
+/// `//tests/fixtures:ingested_tng_test` reimplements the recipe and
+/// checks exactly this.
+///
+/// Parts must not contain `#`. Debug builds assert it; in release a
+/// violating part would make the join ambiguous rather than unsafe.
+pub fn composite_key(parts: &[&str]) -> String {
+    debug_assert!(
+        parts.iter().all(|p| !p.contains('#')),
+        "composite_key parts must not contain '#': {parts:?}"
+    );
+    parts.join("#")
+}
+
 /// [`entity_id`] as the hyphenated string the schema columns store.
 pub fn entity_id_str(
     provider: &str,
@@ -289,6 +319,30 @@ mod tests {
             entity_id("pdf", Scope::Upstream(""), "document", "abc"),
             entity_id("pdf", Scope::ProviderGlobal, "document", "abc"),
         );
+    }
+
+    /// The invariant the fixture test enforces from the outside:
+    /// whatever string goes into the recipe is the string that goes
+    /// into `source_native_id`, so recomputing from the stored columns
+    /// reproduces the id.
+    #[test]
+    fn a_composite_key_round_trips() {
+        let key = composite_key(&["msg-1", "toolu_9"]);
+        assert_eq!(key, "msg-1#toolu_9");
+        assert_eq!(
+            entity_id_str("anthropic", Scope::ProviderGlobal, "tool_use", &key),
+            entity_id_str(
+                "anthropic",
+                Scope::ProviderGlobal,
+                "tool_use",
+                "msg-1#toolu_9"
+            ),
+        );
+    }
+
+    #[test]
+    fn composite_keys_do_not_alias_across_part_boundaries() {
+        assert_ne!(composite_key(&["a", "bc"]), composite_key(&["ab", "c"]),);
     }
 
     #[test]
