@@ -2,6 +2,18 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# Tiny synthetic media corpus. Generated rather than encoded so the
+# inputs are reviewable and byte-deterministic: see
+# //tests/fixtures/make_media_fixtures.py for what each file tests.
+filegroup(
+    name = "media_fixture",
+    srcs = glob(
+        ["tests/fixtures/media_tng/**"],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_media",
     srcs = glob(["src/**/*.rs"]),
@@ -31,3 +43,24 @@ rust_test(
     edition = "2021",
     deps = ["@datalib_crates//:tempfile"],
 )
+
+# End-to-end: scan the fixture corpus and assert on the store contents.
+# Most assertions are the same claim in two directions — `blake3`
+# differs, `payload_blake3` does not.
+rust_test(
+    name = "media_e2e",
+    size = "medium",
+    srcs = ["tests/media_e2e.rs"],
+    data = [":media_fixture"],
+    edition = "2021",
+    env = {"MEDIA_FIXTURE_DIR": "datalib/backend/etl/providers/media/tests/fixtures/media_tng"},
+    deps = [
+        ":datalib_etl_media",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
