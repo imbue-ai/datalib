@@ -119,44 +119,90 @@ table you want to stay in. It carries:
   subscriber's NDJSON to `<root>/system/job-logs/<id>.log`, and
   `SourcesView` already classifies lines by `level`. Error / warn / info
   / everything is a filter over data that exists.
-- **This source's lines only.** A run spans several sources, so the
-  panel filters the job log by step id rather than showing the whole
-  run. (The same per-step attribution the `step_runs` table needs — one
-  more reason it comes first.)
-- **Older runs.** A dropdown of this source's recent runs, from
-  `step_runs`, so "it broke sometime last week" is answerable.
+- **This step's lines only.** A run covers several steps, so the panel
+  filters the job log by step id rather than showing the whole run. The
+  per-step attribution this needs now exists — see below.
+- **Older runs.** A dropdown of this step's recent runs, so "it broke
+  sometime last week" is answerable. This is the one piece still
+  missing: `DagState` keeps the *last* run per step, not a history, and
+  a history wants somewhere that isn't a file rewritten in full.
 
 Live runs stream into the same panel over the existing
 `/api/sync/stream` SSE, so clicking status on a running source is how
 you watch it — which is most of what "part two" wanted, reachable from
 the grid rather than as a separate screen.
 
-### Two of those columns have no data source yet
+### Two of those columns had no data source, and now do
 
-"Last synced" and "Last status" are the obvious things to want per
-source, and **neither is currently recorded per source.**
+*(Built, 2026-08-31.)*
+
+"Last synced" and "Last status" are the obvious things to want per step,
+and neither was recorded per step:
 
 - `sync_jobs` (in `system/jobs.doltlite_db`) is per *run*, and a run
-  routinely spans several sources — the UI comma-joins step ids into one
-  job's `source_name`. A multi-source job that failed doesn't say which
-  source failed.
-- `DagState`'s `StepState` *is* per step, but it holds
+  routinely covers several steps — the UI comma-joins step ids into one
+  job's `source_name`. A multi-step job that failed didn't say which
+  step failed. That is what the `~` marker beside the status was
+  apologizing for.
+- `DagState`'s `StepState` *was* per step, but held only
   `input_versions`, `output_versions`, `succeeded` and `fingerprint` —
-  no timestamp, no error. It answers "is this step up to date", not
+  no timestamp, no error. It answered "is this step up to date", not
   "when did it last run and how did it go".
 
-The events already exist and are simply not persisted: every run ends
-with `Event::RunSummary`, whose `StepSummary { step, status, failure,
-attempts, error, outputs }` is exactly these two columns, per step.
+**Where it went: `DagState`, not a `step_runs` table.** An earlier draft
+of this section proposed a table in `system/jobs.doltlite_db`, written
+by the sync worker as it consumed the run's event stream. Two things
+argued against it once the code was in front of us.
 
-**Proposal: persist it.** A `step_runs` table in
-`system/jobs.doltlite_db` — the server already owns that file and is its
-only writer — keyed `(job_id, step_id)`, written by the sync worker as
-it consumes the run's event stream. Both columns become one query, and
-per-source run history comes free (a status sparkline in the row, if we
-want it later). `dag_state.rs`'s own module doc already flags moving
-this state into a `pipeline_runs` table as an open question, so this
-runs with the grain.
+*The worker is the wrong writer.* It only sees runs **it** spawned. A
+sync started from a terminal — `datalib-dag <root>` — would leave no
+trace, and "the CLI and the UI disagree about what happened" is the
+complaint that started this work. The runner is the only process that
+sees every run, because it *is* every run.
+
+*Doltlite is the wrong store for this.* Its working set is per file and
+shared across processes, and it charges roughly 50ms per auto-committed
+statement bundle — `grid_index` batches a whole run into one transaction
+for exactly that reason. Run state changes tens of times per run and is
+worth nothing after the next one; versioning it would be slow and would
+bury `dolt_log` under entries nobody will read.
+
+So `StepState` gained a `last_run { started_at, finished_at, status,
+attempts, error }`, and `DagState` gained a `current_run { run_id,
+started_at, finished_at, plan, states }`. Both are written by the
+scheduler at the points it already saved state — after every terminal
+step — so the cost is unchanged.
+
+**State transitions, not progress ticks.** A step going
+running→succeeded lands in the file; "347 of 900 messages" does not.
+That keeps writes at O(steps) per run and leaves live progress to the
+NDJSON event stream, where a subscriber already gets it push-shaped. A
+CLI run showing "running" with no bar is honest rather than
+impoverished.
+
+`GET /api/dag` serves it alongside the graph it already returned, so the
+table joins status to structure in one fetch.
+
+### A crashed run is not a running one
+
+A record with no `finished_at` means "still going" — and means it
+forever if the runner was killed. `sync_runs.status = 'running'` tells
+the same lie for the same reason.
+
+What resolves it is the lock. `datalib-dag` holds
+`system/runner-lock` (`flock(2)`) for the life of a run, and the kernel
+releases it however the process exits, crash included. So an open record
+plus no lock holder is a run that died, and `GET /api/dag` reports
+`live: false` for it. The table says **interrupted** rather than
+spinning until someone reboots.
+
+The lock earns its keep twice over: it also closes a hole that predated
+this work. `datalib-http` has claimed a root since #200, but that is the
+*server's* claim — nothing stopped a terminal `datalib-dag` running
+beside the app's own sync, interleaving `system/dag_state.json` and the
+raw stores their steps write. They are deliberately two different files:
+the server spawns the runner, so one shared lock would deadlock it
+against its own child.
 
 ### Document counts must go through the applet
 
@@ -1027,7 +1073,7 @@ running it.)
 |---|---|
 | **0** | Duplicate + reserved source-name rejection in `dag::config::to_specs`. Independently correct, and everything below assumes it. |
 | **1** | The Manage screen inversion: AG Grid of sources with Run/Edit/Delete, **Add Data Source** above it, config editor demoted to an Advanced disclosure. Catalog crate + `GET /api/sources/catalog`; picker with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit and delete-from-config. |
-| **1b** | `step_runs` in `system/jobs.doltlite_db`, so the grid's Last synced / Last status columns have data. |
+| **1b** | *(Done, differently.)* Per-step run state, so the grid's Last synced / Last status columns have data. It landed in `DagState` rather than a `step_runs` table in `system/jobs.doltlite_db` — see "Two of those columns" above for why the runner had to be the writer. |
 | **2** | Slack end to end: the browser-mode credential screen (`/api/credentials/*` → `latchkey auth browser slack`), `datalib-step probe` + `POST /api/sources/probe` for the live channel multi-select, since/media, review. Includes plumbing `--account` through `HttpRequest` — the multi-workspace bug above. The reference implementation the rest copy. |
 | **3** | Credentials for the rest: test cookie-capture registration for `claude-ai`, and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail-dav. Includes the `auth`-probe fallback for services whose `credentialStatus` can only ever be `unknown`. |
 | **4** | `GET /api/fs/browse` + `inspect` probes; descriptors for the file-backed sources. |
@@ -1079,6 +1125,8 @@ So part two is:
   `<root>/system/job-logs/<id>.log` and `SourcesView` already classifies
   lines by `level`. A level filter and per-step grouping are UI work on
   data that is already there.
-- **`step_runs`** (proposed above for the grid's Last synced / Last
-  status columns) is the same table a run view would page through for
-  history.
+- **Run history.** `DagState` now carries the *last* run per step,
+  which is what the grid's columns needed, but not a series. A run view
+  paging through "the last twenty runs of this step" still needs
+  somewhere to keep them — and that store should not be the file the
+  scheduler rewrites in full after every terminal step.

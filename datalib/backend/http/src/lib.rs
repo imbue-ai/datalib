@@ -1051,9 +1051,46 @@ pub struct DagStepInfo {
     pub inputs: Vec<String>,
     /// Declared output artifact paths.
     pub outputs: Vec<String>,
-    /// Ids of the steps this one depends on (derived from artifact
-    /// overlap — the actual DAG edges).
+    /// Ids of the steps this one declares as inputs — the DAG edges.
     pub deps: Vec<String>,
+    /// What this step did the last time a run reached it, from the
+    /// runner's own state. `None` when it has never been reached.
+    ///
+    /// This is per *step*, which is what makes it honest: the job queue
+    /// records whole runs, so a run naming several steps could only
+    /// ever attribute one timestamp to all of them.
+    pub last_run: Option<DagStepRun>,
+    /// What this step is doing in the run currently in flight, when
+    /// there is one: `running`, `succeeded`, `blocked`, … `None` means
+    /// the scheduler has not reached it yet.
+    pub current_state: Option<String>,
+}
+
+/// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
+#[derive(Debug, Serialize)]
+pub struct DagStepRun {
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub status: String,
+    pub attempts: u32,
+    pub error: Option<String>,
+}
+
+/// The run in flight, or the one that finished last.
+#[derive(Debug, Serialize)]
+pub struct DagRunInfo {
+    pub run_id: String,
+    pub started_at: String,
+    /// `None` while the run is going.
+    pub finished_at: Option<String>,
+    /// True when a runner actually holds this root right now.
+    ///
+    /// `finished_at == None` alone is not enough: a runner killed
+    /// mid-run leaves the record open forever. The lock is the truth —
+    /// the kernel drops it when the holder dies — so a record with no
+    /// `finished_at` and no live holder is a crashed run, and the UI
+    /// can say so instead of showing a spinner until someone reboots.
+    pub live: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1061,6 +1098,8 @@ pub struct DagResponse {
     pub ok: bool,
     pub error: Option<String>,
     pub steps: Vec<DagStepInfo>,
+    /// `None` when nothing has ever run against this root.
+    pub run: Option<DagRunInfo>,
 }
 
 /// `GET /api/dag` — the step DAG derived from the data root's config,
@@ -1069,6 +1108,29 @@ pub struct DagResponse {
 /// execution. Steps come back in topological order.
 async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     use datalib_dag::config;
+
+    // The runner's own record. Absent on a root that has never synced,
+    // which is not an error — every step just reports no last run.
+    let state = datalib_dag::state::DagState::load(&s.root).unwrap_or_default();
+    // Is a runner actually holding this root? Taking the lock and
+    // dropping it immediately is the cheapest honest test: success
+    // means nobody had it. Racy by nature — a run could start a
+    // microsecond later — but the answer is only ever used to say "that
+    // open record belongs to a run that died", where being one poll
+    // stale costs nothing.
+    let live = datalib_dag::lock::FileLock::acquire_runner(&s.root).is_err();
+    let run = state.current_run.as_ref().map(|r| DagRunInfo {
+        run_id: r.run_id.clone(),
+        started_at: r.started_at.clone(),
+        finished_at: r.finished_at.clone(),
+        live: live && r.finished_at.is_none(),
+    });
+    let states = state
+        .current_run
+        .as_ref()
+        .map(|r| r.states.clone())
+        .unwrap_or_default();
+
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
         let commands: std::collections::HashMap<String, String> = cfg
@@ -1092,6 +1154,16 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         .iter()
                         .map(|&d| graph.steps[d].id.clone())
                         .collect(),
+                    last_run: state.steps.get(&sp.id).and_then(|st| {
+                        st.last_run.as_ref().map(|r| DagStepRun {
+                            started_at: r.started_at.clone(),
+                            finished_at: r.finished_at.clone(),
+                            status: r.status.clone(),
+                            attempts: r.attempts,
+                            error: r.error.clone(),
+                        })
+                    }),
+                    current_state: states.get(&sp.id).cloned(),
                 }
             })
             .collect())
@@ -1101,11 +1173,13 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
             ok: true,
             error: None,
             steps,
+            run,
         }),
         Err(e) => Json(DagResponse {
             ok: false,
             error: Some(format!("{e:#}")),
             steps: Vec::new(),
+            run: None,
         }),
     }
 }

@@ -396,21 +396,49 @@ export async function initConfig(signal?: AbortSignal): Promise<InitConfigRespon
   return (await r.json()) as InitConfigResponse;
 }
 
-// One step of the config's derived DAG (GET /api/dag), in topological
-// order. `deps` are the actual edges the runner derives from artifact
-// overlap.
+// One step of the config's DAG (GET /api/dag), in topological order.
+// `deps` are the edges — the ids the step names as inputs.
 export type DagStep = {
   id: string;
   command: string;
   inputs: string[];
   outputs: string[];
   deps: string[];
+  // What this step did the last time a run reached it, from the
+  // runner's own state — so a run started from a terminal shows up here
+  // exactly like one the app kicked off. Null when never reached.
+  last_run: DagStepRun | null;
+  // What it is doing in the run currently in flight: "running",
+  // "succeeded", "blocked", … Null means the scheduler hasn't reached
+  // it, which reads as queued.
+  current_state: string | null;
+};
+
+export type DagStepRun = {
+  started_at: string;
+  finished_at: string | null;
+  // `succeeded` | `skipped_up_to_date` | `blocked` | `failed` |
+  // `not_selected`. Empty while running.
+  status: string;
+  attempts: number;
+  error: string | null;
+};
+
+export type DagRun = {
+  run_id: string;
+  started_at: string;
+  finished_at: string | null;
+  // Whether a runner actually holds the root right now. An open record
+  // with `live: false` is a run that died — the lock is the truth, not
+  // the absence of `finished_at`.
+  live: boolean;
 };
 
 export type DagResponse = {
   ok: boolean;
   error: string | null;
   steps: DagStep[];
+  run: DagRun | null;
 };
 
 export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {

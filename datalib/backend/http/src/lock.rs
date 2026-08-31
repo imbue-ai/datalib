@@ -29,30 +29,34 @@
 //! The file's *contents* are advisory: they exist so the refusal can
 //! say where the other server is listening, and are never trusted to
 //! decide whether the lock is held.
+//!
+//! The mechanism itself lives in [`datalib_dag::lock`], because the
+//! runner needs the same thing for its own invariant (one runner per
+//! root) and this crate already depends on that one. What stays here is
+//! the part that is about *servers*: which file, and what the refusal
+//! says. The two locks are deliberately different files — this process
+//! spawns the runner, so sharing one would deadlock the server against
+//! its own child.
 
-use std::fmt;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use datalib_dag::lock::FileLock;
 
 /// Why the data root could not be claimed.
 #[derive(Debug)]
 pub enum LockError {
-    /// Another process holds it. `holder` is whatever that process
-    /// wrote about itself, when it wrote anything.
+    /// Another server holds it. `holder` is whatever that process wrote
+    /// about itself, when it wrote anything.
     Held {
         path: PathBuf,
         holder: Option<String>,
     },
     /// The lock file itself could not be opened or locked.
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    Io { path: PathBuf, source: String },
 }
 
-impl fmt::Display for LockError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for LockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LockError::Held { path, holder } => {
                 write!(
@@ -86,10 +90,7 @@ impl std::error::Error for LockError {}
 /// lives. Dropping it — or the process exiting for any reason,
 /// including a crash — releases the lock.
 #[derive(Debug)]
-pub struct DataRootLock {
-    file: File,
-    path: PathBuf,
-}
+pub struct DataRootLock(FileLock);
 
 impl DataRootLock {
     /// Claim `root` exclusively, or fail saying who holds it.
@@ -98,93 +99,37 @@ impl DataRootLock {
     /// particular before the API token is minted, so a refused server
     /// never clobbers the running one's token on its way out.
     pub fn acquire(root: &Path) -> Result<Self, LockError> {
-        let dir = datalib_core::layout::system_dir(root);
-        std::fs::create_dir_all(&dir).map_err(|e| LockError::Io {
-            path: dir.clone(),
-            source: e,
-        })?;
-        let path = datalib_core::layout::lock_file(root);
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|e| LockError::Io {
-                path: path.clone(),
-                source: e,
-            })?;
-
-        take(&file).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                // Read what the holder said about itself. Best effort:
-                // the lock is the truth, this is only for the message.
-                let holder = std::fs::read_to_string(&path)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                LockError::Held {
-                    path: path.clone(),
-                    holder,
+        FileLock::acquire(&datalib_core::layout::lock_file(root))
+            .map(Self)
+            .map_err(|e| {
+                let path = e.path().to_path_buf();
+                if e.is_held() {
+                    LockError::Held {
+                        path,
+                        holder: e.holder().map(str::to_string),
+                    }
+                } else {
+                    LockError::Io {
+                        path,
+                        source: e.to_string(),
+                    }
                 }
-            } else {
-                LockError::Io {
-                    path: path.clone(),
-                    source: e,
-                }
-            }
-        })?;
-
-        let mut lock = Self { file, path };
-        lock.describe(&format!("held by pid {}", std::process::id()));
-        Ok(lock)
+            })
     }
 
     /// Record where this server can be reached, so a later would-be
     /// owner's refusal can point at it. Called once the listener has a
     /// port; failure to write is not worth failing a boot over.
     pub fn announce(&mut self, base_url: &str) {
-        self.describe(&format!(
+        self.0.describe(&format!(
             "served at {base_url} by pid {}",
             std::process::id()
         ));
     }
 
-    fn describe(&mut self, what: &str) {
-        // Truncate-and-write rather than append: this file holds one
-        // fact, and a partial old line under a new one would read as
-        // two holders.
-        let _ = self.file.set_len(0);
-        let _ = std::io::Seek::seek(&mut self.file, std::io::SeekFrom::Start(0));
-        let _ = writeln!(self.file, "{what}");
-        let _ = self.file.flush();
-    }
-
     pub fn path(&self) -> &Path {
-        &self.path
+        self.0.path()
     }
-}
-
-#[cfg(unix)]
-fn take(file: &File) -> std::io::Result<()> {
-    use std::os::unix::io::AsRawFd;
-    // LOCK_NB: refuse immediately rather than blocking a boot forever
-    // behind a server someone forgot about.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-/// No advisory-lock call on this platform, so the root is claimed
-/// unconditionally. The shipped targets are macOS and Linux; leaving
-/// this permissive keeps a Windows build compiling rather than
-/// pretending to a guarantee it doesn't have.
-#[cfg(not(unix))]
-fn take(_file: &File) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
