@@ -158,11 +158,19 @@ holds (an input that *disappears* versions as `absent`, which differs
 from a hash, so the consumer re-runs and can drop stale output) and was
 rewritten against a declared producer whose tree the user deletes.
 
-The behavior change worth naming: a render-only source is now a step
-with no inputs, and an input-less step always runs. Previously its
-staged tree was hashed and the step skipped when unchanged. The step's
-own incrementality (render cursors, per-doc fingerprints) absorbs most
-of that, but it is a real difference.
+**No behavior change for any shipped shape.** An earlier draft of this
+section claimed render-only sources became input-less and so started
+running every sync. They already were: `claude-export` in
+`all_sources.toml` has declared no `inputs` since before this change,
+with a comment saying exactly that ("With no `inputs` this is a fringe
+step … so it runs every sync"). The `inputs = ["<path>"]` shape the
+staged-source machinery served was used by nothing that ships.
+
+The one config that did use it was the TNG fixture, which gave
+render-only `yolink` an `inputs = ["yolink/raw"]` naming a tree nothing
+writes — so the runner synthesized a source step to hash a directory
+that never existed. That is now `inputs` omitted, matching what
+`all_sources.toml` documents. The fixture got more correct, not less.
 
 ## Migration
 
