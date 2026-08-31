@@ -728,6 +728,34 @@ stamping `_source: { via: "claude.ai/api", org_uuid }` provenance) so a
 single render path consumes either source indistinguishably. See
 `datalib/backend/etl/providers/anthropic/DOWNLOAD.md`.
 
+## Unordered collections: give a bag an order before storing it
+
+**A JSON array is not necessarily a list.** When an API returns a *set*
+— capabilities, permissions, tags, member ids, labels — the array order
+is whatever the server happened to emit, and nothing promises it is
+stable between fetches. Sort it before it goes into a content payload.
+
+Left unsorted, a re-fetch of an unchanged object serializes differently
+from itself, and everything downstream believes it changed:
+`dolt_diff_<table>` reports a modification, the entity re-renders, and
+the manual-e2e golden's `--reset-and-redownload` stability check fails
+on content that never moved. Found this way on 2026-08-31 — claude.ai
+returns a project's eight `permissions` strings in a different order on
+different fetches (`canonicalize_project_payload` in the anthropic
+downloader now sorts them).
+
+**Sort; don't declare it volatile.** The two look interchangeable and
+are not. `*_VOLATILE_PATHS` says *"this field's value carries no
+information"* and drops it from the content payload — right for a
+per-fetch `updated` stamp. For a bag the contents are content — losing
+a permission is a real change you want to see — and it is only the
+order that means nothing. Sorting keeps the signal and removes the
+noise; declaring it volatile throws the signal away too.
+
+Applies to nested arrays as well, and the sort has to be total: sort by
+the rendered string rather than by `as_str()`, so a mixed-type array
+gets an order instead of a panic.
+
 ## Timestamp convention
 
 Every timestamp stored anywhere in this project — Dolt columns, JSON cache

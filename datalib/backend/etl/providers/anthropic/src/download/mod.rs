@@ -775,6 +775,38 @@ async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: boo
     }
 }
 
+/// Sort the string arrays that the API returns as unordered *bags*, so
+/// re-fetching an unchanged project lands identical bytes.
+///
+/// `permissions` is a set of capability names. The API returns the same
+/// eight strings in a different order on different fetches, which makes
+/// the stored payload differ from itself: `dolt_diff_projects` reports a
+/// change, the project re-renders, and the manual-e2e golden's
+/// `--reset-and-redownload` stability check fails on content that never
+/// actually changed.
+///
+/// Sorting is the right fix rather than declaring the field volatile:
+/// the *contents* are content — losing a permission is a real change we
+/// want to see — it is only the order that carries no information.
+///
+/// The general rule, of which this is one instance: **an unordered
+/// collection from an API must be given an order before it is stored.**
+/// JSON arrays preserve whatever order the server happened to emit, and
+/// nothing upstream promises that is stable.
+fn canonicalize_project_payload(payload: &Value) -> Value {
+    let mut out = payload.clone();
+    if let Some(permissions) = out.get_mut("permissions").and_then(Value::as_array_mut) {
+        // Sort by the rendered string so mixed types (which would make
+        // `as_str` sort unstable) still get a total order.
+        permissions.sort_by_key(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| v.to_string())
+        });
+    }
+    out
+}
+
 async fn upsert_project(
     db: &RawDb,
     payload: &Value,
@@ -783,6 +815,7 @@ async fn upsert_project(
     org_name: &str,
     now: &str,
 ) -> Result<()> {
+    let payload = &canonicalize_project_payload(payload);
     let row = ProjectRow {
         id_and_payload: WirePayload {
             id: uuid.to_string(),
@@ -1364,5 +1397,67 @@ mod tests {
         // Missing/garbage updated_at stays in scope (fetch, don't drop).
         assert!(updated_at_in_scope(None, Some(&since)));
         assert!(updated_at_in_scope(Some("garbage"), Some(&since)));
+    }
+
+    // ── unordered bags from the API ──────────────────────────────────
+
+    /// Two fetches of an unchanged project must serialize identically.
+    ///
+    /// The API returns `permissions` as a set, and the order varies
+    /// between fetches. Left alone that makes the payload differ from
+    /// itself: `dolt_diff_projects` reports a change, the project
+    /// re-renders, and the manual-e2e golden's `--reset-and-redownload`
+    /// stability check fails on content that never changed. Observed
+    /// 2026-08-31, which is what prompted this.
+    #[test]
+    fn project_permissions_are_stored_in_a_stable_order() {
+        let one = serde_json::json!({
+            "uuid": "p1",
+            "permissions": ["chat_project:view", "chat_project:chat:create"],
+        });
+        let other_order = serde_json::json!({
+            "uuid": "p1",
+            "permissions": ["chat_project:chat:create", "chat_project:view"],
+        });
+        assert_eq!(
+            canonicalize_project_payload(&one),
+            canonicalize_project_payload(&other_order),
+            "the same permissions in a different order must canonicalize the same"
+        );
+    }
+
+    /// Sorting, not dropping: losing a permission is a real change and
+    /// must still show up as one.
+    #[test]
+    fn project_permissions_keep_their_contents() {
+        let full = serde_json::json!({"permissions": ["b", "a", "c"]});
+        let fewer = serde_json::json!({"permissions": ["a", "b"]});
+        assert_eq!(
+            canonicalize_project_payload(&full)["permissions"],
+            serde_json::json!(["a", "b", "c"]),
+            "every permission is kept, in sorted order"
+        );
+        assert_ne!(
+            canonicalize_project_payload(&full),
+            canonicalize_project_payload(&fewer),
+            "a removed permission must still read as a change"
+        );
+    }
+
+    /// A project without the field, or with something unexpected in it,
+    /// passes through rather than panicking — this runs on every project
+    /// of every sync.
+    #[test]
+    fn canonicalize_tolerates_a_missing_or_odd_permissions_field() {
+        let none = serde_json::json!({"uuid": "p1"});
+        assert_eq!(canonicalize_project_payload(&none), none);
+        let odd = serde_json::json!({"permissions": "not-an-array"});
+        assert_eq!(canonicalize_project_payload(&odd), odd);
+        let mixed = serde_json::json!({"permissions": [2, "a", 1]});
+        assert_eq!(
+            canonicalize_project_payload(&mixed)["permissions"],
+            serde_json::json!([1, 2, "a"]),
+            "mixed types still get a total order rather than panicking"
+        );
     }
 }
