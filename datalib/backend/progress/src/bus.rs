@@ -31,7 +31,7 @@ use std::time::Duration;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use crate::{progress_path, StepProgress, SCHEMA};
+use crate::{progress_path, ProgressRow, SCHEMA};
 
 /// How often the writer thread flushes. 200ms is under the threshold
 /// where a progress bar reads as laggy, and far above the cost of the
@@ -113,7 +113,7 @@ async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 }
 
 /// Everything a reader needs, in one query.
-pub async fn snapshot(data_root: &Path) -> Vec<StepProgress> {
+pub async fn snapshot(data_root: &Path) -> Vec<ProgressRow> {
     let path = progress_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -129,7 +129,7 @@ pub async fn snapshot(data_root: &Path) -> Vec<StepProgress> {
     .unwrap_or_default();
     pool.close().await;
     rows.iter()
-        .map(|r| StepProgress {
+        .map(|r| ProgressRow {
             step: r.get("step"),
             state: r.get("state"),
             done: r.get("done"),
@@ -140,7 +140,7 @@ pub async fn snapshot(data_root: &Path) -> Vec<StepProgress> {
         .collect()
 }
 
-type Pending = Arc<Mutex<BTreeMap<String, StepProgress>>>;
+type Pending = Arc<Mutex<BTreeMap<String, ProgressRow>>>;
 
 /// Publishes step state to the bus. Cheap to call; the work happens on
 /// its own thread.
@@ -196,7 +196,7 @@ impl ProgressWriter {
 
     /// Record the newest state for a step, replacing whatever was
     /// pending for it.
-    pub fn update(&self, next: StepProgress) {
+    pub fn update(&self, next: ProgressRow) {
         let mut map = self.pending.lock().expect("progress bus mutex");
         // A terminal state latches: a tick that was already in flight
         // when the step finished must not resurrect it as running.
@@ -248,7 +248,7 @@ fn writer_loop(path: PathBuf, run_id: String, pending: Pending, stop: mpsc::Rece
             stop.recv_timeout(FLUSH_EVERY),
             Err(RecvTimeoutError::Disconnected) | Ok(())
         );
-        let batch: Vec<StepProgress> = {
+        let batch: Vec<ProgressRow> = {
             let mut map = pending.lock().expect("progress bus mutex");
             std::mem::take(&mut *map).into_values().collect()
         };
@@ -262,7 +262,7 @@ fn writer_loop(path: PathBuf, run_id: String, pending: Pending, stop: mpsc::Rece
     rt.block_on(pool.close());
 }
 
-async fn flush(pool: &SqlitePool, run_id: &str, batch: &[StepProgress]) {
+async fn flush(pool: &SqlitePool, run_id: &str, batch: &[ProgressRow]) {
     for p in batch {
         let res = sqlx::query(
             "INSERT INTO step_progress (step, run_id, state, done, total, msg, updated_at) \

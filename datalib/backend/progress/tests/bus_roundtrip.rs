@@ -1,10 +1,10 @@
 //! The bus end to end: a writer publishes, a reader in another
 //! *process's* position sees it, and the coalescing rules hold.
 
-use datalib_progress::{snapshot, ProgressWriter, StepProgress};
+use datalib_progress::{snapshot, ProgressRow, ProgressWriter};
 
-fn at(step: &str, state: &str, done: Option<i64>, msg: &str) -> StepProgress {
-    StepProgress {
+fn at(step: &str, state: &str, done: Option<i64>, msg: &str) -> ProgressRow {
+    ProgressRow {
         step: step.into(),
         state: state.into(),
         done,

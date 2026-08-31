@@ -73,8 +73,13 @@ pub fn progress_path(data_root: &Path) -> PathBuf {
 }
 
 /// One step's live state, as a reader sees it.
+///
+/// Named `ProgressRow` rather than `StepProgress` because
+/// `datalib_dag::events::StepProgress` already exists and means
+/// something different: the *handle a step emits through*. This is the
+/// row that comes back out the other end.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StepProgress {
+pub struct ProgressRow {
     pub step: String,
     /// `pending` | `running` | the terminal status the scheduler gave it.
     pub state: String,

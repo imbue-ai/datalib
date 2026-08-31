@@ -58,6 +58,7 @@ pub mod config;
 pub mod events;
 pub mod graph;
 pub mod lock;
+pub mod progress_bus;
 pub mod scheduler;
 pub mod state;
 pub mod step;

@@ -68,8 +68,10 @@ const VERSION_RESOLVED: &str = {
         raw
     }
 };
+use datalib_dag::events::FanOutSink;
+use datalib_dag::progress_bus::ProgressBusSink;
 use datalib_dag::step::FailureKind;
-use datalib_dag::{config, subprocess, Graph, NdjsonSink, Runner};
+use datalib_dag::{config, subprocess, EventSink, Graph, NdjsonSink, Runner};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -181,6 +183,9 @@ async fn main() -> Result<()> {
     }
     let now =
         now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+    // The scheduler takes its run id from ENV_NOW, so this is the same
+    // string it will stamp on the run — keep it for the progress bus.
+    let run_id = now.clone();
     child_env.insert(subprocess::ENV_NOW.into(), now);
     if reset_and_redownload {
         child_env.insert(subprocess::ENV_RESET_AND_REDOWNLOAD.into(), "1".into());
@@ -226,8 +231,30 @@ async fn main() -> Result<()> {
 
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
+    // stderr stays the log; the bus is the live view. Both, not either:
+    // the stream is a record of everything that happened, the bus is a
+    // coalesced answer to "what is happening now" that a second process
+    // can read. Publishing the bus here rather than inside `Runner`
+    // means every way of starting a sync gets it — the http server's
+    // worker shells out to this binary too — while a library caller
+    // embedding `Runner` is not forced to own a file.
+    let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
+    match ProgressBusSink::start(&data_root, &run_id) {
+        Some(bus) => sinks.push(Arc::new(bus)),
+        None => {
+            // This binary has no tracing subscriber and no indicatif
+            // bars, so the macro's usual objection does not apply and
+            // `tracing::warn!` would go nowhere at all. The NDJSON
+            // reader tolerates non-JSON lines (worker.rs skips what it
+            // cannot parse), so a plain line is safe here.
+            #[allow(clippy::disallowed_macros)]
+            {
+                eprintln!("datalib-dag: progress bus unavailable; no live progress this run");
+            }
+        }
+    }
     let mut runner = Runner::new(&data_root)
-        .sink(Arc::new(NdjsonSink::new(std::io::stderr())))
+        .sink(Arc::new(FanOutSink(sinks)))
         .child_env(child_env);
     if let Some(p) = parallelism {
         runner.parallelism = p;
