@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_media",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_media",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "media_unittests",
+    size = "small",
+    crate = ":datalib_etl_media",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)

@@ -1437,6 +1437,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-media"
+version = "0.29.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "datalib-etl-notion"
 version = "0.29.0"
 dependencies = [

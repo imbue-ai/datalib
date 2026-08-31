@@ -1,0 +1,19 @@
+[package]
+name = "datalib-etl-media"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_media"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+# The payload hash (`download/payload/`). Same digest the file-bytes key
+# will use, so both columns are comparable at a glance.
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

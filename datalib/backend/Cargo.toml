@@ -23,6 +23,7 @@ members = [
     "etl/providers/linkedin",
     "etl/providers/fsindex",
     "etl/providers/lightroom",
+    "etl/providers/media",
     "etl/providers/notion",
     "etl/providers/pdf",
     "etl/providers/perseus",
