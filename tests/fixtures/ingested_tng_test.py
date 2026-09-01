@@ -726,12 +726,31 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # fingerprint along with the index, so every renderer runs again
         # from scratch.
         #
-        # This is the property the whole id design rests on: an id is a
-        # pure function of upstream data. No wall-clock, no scan order,
-        # no row order, and nothing from `config.toml` that a second
-        # root might spell differently. Get that wrong and two machines
-        # ingesting one export disagree about what anything is called,
-        # while every other test in this file still passes.
+        # What this catches: a recipe that reads the clock, an RNG, or
+        # anything whose order is not fixed (HashMap iteration, readdir)
+        # — and a renderer that reads an id back off the existing index
+        # instead of deriving it, since there is no index to read.
+        #
+        # What it does NOT catch, because both runs see them identically:
+        #
+        #   * an id derived from `config.toml`. The driver regenerates
+        #     the same step ids every run, so a recipe keyed on the
+        #     source name is byte-identical here. Catching that needs a
+        #     run over the same fixture under *different* step ids,
+        #     which the driver cannot do today — its source names are a
+        #     hardcoded dict and three raw stores are seeded at paths
+        #     built from them. What stands in for it is
+        #     `SCOPE_TAG_BY_PROVIDER`: a ported provider whose ids
+        #     depend on configuration has to declare that as the `src`
+        #     scope and store the value in `upstream_scope`, or the
+        #     round-trip check above fails it.
+        #   * an id derived from the data-root path, which is the same
+        #     directory both times.
+        #   * anything that varies between upstream *responses* rather
+        #     than within one. The fixture replays fixed tapes, so the
+        #     two known instabilities — slack's count-only reactions and
+        #     anthropic's positional thinking-block index — cannot
+        #     surface here. See `docs/dev/entity_ids.md`.
         shutil.rmtree(self.workspace)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self._run_pipeline(reset=False)

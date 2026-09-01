@@ -192,6 +192,29 @@ Neither is caught by the reproducibility check below: that run replays
 one fixed payload, so a value that varies *between* upstream responses
 never varies within it.
 
+### What the reproducibility check does and does not cover
+
+`ingested_tng_test`'s run 4 wipes the data root and ingests the same
+TNG fixture again, then asserts every id is byte-identical to run 1.
+Runs 2 and 3 cannot do this: both skip on `source_fingerprint`, so no
+id in them is recomputed. Verified by sabotage — a wall-clock salt in
+an id recipe passes runs 1–3 and fails run 4.
+
+It catches a recipe that reads the clock, an RNG, or an unfixed
+iteration order, and a renderer that reads ids back off the index
+rather than deriving them.
+
+It does not catch an id derived from `config.toml`, because the driver
+regenerates the same step ids every run. The real test is a run over
+the same fixture under *different* step ids, which the driver cannot do
+today — its source names are a hardcoded dict and three raw stores are
+seeded at paths built from them. Standing in for it:
+`SCOPE_TAG_BY_PROVIDER` forces a ported provider whose ids depend on
+configuration to declare the `src` scope and store the value in
+`upstream_scope`, or the round-trip check fails it. That makes a
+config-scoped id **declared** rather than merely detected, which is
+weaker but not nothing.
+
 ## Porting status
 
 Three of sixteen row-emitting providers mint through `entity_id`. The
