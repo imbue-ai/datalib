@@ -346,6 +346,11 @@ fn image_mime_for(filetype: &str) -> Option<String> {
 /// reacting user (resolved to a display label), so each is its own
 /// searchable grid row. A count-only reaction (no `users` list) yields a
 /// single row labelled with the count.
+///
+/// The branch below is also an id boundary: the two shapes produce
+/// differently-keyed rows for the same reaction, so a re-fetch that
+/// returns the other shape re-keys them. See [`crate::ids::reaction`]
+/// for why that is left standing and what the fixes would cost.
 fn build_reactions(
     raw: &Value,
     m: &Message,

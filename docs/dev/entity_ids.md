@@ -168,6 +168,30 @@ Three checks stand between a bad recipe and silent data loss.
 3. **`//datalib/ui:e2e_test`** (`grid-copy-ids.spec.ts`) pins that the
    two copy actions land in two different id spaces.
 
+## Known instabilities
+
+An id is supposed to be a pure function of upstream data. Two ported
+recipes are keyed on something weaker, and both are position- or
+response-shaped rather than issued by the provider:
+
+- **slack reactions** include the reacting user, and whether Slack
+  returns `reactions[].users` varies by response rather than by
+  reaction. The same reaction is either N per-user rows or one
+  aggregate row keyed with an empty user, and a re-fetch in the other
+  shape re-keys it. Options and their costs are written out on
+  `slack::ids::reaction`.
+- **anthropic `thinking` blocks** (and the fallback for a tool block
+  missing its id) are keyed on `(message_uuid, block_index)`, where the
+  index is the block's position in the message's `content` array.
+  Claude's content order is meaningful, so this is stable in practice —
+  but it is derived from position, not from anything Anthropic issued,
+  and a re-fetch yielding a different block set moves every id after
+  the change point.
+
+Neither is caught by the reproducibility check below: that run replays
+one fixed payload, so a value that varies *between* upstream responses
+never varies within it.
+
 ## Porting status
 
 Three of sixteen row-emitting providers mint through `entity_id`. The

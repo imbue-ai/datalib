@@ -36,6 +36,7 @@ since run 3 wipes the cursor and then re-creates it.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -250,6 +251,38 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return {
             "grid_rows": self._count(self._index_db, "grid_rows"),
             "markdowns": self._count(self._index_db, "markdowns"),
+        }
+
+    def _index_ids(self) -> dict[str, list[str]]:
+        """Every id in the index, so a re-run can be checked id-by-id.
+
+        Counts are not enough, and the gap is specific rather than
+        theoretical. `apply_markdown` deletes `grid_rows` by
+        `markdown_uuid` and then re-inserts, so within a markdown whose
+        id is unchanged, every row id could move and the count would not
+        budge — the delete takes the old ones away and the insert puts
+        the same number back. Only `markdown_uuid` instability shows up
+        in a count, and then only because the delete misses the old rows
+        and they accumulate.
+
+        That matters because ids are the durable thing: they are what
+        `feedback.target_uuids` stores unqualified and what a
+        `/chat/{uuid}` URL that has been handed out resolves through. An
+        id that silently moves on re-ingest breaks both, and nothing
+        else in this suite would notice — the checked-in golden pins row
+        ids against a *snapshot*, which catches a change between commits
+        but not one between two runs of the same build.
+
+        Sorted rather than a set so a failure diff reads in a stable
+        order.
+        """
+        return {
+            "grid_rows": sorted(
+                self._query(self._index_db, "SELECT uuid FROM grid_rows;")
+            ),
+            "markdowns": sorted(
+                self._query(self._index_db, "SELECT markdown_uuid FROM markdowns;")
+            ),
         }
 
     def _providers(self) -> frozenset[str]:
@@ -481,6 +514,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
         shape1 = self._index_shape()
+        ids1 = self._index_ids()
         self.assertGreater(
             shape1["grid_rows"], 0, "run 1 must load grid rows into the index"
         )
@@ -628,6 +662,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
         )
+        # Ids specifically, not just how many of them there are.
+        #
+        # Note what this does and does not prove. A steady-state re-run
+        # skips every unchanged markdown on its `source_fingerprint`, so
+        # almost nothing is re-rendered and almost no id is re-derived —
+        # this is "the index sat still", which is worth pinning but is
+        # weaker than it looks. Re-derivation is tested by run 4.
+        self.assertEqual(
+            self._index_ids(),
+            ids1,
+            "run 2 must leave every id in place: a moved uuid orphans "
+            "filed feedback and breaks any /chat/{uuid} URL already "
+            "handed out",
+        )
         self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 2 providers")
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
@@ -651,6 +699,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             shape1,
             "run 3 (--reset-and-redownload) must converge to the same index",
         )
+        # The strongest form of the check: run 3 threw the raw stores
+        # away and fetched again, so these ids were derived a second
+        # time from a fresh download rather than read back off an
+        # existing index.
+        self.assertEqual(
+            self._index_ids(),
+            ids1,
+            "run 3 re-downloaded from scratch and must still mint byte-identical ids",
+        )
         self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 3 providers")
         # The cursor is wiped mid-run, so by the end it must be back —
         # same snapshot, same fingerprint.
@@ -658,6 +715,35 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._signal_cursor(),
             cursor1,
             "run 3 must re-record the same signal snapshot fingerprint",
+        )
+
+        # --- Run 4: a brand-new data root over the same fixture.
+        #
+        # The one run that actually re-derives every id. Runs 2 and 3
+        # both skip on `source_fingerprint`, so no id in them is
+        # recomputed — they pin that the index sits still, not that the
+        # recipes are reproducible. Wiping the root removes every
+        # fingerprint along with the index, so every renderer runs again
+        # from scratch.
+        #
+        # This is the property the whole id design rests on: an id is a
+        # pure function of upstream data. No wall-clock, no scan order,
+        # no row order, and nothing from `config.toml` that a second
+        # root might spell differently. Get that wrong and two machines
+        # ingesting one export disagree about what anything is called,
+        # while every other test in this file still passes.
+        shutil.rmtree(self.workspace)
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        self._run_pipeline(reset=False)
+        self.assertEqual(
+            self._index_shape(), shape1, "run 4 must rebuild the same index"
+        )
+        self.assertEqual(
+            self._index_ids(),
+            ids1,
+            "a fresh data root over the same fixture must mint "
+            "byte-identical ids — an id recipe that reads the clock, the "
+            "scan order, or the config would differ here and nowhere else",
         )
 
 

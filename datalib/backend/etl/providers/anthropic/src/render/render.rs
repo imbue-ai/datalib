@@ -351,7 +351,10 @@ fn build_chat(
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
-            source_ref: Some(UpstreamRef::new(ids::KIND_MESSAGE, m.message_uuid.clone())),
+            source_ref: Some(UpstreamRef::new(
+                msg_id.entity_kind,
+                msg_id.natural_key.clone(),
+            )),
         });
     }
 

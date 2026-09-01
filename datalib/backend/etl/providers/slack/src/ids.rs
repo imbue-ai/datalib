@@ -89,6 +89,44 @@ pub fn message(team_id: &str, channel_id: &str, ts: &str) -> Identity {
 /// One reaction — one row per reacting user, so search can find them by
 /// emoji. `user` is empty for the aggregate row a reaction with no
 /// per-user breakdown produces.
+///
+/// # This is the one id here that is not stable across re-fetches
+///
+/// Every other recipe in this module is keyed on values Slack issues
+/// and does not vary: a `channel_id`, a `ts`. This one includes the
+/// reacting user, and whether Slack *tells* us the reacting users is
+/// not a property of the reaction — it is a property of the response.
+/// `reactions[].users` is present on some payloads and absent on
+/// others, which leaves the same reaction with two possible shapes:
+///
+/// ```text
+/// users: [U1, U2]  →  two rows, keyed (chan, ts, name, U1) / (…, U2)
+/// users absent     →  one row,  keyed (chan, ts, name, "")
+/// ```
+///
+/// So a re-fetch that comes back in the other shape re-keys that
+/// reaction's rows — orphaning any feedback filed against them. The
+/// downloader stores the message JSON verbatim (deliberately: see the
+/// wire-tape argument in `data_architecture_ingestion.md`), so nothing
+/// upstream of here normalizes the two shapes together.
+///
+/// Left as-is rather than papered over, because the alternatives all
+/// cost something real and the choice should be made deliberately:
+///
+/// * Key every reaction on `(channel_id, ts, name)` and drop the user
+///   from the id. Stable, but collapses N per-user rows into one and
+///   loses the ability to search "who reacted".
+/// * Always key the aggregate form and treat per-user rows as children
+///   with their own sub-ids. Stable and keeps the detail, but changes
+///   row cardinality and the grid's reaction semantics.
+/// * Normalize at download time by re-fetching `reactions.get` for any
+///   count-only reaction. Correct, and an extra API call per reaction.
+///
+/// Until then: reaction ids are best-effort, and nothing should be
+/// built on the assumption that they survive a shape change.
+/// `//tests/fixtures:ingested_tng_test`'s run-4 reproducibility check
+/// does not catch this — the fixture serves one fixed payload, so both
+/// shapes never occur for one reaction.
 pub fn reaction(team_id: &str, channel_id: &str, ts: &str, name: &str, user: &str) -> Identity {
     identity(
         team_id,

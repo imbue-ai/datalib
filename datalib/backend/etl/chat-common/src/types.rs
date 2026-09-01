@@ -176,6 +176,15 @@ pub struct UpstreamRef {
 }
 
 impl UpstreamRef {
+    /// Build from an ids-module `Identity`'s own `entity_kind` and
+    /// `natural_key` — never from the expression that was *passed* to
+    /// the id function.
+    ///
+    /// The two are usually the same string, which is the hazard: a
+    /// recipe that later gains a prefix or a scope component leaves the
+    /// call site still storing the raw upstream value, and the
+    /// backpointer silently stops regenerating the row. Only
+    /// `ingested_tng_test`'s round-trip check would notice.
     pub fn new(entity_kind: impl Into<String>, native_id: impl Into<String>) -> Self {
         Self {
             native_id: native_id.into(),
