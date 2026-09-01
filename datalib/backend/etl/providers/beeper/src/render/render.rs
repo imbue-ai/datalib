@@ -135,14 +135,7 @@ fn render_one(
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel)?;
-    emit_sidecar(
-        &json_path,
-        &markdown_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
+    emit_sidecar(&json_path, &markdown_uuid, &fingerprint, &rows, &[])?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
@@ -154,9 +147,7 @@ fn render_one(
         // `source_fingerprint` skip. A future enhancement could
         // stamp `MAX(events.fetched_at)` per room here so the
         // next run can skip whole rooms before parsing.
-        upstream_cursor: None,
         md_path,
-        render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
     })

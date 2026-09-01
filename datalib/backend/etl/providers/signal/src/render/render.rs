@@ -267,22 +267,13 @@ fn render_one(
         messages_rendered += 1;
     }
 
-    emit_sidecar(
-        &json_path,
-        &markdown_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
+    emit_sidecar(&json_path, &markdown_uuid, &fingerprint, &rows, &[])?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: None,
         md_path,
-        render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
     })

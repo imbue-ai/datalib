@@ -25,7 +25,7 @@ use datalib_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::grid_rows::{fingerprint_for_mr, rows_for_mr, RENDER_VERSION};
+use super::grid_rows::{fingerprint_for_mr, rows_for_mr};
 use super::parse::{MergeRequestRow, NoteRow, NoteSection, ParsedGitlabApi};
 
 pub const SLUG_MAX_LEN: usize = 60;
@@ -270,7 +270,6 @@ fn render_one_mr(
         &sidecar_path,
         &mr.uuid,
         &fingerprint_for_mr(mr, notes),
-        RENDER_VERSION,
         &rows,
         &[],
     )?;
@@ -316,9 +315,7 @@ pub fn render_gitlab(
             markdown_uuid: mr.uuid.clone(),
             source_name: String::new(),
             source_fingerprint: fingerprint,
-            upstream_cursor: None,
             md_path: md_path.clone(),
-            render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
         })?;

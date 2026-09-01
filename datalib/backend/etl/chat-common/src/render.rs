@@ -171,14 +171,7 @@ fn render_one(
 
     let rows = build_grid_rows(profile, chat, doc, &chat_title, &md_rel)?;
 
-    emit_sidecar(
-        &json_path,
-        &doc.markdown_uuid,
-        &fingerprint,
-        profile.render_version,
-        &rows,
-        &[],
-    )?;
+    emit_sidecar(&json_path, &doc.markdown_uuid, &fingerprint, &rows, &[])?;
 
     let items_rendered = doc
         .items
@@ -191,9 +184,7 @@ fn render_one(
         markdown_uuid: doc.markdown_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: None,
         md_path,
-        render_version: profile.render_version,
         rows,
         edges: Vec::new(),
     })

@@ -138,7 +138,6 @@ pub fn render_all(
         &page_dir.join("index.grid_rows.json"),
         &m_uuid,
         &fingerprint,
-        RENDER_VERSION,
         &rows,
         &[],
     )?;
@@ -147,9 +146,7 @@ pub fn render_all(
         markdown_uuid: m_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: parsed.head.clone(),
         md_path,
-        render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
     })

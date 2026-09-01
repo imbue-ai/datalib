@@ -6,9 +6,10 @@
 //!   * [`apply_one`] writes a single rendered document into `grid_rows`
 //!     and stamps the `documents` row. Called per-doc by sync's render
 //!     callback so render+index commit atomically.
-//!   * [`build_grid_index`] walks a `rendered_md/` tree and calls `apply_one`
-//!     for each sidecar. Used as a rebuild-from-disk tool; not on the
-//!     hot path now that sync renders+loads per doc.
+//!   * [`build_grid_index`] walks a `rendered_md/` tree and calls
+//!     `apply_one` for each sidecar. This is the body of the
+//!     `grid_index` DAG step (see `datalib_step::grid_index`), so it is
+//!     very much the hot path, and doubles as a rebuild-from-disk tool.
 //!
 //! The sidecar format is the cross-provider contract:
 //!
@@ -16,18 +17,19 @@
 //! {
 //!   "header": {
 //!     "markdown_uuid": "…",            // primary key for the document
-//!     "source_fingerprint": "…",       // hash of upstream payload
-//!     "render_version": 1              // renderer-side schema stamp
+//!     "source_fingerprint": "…"        // the render step's input hash
 //!   },
 //!   "rows": [GridRow, …]
 //! }
 //! ```
 //!
-//! Skip logic: before applying we look up `documents.source_fingerprint`
-//! by `markdown_uuid`; if it matches the sidecar header we treat the
-//! document as up-to-date and leave `grid_rows` alone. Same delete-then-
-//! insert pattern as the Python `populate_grid_rows`, generalized so
-//! any provider's Render step can produce a sidecar tree this loader
+//! Skip logic: we hash the sidecar's rows + edges and compare against the
+//! stored `markdowns.row_set_hash`; a match means the index already holds
+//! exactly this content. It deliberately does not key on
+//! `source_fingerprint` — that is the render step's input hash, and a
+//! provider may legitimately make it a constant. Same delete-then-insert
+//! pattern as the Python `populate_grid_rows`, generalized so any
+//! provider's Render step can produce a sidecar tree this loader
 //! consumes verbatim.
 
 use std::collections::HashMap;
@@ -40,6 +42,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
+use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
@@ -265,36 +268,6 @@ impl Drop for WriteLockGuard<'_> {
     }
 }
 
-/// Per-rendered-markdown metadata projection: one row per `.md` file
-/// in `<root>/rendered_md/`. `source_fingerprint` is the renderer's
-/// input-hash, set when the markdown + blobs land on disk; subsequent
-/// runs compare against it to decide whether to re-render.
-/// `row_set_hash` is the load-side hash over the canonical grid_rows,
-/// used by tools that walk a stale tree.
-///
-/// `markdown_uuid` is the canonical addressing primitive for rendered
-/// output: every grid_row carries a FK back here, and `/api/chat/{uuid}`
-/// dereferences it through `md_path`. Note that for sharded renders
-/// (beeper renders one file per period) a single upstream
-/// "conversation" maps to N rows here — `conversation_uuid` is not
-/// unique in the table.
-pub const MARKDOWNS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS markdowns (
-    markdown_uuid VARCHAR(96) NOT NULL,
-    source_name VARCHAR(64) NOT NULL,
-    provider VARCHAR(32) NOT NULL,
-    kind VARCHAR(32) NOT NULL,
-    title TEXT,
-    created_at VARCHAR(40),
-    updated_at VARCHAR(40),
-    md_path VARCHAR(1024),
-    source_fingerprint VARCHAR(64),
-    upstream_cursor VARCHAR(64),
-    row_set_hash CHAR(64),
-    renderer_version VARCHAR(32),
-    rendered_at VARCHAR(40),
-    PRIMARY KEY (markdown_uuid)
-)"#;
-
 /// Stats emitted on every load run. Stable shape so a web UI can poll
 /// or stream it without per-provider branches.
 #[derive(Debug, Default, Serialize)]
@@ -319,10 +292,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
             .await
             .context("create grid_rows")?;
     }
-    sqlx::query(MARKDOWNS_DDL)
-        .execute(pool)
-        .await
-        .context("create markdowns")?;
+    for (_table, ddl) in MARKDOWNS_DDL {
+        sqlx::query(ddl)
+            .execute(pool)
+            .await
+            .context("create markdowns")?;
+    }
     for (_table, ddl) in EDGES_DDL {
         sqlx::query(ddl)
             .execute(pool)
@@ -332,15 +307,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Renderer-side cache stamp. Bump when the canonical-tuple shape in
-/// `compute_row_set_hash` or the rendered `.md` layout changes — every
-/// `documents.row_set_hash` is invalidated and the next ingest will
-/// re-render. `rust-v1` is the clean break from the Python `"v1"` since
-/// the hash encoding differs.
-pub const RENDERER_VERSION: &str = "rust-v1";
-
 /// Map a grid_rows `kind` (string used in the UI) to the
-/// `documents.kind` enum (chat/thread/page/pr/mr). Anything not in this
+/// `markdowns.kind` enum (chat/thread/page/pr/mr). Anything not in this
 /// map is a child row and shouldn't be picked as the canonical document
 /// row — but if it ends up being the only candidate we fall back to
 /// `"chat"`, matching the Python behavior.
@@ -365,12 +333,15 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
     }
 }
 
-/// SHA-256 over the canonical per-row tuple, sorted by `(when_ts, uuid)`
-/// so the hash is independent of producer order. Encoding is a
-/// `\0`-delimited concatenation of length-prefixed fields — stable across
-/// Rust versions (unlike `Debug`), unlike Python's `repr` but that's
-/// fine: bumping `RENDERER_VERSION` invalidates the old hashes anyway.
-pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
+/// SHA-256 over this markdown's canonical row tuples **and its outgoing
+/// edges**, each sorted so the hash is independent of producer order.
+/// Encoding is a `\0`-delimited concatenation of length-prefixed fields
+/// — stable across Rust versions, unlike `Debug`.
+///
+/// This is the index step's skip key, so it has to cover everything
+/// [`apply_one`] writes. Rows alone would miss a document whose text is
+/// unchanged but whose outgoing edges moved.
+pub fn compute_row_set_hash(rows: &[GridRow], edges: &[EdgeRow]) -> String {
     let mut sorted: Vec<&GridRow> = rows.iter().collect();
     sorted.sort_by(|a, b| a.when_ts.cmp(&b.when_ts).then_with(|| a.uuid.cmp(&b.uuid)));
     let mut h = Sha256::new();
@@ -409,6 +380,31 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
         push(&mut h, r.notion_page_uuid.as_deref());
         push(&mut h, r.notion_block_uuid.as_deref());
     }
+    // Edges are the other half of what `apply_markdown` replaces, so they
+    // belong in the same key. Sorted by uuid for producer-order
+    // independence; the `|edges|` separator keeps a row field from
+    // colliding with an edge field.
+    //
+    // Folded in only when there are any, so a document that has never
+    // had edges keeps the hash it had before edges joined this key.
+    // Without that, every stored hash in every existing install would
+    // change at once and the next index run would re-apply the entire
+    // corpus. Correctness is unaffected either way: gaining or losing
+    // an edge still moves the hash, because the empty case and the
+    // non-empty case can't collide.
+    if !edges.is_empty() {
+        h.update(b"|edges|");
+    }
+    let mut sorted_edges: Vec<&EdgeRow> = edges.iter().collect();
+    sorted_edges.sort_by(|a, b| a.edge_uuid.cmp(&b.edge_uuid));
+    for e in sorted_edges {
+        push(&mut h, Some(&e.edge_uuid));
+        push(&mut h, Some(&e.src_markdown_uuid));
+        push(&mut h, e.src_anchor_uuid.as_deref());
+        push(&mut h, Some(&e.dst_markdown_uuid));
+        push(&mut h, e.dst_anchor_uuid.as_deref());
+        push(&mut h, e.label.as_deref());
+    }
     let digest = h.finalize();
     let mut s = String::with_capacity(64);
     for b in digest {
@@ -427,20 +423,14 @@ pub struct RenderedMarkdown {
     /// User-facing config name (e.g. `tiny-slack`); falls back to the
     /// provider string when sync doesn't have one wired in.
     pub source_name: String,
+    /// The render step's input hash, carried through from the sidecar so
+    /// it can be stored as provenance. Not consulted here — see
+    /// [`load_row_set_hashes`].
     pub source_fingerprint: String,
-    /// Optional provider-defined cheap-probe value the orchestrator can
-    /// use *before* loading payloads to decide whether a markdown has
-    /// changed since last run. Examples: slack stamps each thread's
-    /// `MAX(fetched_at)` here, so the next run can `GROUP BY
-    /// thread_root_uuid` on the existing index and skip loading
-    /// untouched threads entirely. None when the provider has no
-    /// cheaper-than-fingerprint signal.
-    pub upstream_cursor: Option<String>,
     /// Absolute path to the rendered `.md`. Used to derive the
     /// `qmd_path` we stamp into `markdowns.md_path` by stripping the
     /// out-dir prefix.
     pub md_path: PathBuf,
-    pub render_version: u32,
     pub rows: Vec<GridRow>,
     /// Outgoing edges originating from this markdown
     /// (`src_markdown_uuid == markdown_uuid`). Empty for renderers that
@@ -501,7 +491,7 @@ pub async fn build_grid_index(
     // `system/` (the aggregate indices live there, no sidecars).
     // (stanza name, sidecar path): the stanza directory name IS the
     // config-level source name — `<data_root>/<name>/rendered_md/…` —
-    // so `documents.source_name` keeps the user-facing name exactly as
+    // so `markdowns.source_name` keeps the user-facing name exactly as
     // the fused loader did.
     let mut sidecars: Vec<(String, PathBuf)> = Vec::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
@@ -529,7 +519,7 @@ pub async fn build_grid_index(
     // index pool is one connection wide (doltlite's HEAD is
     // per-connection), so a per-doc read against the pool while the
     // transaction holds that connection would deadlock.
-    let prior_fingerprints = load_fingerprints(pool).await?;
+    let prior_row_set_hashes = load_row_set_hashes(pool).await?;
 
     write_lock
         .begin_transaction()
@@ -537,7 +527,7 @@ pub async fn build_grid_index(
         .context("WriteLock::begin_transaction for build_grid_index")?;
     let res = load_all_batch(
         &write_lock,
-        &prior_fingerprints,
+        &prior_row_set_hashes,
         out_dir,
         &sidecars,
         &progress,
@@ -566,7 +556,7 @@ pub async fn build_grid_index(
 /// wrap it in one begin/rollback-or-commit transaction.
 async fn load_all_batch(
     write_lock: &WriteLock,
-    prior_fingerprints: &HashMap<String, String>,
+    prior_row_set_hashes: &HashMap<String, String>,
     out_dir: &Path,
     sidecars: &[(String, PathBuf)],
     progress: &impl Fn(&str),
@@ -585,7 +575,11 @@ async fn load_all_batch(
         let markdown_uuid = sidecar.header.markdown_uuid.clone();
         let fingerprint = sidecar.header.source_fingerprint.clone();
 
-        if prior_fingerprints.get(&markdown_uuid) == Some(&fingerprint) {
+        // Skip on what this step actually writes — the rows and edges —
+        // not on the render step's input hash. See
+        // [`load_row_set_hashes`] for why that distinction matters.
+        let row_set_hash = compute_row_set_hash(&sidecar.rows, &sidecar.edges);
+        if prior_row_set_hashes.get(&markdown_uuid) == Some(&row_set_hash) {
             summary.markdowns_skipped += 1;
             continue;
         }
@@ -606,14 +600,7 @@ async fn load_all_batch(
             markdown_uuid,
             source_name,
             source_fingerprint: fingerprint,
-            // build_grid_index rebuilds the index from sidecars on disk, which
-            // don't carry the cheap-probe cursor (it lives in the
-            // indexer only). Leaving it None forces the next live sync
-            // to fall back to the fingerprint check for these markdowns
-            // — safe, just not as fast as the cursor short-circuit.
-            upstream_cursor: None,
             md_path,
-            render_version: sidecar.header.render_version,
             rows: sidecar.rows,
             edges: sidecar.edges,
         };
@@ -653,44 +640,31 @@ fn derive_md_path(sidecar: &Path) -> Option<PathBuf> {
     Some(sidecar.with_file_name(format!("{stem}.md")))
 }
 
-/// Bulk fingerprint snapshot. Used once per sync to populate the
-/// `prior_fingerprints` map every renderer consults at per-markdown
-/// skip time. Rows whose `source_fingerprint` is NULL are omitted so
-/// the caller treats them as "not rendered".
-pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, String>> {
+/// Bulk snapshot of every markdown's stored [`compute_row_set_hash`].
+///
+/// Read once per index run and consulted per sidecar: a match means the
+/// index already holds exactly these rows and edges, so re-applying them
+/// would change nothing.
+///
+/// This deliberately does **not** key on `markdowns.source_fingerprint`.
+/// That value belongs to the render step, and a provider is free to make
+/// it a constant — signal sets it to the `markdown_uuid` because it
+/// drives skipping from `dolt_diff` at parse time instead. Keying the
+/// index on it made every signal re-render after the first a silent
+/// no-op: the `.md` on disk updated, the indexed rows did not.
+pub async fn load_row_set_hashes(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query(
-        "SELECT markdown_uuid, source_fingerprint \
-         FROM markdowns WHERE source_fingerprint IS NOT NULL",
+        "SELECT markdown_uuid, row_set_hash \
+         FROM markdowns WHERE row_set_hash IS NOT NULL",
     )
     .fetch_all(pool)
     .await
-    .context("load_fingerprints")?;
+    .context("load_row_set_hashes")?;
     let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
     for r in rows {
         let uuid: String = r.try_get("markdown_uuid")?;
-        let fp: String = r.try_get("source_fingerprint")?;
-        out.insert(uuid, fp);
-    }
-    Ok(out)
-}
-
-/// Bulk upstream-cursor snapshot, used the same way as
-/// [`load_fingerprints`] but for the cheap-probe shortcut a few
-/// providers use. Today only slack writes a non-NULL cursor (each
-/// thread's `MAX(fetched_at)`); other providers' rows are omitted.
-pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query(
-        "SELECT markdown_uuid, upstream_cursor \
-         FROM markdowns WHERE upstream_cursor IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load_cursors")?;
-    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let uuid: String = r.try_get("markdown_uuid")?;
-        let cur: String = r.try_get("upstream_cursor")?;
-        out.insert(uuid, cur);
+        let hash: String = r.try_get("row_set_hash")?;
+        out.insert(uuid, hash);
     }
     Ok(out)
 }
@@ -774,8 +748,7 @@ async fn upsert_markdown(
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
-    let row_set_hash = compute_row_set_hash(&md.rows);
-    let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
+    let row_set_hash = compute_row_set_hash(&md.rows, &md.edges);
     // Prefer the user-facing source_name the renderer was invoked with
     // (config.sources[].name in sync). Fall back to the canonical row's
     // provider when build_grid_index rebuilds from disk without that context.
@@ -793,8 +766,8 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_name, provider, kind, title, created_at, updated_at, \
-          md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, rendered_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          md_path, source_fingerprint, row_set_hash, rendered_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_name)
@@ -805,9 +778,7 @@ async fn upsert_markdown(
     .bind(updated_at)
     .bind(qmd_path)
     .bind(&md.source_fingerprint)
-    .bind(md.upstream_cursor.as_deref())
     .bind(&row_set_hash)
-    .bind(&version_str)
     .bind(rendered_at)
     .execute(&mut **conn)
     .await
@@ -949,9 +920,7 @@ mod write_lock_tests {
             markdown_uuid: uuid.clone(),
             source_name: "test".into(),
             source_fingerprint: format!("fp-{uuid}"),
-            upstream_cursor: None,
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
-            render_version: 1,
             rows: vec![row],
             edges: Vec::new(),
         }
@@ -1172,5 +1141,130 @@ mod write_lock_tests {
         assert_eq!(m.avg_wait(), Duration::ZERO);
         assert_eq!(m.avg_hold(), Duration::ZERO);
         let _ = StdArc::new(()).as_ref();
+    }
+
+    /// A re-render whose `source_fingerprint` did not change must still
+    /// reach `grid_rows`.
+    ///
+    /// Signal sets its sidecar fingerprint to the `markdown_uuid` on
+    /// purpose (see the comment in signal's `render.rs`): it drives
+    /// skipping from `dolt_diff` at parse time, so anything reaching
+    /// render is already known-changed. That makes the fingerprint a
+    /// constant per document. While the index keyed its skip on that
+    /// value, every signal re-render after the first was discarded —
+    /// the `.md` on disk updated and the indexed rows did not.
+    #[tokio::test]
+    async fn rerender_with_unchanged_fingerprint_still_updates_rows() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("root");
+        let rendered = out.join("signal").join("rendered_md");
+        std::fs::create_dir_all(&rendered).unwrap();
+        let pool = open_pool(&dir.path().join("idx.doltlite_db"), 1).await;
+        init_schema(&pool).await.unwrap();
+
+        let uuid = "md-signal-bucket-1";
+        let write = |text: &str| {
+            let mut row = mk_md(0, 0).rows.remove(0);
+            row.uuid = uuid.to_string();
+            row.conversation_uuid = uuid.to_string();
+            row.markdown_uuid = Some(uuid.to_string());
+            row.text = text.to_string();
+            // Fingerprint IS the markdown_uuid — constant across
+            // re-renders of the same bucket, exactly as signal emits it.
+            datalib_index_lib::emit_sidecar(
+                &rendered.join("doc.grid_rows.json"),
+                uuid,
+                uuid,
+                &[row],
+                &[],
+            )
+            .unwrap();
+        };
+        async fn text_now(pool: &SqlitePool, uuid: &str) -> String {
+            sqlx::query_scalar::<_, String>("SELECT text FROM grid_rows WHERE uuid = ?")
+                .bind(uuid)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+
+        write("first version");
+        build_grid_index(&pool, &out, |_| {}, None).await.unwrap();
+        assert_eq!(text_now(&pool, uuid).await, "first version");
+
+        write("second version");
+        let summary = build_grid_index(&pool, &out, |_| {}, None).await.unwrap();
+        assert_eq!(
+            text_now(&pool, uuid).await,
+            "second version",
+            "re-rendered rows were dropped; markdowns_skipped={}",
+            summary.markdowns_skipped
+        );
+    }
+
+    /// The other half: genuinely unchanged content must still skip, or
+    /// the index rewrites every document on every run.
+    #[tokio::test]
+    async fn unchanged_sidecar_is_skipped() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("root");
+        let rendered = out.join("src1").join("rendered_md");
+        std::fs::create_dir_all(&rendered).unwrap();
+        let pool = open_pool(&dir.path().join("idx.doltlite_db"), 1).await;
+        init_schema(&pool).await.unwrap();
+
+        let md = mk_md(0, 0);
+        datalib_index_lib::emit_sidecar(
+            &rendered.join("doc.grid_rows.json"),
+            &md.markdown_uuid,
+            &md.source_fingerprint,
+            &md.rows,
+            &[],
+        )
+        .unwrap();
+
+        let first = build_grid_index(&pool, &out, |_| {}, None).await.unwrap();
+        assert_eq!(first.markdowns_loaded, 1);
+        assert_eq!(first.markdowns_skipped, 0);
+
+        let second = build_grid_index(&pool, &out, |_| {}, None).await.unwrap();
+        assert_eq!(second.markdowns_loaded, 0);
+        assert_eq!(second.markdowns_skipped, 1);
+    }
+
+    /// `row_set_hash` keys the index skip, so it has to move when edges
+    /// move — otherwise a document whose rows are unchanged but whose
+    /// outgoing edges changed would be skipped and keep stale edges.
+    #[test]
+    fn row_set_hash_covers_edges() {
+        let rows = mk_md(0, 0).rows;
+        let edge = EdgeRow {
+            edge_uuid: "e-1".into(),
+            src_markdown_uuid: "md-a".into(),
+            src_anchor_uuid: None,
+            dst_markdown_uuid: "md-b".into(),
+            dst_anchor_uuid: None,
+            label: Some("mentions".into()),
+        };
+        let mut moved = edge.clone();
+        moved.dst_markdown_uuid = "md-c".into();
+        // A second, distinct edge — `edge_uuid` is the primary key, so
+        // two edges never share one.
+        let mut other = edge.clone();
+        other.edge_uuid = "e-2".into();
+
+        assert_ne!(
+            compute_row_set_hash(&rows, &[]),
+            compute_row_set_hash(&rows, std::slice::from_ref(&edge)),
+        );
+        assert_ne!(
+            compute_row_set_hash(&rows, std::slice::from_ref(&edge)),
+            compute_row_set_hash(&rows, std::slice::from_ref(&moved)),
+        );
+        // Producer order must not matter.
+        assert_eq!(
+            compute_row_set_hash(&rows, &[edge.clone(), other.clone()]),
+            compute_row_set_hash(&rows, &[other, edge]),
+        );
     }
 }

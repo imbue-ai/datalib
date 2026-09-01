@@ -13,8 +13,7 @@
 //! {
 //!   "header": {
 //!     "markdown_uuid": "…",            // primary key for the rendered .md
-//!     "source_fingerprint": "…",       // hash of upstream payload
-//!     "render_version": 1              // renderer-side schema stamp
+//!     "source_fingerprint": "…"        // the render step's input hash
 //!   },
 //!   "rows": [GridRow, …],
 //!   "edges": [EdgeRow, …]              // optional; omitted when empty
@@ -50,13 +49,18 @@ pub struct SidecarHeader {
     /// their native uuid.
     pub markdown_uuid: String,
     /// Blake3 / SHA hash of the upstream payload(s) that produced this
-    /// document. Load skips re-applying rows when the existing row's
-    /// fingerprint matches.
+    /// document.
+    ///
+    /// This is the **render** step's key: it reads the sidecar tree back
+    /// on the next run and re-renders a document whose fingerprint
+    /// moved. Every provider folds its own `RENDER_VERSION` into this
+    /// value, so bumping that constant re-renders — which is why no
+    /// separate version field is carried here.
+    ///
+    /// The index step does not key on this. A provider may legitimately
+    /// make it a constant (signal does, because it skips via `dolt_diff`
+    /// at parse time); the index keys on `markdowns.row_set_hash`.
     pub source_fingerprint: String,
-    /// Renderer-side schema stamp. Bumped by the provider when the
-    /// rendered markdown / row shape changes in a way that should
-    /// invalidate previously-rendered docs.
-    pub render_version: u32,
 }
 
 /// Owned sidecar — the on-disk wire shape. Use this when **reading**
@@ -104,7 +108,6 @@ pub fn emit_sidecar(
     sidecar_path: &Path,
     markdown_uuid: &str,
     source_fingerprint: &str,
-    render_version: u32,
     rows: &[GridRow],
     edges: &[EdgeRow],
 ) -> Result<()> {
@@ -112,7 +115,6 @@ pub fn emit_sidecar(
         header: SidecarHeader {
             markdown_uuid: markdown_uuid.to_string(),
             source_fingerprint: source_fingerprint.to_string(),
-            render_version,
         },
         rows,
         edges,
@@ -162,12 +164,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("doc.grid_rows.json");
         let rows = vec![empty_row("u-1")];
-        emit_sidecar(&path, "md-1", "fp-1", 7, &rows, &[]).unwrap();
+        emit_sidecar(&path, "md-1", "fp-1", &rows, &[]).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
         let parsed: Sidecar = serde_json::from_str(&raw).unwrap();
         assert_eq!(parsed.header.markdown_uuid, "md-1");
         assert_eq!(parsed.header.source_fingerprint, "fp-1");
-        assert_eq!(parsed.header.render_version, 7);
         assert_eq!(parsed.rows.len(), 1);
         assert!(parsed.edges.is_empty());
         // Empty edges must be omitted from the serialized form so we
@@ -183,7 +184,6 @@ mod tests {
             header: SidecarHeader {
                 markdown_uuid: "md".into(),
                 source_fingerprint: "fp".into(),
-                render_version: 1,
             },
             rows: vec![empty_row("u")],
             edges: Vec::new(),

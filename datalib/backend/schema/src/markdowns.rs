@@ -1,8 +1,9 @@
 // Per-rendered-markdown metadata + render bookkeeping. One row per
 // `.md` file in `<root>/rendered_md/`. Owns the file's identity (UUID +
-// title + provenance) and the cache key (`row_set_hash` +
-// `renderer_version`) used by incremental ingest to decide whether to
-// re-emit the file. `grid_rows.markdown_uuid` is the FK pointing here;
+// title + provenance) and the load-side cache key (`row_set_hash`)
+// used by the index step to decide whether a re-rendered document
+// actually changed the rows it indexes. `grid_rows.markdown_uuid` is
+// the FK pointing here;
 // many grid rows can share one markdown file. Note that a single
 // 'conversation' upstream can shard into many markdowns when a provider
 // renders one file per period (beeper) — the `markdowns` table is keyed
@@ -14,12 +15,22 @@
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// One row in the `markdowns` table. Source of truth for
-/// `<root>/rendered_md/<...>.md` cache invalidation: ingest computes a
-/// fresh `row_set_hash` from the canonical grid_row tuples for this
-/// markdown file and compares it to the stored value; on mismatch the
-/// renderer re-emits the file and bumps `rendered_at`. A bump to
-/// `renderer_version` invalidates every cache entry at once.
+/// One row in the `markdowns` table.
+///
+/// This struct is the *only* definition of the table —
+/// `#[derive(PortableTable)]` generates the `CREATE TABLE` DDL that
+/// `grid_index::init_schema` executes, the same way `grid_rows` and
+/// `edges` already work.
+///
+/// Two hashes reach this table and they answer different questions.
+/// Keeping them apart is load-bearing:
+///
+///   * `source_fingerprint` — "did the upstream input change?" Owned by
+///     the **render** step, which reads it back from the sidecar tree on
+///     disk. Diagnostic only once it is here; nothing reads this column.
+///   * `row_set_hash` — "did the rows I index change?" Owned by the
+///     **index** step, which compares it to decide whether to re-apply a
+///     sidecar's rows and edges.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
 #[portable_table(table = "markdowns", primary_key = "markdown_uuid")]
 pub struct MarkdownRow {
@@ -75,20 +86,28 @@ pub struct MarkdownRow {
     /// hit→row mapping depends on it.
     #[col(sql = "VARCHAR(1024)")]
     pub md_path: Option<String>,
-    /// SHA-256 (hex) over the canonical tuple list of grid_rows that feed
-    /// this markdown — message texts, authors, timestamps, attachments.
-    /// Computed by ingest; if it matches the stored value and
-    /// `renderer_version` is unchanged, the renderer skips this markdown.
-    /// The canonical tuple definition is part of the renderer contract;
-    /// bump `renderer_version` if you change it.
+    /// The render step's input hash for this document, copied from the
+    /// sidecar header.
+    ///
+    /// **Not a cache key on this side.** The render step keeps its own
+    /// copy in the sidecar tree on disk and reads it back from there;
+    /// this column exists so an operator can ask "what upstream state
+    /// produced this row?" without opening the sidecar. Wiring an index
+    /// decision to it is how the index came to skip re-rendered
+    /// documents — a provider may legitimately make it a constant, and
+    /// signal does.
+    #[col(sql = "VARCHAR(64)")]
+    pub source_fingerprint: Option<String>,
+    /// SHA-256 (hex) over this markdown's canonical grid_row tuples and
+    /// its outgoing edges. The index step's skip key: on a match, the
+    /// sidecar's rows and edges are already what the index holds, so
+    /// re-applying them would be a no-op.
+    ///
+    /// It must cover exactly what `apply_markdown` writes. Edges are
+    /// included for that reason — a document whose rows are unchanged
+    /// but whose outgoing edges moved still needs re-applying.
     #[col(sql = "CHAR(64)")]
     pub row_set_hash: String,
-    /// Opaque version string for the renderer that produced `md_path`.
-    /// Bumping this value (typically when the markdown layout or
-    /// templating changes) invalidates every markdowns row's cache and
-    /// forces a global re-render on the next ingest.
-    #[col(sql = "VARCHAR(32)")]
-    pub renderer_version: String,
     /// When `md_path` was last written (ISO-8601 with explicit local
     /// offset, per AGENTS.md). NULL before the first render.
     #[col(sql = "VARCHAR(40)")]

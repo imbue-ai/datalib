@@ -55,9 +55,7 @@ pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
 /// `grid_rows` projection leaves every document's bytes untouched, so a
 /// pure-blake3 fingerprint would skip them all and an existing install
 /// would keep pre-change output indefinitely. Folding
-/// [`RENDER_VERSION`] in is what makes bumping it mean something — see
-/// that constant's docs for why the framework's `renderer_version`
-/// column cannot be relied on for this.
+/// [`RENDER_VERSION`] in is what makes bumping it mean something.
 pub fn render_fingerprint(blake3: &str) -> String {
     format!("{blake3}.v{RENDER_VERSION}")
 }
@@ -238,7 +236,6 @@ fn render_one(
         &md_path.with_extension("grid_rows.json"),
         doc_uuid,
         &render_fingerprint(&t.blake3),
-        RENDER_VERSION,
         &rows,
         &[],
     )?;
@@ -247,9 +244,7 @@ fn render_one(
         markdown_uuid: doc_uuid.to_string(),
         source_name: source_name.to_string(),
         source_fingerprint: render_fingerprint(&t.blake3),
-        upstream_cursor: None,
         md_path: md_path.to_path_buf(),
-        render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
     })

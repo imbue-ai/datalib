@@ -51,8 +51,21 @@ emits `*.grid_rows.json` sidecars next to its rendered markdown. The
 grid_index step (`datalib-step grid_index`; `build_grid_index` in
 `datalib/backend/etl/src/grid_index.rs`) walks every sidecar under
 `<root>/<stanza>/rendered_md/`, upserts each conversation's row set
-into Dolt, and stamps the corresponding `documents` row with the
-`row_set_hash` used to skip unchanged re-renders next time.
+into Dolt, and stamps the corresponding `markdowns` row with the
+`row_set_hash` — a hash of the sidecar's rows and edges, which the next
+run compares to decide whether re-applying them would change anything.
+
+That is deliberately *not* the sidecar's `source_fingerprint`. The two
+hashes answer different questions and belong to different steps:
+
+| hash | question | owned by |
+|---|---|---|
+| `source_fingerprint` | did the upstream input change? | the render step, which reads it back from the sidecar tree on disk |
+| `row_set_hash` | did the rows I index change? | the index step |
+
+A provider may legitimately make `source_fingerprint` a constant —
+signal sets it to the `markdown_uuid`, because it decides what to
+re-render from `dolt_diff` at parse time instead.
 
 ## Consumer side: `datalib/backend/core/src/dolt_repo.rs`
 

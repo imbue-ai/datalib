@@ -6,8 +6,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "70000001-1701-4d00-8000-000000000701",
-    "source_fingerprint": "1333c53e90043ea04c6009aaf333f379e2c04c2a16f6fb8417885b5561275dfa",
-    "render_version": 4
+    "source_fingerprint": "1333c53e90043ea04c6009aaf333f379e2c04c2a16f6fb8417885b5561275dfa"
   },
   "rows": [
     {
@@ -146,8 +145,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003",
-    "source_fingerprint": "aa22ca8c4bb10fb522e77cb4abd3ea009b7e38ab7617adaeb1c80c143118f63c",
-    "render_version": 4
+    "source_fingerprint": "aa22ca8c4bb10fb522e77cb4abd3ea009b7e38ab7617adaeb1c80c143118f63c"
   },
   "rows": [
     {
@@ -338,8 +336,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004",
-    "source_fingerprint": "91f9ee23e19a87b6cb56d85d792b6262660d1c13fdc07354c21c2f1c877d84ab",
-    "render_version": 4
+    "source_fingerprint": "91f9ee23e19a87b6cb56d85d792b6262660d1c13fdc07354c21c2f1c877d84ab"
   },
   "rows": [
     {
@@ -426,8 +423,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005",
-    "source_fingerprint": "4df72f1fc91c57c23ac8976cea959166a655f8338720902f8772fc2011c48195",
-    "render_version": 4
+    "source_fingerprint": "4df72f1fc91c57c23ac8976cea959166a655f8338720902f8772fc2011c48195"
   },
   "rows": [
     {

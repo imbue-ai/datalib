@@ -1191,7 +1191,6 @@ pub fn render_notion_official(
                 &sidecar_path,
                 &pd.page_uuid,
                 &pd.source_fingerprint,
-                RENDER_VERSION,
                 &pd.rows,
                 &[],
             )?;
@@ -1200,9 +1199,7 @@ pub fn render_notion_official(
                 markdown_uuid: pd.page_uuid.clone(),
                 source_name: String::new(),
                 source_fingerprint: pd.source_fingerprint.clone(),
-                upstream_cursor: None,
                 md_path: target.clone(),
-                render_version: RENDER_VERSION,
                 rows: pd.rows.clone(),
                 edges: Vec::new(),
             })?;
@@ -1293,7 +1290,6 @@ pub fn render_notion_official(
                 &sidecar_path,
                 &td.discussion_uuid,
                 &td.source_fingerprint,
-                RENDER_VERSION,
                 &td.rows,
                 &[],
             )?;
@@ -1302,9 +1298,7 @@ pub fn render_notion_official(
                 markdown_uuid: td.discussion_uuid.clone(),
                 source_name: String::new(),
                 source_fingerprint: td.source_fingerprint.clone(),
-                upstream_cursor: None,
                 md_path: p.clone(),
-                render_version: RENDER_VERSION,
                 rows: td.rows.clone(),
                 edges: Vec::new(),
             })?;

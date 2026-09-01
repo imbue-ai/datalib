@@ -157,22 +157,13 @@ fn render_one(
     // every other provider writes. The orchestrator commits `rows` into
     // the doltlite grid_rows table via `on_doc_complete`.
     let rows = std::slice::from_ref(&row);
-    emit_sidecar(
-        &json_path,
-        m_uuid,
-        &fingerprint,
-        profile.render_version,
-        rows,
-        &[],
-    )?;
+    emit_sidecar(&json_path, m_uuid, &fingerprint, rows, &[])?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: contact.when_ts.clone(),
         md_path,
-        render_version: profile.render_version,
         rows: vec![row],
         edges: Vec::new(),
     })

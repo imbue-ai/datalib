@@ -29,7 +29,7 @@ use datalib_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::grid_rows::{fingerprint_for_pr, rows_for_pr, RENDER_VERSION};
+use super::grid_rows::{fingerprint_for_pr, rows_for_pr};
 use super::parse::{CommentRow, CommentSection, ParsedGithubApi, PullRequestRow};
 
 pub const SLUG_MAX_LEN: usize = 60;
@@ -318,7 +318,6 @@ fn render_one_pr(
         &sidecar_path,
         &pr.uuid,
         &fingerprint_for_pr(pr, comments),
-        RENDER_VERSION,
         &rows,
         &[],
     )?;
@@ -365,9 +364,7 @@ pub fn render_github(
             markdown_uuid: pr.uuid.clone(),
             source_name: String::new(),
             source_fingerprint: fingerprint,
-            upstream_cursor: None,
             md_path: md_path.clone(),
-            render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
         })?;
