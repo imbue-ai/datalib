@@ -1495,7 +1495,15 @@ onUnmounted(() => {
 /* A run that died mid-step: not a failure anyone reported, but not a
    success either, so it reads as a warning rather than an error. */
 .m2-status-interrupted { color: var(--datalib-log-warn); }
-.m2-status-succeeded { color: var(--datalib-log-ok, var(--datalib-muted)); }
+/* Both tick glyphs are green, and for the same reason the failure "!"
+   is red: the column is icons now, so colour is doing the work the
+   words used to. A grey tick beside a red exclamation reads as "no
+   answer yet" rather than "fine".
+   `succeeded` is one tick, `skipped_up_to_date` ("Up to date") is two —
+   different facts, both good news, so they share the colour and are
+   told apart by the glyph. */
+.m2-status-succeeded,
+.m2-status-skipped-up-to-date { color: var(--datalib-log-ok); }
 /* Never run is the emptiest state in the column, and reads as such. */
 .m2-status-never-run { opacity: 0.55; }
 
