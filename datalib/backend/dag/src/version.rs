@@ -5,6 +5,15 @@
 //! this is the fallback for everyone else. Content (not mtime) so a
 //! byte-identical rewrite doesn't cascade re-runs — that's the
 //! "content-stable outputs" half of the contract doing its job.
+//!
+//! [`tree_version`] has exactly one caller, and that is deliberate:
+//! `resolve_outputs`, once a step has run and reported no version of
+//! its own. The runner never hashes a tree on its own behalf. Versions
+//! are a step's to report, and the runner cannot know what is cheap for
+//! a given store — the raw stores are doltlite databases that can be
+//! asked for a HEAD commit in milliseconds, which the runner
+//! deliberately does not know. See [`UNKNOWN`] for what it uses instead
+//! when a step it did not run has no recorded version.
 
 use std::path::Path;
 
@@ -21,6 +30,26 @@ use anyhow::{Context, Result};
 /// dirtied; a path that existed and was deleted moves from a real
 /// digest to this, which is a difference, so its consumers re-run.
 pub const ABSENT: &str = "absent";
+
+/// The version used for an artifact whose producer did not run this
+/// pass and has no version recorded from an earlier one: the runner
+/// genuinely does not know what the tree holds.
+///
+/// Distinct from [`ABSENT`], which is a claim about the disk —
+/// "nothing was ever produced here". The runner cannot make that claim
+/// about a step it skipped without reading the tree, and in the case
+/// that motivated this (#225) it would have been false: the tree held
+/// 3.4 GB. Recording that we don't know is the honest answer, and it is
+/// the cheap one.
+///
+/// Like `ABSENT` it is compared for equality like any other version,
+/// which gives the right answer in both directions. Two runs that both
+/// know nothing about a tree agree, so a consumer that already recorded
+/// this is not dirtied every run; and a real version — always
+/// `<fingerprint>:<version>`, so always containing a colon — can never
+/// collide with it, so a producer that later runs does dirty its
+/// consumers.
+pub const UNKNOWN: &str = "unknown";
 
 /// Hash the tree (or single file) at `path`. Deterministic: files are
 /// visited in sorted path order; each contributes its root-relative

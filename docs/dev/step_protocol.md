@@ -144,7 +144,16 @@ If you cannot cheaply derive one, omit the output and let the
 scheduler hash. That is correct, just slower — and for a big output
 (a raw store with a blob CAS, a large rendered tree) the difference is
 substantial, so prefer a logical version wherever the underlying store
-already has one.
+already has one. When the scheduler does hash, it says so on the event
+stream (`info`: "reported no version for `<path>`; reading the whole
+tree to hash it"), so the cost is visible rather than showing up as an
+unexplained pause.
+
+The hash only ever happens for a step that **ran**. The runner does
+not hash a tree on behalf of a step it skipped: a skipped step's
+output keeps the version recorded for it last time, or
+`datalib_dag::version::UNKNOWN` if there is none. So omitting a
+version costs a tree read per invocation, not per run of the pipeline.
 
 Claiming a path you didn't declare in `outputs` is a contract
 violation and fails the step. Exit `0` means success; the outcome
