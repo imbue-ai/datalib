@@ -78,6 +78,7 @@ pub const SOURCE_TYPES: &[&str] = &[
     "google_takeout",
     "lightroom",
     "linkedin",
+    "media",
     "notion_api",
     "pdf",
     "perseus",
@@ -219,6 +220,12 @@ pub fn plan(
             datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig,
             datalib_etl_google_takeout,
             "google_takeout"
+        ),
+        "media" => arm!(
+            datalib_etl_media_config::MediaConfig,
+            datalib_etl_media_config::MediaRenderConfig,
+            datalib_etl_media,
+            "media"
         ),
         "pdf" => arm!(
             datalib_etl_pdf_config::PdfConfig,
@@ -407,6 +414,66 @@ mod tests {
         )
         .unwrap();
         assert!(dl.processors.is_empty(), "claude_export is render-only");
+    }
+
+    /// Download-only sources are not in the `ingested_tng` fixture
+    /// pipeline (they render nothing, so there is no markdown for it to
+    /// index), which means nothing else in CI exercises their dispatch
+    /// arm or their `plan_*` pair. Without this, a `media` step's
+    /// params could stop deserializing and every test would still pass.
+    #[test]
+    fn download_only_sources_plan_a_download_and_no_render() {
+        let td = tempfile::tempdir().unwrap();
+        for (ty, params) in [
+            ("media", serde_json::json!({"playlists": false})),
+            ("fsindex", serde_json::json!({})),
+        ] {
+            let dl = plan(
+                ty,
+                Phase::Download,
+                "local",
+                {
+                    let mut v = params.clone();
+                    v.as_object_mut().unwrap().insert(
+                        "common".into(),
+                        serde_json::json!({"input_path": td.path().to_str().unwrap()}),
+                    );
+                    v
+                },
+                td.path(),
+            )
+            .unwrap();
+            assert_eq!(dl.type_str, ty);
+            assert_eq!(dl.raw_path, td.path().join("local/raw"));
+            assert_eq!(dl.processors.len(), 1, "{ty} should plan one download");
+
+            let rn = plan(ty, Phase::Render, "local", serde_json::json!({}), td.path()).unwrap();
+            assert!(
+                rn.processors.is_empty(),
+                "{ty} renders nothing; download-only is structural, not a flag"
+            );
+        }
+    }
+
+    /// The provider config really is `deny_unknown_fields`, so a typo in
+    /// a step's params fails at load rather than being ignored.
+    #[test]
+    fn a_misspelled_media_param_is_rejected() {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            "media",
+            Phase::Download,
+            "local",
+            serde_json::json!({"playlist": false}),
+            td.path(),
+        )
+        .unwrap_err();
+        // `{:#}` for the whole chain: `to_string()` gives only the
+        // outermost context ("parse --params as a media download
+        // config"), and the field name lives in serde's error under it.
+        let err = format!("{err:#}");
+        assert!(err.contains("playlist"), "{err}");
+        assert!(err.contains("unknown field"), "{err}");
     }
 
     #[test]

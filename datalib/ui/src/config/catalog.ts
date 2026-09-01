@@ -311,6 +311,55 @@ export const CATALOG: CatalogEntry[] = [
   { type: "pdf", label: "PDFs", blurb: "Convert a directory tree of PDFs into searchable markdown.", keywords: ["pdf", "documents", "papers", "files"], kind: "local", icon: null, defaultName: "pdfs", wizard: false },
   { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
   {
+    type: "media",
+    label: "Music, photos & video",
+    blurb: "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash.",
+    keywords: ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"],
+    kind: "local",
+    icon: null,
+    defaultName: "media",
+    wizard: true,
+    // Download-only: media has no text to convert, so nothing is
+    // rendered and no render step is declared.
+    renderStep: false,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your media folder",
+        required: true,
+        target: "common.input_path",
+        label: "Media folder",
+        placeholder: "~/Music",
+        help:
+          "Scanned for audio, images, video and .m3u playlists. Files are identified by " +
+          "their bytes rather than their extension, and each one also gets a hash over " +
+          "just its audio or picture data — so retagging a track, or re-rendering a RAW " +
+          "preview, doesn't make it look like a new file.",
+      },
+      {
+        kind: "bool",
+        target: "playlists",
+        label: "Index .m3u playlists",
+        default: true,
+        help:
+          "Records each playlist's entries in order, including the ones pointing at " +
+          "tracks you no longer have. Streaming manifests that share the .m3u8 " +
+          "extension are recognized and skipped.",
+      },
+      {
+        kind: "bool",
+        target: "skip_dataless",
+        label: "Skip cloud placeholders",
+        default: true,
+        help:
+          "Leave Dropbox online-only and iCloud evicted files alone rather than pulling " +
+          "them down. Turn this off only if your filesystem reports no block counts, " +
+          "which makes every file look evicted.",
+      },
+    ],
+  },
+  {
     type: "lightroom",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",

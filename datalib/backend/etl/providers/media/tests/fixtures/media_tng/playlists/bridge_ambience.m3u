@@ -1,0 +1,12 @@
+#EXTM3U
+#PLAYLIST:Bridge Ambience
+#EXTINF:227,Data - Ode to Spot
+../music/ode_to_spot.mp3
+#EXTINF:-1,Geordi La Forge - Warp Core Hum
+../music/warp_core_hum.flac
+#EXTINF:12,A track that was deleted years ago
+../music/deleted_long_ago.mp3
+#EXTINF:0,A stream
+http://holodeck.local/stream.mp3
+/Volumes/Enterprise/tracks/tea_earl_grey.m4a
+..\music\tea_earl_grey.wav

@@ -39,6 +39,15 @@ are relative to the repo root.
   resumability, wire tape. Companion:
   [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
   (how to build a new provider).
+- [`datalib/backend/etl/providers/media/DOWNLOAD.md`](datalib/backend/etl/providers/media/DOWNLOAD.md)
+  — the `media` source: local music/photos/video/playlists. Read it
+  before touching anything about **`payload_blake3`**, the
+  metadata-excluding second hash (per-container recipes, why an
+  unparsable container gets NULL rather than the file hash, why the
+  scheme name is stored beside the digest). Also covers the
+  audio-vs-visual table split, why playlists keep their unresolvable
+  entries, and the one place this repo's timestamp convention is
+  deliberately deviated from.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
@@ -158,6 +167,10 @@ datalib/
                    render cursors) + etl/providers/<p>/ crates, each
                    with src/download/ and src/render/ and a sibling
                    <p>_config/ crate for its config schema.
+                   Three of them scan local trees and share
+                   etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
+                   fsindex (path-keyed, no render), pdf and media (both
+                   content-keyed; media has no render side either).
     migrate_config/ `datalib-migrate-config`: one-shot conversion of a
                    pre-TOML `config.yaml`. Holds every retired config
                    schema and the tree's last YAML parser, so the
