@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
 
-const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 1;
 
 /// Projection for [`BlobBundle::load`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`

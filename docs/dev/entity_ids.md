@@ -304,16 +304,21 @@ compare row content rather than just the id.
    easy to miss — that was a real bug).
 3. Add the provider to `SCOPE_TAG_BY_PROVIDER` and `PORTED_PROVIDERS`
    in `ingested_tng_test`.
-4. Bump the provider's `RENDER_VERSION` and return it from its render
-   processor's `DataProcessor::render_version`. A re-key moves
-   `chat_uuid`, which *names the output directory*, so the new
-   documents land beside the old ones rather than over them and the
-   index loads both. The render step handles that — a tree whose
-   sidecars carry a version this build doesn't produce is deleted and
-   re-rendered from the raw store — but only for a provider that
-   declares its version. Skip this and the port silently does nothing
-   to any data root that already exists: the fingerprints still match,
-   so nothing re-renders and the old ids stay.
+4. Bump the provider's `RENDER_VERSION`. A re-key moves `chat_uuid`,
+   which *names the output directory*, so the new documents land beside
+   the old ones rather than over them and the index loads both. The
+   render step handles that — a tree whose sidecars carry a version this
+   build doesn't produce is deleted and re-rendered from the raw store.
+   Skip the bump and the port silently does nothing to any data root
+   that already exists: the fingerprints still match, so nothing
+   re-renders and the old ids stay.
+
+   Every render processor already returns its constant from
+   `DataProcessor::render_version`, and the render step fails a source
+   that writes sidecars without declaring one — so a *new* provider
+   can't inherit the old behaviour by omission, and a wrong constant is
+   caught by `//tests/fixtures:ingested_tng_test` rather than by a user
+   noticing every conversation twice.
 
 ### What a re-key costs an existing data root
 

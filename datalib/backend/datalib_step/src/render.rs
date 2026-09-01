@@ -37,9 +37,12 @@ pub async fn run(
     // replaced — see [`discard_tree_from_an_older_renderer`]. When it is
     // discarded there is nothing left to skip against, so every document
     // renders fresh.
-    let current = declared_render_versions(&planned.processors);
-    let prior = if discard_tree_from_an_older_renderer(&rendered_root, &scan, current.as_ref())? {
+    let declared = declared_render_versions(&planned.processors);
+    let discarded = discard_tree_from_an_older_renderer(&rendered_root, &scan, declared.as_ref())?;
+    let mut versions_on_disk = scan.versions;
+    let prior = if discarded {
         progress.set_message("renderer version changed; re-rendering this source from scratch");
+        versions_on_disk.clear();
         HashMap::new()
     } else {
         scan.fingerprints
@@ -52,6 +55,9 @@ pub async fn run(
 
     let docs = Arc::new(AtomicUsize::new(0));
     let out_rel = format!("{}/rendered_md", planned.name);
+    // `planned` moves into the render task below; the post-render check
+    // still needs the source's name for its message.
+    let source_name = planned.name.clone();
     let data_root = data_root.to_path_buf();
     let docs_in = docs.clone();
     // Render is synchronous work driven by `futures`' executor (NOT
@@ -86,6 +92,17 @@ pub async fn run(
 
     let docs = docs.load(Ordering::SeqCst);
     tracing::info!(docs, "render: docs (re)rendered");
+    // Nothing rendered ⇒ nothing on disk moved, so the pre-render scan
+    // still describes the tree and a second walk would only re-read it.
+    if docs > 0 {
+        versions_on_disk = scan_sidecars(&rendered_root)?.versions;
+    }
+    every_sidecar_version_must_be_declared(
+        &source_name,
+        &rendered_root,
+        &versions_on_disk,
+        declared.as_ref(),
+    )?;
     // The whole tree re-renders from raw/, so cache-aware backups
     // (`restic --exclude-caches` etc.) may skip it. No-op until the
     // first render materializes the dir.
@@ -250,14 +267,85 @@ fn discard_tree_from_an_older_renderer(
     Ok(true)
 }
 
-/// The set of `render_version`s this wave will stamp into sidecars, or
-/// `None` when the check can't be trusted.
+/// Fail the step unless every `render_version` now on disk is one the
+/// source's processors declared.
 ///
-/// `None` when **any** processor declines to declare one: that
-/// processor's own sidecars would then look foreign against the
-/// versions its siblings reported, and the tree would be discarded and
-/// rebuilt on every run. Better to skip the check than to make an
-/// unported provider re-render forever.
+/// This is what keeps [`DataProcessor::render_version`] from being
+/// advisory. The declaration decides whether a tree gets discarded, and
+/// there are two ways for it to be wrong, both of which are silent
+/// without this:
+///
+///   * **Absent.** A renderer that declares nothing opts its whole
+///     source out of the staleness check, so a future re-key writes each
+///     document into a new directory beside the old one and the index
+///     loads both. Nothing errors and every document appears twice. A
+///     provider added later inherits that by simply not overriding the
+///     default, which is exactly the failure mode "add one line to each
+///     provider" is bad at preventing — so a source that wrote sidecars
+///     and declared nothing is an error here.
+///   * **Wrong.** A processor that reports one version and writes
+///     another marks every tree stale, *including the one it just
+///     wrote*, and re-renders the source from scratch on every run.
+///     Correct output, unbounded cost, no symptom but a slow pipeline.
+///
+/// Checked against the sidecars on disk rather than against what the
+/// processors emitted through the doc callback, because the tree is what
+/// the next run reads. A declaration that agrees with the callback and
+/// disagrees with the file would still be wrong, and only this direction
+/// notices.
+fn every_sidecar_version_must_be_declared(
+    source: &str,
+    rendered_root: &Path,
+    on_disk: &BTreeSet<u32>,
+    declared: Option<&BTreeSet<u32>>,
+) -> Result<()> {
+    if on_disk.is_empty() {
+        return Ok(());
+    }
+    let Some(declared) = declared else {
+        anyhow::bail!(
+            concat!(
+                "source `{source}` wrote .grid_rows.json sidecars (render_version {on_disk:?}) ",
+                "but none of its processors implement `DataProcessor::render_version`. Every ",
+                "renderer must: it is what lets the next run tell a tree this build produced ",
+                "from one an older build left behind, and a tree whose ids were re-keyed cannot ",
+                "be merged into, only replaced. Return the same constant the render path passes ",
+                "to `emit_sidecar`."
+            ),
+            source = source,
+            on_disk = on_disk,
+        );
+    };
+    let undeclared: Vec<u32> = on_disk.difference(declared).copied().collect();
+    if !undeclared.is_empty() {
+        anyhow::bail!(
+            concat!(
+                "source `{source}`: sidecars under {root} carry render_version {undeclared:?}, ",
+                "which none of its processors declare (declared: {declared:?}). A processor ",
+                "that reports one version and writes another marks every tree stale — ",
+                "including the one it just wrote — and re-renders this source from scratch on ",
+                "every run."
+            ),
+            source = source,
+            root = rendered_root.display(),
+            undeclared = undeclared,
+            declared = declared,
+        );
+    }
+    Ok(())
+}
+
+/// The set of `render_version`s this wave will stamp into sidecars, or
+/// `None` when the declaration is incomplete.
+///
+/// `None` when **any** processor declines to declare one, because a
+/// partial set is worse than no set: that processor's own sidecars would
+/// look foreign against the versions its siblings reported, and the tree
+/// would be deleted and rebuilt on every run. So an incomplete
+/// declaration deletes nothing — and
+/// [`every_sidecar_version_must_be_declared`] then fails the step at the
+/// end of the wave, so "incomplete" is loud rather than silently
+/// unchecked.
 fn declared_render_versions(processors: &[Box<dyn DataProcessor>]) -> Option<BTreeSet<u32>> {
     let versions: BTreeSet<u32> = processors
         .iter()
@@ -366,7 +454,10 @@ mod stale_tree_tests {
     use anyhow::Result;
     use datalib_etl::processor::{DataProcessor, RunCtx};
 
-    use super::{declared_render_versions, discard_tree_from_an_older_renderer, scan_sidecars};
+    use super::{
+        declared_render_versions, discard_tree_from_an_older_renderer,
+        every_sidecar_version_must_be_declared, scan_sidecars,
+    };
 
     /// Write one document's sidecar at `version` under
     /// `<root>/<chat_uuid>/all.grid_rows.json` — the shape chat-common
@@ -472,10 +563,12 @@ mod stale_tree_tests {
         assert!(!discard_tree_from_an_older_renderer(&root, &scan, Some(&versions(&[5]))).unwrap());
     }
 
-    /// A source whose processors don't all declare a version keeps its
-    /// tree no matter what is in it.
+    /// A source whose processors don't all declare a version deletes
+    /// nothing, whatever is in its tree — acting on a partial
+    /// declaration is how you delete a live document. The run still
+    /// fails, at the post-render check rather than here.
     #[test]
-    fn an_undeclared_version_disables_the_check() {
+    fn an_undeclared_version_deletes_nothing() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("claude_web/rendered_md");
         write_doc(&root, "old-uuid", 4);
@@ -485,6 +578,70 @@ mod stale_tree_tests {
 
         assert!(!discarded);
         assert!(root.exists());
+    }
+
+    /// A renderer that writes sidecars and declares nothing fails the
+    /// step rather than silently opting its source out of the staleness
+    /// check. This is the assertion that makes the trait method
+    /// mandatory in practice — without it, "every provider declares one"
+    /// is a convention that a new provider breaks by doing nothing.
+    #[test]
+    fn writing_sidecars_without_declaring_a_version_is_an_error() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("claude_web/rendered_md");
+        write_doc(&root, "uuid-a", 5);
+
+        let scan = scan_sidecars(&root).unwrap();
+        let err = every_sidecar_version_must_be_declared("claude_web", &root, &scan.versions, None)
+            .expect_err("a source with sidecars and no declaration must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("claude_web"), "{msg}");
+        assert!(msg.contains("render_version"), "{msg}");
+    }
+
+    /// Declaring one version and writing another fails on the first run,
+    /// naming both. Left undetected it re-renders the source from
+    /// scratch forever, which produces correct output and so shows up
+    /// only as a pipeline that stopped being incremental.
+    #[test]
+    fn declaring_a_version_the_renderer_does_not_write_is_an_error() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("claude_web/rendered_md");
+        write_doc(&root, "uuid-a", 4);
+
+        let scan = scan_sidecars(&root).unwrap();
+        let err = every_sidecar_version_must_be_declared(
+            "claude_web",
+            &root,
+            &scan.versions,
+            Some(&versions(&[5])),
+        )
+        .expect_err("declared 5, wrote 4");
+        let msg = format!("{err:#}");
+        assert!(msg.contains('4') && msg.contains('5'), "{msg}");
+    }
+
+    /// A source that declares correctly passes, and one that rendered
+    /// nothing at all has nothing to check.
+    #[test]
+    fn a_matching_declaration_and_an_empty_tree_both_pass() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("claude_web/rendered_md");
+        write_doc(&root, "uuid-a", 5);
+
+        let scan = scan_sidecars(&root).unwrap();
+        every_sidecar_version_must_be_declared(
+            "claude_web",
+            &root,
+            &scan.versions,
+            Some(&versions(&[5])),
+        )
+        .expect("declared 5, wrote 5");
+
+        // No sidecars — a download-only source, or a first run that
+        // found nothing — must not trip the "declare something" rule.
+        every_sidecar_version_must_be_declared("empty", &root, &BTreeSet::new(), None)
+            .expect("nothing written, nothing to declare");
     }
 
     struct Stub(Option<u32>);

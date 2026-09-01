@@ -61,13 +61,21 @@ pub trait DataProcessor: Send + Sync {
     /// what a bumped `source_fingerprint` gets you on its own — is only
     /// correct while the path is stable.
     ///
-    /// `None` (the default) means "unversioned as far as this check is
-    /// concerned", and the render step then leaves the tree alone.
-    /// **Before overriding it, confirm the value returned here is the
-    /// same one that reaches [`datalib_index_lib::emit_sidecar`].** A
-    /// processor that reports one number and writes another declares
-    /// every tree stale, including the one it just wrote, and re-renders
-    /// the source from scratch on every single run.
+    /// **Every processor that writes sidecars must override this.** The
+    /// `None` default is for the download half, which writes none; a
+    /// processor that writes sidecars and returns `None` fails its
+    /// render step, naming the source. That is deliberate. The default
+    /// cannot be "opt out": a provider added later would inherit the opt
+    /// out by writing no code at all, and the resulting duplicate rows
+    /// are the kind of failure nothing downstream complains about.
+    ///
+    /// Return the same constant the render path passes to
+    /// `datalib_index_lib::emit_sidecar` — one per source, since the
+    /// thing being versioned is the whole `rendered_md` tree. The render
+    /// step re-reads the tree afterwards and fails if it carries a
+    /// version nobody declared, so reporting one number and writing
+    /// another is caught on the first run rather than silently
+    /// re-rendering the source from scratch forever.
     fn render_version(&self) -> Option<u32> {
         None
     }

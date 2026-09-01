@@ -47,8 +47,7 @@ use serde_json::Value;
 use crate::download::schema_raw::ns_id as uuid5;
 use crate::download::{db_path_for, RawDb};
 
-/// Bump when the item-shape / column mapping changes meaningfully.
-const RENDER_VERSION: u32 = 1;
+use crate::render::RENDER_VERSION;
 
 /// Author label for the export owner. Every share and comment in these
 /// two feeds is something the user themselves wrote.

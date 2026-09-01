@@ -32,7 +32,15 @@ use crate::download::schema_raw::{message_tables, ns_id as uuid5};
 use crate::download::{db_path_for, RawDb};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
-const RENDER_VERSION: u32 = 1;
+///
+/// Covers all three of this provider's render paths — messages here,
+/// `connections`, and `posts` — because they write into one
+/// `rendered_md` tree and the version is a property of that tree: it is
+/// what tells the render step whether the tree on disk is one this
+/// build produced. Three independently-bumped constants (which is what
+/// this was) cannot answer that question, since a tree carrying two of
+/// them is indistinguishable from a stale one.
+pub const RENDER_VERSION: u32 = 1;
 
 fn profile() -> RenderProfile {
     RenderProfile {
