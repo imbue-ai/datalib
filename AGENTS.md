@@ -67,6 +67,15 @@ are relative to the repo root.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
+- [`docs/dev/multimodal_retrieval.md`](docs/dev/multimodal_retrieval.md)
+  — *proposal*, nothing built: replacing the `qmd_index` step with a
+  retrieval layer that takes an arbitrary `grid_rows` metadata
+  prefilter and holds more than one vector space. Read §4 ("bytes at
+  rest") before touching how text is stored anywhere — it measures a
+  real data root and finds the same text kept **five** times (raw,
+  rendered `.md`, `grid_rows.text`, and *twice* inside qmd, whose FTS5
+  is declared without `content=`), attachment bytes kept twice, and
+  nothing compressed at rest.
 
 **UI**
 
