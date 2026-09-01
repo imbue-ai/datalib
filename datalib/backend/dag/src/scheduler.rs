@@ -1057,6 +1057,35 @@ mod tests {
     /// blocked, which never "ran"), a `finished_at` that distinguishes
     /// a completed run from a crashed one, and per-step timings that
     /// don't need a whole-run timestamp smeared across every source.
+    /// The run id is the pinned `DATALIB_DAG_NOW`, verbatim.
+    ///
+    /// `datalib-dag` mints that value and hands it to the progress bus
+    /// as the run id *before* calling `run`, so the two derive the same
+    /// string independently. If they ever diverge, nothing errors — the
+    /// bus just describes a run nobody is displaying, `/api/dag` filters
+    /// every row out on the id mismatch, and the UI silently shows no
+    /// progress at all. This is the coupling that keeps that from
+    /// happening quietly.
+    #[tokio::test]
+    async fn the_run_id_is_the_pinned_now_so_the_bus_can_match_it() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let pinned = "2026-08-31T12:34:56+02:00";
+        let r = runner(fx.root.path()).child_env(BTreeMap::from([(
+            crate::subprocess::ENV_NOW.to_string(),
+            pinned.to_string(),
+        )]));
+        assert!(r.run(&g).await.unwrap().all_ok());
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        assert_eq!(
+            st.current_run.expect("a run leaves a record").run_id,
+            pinned,
+            "the run id must be DATALIB_DAG_NOW verbatim — the binary \
+             passes that same string to the progress bus"
+        );
+    }
+
     #[tokio::test]
     async fn a_run_records_its_plan_and_every_step_outcome() {
         let fx = Fixture::new();
