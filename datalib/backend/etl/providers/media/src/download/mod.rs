@@ -381,7 +381,6 @@ fn identify(path: &Path, size: i64, blake3: &str, opts: &FetchOptions) -> Result
         gps_altitude_m: v.gps_altitude_m,
         title: v.title,
         caption: v.caption,
-        keywords: v.keywords,
         frame_rate: v.frame_rate,
         video_codec: v.video_codec,
         audio_codec: v.audio_codec,

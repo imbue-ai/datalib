@@ -428,9 +428,15 @@ otherwise still show. Pinned by
   recorded; `payload_blake3` is NULL.
 - **No video frame-accurate duration for AVI** beyond
   `total_frames × µs_per_frame` from `avih`.
-- **Keywords are comma-joined** into one column rather than getting a
-  table of their own. Fine until keyword search becomes a first-class
-  query.
+- **No keyword extraction, and no column pretending otherwise.**
+  Keywords live in IPTC or XMP, not in the EXIF IFD, so
+  `kamadak-exif` cannot reach them — it does not even expose the
+  Windows `XPKeywords` tag. An earlier revision of this provider
+  declared a `keywords` column and threaded it through the row struct
+  without ever assigning it, which is worse than not having it: a
+  column that is structurally always NULL reads as "this library has no
+  keywords". Getting them needs an XMP reader, which is real work and
+  is not done.
 - **Nothing in CI exercises the step-invocation path.** The e2e suite
   calls `download::fetch` directly, so `processor.rs` and the
   `RawStoreSession` commit around it are covered only by hand-running

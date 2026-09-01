@@ -183,7 +183,6 @@ pub const MEDIA_VISUAL_DDL: &str = "CREATE TABLE IF NOT EXISTS media_visual (
     gps_altitude_m  REAL NULL,
     title           TEXT NULL,
     caption         TEXT NULL,
-    keywords        TEXT NULL,
     frame_rate      REAL NULL,
     video_codec     TEXT NULL,
     audio_codec     TEXT NULL
@@ -441,7 +440,6 @@ pub struct MediaVisualRow {
     pub gps_altitude_m: Option<f64>,
     pub title: Option<String>,
     pub caption: Option<String>,
-    pub keywords: Option<String>,
     pub frame_rate: Option<f64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
@@ -467,7 +465,6 @@ impl BulkUpsertable for MediaVisualRow {
         "gps_altitude_m",
         "title",
         "caption",
-        "keywords",
         "frame_rate",
         "video_codec",
         "audio_codec",
@@ -499,7 +496,6 @@ impl BulkUpsertable for MediaVisualRow {
             .bind(self.gps_altitude_m)
             .bind(self.title.as_deref())
             .bind(self.caption.as_deref())
-            .bind(self.keywords.as_deref())
             .bind(self.frame_rate)
             .bind(self.video_codec.as_deref())
             .bind(self.audio_codec.as_deref())

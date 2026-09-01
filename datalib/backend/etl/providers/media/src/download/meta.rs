@@ -119,10 +119,6 @@ pub struct VisualMeta {
     pub gps_altitude_m: Option<f64>,
     pub title: Option<String>,
     pub caption: Option<String>,
-    /// Comma-joined. A dedicated keyword table is the right shape if
-    /// keyword search ever becomes a first-class query; joining is the
-    /// cheap thing that keeps the data rather than dropping it.
-    pub keywords: Option<String>,
     pub frame_rate: Option<f64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
