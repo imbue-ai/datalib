@@ -603,6 +603,26 @@ async fn export_channel(
         Some(ts) => (ts.to_string(), false),
         None => (since_ts.to_string(), true),
     };
+    // The resume decision, per conversation, in the run's own log.
+    //
+    // "Why did this conversation re-walk history it already has?" is
+    // otherwise unanswerable after the fact: the only observable is a
+    // message count in the summary, and every explanation for a
+    // non-zero one — no stored watermark, a widened `since`, a relaxed
+    // blob knob — produces the identical number. These four fields
+    // separate them. `resumed = false` with a `watermark` present means
+    // an adjustment forced the re-walk; `resumed = false` with none
+    // means the conversation had nothing stored and cold-started.
+    info!(
+        event = "slack_channel_walk_planned",
+        channel = %channel_id,
+        watermark = channel_latest_ts.unwrap_or("-"),
+        oldest = %forward_oldest,
+        inclusive = inclusive,
+        resumed = channel_latest_ts.is_some() && !adjust.force_full_walk,
+        force_full_walk = adjust.force_full_walk,
+        backfill_below_oldest = adjust.backfill_below_oldest,
+    );
     list_history(
         db,
         team_id,
@@ -809,6 +829,20 @@ async fn list_history(
             .and_then(|v| v.as_array())
             .map(|a| a.to_vec())
             .unwrap_or_default();
+        // One line per request actually issued, with the bounds that
+        // were sent. Pairs with `slack_channel_walk_planned`: that says
+        // what the walk intended, this says what went on the wire and
+        // what came back, so a re-fetch can be attributed to a specific
+        // call rather than inferred from a total.
+        info!(
+            event = "slack_history_page",
+            channel = %channel_id,
+            oldest = params.get("oldest").map(String::as_str).unwrap_or("-"),
+            latest = params.get("latest").map(String::as_str).unwrap_or("-"),
+            inclusive = params.get("inclusive").map(String::as_str).unwrap_or("-"),
+            cursor = params.get("cursor").map(String::as_str).unwrap_or("-"),
+            returned = messages.len(),
+        );
 
         let rows: Vec<MessageInput> = messages
             .iter()
