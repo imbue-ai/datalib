@@ -80,6 +80,7 @@ import {
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
+import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import {
   claimedBy as claimedByJob,
   sourcesFeeding as sourcesFeedingIn,
@@ -273,7 +274,6 @@ function stepStatus(id: string): StatusView {
     run: effectiveRun(dagRun.value, liveJob.value),
     claim: claimedBy.value.get(id),
     waitingOn: waitingOn(sources.value, id, finishedThisRun),
-    formatStamp,
   });
 }
 
@@ -406,31 +406,6 @@ function formatBytes(n: number): string {
 const maxBytes = computed(() =>
   rows.value.reduce((m, r) => Math.max(m, r.bytes ?? 0), 0),
 );
-
-/// Timestamps in the viewer's own locale, on a 24-hour clock.
-///
-/// `hourCycle` rather than the locale's default: the times here are
-/// operational — "did this run before or after that one" — and a
-/// 12-hour clock makes that a two-token comparison. Everything else
-/// (field order, month name, separators) still follows the system.
-const STAMP_FMT = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-});
-
-/// Render one of the tree's ISO-8601-with-offset stamps. Returns the
-/// string unchanged when it isn't a date we can parse — a stamp we
-/// can't read is still worth showing verbatim.
-function formatStamp(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
-}
 
 /// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
 /// button's own colour through hover, disabled and the dark theme.
@@ -629,9 +604,25 @@ const columnDefs: ColDef<Row>[] = [
   {
     headerName: "Last synced",
     field: "lastSynced",
-    width: 190,
-    minWidth: 190,
-    valueFormatter: (p) => formatStamp(p.value as string | null),
+    width: 150,
+    minWidth: 150,
+    // Sort on the instant. The cell paints "5 minutes ago", and AG Grid
+    // sorts the row's *value* rather than what a renderer drew — but
+    // the value is an ISO string carrying its source's own UTC offset,
+    // which does not compare correctly as text either. See
+    // `compareStamps`.
+    comparator: (a: string | null, b: string | null, _na, _nb, inverted?: boolean) =>
+      compareStamps(a, b, inverted),
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const iso = p.data?.lastSynced ?? null;
+      const span = document.createElement("span");
+      span.textContent = formatRelative(iso, Date.now());
+      // The exact stamp, for when "7 days ago" isn't the answer you
+      // needed. Only when there is one — "—" has nothing to reveal.
+      if (iso) span.title = formatStamp(iso);
+      else span.className = "m2-none";
+      return span;
+    },
   },
   {
     headerName: "Bytes on disk",
@@ -675,7 +666,7 @@ const columnDefs: ColDef<Row>[] = [
         // Null is "nothing on disk yet", which is not a zero-length
         // bar — it's the absence of a bar.
         wrap.textContent = "—";
-        wrap.classList.add("m2-bytes-none");
+        wrap.classList.add("m2-none");
         return wrap;
       }
       const max = maxBytes.value;
@@ -1189,6 +1180,26 @@ function mergeJob(e: JobProgressEvent) {
 let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 let progressPoll: ReturnType<typeof setInterval> | null = null;
+let relativePoll: ReturnType<typeof setInterval> | null = null;
+
+/// The Last synced column reads "5 minutes ago", which goes stale on
+/// its own: nothing about the page has changed a second later, but the
+/// cell is now wrong. Every other repaint here is triggered by data
+/// moving, so this is the one clock the column needs.
+///
+/// It ticks every second but repaints only when at least one row would
+/// actually read differently — on a table whose newest row is hours
+/// old that is a handful of short string builds per second and no DOM
+/// work at all, and in the seconds after a sync it is the per-second
+/// update that makes "2 seconds ago" mean it.
+let lastRelativePaint = "";
+function tickRelative() {
+  const now = Date.now();
+  const next = rows.value.map((r) => formatRelative(r.lastSynced, now)).join("\u0000");
+  if (next === lastRelativePaint) return;
+  lastRelativePaint = next;
+  gridApi?.refreshCells({ columns: ["lastSynced"], force: true });
+}
 
 onMounted(async () => {
   await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
@@ -1212,6 +1223,7 @@ onMounted(async () => {
   }, 2000);
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
+  relativePoll = setInterval(tickRelative, 1000);
   poll = setInterval(() => {
     void loadConfig();
     void loadJobs();
@@ -1225,6 +1237,7 @@ onUnmounted(() => {
   if (stream) stream.close();
   if (poll) clearInterval(poll);
   if (progressPoll) clearInterval(progressPoll);
+  if (relativePoll) clearInterval(relativePoll);
   gridApi = null;
 });
 </script>
@@ -1558,7 +1571,10 @@ onUnmounted(() => {
   height: 100%;
   width: 100%;
 }
-.m2-bytes-none { color: var(--datalib-muted); opacity: 0.55; }
+/* "Nothing to show here" — an em dash, in both the Bytes column
+   (no artifacts on disk) and Last synced (never run). Shared,
+   because it is one meaning. */
+.m2-none { color: var(--datalib-muted); opacity: 0.55; }
 .m2-bar {
   position: relative;
   flex: 1 1 auto;

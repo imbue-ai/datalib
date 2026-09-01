@@ -11,6 +11,7 @@
 
 import type { ConfiguredStep } from "@/config/sourceSteps";
 import type { DagRun, DagStep, DagStepProgress, SyncJob, SyncTask } from "@/api";
+import { formatStamp } from "@/config/timeFormat";
 
 /// What the pushed task board contributes to a row.
 ///
@@ -324,11 +325,8 @@ export function stepStatus(args: {
   /// in the queued branch, where it turns "Queued" into a sentence that
   /// says what the row is behind.
   waitingOn?: string[];
-  /// How to render a timestamp inside a prose detail. Injected so this
-  /// module stays free of locale formatting.
-  formatStamp: (iso: string) => string;
 }): StatusView {
-  const { step, run, claim, formatStamp } = args;
+  const { step, run, claim } = args;
   const last = step?.last_run ?? null;
   const runInFlight = run && !run.finished_at ? run : null;
   // Only a run still in flight says anything about now. A closed
