@@ -128,6 +128,12 @@ impl DataProcessor for NotionRender {
         &self.id
     }
 
+    /// The value every sidecar this processor writes carries; the
+    /// render step refuses to finish if the two disagree.
+    fn render_version(&self) -> Option<u32> {
+        Some(crate::render::render::RENDER_VERSION)
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render::render_notion_official};
         let parsed = parse_api_dir(&self.raw_path)

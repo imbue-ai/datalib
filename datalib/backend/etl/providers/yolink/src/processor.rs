@@ -93,6 +93,12 @@ impl DataProcessor for YolinkRender {
         &self.id
     }
 
+    /// The value every sidecar this processor writes carries; the
+    /// render step refuses to finish if the two disagree.
+    fn render_version(&self) -> Option<u32> {
+        Some(crate::render::RENDER_VERSION)
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::parse::{parse, Parsed};
         use crate::render::render::{cursor_params, render_all};

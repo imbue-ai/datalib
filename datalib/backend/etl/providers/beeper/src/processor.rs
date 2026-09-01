@@ -119,6 +119,12 @@ impl DataProcessor for BeeperRender {
         &self.id
     }
 
+    /// The value every sidecar this processor writes carries; the
+    /// render step refuses to finish if the two disagree.
+    fn render_version(&self) -> Option<u32> {
+        Some(crate::render::render::RENDER_VERSION)
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, self.period)

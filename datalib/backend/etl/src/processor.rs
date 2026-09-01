@@ -47,6 +47,38 @@ pub trait DataProcessor: Send + Sync {
     /// *structured* outcome with a content-version is a Program-B concern;
     /// Program A keeps the string.)
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
+
+    /// The renderer version this processor stamps into every sidecar
+    /// header it writes, when it writes sidecars at all.
+    ///
+    /// The render step uses it to tell a tree rendered by *this* build
+    /// from one left behind by an older one. That distinction only
+    /// matters because a version bump can move a document's output
+    /// path: `rendered_md/<chat_uuid>/…` is named for an id the
+    /// renderer mints, so a change to the id recipe writes the new
+    /// document beside the old one instead of over it, and both then
+    /// load into the index as separate rows. Re-rendering in place —
+    /// what a bumped `source_fingerprint` gets you on its own — is only
+    /// correct while the path is stable.
+    ///
+    /// **Every processor that writes sidecars must override this.** The
+    /// `None` default is for the download half, which writes none; a
+    /// processor that writes sidecars and returns `None` fails its
+    /// render step, naming the source. That is deliberate. The default
+    /// cannot be "opt out": a provider added later would inherit the opt
+    /// out by writing no code at all, and the resulting duplicate rows
+    /// are the kind of failure nothing downstream complains about.
+    ///
+    /// Return the same constant the render path passes to
+    /// `datalib_index_lib::emit_sidecar` — one per source, since the
+    /// thing being versioned is the whole `rendered_md` tree. The render
+    /// step re-reads the tree afterwards and fails if it carries a
+    /// version nobody declared, so reporting one number and writing
+    /// another is caught on the first run rather than silently
+    /// re-rendering the source from scratch forever.
+    fn render_version(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// The genuinely-runtime inputs a provider's `plan()` needs that are NOT part

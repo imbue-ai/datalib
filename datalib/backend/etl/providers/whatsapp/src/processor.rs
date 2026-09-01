@@ -115,6 +115,12 @@ impl DataProcessor for WhatsappRender {
         &self.id
     }
 
+    /// The value every sidecar this processor writes carries; the
+    /// render step refuses to finish if the two disagree.
+    fn render_version(&self) -> Option<u32> {
+        Some(crate::render::render::RENDER_VERSION)
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
         // WhatsApp doesn't expose a `period` knob on its sync block today —

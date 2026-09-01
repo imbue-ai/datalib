@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
 
-const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 1;
 
 /// Projection for [`BlobBundle::load`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
