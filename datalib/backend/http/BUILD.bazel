@@ -64,6 +64,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/progress:datalib_progress",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",

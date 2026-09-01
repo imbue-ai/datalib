@@ -54,6 +54,7 @@ import {
   openJobStream,
   type DagRun,
   type DagStep,
+  type DagStepProgress,
   type SyncJob,
   type OutputStorage,
 } from "@/api";
@@ -194,6 +195,9 @@ type Row = {
   /// Why the status is what it is — a failure message, or how a run
   /// came to be interrupted. Null when the status speaks for itself.
   statusDetail: string | null;
+  /// Live position in the run currently in flight, from the progress
+  /// bus. Null when the step isn't running or hasn't reported anything.
+  progress: DagStepProgress | null;
   /// Null when nothing is on disk yet — rendered as "—", not "0 B",
   /// which would read as "ran, and produced nothing".
   bytes: number | null;
@@ -336,6 +340,7 @@ const rows = computed<Row[]>(() =>
       lastSynced: run?.at ?? null,
       lastStatus,
       statusDetail: run?.detail ?? null,
+      progress: s.kind === "applet" ? null : (dagSteps.value[s.id]?.progress ?? null),
       bytes: onDisk.length ? outputs.reduce((n, o) => n + o.bytes, 0) : null,
       outputs,
       revealPath: onDisk[0]?.abs ?? null,
@@ -472,7 +477,9 @@ const columnDefs: ColDef<Row>[] = [
       if (row.kind === "applet") {
         return appletErrors.value[row.id] ?? "The gateway has this applet up.";
       }
-      return row.statusDetail ?? undefined;
+      // While it is running, the step's own words are the most useful
+      // thing we have — more than "running" ever is.
+      return row.progress?.msg ?? row.statusDetail ?? undefined;
     },
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const span = document.createElement("span");
@@ -480,7 +487,24 @@ const columnDefs: ColDef<Row>[] = [
       // `skipped_up_to_date` is the runner's word; "up to date" is what
       // it means to someone looking at a table.
       span.className = `m2-status m2-status-${label.replace(/[\s_]+/g, "-")}`;
-      span.textContent = label.replace(/_/g, " ").replace("skipped up to date", "up to date");
+      let text = label.replace(/_/g, " ").replace("skipped up to date", "up to date");
+
+      const prog = p.data?.progress;
+      if (label === "running" && prog) {
+        // A known total gets a count and a bar drawn as the pill's own
+        // background. An unknown one gets neither: "6" with no
+        // denominator, or a bar at an invented fraction, both claim more
+        // than we know. The pill keeps pulsing, which is the honest
+        // signal that something is happening.
+        if (prog.total != null && prog.total > 0 && prog.done != null) {
+          const frac = Math.max(0, Math.min(1, prog.done / prog.total));
+          text += ` ${prog.done}/${prog.total}`;
+          span.style.background = `linear-gradient(to right, var(--m2-progress-fill) ${
+            frac * 100
+          }%, transparent ${frac * 100}%)`;
+        }
+      }
+      span.textContent = text;
       return span;
     },
   },
@@ -850,6 +874,7 @@ async function runSource(id: string) {
 
 let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
+let progressPoll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
   await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
@@ -858,6 +883,13 @@ onMounted(async () => {
     // A step finishing is exactly when its record moves.
     void loadDag();
   });
+  // Progress moves much faster than anything else here, and only while
+  // a run is live — so poll the DAG on its own quick cadence then, and
+  // leave the rest on the slow one. Off entirely when nothing is
+  // running, so an idle tab is not asking twice a second forever.
+  progressPoll = setInterval(() => {
+    if (dagRun.value?.live) void loadDag();
+  }, 1000);
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
   poll = setInterval(() => {
@@ -872,6 +904,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (stream) stream.close();
   if (poll) clearInterval(poll);
+  if (progressPoll) clearInterval(progressPoll);
   gridApi = null;
 });
 </script>
@@ -1124,6 +1157,15 @@ onUnmounted(() => {
    sheet hasn't met. */
 .m2-status { text-transform: capitalize; }
 .m2-status-running { color: var(--datalib-accent); font-weight: 600; }
+/* The progress bar is the running pill's own background, so a step with
+   a known total fills left-to-right in place. Kept faint: it has to sit
+   under the label without fighting it for legibility. */
+.m2-status-running {
+  --m2-progress-fill: color-mix(in srgb, var(--datalib-accent) 22%, transparent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
 .m2-status-failed { color: var(--datalib-log-error); font-weight: 600; }
 /* A run that died mid-step: not a failure anyone reported, but not a
    success either, so it reads as a warning rather than an error. */

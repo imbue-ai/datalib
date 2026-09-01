@@ -559,14 +559,18 @@ fn manual_e2e_live_sync_golden() {
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-stanza `rendered_md/` tags
     // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
-    // walk below). The backend index is always produced here; qmd is skipped in
-    // this test so its tag may be absent. `system/` must NOT be tagged —
-    // job logs are operational history, not rebuildable from raw.
+    // walk below). `system/` must NOT be tagged — job logs are operational
+    // history, not rebuildable from raw.
+    //
+    // One tag at `unified_index/`, not one per index: a CACHEDIR.TAG covers
+    // everything beneath it, so this excludes `grid/` and `qmd/` together and
+    // does not depend on which of them a given run happened to produce. Both
+    // index steps write it (`grid_index.rs`, `qmd_index.rs`); the cheap pin on
+    // that is `grid_index_marks_the_index_tree_as_derived_cache` in
+    // datalib_step, so a regression does not wait for a live run to surface.
     assert!(
-        data_root
-            .join("unified_index/grid/CACHEDIR.TAG")
-            .is_file(),
-        "unified_index/grid/ must carry a CACHEDIR.TAG marking it as derived cache"
+        data_root.join("unified_index/CACHEDIR.TAG").is_file(),
+        "unified_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
     );
     assert!(
         !data_root.join("system/CACHEDIR.TAG").exists(),
@@ -652,6 +656,20 @@ fn manual_e2e_live_sync_golden() {
     }, {
         assert_json_snapshot!("sync_summary_run2_incrementality", report);
     });
+    // On slack, read `messages` in that snapshot with care: it is the one
+    // count here that moves without anything being wrong. `rewrite_config`
+    // patches `refresh_window_days = 30` into the slack step, so run 2
+    // re-queries the trailing 30 days on top of its forward walk, and
+    // `messages` is however much DM/channel traffic happens to fall inside
+    // that window on the day of the bake. It was 15 on the 2026-08-31 bake,
+    // all of them in one DM; every other conversation's newest message
+    // predated the floor, so their refresh pass returned nothing.
+    //
+    // The counts that must stay at zero are the content deltas. If those are
+    // zero and only `messages` moved, incrementality is intact. To confirm
+    // from a run's own logs rather than by reasoning: `slack_history_page`
+    // prints one line per request, and the refresh pass is the one carrying
+    // `latest = <watermark>` — the forward walk has no `latest` at all.
 
     // ── Third run: --reset-and-redownload content stability ───────────
     //
@@ -1270,6 +1288,18 @@ fn summarize_file(path: &Path) -> SnapValue {
 /// Patch the DAG config with the two test-only tweaks: point `data_root` at
 /// this run's directory, and bump slack `refresh_window_days` so a fresh
 /// data_root re-downloads media.
+///
+/// **The refresh-window tweak also drives run 2's slack `messages` count, and
+/// it is the reason that count is not zero.** A config-driven slack step
+/// defaults to `refresh_window_days = 0` (only the CLI defaults to 30), so
+/// without this line run 2 would do a forward walk from the watermark and
+/// nothing else. With it, run 2 *additionally* re-queries the trailing 30
+/// days — `oldest = now - 30d, latest = watermark, inclusive = true` — and
+/// re-fetches every message in that window. Those messages come back
+/// byte-identical, so the content deltas stay at zero and incrementality is
+/// still what the snapshot proves; only `messages` and
+/// `messages_bookkeeping` move. See the note at the run-2 snapshot for what
+/// that means when the number changes.
 ///
 /// The pre-DAG version also forced `qmd.skip=true`; in the steps format that
 /// is expressed by the config simply not declaring a `qmd_index` step, so

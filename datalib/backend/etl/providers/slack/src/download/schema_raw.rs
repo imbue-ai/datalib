@@ -102,6 +102,25 @@ pub struct UserRow {
 /// top-level `updated` epoch on every user object; it churns across
 /// re-fetches without reflecting a state change, so it must not live in
 /// the content payload that drives `dolt_diff_users`.
+///
+/// **Known gap, deliberately not fixed: `profile.status_*`.** A user's
+/// Slack status — `status_text`, `status_emoji`, `status_expiration`,
+/// `status_emoji_display_info` — is per-fetch state of the same kind as
+/// `updated`, and it is still in the content payload. Nothing reads it
+/// (`render::User::label` uses `real_name` / `name`), so when a
+/// colleague sets or clears a status it produces a `dolt_diff_users`
+/// change and a re-render that carry no information.
+///
+/// It also breaks the manual-e2e golden's `--reset-and-redownload`
+/// stability check, which asserts that re-fetching unchanged upstream
+/// objects lands identical bytes — observed 2026-08-31, when someone's
+/// "In a meeting" status cleared partway through a bake.
+///
+/// Left alone because it is rare (it needs a status change inside the
+/// ~90s a bake takes) and harmless when it happens: a spurious
+/// re-render, not wrong data. If it starts costing bake reruns, the fix
+/// is to add those four paths here — `split_volatile` already walks
+/// nested paths, so `&["profile", "status_text"]` works as written.
 pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
 
 /// `channels` — one row per Slack chat surface: public channel,

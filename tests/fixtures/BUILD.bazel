@@ -320,3 +320,18 @@ genrule(
     ],
     visibility = ["//visibility:public"],
 )
+
+# The progress bus, end to end, read by an engine that is not ours.
+#
+# Runs the real runner and opens `system/progress.sqlite` with Python's
+# stdlib sqlite3 — a separate engine in a separate process that knows
+# nothing about doltlite. Deliberately NOT folded into :ingested_tng:
+# the bus carries live wall-clock heartbeats, and that fixture is the
+# tree's deterministic, cacheable one.
+py_test(
+    name = "progress_bus_e2e_test",
+    size = "small",
+    srcs = ["progress_bus_e2e_test.py"],
+    args = ["$(rootpath //datalib/backend/dag:datalib_dag_bin)"],
+    data = ["//datalib/backend/dag:datalib_dag_bin"],
+)

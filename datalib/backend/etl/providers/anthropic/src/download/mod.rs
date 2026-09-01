@@ -775,6 +775,38 @@ async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: boo
     }
 }
 
+/// Sort the string arrays that the API returns as unordered *bags*, so
+/// re-fetching an unchanged project lands identical bytes.
+///
+/// `permissions` is a set of capability names. The API returns the same
+/// eight strings in a different order on different fetches, which makes
+/// the stored payload differ from itself: `dolt_diff_projects` reports a
+/// change, the project re-renders, and the manual-e2e golden's
+/// `--reset-and-redownload` stability check fails on content that never
+/// actually changed.
+///
+/// Sorting is the right fix rather than declaring the field volatile:
+/// the *contents* are content — losing a permission is a real change we
+/// want to see — it is only the order that carries no information.
+///
+/// The general rule, of which this is one instance: **an unordered
+/// collection from an API must be given an order before it is stored.**
+/// JSON arrays preserve whatever order the server happened to emit, and
+/// nothing upstream promises that is stable.
+fn canonicalize_project_payload(payload: &Value) -> Value {
+    let mut out = payload.clone();
+    if let Some(permissions) = out.get_mut("permissions").and_then(Value::as_array_mut) {
+        // Sort by the rendered string so mixed types (which would make
+        // `as_str` sort unstable) still get a total order.
+        permissions.sort_by_key(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| v.to_string())
+        });
+    }
+    out
+}
+
 async fn upsert_project(
     db: &RawDb,
     payload: &Value,
@@ -783,6 +815,7 @@ async fn upsert_project(
     org_name: &str,
     now: &str,
 ) -> Result<()> {
+    let payload = &canonicalize_project_payload(payload);
     let row = ProjectRow {
         id_and_payload: WirePayload {
             id: uuid.to_string(),
@@ -854,15 +887,38 @@ fn credential_hint(e: ClaudeError) -> anyhow::Error {
     let lk = datalib_etl::latchkey::latchkey_cli_hint();
     anyhow::anyhow!(
         "claude.ai credentials are not set up: {s}\n\
-         One-time latchkey setup:\n\
-         1. Register the service:\n\
+         The credential is the `sessionKey` cookie. Copy the one your\n\
+         browser already has:\n\
+         1. Register the service (once):\n\
               {lk} services register claude-ai --base-api-url=\"https://claude.ai/\"\n\
-         2. Open https://claude.ai logged in; in DevTools → Application → Cookies →\n\
-            claude.ai, copy the `sessionKey` value to the clipboard.\n\
+         2. Open https://claude.ai signed in; DevTools -> Application ->\n\
+            Cookies -> claude.ai, copy the `sessionKey` value.\n\
          3. Store it (`$(pbpaste)` keeps the secret out of shell history):\n\
               {lk} auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"\n\
          4. Smoke-test:\n\
-              {lk} curl -s https://claude.ai/api/organizations | head -c 200\n\
+              {lk} curl -s https://claude.ai/api/organizations\n\
+\n\
+         Already set it and still seeing this? Check the stored value's\n\
+         shape before re-pasting. Quoting `$(pbpaste)` in SINGLE quotes\n\
+         stores the literal 10 characters `$(pbpaste)` — the shell never\n\
+         expands it, and claude.ai answers `account_session_invalid`,\n\
+         which reads exactly like an expired key. A real sessionKey\n\
+         starts `sk-ant-sid01-` and is >100 chars. This prints only the\n\
+         length, never the secret (LATCHKEY_CURL must be unset — the\n\
+         impersonating shim drops `-v`):\n\
+              env -u LATCHKEY_CURL {lk} curl -v \\\n\
+                https://claude.ai/api/organizations 2>&1 >/dev/null |\\\n\
+                sed -n 's/.*sessionKey=\\([^;]*\\).*/\\1/p' |\\\n\
+                awk '{{print \"sessionKey length: \" length($0)}}'\n\
+\n\
+         There is also a browser login — register with\n\
+         `--login-url=\"https://claude.ai/login\" --login-flow=cookie-capture\n\
+         --login-flow-params='{{\"cookieKeys\": [\"sessionKey\"]}}'`, then\n\
+         `{lk} auth browser claude-ai`. It works, but it signs in a second\n\
+         time, and claude.ai appears to invalidate the older session when it\n\
+         does: observed 2026-08-31, the captured cookie and the browser you\n\
+         normally use kept evicting each other, logging both out repeatedly.\n\
+         Prefer the paste above until that is understood.\n\
          See docs/user/getting_your_data.md for the full walkthrough."
     )
 }
@@ -1311,6 +1367,47 @@ fn updated_at_in_scope(updated_at: Option<&str>, since: Option<&DateTime<Utc>>) 
 mod tests {
     use super::*;
 
+    /// A 403 from claude.ai reads as "expired key" but is equally the
+    /// signature of a *malformed stored* key — observed 2026-08-31, where
+    /// `auth set` had been run with `'$(pbpaste)'` in single quotes and
+    /// latchkey had been sending those 10 literal characters as the cookie
+    /// for hours. The hint has to name that case, because the symptom
+    /// (`account_session_invalid`) points the other way and re-pasting a
+    /// perfectly good browser key does not fix it.
+    #[test]
+    fn auth_hint_names_the_single_quote_trap_and_offers_a_shape_check() {
+        let hint = credential_hint(ClaudeError::Forbidden("HTTP 403".into())).to_string();
+        assert!(
+            hint.contains("SINGLE quotes"),
+            "hint must name the quoting trap; got:\n{hint}"
+        );
+        assert!(
+            hint.contains("sk-ant-sid01-"),
+            "hint must say what a real key looks like; got:\n{hint}"
+        );
+        // The shape check is only useful if it can actually run: the
+        // impersonating shim swallows `-v`, so the command must clear it.
+        assert!(
+            hint.contains("env -u LATCHKEY_CURL"),
+            "shape-check command must unset LATCHKEY_CURL; got:\n{hint}"
+        );
+        // ...and it must never suggest printing the secret itself.
+        assert!(
+            hint.contains("length"),
+            "shape check must report length, not the value; got:\n{hint}"
+        );
+    }
+
+    /// The embellishment is scoped: a claude.ai outage or a network blip is
+    /// not a credentials problem, and dumping setup instructions on one
+    /// sends you off fixing something that isn't broken.
+    #[test]
+    fn auth_hint_passes_through_non_setup_failures() {
+        let hint =
+            credential_hint(ClaudeError::Permanent("HTTP 502 bad gateway".into())).to_string();
+        assert_eq!(hint, "list orgs: HTTP 502 bad gateway");
+    }
+
     #[test]
     fn since_parses_date_and_rfc3339() {
         let d = parse_iso_or_utc_date("2026-01-15").unwrap();
@@ -1354,5 +1451,67 @@ mod tests {
         // Missing/garbage updated_at stays in scope (fetch, don't drop).
         assert!(updated_at_in_scope(None, Some(&since)));
         assert!(updated_at_in_scope(Some("garbage"), Some(&since)));
+    }
+
+    // ── unordered bags from the API ──────────────────────────────────
+
+    /// Two fetches of an unchanged project must serialize identically.
+    ///
+    /// The API returns `permissions` as a set, and the order varies
+    /// between fetches. Left alone that makes the payload differ from
+    /// itself: `dolt_diff_projects` reports a change, the project
+    /// re-renders, and the manual-e2e golden's `--reset-and-redownload`
+    /// stability check fails on content that never changed. Observed
+    /// 2026-08-31, which is what prompted this.
+    #[test]
+    fn project_permissions_are_stored_in_a_stable_order() {
+        let one = serde_json::json!({
+            "uuid": "p1",
+            "permissions": ["chat_project:view", "chat_project:chat:create"],
+        });
+        let other_order = serde_json::json!({
+            "uuid": "p1",
+            "permissions": ["chat_project:chat:create", "chat_project:view"],
+        });
+        assert_eq!(
+            canonicalize_project_payload(&one),
+            canonicalize_project_payload(&other_order),
+            "the same permissions in a different order must canonicalize the same"
+        );
+    }
+
+    /// Sorting, not dropping: losing a permission is a real change and
+    /// must still show up as one.
+    #[test]
+    fn project_permissions_keep_their_contents() {
+        let full = serde_json::json!({"permissions": ["b", "a", "c"]});
+        let fewer = serde_json::json!({"permissions": ["a", "b"]});
+        assert_eq!(
+            canonicalize_project_payload(&full)["permissions"],
+            serde_json::json!(["a", "b", "c"]),
+            "every permission is kept, in sorted order"
+        );
+        assert_ne!(
+            canonicalize_project_payload(&full),
+            canonicalize_project_payload(&fewer),
+            "a removed permission must still read as a change"
+        );
+    }
+
+    /// A project without the field, or with something unexpected in it,
+    /// passes through rather than panicking — this runs on every project
+    /// of every sync.
+    #[test]
+    fn canonicalize_tolerates_a_missing_or_odd_permissions_field() {
+        let none = serde_json::json!({"uuid": "p1"});
+        assert_eq!(canonicalize_project_payload(&none), none);
+        let odd = serde_json::json!({"permissions": "not-an-array"});
+        assert_eq!(canonicalize_project_payload(&odd), odd);
+        let mixed = serde_json::json!({"permissions": [2, "a", 1]});
+        assert_eq!(
+            canonicalize_project_payload(&mixed)["permissions"],
+            serde_json::json!([1, 2, "a"]),
+            "mixed types still get a total order rather than panicking"
+        );
     }
 }
