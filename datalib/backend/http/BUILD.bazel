@@ -64,6 +64,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/progress:datalib_progress",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
@@ -121,6 +122,24 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# `GET /api/dag` carries the runner's per-step run record — what
+# replaced inferring a step's status from the whole-run job queue.
+rust_test(
+    name = "dag_run_state_test",
+    srcs = ["tests/dag_run_state.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

@@ -53,7 +53,11 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
     page.locator('.ag-center-cols-container [role="row"]').first(),
   ).toBeVisible({ timeout: 10_000 });
 
-  // Scroll the long-snippet row into view (the grid is virtualized).
+  // Scroll the long-snippet row into view. The grid virtualizes both
+  // axes, so the Contents *column* has to be brought into view too —
+  // without that, this spec fails the moment a column is added to its
+  // left, reporting a missing clamp element rather than the layout
+  // change that actually happened.
   await page.evaluate((uuid) => {
     const api = (
       window as unknown as {
@@ -62,10 +66,12 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
             comparator: (node: { data?: { uuid: string } }) => boolean,
             position?: string,
           ) => void;
+          ensureColumnVisible: (col: string) => void;
         };
       }
     ).__fwGridApi;
     api?.ensureNodeVisible((n) => n.data?.uuid === uuid, "middle");
+    api?.ensureColumnVisible("snippet");
   }, longRow!.uuid);
 
   const clamp = page

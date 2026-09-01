@@ -119,44 +119,90 @@ table you want to stay in. It carries:
   subscriber's NDJSON to `<root>/system/job-logs/<id>.log`, and
   `SourcesView` already classifies lines by `level`. Error / warn / info
   / everything is a filter over data that exists.
-- **This source's lines only.** A run spans several sources, so the
-  panel filters the job log by step id rather than showing the whole
-  run. (The same per-step attribution the `step_runs` table needs — one
-  more reason it comes first.)
-- **Older runs.** A dropdown of this source's recent runs, from
-  `step_runs`, so "it broke sometime last week" is answerable.
+- **This step's lines only.** A run covers several steps, so the panel
+  filters the job log by step id rather than showing the whole run. The
+  per-step attribution this needs now exists — see below.
+- **Older runs.** A dropdown of this step's recent runs, so "it broke
+  sometime last week" is answerable. This is the one piece still
+  missing: `DagState` keeps the *last* run per step, not a history, and
+  a history wants somewhere that isn't a file rewritten in full.
 
 Live runs stream into the same panel over the existing
 `/api/sync/stream` SSE, so clicking status on a running source is how
 you watch it — which is most of what "part two" wanted, reachable from
 the grid rather than as a separate screen.
 
-### Two of those columns have no data source yet
+### Two of those columns had no data source, and now do
 
-"Last synced" and "Last status" are the obvious things to want per
-source, and **neither is currently recorded per source.**
+*(Built, 2026-08-31.)*
+
+"Last synced" and "Last status" are the obvious things to want per step,
+and neither was recorded per step:
 
 - `sync_jobs` (in `system/jobs.doltlite_db`) is per *run*, and a run
-  routinely spans several sources — the UI comma-joins step ids into one
-  job's `source_name`. A multi-source job that failed doesn't say which
-  source failed.
-- `DagState`'s `StepState` *is* per step, but it holds
+  routinely covers several steps — the UI comma-joins step ids into one
+  job's `source_name`. A multi-step job that failed didn't say which
+  step failed. That is what the `~` marker beside the status was
+  apologizing for.
+- `DagState`'s `StepState` *was* per step, but held only
   `input_versions`, `output_versions`, `succeeded` and `fingerprint` —
-  no timestamp, no error. It answers "is this step up to date", not
+  no timestamp, no error. It answered "is this step up to date", not
   "when did it last run and how did it go".
 
-The events already exist and are simply not persisted: every run ends
-with `Event::RunSummary`, whose `StepSummary { step, status, failure,
-attempts, error, outputs }` is exactly these two columns, per step.
+**Where it went: `DagState`, not a `step_runs` table.** An earlier draft
+of this section proposed a table in `system/jobs.doltlite_db`, written
+by the sync worker as it consumed the run's event stream. Two things
+argued against it once the code was in front of us.
 
-**Proposal: persist it.** A `step_runs` table in
-`system/jobs.doltlite_db` — the server already owns that file and is its
-only writer — keyed `(job_id, step_id)`, written by the sync worker as
-it consumes the run's event stream. Both columns become one query, and
-per-source run history comes free (a status sparkline in the row, if we
-want it later). `dag_state.rs`'s own module doc already flags moving
-this state into a `pipeline_runs` table as an open question, so this
-runs with the grain.
+*The worker is the wrong writer.* It only sees runs **it** spawned. A
+sync started from a terminal — `datalib-dag <root>` — would leave no
+trace, and "the CLI and the UI disagree about what happened" is the
+complaint that started this work. The runner is the only process that
+sees every run, because it *is* every run.
+
+*Doltlite is the wrong store for this.* Its working set is per file and
+shared across processes, and it charges roughly 50ms per auto-committed
+statement bundle — `grid_index` batches a whole run into one transaction
+for exactly that reason. Run state changes tens of times per run and is
+worth nothing after the next one; versioning it would be slow and would
+bury `dolt_log` under entries nobody will read.
+
+So `StepState` gained a `last_run { started_at, finished_at, status,
+attempts, error }`, and `DagState` gained a `current_run { run_id,
+started_at, finished_at, plan, states }`. Both are written by the
+scheduler at the points it already saved state — after every terminal
+step — so the cost is unchanged.
+
+**State transitions, not progress ticks.** A step going
+running→succeeded lands in the file; "347 of 900 messages" does not.
+That keeps writes at O(steps) per run and leaves live progress to the
+NDJSON event stream, where a subscriber already gets it push-shaped. A
+CLI run showing "running" with no bar is honest rather than
+impoverished.
+
+`GET /api/dag` serves it alongside the graph it already returned, so the
+table joins status to structure in one fetch.
+
+### A crashed run is not a running one
+
+A record with no `finished_at` means "still going" — and means it
+forever if the runner was killed. `sync_runs.status = 'running'` tells
+the same lie for the same reason.
+
+What resolves it is the lock. `datalib-dag` holds
+`system/runner-lock` (`flock(2)`) for the life of a run, and the kernel
+releases it however the process exits, crash included. So an open record
+plus no lock holder is a run that died, and `GET /api/dag` reports
+`live: false` for it. The table says **interrupted** rather than
+spinning until someone reboots.
+
+The lock earns its keep twice over: it also closes a hole that predated
+this work. `datalib-http` has claimed a root since #200, but that is the
+*server's* claim — nothing stopped a terminal `datalib-dag` running
+beside the app's own sync, interleaving `system/dag_state.json` and the
+raw stores their steps write. They are deliberately two different files:
+the server spawns the runner, so one shared lock would deadlock it
+against its own child.
 
 ### Document counts must go through the applet
 
@@ -832,22 +878,182 @@ Enforcing this in the loader rather than the UI is the point. The config
 file is the source of truth, so a rule the UI enforces alone is a rule
 that a hand-edit silently breaks.
 
-### Delete means "remove from config"
+### Two names: `id` is the identity, `name` is what you type
 
-Delete drops the source's two steps from the config and stops there. The
-data on disk is untouched, and that turns out to be the well-behaved
-option rather than a compromise:
+*(Built, 2026-08-31.)*
 
-- `<data_root>/<name>/` keeps its raw stores and `rendered_md/` tree.
-- Both fan-in steps declare `inputs = ["**/rendered_md"]`, and
-  `build_grid_index` walks the data root **by directory**, not by
-  config — so the removed source's documents keep getting indexed and
+Every entry has exactly two names, and only one of them is permanent:
+
+| | What it is | Changeable |
+|---|---|---|
+| `id` | Identity. Path-safe, unique, and the string the directory structure is formed from — the stanza under the data root, the stem of both step ids, the prefix inside `markdowns.md_path` and `grid_rows.qmd_path`. | Only by migration |
+| `name` | What a person types and what every screen shows. Free text, meaningless to every program. | Freely |
+
+```toml
+[[steps]]
+id = "work-slack.download"
+name = "Work Slack"
+command = "datalib-step download slack_api"
+outputs = ["work-slack/raw"]
+```
+
+**Why the id can't just be renamed.** A source's id appears in seven
+places, and only two of them move when you `mv` the directory. The other
+five have to be rewritten: `system/dag_state.json` keys,
+`markdowns.md_path`, `markdowns.source_name`, `grid_rows.qmd_path`, and
+any applet's `params.tree`. The last three are the dangerous ones,
+because `grid_index` skips a document whose `source_fingerprint` still
+matches — and that fingerprint is the *renderer's input hash*, which does
+not include the output path. So a bare rename leaves every `qmd_path`
+pointing at a directory that no longer exists, the preview pane 404s,
+and qmd hits resolve to zero grid rows, with nothing logged.
+
+**The wizard derives the id from the name, once.** Type "Work Slack" and
+the Id field fills in `work-slack` — `slugify` (NFKD, drop combining
+marks, lowercase, runs of non-alphanumerics to `-`, capped at 40) then
+`suggestId`, which suffixes `-2`, `-3` past anything taken or reserved.
+Word order is preserved: `work-slack`, never `slack-work`. Typing into
+the Id field directly stops the derivation — a suggestion never
+overwrites a choice. On edit the Id is read-only and the Name is free.
+
+Four properties make this safe to offer, and each is pinned by a test:
+
+- **Nothing moves and nothing re-runs.** `name` never reaches the
+  child's argv and is absent from `StepSpec::fingerprint_material`, so
+  renaming cannot make a step stale
+  (`a_name_changes_neither_argv_nor_fingerprint`).
+- **An entry that sets none is unchanged.** `listConfiguredSources`
+  reports `name = id` in that case, and the wizard writes no key when
+  the name is blank or merely respells the id — so opening the Edit form
+  on an existing entry doesn't churn its config.
+- **The id stays visible.** The table shows the name, then the id muted
+  beside it when the two differ. Hiding it would trade away the legible
+  on-disk layout that made the id permanent in the first place.
+- **Something reads it.** That is the lesson of `00633dd5`, which
+  deleted the applet `title` key: documented as the gallery's label,
+  read by nothing. A key with no consumer is a doc that lies.
+
+A slug that comes out empty — a name in a non-Latin script, or pure
+punctuation — falls back to the catalog's `defaultName` rather than
+inventing something unrecognizable.
+
+Any step may carry a `name`: the shared `grid_index` / `qmd_index`
+fan-ins are rows in the same table and are named the same way. Applets
+are the exception — `AppletEntry` is `deny_unknown_fields` with no
+`name`, deliberately, since an applet already takes its display label
+through its own `params` — so they are shown by their `id`.
+
+**The name reaches the unified index grid too**, as a "Source" column
+beside the provider icon (which is now labelled "Provider", because that
+is what it always was). The join is client-side and that is the point:
+
+- `SearchRow.source_name` is the source's id, derived server-side as the
+  first segment of the row's `qmd_path`
+  (`dolt_repo::source_name_from_qmd_path`) — the same derivation
+  `datalib-step` uses to name a source from its outputs and `grid_index`
+  uses when it walks one directory per source.
+- The name comes from `config.toml`, read once on mount by `GridCard`
+  and joined by that id. It is deliberately *not* an index column: a
+  name is free text edited at any moment, while `grid_rows` is written
+  by a pipeline step, so storing it there would make renaming a
+  re-indexing job — exactly the cost this feature exists to avoid.
+- The cell shows the name; the row still carries the id, so right-click
+  "Keep only" emits `source_name:<id>`. Filtering on a name would be
+  wrong twice over: names are mutable, and two sources may share one.
+
+`source_name:` is the one filter with no column behind it. `build_where`
+matches it as `INSTR(qmd_path, ?) = 1` with a trailing separator on the
+needle — `LIKE 'slack_work/%'` would be wrong, since an id may legally
+contain `_` and LIKE reads that as a wildcard, so
+`source_name:slack_work` would also return a `slackXwork` source.
+
+**What is and isn't unique.** Names may collide freely — two workspaces
+both called "Slack" is a legitimate thing to want, and the muted id is
+what tells them apart. Step *ids* must be unique
+(`config::validate_steps`, again in `Graph::build`), and output *paths*
+may not overlap across steps (`Graph::build`'s single-writer check).
+There is no id-uniqueness rule as such at the source level, because a
+source is not a config entity: two sources cannot share an id only
+because they would then both declare `<id>/raw`, and `PUT /api/config`
+builds the graph, so that collision is refused at save time rather than
+at run time.
+
+Renaming an id for real — moving the directory and repairing the five
+references above — remains unbuilt. It wants to be one operation (config
+rewrite + `mv` + `dag_state.json` remap + two `UPDATE`s in a single dolt
+commit), and it is cheaper than it looks: rendered markdown is
+position-independent (relative `blobs/` links, no id in frontmatter),
+`markdown_uuid` is upstream-derived so filed feedback survives, and qmd
+keys `content_vectors` by content hash, so a move costs no re-embedding.
+
+### One row per step, and no "data source" at all
+
+*(Built, 2026-08-31.)*
+
+A source used to be a row: a `<name>/raw` + `<name>/rendered_md` pair
+fused into one entry, edited by one form, run as one unit. It was never
+a config entity — the grouping was invented in `sourceSteps.ts` and
+reconstructed by splitting paths — and it cost more than it bought. A
+fetch step and a render step have separate options, separate outputs,
+separate disk footprints and separate reasons to re-run; the runner has
+always treated them as two steps.
+
+So the table is one row per `[[steps]]` entry, and the Kind column says
+which wave each is — **Fetch**, **Render**, **Index** — derived from the
+shape of the id (`phaseOf`). Each row edits, runs, reveals and deletes
+on its own.
+
+What survives is a *display* relationship: two steps sharing an id stem
+are siblings under one directory. `stemOf` and `renderIdFor` are the
+only places that touch it, and they exist to propose a default, never to
+resolve anything.
+
+### Adding the render step: a checkbox, not a second dialog
+
+Only `signal_backup` declares a render-phase field. For every other
+provider the render step has nothing to configure, so it is offered as a
+checkbox at the bottom of the fetch step's form — ticked by default,
+with the TOML preview showing both steps so the checkbox demonstrates
+its consequence rather than asserting it. One save writes both.
+
+A provider that *does* have render options gets the second dialog
+instead, opened on the same component with `renderFor` set: name
+pre-filled `"<name> (render markdown)"`, id fixed at the sibling, and
+`inputs` pointing at the step just written.
+
+Either way it can be declined and added later: a fetch row carries a
+**Render to markdown** action, which mints the same id through the same
+`renderIdFor`. The action is absent on rows where it makes no sense and
+disabled with a reason where it nearly does ("This already has a render
+step", "Lightroom produces no markdown to render").
+
+One consequence to expect: **names drift.** Rename the fetch step and
+the render step keeps the name it was created with. That is correct —
+they are separate steps — and the muted id beside each keeps the table
+readable.
+
+### Delete takes the pair
+
+Delete drops a step's `[[steps]]` block from the config and stops there.
+The data on disk is untouched, which is the right default for a button
+one click away in a table.
+
+**A fetch step takes its render step with it.** Since `inputs` names
+step ids, a render step whose input no longer exists is a config the
+loader refuses outright — a whole app broken by a partial delete. So the
+confirm names both, and `removeSteps` cuts both, and `unwireFromFanIns`
+strips the render step from the index steps' inputs first. (The general
+version of that brittleness — one bad line taking the app down — is
+issue #209.)
+
+The data stays behind either way:
+
+- `<data_root>/<stem>/` keeps its raw store and `rendered_md/` tree.
+- `build_grid_index` walks the data root **by directory**, not by
+  config, so the removed source's documents keep getting indexed and
   stay searchable in Explore.
-- The raw store is intact, so re-adding the source later resumes
-  incrementally instead of re-downloading.
-
-That makes Delete non-destructive and reversible, which is the right
-default for a button sitting one click away in a table.
+- The raw store is intact, so re-adding later resumes incrementally
+  instead of re-downloading.
 
 Removing the *data* is a separate feature and isn't designed here. When
 someone does design it, note the prerequisite: **`grid_index` is
@@ -867,7 +1073,7 @@ running it.)
 |---|---|
 | **0** | Duplicate + reserved source-name rejection in `dag::config::to_specs`. Independently correct, and everything below assumes it. |
 | **1** | The Manage screen inversion: AG Grid of sources with Run/Edit/Delete, **Add Data Source** above it, config editor demoted to an Advanced disclosure. Catalog crate + `GET /api/sources/catalog`; picker with filter; the generic (descriptor-less) flow for all twenty types; `toml_edit`-backed create, edit and delete-from-config. |
-| **1b** | `step_runs` in `system/jobs.doltlite_db`, so the grid's Last synced / Last status columns have data. |
+| **1b** | *(Done, differently.)* Per-step run state, so the grid's Last synced / Last status columns have data. It landed in `DagState` rather than a `step_runs` table in `system/jobs.doltlite_db` — see "Two of those columns" above for why the runner had to be the writer. |
 | **2** | Slack end to end: the browser-mode credential screen (`/api/credentials/*` → `latchkey auth browser slack`), `datalib-step probe` + `POST /api/sources/probe` for the live channel multi-select, since/media, review. Includes plumbing `--account` through `HttpRequest` — the multi-workspace bug above. The reference implementation the rest copy. |
 | **3** | Credentials for the rest: test cookie-capture registration for `claude-ai`, and the `set`-mode token field → `latchkey auth set` on stdin for gitlab / notion / chatgpt / fastmail-dav. Includes the `auth`-probe fallback for services whose `credentialStatus` can only ever be `unknown`. |
 | **4** | `GET /api/fs/browse` + `inspect` probes; descriptors for the file-backed sources. |
@@ -919,6 +1125,8 @@ So part two is:
   `<root>/system/job-logs/<id>.log` and `SourcesView` already classifies
   lines by `level`. A level filter and per-step grouping are UI work on
   data that is already there.
-- **`step_runs`** (proposed above for the grid's Last synced / Last
-  status columns) is the same table a run view would page through for
-  history.
+- **Run history.** `DagState` now carries the *last* run per step,
+  which is what the grid's columns needed, but not a series. A run view
+  paging through "the last twenty runs of this step" still needs
+  somewhere to keep them — and that store should not be the file the
+  scheduler rewrites in full after every terminal step.

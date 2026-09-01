@@ -41,6 +41,52 @@ registration is needed — the same `slack` credential signs both
 `shapes.rs` is the shape-of-the-response catalog: which path holds the
 items, what counts as the cursor key, how to dedup.
 
+## Channels and DMs
+
+`conversations.list` covers four surfaces, selected by its `types`
+param. We send `public_channel,private_channel` by default and append
+`im,mpim` only when `dms` is set — so **`dms = false` is enforced by
+never asking**, not by filtering a response that already contains your
+DMs.
+
+The two scopes are independent namespaces and neither filters the
+other: `channels` names channels (`#`), `dm_users` names people (`@`).
+A DM has no channel name to match, so folding both into one list would
+silently drop every DM. `dm_users` set with `dms = false` is a config
+error, because both silent readings of it are wrong.
+
+What the surfaces actually look like on the wire (checked against the
+live API 2026-08-31 — worth knowing, because the differences are what
+the code is shaped around):
+
+| Field | `public/private_channel` | `im` (1:1 DM) | `mpim` (group DM) |
+|---|---|---|---|
+| `name` | `general` | **absent** | `mpdm-alice--bob--carol-1` |
+| `is_member` | yes | **absent** | yes |
+| `is_archived` | yes | yes | yes |
+| who's in it | — | `user` (just them) | `members` (**includes you**) |
+
+Two consequences, both load-bearing:
+
+  * **`members_only` cannot be applied to a DM.** A 1:1 DM has no
+    `is_member` field, so the predicate that selects channels rejects
+    every one of them. On a real workspace this was 99 of 203 DM rows.
+    Hence the `is_dm` column: the `is_member` predicate runs only
+    against `is_dm = 0`. `is_archived` applies to everything.
+  * **Both DM shapes reduce to one participant list.** `dm_user_ids`
+    stores `user` or `members` verbatim, comma-joined, and
+    `dm_counterparts` subtracts the `auth.test` user at read time. One
+    column answers both questions the DM path asks — is this a
+    conversation with someone on the allowlist, and whose names title
+    it — for either shape, so a group DM needs no special case. (It
+    never subtracts to nothing: a DM with yourself keeps your name.)
+
+A DM is titled after its counterparts — `@Jean-Luc Picard`,
+`@William T. Riker, Worf` — since `#D0123ABCD` is unreadable. Slack's
+`mpdm-…` handle is the fallback when participants can't be resolved;
+it is not split back into people, because a Slack handle may itself
+contain dashes.
+
 ## What bounds how far back we mirror
 
 `since` — and only `since`. It is the oldest message any pass will ask
@@ -96,6 +142,14 @@ Only widenings do work; a narrowed knob leaves an on-disk superset and
 nothing in the pipeline deletes. `channels` and `refresh_window_days` are
 deliberately *not* recorded — a newly listed channel has no rows so it
 cold-starts on its own, and the refresh window is re-applied every run.
+
+`dms` and `dm_users` aren't recorded either, for the same reason one
+level up: a newly listed DM has no message rows, so it cold-starts from
+`since` unaided. What turning `dms` on *does* need is a fresh
+`conversations.list` — the cached sweep was taken under the narrower
+`types` and holds no DM rows at all. That is handled by keying the
+sweep marker on `dms`, so flipping the knob misses the six-hour TTL
+rather than silently mirroring nothing until it expires.
 
 Two rules worth knowing when reading the code:
 

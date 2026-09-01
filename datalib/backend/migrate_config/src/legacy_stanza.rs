@@ -39,6 +39,7 @@ use datalib_etl_gitlab_config::GitlabConfig;
 use datalib_etl_google_takeout_config::GoogleTakeoutConfig;
 use datalib_etl_lightroom_config::LightroomConfig;
 use datalib_etl_linkedin_config::LinkedinConfig;
+use datalib_etl_media_config::MediaConfig;
 use datalib_etl_notion_config::NotionConfig;
 use datalib_etl_pdf_config::PdfConfig;
 use datalib_etl_perseus_config::PerseusConfig;
@@ -179,6 +180,16 @@ pub enum SourceConfig {
     /// render: readable PDFs become markdown. Scanned ones are recorded
     /// and skipped until an OCR engine lands.
     Pdf(PdfConfig),
+    /// Local music / photos / video / playlists. File-backed and
+    /// **download-only**.
+    ///
+    /// Postdates the YAML format entirely — no legacy config ever named
+    /// it, and the migrator will never produce it. It is here for the
+    /// other job this enum does: being the one mapping from a `type:`
+    /// string to a provider's config schema, which is what validates
+    /// the documented example configs (see the module header and
+    /// `tests/config_examples.rs`).
+    Media(MediaConfig),
 }
 
 /// Dispatch an expression over the payload of any variant, binding it to `$c`.
@@ -206,6 +217,7 @@ macro_rules! over_payload {
             SourceConfig::Fsindex($c) => $e,
             SourceConfig::Lightroom($c) => $e,
             SourceConfig::Pdf($c) => $e,
+            SourceConfig::Media($c) => $e,
         }
     };
 }
@@ -249,6 +261,7 @@ impl SourceConfig {
             SourceConfig::Fsindex(_) => "fsindex",
             SourceConfig::Lightroom(_) => "lightroom",
             SourceConfig::Pdf(_) => "pdf",
+            SourceConfig::Media(_) => "media",
         }
     }
 
@@ -284,6 +297,7 @@ impl SourceConfig {
             SourceConfig::Lightroom(c) => c.common.input_path.is_some(),
             // File-backed only: managed iff an `input_path:` scan root is set.
             SourceConfig::Pdf(c) => c.common.input_path.is_some(),
+            SourceConfig::Media(c) => c.common.input_path.is_some(),
         }
     }
 }
@@ -384,9 +398,12 @@ pub enum ConfigError {
 /// (`[A-Za-z0-9._-]`); reject path separators, `.`/`..`, and a leading `-`
 /// (which would read as a flag to CLI tools).
 fn validate_source_name(name: &str) -> Result<(), &'static str> {
-    // One list, shared with the live TOML path's `validate_steps` — the
-    // migrator and the runner must agree on what a stanza may be called.
-    if datalib_dag::config::RESERVED_STANZA_NAMES.contains(&name) {
+    // `system/` is the runner's and the server's own state; the live
+    // TOML path refuses a step id under it for the same reason.
+    // `unified_index` needs no rule here any more: the index steps' ids
+    // *are* `unified_index/grid` and `unified_index/qmd`, so a stanza
+    // claiming that stem collides as an ordinary duplicate id.
+    if name == datalib_dag::config::SYSTEM_DIR {
         return Err("name is reserved (it names a top-level directory the pipeline owns)");
     }
     if name == "." || name == ".." {

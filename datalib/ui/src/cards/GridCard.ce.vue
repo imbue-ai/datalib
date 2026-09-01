@@ -37,12 +37,14 @@ import {
 import { AllEnterpriseModule } from "ag-grid-enterprise";
 import {
   fetchAccounts,
+  fetchConfig,
   fetchQmdState,
   fetchSearch,
   type AccountsMap,
   type QmdDocState,
   type SearchRow,
 } from "@/api";
+import { listSteps, slugify, stemOf } from "@/config/sourceSteps";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -121,6 +123,14 @@ const accounts = ref<AccountsMap>({});
 // `rows` to carry it would blow away selection, scroll position, and
 // the adaptive column pass on every refresh. `refreshCells` on two
 // columns is the whole update.
+// Source id → the `name` its steps declare in config.toml, for the
+// "Source" column. Config-side, not index-side, and deliberately so: a
+// name is free text a person edits at any time, while the index is
+// rebuilt by a pipeline step. Baking names into `grid_rows` would make
+// renaming a source a re-indexing job. Sources with no name are simply
+// absent here and the column falls back to the id.
+const sourceNames = ref<Map<string, string>>(new Map());
+
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
 // Collection-wide totals, shown next to the row count.
 const qmdSummary = ref<{ documents: number; embedded: number } | null>(null);
@@ -139,6 +149,39 @@ function currentMarkdownUuids(): string[] {
     if (r.markdown_uuid) seen.add(r.markdown_uuid);
   }
   return [...seen];
+}
+
+/// Read the names out of `config.toml`. Once, on mount: the config
+/// changes on human time, and a stale name is a cosmetic miss, not a
+/// wrong row. A failure leaves the map empty, which shows source ids —
+/// the same thing the column showed before names existed.
+async function loadSourceNames() {
+  try {
+    const cfg = await fetchConfig();
+    // A row's `source_name` is the *stem* of the tree its document
+    // lives under (`work-slack`), not a step id — so the join is
+    // stem → name, and the name is the first one declared under that
+    // stem in file order. For an ordinary pair that is the fetch step,
+    // which is the one a person named and thinks of as the source; a
+    // config with only a render step falls back to that step's name.
+    const m = new Map<string, string>();
+    for (const step of listSteps(cfg.text)) {
+      if (step.kind !== "step" || step.name === step.id) continue;
+      const stem = stemOf(step.id);
+      if (!m.has(stem)) m.set(stem, step.name);
+    }
+    sourceNames.value = m;
+    gridApi?.refreshCells({ columns: ["source_name"], force: true });
+  } catch {
+    /* names are cosmetic; the column falls back to the source id */
+  }
+}
+
+/// What the "Source" column shows: the configured name when there is
+/// one, else the id — the directory the row's document lives under.
+function sourceNameFor(row: SearchRow | null | undefined): string {
+  if (!row?.source_name) return "";
+  return sourceNames.value.get(row.source_name) ?? row.source_name;
 }
 
 // True when either index-state column is on screen. Both are hidden by
@@ -370,7 +413,8 @@ const FILTER_COLUMNS: Record<
   string,
   { key: string; header: string; uuidCol?: keyof SearchRow }
 > = {
-  source: { key: "source", header: "Source" },
+  source: { key: "source", header: "Provider" },
+  source_name: { key: "source_name", header: "Source" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
   author: { key: "author", header: "Author", uuidCol: "author" },
@@ -430,19 +474,6 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Slugify a human-readable label for use as the non-load-bearing prefix in a
-// Notion-shaped `slug-uuid` token. Conservative: ASCII alnum + hyphens only,
-// max 40 chars, leading/trailing hyphens stripped. The backend ignores the
-// slug entirely — it's just for token/URL self-description.
-function slugifyForToken(label: string): string {
-  const ascii = label
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return ascii.slice(0, 40).replace(/-+$/, "");
-}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -451,7 +482,7 @@ const UUID_RE =
 // label available) or `uuid` is not UUID-shaped, falls back to just `uuid`.
 function formatSlugUuid(slug: string, uuid: string): string {
   if (!UUID_RE.test(uuid)) return uuid;
-  const s = slugifyForToken(slug);
+  const s = slugify(slug);
   return s.length === 0 ? uuid : `${s}-${uuid}`;
 }
 
@@ -461,7 +492,7 @@ function formatSlugUuid(slug: string, uuid: string): string {
 /// rather than one that guesses, because the two ids are not
 /// interchangeable and are often both UUID-shaped: `uuid` is what
 /// resolves inside datalib (chat URLs, `feedback.target_uuids`, `id:`
-/// filters), while `source_native_id` is what resolves upstream
+/// filters), while `upstream_id` is what resolves upstream
 /// (claude.ai, the GitHub API, `conversations.replies`). A single
 /// action returning whichever happened to exist would leave no way to
 /// tell which one you were holding.
@@ -748,6 +779,7 @@ onMounted(async () => {
   } catch {
     /* accounts mapping is best-effort */
   }
+  void loadSourceNames();
   runSearch(query.value);
 });
 
@@ -783,7 +815,10 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   },
   {
     field: "source",
-    headerName: "Source",
+    headerName: "Provider",
+    headerTooltip:
+      "Which service this came from. A property of the source's *type* — two Slack " +
+      "workspaces share it; the Source column is what separates them.",
     width: 90,
     cellRenderer: (params: { value: unknown }) => {
       const v = typeof params.value === "string" ? params.value : "";
@@ -795,6 +830,30 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
       img.title = v;
       img.className = "source-icon";
       return img;
+    },
+  },
+  // The configured source, as opposed to the provider icon left of it:
+  // two Slack workspaces are one "Provider" and two of these.
+  //
+  // `field` and `valueGetter` disagree on purpose. The cell shows the
+  // name from config.toml, but `buildFilterCtx` reads `row[colId]` off
+  // the raw row, so right-click "Keep only" emits the source *id* —
+  // which is what `source_name:` matches. Filtering on a name would be
+  // wrong twice over: names are mutable, and two sources may share one.
+  {
+    field: "source_name",
+    colId: "source_name",
+    headerName: "Source",
+    headerTooltip:
+      "The configured source this row came from — its id is its directory under the " +
+      "data root; the cell shows the name config.toml gives it",
+    width: 130,
+    valueGetter: (p) => sourceNameFor(p.data),
+    tooltipValueGetter: (p) => {
+      const id = p.data?.source_name ?? "";
+      if (!id) return "";
+      const name = sourceNames.value.get(id);
+      return name ? `${name} — stored in ${id}/` : `Stored in ${id}/`;
     },
   },
   { field: "kind", headerName: "Type", width: 110 },
@@ -1015,11 +1074,11 @@ const gridOptions: GridOptions<SearchRow> = {
     // upstream id — a provider that hasn't been ported onto
     // `datalib_id` writes NULL here, and a menu item that silently
     // copies nothing is worse than no menu item.
-    if (targets.some((r) => r.source_native_id)) {
+    if (targets.some((r) => r.upstream_id)) {
       items.push({
-        name: `Copy source ID${plural}`,
+        name: `Copy upstream ID${plural}`,
         action: () => {
-          void copyIds(targets, (r) => r.source_native_id ?? "");
+          void copyIds(targets, (r) => r.upstream_id ?? "");
         },
       });
     }

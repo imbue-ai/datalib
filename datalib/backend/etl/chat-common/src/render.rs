@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Default `source_entity_kind` for a chat/thread-level row — the
+/// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
 ///
 /// The `entity_kind` component of the `datalib_id` recipe, in the
@@ -49,7 +49,7 @@ pub struct RenderProfile {
     /// Discriminator for reaction-level grid_rows. Reactions get their
     /// own rows so search can find them by emoji content.
     pub reaction_kind: String,
-    /// `grid_rows.source_entity_kind` for this profile's chat-level
+    /// `grid_rows.upstream_entity_kind` for this profile's chat-level
     /// rows — the `entity_kind` component of the `datalib_id` recipe
     /// that minted their `uuid`.
     ///
@@ -551,9 +551,9 @@ fn build_grid_rows(
             )
             .qmd_path(Some(md_rel.to_string()))
             .source_url(chat.source_url.clone())
-            .source_native_id(chat.external_id.clone())
-            .source_entity_kind(Some(profile.chat_entity_kind.to_string()))
-            .source_scope(chat.source_scope.clone())
+            .upstream_id(chat.external_id.clone())
+            .upstream_entity_kind(Some(profile.chat_entity_kind.to_string()))
+            .upstream_scope(chat.upstream_scope.clone())
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
             .build()?,
     );
@@ -584,12 +584,12 @@ fn build_grid_rows(
                         .unwrap_or_else(|| profile.message_kind.clone()),
                 )
                 .source_label(profile.source_label.clone())
-                .source_native_id(item.source_ref.as_ref().map(|r| r.native_id.clone()))
-                .source_entity_kind(item.source_ref.as_ref().map(|r| r.entity_kind.clone()))
+                .upstream_id(item.source_ref.as_ref().map(|r| r.native_id.clone()))
+                .upstream_entity_kind(item.source_ref.as_ref().map(|r| r.entity_kind.clone()))
                 // Items inherit the chat's scope: a chat belongs to
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same `Scope::Upstream`.
-                .source_scope(chat.source_scope.clone())
+                .upstream_scope(chat.upstream_scope.clone())
                 .when_ts(Some(iso_from_ms(item.date_ms)))
                 .author(Some(item.author_display.clone()))
                 .account(chat.account.clone())
@@ -619,9 +619,9 @@ fn build_grid_rows(
                     .provider(profile.provider)
                     .kind(profile.reaction_kind.clone())
                     .source_label(profile.source_label.clone())
-                    .source_native_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
-                    .source_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
-                    .source_scope(chat.source_scope.clone())
+                    .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
+                    .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
+                    .upstream_scope(chat.upstream_scope.clone())
                     .when_ts(Some(iso_from_ms(r.date_ms)))
                     .author(Some(r.reactor_display.clone()))
                     .account(chat.account.clone())
@@ -769,7 +769,7 @@ mod tests {
             project: None,
             external_id: Some("bridge-crew@g.us".to_string()),
             source_url: None,
-            source_scope: None,
+            upstream_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,

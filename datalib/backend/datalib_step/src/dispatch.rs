@@ -78,6 +78,7 @@ pub const SOURCE_TYPES: &[&str] = &[
     "google_takeout",
     "lightroom",
     "linkedin",
+    "media",
     "notion_api",
     "pdf",
     "perseus",
@@ -220,6 +221,12 @@ pub fn plan(
             datalib_etl_google_takeout,
             "google_takeout"
         ),
+        "media" => arm!(
+            datalib_etl_media_config::MediaConfig,
+            datalib_etl_media_config::MediaRenderConfig,
+            datalib_etl_media,
+            "media"
+        ),
         "pdf" => arm!(
             datalib_etl_pdf_config::PdfConfig,
             datalib_etl_pdf_config::PdfRenderConfig,
@@ -320,6 +327,54 @@ mod tests {
         assert!(err.contains("render config"), "{err}");
     }
 
+    /// Every slack config written before `dms` existed must keep
+    /// parsing, and must keep meaning "no direct messages". The struct
+    /// is `deny_unknown_fields`, so this is really two guarantees: the
+    /// old shape still deserializes, and the new field defaults off
+    /// rather than opting an existing mirror into DMs on upgrade.
+    #[test]
+    fn slack_config_without_dms_still_parses_and_leaves_dms_off() {
+        let cfg: datalib_etl_slack_config::SlackConfig = serde_json::from_value(
+            serde_json::json!({"sync": {"media": true, "channels": ["chat-qi"]}}),
+        )
+        .expect("a pre-dms config must still parse");
+        let sync = cfg.sync.expect("sync");
+        assert!(!sync.dms, "an upgrade must not start mirroring DMs");
+        assert!(sync.dm_users.is_none());
+    }
+
+    /// The one combination the provider refuses, refused where the
+    /// step actually reads its params — `plan` is what calls
+    /// `validate`, and a rule that isn't wired into it is not enforced.
+    #[test]
+    fn slack_dm_users_without_dms_fails_at_plan_time() {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            "slack_api",
+            Phase::Download,
+            "slack",
+            serde_json::json!({"sync": {"dm_users": ["@riker"]}}),
+            td.path(),
+        )
+        .unwrap_err();
+        // `{:#}` walks the cause chain, which is what `main.rs` prints
+        // (one line per `e.chain()` entry) — the bare `to_string()` is
+        // only the outermost "source ... (type=slack_api)" context.
+        let err = format!("{err:#}");
+        assert!(err.contains("dm_users"), "{err}");
+        assert!(err.contains("dms = true"), "{err}");
+
+        // …and is accepted with the switch on.
+        plan(
+            "slack_api",
+            Phase::Download,
+            "slack",
+            serde_json::json!({"sync": {"dms": true, "dm_users": ["@riker"]}}),
+            td.path(),
+        )
+        .expect("dms = true with an allowlist is the supported shape");
+    }
+
     #[test]
     fn render_knobs_are_rejected_on_download_and_read_on_render() {
         let td = tempfile::tempdir().unwrap();
@@ -359,6 +414,66 @@ mod tests {
         )
         .unwrap();
         assert!(dl.processors.is_empty(), "claude_export is render-only");
+    }
+
+    /// Download-only sources are not in the `ingested_tng` fixture
+    /// pipeline (they render nothing, so there is no markdown for it to
+    /// index), which means nothing else in CI exercises their dispatch
+    /// arm or their `plan_*` pair. Without this, a `media` step's
+    /// params could stop deserializing and every test would still pass.
+    #[test]
+    fn download_only_sources_plan_a_download_and_no_render() {
+        let td = tempfile::tempdir().unwrap();
+        for (ty, params) in [
+            ("media", serde_json::json!({"playlists": false})),
+            ("fsindex", serde_json::json!({})),
+        ] {
+            let dl = plan(
+                ty,
+                Phase::Download,
+                "local",
+                {
+                    let mut v = params.clone();
+                    v.as_object_mut().unwrap().insert(
+                        "common".into(),
+                        serde_json::json!({"input_path": td.path().to_str().unwrap()}),
+                    );
+                    v
+                },
+                td.path(),
+            )
+            .unwrap();
+            assert_eq!(dl.type_str, ty);
+            assert_eq!(dl.raw_path, td.path().join("local/raw"));
+            assert_eq!(dl.processors.len(), 1, "{ty} should plan one download");
+
+            let rn = plan(ty, Phase::Render, "local", serde_json::json!({}), td.path()).unwrap();
+            assert!(
+                rn.processors.is_empty(),
+                "{ty} renders nothing; download-only is structural, not a flag"
+            );
+        }
+    }
+
+    /// The provider config really is `deny_unknown_fields`, so a typo in
+    /// a step's params fails at load rather than being ignored.
+    #[test]
+    fn a_misspelled_media_param_is_rejected() {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            "media",
+            Phase::Download,
+            "local",
+            serde_json::json!({"playlist": false}),
+            td.path(),
+        )
+        .unwrap_err();
+        // `{:#}` for the whole chain: `to_string()` gives only the
+        // outermost context ("parse --params as a media download
+        // config"), and the field name lives in serde's error under it.
+        let err = format!("{err:#}");
+        assert!(err.contains("playlist"), "{err}");
+        assert!(err.contains("unknown field"), "{err}");
     }
 
     #[test]

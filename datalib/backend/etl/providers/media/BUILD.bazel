@@ -1,0 +1,66 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Tiny synthetic media corpus. Generated rather than encoded so the
+# inputs are reviewable and byte-deterministic: see
+# //tests/fixtures/make_media_fixtures.py for what each file tests.
+filegroup(
+    name = "media_fixture",
+    srcs = glob(
+        ["tests/fixtures/media_tng/**"],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_media",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_media",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:kamadak-exif",
+        "@datalib_crates//:lofty",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "media_unittests",
+    size = "small",
+    crate = ":datalib_etl_media",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# End-to-end: scan the fixture corpus and assert on the store contents.
+# Most assertions are the same claim in two directions — `blake3`
+# differs, `payload_blake3` does not.
+rust_test(
+    name = "media_e2e",
+    size = "medium",
+    srcs = ["tests/media_e2e.rs"],
+    data = [":media_fixture"],
+    edition = "2021",
+    env = {"MEDIA_FIXTURE_DIR": "datalib/backend/etl/providers/media/tests/fixtures/media_tng"},
+    deps = [
+        ":datalib_etl_media",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+

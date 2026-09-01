@@ -103,7 +103,7 @@ pub struct NormalizedReaction {
     /// backpointer — they are not covered by the containing item's.
     /// The round-trip check treats an unset one on a ported provider
     /// as a failure, which is how the gap was found.
-    pub source_ref: Option<ItemSourceRef>,
+    pub source_ref: Option<UpstreamRef>,
 }
 
 /// One item in a chat doc — text message, attachment-bearing message,
@@ -148,12 +148,12 @@ pub struct NormalizedChatItem {
     /// What this item is upstream, for the message-level grid_row's
     /// backpointer columns. `None` for providers not yet ported onto
     /// `datalib_id`.
-    pub source_ref: Option<ItemSourceRef>,
+    pub source_ref: Option<UpstreamRef>,
 }
 
 /// The upstream's own identity for one chat item, carried through to
-/// the message-level grid_row's `source_native_id` /
-/// `source_entity_kind`.
+/// the message-level grid_row's `upstream_id` /
+/// `upstream_entity_kind`.
 ///
 /// One field rather than two loose `Option`s because neither half is
 /// useful alone: a native id with no kind is ambiguous (GitHub numbers
@@ -161,7 +161,7 @@ pub struct NormalizedChatItem {
 /// points at nothing. Making them inseparable means a provider cannot
 /// half-populate the backpointer.
 #[derive(Debug, Clone, Serialize)]
-pub struct ItemSourceRef {
+pub struct UpstreamRef {
     /// The upstream's identifier for this item, within the chat's
     /// scope — an Anthropic `message_uuid`, a Slack `ts`, a JMAP
     /// `email_id`. The `natural_key` fed to `datalib_id::entity_id`.
@@ -175,7 +175,7 @@ pub struct ItemSourceRef {
     pub entity_kind: String,
 }
 
-impl ItemSourceRef {
+impl UpstreamRef {
     pub fn new(entity_kind: impl Into<String>, native_id: impl Into<String>) -> Self {
         Self {
             native_id: native_id.into(),
@@ -225,7 +225,7 @@ pub struct NormalizedChat {
     /// Upstream id used by the source app (matrix room id, WhatsApp
     /// JID, Anthropic conversation UUID, Slack
     /// `{channel_id}:{thread_ts}`). Goes into the chat-level grid_row's
-    /// `source_native_id` column and the .md frontmatter.
+    /// `upstream_id` column and the .md frontmatter.
     ///
     /// Set it even when it currently equals the row's `uuid`: providers
     /// that pass an upstream id through as the primary key lose that
@@ -234,7 +234,7 @@ pub struct NormalizedChat {
     pub external_id: Option<String>,
     /// The `Scope::Upstream` value every row in this chat was minted
     /// under — the exact provider-issued string fed to
-    /// `datalib_id::entity_id`, stamped into `grid_rows.source_scope`.
+    /// `datalib_id::entity_id`, stamped into `grid_rows.upstream_scope`.
     /// `None` for chats minted under `ProviderGlobal` or `Content`.
     ///
     /// Per-chat rather than per-item because a chat belongs to exactly
@@ -244,7 +244,7 @@ pub struct NormalizedChat {
     /// and filter value the UI shows, and a provider may prettify it.
     /// This one must stay byte-exact, because the round-trip check
     /// recomputes `uuid` from it.
-    pub source_scope: Option<String>,
+    pub upstream_scope: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`
     /// link in the page title and the chat-level grid_row's `source_url`.

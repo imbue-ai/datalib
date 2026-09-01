@@ -49,7 +49,7 @@ pub const KIND_MESSAGE: &str = "message";
 pub const KIND_REACTION: &str = "reaction";
 
 /// An entity's identity: the id we mint, and the upstream natural key
-/// it was minted from. Paired so `grid_rows.source_native_id` and
+/// it was minted from. Paired so `grid_rows.upstream_id` and
 /// `uuid` cannot drift — see `anthropic::render::ids::Identity`.
 #[derive(Debug, Clone)]
 pub struct Identity {

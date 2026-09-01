@@ -87,7 +87,10 @@ pub fn unified_index_dir(data_root: &Path) -> PathBuf {
 }
 
 /// `data_root/unified_index/grid` — the dir holding the
-/// grid_rows/markdowns index DB (and its `CACHEDIR.TAG`).
+/// grid_rows/markdowns index DB.
+///
+/// The `CACHEDIR.TAG` is not here: it goes on `unified_index/` itself, so
+/// one tag covers `grid/` and `qmd/` together. See [`mark_derived_cache`].
 pub fn grid_index_dir(data_root: &Path) -> PathBuf {
     unified_index_dir(data_root).join(GRID_DIR)
 }

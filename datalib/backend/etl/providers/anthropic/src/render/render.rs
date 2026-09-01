@@ -33,8 +33,7 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, ItemSourceRef, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc,
+    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 
 use super::ids;
@@ -323,7 +322,7 @@ fn build_chat(
                 system_note: None,
                 source_url: None,
                 kind_label: Some(kind_for_block(btype).to_string()),
-                source_ref: Some(ItemSourceRef::new(
+                source_ref: Some(UpstreamRef::new(
                     block_id.entity_kind,
                     block_id.natural_key.clone(),
                 )),
@@ -352,10 +351,7 @@ fn build_chat(
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
-            source_ref: Some(ItemSourceRef::new(
-                ids::KIND_MESSAGE,
-                m.message_uuid.clone(),
-            )),
+            source_ref: Some(UpstreamRef::new(ids::KIND_MESSAGE, m.message_uuid.clone())),
         });
     }
 
@@ -387,7 +383,7 @@ fn build_chat(
         // the grid's "Copy source ID(s)" action reads.
         external_id: Some(conv_uuid.clone()),
         source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
-        source_scope: None,
+        upstream_scope: None,
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
@@ -476,7 +472,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
             system_note: None,
             source_url: None,
             kind_label: Some("Project Knowledge".to_string()),
-            source_ref: Some(ItemSourceRef::new(
+            source_ref: Some(UpstreamRef::new(
                 doc_id.entity_kind,
                 doc_id.natural_key.clone(),
             )),
@@ -500,7 +496,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
         // conversation's, see `build_chat`.
         external_id: Some(project_uuid.clone()),
         source_url: Some(format!("https://claude.ai/project/{project_uuid}")),
-        source_scope: None,
+        upstream_scope: None,
         org_uuid: project.org_uuid.clone(),
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {
@@ -556,7 +552,7 @@ fn project_item(
         system_note: None,
         source_url: None,
         kind_label: Some(kind_label.to_string()),
-        source_ref: Some(ItemSourceRef::new(id.entity_kind, id.natural_key)),
+        source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
     }
 }
 

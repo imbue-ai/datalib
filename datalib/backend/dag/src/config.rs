@@ -9,6 +9,7 @@
 //!
 //! [[steps]]
 //! id = "slack.download"
+//! name = "Work Slack"             # optional, and read only by the UI
 //! command = "datalib-step download slack_api"
 //! outputs = ["slack/raw"]
 //! # `params` is the provider's own config subtree. As a sub-table it
@@ -57,6 +58,11 @@
 //! stays reproducible. Any executable that understands those flags
 //! (and optionally the NDJSON stdout protocol) can be a step — see
 //! docs/dev/step_protocol.md.
+//!
+//! A step's `id` is its identity: unique, path-safe, and the string the
+//! directory structure is formed from, which makes changing it a
+//! migration rather than an edit. `name` carries the half that is safe
+//! to change — see [`StepEntry::name`].
 //!
 //! TOML has no anchors, so a params subtree shared between a download
 //! and a render step is written out twice. In practice the two halves
@@ -151,10 +157,48 @@ impl AppletEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepEntry {
     pub id: String,
+    /// What to call this step on screen. Free text, freely changed.
+    ///
+    /// The runner never reads it: it is not passed to the child, and it
+    /// is deliberately absent from [`StepSpec::fingerprint_material`],
+    /// so renaming a step does not make it stale and does not re-run
+    /// anything. Its consumers are both grids — the Pipeline table
+    /// shows it in place of the step's `id`, and the unified index
+    /// grid shows it beside the rows that step produced
+    /// (`datalib/ui/src/config/sourceSteps.ts`).
+    ///
+    /// **`name` and `id` are the two halves of one identity, and only
+    /// this half is malleable.** The `id` is the identity: it is
+    /// path-safe, unique, and the directory structure is formed from
+    /// it, so changing it moves data on disk and strands the paths the
+    /// index recorded — a migration, not an edit. The `name` is what a
+    /// person types and what they see; it carries no meaning to any
+    /// program. The wizard derives an `id` from the `name` once, at
+    /// creation, and never again.
+    ///
+    /// Written only when it differs from the `id`. A name that merely
+    /// respells the id would be the second, silent spelling of one
+    /// string, which is what got the applet `title` key deleted
+    /// (00633dd5) — so an unnamed step is displayed by its id, and its
+    /// config stays as it was.
+    ///
+    /// Any step may carry one: the shared `grid_index` / `qmd_index`
+    /// fan-ins are rows in the same table and are named the same way.
+    /// [`AppletEntry`] deliberately has no counterpart — an applet's
+    /// own `params` already carry whatever label it wants (see that
+    /// type's docs), and it is displayed by its `id`.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The ids of the steps this one reads.
+    ///
+    /// A step id *is* the tree that step writes, so an entry here is
+    /// simultaneously a step reference and an artifact path — which is
+    /// why there is nothing to match and nothing to glob. Every entry
+    /// must name a declared step; a directory staged by hand is named
+    /// by `params.common.input_path` instead, and is not an artifact
+    /// the DAG knows about.
     #[serde(default)]
     pub inputs: Vec<String>,
-    #[serde(default)]
-    pub outputs: Vec<String>,
     /// The command to run, split shell-style into an argv. Note the
     /// child runs with its cwd set to `data_root`, so a relative
     /// multi-component argv[0] resolves against the data root; use a
@@ -211,101 +255,86 @@ pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     Ok((cfg, data_root))
 }
 
-/// Top-level directories the pipeline reserves for itself, so no source
-/// stanza may take one as its name.
+/// The one reserved top-level directory: the runner's and the server's
+/// own state (`system/dag_state.json`, `system/jobs.doltlite_db`, the
+/// job logs). A step writing there would put the scheduler's own
+/// bookkeeping under its change detection.
 ///
-/// A source's name is the first path segment of its artifacts
-/// (`<name>/raw`, `<name>/rendered_md`), which is also its directory
-/// under the data root — so a stanza named `system` or `unified_index`
-/// would land its store inside a tree that isn't its own.
-/// `unified_index/` in particular carries a `CACHEDIR.TAG`, so a raw
-/// store placed there would be silently skipped by every backup tool
-/// that honors it. That is the failure worth preventing: not a crash,
-/// a quiet data-loss trap.
+/// `unified_index` used to be reserved alongside it, back when a
+/// source's identity was the first segment of a free-form output path
+/// and nothing stopped a stanza from claiming that segment. It needs no
+/// rule now: the index steps' ids *are* `unified_index/grid` and
+/// `unified_index/qmd`, and id uniqueness does the rest.
 ///
-/// This is the *policy* (what a stanza may be called). The path
-/// constants themselves live in `datalib_core::layout`, which this
-/// crate deliberately doesn't depend on — the runner is lean on
-/// purpose. `layout.rs` points here.
-/// The reserved directory that holds the runner's and the server's own
-/// state (`system/dag_state.json`, `system/jobs.doltlite_db`, the job
-/// logs). `state.rs` encodes the same name in `STATE_REL_PATH`.
+/// This is the *policy*. The path constants live in
+/// `datalib_core::layout`, which this crate deliberately doesn't depend
+/// on — the runner is lean on purpose. `layout.rs` points here.
 pub const SYSTEM_DIR: &str = "system";
 
-pub const RESERVED_STANZA_NAMES: &[&str] = &[SYSTEM_DIR, "unified_index"];
-
-/// Artifact suffixes that mark an output as belonging to a *source
-/// stanza* rather than to one of the pipeline's own aggregate trees.
-/// `unified_index/grid` is a legitimate output; `unified_index/raw`
-/// would be a source stanza colliding with it.
-const STANZA_OUTPUT_SUFFIXES: &[&str] = &["raw", "rendered_md"];
+/// One id segment: what a directory name may contain.
+///
+/// Deliberately narrower than the filesystem allows. An id is a path
+/// component on every platform we ship to, it appears inside
+/// `markdowns.md_path` and `grid_rows.qmd_path`, and it is compared as
+/// a whole string everywhere — so the portable-filename character set
+/// plus `.` is all it needs to be.
+fn valid_id_segment(seg: &str) -> bool {
+    !seg.is_empty()
+        && seg != "."
+        && seg != ".."
+        && !seg.starts_with('-')
+        && seg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
 
 /// Validate the `[[steps]]` array as a whole — the checks that need to
 /// see every entry, not just one.
 ///
-/// Called from [`to_specs`], which is the single chokepoint every
-/// entry point already goes through: the `datalib-dag` binary, and
+/// Called from [`to_specs`], which is the single chokepoint every entry
+/// point already goes through: the `datalib-dag` binary, and
 /// `datalib-http`'s config load *and* its `PUT /api/config` validation.
 /// Putting this here rather than in the UI is deliberate — the config
 /// file is the source of truth, so a rule the UI enforces alone is a
 /// rule a hand-edit silently breaks.
 ///
+///   * **Ids are well-formed.** An id is the tree the step writes, so
+///     it has to be a usable relative path: non-empty segments from the
+///     portable filename character set, no `.`/`..`, no leading `-`.
 ///   * **Ids are unique.** They key the persisted scheduler state
 ///     (`DagState.steps`, a map), so two entries sharing an id get one
 ///     bookkeeping slot between them and clobber each other's
 ///     up-to-date bookkeeping in turn — while both still run, against
-///     the same declared outputs. TOML cannot enforce this for us
+///     the same tree. Since a step's id *is* its output tree, this is
+///     also the single-writer rule. TOML cannot enforce it for us,
 ///     since `[[steps]]` is an array.
-///   * **Stanza names aren't reserved.** See
-///     [`RESERVED_STANZA_NAMES`].
-///   * **Nothing writes under `system/`.** That tree is the server's
-///     and the runner's own state (`system/dag_state.json`,
-///     `system/jobs.doltlite_db`, the job logs); a step claiming an
-///     artifact there would put the scheduler's bookkeeping under its
-///     own change detection.
+///   * **Nothing writes under `system/`.** See [`SYSTEM_DIR`].
+///
+/// Inputs are checked in [`crate::Graph::build`], which is where the
+/// full set of ids is indexed.
 pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
     let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
     for e in &cfg.steps {
-        if seen.insert(e.id.as_str(), ()).is_some() {
+        let id = e.id.as_str();
+        if id.is_empty() || !id.split('/').all(valid_id_segment) {
             bail!(
-                "step {:?}: duplicate id. Step ids key the scheduler's persisted state, so two \
-                 steps sharing one would overwrite each other's bookkeeping. Give each source a \
-                 distinct name.",
-                e.id
+                "step {id:?}: an id is the directory the step writes, so every `/`-separated \
+                 segment must be a portable filename — letters, digits, `.`, `_`, `-`, not \
+                 starting with `-`, and never `.` or `..`."
             );
         }
-        for out in &e.outputs {
-            let mut segments = out.split('/');
-            let Some(first) = segments.next() else {
-                continue;
-            };
-            if first == SYSTEM_DIR {
-                bail!(
-                    "step {:?}: output {:?} is under {:?}, which is reserved for the runner's \
-                     and the server's own state.",
-                    e.id,
-                    out,
-                    SYSTEM_DIR
-                );
-            }
-            // A source stanza is what `<name>/raw` and
-            // `<name>/rendered_md` identify; the aggregate index trees
-            // legitimately live under a reserved name
-            // (`unified_index/grid`), so only the stanza-shaped outputs
-            // are refused.
-            let rest: Vec<&str> = segments.collect();
-            if RESERVED_STANZA_NAMES.contains(&first)
-                && rest.len() == 1
-                && STANZA_OUTPUT_SUFFIXES.contains(&rest[0])
-            {
-                bail!(
-                    "step {:?}: output {:?} would make {:?} a source name, but that is a \
-                     reserved top-level directory. Rename the source.",
-                    e.id,
-                    out,
-                    first
-                );
-            }
+        if seen.insert(id, ()).is_some() {
+            bail!(
+                "step {id:?}: duplicate id. A step's id is both its bookkeeping key and the \
+                 tree it writes, so two steps sharing one would overwrite each other's state \
+                 and each other's output. Give each step a distinct id."
+            );
+        }
+        if id == SYSTEM_DIR || id.starts_with(&format!("{SYSTEM_DIR}/")) {
+            bail!(
+                "step {id:?}: writes under {SYSTEM_DIR:?}, which is reserved for the runner's \
+                 and the server's own state."
+            );
         }
     }
     Ok(())
@@ -337,10 +366,12 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
             argv.push("--inputs".to_string());
             argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
         }
-        if !e.outputs.is_empty() {
-            argv.push("--outputs".to_string());
-            argv.push(serde_json::to_string(&e.outputs).expect("string vec → JSON"));
-        }
+        // The step protocol is unchanged: a child still receives
+        // `--outputs`, now with the single tree its id names. Steps
+        // written against the old contract keep working without
+        // knowing the config stopped declaring it.
+        argv.push("--outputs".to_string());
+        argv.push(serde_json::to_string(&[&e.id]).expect("string vec → JSON"));
         let mut spec = StepSpec::new(
             &e.id,
             StepRun::Subprocess {
@@ -351,11 +382,7 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
         spec.code_version = e.code_version.clone();
         for i in &e.inputs {
             spec.inputs
-                .push(crate::ArtifactPat::parse(i).with_context(|| format!("step {:?}", e.id))?);
-        }
-        for o in &e.outputs {
-            spec.outputs
-                .push(crate::ArtifactPat::parse(o).with_context(|| format!("step {:?}", e.id))?);
+                .push(crate::ArtifactPath::parse(i).with_context(|| format!("step {:?}", e.id))?);
         }
         specs.push(spec);
     }
@@ -569,9 +596,8 @@ mod tests {
             let cfg: DagConfig = toml::from_str(&format!(
                 r#"
                 [[steps]]
-                id = "slack.render"
+                id = "slack/rendered_md"
                 inputs = ["slack/raw"]
-                outputs = ["slack/rendered_md"]
                 command = "datalib-step render slack_api"
                 {line}
                 "#
@@ -602,8 +628,7 @@ mod tests {
             let cfg: DagConfig = toml::from_str(&format!(
                 r#"
                 [[steps]]
-                id = "slack.download"
-                outputs = ["slack/raw"]
+                id = "slack/raw"
                 command = "datalib-step download slack_api"
                 params.sync = {{ since = "{since}" }}
                 "#
@@ -622,22 +647,19 @@ mod tests {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[steps]]
-            id = "slack.download"
-            outputs = ["slack/raw"]
+            id = "slack/raw"
             command = "datalib-step download slack_api"
             params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
-            id = "slack.render"
+            id = "slack/rendered_md"
             inputs = ["slack/raw"]
-            outputs = ["slack/rendered_md"]
             command = "datalib-step render slack_api"
             params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
-            id = "grid_index"
-            inputs = ["**/rendered_md"]
-            outputs = ["unified_index/grid"]
+            id = "unified_index/grid"
+            inputs = ["slack/rendered_md"]
             command = "datalib-step grid_index"
             "#,
         )
@@ -654,7 +676,9 @@ mod tests {
         assert_eq!(dl[3], "--params");
         let params: serde_json::Value = serde_json::from_str(&dl[4]).unwrap();
         assert_eq!(params["sync"]["channels"][0], "chat-qi");
-        // No inputs declared → no --inputs; outputs follow params.
+        // No inputs declared → no --inputs. `--outputs` is still sent,
+        // now derived from the id, so a step written against the old
+        // contract keeps working.
         assert_eq!(&dl[5..], &["--outputs", r#"["slack/raw"]"#]);
 
         // TOML has no anchors, so the render step repeats the subtree —
@@ -679,15 +703,15 @@ mod tests {
                 "datalib-step",
                 "grid_index",
                 "--inputs",
-                r#"["**/rendered_md"]"#,
+                r#"["slack/rendered_md"]"#,
                 "--outputs",
                 r#"["unified_index/grid"]"#
             ]
         );
 
-        // The graph derives as expected from the declared artifacts.
+        // Edges are the declared inputs, nothing more.
         let g = crate::Graph::build(specs).unwrap();
-        assert_eq!(g.deps[g.by_id["grid_index"]].len(), 1);
+        assert_eq!(g.deps[g.by_id["unified_index/grid"]].len(), 1);
     }
 
     #[test]
@@ -695,8 +719,7 @@ mod tests {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[steps]]
-            id = "custom"
-            outputs = ["custom/out"]
+            id = "custom/out"
             command = """sh -c 'echo "hi there" > custom/out/x.txt'"""
             "#,
         )
@@ -716,87 +739,164 @@ mod tests {
 
     #[test]
     fn bad_commands_are_rejected() {
-        let cfg: DagConfig = toml::from_str(
-            r#"steps = [{id = "x", outputs = ["x/raw"], command = "unbalanced '"}]"#,
-        )
-        .unwrap();
+        let cfg: DagConfig =
+            toml::from_str(r#"steps = [{id = "x/raw", command = "unbalanced '"}]"#).unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("unbalanced quoting"), "{err}");
 
-        let cfg: DagConfig =
-            toml::from_str(r#"steps = [{id = "x", outputs = ["x/raw"], command = ""}]"#).unwrap();
+        let cfg: DagConfig = toml::from_str(r#"steps = [{id = "x/raw", command = ""}]"#).unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("empty command"), "{err}");
+    }
+
+    /// The whole point of `name`: it is not part of what the step is,
+    /// so renaming one cannot make it stale. If this ever fails, every
+    /// rename in the UI silently re-runs a download.
+    #[test]
+    fn a_name_changes_neither_argv_nor_fingerprint() {
+        let bare: DagConfig = toml::from_str(
+            r#"steps = [{id = "slack/raw", command = "datalib-step download slack_api"}]"#,
+        )
+        .unwrap();
+        let named: DagConfig = toml::from_str(
+            r#"steps = [{id = "slack/raw", name = "Work Slack", command = "datalib-step download slack_api"}]"#,
+        )
+        .unwrap();
+        assert_eq!(named.steps[0].name.as_deref(), Some("Work Slack"));
+
+        let bare = to_specs(&bare).unwrap();
+        let named = to_specs(&named).unwrap();
+        match (&bare[0].run, &named[0].run) {
+            (StepRun::Subprocess { argv: a, .. }, StepRun::Subprocess { argv: b, .. }) => {
+                assert_eq!(a, b, "a name must not reach the child's argv")
+            }
+            other => panic!("expected subprocesses, got {other:?}"),
+        }
+        assert_eq!(
+            bare[0].fingerprint_material(),
+            named[0].fingerprint_material()
+        );
     }
 
     #[test]
     fn rejects_duplicate_step_ids() {
         let cfg: DagConfig = toml::from_str(
             r#"steps = [
-                 {id = "slack.download", command = "a", outputs = ["slack/raw"]},
-                 {id = "slack.download", command = "b", outputs = ["slack2/raw"]},
+                 {id = "slack/raw", command = "a"},
+                 {id = "slack/raw", command = "b"},
                ]"#,
         )
         .unwrap();
         let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("duplicate id"), "{err}");
+        // Same rule, said the other way: two steps writing one tree.
+        assert!(err.contains("tree it writes"), "{err}");
     }
 
-    /// Two sources with the same *name* collide through their step ids,
-    /// which is the shape the UI's "Add Data Source" will produce if it
-    /// ever defaults a name twice.
+    /// Two sources of the same type, which is what "Add Data Source"
+    /// produces the second time someone connects a Slack workspace.
     #[test]
     fn distinct_ids_are_fine() {
         let cfg: DagConfig = toml::from_str(
             r#"steps = [
-                 {id = "slack.download", command = "a", outputs = ["slack/raw"]},
-                 {id = "slack2.download", command = "b", outputs = ["slack2/raw"]},
+                 {id = "slack/raw", command = "a"},
+                 {id = "slack-2/raw", command = "b"},
                ]"#,
         )
         .unwrap();
         to_specs(&cfg).expect("distinct ids must pass");
     }
 
+    /// Sharing a stem is not sharing a tree: a download and a render
+    /// step sit side by side under one directory and are two distinct
+    /// steps, which is the whole layout.
     #[test]
-    fn rejects_outputs_under_system() {
-        let cfg: DagConfig =
-            toml::from_str(r#"steps = [{id = "x", command = "a", outputs = ["system/state"]}]"#)
-                .unwrap();
-        let err = to_specs(&cfg).unwrap_err().to_string();
-        assert!(err.contains("reserved"), "{err}");
-    }
-
-    #[test]
-    fn rejects_a_source_stanza_named_after_a_reserved_dir() {
-        for out in ["unified_index/raw", "unified_index/rendered_md"] {
-            let cfg: DagConfig = toml::from_str(&format!(
-                r#"steps = [{{id = "x", command = "a", outputs = ["{out}"]}}]"#
-            ))
-            .unwrap();
-            let err = to_specs(&cfg).unwrap_err().to_string();
-            assert!(err.contains("reserved top-level directory"), "{out}: {err}");
-        }
-    }
-
-    /// The aggregate index steps legitimately write under a reserved
-    /// name — they are not source stanzas, so the check must let them
-    /// through. This is the regression that a blanket prefix ban would
-    /// cause.
-    #[test]
-    fn allows_the_real_index_step_outputs() {
+    fn a_shared_stem_is_not_a_collision() {
         let cfg: DagConfig = toml::from_str(
             r#"steps = [
-                 {id = "grid_index", command = "a", inputs = ["**/rendered_md"], outputs = ["unified_index/grid"]},
-                 {id = "qmd_index", command = "b", inputs = ["**/rendered_md"], outputs = ["unified_index/qmd"]},
+                 {id = "slack/raw", command = "a"},
+                 {id = "slack/rendered_md", command = "b", inputs = ["slack/raw"]},
                ]"#,
         )
         .unwrap();
-        to_specs(&cfg).expect("index steps must remain valid");
+        let specs = to_specs(&cfg).expect("siblings must pass");
+        crate::Graph::build(specs).expect("siblings must graph");
+    }
+
+    /// An id becomes a directory, so it has to be able to be one.
+    #[test]
+    fn rejects_ids_that_cannot_be_directories() {
+        for id in ["", "a//b", "a/../b", "./a", "-lead", "a/b c", "star*"] {
+            let cfg: DagConfig =
+                toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
+            assert!(
+                to_specs(&cfg).is_err(),
+                "{id:?} should be rejected as a step id"
+            );
+        }
+        for id in ["a", "a/b", "a/b/c", "a.b/c_d-e", "slack-2/rendered_md"] {
+            let cfg: DagConfig =
+                toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
+            to_specs(&cfg).unwrap_or_else(|e| panic!("{id:?} should be a valid step id: {e}"));
+        }
+    }
+
+    /// An input is a step id. Naming a directory instead is the
+    /// mistake worth a pointed message, since it is what every
+    /// pre-phase-2 config does.
+    #[test]
+    fn rejects_an_input_that_names_no_step() {
+        let cfg: DagConfig = toml::from_str(
+            r#"steps = [{id = "slack/rendered_md", command = "a", inputs = ["slack/raw"]}]"#,
+        )
+        .unwrap();
+        let specs = to_specs(&cfg).expect("to_specs does not resolve inputs");
+        let err = crate::Graph::build(specs).unwrap_err().to_string();
+        assert!(err.contains("names no declared step"), "{err}");
+    }
+
+    #[test]
+    fn rejects_ids_under_system() {
+        for id in ["system", "system/state", "system/a/b"] {
+            let cfg: DagConfig =
+                toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
+            let err = to_specs(&cfg).unwrap_err().to_string();
+            assert!(err.contains("reserved"), "{id}: {err}");
+        }
+    }
+
+    /// `unified_index` needs no reserved-name rule any more: the index
+    /// steps' ids *are* those trees, so anything else claiming one is
+    /// an ordinary duplicate id. What must keep working is the index
+    /// steps themselves.
+    #[test]
+    fn the_index_steps_own_unified_index_by_being_it() {
+        let cfg: DagConfig = toml::from_str(
+            r#"steps = [
+                 {id = "slack/rendered_md", command = "r"},
+                 {id = "unified_index/grid", command = "a", inputs = ["slack/rendered_md"]},
+                 {id = "unified_index/qmd", command = "b", inputs = ["slack/rendered_md"]},
+               ]"#,
+        )
+        .unwrap();
+        let specs = to_specs(&cfg).expect("index steps must remain valid");
+        crate::Graph::build(specs).expect("index steps must graph");
+
+        // And a second claimant is refused as a duplicate, with no
+        // special-case list involved.
+        let clash: DagConfig = toml::from_str(
+            r#"steps = [
+                 {id = "unified_index/grid", command = "a"},
+                 {id = "unified_index/grid", command = "b"},
+               ]"#,
+        )
+        .unwrap();
+        assert!(to_specs(&clash).is_err());
     }
 
     #[test]
     fn missing_command_is_rejected_at_parse() {
-        let err = toml::from_str::<DagConfig>(r#"steps = [{id = "x", outputs = ["x/out"]}]"#)
+        let err = toml::from_str::<DagConfig>(r#"steps = [{id = "x/out"}]"#)
             .unwrap_err()
             .to_string();
         assert!(err.contains("command"), "{err}");
@@ -810,8 +910,7 @@ mod tests {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[steps]]
-            id = "x"
-            outputs = ["x/raw"]
+            id = "x/raw"
             command = "s"
             params.sync = {since = 2026-06-15, at = 2026-06-15T10:30:00Z}
             "#,

@@ -101,6 +101,25 @@ pub struct UserRow {
 /// top-level `updated` epoch on every user object; it churns across
 /// re-fetches without reflecting a state change, so it must not live in
 /// the content payload that drives `dolt_diff_users`.
+///
+/// **Known gap, deliberately not fixed: `profile.status_*`.** A user's
+/// Slack status — `status_text`, `status_emoji`, `status_expiration`,
+/// `status_emoji_display_info` — is per-fetch state of the same kind as
+/// `updated`, and it is still in the content payload. Nothing reads it
+/// (`render::User::label` uses `real_name` / `name`), so when a
+/// colleague sets or clears a status it produces a `dolt_diff_users`
+/// change and a re-render that carry no information.
+///
+/// It also breaks the manual-e2e golden's `--reset-and-redownload`
+/// stability check, which asserts that re-fetching unchanged upstream
+/// objects lands identical bytes — observed 2026-08-31, when someone's
+/// "In a meeting" status cleared partway through a bake.
+///
+/// Left alone because it is rare (it needs a status change inside the
+/// ~90s a bake takes) and harmless when it happens: a spurious
+/// re-render, not wrong data. If it starts costing bake reruns, the fix
+/// is to add those four paths here — `split_volatile` already walks
+/// nested paths, so `&["profile", "status_text"]` works as written.
 pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
 
 /// `channels` — one row per Slack chat surface: public channel,
@@ -113,7 +132,18 @@ pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
 /// are an implementation detail of where the payload came from.
 ///
 /// Columns: `name`, `is_member`, `is_archived` drive the
-/// listing filter and per-channel-sweep TTL; full payload retained.
+/// listing filter and per-channel-sweep TTL; `is_dm` / `dm_user_id`
+/// do the same for the DM half. Full payload retained.
+///
+/// **A DM answers a different set of columns.** Checked against the
+/// live API (2026-08-31): an `im` carries `user`, `is_archived` and
+/// `is_user_deleted`, but no `name` and — the load-bearing gap — no
+/// `is_member`, so the `members_only` predicate that selects channels
+/// rejects every 1:1 DM. `is_dm` keeps the two populations apart in
+/// one table: the `is_member` predicate runs only against `is_dm = 0`.
+///
+/// The new columns are added to already-existing stores by
+/// [`datalib_etl::doltlite_raw::open`]'s schema reconcile.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "channels")]
 pub struct ChannelRow {
@@ -123,6 +153,93 @@ pub struct ChannelRow {
     //FIXME: define is_member (of what?)
     pub is_member: Option<i64>,
     pub is_archived: Option<i64>,
+    /// 1 for a direct message surface — `is_im` (1:1) or `is_mpim`
+    /// (group DM). 0 for a public or private channel.
+    pub is_dm: Option<i64>,
+    /// Who is in this DM, comma-joined, exactly as Slack listed them:
+    /// an `im`'s single `user`, or an `mpim`'s `members` array (which
+    /// *does* include the account itself). NULL for a channel.
+    ///
+    /// One column rather than an `im` field and an `mpim` field,
+    /// because both surfaces answer the same two questions — is this a
+    /// conversation with someone on the `dm_users` allowlist, and whose
+    /// names title it — and a single participant list answers both for
+    /// either shape. Self is subtracted at read time via
+    /// [`dm_counterparts`] rather than at write time, so the column
+    /// stays a faithful copy of the wire.
+    pub dm_user_ids: Option<String>,
+}
+
+/// Split [`ChannelRow::dm_user_ids`] back into participant ids.
+pub fn parse_dm_user_ids(joined: Option<&str>) -> Vec<String> {
+    joined
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Join participant ids for [`ChannelRow::dm_user_ids`].
+pub fn join_dm_user_ids(ids: &[String]) -> Option<String> {
+    if ids.is_empty() {
+        None
+    } else {
+        Some(ids.join(","))
+    }
+}
+
+/// The people in a DM other than the account doing the mirroring.
+///
+/// An `mpim`'s `members` includes you; an `im`'s `user` does not. Both
+/// are stored verbatim, so this is where the difference is reconciled —
+/// once, for the allowlist and the display label alike. Falls back to
+/// the full list when subtracting self would leave nothing, which is a
+/// real case: a DM with yourself.
+pub fn dm_counterparts(participants: &[String], self_user_id: Option<&str>) -> Vec<String> {
+    let Some(me) = self_user_id else {
+        return participants.to_vec();
+    };
+    let others: Vec<String> = participants.iter().filter(|u| *u != me).cloned().collect();
+    if others.is_empty() {
+        participants.to_vec()
+    } else {
+        others
+    }
+}
+
+/// What to call a DM: `@` plus the people in it — `@Jean-Luc Picard`,
+/// or `@William Riker, Data` for a group.
+///
+/// Shared by the downloader (progress lines, logs) and the renderer
+/// (document titles, the grid's `conversation_name`) so the two can't
+/// drift — a DM announced as one thing while syncing and titled
+/// another once rendered reads as two different conversations.
+///
+/// `counterparts` comes from [`dm_counterparts`]; `labels` maps user id
+/// → display name. The fallbacks matter: `name` is Slack's own
+/// `mpdm-…` handle, and it is not split back into people because a
+/// Slack handle may itself contain dashes. Reaching `channel_id` means
+/// a store written before `dm_user_ids` existed, or a DM with someone
+/// `users.list` didn't return.
+pub fn dm_display_name(
+    counterparts: &[String],
+    name: Option<&str>,
+    channel_id: &str,
+    labels: &std::collections::BTreeMap<String, String>,
+) -> String {
+    if !counterparts.is_empty() {
+        let names: Vec<&str> = counterparts
+            .iter()
+            .map(|u| labels.get(u).map(String::as_str).unwrap_or(u.as_str()))
+            .collect();
+        return format!("@{}", names.join(", "));
+    }
+    match name {
+        Some(n) => format!("@{n}"),
+        None => channel_id.to_string(),
+    }
 }
 
 /// Per-fetch volatile fields split out of the `channels` content

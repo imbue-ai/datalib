@@ -52,10 +52,12 @@ fn renders_tng_fixture() {
         &mut on_done,
     )
     .expect("render");
-    assert_eq!(summary.threads_total, 6);
-    assert_eq!(summary.threads_rendered, 6);
+    // 6 channel threads + 5 DM threads (two 1:1 DMs and a group DM;
+    // each standalone message is its own thread bucket).
+    assert_eq!(summary.threads_total, 11);
+    assert_eq!(summary.threads_rendered, 11);
     assert_eq!(summary.threads_skipped, 0);
-    assert_eq!(completed, 6);
+    assert_eq!(completed, 11);
 
     let md_tree = collect_md(tmp.path());
     let mut bundle = String::new();
@@ -81,7 +83,8 @@ fn renders_tng_fixture() {
         }
     }
     walk(tmp.path(), &mut sidecar_paths);
-    assert_eq!(sidecar_paths.len(), 6);
+    // One sidecar per rendered thread — see the count above.
+    assert_eq!(sidecar_paths.len(), 11);
     let one: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&sidecar_paths[0]).unwrap()).unwrap();
     assert!(one

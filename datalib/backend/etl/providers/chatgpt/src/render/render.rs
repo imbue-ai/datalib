@@ -26,8 +26,7 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, ItemSourceRef, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc,
+    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 
 use super::ids;
@@ -179,7 +178,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
-            source_ref: Some(ItemSourceRef::new(
+            source_ref: Some(UpstreamRef::new(
                 msg_id.entity_kind,
                 msg_id.natural_key.clone(),
             )),
@@ -203,7 +202,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         // to chatgpt.com now that `uuid` is a minted v5.
         external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
-        source_scope: None,
+        upstream_scope: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

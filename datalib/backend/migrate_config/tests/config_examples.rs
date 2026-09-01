@@ -1,6 +1,6 @@
-//! Parse-and-validate the checked-in example configs under
-//! `docs/user/config_examples/`, which are in the current TOML steps
-//! format.
+//! Parse-and-validate the checked-in example configs — those under
+//! `docs/user/config_examples/` plus `configs/dag_example.toml` — which
+//! are in the current TOML steps format.
 //!
 //! This test lives in the migration crate for one reason: `SourceConfig`
 //! does. The stanza envelope around it is retired, but its `type:`-tagged
@@ -28,12 +28,12 @@
 
 use datalib_migrate_config::legacy_stanza::SourceConfig;
 
-/// Resolve a `docs/user/config_examples/<name>` file from the test's runfiles
-/// tree (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles
+/// Resolve a repo-relative config file from the test's runfiles tree
+/// (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles
 /// lookup in `fixture_db_snapshot.rs`.
-fn example_config(name: &str) -> std::path::PathBuf {
+fn example_config(repo_rel: &str) -> std::path::PathBuf {
     let r = runfiles::Runfiles::create().expect("runfiles tree");
-    let rel = format!("_main/docs/user/config_examples/{name}");
+    let rel = format!("_main/{repo_rel}");
     let path = r
         .rlocation(&rel)
         .unwrap_or_else(|| panic!("rlocation for {rel}"));
@@ -135,7 +135,15 @@ fn validate_config(name: &str, path: &std::path::Path) {
 
 #[test]
 fn example_configs_parse_and_validate() {
-    for name in ["sample_config.toml", "claude_only.toml", "all_sources.toml"] {
+    for name in [
+        "docs/user/config_examples/sample_config.toml",
+        "docs/user/config_examples/claude_only.toml",
+        "docs/user/config_examples/all_sources.toml",
+        // The walkthrough config AGENTS.md sends people to. It is not
+        // under docs/, and it was outside this test until a `label =`
+        // key landed in it.
+        "configs/dag_example.toml",
+    ] {
         validate_config(name, &example_config(name));
     }
 }

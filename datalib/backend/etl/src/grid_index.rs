@@ -530,9 +530,9 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
         push(&mut h, r.source_url.as_deref());
         push(&mut h, r.slack_link.as_deref());
         push(&mut h, r.git_sha.as_deref());
-        push(&mut h, r.source_native_id.as_deref());
-        push(&mut h, r.source_entity_kind.as_deref());
-        push(&mut h, r.source_scope.as_deref());
+        push(&mut h, r.upstream_id.as_deref());
+        push(&mut h, r.upstream_entity_kind.as_deref());
+        push(&mut h, r.upstream_scope.as_deref());
         push(&mut h, r.notion_page_uuid.as_deref());
         push(&mut h, r.notion_block_uuid.as_deref());
     }
@@ -994,8 +994,8 @@ async fn insert_grid_row(
         "INSERT INTO grid_rows \
          (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, author, account, \
           project, channel, conversation_name, conversation_uuid, message_index, entire_chat, text, \
-          slack_link, qmd_path, source_url, git_sha, source_native_id, source_entity_kind, \
-          source_scope, notion_page_uuid, notion_block_uuid, \
+          slack_link, qmd_path, source_url, git_sha, upstream_id, upstream_entity_kind, \
+          upstream_scope, notion_page_uuid, notion_block_uuid, \
           markdown_uuid) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -1019,9 +1019,9 @@ async fn insert_grid_row(
     .bind(&row.qmd_path)
     .bind(&row.source_url)
     .bind(&row.git_sha)
-    .bind(&row.source_native_id)
-    .bind(&row.source_entity_kind)
-    .bind(&row.source_scope)
+    .bind(&row.upstream_id)
+    .bind(&row.upstream_entity_kind)
+    .bind(&row.upstream_scope)
     .bind(&row.notion_page_uuid)
     .bind(&row.notion_block_uuid)
     .bind(&row.markdown_uuid)
@@ -1098,9 +1098,9 @@ mod id_claim_tests {
             qmd_path: None,
             source_url: None,
             git_sha: None,
-            source_native_id: None,
-            source_entity_kind: None,
-            source_scope: None,
+            upstream_id: None,
+            upstream_entity_kind: None,
+            upstream_scope: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(markdown_uuid.into()),
@@ -1239,9 +1239,9 @@ mod write_lock_tests {
             qmd_path: Some(format!("chats/{uuid}.md")),
             source_url: None,
             git_sha: None,
-            source_native_id: None,
-            source_entity_kind: None,
-            source_scope: None,
+            upstream_id: None,
+            upstream_entity_kind: None,
+            upstream_scope: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(uuid.clone()),

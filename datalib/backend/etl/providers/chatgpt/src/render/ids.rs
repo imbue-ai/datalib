@@ -32,7 +32,7 @@ pub const KIND_MESSAGE: &str = "message";
 
 /// An entity's identity: the id we mint, and the upstream natural key
 /// it was minted from. See `anthropic::render::ids::Identity` — the
-/// pairing exists so `source_native_id` and `uuid` cannot drift apart.
+/// pairing exists so `upstream_id` and `uuid` cannot drift apart.
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub uuid: String,
@@ -80,7 +80,7 @@ mod tests {
         }
     }
 
-    /// `source_native_id` must regenerate `uuid`; see the equivalent
+    /// `upstream_id` must regenerate `uuid`; see the equivalent
     /// test in the anthropic ids module.
     #[test]
     fn natural_key_regenerates_the_uuid() {

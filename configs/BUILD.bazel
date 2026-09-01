@@ -1,1 +1,9 @@
-# No exported configs. (Per-user sample configs are kept out of the repo.)
+# `dag_example.toml` is exported so
+# //datalib/backend/migrate_config:config_examples_test can hold it to
+# the same bar as the examples under docs/user/config_examples/: it must
+# load and graph-build like the runner would, and its params must match
+# the provider schemas. It is the file AGENTS.md points at for "a
+# complete, commented steps-format config", and it documented an applet
+# `title` key nothing read for months (00633dd5) — an example config
+# nothing parses is a doc that drifts.
+exports_files(["dag_example.toml"])

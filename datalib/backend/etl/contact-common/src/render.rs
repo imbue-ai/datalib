@@ -333,7 +333,7 @@ fn build_grid_row(
         .text(text)
         .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
-        .source_native_id(contact.external_id.clone())
+        .upstream_id(contact.external_id.clone())
         .markdown_uuid(Some(contact.contact_uuid.clone()))
         .build()
         .map_err(anyhow::Error::from)

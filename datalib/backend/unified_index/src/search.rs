@@ -31,7 +31,21 @@ pub struct SearchRow {
     /// the upstream payload didn't carry one.
     pub org_name: String,
     pub entire_chat: String,
+    /// The provider's human label ("Slack", "Claude") — a property of
+    /// the source *type*, not of the configured source. Two Slack
+    /// workspaces both say "Slack" here; `source_name` is what tells
+    /// them apart.
     pub source: String,
+    /// The configured source this row came from: the first path segment
+    /// of the row's `qmd_path`, which is the stanza directory under the
+    /// data root and the name the config gives it (`slack/raw` →
+    /// `slack`). Empty when the row carries no `qmd_path`.
+    ///
+    /// The *label* a person put on that source in `config.toml` is
+    /// deliberately not here. It is config, mutable at any time, and the
+    /// index has never read the config — baking it in would mean
+    /// re-indexing on every relabel. The UI joins the two by this name.
+    pub source_name: String,
     pub kind: String,
     pub author: String,
     /// Slack channel display name for Slack rows; empty otherwise.
@@ -47,7 +61,7 @@ pub struct SearchRow {
     /// otherwise. Used by right-click "Filter by Notion Page".
     pub notion_page_uuid: String,
     /// The upstream's own id for this entity, verbatim from the
-    /// `source_native_id` grid_rows column. Empty when the producer
+    /// `upstream_id` grid_rows column. Empty when the producer
     /// didn't set one (a provider not yet ported onto `datalib_id`).
     ///
     /// This is what the grid's "Copy source ID(s)" action puts on the
@@ -61,13 +75,13 @@ pub struct SearchRow {
     /// For Perseus this is the locator path (`"1"`, `"1.2"`, `"1.2.3"`
     /// for book / chapter / section), which the scaife control panel
     /// parses to build its book→chapter→section tree.
-    pub source_native_id: String,
+    pub upstream_id: String,
     /// What sort of upstream thing the row is, in the provider's own
     /// vocabulary (`"conversation"`, `"tool_use"`, `"pr"`). Empty when
     /// the producer didn't set one. Disambiguates
-    /// `source_native_id` — a bare `12345` is ambiguous between a
+    /// `upstream_id` — a bare `12345` is ambiguous between a
     /// GitHub review and a review comment.
-    pub source_entity_kind: String,
+    pub upstream_entity_kind: String,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for pure structured queries (no free text) and for the SQL-LIKE
     /// fallback path. Surfaced to the UI as a sortable "Score" column.

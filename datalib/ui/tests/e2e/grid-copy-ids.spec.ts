@@ -5,7 +5,7 @@ import { contextMenuRowByUuid, stubClipboard } from "./grid-helpers";
 // which one they got.
 //
 // `grid_rows.uuid` is ours: it resolves inside datalib (chat URLs,
-// `feedback.target_uuids`, `id:` filters). `source_native_id` is the
+// `feedback.target_uuids`, `id:` filters). `upstream_id` is the
 // upstream's: it resolves at claude.ai, in the GitHub API, in
 // `conversations.replies`. They are usually BOTH UUID-ish strings, so
 // nothing about the copied text tells you which space it belongs to —
@@ -23,7 +23,7 @@ import { contextMenuRowByUuid, stubClipboard } from "./grid-helpers";
 
 type Row = {
   uuid: string;
-  source_native_id: string;
+  upstream_id: string;
   provider: string;
   kind: string;
 };
@@ -49,11 +49,11 @@ test("a row with an upstream id offers both copies, and they differ", async ({
   // "they differ" assertion below could pass for the wrong reason on a
   // provider that still passes the upstream id through.
   const row = all.find(
-    (r) => r.source_native_id && r.source_native_id !== r.uuid,
+    (r) => r.upstream_id && r.upstream_id !== r.uuid,
   );
   expect(
     row,
-    "fixture must contain a row whose source_native_id differs from its uuid " +
+    "fixture must contain a row whose upstream_id differs from its uuid " +
       "(slack threads carry `{channel_id}:{ts}` against a v5 uuid)",
   ).toBeTruthy();
 
@@ -67,12 +67,12 @@ test("a row with an upstream id offers both copies, and they differ", async ({
   await contextMenuRowByUuid(page, row!.uuid);
 
   await expect(menuItem(page, /^Copy UUID$/)).toBeVisible();
-  await expect(menuItem(page, /^Copy source ID$/)).toBeVisible();
+  await expect(menuItem(page, /^Copy upstream ID$/)).toBeVisible();
 
-  await menuItem(page, /^Copy source ID$/).click();
+  await menuItem(page, /^Copy upstream ID$/).click();
   await expect
-    .poll(readClipboard, { message: "clipboard after Copy source ID" })
-    .toBe(row!.source_native_id);
+    .poll(readClipboard, { message: "clipboard after Copy upstream ID" })
+    .toBe(row!.upstream_id);
 
   // ...and the other action still yields OUR id, not the upstream one.
   await contextMenuRowByUuid(page, row!.uuid);
@@ -82,7 +82,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({
     .toBe(row!.uuid);
 });
 
-test("a row with no upstream id hides the source-id action", async ({
+test("a row with no upstream id hides the upstream-id action", async ({
   page,
   request,
 }) => {
@@ -91,10 +91,10 @@ test("a row with no upstream id hides the source-id action", async ({
   // the per-provider `datalib_id` port. When that lands and every row
   // has one, this test should start failing to find a subject; delete
   // it then rather than weakening it.
-  const row = all.find((r) => !r.source_native_id);
+  const row = all.find((r) => !r.upstream_id);
   expect(
     row,
-    "fixture must contain a row with no source_native_id",
+    "fixture must contain a row with no upstream_id",
   ).toBeTruthy();
 
   await page.goto("/");
@@ -106,5 +106,5 @@ test("a row with no upstream id hides the source-id action", async ({
   await contextMenuRowByUuid(page, row!.uuid);
   await expect(menuItem(page, /^Copy UUID$/)).toBeVisible();
   // A menu item that silently copies nothing is worse than no item.
-  await expect(menuItem(page, /^Copy source ID$/)).toHaveCount(0);
+  await expect(menuItem(page, /^Copy upstream ID$/)).toHaveCount(0);
 });

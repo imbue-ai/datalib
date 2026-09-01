@@ -88,8 +88,8 @@ NON_UUID_PK_PROVIDERS: frozenset[str] = frozenset()
 # one. Asserting `entity_id(...) == uuid` by invoking the same function
 # that produced the uuid proves only that the function is
 # deterministic. Recomputing it here from the columns the renderer
-# stored pins the actual contract: that `source_native_id` and
-# `source_entity_kind` really are the inputs `uuid` was derived from,
+# stored pins the actual contract: that `upstream_id` and
+# `upstream_entity_kind` really are the inputs `uuid` was derived from,
 # and that the wire format hasn't drifted. A renderer that stamps a
 # plausible-looking but wrong backpointer fails here and nowhere else.
 #
@@ -101,7 +101,7 @@ ID_SEP = "\x1f"
 
 # Which `Scope` variant each ported provider mints under. Scope is a
 # provider-level design decision, not a per-row one, so a table is the
-# right shape — and it has to live here because `source_scope` is NULL
+# right shape — and it has to live here because `upstream_scope` is NULL
 # for both `ProviderGlobal` and `Content`, making the two
 # indistinguishable from the row alone.
 #
@@ -371,8 +371,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Ported rows whose backpointer does not regenerate their uuid.
 
         For every row from a provider in `SCOPE_TAG_BY_PROVIDER`,
-        recompute `entity_id(provider, scope, source_entity_kind,
-        source_native_id)` and compare to the stored `uuid`. A mismatch
+        recompute `entity_id(provider, scope, upstream_entity_kind,
+        upstream_id)` and compare to the stored `uuid`. A mismatch
         means the backpointer is decorative — it names something that
         would not produce this row — and the round-trip back to the
         upstream API is broken in a way nothing else would notice,
@@ -380,8 +380,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         rows = self._query(
             self._index_db,
-            "SELECT provider, uuid, IFNULL(source_entity_kind, ''), "
-            "       IFNULL(source_native_id, ''), IFNULL(source_scope, '') "
+            "SELECT provider, uuid, IFNULL(upstream_entity_kind, ''), "
+            "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, '') "
             "FROM grid_rows "
             f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
             "ORDER BY uuid;",
@@ -392,20 +392,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if not entity_kind or not native_id:
                 failures.append(
                     f"{provider} {row_uuid}: ported provider left "
-                    f"source_entity_kind={entity_kind!r} "
-                    f"source_native_id={native_id!r}"
+                    f"upstream_entity_kind={entity_kind!r} "
+                    f"upstream_id={native_id!r}"
                 )
                 continue
             scope_tag, scope_val = SCOPE_TAG_BY_PROVIDER[provider]
             # An `Upstream` scope's value is per-row, so the table
             # stores None and the row supplies it. A ported provider
-            # that scopes upstream but leaves `source_scope` empty is
+            # that scopes upstream but leaves `upstream_scope` empty is
             # itself the bug.
             if scope_val is None:
                 if not row_scope:
                     failures.append(
                         f"{provider} {row_uuid}: upstream-scoped but "
-                        f"source_scope is empty"
+                        f"upstream_scope is empty"
                     )
                     continue
                 scope_val = row_scope
@@ -585,7 +585,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._roundtrip_failures(),
             [],
-            "a ported provider's (source_entity_kind, source_native_id) "
+            "a ported provider's (upstream_entity_kind, upstream_id) "
             "must regenerate its uuid",
         )
         # ...and every ported provider must actually have rows, or the

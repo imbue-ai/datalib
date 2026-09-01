@@ -43,6 +43,8 @@ rust_binary(
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
         "//datalib/backend/etl/providers/notion:datalib_etl_notion",
         "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
+        "//datalib/backend/etl/providers/media:datalib_etl_media",
+        "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
         "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
         "//datalib/backend/etl/providers/perseus:datalib_etl_perseus",

@@ -8,6 +8,7 @@
 //! addition — the work list already exists as a SQL query
 //! (`SELECT … WHERE needs_ocr = 1`) instead of needing a re-scan.
 
+pub mod content_hash;
 pub mod db;
 pub mod identity;
 pub mod schema_raw;
@@ -218,7 +219,10 @@ fn identify(path: &Path, size: i64, now: &str) -> Result<PdfDocumentRow> {
             .map_err(|e| anyhow::anyhow!("classify {}: {e}", path.display()))?;
 
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let ident = identity::extract(&bytes);
+    // One parse feeds both: the metadata fields and the content hash
+    // want the same `lopdf::Document`, and building it is the expensive
+    // half of each.
+    let (ident, content_blake3) = identity::extract_with_content_hash(&bytes);
 
     let kind = match det.pdf_type {
         pdf_inspector::PdfType::TextBased => PdfKind::TextBased,
@@ -250,6 +254,7 @@ fn identify(path: &Path, size: i64, now: &str) -> Result<PdfDocumentRow> {
         author: ident.author,
         doc_created_at: ident.created_at,
         doc_modified_at: ident.modified_at,
+        content_blake3,
         pdf_id_permanent: ident.pdf_id_permanent,
         xmp_document_id: ident.xmp_document_id,
         xmp_instance_id: ident.xmp_instance_id,

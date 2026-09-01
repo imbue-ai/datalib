@@ -23,12 +23,15 @@
 //! * **Provider namespace + upstream account scope** — slack, email,
 //!   github, gitlab, beeper and friends. This is the shape that was
 //!   right, and [`Scope::Upstream`] is it.
-//! * **Provider namespace + our config's `source_name`** — signal,
-//!   whatsapp, yolink, and (via a caller passing `source_name` into a
-//!   parameter literally named `account_id`) contacts. Renaming a
-//!   source in `config.toml` silently re-keys every row it ever
-//!   produced and orphans every `feedback.target_uuids` pointing at
-//!   them. [`Scope`] has no variant for this on purpose.
+//! * **Provider namespace + our config's source name** — signal,
+//!   whatsapp, yolink, and (via a caller passing it into a parameter
+//!   literally named `account_id`) contacts. When that string was also
+//!   the editable display name, renaming a source silently re-keyed
+//!   every row it ever produced. Config now has two names (#201) and
+//!   only the stable `id` reaches a renderer, so the rename hazard is
+//!   gone and [`Scope::SourceInstance`] makes this expressible — as a
+//!   last resort, since such ids are a function of configuration
+//!   rather than of data.
 //! * **Content-addressed** — pdf (blake3), perseus (canonical work
 //!   id). Deliberately source-independent, so two sources finding one
 //!   file collapse to one row. [`Scope::Content`] keeps that explicit
@@ -36,15 +39,19 @@
 //!
 //! # Why not `source_type` either
 //!
-//! Swapping `source_name` for the *type* (`"signal"`, `"yolink"`) is
-//! stable against renames but stops discriminating exactly where the
-//! discrimination was load-bearing: signal's `chat_id` is an
+//! The source *type* is already the first recipe component: `provider`
+//! is a hardcoded `&'static str` per provider (`"slack"`, `"openai"`,
+//! `"jmap"`), never a config string. So "use the type instead" was
+//! never the missing piece — the type was always there, and what was
+//! missing is instance-level discrimination.
+//!
+//! The type alone cannot supply it: signal's `chat_id` is an
 //! autoincrement local to one backup file, and yolink's `device` is a
-//! user-typed label like `"fridge"`. Two configured accounts of either
-//! type would collide on every row. What those providers need is a
-//! stable *upstream* identity — signal's own account identifier,
-//! yolink's `family_device_id` — which is what [`Scope::Upstream`]
-//! asks for.
+//! user-typed label like `"fridge"`, so two configured accounts of
+//! either type would collide on every row. That needs either a stable
+//! *upstream* identity ([`Scope::Upstream`]) or, where the entity is
+//! one datalib invented and no upstream object exists,
+//! [`Scope::SourceInstance`].
 //!
 //! # Why not mint opaque random ids
 //!
@@ -106,6 +113,30 @@ pub enum Scope<'a> {
     /// nothing extra and cannot be wrong.
     ProviderGlobal,
 
+    /// The configured source itself, identified by its **step id** —
+    /// the stable half of a source's identity, not its display name.
+    ///
+    /// For entities that have no upstream identity at all because
+    /// datalib invented them: yolink's per-source timeseries page is a
+    /// document we compose for a configured source, and there is no
+    /// YoLink-side object it corresponds to.
+    ///
+    /// This variant only became safe to offer when config grew two
+    /// names (#201). A step's `id` is path-safe, unique, and forms the
+    /// directory structure — changing it is a migration, and the
+    /// wizard makes it read-only on edit — while `name` is the free
+    /// text people retype at will and never reaches an id. Before that
+    /// split there was one editable string doing both jobs, and
+    /// scoping on it meant a rename silently re-keyed every row a
+    /// source ever produced.
+    ///
+    /// Still the last resort. Ids scoped this way are a function of
+    /// *configuration* rather than of data, so two roots ingesting the
+    /// same upstream data under different step ids get different
+    /// uuids. Reach for [`Scope::Upstream`] whenever the provider
+    /// gives you anything at all to key on.
+    SourceInstance(&'a str),
+
     /// Identity is the content itself, so two sources that find the
     /// same bytes deliberately produce one row — a PDF discovered
     /// under two scanned trees, the same canonical text from two
@@ -126,6 +157,7 @@ impl Scope<'_> {
     fn tag(&self) -> (&'static str, &str) {
         match self {
             Scope::Upstream(id) => ("up", id),
+            Scope::SourceInstance(id) => ("src", id),
             Scope::ProviderGlobal => ("pg", ""),
             Scope::Content => ("content", ""),
         }
@@ -166,14 +198,14 @@ pub fn entity_id(provider: &str, scope: Scope<'_>, entity_kind: &str, natural_ke
 /// `(channel_id, ts)` — this is how the parts are joined.
 ///
 /// Uses `#`, not the `\x1f` that separates recipe *components*,
-/// because this exact string is also what `grid_rows.source_native_id`
+/// because this exact string is also what `grid_rows.upstream_id`
 /// stores and what the grid's "Copy source ID(s)" action puts on a
 /// user's clipboard. A control character there would be user-hostile.
 ///
 /// **Feed the same string to [`entity_id`] and to
-/// `source_native_id`.** Building the key once and using it twice is
+/// `upstream_id`.** Building the key once and using it twice is
 /// what makes the round-trip
-/// (`entity_id(provider, scope, kind, source_native_id) == uuid`) hold;
+/// (`entity_id(provider, scope, kind, upstream_id) == uuid`) hold;
 /// deriving the id from one spelling and storing another produces a
 /// backpointer that looks plausible and regenerates nothing.
 /// `//tests/fixtures:ingested_tng_test` reimplements the recipe and
@@ -309,6 +341,27 @@ mod tests {
     /// A `Content`-scoped id must not collide with an `Upstream` one
     /// carrying the same string, or a content hash reused as an
     /// account label would alias.
+    /// A source-instance id is scoped to the step id, so two
+    /// configured sources of one type stay apart — the property the
+    /// bare provider type cannot give.
+    #[test]
+    fn source_instance_separates_two_configured_sources() {
+        assert_ne!(
+            entity_id(
+                "yolink",
+                Scope::SourceInstance("home-yolink"),
+                "page",
+                "timeseries"
+            ),
+            entity_id(
+                "yolink",
+                Scope::SourceInstance("cabin-yolink"),
+                "page",
+                "timeseries"
+            ),
+        );
+    }
+
     #[test]
     fn scope_variants_do_not_alias() {
         assert_ne!(
@@ -319,11 +372,17 @@ mod tests {
             entity_id("pdf", Scope::Upstream(""), "document", "abc"),
             entity_id("pdf", Scope::ProviderGlobal, "document", "abc"),
         );
+        // An upstream account id and a step id are different spaces
+        // even when they spell the same thing.
+        assert_ne!(
+            entity_id("p", Scope::Upstream("x"), "k", "n"),
+            entity_id("p", Scope::SourceInstance("x"), "k", "n"),
+        );
     }
 
     /// The invariant the fixture test enforces from the outside:
     /// whatever string goes into the recipe is the string that goes
-    /// into `source_native_id`, so recomputing from the stored columns
+    /// into `upstream_id`, so recomputing from the stored columns
     /// reproduces the id.
     #[test]
     fn a_composite_key_round_trips() {

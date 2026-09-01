@@ -184,8 +184,8 @@ pub fn rows_for_pr(
             .qmd_path(Some(qmd.clone()))
             .source_url(pr.html_url.clone())
             .git_sha(pr.head_sha.clone())
-            .source_native_id(Some(pr.pr_number.to_string()))
-            .source_entity_kind(Some(crate::render::parse::ENTITY_PR.to_string()))
+            .upstream_id(Some(pr.pr_number.to_string()))
+            .upstream_entity_kind(Some(crate::render::parse::ENTITY_PR.to_string()))
             .markdown_uuid(Some(pr.uuid.clone()))
             .build()?,
     );
@@ -208,12 +208,12 @@ pub fn rows_for_pr(
                 .qmd_path(Some(qmd.clone()))
                 .source_url(c.html_url.clone())
                 .git_sha(c.commit_id.clone())
-                .source_native_id(Some(c.external_id.to_string()))
+                .upstream_id(Some(c.external_id.to_string()))
                 // `issue_comment` / `pr_review` / `pr_review_comment` —
                 // the three live in separate GitHub API namespaces and
                 // their numeric ids overlap freely, so the bare id is
                 // not a usable backpointer without this.
-                .source_entity_kind(Some(c.section.entity().to_string()))
+                .upstream_entity_kind(Some(c.section.entity().to_string()))
                 .markdown_uuid(Some(pr.uuid.clone()))
                 .build()?,
         );

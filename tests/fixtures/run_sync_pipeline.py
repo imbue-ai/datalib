@@ -288,8 +288,7 @@ def main() -> int:
     steps: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
         # Per-phase params, as a TOML inline table. The source name
-        # isn't in either — each step derives it from its first
-        # declared output. Download gets the provider config subtree;
+        # isn't in either — each step takes it from its own id. Download gets the provider config subtree;
         # render gets only the render-side knobs (most sources: none).
         params = _toml_value(
             _source_config(
@@ -305,31 +304,36 @@ def main() -> int:
         render_params_line = (
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
+        # A step's id is the tree it writes, so there is no `outputs`.
         download_block = (
             ""
             if name in RENDER_ONLY
             else f"""[[steps]]
-id = "{name}.download"
+id = "{name}/raw"
 command = "datalib-step download {type_str}"
-outputs = ["{name}/raw"]
 params = {params}
 
 """
         )
+        # A render-only source has no download step to name, and its
+        # data is not an artifact the DAG knows about — it comes from
+        # `params.common.input_path`. So it declares no inputs, which
+        # also makes it a fringe step the runner always runs.
+        inputs_line = "" if name in RENDER_ONLY else f'\ninputs = ["{name}/raw"]'
         steps.append(
             download_block
             + f"""[[steps]]
-id = "{name}.render"
-command = "datalib-step render {type_str}"
-inputs = ["{name}/raw"]
-outputs = ["{name}/rendered_md"]{render_params_line}"""
+id = "{name}/rendered_md"
+command = "datalib-step render {type_str}"{inputs_line}{render_params_line}"""
         )
+    # The fan-in names its inputs; there is no glob to stand in for
+    # "every render step".
+    rendered = ", ".join(f'"{n}/rendered_md"' for n in sources)
     steps.append(
-        """[[steps]]
-id = "grid_index"
+        f"""[[steps]]
+id = "unified_index/grid"
 command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]"""
+inputs = [{rendered}]"""
     )
     dag_config = workspace / "dag.toml"
     dag_config.write_text(
@@ -452,7 +456,15 @@ def _source_config(
         # Disable media so extract doesn't fall back to the direct
         # `latchkey curl -v` path for file downloads (not on PATH in
         # the bazel sandbox, and the fixtures don't exercise media).
-        source["sync"] = {"media": False}
+        #
+        # `dms` is ON here even though it is off by default, because
+        # this is the pipeline that exercises the real download step
+        # against playback: `conversations.list` is keyed on its
+        # `types` param, so only a dms-enabled run reaches the fixture's
+        # `im` / `mpim` envelope at all. Leaving it off would mean the
+        # DM surfaces are in the fixture but never mirrored, rendered,
+        # indexed, or asserted on.
+        source["sync"] = {"media": False, "dms": True}
     elif type_str == "beeper":
         # `sources` here is the canonical-network list that filters
         # which rooms get ingested. `beeper_data_dir` points at the

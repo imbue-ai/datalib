@@ -39,7 +39,16 @@ export type SearchRow = {
   // Human-readable org name (from /api/organizations). Empty when missing.
   org_name: string;
   entire_chat: string;
+  // The provider's human label ("Slack") — a property of the source
+  // *type*. Two Slack workspaces both say "Slack"; source_name is what
+  // separates them.
   source: string;
+  // The configured source this row came from: the stanza directory under
+  // the data root (the first segment of its qmd_path). Empty when the row
+  // has no rendered document. The friendly `label` a person may have put
+  // on that source lives in config.toml, not here — the grid joins the
+  // two client-side so relabelling never needs a re-index.
+  source_name: string;
   kind: string;
   author: string;
   channel: string;
@@ -52,7 +61,7 @@ export type SearchRow = {
   // For Notion rows: the page-level UUID the row belongs to. Empty otherwise.
   notion_page_uuid: string;
   // The upstream's own id for this entity (the grid_rows
-  // `source_native_id` column); empty when the provider hasn't been
+  // `upstream_id` column); empty when the provider hasn't been
   // ported onto `datalib_id` yet. This is what "Copy source ID(s)"
   // copies, as opposed to `uuid` — ours resolves inside datalib, this
   // one resolves upstream.
@@ -60,12 +69,12 @@ export type SearchRow = {
   // For Perseus it's the locator path — `"1"` (book), `"1.2"`
   // (chapter), `"1.2.3"` (section) — which perseusView parses to build
   // its book→chapter→section tree.
-  source_native_id: string;
+  upstream_id: string;
   // What sort of upstream thing the row is, in the provider's own
   // vocabulary (`"pull_request"`, `"pr_review_comment"`, `"page"`).
-  // Empty when unset. Disambiguates `source_native_id`, whose numeric
+  // Empty when unset. Disambiguates `upstream_id`, whose numeric
   // ids overlap across a provider's API namespaces.
-  source_entity_kind: string;
+  upstream_entity_kind: string;
   // QMD rank score. Present when the row came from a qmd-routed search;
   // omitted (undefined) for pure structured queries and the LIKE fallback.
   score?: number;
@@ -397,21 +406,63 @@ export async function initConfig(signal?: AbortSignal): Promise<InitConfigRespon
   return (await r.json()) as InitConfigResponse;
 }
 
-// One step of the config's derived DAG (GET /api/dag), in topological
-// order. `deps` are the actual edges the runner derives from artifact
-// overlap.
+// One step of the config's DAG (GET /api/dag), in topological order.
+// `deps` are the edges — the ids the step names as inputs.
 export type DagStep = {
   id: string;
   command: string;
   inputs: string[];
   outputs: string[];
   deps: string[];
+  // What this step did the last time a run reached it, from the
+  // runner's own state — so a run started from a terminal shows up here
+  // exactly like one the app kicked off. Null when never reached.
+  last_run: DagStepRun | null;
+  // What it is doing in the run currently in flight: "running",
+  // "succeeded", "blocked", … Null means the scheduler hasn't reached
+  // it, which reads as queued.
+  current_state: string | null;
+  // How far into the current run, from the progress bus
+  // (system/progress.sqlite). Null when the step has reported nothing —
+  // which is not zero, and should read as a spinner rather than an
+  // empty bar.
+  progress: DagStepProgress | null;
+};
+
+// A step's live position. `total: null` means indeterminate: a
+// paginated walk that cannot know its length up front.
+export type DagStepProgress = {
+  done: number | null;
+  total: number | null;
+  msg: string | null;
+  updated_at: string;
+};
+
+export type DagStepRun = {
+  started_at: string;
+  finished_at: string | null;
+  // `succeeded` | `skipped_up_to_date` | `blocked` | `failed` |
+  // `not_selected`. Empty while running.
+  status: string;
+  attempts: number;
+  error: string | null;
+};
+
+export type DagRun = {
+  run_id: string;
+  started_at: string;
+  finished_at: string | null;
+  // Whether a runner actually holds the root right now. An open record
+  // with `live: false` is a run that died — the lock is the truth, not
+  // the absence of `finished_at`.
+  live: boolean;
 };
 
 export type DagResponse = {
   ok: boolean;
   error: string | null;
   steps: DagStep[];
+  run: DagRun | null;
 };
 
 export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {

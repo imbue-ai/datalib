@@ -13,21 +13,21 @@
 //! Step types:
 //!
 //! * `download <source_type>` — one source's download wave, via the
-//!   provider's own `DataProcessor`s. Writes `<name>/raw`, where the
-//!   source name comes from the first declared output (`slack/raw` →
-//!   `slack`). `--params` is the provider's own download config
+//!   provider's own `DataProcessor`s. Writes the tree its step id
+//!   names, which the runner passes in `DATALIB_DAG_STEP`
+//!   (`slack/raw`). `--params` is the provider's own download config
 //!   subtree (no `type:` tag — the subcommand names the provider, no
-//!   `name:` — the outputs carry it).
+//!   `name:` — the id carries it).
 //! * `render <source_type>` — the source's render wave. `--params`
 //!   here is the provider's slim render config (render knobs only —
 //!   the per-phase params split; see `dispatch.rs`).
-//!   Writes `<name>/rendered_md` (`.md` files plus the
+//!   Writes the tree its id names (`.md` files plus the
 //!   `.grid_rows.json` sidecars the providers already emit).
 //!   Incremental: docs whose sidecar fingerprint is unchanged are
 //!   skipped, using the sidecar tree itself as the prior-fingerprint
 //!   store (no index-DB peeking — that's the un-fused contract).
 //! * `grid_index` — rebuild/refresh the unified grid table
-//!   (`unified_index/grid`) from every stanza's sidecar tree
+//!   (`unified_index/grid`) from every source's sidecar tree
 //!   (`build_grid_index`, per-doc fingerprint skip), then `dolt_commit`. This
 //!   is the load step un-fused from render.
 //! * `qmd_index` — the qmd search index over every rendered_md tree,
@@ -36,7 +36,7 @@
 //!   playback fixtures for one source from its `input_path` raw
 //!   fixture tree (the `--synthesize-playback-root` mode of the old
 //!   sync binary, one source per invocation). Takes an explicit
-//!   `--name` (no outputs to derive it from).
+//!   `--name` (there is no step id to take it from).
 //!
 //! Identity comes from the runner via `DATALIB_DAG_STEP` /
 //! `DATALIB_DAG_DATA_ROOT` (falling back to the CWD, which the
@@ -85,10 +85,11 @@ struct Cli {
     /// types rescan the data root rather than consuming it.
     #[arg(long, global = true)]
     inputs: Option<String>,
-    /// Declared output artifact paths (JSON string array), appended
-    /// by the runner from the config entry's `outputs:`.
-    /// Download/render derive their source name from the first entry
-    /// (`slack/raw` → `slack`).
+    /// Declared output artifact paths (JSON string array), appended by
+    /// the runner as the single tree this step's id names. Accepted so
+    /// every step command shares one flag surface, and so a step
+    /// written against the older contract still parses — nothing here
+    /// reads it. Identity comes from `DATALIB_DAG_STEP`.
     #[arg(long, global = true)]
     outputs: Option<String>,
     /// Fixed "now" timestamp (RFC 3339), stamped wherever this step
@@ -147,8 +148,7 @@ enum Cmd {
         /// Source type, same position as in `download <source_type>`.
         source_type: String,
         /// Source name (the `<name>/…` directory prefix). Explicit
-        /// here — a dev invocation has no declared outputs to derive
-        /// it from.
+        /// here — a dev invocation has no step id to take it from.
         #[arg(long)]
         name: String,
         /// Output directory for the playback fixture tree.
@@ -217,10 +217,7 @@ async fn main() {
         refetch_blobs: cli.refetch_blobs || env_flag(ENV_REFETCH_BLOBS),
     };
 
-    let step_io = StepIo {
-        params: cli.params,
-        outputs: cli.outputs,
-    };
+    let step_io = StepIo { params: cli.params };
     match run(cli.cmd, &step_io, &data_root, &now, &control, &emitter).await {
         Ok(outputs) => {
             emitter.outcome(&outputs, None);
@@ -245,11 +242,10 @@ async fn main() {
     }
 }
 
-/// The runner-appended step declaration (`--params` / `--outputs`) as
-/// received; parsed on demand by the step types that consume it.
+/// The runner-appended step declaration as received; parsed on demand
+/// by the step types that consume it.
 struct StepIo {
     params: Option<String>,
-    outputs: Option<String>,
 }
 
 async fn run(
@@ -269,7 +265,8 @@ async fn run(
                 let pb = pb.canonicalize().context("playback root")?;
                 std::env::set_var(datalib_etl::http::PLAYBACK_ENV, pb);
             }
-            let name = source::name_from_outputs(io.outputs.as_deref())?;
+            let tree = source::tree_from_env()?;
+            let name = source::source_name(&tree).to_string();
             let params = source::parse_params(io.params.as_deref())?;
             let planned = dispatch::plan(
                 &source_type,
@@ -283,7 +280,8 @@ async fn run(
             res
         }
         Cmd::Render { source_type } => {
-            let name = source::name_from_outputs(io.outputs.as_deref())?;
+            let tree = source::tree_from_env()?;
+            let name = source::source_name(&tree).to_string();
             let params = source::parse_params(io.params.as_deref())?;
             let planned = dispatch::plan(
                 &source_type,

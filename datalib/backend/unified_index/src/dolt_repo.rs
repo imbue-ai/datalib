@@ -34,6 +34,87 @@ pub struct DoltRepo {
     root: Arc<PathBuf>,
 }
 
+/// The `grid_rows` columns every [`SearchRow`] is built from. One
+/// constant because `search` and `search_by_uuids` select exactly the
+/// same set through [`search_row_from`]; two hand-kept lists drifted for
+/// as long as they existed.
+const SEARCH_ROW_COLUMNS: &str = "uuid, provider, kind, source_label, when_ts, author, account, \
+     project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
+     message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
+     upstream_entity_kind, qmd_path";
+
+/// Build a [`SearchRow`] from one `grid_rows` row selected with
+/// [`SEARCH_ROW_COLUMNS`]. `needle` is the free-text term the snippet is
+/// centered on; pass `""` for a query that has none.
+///
+/// sqlx-sqlite has a load-bearing gotcha: `try_get::<T>` for a SQL NULL
+/// column does NOT return Err — it silently returns `T::default()` (0
+/// for i64, "" for String). That means `try_get(…).ok()` with an
+/// `Option<T>` LHS gives `Some(0)` / `Some("")` for NULL, NOT `None`. To
+/// distinguish NULL from an actual default value, the type passed to
+/// `try_get` must itself be `Option<T>`. Pattern:
+/// `try_get::<Option<T>, _>(…).ok().flatten()`. See
+/// `tests/fixture_db_snapshot.rs` for the canonical example.
+fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
+    let kind: String = r.try_get("kind").unwrap_or_default();
+    let author: String = r.try_get("author").unwrap_or_default();
+    let text: String = r.try_get("text").unwrap_or_default();
+    let qmd_path: String = r.try_get("qmd_path").unwrap_or_default();
+    SearchRow {
+        uuid: r.try_get("uuid").unwrap_or_default(),
+        conversation_uuid: r.try_get("conversation_uuid").unwrap_or_default(),
+        markdown_uuid: r
+            .try_get::<Option<String>, _>("markdown_uuid")
+            .ok()
+            .flatten(),
+        message_index: r
+            .try_get::<Option<i64>, _>("message_index")
+            .ok()
+            .flatten()
+            .map(|n| n as usize),
+        snippet: if kind == "Chat" {
+            text.clone()
+        } else {
+            snippet(&text, needle)
+        },
+        sender: author.clone(),
+        when: r.try_get::<Option<String>, _>("when_ts").ok().flatten(),
+        conversation_name: r.try_get("conversation_name").unwrap_or_default(),
+        project: r.try_get("project").unwrap_or_default(),
+        account: r.try_get("account").unwrap_or_default(),
+        org_uuid: r.try_get("org_uuid").unwrap_or_default(),
+        org_name: r.try_get("org_name").unwrap_or_default(),
+        entire_chat: r.try_get("entire_chat").unwrap_or_default(),
+        source: r.try_get("source_label").unwrap_or_default(),
+        source_name: source_name_from_qmd_path(&qmd_path),
+        kind,
+        author,
+        channel: r.try_get("channel").unwrap_or_default(),
+        slack_link: r.try_get("slack_link").unwrap_or_default(),
+        source_url: r.try_get("source_url").unwrap_or_default(),
+        notion_page_uuid: r.try_get("notion_page_uuid").unwrap_or_default(),
+        upstream_id: r.try_get("upstream_id").unwrap_or_default(),
+        upstream_entity_kind: r.try_get("upstream_entity_kind").unwrap_or_default(),
+        score: None,
+    }
+}
+
+/// The configured source a rendered document belongs to: the first
+/// segment of its data-root-relative path (`slack/rendered_md/x/all.md`
+/// → `slack`). This is the same derivation `datalib-step` uses to name
+/// a source from its declared outputs, and the same one `grid_index`
+/// uses when it walks one directory per stanza — the stanza directory
+/// name *is* the config-level name.
+///
+/// Empty for a path with no separator, which would mean a renderer wrote
+/// outside its own tree.
+fn source_name_from_qmd_path(qmd_path: &str) -> String {
+    match qmd_path.split_once('/') {
+        Some((first, _)) => first.to_string(),
+        None => String::new(),
+    }
+}
+
 impl DoltRepo {
     /// Wrap an existing index pool.
     pub fn from_pool(pool: SqlitePool, root: Arc<PathBuf>) -> Self {
@@ -60,11 +141,7 @@ impl IndexRepo for DoltRepo {
         let needle = q.free_text.to_lowercase();
         let (where_sql, params) = build_where(q, &needle);
         let sql = format!(
-            "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
-                    org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-                    message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, \
-                    source_native_id, source_entity_kind \
-             FROM grid_rows{} \
+            "SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{} \
              ORDER BY when_ts_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
              LIMIT ?",
             where_sql
@@ -84,71 +161,7 @@ impl IndexRepo for DoltRepo {
 
         let mut out: Vec<SearchRow> = Vec::with_capacity(rows.len());
         for r in rows {
-            let uuid: String = r.try_get("uuid").unwrap_or_default();
-            let kind: String = r.try_get("kind").unwrap_or_default();
-            let source_label: String = r.try_get("source_label").unwrap_or_default();
-            // sqlx-sqlite has a load-bearing gotcha: `try_get::<T>` for a
-            // SQL NULL column does NOT return Err — it silently returns
-            // `T::default()` (0 for i64, "" for String). That means
-            // `try_get(…).ok()` with an `Option<T>` LHS gives `Some(0)` /
-            // `Some("")` for NULL, NOT `None`. To distinguish NULL from
-            // an actual default value, the type passed to `try_get` must
-            // itself be `Option<T>`. Pattern: `try_get::<Option<T>, _>(…)
-            // .ok().flatten()`. See `tests/fixture_db_snapshot.rs` for
-            // the canonical example.
-            let when_ts: Option<String> = r.try_get::<Option<String>, _>("when_ts").ok().flatten();
-            let author: String = r.try_get("author").unwrap_or_default();
-            let account: String = r.try_get("account").unwrap_or_default();
-            let project: String = r.try_get("project").unwrap_or_default();
-            let org_uuid: String = r.try_get("org_uuid").unwrap_or_default();
-            let org_name: String = r.try_get("org_name").unwrap_or_default();
-            let channel: String = r.try_get("channel").unwrap_or_default();
-            let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
-            let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
-            let markdown_uuid: Option<String> = r
-                .try_get::<Option<String>, _>("markdown_uuid")
-                .ok()
-                .flatten();
-            let message_index: Option<i64> =
-                r.try_get::<Option<i64>, _>("message_index").ok().flatten();
-            let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
-            let text: String = r.try_get("text").unwrap_or_default();
-            let slack_link: String = r.try_get("slack_link").unwrap_or_default();
-            let source_url: String = r.try_get("source_url").unwrap_or_default();
-            let notion_page_uuid: String = r.try_get("notion_page_uuid").unwrap_or_default();
-            let source_native_id: String = r.try_get("source_native_id").unwrap_or_default();
-            let source_entity_kind: String = r.try_get("source_entity_kind").unwrap_or_default();
-
-            let snip = if kind == "Chat" {
-                text.clone()
-            } else {
-                snippet(&text, &needle)
-            };
-            out.push(SearchRow {
-                uuid,
-                conversation_uuid,
-                markdown_uuid,
-                message_index: message_index.map(|n| n as usize),
-                snippet: snip,
-                sender: author.clone(),
-                when: when_ts,
-                conversation_name,
-                project,
-                account,
-                org_uuid,
-                org_name,
-                entire_chat,
-                source: source_label,
-                kind,
-                author,
-                channel,
-                slack_link,
-                source_url,
-                notion_page_uuid,
-                source_native_id,
-                source_entity_kind,
-                score: None,
-            });
+            out.push(search_row_from(&r, &needle));
         }
         Ok(out)
     }
@@ -259,14 +272,7 @@ impl IndexRepo for DoltRepo {
         for u in uuids.iter().take(take) {
             params.push(u.clone());
         }
-        let sql = format!(
-            "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
-                    org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-                    message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, \
-                    source_native_id, source_entity_kind \
-             FROM grid_rows{}",
-            where_sql
-        );
+        let sql = format!("SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{}", where_sql);
         let mut query = sqlx::query(&sql);
         for p in &params {
             query = query.bind(p);
@@ -279,69 +285,8 @@ impl IndexRepo for DoltRepo {
         let mut by_uuid: std::collections::HashMap<String, SearchRow> =
             std::collections::HashMap::new();
         for r in rows {
-            let uuid: String = r.try_get("uuid").unwrap_or_default();
-            let kind: String = r.try_get("kind").unwrap_or_default();
-            let source_label: String = r.try_get("source_label").unwrap_or_default();
-            // See the `search` function above for the load-bearing
-            // `try_get::<Option<T>, _>(…).ok().flatten()` pattern.
-            // sqlx-sqlite silently returns `T::default()` for NULL
-            // columns when the target type is non-Optional, so the
-            // explicit `Option<T>` generic is required.
-            let when_ts: Option<String> = r.try_get::<Option<String>, _>("when_ts").ok().flatten();
-            let author: String = r.try_get("author").unwrap_or_default();
-            let account: String = r.try_get("account").unwrap_or_default();
-            let project: String = r.try_get("project").unwrap_or_default();
-            let org_uuid: String = r.try_get("org_uuid").unwrap_or_default();
-            let org_name: String = r.try_get("org_name").unwrap_or_default();
-            let channel: String = r.try_get("channel").unwrap_or_default();
-            let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
-            let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
-            let markdown_uuid: Option<String> = r
-                .try_get::<Option<String>, _>("markdown_uuid")
-                .ok()
-                .flatten();
-            let message_index: Option<i64> =
-                r.try_get::<Option<i64>, _>("message_index").ok().flatten();
-            let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
-            let text: String = r.try_get("text").unwrap_or_default();
-            let slack_link: String = r.try_get("slack_link").unwrap_or_default();
-            let source_url: String = r.try_get("source_url").unwrap_or_default();
-            let notion_page_uuid: String = r.try_get("notion_page_uuid").unwrap_or_default();
-            let source_native_id: String = r.try_get("source_native_id").unwrap_or_default();
-            let source_entity_kind: String = r.try_get("source_entity_kind").unwrap_or_default();
-            let snip = if kind == "Chat" {
-                text.clone()
-            } else {
-                snippet(&text, "")
-            };
-            by_uuid.insert(
-                uuid.clone(),
-                SearchRow {
-                    uuid,
-                    conversation_uuid,
-                    markdown_uuid,
-                    message_index: message_index.map(|n| n as usize),
-                    snippet: snip,
-                    sender: author.clone(),
-                    when: when_ts,
-                    conversation_name,
-                    project,
-                    account,
-                    org_uuid,
-                    org_name,
-                    entire_chat,
-                    source: source_label,
-                    kind,
-                    author,
-                    channel,
-                    slack_link,
-                    source_url,
-                    notion_page_uuid,
-                    source_native_id,
-                    source_entity_kind,
-                    score: None,
-                },
-            );
+            let row = search_row_from(&r, "");
+            by_uuid.insert(row.uuid.clone(), row);
         }
         let mut out: Vec<SearchRow> = Vec::with_capacity(by_uuid.len());
         for u in uuids.iter().take(take) {
@@ -462,5 +407,34 @@ impl IndexRepo for DoltRepo {
         let Some(r) = row else { return Ok(None) };
         let rel: Option<String> = r.try_get("md_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stanza is the first path segment, matching how
+    /// `datalib-step` names a source from its declared outputs and how
+    /// `grid_index` names one from the directory it walked.
+    #[test]
+    fn source_name_is_the_first_path_segment() {
+        assert_eq!(
+            source_name_from_qmd_path("slack/rendered_md/abc/all.md"),
+            "slack"
+        );
+        assert_eq!(
+            source_name_from_qmd_path("anthropic-api/rendered_md/x/all.md"),
+            "anthropic-api"
+        );
+        // Sharded renders nest deeper; the stanza is still segment one.
+        assert_eq!(
+            source_name_from_qmd_path("beeper/rendered_md/googlechat/x/2024-03.md"),
+            "beeper"
+        );
+        // No separator means the renderer wrote outside its own tree —
+        // report nothing rather than claim the filename is a source.
+        assert_eq!(source_name_from_qmd_path("all.md"), "");
+        assert_eq!(source_name_from_qmd_path(""), "");
     }
 }

@@ -54,15 +54,37 @@ That is the intended behaviour; `IdClaims` turns the contention into an
 error naming both sources rather than letting one silently erase the
 other (see [Guardrails](#guardrails)).
 
-### There is no `SourceName` scope
+### `SourceInstance` is the last resort, not the default
 
 Four providers — signal, whatsapp, yolink, contacts — key on our
-config's `source_name` today. That means renaming a source from the
-Manage tab silently re-keys every row it ever produced and orphans every
-`feedback.target_uuids` entry pointing at them. One click, unrecoverable.
+config's source name. That used to be flatly unsafe: one editable string
+was both the display name and the identity, so renaming a source from
+the Manage tab silently re-keyed every row it ever produced and orphaned
+every `feedback.target_uuids` entry pointing at them.
 
-**`source_type` is not the fix.** It survives renames but stops
-discriminating exactly where the discrimination is load-bearing:
+Config now has two names (#201), and the split is what makes
+[`Scope::SourceInstance`] offerable:
+
+| | |
+|---|---|
+| `id` | identity. Path-safe, unique, forms the directory structure. Changing it is a migration; the wizard makes it read-only on edit. |
+| `name` | what a person types and every screen shows. Free text, meaningless to every program, freely changed. |
+
+A renderer receives `source_name(tree)` — the first segment of the
+step's `id` — so only the stable half ever reaches an id.
+
+What is left is weaker but real: an id scoped this way is a function of
+*configuration* rather than of data, so two roots ingesting the same
+upstream data under different step ids get different uuids. Prefer
+`Upstream` wherever the provider gives you anything to key on; reach for
+`SourceInstance` when it genuinely gives you nothing, as with yolink's
+per-source timeseries page — a document datalib composes, with no
+YoLink-side object behind it.
+
+**The source *type* was never the missing piece.** It is already the
+first recipe component: `provider` is a hardcoded `&'static str` per
+provider (`"slack"`, `"openai"`, `"jmap"`), never a config string. What
+the type cannot supply is instance-level discrimination:
 
 - signal's `chat_id` is an autoincrement local to one backup file, so
   two accounts both have chat `1`;
@@ -70,11 +92,12 @@ discriminating exactly where the discrimination is load-bearing:
 - contacts' vCard `UID` is unique per addressbook, not globally.
 
 Two configured accounts of any of those types would collide on every
-row. What they need is a stable **upstream** identity, which is what
-`Scope::Upstream` asks for. Corroborating evidence that this was always
-the intent: contacts' `contact_uuid(account_id, …)` is *called* with
-`source_name` — the parameter has been named for the right thing all
-along.
+row. They need either a stable **upstream** identity (`Scope::Upstream`)
+or, where no upstream object exists, `Scope::SourceInstance` — which at
+least keys on the stable `id` rather than a display name. Corroborating
+evidence that upstream was always the intent: contacts'
+`contact_uuid(account_id, …)` is *called* with the source name — the
+parameter has been named for the right thing all along.
 
 ### Why not opaque random ids
 
@@ -98,15 +121,15 @@ from:
 
 | Column | Holds |
 |---|---|
-| `source_native_id` | The upstream's own id, within the scope |
-| `source_entity_kind` | The `entity_kind` component — the upstream's vocabulary |
-| `source_scope` | The `Scope::Upstream` value; NULL for `ProviderGlobal` / `Content` |
+| `upstream_id` | The upstream's own id, within the scope |
+| `upstream_entity_kind` | The `entity_kind` component — the upstream's vocabulary |
+| `upstream_scope` | The `Scope::Upstream` / `SourceInstance` value; NULL for `ProviderGlobal` / `Content` |
 
 Together with `provider` (its own column) that is the entire recipe, so
 once a provider is ported `entity_id(provider, scope,
-source_entity_kind, source_native_id) == uuid` holds by construction.
+upstream_entity_kind, upstream_id) == uuid` holds by construction.
 
-`source_entity_kind` is **not** `grid_rows.kind`. `kind` is a display
+`upstream_entity_kind` is **not** `grid_rows.kind`. `kind` is a display
 label for the grid's Kind column ("LLM Thinking", "GitHub PR") and may
 be reworded freely; this one may not, because the id depends on it. It
 is also what makes the backpointer usable: GitHub numbers issue
@@ -114,10 +137,10 @@ comments, reviews and review comments in three independent sequences
 that overlap, and each is fetched from a different API path, so a bare
 `12345` is ambiguous without it.
 
-**Set `source_native_id` even when it currently equals `uuid`.** A
+**Set `upstream_id` even when it currently equals `uuid`.** A
 provider that passes an upstream id through as its primary key loses
 that route the moment it moves onto `datalib_id`, and this column is
-what the grid's "Copy source ID(s)" action reads.
+what the grid's "Copy upstream ID(s)" action reads.
 
 ## Guardrails
 
@@ -155,50 +178,53 @@ fixture is UUID-shaped.
 | pdf, perseus | pending | `Content` |
 | linkedin, google_takeout, sms_backup_restore | pending | `ProviderGlobal` |
 | whatsapp | pending | `Upstream(account_jid)` — needs parse plumbing |
-| **signal, yolink, contacts** | **blocked** | see below |
+| signal | pending | `ProviderGlobal` on recipient identifiers |
+| yolink | pending | `Upstream(device_udid)` for devices, `SourceInstance` for the page |
+| contacts | pending | `SourceInstance`, until a CardDAV principal is extracted |
 
 The pending ones are mechanical: their recipes already carry the right
 discriminator, so the port is swapping the namespace and separator and
 populating the backpointer.
 
-### The blocked three
+### The three that were blocked
 
-All four `source_name`-keyed providers need an upstream identity to
-replace it with. Only whatsapp has one available today
-(`wa_chat.account_jid`, already in the raw store, just not surfaced by
-`parse`). The other three do not:
+All four source-name-keyed providers wanted an upstream identity.
+Three now have a route, and none is blocked on a decision any more:
 
-- **signal** — the backup's `AccountData` frame carries `profileKey`,
-  `username`, `givenName`/`familyName`, but no ACI or e164. The chat
-  ids it keys on are autoincrements local to one backup file, so
-  something must discriminate two accounts. Candidates: a hash of
-  `profileKey` (stable, but rotates on re-registration, and it is a
-  secret we would be hashing into public ids), or extracting the self
-  recipient's ACI (more parse work, may not be present).
-- **yolink** — device rows can key on the config's `family_device_id`,
-  which is YoLink-issued. The per-source *timeseries page* has no
-  upstream entity at all: it is a document datalib invents for a
-  configured source, so its identity genuinely is the source.
-- **contacts** — `contact_uuid(account_id, …)` is called with
-  `source_name`. The CardDAV config has `server_url`, which is stable
-  against renames but is still our config rather than the server's own
-  principal id.
+- **whatsapp** — `wa_chat.account_jid` is already in the raw store,
+  just not surfaced by `parse`. `Upstream(account_jid)`.
+- **signal** — the blocker was that `chat_id` and `author_id` are
+  autoincrements local to one backup file. `ParsedRecipient.identifier`
+  is the e164 or ACI, and both chats and messages resolve to a
+  recipient, so keying on identifiers instead of row ids makes the ids
+  content-derived and backup-independent. (`AccountData` carries
+  `profileKey`, `username` and names but no ACI, so the *account*
+  cannot be identified — which is why keying on the peer rather than
+  the owner is the move.)
+- **yolink** — `device_udid` is "the per-device UUID returned by the
+  YoLink open API", so device rows are `Upstream`. The per-source
+  timeseries page has no upstream object at all and is the honest case
+  for `SourceInstance`.
+- **contacts** — the weakest. A vCard `UID` is unique per addressbook
+  rather than globally, and the config's `server_url` is ours.
+  `SourceInstance` until someone extracts the CardDAV principal.
 
-These need a decision, not more code. The options are on the table:
-mint and persist a per-source instance id (breaks id reproducibility
-from data alone, which the fixture and insta goldens rely on), extract
-a real upstream id per provider (most work, best result), or add an
-explicit scope variant for "a document datalib invents per configured
-source" that names the rename hazard instead of hiding it.
+One consequence worth settling before signal lands: content-derived ids
+mean two backups of one account deliberately dedupe, and `IdClaims`
+currently treats two sources claiming an id as a hard error. That is a
+contradiction this file introduced — `Scope::Content` is documented as
+"two sources finding the same thing collapse" while the check fails the
+run. Dedup-intending scopes need an exemption, or the check needs to
+compare row content rather than just the id.
 
 ### When porting a provider
 
 1. Add an `ids` module returning an `Identity { uuid, natural_key,
-   entity_kind }`. Returning the pair is what keeps `source_native_id`
+   entity_kind }`. Returning the pair is what keeps `upstream_id`
    and `uuid` from drifting — build the key once and use it twice.
    Use `datalib_id::composite_key` for tuple keys.
 2. Populate all three backpointer columns. For chat-common providers
-   that means `NormalizedChat::source_scope`,
+   that means `NormalizedChat::upstream_scope`,
    `RenderProfile::chat_entity_kind`, and `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
    easy to miss — that was a real bug).

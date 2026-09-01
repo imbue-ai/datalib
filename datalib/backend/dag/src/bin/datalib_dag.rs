@@ -42,6 +42,10 @@
 //! scheduler then drains, emits the run summary, and exits 130.
 //! Exit codes: 0 all ok, 2 some step failed/blocked, 130 cancelled,
 //! 1 setup error.
+//!
+//! Only one runner may hold a data root at a time (`system/runner-lock`,
+//! `flock(2)`), so a sync started from a terminal and one started by the
+//! app refuse rather than interleave. The refusal names the holder.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,8 +68,10 @@ const VERSION_RESOLVED: &str = {
         raw
     }
 };
+use datalib_dag::events::FanOutSink;
+use datalib_dag::progress_bus::ProgressBusSink;
 use datalib_dag::step::FailureKind;
-use datalib_dag::{config, subprocess, Graph, NdjsonSink, Runner};
+use datalib_dag::{config, subprocess, EventSink, Graph, NdjsonSink, Runner};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -130,6 +136,37 @@ async fn main() -> Result<()> {
     let specs = config::to_specs(&cfg)?;
     let graph = Graph::build(specs)?;
 
+    // One runner per data root, taken before anything is written.
+    //
+    // Two runners interleave `system/dag_state.json` — rewritten after
+    // every terminal step — and interleave the raw stores their steps
+    // write, whose doltlite working set is shared across processes. So
+    // a sync started from a terminal while the app is syncing, or two
+    // terminals, would corrupt bookkeeping quietly rather than loudly.
+    //
+    // Held until the process exits, however it exits: `flock(2)` is
+    // released by the kernel, so a crashed run leaves nothing to clean
+    // up. `_lock` and not `_` — binding to `_` would drop it here and
+    // release the claim before the run starts.
+    let _lock = datalib_dag::lock::FileLock::acquire_runner(&data_root).map_err(|e| {
+        if e.is_held() {
+            anyhow::anyhow!(
+                "another datalib-dag is already running against {}{}.\n\
+                 Two runners on one data root overwrite each other's scheduler state and \
+                 each other's raw stores. Wait for it to finish, or point this one at a \
+                 different root.\n(lock: {})",
+                data_root.display(),
+                match e.holder() {
+                    Some(h) => format!(" — {h}"),
+                    None => String::new(),
+                },
+                e.path().display()
+            )
+        } else {
+            anyhow::anyhow!("{e}")
+        }
+    })?;
+
     // Run-wide environment for every step subprocess: PATH with the
     // binary dir prepended (so commands can say `datalib-step` bare),
     // one pinned timestamp for the whole run — whether given or
@@ -146,6 +183,9 @@ async fn main() -> Result<()> {
     }
     let now =
         now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+    // The scheduler takes its run id from ENV_NOW, so this is the same
+    // string it will stamp on the run — keep it for the progress bus.
+    let run_id = now.clone();
     child_env.insert(subprocess::ENV_NOW.into(), now);
     if reset_and_redownload {
         child_env.insert(subprocess::ENV_RESET_AND_REDOWNLOAD.into(), "1".into());
@@ -191,43 +231,83 @@ async fn main() -> Result<()> {
 
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
-    let mut runner = Runner::new(&data_root)
-        .sink(Arc::new(NdjsonSink::new(std::io::stderr())))
-        .child_env(child_env);
-    if let Some(p) = parallelism {
-        runner.parallelism = p;
-    }
-    if !sync_only.is_empty() {
-        runner = runner.only_fringe(sync_only);
-    }
-    let report = runner.run(&graph).await?;
-
-    #[allow(clippy::disallowed_macros)]
-    for s in &report.steps {
-        println!(
-            "{:<32} {:?}{}",
-            s.id,
-            s.status,
-            s.error
-                .as_deref()
-                .map(|e| format!("  ({e})"))
-                .unwrap_or_default()
-        );
-    }
-    let cancelled = report.steps.iter().any(|s| {
-        matches!(
-            s.status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
+    // stderr stays the log; the bus is the live view. Both, not either:
+    // the stream is a record of everything that happened, the bus is a
+    // coalesced answer to "what is happening now" that a second process
+    // can read. Publishing the bus here rather than inside `Runner`
+    // means every way of starting a sync gets it — the http server's
+    // worker shells out to this binary too — while a library caller
+    // embedding `Runner` is not forced to own a file.
+    //
+    // The bus owns a writer thread, and this binary ends in
+    // `std::process::exit`, which runs no destructors. So the bus gets
+    // an explicit scope that computes the exit code, and the exit
+    // happens *after* that scope closes.
+    //
+    // That is the nursery discipline from Nathaniel J. Smith's "Notes
+    // on structured concurrency, or: Go statement considered harmful"
+    // (https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/):
+    // a spawned thing's lifetime is bracketed by a scope its parent
+    // cannot leave early, so there is no path out that forgets it. The
+    // first version of this called a `finish()` by hand instead, which
+    // is precisely the unstructured spawn the essay argues against —
+    // and it was already wrong, because the `?` on `runner.run` below
+    // skips it. `//tests/fixtures:progress_bus_e2e_test` is what caught
+    // the empty bus, and is what would catch it coming back.
+    let code = {
+        let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
+        match ProgressBusSink::start(&data_root, &run_id) {
+            Some(bus) => sinks.push(Arc::new(bus)),
+            None => {
+                // This binary has no tracing subscriber and no indicatif
+                // bars, so the macro's usual objection does not apply and
+                // `tracing::warn!` would go nowhere at all. The NDJSON
+                // reader tolerates non-JSON lines (worker.rs skips what it
+                // cannot parse), so a plain line is safe here.
+                #[allow(clippy::disallowed_macros)]
+                {
+                    eprintln!("datalib-dag: progress bus unavailable; no live progress this run");
+                }
             }
-        )
-    });
-    let code = if cancelled {
-        130
-    } else if report.all_ok() {
-        0
-    } else {
-        2
-    };
+        }
+        let mut runner = Runner::new(&data_root)
+            .sink(Arc::new(FanOutSink(sinks)))
+            .child_env(child_env);
+        if let Some(p) = parallelism {
+            runner.parallelism = p;
+        }
+        if !sync_only.is_empty() {
+            runner = runner.only_fringe(sync_only);
+        }
+        let report = runner.run(&graph).await?;
+
+        #[allow(clippy::disallowed_macros)]
+        for s in &report.steps {
+            println!(
+                "{:<32} {:?}{}",
+                s.id,
+                s.status,
+                s.error
+                    .as_deref()
+                    .map(|e| format!("  ({e})"))
+                    .unwrap_or_default()
+            );
+        }
+        let cancelled = report.steps.iter().any(|s| {
+            matches!(
+                s.status,
+                StepStatus::Failed {
+                    kind: FailureKind::Cancelled
+                }
+            )
+        });
+        if cancelled {
+            130
+        } else if report.all_ok() {
+            0
+        } else {
+            2
+        }
+    }; // every sink drops here, so the bus flushes and joins before we exit
     std::process::exit(code);
 }

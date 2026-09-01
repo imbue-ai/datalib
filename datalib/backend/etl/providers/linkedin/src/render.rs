@@ -143,7 +143,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             external_id: Some(conv.clone()),
             // No public per-conversation URL in the message export.
             source_url: None,
-            source_scope: None,
+            upstream_scope: None,
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {

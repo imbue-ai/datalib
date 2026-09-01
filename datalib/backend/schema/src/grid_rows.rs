@@ -356,16 +356,16 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(64)")]
     pub git_sha: Option<String>,
     /// The upstream's own identifier for this entity, within
-    /// `source_scope` — the *backpointer* half of the id pair. Our
+    /// `upstream_scope` — the *backpointer* half of the id pair. Our
     /// `uuid` is minted by `datalib_id::entity_id`; this column
     /// preserves the input it was minted from, so a row can be
     /// round-tripped back to the provider's API (or its export) without
     /// anyone having to reverse a one-way hash.
     ///
-    /// Together with `source_entity_kind` and `source_scope` this is
+    /// Together with `upstream_entity_kind` and `upstream_scope` this is
     /// the whole recipe, minus the provider (which is its own column):
     /// once a provider is ported, `entity_id(provider, scope,
-    /// source_entity_kind, source_native_id) == uuid` holds by
+    /// upstream_entity_kind, upstream_id) == uuid` holds by
     /// construction, which makes the backpointer verifiable rather than
     /// merely decorative.
     ///
@@ -390,7 +390,7 @@ pub struct GridRow {
     ///   email.thread: thread_id
     ///   perseus: the locator path ('1', '1.2', '1.2.3')
     #[col(sql = "VARCHAR(128)")]
-    pub source_native_id: Option<String>,
+    pub upstream_id: Option<String>,
     /// What *sort* of upstream thing this row is, in the provider's own
     /// vocabulary — `"conversation"`, `"message"`, `"thinking_block"`,
     /// `"tool_use"`, `"pr"`, `"page"`. The `entity_kind` component of
@@ -403,7 +403,7 @@ pub struct GridRow {
     /// re-keying anything; this column may not, because the id depends
     /// on it.
     ///
-    /// Carrying it explicitly is what keeps `source_native_id` a
+    /// Carrying it explicitly is what keeps `upstream_id` a
     /// *usable* backpointer: a bare `12345` is ambiguous between a
     /// GitHub review and a review comment, and the two live in
     /// different API namespaces.
@@ -411,9 +411,9 @@ pub struct GridRow {
     /// Null for rows whose provider has not been ported onto
     /// `datalib_id` yet.
     #[col(sql = "VARCHAR(32)")]
-    pub source_entity_kind: Option<String>,
+    pub upstream_entity_kind: Option<String>,
     /// The upstream account / workspace / organization
-    /// `source_native_id` is unique within — the `Scope::Upstream`
+    /// `upstream_id` is unique within — the `Scope::Upstream`
     /// value fed to `datalib_id::entity_id`. NULL means the row was
     /// minted under `Scope::ProviderGlobal` or `Scope::Content`, where
     /// the natural key needs no further scoping.
@@ -430,7 +430,7 @@ pub struct GridRow {
     /// name, while this is the exact opaque string the id was derived
     /// from and must never be prettified.
     #[col(sql = "VARCHAR(96)")]
-    pub source_scope: Option<String>,
+    pub upstream_scope: Option<String>,
     /// Notion-only. UUID of the page this row belongs to. For page rows
     /// this equals `uuid`; for heading / comment thread / comment rows it
     /// points at the containing page so the grid can filter every row

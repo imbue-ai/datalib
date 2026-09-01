@@ -30,6 +30,15 @@ type FieldBase = {
   label: string;
   help?: string;
   phase?: FieldPhase;
+  /// Only shown, and only written, while the `bool` field at this
+  /// target is on.
+  ///
+  /// This is not cosmetic. A provider may reject a combination its
+  /// struct can express — `slack_api` errors on `dm_users` set with
+  /// `dms = false`, because both silent readings of that are wrong —
+  /// and a form that can produce a config the backend refuses is a
+  /// form that fails at sync time instead of at fill-in time.
+  requires?: string;
 };
 
 export type Field =
@@ -135,6 +144,26 @@ export const CATALOG: CatalogEntry[] = [
         label: "Include channels you're not a member of",
         default: false,
         help: "Ignored when Channels is set.",
+      },
+      {
+        kind: "bool",
+        target: "sync.dms",
+        label: "Download direct messages",
+        default: false,
+        help:
+          "Your 1:1 and group DMs, alongside the channels above. Off by default — DMs are " +
+          "the most private thing in a workspace, so mirroring them is opt-in.",
+      },
+      {
+        kind: "string_list",
+        target: "sync.dm_users",
+        requires: "sync.dms",
+        label: "Only DMs with these people",
+        placeholder: "@riker, Jean-Luc Picard, U024BE7LH",
+        help:
+          "Names a person, not a conversation — a Slack handle, display name, real name or " +
+          "user id, with or without the @. A group DM counts as a conversation with everyone " +
+          "in it. Leave empty for every DM.",
       },
       {
         kind: "int",
@@ -281,6 +310,55 @@ export const CATALOG: CatalogEntry[] = [
 
   { type: "pdf", label: "PDFs", blurb: "Convert a directory tree of PDFs into searchable markdown.", keywords: ["pdf", "documents", "papers", "files"], kind: "local", icon: null, defaultName: "pdfs", wizard: false },
   { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
+  {
+    type: "media",
+    label: "Music, photos & video",
+    blurb: "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash.",
+    keywords: ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"],
+    kind: "local",
+    icon: null,
+    defaultName: "media",
+    wizard: true,
+    // Download-only: media has no text to convert, so nothing is
+    // rendered and no render step is declared.
+    renderStep: false,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your media folder",
+        required: true,
+        target: "common.input_path",
+        label: "Media folder",
+        placeholder: "~/Music",
+        help:
+          "Scanned for audio, images, video and .m3u playlists. Files are identified by " +
+          "their bytes rather than their extension, and each one also gets a hash over " +
+          "just its audio or picture data — so retagging a track, or re-rendering a RAW " +
+          "preview, doesn't make it look like a new file.",
+      },
+      {
+        kind: "bool",
+        target: "playlists",
+        label: "Index .m3u playlists",
+        default: true,
+        help:
+          "Records each playlist's entries in order, including the ones pointing at " +
+          "tracks you no longer have. Streaming manifests that share the .m3u8 " +
+          "extension are recognized and skipped.",
+      },
+      {
+        kind: "bool",
+        target: "skip_dataless",
+        label: "Skip cloud placeholders",
+        default: true,
+        help:
+          "Leave Dropbox online-only and iCloud evicted files alone rather than pulling " +
+          "them down. Turn this off only if your filesystem reports no block counts, " +
+          "which makes every file look evicted.",
+      },
+    ],
+  },
   {
     type: "lightroom",
     label: "Lightroom",

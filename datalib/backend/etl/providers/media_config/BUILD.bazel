@@ -1,0 +1,28 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Schema-only config crate for the media source.
+# Bazel-only by design (no Cargo.toml). See
+# docs/dev/archived/data_processor_and_config_refactor.md §4.3.
+rust_library(
+    name = "datalib_etl_media_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_media_config",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "media_config_unittests",
+    size = "small",
+    crate = ":datalib_etl_media_config",
+    edition = "2021",
+    # Parsing tests assert the `deny_unknown_fields` / default behavior
+    # against the real config format, so the test needs the TOML parser
+    # even though the library itself is serde-only.
+    deps = ["@datalib_crates//:toml"],
+)

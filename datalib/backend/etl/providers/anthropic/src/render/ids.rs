@@ -47,7 +47,7 @@ use datalib_id::{composite_key, entity_id_str, Scope};
 pub const PROVIDER: &str = "anthropic";
 
 // Entity kinds — the `entity_kind` recipe component, and the value
-// stamped into `grid_rows.source_entity_kind`. Distinct from the
+// stamped into `grid_rows.upstream_entity_kind`. Distinct from the
 // display `kind_label` ("LLM Thinking", "Tool Call"), which may be
 // reworded without re-keying anything.
 pub const KIND_CONVERSATION: &str = "conversation";
@@ -66,7 +66,7 @@ pub const KIND_PROJECT_DOCUMENT: &str = "project_document";
 ///
 /// Returned as a pair rather than two functions because the two must
 /// not drift: `natural_key` is what the renderer stores in
-/// `grid_rows.source_native_id`, and `uuid` is derived from that exact
+/// `grid_rows.upstream_id`, and `uuid` is derived from that exact
 /// string. Deriving from one spelling and storing another yields a
 /// backpointer that regenerates nothing — which is precisely the bug
 /// `//tests/fixtures:ingested_tng_test`'s round-trip check caught when
@@ -187,7 +187,7 @@ mod tests {
 
     /// The invariant that broke once: the `natural_key` an `Identity`
     /// carries is exactly the string its `uuid` was derived from, so
-    /// storing it in `source_native_id` regenerates the row.
+    /// storing it in `upstream_id` regenerates the row.
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for got in [
