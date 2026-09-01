@@ -1190,15 +1190,29 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         .iter()
                         .map(|&d| graph.steps[d].id.clone())
                         .collect(),
-                    last_run: state.steps.get(&sp.id).and_then(|st| {
-                        st.last_run.as_ref().map(|r| DagStepRun {
+                    last_run: state
+                        .steps
+                        .get(&sp.id)
+                        .and_then(|st| st.last_run.as_ref())
+                        // A `not_selected` last-run is a record from
+                        // before the scheduler stopped writing them —
+                        // see `Scheduler::finish`. It says a run walked
+                        // past this step without touching it, stamped
+                        // with that run's time, on top of whatever the
+                        // step had actually done. The real outcome it
+                        // replaced is gone, so the honest report is no
+                        // record at all: "never run", which is what a
+                        // step we know nothing about looks like. It
+                        // self-heals the next time a run reaches the
+                        // step for real.
+                        .filter(|r| r.status != "not_selected")
+                        .map(|r| DagStepRun {
                             started_at: r.started_at.clone(),
                             finished_at: r.finished_at.clone(),
                             status: r.status.clone(),
                             attempts: r.attempts,
                             error: r.error.clone(),
-                        })
-                    }),
+                        }),
                     current_state: states.get(&sp.id).cloned(),
                     progress: progress.get(&sp.id).map(|p| DagStepProgress {
                         done: p.done,
