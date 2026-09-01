@@ -226,7 +226,7 @@ export const CATALOG: CatalogEntry[] = [
   { type: "notion_api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", wizard: false, credentialService: "notion" },
   { type: "email", label: "Email", blurb: "Mirror mail over JMAP, the Gmail API, or a Takeout mbox.", keywords: ["email", "mail", "gmail", "fastmail", "jmap", "imap", "mbox"], kind: "api", icon: "email", defaultName: "email", wizard: false, credentialService: "fastmail" },
   { type: "carddav", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", wizard: false },
-  { type: "yolink", label: "YoLink sensors", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot"], kind: "api", icon: null, defaultName: "yolink", wizard: false },
+  { type: "yolink", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", wizard: false },
 
   { type: "claude_export", label: "Claude export", blurb: "Render an unpacked Claude data export already on disk.", keywords: ["claude", "anthropic", "export", "backup"], kind: "export", icon: "claude", defaultName: "claude-export", wizard: false },
   { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", wizard: false },
