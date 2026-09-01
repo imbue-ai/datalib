@@ -29,7 +29,9 @@ use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use uuid::Uuid;
@@ -124,6 +126,7 @@ fn profile() -> RenderProfile {
         chat_kind: "Email Thread".to_string(),
         message_kind: "Email".to_string(),
         reaction_kind: "Email Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -439,6 +442,7 @@ fn build_chat(
             // Per-email `↗` outlink into the source webmail.
             source_url: email_outlink(outlink, em, &labels),
             kind_label: None,
+            source_ref: None,
         });
     }
 
@@ -453,6 +457,7 @@ fn build_chat(
         project: None,
         external_id: Some(bucket.thread_id.clone()),
         source_url: thread_source_url,
+        upstream_scope: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

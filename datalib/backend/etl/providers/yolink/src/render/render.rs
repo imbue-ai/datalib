@@ -617,7 +617,8 @@ fn build_grid_rows(
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .text(text)
                 .qmd_path(Some(md_rel.to_string()))
-                .external_id(Some(dev.kind.clone()))
+                .upstream_id(Some(dev.kind.clone()))
+                .upstream_entity_kind(Some("device".to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
                 .build()
                 .map_err(anyhow::Error::from)?,

@@ -34,10 +34,8 @@ use datalib_etl::render_cursor;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction,
+    NormalizedReaction, UpstreamRef,
 };
-
-use crate::download::schema_raw::slack_reaction_uuid;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::{slack_link, Message, ParsedSlack};
@@ -60,6 +58,7 @@ fn profile() -> RenderProfile {
         chat_kind: "Slack Thread".to_string(),
         message_kind: "Slack Message".to_string(),
         reaction_kind: "Slack Reaction".to_string(),
+        chat_entity_kind: crate::ids::KIND_THREAD,
         render_version: RENDER_VERSION,
     }
 }
@@ -182,9 +181,20 @@ fn build_chats(
             title: Some(title),
             account: Some(root.team_id.clone()),
             project: None,
-            external_id: None,
+            // The exact natural key the thread's `uuid` was minted
+            // from — `{channel_id}#{thread_ts}`, the tuple
+            // `conversations.replies` takes back. Must be this
+            // spelling, not a prettier one: the round-trip check
+            // recomputes `uuid` from it.
+            external_id: Some(
+                crate::ids::thread(&root.team_id, &root.channel_id, &root.ts).natural_key,
+            ),
             // Thread permalink → chat-level `↗` + chat grid source_url.
             source_url: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
+            // Every row in this thread was minted under
+            // `Scope::Upstream(team_id)`; the round-trip check
+            // recomputes `uuid` from this exact string.
+            upstream_scope: Some(root.team_id.clone()),
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
@@ -216,8 +226,9 @@ fn build_item(
     } else {
         ItemKind::Attachment
     };
+    let msg_id = crate::ids::message(&m.team_id, &m.channel_id, &m.ts);
     NormalizedChatItem {
-        message_uuid: m.uuid(),
+        message_uuid: msg_id.uuid.clone(),
         author_id: m.user_id.clone().unwrap_or_else(|| "unknown".into()),
         author_display,
         date_ms: ts_to_ms(&m.ts),
@@ -229,6 +240,10 @@ fn build_item(
         // Per-message permalink (with thread_ts for replies).
         source_url: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
         kind_label: None,
+        source_ref: Some(UpstreamRef::new(
+            msg_id.entity_kind,
+            msg_id.natural_key.clone(),
+        )),
     }
 }
 
@@ -331,6 +346,11 @@ fn image_mime_for(filetype: &str) -> Option<String> {
 /// reacting user (resolved to a display label), so each is its own
 /// searchable grid row. A count-only reaction (no `users` list) yields a
 /// single row labelled with the count.
+///
+/// The branch below is also an id boundary: the two shapes produce
+/// differently-keyed rows for the same reaction, so a re-fetch that
+/// returns the other shape re-keys them. See [`crate::ids::reaction`]
+/// for why that is left standing and what the fixes would cost.
 fn build_reactions(
     raw: &Value,
     m: &Message,
@@ -353,19 +373,25 @@ fn build_reactions(
             .unwrap_or_default();
         if users.is_empty() {
             let count = r.get("count").and_then(|v| v.as_u64()).unwrap_or(1);
+            // No per-user breakdown: one aggregate row, keyed with an
+            // empty user component.
+            let id = crate::ids::reaction(&m.team_id, &m.channel_id, &m.ts, name, "");
             out.push(NormalizedReaction {
-                reaction_uuid: slack_reaction_uuid(&m.team_id, &m.channel_id, &m.ts, name, ""),
+                reaction_uuid: id.uuid.clone(),
                 reactor_display: format!("{count}"),
                 emoji,
                 date_ms,
+                source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
             });
         } else {
             for u in users {
+                let id = crate::ids::reaction(&m.team_id, &m.channel_id, &m.ts, name, u);
                 out.push(NormalizedReaction {
-                    reaction_uuid: slack_reaction_uuid(&m.team_id, &m.channel_id, &m.ts, name, u),
+                    reaction_uuid: id.uuid.clone(),
                     reactor_display: user_labels.get(u).cloned().unwrap_or_else(|| u.to_string()),
                     emoji: emoji.clone(),
                     date_ms,
+                    source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                 });
             }
         }

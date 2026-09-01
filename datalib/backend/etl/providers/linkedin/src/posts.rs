@@ -36,7 +36,9 @@ use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
@@ -59,6 +61,7 @@ fn profile() -> RenderProfile {
         chat_kind: "LinkedIn Post".to_string(),
         message_kind: "LinkedIn Post Message".to_string(),
         reaction_kind: "LinkedIn Post Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -200,6 +203,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             external_id: nonempty(&key).map(str::to_string),
             // Whole-post linkout on the thread header / chat-level row.
             source_url: nonempty(&thread.url).map(str::to_string),
+            upstream_scope: None,
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
@@ -235,6 +239,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         system_note: None,
         source_url: None,
         kind_label: None,
+        source_ref: None,
     }
 }
 
@@ -257,6 +262,7 @@ fn post_placeholder(key: &str, date_ms: i64, url: &str) -> NormalizedChatItem {
         system_note: Some(note),
         source_url: None,
         kind_label: None,
+        source_ref: None,
     }
 }
 

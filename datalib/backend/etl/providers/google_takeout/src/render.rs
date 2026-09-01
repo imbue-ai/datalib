@@ -17,7 +17,9 @@ use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
@@ -53,6 +55,7 @@ fn profile() -> RenderProfile {
         chat_kind: "Google Chat".to_string(),
         message_kind: "Google Chat Message".to_string(),
         reaction_kind: "Google Chat Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -64,6 +67,7 @@ fn voice_profile() -> RenderProfile {
         chat_kind: "Google Voice Conversation".to_string(),
         message_kind: "Google Voice Message".to_string(),
         reaction_kind: "Google Voice Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -228,6 +232,7 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
                     system_note: None,
                     source_url: None,
                     kind_label: None,
+                    source_ref: None,
                 }
             })
             .collect();
@@ -261,6 +266,7 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
             project: None,
             external_id: Some(space.clone()),
             source_url: None,
+            upstream_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -387,6 +393,7 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
             project: Some("Google Voice".to_string()),
             external_id: Some(external_id),
             source_url: None,
+            upstream_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -459,6 +466,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 system_note: None,
                 source_url: None,
                 kind_label: None,
+                source_ref: None,
             }
         }
         "voicemail" | "recorded" => {
@@ -487,6 +495,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 system_note: None,
                 source_url: None,
                 kind_label: None,
+                source_ref: None,
             }
         }
         // missed / placed / received — a call with no media: a system note.
@@ -510,6 +519,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 system_note: Some(format!("{note} — {}", party_display(party))),
                 source_url: None,
                 kind_label: None,
+                source_ref: None,
             }
         }
     }

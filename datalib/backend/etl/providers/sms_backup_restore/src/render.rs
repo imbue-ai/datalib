@@ -17,7 +17,9 @@ use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{
+    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
@@ -55,6 +57,7 @@ fn profile() -> RenderProfile {
         chat_kind: "SMS Conversation".to_string(),
         message_kind: "SMS Message".to_string(),
         reaction_kind: "SMS Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -202,6 +205,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             project: Some("SMS Backup".to_string()),
             external_id: Some(external_id),
             source_url: None,
+            upstream_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -245,6 +249,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 system_note: Some(call_note(call_type, duration, display)),
                 source_url: None,
                 kind_label: None,
+                source_ref: None,
             }
         }
         // sms / mms
@@ -306,6 +311,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 system_note: None,
                 source_url: None,
                 kind_label: None,
+                source_ref: None,
             }
         }
     }

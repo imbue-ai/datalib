@@ -36,9 +36,11 @@ since run 3 wipes the cursor and then re-creates it.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import unittest
+import uuid as uuidlib
 from pathlib import Path
 
 
@@ -64,6 +66,77 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # moved to `project_full_path`, so it silently produced nothing for
 # three months. A source that stops producing rows should fail here,
 # not disappear quietly.
+# Providers still minting `grid_rows.uuid` values that are not UUIDs.
+#
+# Empty, and it must stay that way. It held `anthropic` and `openai`,
+# the two that passed an upstream id through verbatim (or lightly
+# prefixed) instead of deriving a v5: anthropic emitted
+# `tu-{tool_use_id}` / `tr-{tool_use_id}` / `th-{msg_uuid}-{idx}` /
+# `pdesc-{project_uuid}` for its structural blocks, and openai used
+# ChatGPT's `conversation_id` / `message_id` directly. Both now mint
+# through `datalib_id::entity_id`.
+#
+# Kept as an empty allowlist rather than deleted so the assertion below
+# stays an exact-set comparison: a provider that starts leaking an
+# upstream id into `grid_rows.uuid` fails here by name, and adding it
+# to this set is a deliberate act someone has to justify in review
+# rather than a silent drift.
+NON_UUID_PK_PROVIDERS: frozenset[str] = frozenset()
+
+# ── datalib_id recipe, reimplemented ────────────────────────────────
+#
+# Deliberately a second implementation rather than a call into the Rust
+# one. Asserting `entity_id(...) == uuid` by invoking the same function
+# that produced the uuid proves only that the function is
+# deterministic. Recomputing it here from the columns the renderer
+# stored pins the actual contract: that `upstream_id` and
+# `upstream_entity_kind` really are the inputs `uuid` was derived from,
+# and that the wire format hasn't drifted. A renderer that stamps a
+# plausible-looking but wrong backpointer fails here and nowhere else.
+#
+# Source of truth: datalib/backend/id/src/lib.rs. If that file's
+# namespace, separator or component order changes, this must change with
+# it — which is the point.
+DATALIB_ID_NS = uuidlib.UUID(bytes=b"datalib-id-ns-v1")
+ID_SEP = "\x1f"
+
+# Which `Scope` variant each ported provider mints under. Scope is a
+# provider-level design decision, not a per-row one, so a table is the
+# right shape — and it has to live here because `upstream_scope` is NULL
+# for both `ProviderGlobal` and `Content`, making the two
+# indistinguishable from the row alone.
+#
+# Grow this as providers are ported; a provider absent from it is
+# skipped by the round-trip check below, and `PORTED_PROVIDERS` keeps
+# that from being silent.
+SCOPE_TAG_BY_PROVIDER = {
+    "anthropic": ("pg", ""),
+    "openai": ("pg", ""),
+    # Slack scopes on `team_id`, which the row carries in `account`.
+    # Resolved per-row rather than from a constant here — see
+    # `_roundtrip_failures`.
+    "slack": ("up", None),
+}
+
+# Providers whose rows MUST round-trip. Separate from the table above so
+# a typo in a provider name shows up as "no rows checked" rather than as
+# a silent pass.
+PORTED_PROVIDERS = frozenset({"anthropic", "openai", "slack"})
+
+
+def datalib_entity_id(provider, scope_tag, scope_val, entity_kind, natural_key):
+    """UUIDv5 over the five-component recipe, joined with \x1f."""
+    name = ID_SEP.join([provider, scope_tag, scope_val, entity_kind, natural_key])
+    return str(uuidlib.uuid5(DATALIB_ID_NS, name))
+
+
+# Canonical 8-4-4-4-12 hex form. Deliberately not a version-specific
+# pattern: the point is that the column holds an opaque fixed-width
+# identifier we minted, not which v5 recipe produced it.
+UUID_SQL_REGEX = (
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
 EXPECTED_PROVIDERS = frozenset(
     {
         "anthropic",
@@ -91,6 +164,16 @@ EXPECTED_PROVIDERS = frozenset(
         "yolink",
     }
 )
+
+
+def _sql_in(names) -> str:
+    """Render a set of provider names as a SQL IN-list literal.
+
+    Provider names are compile-time constants in this file, never user
+    input, so quoting them inline is safe; the doltlite CLI takes one
+    SQL string and has nowhere to bind parameters.
+    """
+    return ", ".join(f"'{n}'" for n in sorted(names))
 
 
 def _argv():
@@ -170,6 +253,38 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "markdowns": self._count(self._index_db, "markdowns"),
         }
 
+    def _index_ids(self) -> dict[str, list[str]]:
+        """Every id in the index, so a re-run can be checked id-by-id.
+
+        Counts are not enough, and the gap is specific rather than
+        theoretical. `apply_markdown` deletes `grid_rows` by
+        `markdown_uuid` and then re-inserts, so within a markdown whose
+        id is unchanged, every row id could move and the count would not
+        budge — the delete takes the old ones away and the insert puts
+        the same number back. Only `markdown_uuid` instability shows up
+        in a count, and then only because the delete misses the old rows
+        and they accumulate.
+
+        That matters because ids are the durable thing: they are what
+        `feedback.target_uuids` stores unqualified and what a
+        `/chat/{uuid}` URL that has been handed out resolves through. An
+        id that silently moves on re-ingest breaks both, and nothing
+        else in this suite would notice — the checked-in golden pins row
+        ids against a *snapshot*, which catches a change between commits
+        but not one between two runs of the same build.
+
+        Sorted rather than a set so a failure diff reads in a stable
+        order.
+        """
+        return {
+            "grid_rows": sorted(
+                self._query(self._index_db, "SELECT uuid FROM grid_rows;")
+            ),
+            "markdowns": sorted(
+                self._query(self._index_db, "SELECT markdown_uuid FROM markdowns;")
+            ),
+        }
+
     def _providers(self) -> frozenset[str]:
         return frozenset(
             self._query(self._index_db, "SELECT DISTINCT provider FROM grid_rows;")
@@ -222,6 +337,133 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "  AND (g.qmd_path IS NULL OR g.qmd_path <> m.md_path);",
         )
 
+    def _duplicate_uuids(self) -> list[str]:
+        """`grid_rows.uuid` values held by more than one row.
+
+        `grid_rows` declares `PRIMARY KEY (uuid)`, so this can only ever
+        come back empty from a store the index actually wrote — which is
+        exactly why it is worth asserting from the outside. A duplicate
+        here would mean the PK is not being enforced by doltlite, and
+        every collision guarantee in the pipeline rests on it being
+        enforced. Cheap check, load-bearing assumption.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT uuid, COUNT(*) FROM grid_rows GROUP BY uuid HAVING COUNT(*) > 1;",
+        )
+
+    def _non_uuid_pk_providers(self) -> frozenset[str]:
+        """Providers whose `grid_rows.uuid` is not UUID-shaped.
+
+        `uuid` is the primary key of the union table, the `id=` /
+        `data-section-uuid` anchor the renderer bakes into the markdown
+        body, and the value `feedback.target_uuids` stores unqualified.
+        A provider that passes an upstream string through instead of
+        minting its own is one upstream id-reuse away from colliding
+        with another source in a keyspace nothing can disambiguate
+        after the fact.
+
+        Asserted as an exact set against `NON_UUID_PK_PROVIDERS`, in
+        both directions: a *new* offender fails, and so does a provider
+        left on the allowlist after it has been cleaned up — so the
+        list cannot rot into a permanent exemption.
+        """
+        return frozenset(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT provider FROM grid_rows "
+                f"WHERE uuid NOT REGEXP '{UUID_SQL_REGEX}';",
+            )
+        )
+
+    def _cross_source_shared_markdowns(self) -> list[str]:
+        """`markdown_uuid`s claimed by more than one `source_name`.
+
+        The failure this catches is silent by construction:
+        `apply_markdown` DELETEs `grid_rows` by `markdown_uuid` before
+        inserting, so when two configured sources mint the same id the
+        sidecar applied second erases the first one's rows and rewrites
+        the `markdowns` row with its own `md_path` and `source_name`.
+        The run reports success and the row count looks plausible — one
+        source has simply vanished from the index.
+
+        `IdClaims` in `datalib_etl::grid_index` now fails the run when
+        it sees this, so in a green pipeline this is a second, external
+        witness rather than the primary check. It is asserted here
+        anyway because it reads the store rather than the code path:
+        if the in-process tracker is ever bypassed (a caller reaching
+        `apply_one` directly, a partial re-index), this still sees it.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT markdown_uuid, COUNT(DISTINCT source_name) FROM markdowns "
+            "GROUP BY markdown_uuid HAVING COUNT(DISTINCT source_name) > 1;",
+        )
+
+    def _roundtrip_failures(self) -> list[str]:
+        """Ported rows whose backpointer does not regenerate their uuid.
+
+        For every row from a provider in `SCOPE_TAG_BY_PROVIDER`,
+        recompute `entity_id(provider, scope, upstream_entity_kind,
+        upstream_id)` and compare to the stored `uuid`. A mismatch
+        means the backpointer is decorative — it names something that
+        would not produce this row — and the round-trip back to the
+        upstream API is broken in a way nothing else would notice,
+        because both columns still look perfectly plausible.
+        """
+        rows = self._query(
+            self._index_db,
+            "SELECT provider, uuid, IFNULL(upstream_entity_kind, ''), "
+            "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, '') "
+            "FROM grid_rows "
+            f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
+            "ORDER BY uuid;",
+        )
+        failures = []
+        for line in rows:
+            provider, row_uuid, entity_kind, native_id, row_scope = line.split("|", 4)
+            if not entity_kind or not native_id:
+                failures.append(
+                    f"{provider} {row_uuid}: ported provider left "
+                    f"upstream_entity_kind={entity_kind!r} "
+                    f"upstream_id={native_id!r}"
+                )
+                continue
+            scope_tag, scope_val = SCOPE_TAG_BY_PROVIDER[provider]
+            # An `Upstream` scope's value is per-row, so the table
+            # stores None and the row supplies it. A ported provider
+            # that scopes upstream but leaves `upstream_scope` empty is
+            # itself the bug.
+            if scope_val is None:
+                if not row_scope:
+                    failures.append(
+                        f"{provider} {row_uuid}: upstream-scoped but "
+                        f"upstream_scope is empty"
+                    )
+                    continue
+                scope_val = row_scope
+            want = datalib_entity_id(
+                provider, scope_tag, scope_val, entity_kind, native_id
+            )
+            if want != row_uuid:
+                failures.append(
+                    f"{provider} {row_uuid}: ({entity_kind!r}, "
+                    f"{native_id!r}) regenerates {want}"
+                )
+        return failures
+
+    def _ported_provider_row_counts(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for line in self._query(
+            self._index_db,
+            "SELECT provider, COUNT(*) FROM grid_rows "
+            f"WHERE provider IN ({_sql_in(PORTED_PROVIDERS)}) "
+            "GROUP BY provider;",
+        ):
+            name, n = line.rsplit("|", 1)
+            out[name] = int(n)
+        return out
+
     def _signal_cursor(self) -> list[str]:
         """Signal's `ingested_backups` rows as `<snapshot_dir>|<blake3>`."""
         return self._query(
@@ -272,6 +514,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
         shape1 = self._index_shape()
+        ids1 = self._index_ids()
         self.assertGreater(
             shape1["grid_rows"], 0, "run 1 must load grid rows into the index"
         )
@@ -333,6 +576,63 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "the qmd_path/md_path join must cover pdf rows",
         )
 
+        # ── id-space guardrails ─────────────────────────────────
+        # Every row uuid is unique. The PK makes this true by
+        # construction; asserting it from outside the writer is what
+        # confirms the PK is real in doltlite, which is the assumption
+        # the whole collision story rests on.
+        self.assertEqual(self._duplicate_uuids(), [], "grid_rows.uuid must be unique")
+        # No two sources may claim one markdown. This is the overlap
+        # that used to erase a source's rows without an error.
+        self.assertEqual(
+            self._cross_source_shared_markdowns(),
+            [],
+            "a markdown_uuid claimed by two source_names means one "
+            "source's rows were silently overwritten",
+        )
+        # Exactly the known offenders still mint non-UUID primary keys.
+        # Equality (not a subset check) in both directions: a new
+        # offender fails, and so does a stale allowlist entry.
+        self.assertEqual(
+            self._non_uuid_pk_providers(),
+            NON_UUID_PK_PROVIDERS,
+            "providers minting non-UUID grid_rows.uuid values; shrink "
+            "NON_UUID_PK_PROVIDERS as each is ported, and do not grow it",
+        )
+        # Guard against the regex silently matching nothing — a typo
+        # that made it match zero rows would satisfy the empty-set
+        # assertion above for entirely the wrong reason. Every row must
+        # be UUID-shaped, and there must be rows.
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                f"SELECT COUNT(*) FROM grid_rows WHERE uuid REGEXP '{UUID_SQL_REGEX}';",
+            ),
+            str(shape1["grid_rows"]),
+            "every grid_rows.uuid must match the UUID shape — if this "
+            "equals 0 the regex itself is broken, not the data",
+        )
+
+        # Ported providers must round-trip: the backpointer columns
+        # regenerate the row's own uuid. See `datalib_entity_id` for why
+        # this is reimplemented rather than delegated.
+        self.assertEqual(
+            self._roundtrip_failures(),
+            [],
+            "a ported provider's (upstream_entity_kind, upstream_id) "
+            "must regenerate its uuid",
+        )
+        # ...and every ported provider must actually have rows, or the
+        # emptiness above proves nothing.
+        counts = self._ported_provider_row_counts()
+        self.assertEqual(
+            frozenset(counts),
+            PORTED_PROVIDERS,
+            "every ported provider must contribute rows to check",
+        )
+        for name, n in counts.items():
+            self.assertGreater(n, 0, f"{name} must have rows")
+
         # The index is committed, so its version history is non-empty.
         self.assertGreater(
             int(self._scalar(self._index_db, "SELECT COUNT(*) FROM dolt_log;")),
@@ -362,6 +662,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
         )
+        # Ids specifically, not just how many of them there are.
+        #
+        # Note what this does and does not prove. A steady-state re-run
+        # skips every unchanged markdown on its `source_fingerprint`, so
+        # almost nothing is re-rendered and almost no id is re-derived —
+        # this is "the index sat still", which is worth pinning but is
+        # weaker than it looks. Re-derivation is tested by run 4.
+        self.assertEqual(
+            self._index_ids(),
+            ids1,
+            "run 2 must leave every id in place: a moved uuid orphans "
+            "filed feedback and breaks any /chat/{uuid} URL already "
+            "handed out",
+        )
         self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 2 providers")
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
@@ -385,6 +699,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             shape1,
             "run 3 (--reset-and-redownload) must converge to the same index",
         )
+        # The strongest form of the check: run 3 threw the raw stores
+        # away and fetched again, so these ids were derived a second
+        # time from a fresh download rather than read back off an
+        # existing index.
+        self.assertEqual(
+            self._index_ids(),
+            ids1,
+            "run 3 re-downloaded from scratch and must still mint byte-identical ids",
+        )
         self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 3 providers")
         # The cursor is wiped mid-run, so by the end it must be back —
         # same snapshot, same fingerprint.
@@ -392,6 +715,54 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._signal_cursor(),
             cursor1,
             "run 3 must re-record the same signal snapshot fingerprint",
+        )
+
+        # --- Run 4: a brand-new data root over the same fixture.
+        #
+        # The one run that actually re-derives every id. Runs 2 and 3
+        # both skip on `source_fingerprint`, so no id in them is
+        # recomputed — they pin that the index sits still, not that the
+        # recipes are reproducible. Wiping the root removes every
+        # fingerprint along with the index, so every renderer runs again
+        # from scratch.
+        #
+        # What this catches: a recipe that reads the clock, an RNG, or
+        # anything whose order is not fixed (HashMap iteration, readdir)
+        # — and a renderer that reads an id back off the existing index
+        # instead of deriving it, since there is no index to read.
+        #
+        # What it does NOT catch, because both runs see them identically:
+        #
+        #   * an id derived from `config.toml`. The driver regenerates
+        #     the same step ids every run, so a recipe keyed on the
+        #     source name is byte-identical here. Catching that needs a
+        #     run over the same fixture under *different* step ids,
+        #     which the driver cannot do today — its source names are a
+        #     hardcoded dict and three raw stores are seeded at paths
+        #     built from them. What stands in for it is
+        #     `SCOPE_TAG_BY_PROVIDER`: a ported provider whose ids
+        #     depend on configuration has to declare that as the `src`
+        #     scope and store the value in `upstream_scope`, or the
+        #     round-trip check above fails it.
+        #   * an id derived from the data-root path, which is the same
+        #     directory both times.
+        #   * anything that varies between upstream *responses* rather
+        #     than within one. The fixture replays fixed tapes, so the
+        #     two known instabilities — slack's count-only reactions and
+        #     anthropic's positional thinking-block index — cannot
+        #     surface here. See `docs/dev/entity_ids.md`.
+        shutil.rmtree(self.workspace)
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        self._run_pipeline(reset=False)
+        self.assertEqual(
+            self._index_shape(), shape1, "run 4 must rebuild the same index"
+        )
+        self.assertEqual(
+            self._index_ids(),
+            ids1,
+            "a fresh data root over the same fixture must mint "
+            "byte-identical ids — an id recipe that reads the clock, the "
+            "scan order, or the config would differ here and nowhere else",
         )
 
 

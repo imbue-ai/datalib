@@ -26,7 +26,7 @@ sibling `.update` target (via the `insta_update` macro in
 [`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`:
 
 ```bash
-bazel run //datalib/backend/core:fixture_db_snapshot_test.update
+bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
 bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 ```
 

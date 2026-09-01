@@ -217,6 +217,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
                     add_on_from_me,
                 ),
                 reactor_display,
+                source_ref: None,
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
                 date_ms: timestamp.unwrap_or(0),
             });
@@ -311,6 +312,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             project: None,
             external_id: Some(ch.chat_jid),
             source_url: None,
+            upstream_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -434,6 +436,7 @@ fn build_item(
         system_note: None,
         source_url: None,
         kind_label: None,
+        source_ref: None,
     }
 }
 

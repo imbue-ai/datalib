@@ -1148,6 +1148,7 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-chat-common",
  "datalib-etl-macros",
+ "datalib-id",
  "datalib-index-lib",
  "datalib-obs",
  "datalib-schema",
@@ -1215,6 +1216,7 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-chat-common",
  "datalib-etl-macros",
+ "datalib-id",
  "datalib-index-lib",
  "datalib-obs",
  "datalib-schema",
@@ -1571,6 +1573,7 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-chat-common",
  "datalib-etl-macros",
+ "datalib-id",
  "datalib-index-lib",
  "datalib-obs",
  "datalib-schema",
@@ -1689,6 +1692,13 @@ dependencies = [
  "tower-http",
  "uuid",
  "webbrowser",
+]
+
+[[package]]
+name = "datalib-id"
+version = "0.29.0"
+dependencies = [
+ "uuid",
 ]
 
 [[package]]

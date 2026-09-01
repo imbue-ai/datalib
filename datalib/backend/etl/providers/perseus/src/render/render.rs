@@ -485,7 +485,7 @@ fn book_grid_row(stanza: &str, book: &Book, bk_uuid: &str) -> Result<GridRow> {
             "https://scaife.perseus.org/reader/{TLG0003_TLG001}:{}/",
             book.n
         )))
-        .external_id(Some(book.n.clone()))
+        .upstream_id(Some(book.n.clone()))
         .markdown_uuid(Some(bk_uuid.to_string()))
         .build()
         .map_err(anyhow::Error::from)
@@ -519,7 +519,7 @@ fn chapter_grid_row(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci_u}/",
             edition.id
         )))
-        .external_id(Some(format!("{bi}.{ci_u}")))
+        .upstream_id(Some(format!("{bi}.{ci_u}")))
         .markdown_uuid(Some(ch_uuid.to_string()))
         .build()
         .map_err(anyhow::Error::from)
@@ -565,7 +565,7 @@ fn section_grid_row(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci}.{si}/",
             edition.id
         )))
-        .external_id(Some(format!("{bi}.{ci}.{si}")))
+        .upstream_id(Some(format!("{bi}.{ci}.{si}")))
         .markdown_uuid(Some(ch_uuid.to_string()))
         .build()
         .map_err(anyhow::Error::from)

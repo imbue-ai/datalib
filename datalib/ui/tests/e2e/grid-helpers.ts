@@ -34,6 +34,67 @@ export async function clickRowByUuid(page: Page, uuid: string) {
     .click();
 }
 
+// Right-click a row located by uuid. Same virtualization dance as
+// `clickRowByUuid` — a row scrolled out of the viewport has no DOM
+// node to dispatch at — but opens the context menu instead of
+// selecting.
+export async function contextMenuRowByUuid(page: Page, uuid: string) {
+  const rowIndex = await page.evaluate(
+    ({ uuid }) => {
+      type Node = {
+        rowIndex: number | null;
+        data?: { uuid: string };
+      };
+      const w = window as unknown as {
+        __fwGridApi?: {
+          forEachNode: (cb: (n: Node) => void) => void;
+          ensureNodeVisible: (n: Node, pos: "middle") => void;
+        };
+      };
+      const api = w.__fwGridApi!;
+      let found: number | null = null;
+      api.forEachNode((node) => {
+        if (node.data && node.data.uuid === uuid) {
+          api.ensureNodeVisible(node, "middle");
+          found = node.rowIndex;
+        }
+      });
+      return found;
+    },
+    { uuid },
+  );
+  expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
+  await page
+    .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
+    .click({ button: "right" });
+  await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
+}
+
+// Replace `navigator.clipboard.writeText` with a recorder, so a copy
+// action can be asserted on without granting clipboard permissions
+// (which differ per browser engine) or reading the real system
+// clipboard (which would make the test order-dependent and flaky under
+// parallelism). Returns a reader for whatever the page last copied.
+export async function stubClipboard(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __copied?: string };
+    w.__copied = undefined;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          w.__copied = t;
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  return async () =>
+    page.evaluate(
+      () => (window as unknown as { __copied?: string }).__copied ?? null,
+    );
+}
+
 // Assert that an AG Grid actually *painted*, not merely mounted.
 //
 // The failure this exists for: WebKit resolves a child's percentage

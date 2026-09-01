@@ -40,8 +40,8 @@ pub struct DoltRepo {
 /// as long as they existed.
 const SEARCH_ROW_COLUMNS: &str = "uuid, provider, kind, source_label, when_ts, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-     message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, external_id, \
-     qmd_path";
+     message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
+     upstream_entity_kind, qmd_path";
 
 /// Build a [`SearchRow`] from one `grid_rows` row selected with
 /// [`SEARCH_ROW_COLUMNS`]. `needle` is the free-text term the snippet is
@@ -93,7 +93,8 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         slack_link: r.try_get("slack_link").unwrap_or_default(),
         source_url: r.try_get("source_url").unwrap_or_default(),
         notion_page_uuid: r.try_get("notion_page_uuid").unwrap_or_default(),
-        external_id: r.try_get("external_id").unwrap_or_default(),
+        upstream_id: r.try_get("upstream_id").unwrap_or_default(),
+        upstream_entity_kind: r.try_get("upstream_entity_kind").unwrap_or_default(),
         score: None,
     }
 }

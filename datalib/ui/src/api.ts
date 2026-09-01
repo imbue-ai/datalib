@@ -60,11 +60,21 @@ export type SearchRow = {
   source_url: string;
   // For Notion rows: the page-level UUID the row belongs to. Empty otherwise.
   notion_page_uuid: string;
-  // Provider-assigned stable id (the grid_rows `external_id` column);
-  // empty when unset. For Perseus it's the locator path — `"1"` (book),
-  // `"1.2"` (chapter), `"1.2.3"` (section) — which perseusView parses to
-  // build its book→chapter→section tree.
-  external_id: string;
+  // The upstream's own id for this entity (the grid_rows
+  // `upstream_id` column); empty when the provider hasn't been
+  // ported onto `datalib_id` yet. This is what "Copy source ID(s)"
+  // copies, as opposed to `uuid` — ours resolves inside datalib, this
+  // one resolves upstream.
+  //
+  // For Perseus it's the locator path — `"1"` (book), `"1.2"`
+  // (chapter), `"1.2.3"` (section) — which perseusView parses to build
+  // its book→chapter→section tree.
+  upstream_id: string;
+  // What sort of upstream thing the row is, in the provider's own
+  // vocabulary (`"pull_request"`, `"pr_review_comment"`, `"page"`).
+  // Empty when unset. Disambiguates `upstream_id`, whose numeric
+  // ids overlap across a provider's API namespaces.
+  upstream_entity_kind: string;
   // QMD rank score. Present when the row came from a qmd-routed search;
   // omitted (undefined) for pure structured queries and the LIKE fallback.
   score?: number;

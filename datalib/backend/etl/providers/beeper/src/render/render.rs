@@ -656,7 +656,7 @@ fn build_grid_rows(
                     .join("\n"),
             )
             .qmd_path(qmd_path.clone())
-            .external_id(room.external_room_id.clone())
+            .upstream_id(room.external_room_id.clone())
             .markdown_uuid(Some(markdown_uuid.to_string()))
             .build()?,
     );
@@ -680,7 +680,7 @@ fn build_grid_rows(
                 .text(m.text_content.clone().unwrap_or_default())
                 .qmd_path(qmd_path.clone())
                 .source_url(m.blobs.first().and_then(|b| b.source_url.clone()))
-                .external_id(m.external_event_id.clone())
+                .upstream_id(m.external_event_id.clone())
                 .markdown_uuid(Some(markdown_uuid.to_string()))
                 .build()?,
         );
@@ -710,7 +710,7 @@ fn build_grid_rows(
                     .entire_chat(entire_chat.clone())
                     .text(r.reaction_emoji.clone().unwrap_or_default())
                     .qmd_path(qmd_path.clone())
-                    .external_id(r.external_event_id.clone())
+                    .upstream_id(r.external_event_id.clone())
                     .markdown_uuid(Some(markdown_uuid.to_string()))
                     .build()?,
             );

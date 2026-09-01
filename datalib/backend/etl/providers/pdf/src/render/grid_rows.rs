@@ -26,6 +26,14 @@ pub const SOURCE_LABEL: &str = "PDF";
 pub const KIND_DOCUMENT: &str = "PDF Document";
 pub const KIND_PAGE: &str = "PDF Page";
 
+/// `grid_rows.upstream_entity_kind` values — the `entity_kind` component
+/// of the `datalib_id` recipe, in the provider's own vocabulary.
+/// Distinct from `KIND_*` above, which are display labels for the
+/// grid's Kind column: those may be reworded freely, these may not,
+/// because `uuid` is derived from them.
+pub const ENTITY_KIND_DOCUMENT: &str = "document";
+pub const ENTITY_KIND_PAGE: &str = "page";
+
 fn pdf_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"pdf.datalib")
 }
@@ -186,7 +194,12 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         qmd_path: meta.qmd_path.map(str::to_string),
         source_url: source_url.clone(),
         git_sha: None,
-        external_id: Some(meta.blake3.to_string()),
+        // Content-scoped: identity IS the bytes, so the same PDF found
+        // under two scanned trees is deliberately one row. `upstream_scope`
+        // stays NULL because a content hash needs no further scoping.
+        upstream_id: Some(meta.blake3.to_string()),
+        upstream_entity_kind: Some(ENTITY_KIND_DOCUMENT.to_string()),
+        upstream_scope: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(doc_uuid.clone()),
@@ -218,7 +231,9 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             qmd_path: meta.qmd_path.map(str::to_string),
             source_url: source_url.clone(),
             git_sha: None,
-            external_id: Some(format!("{}#{number}", meta.blake3)),
+            upstream_id: Some(format!("{}#{number}", meta.blake3)),
+            upstream_entity_kind: Some(ENTITY_KIND_PAGE.to_string()),
+            upstream_scope: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(doc_uuid.clone()),

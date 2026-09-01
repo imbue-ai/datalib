@@ -1,0 +1,12 @@
+[package]
+name = "datalib-id"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_id"
+path = "src/lib.rs"
+
+[dependencies]
+uuid = { workspace = true }

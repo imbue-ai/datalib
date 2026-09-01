@@ -96,6 +96,14 @@ pub struct NormalizedReaction {
     /// Unix milliseconds when the reaction was sent. Used for
     /// fingerprint stability.
     pub date_ms: i64,
+    /// What this reaction is upstream, for its grid_row's backpointer
+    /// columns. `None` for providers not yet ported onto `datalib_id`.
+    ///
+    /// Reactions get their own grid_rows, so they need their own
+    /// backpointer — they are not covered by the containing item's.
+    /// The round-trip check treats an unset one on a ported provider
+    /// as a failure, which is how the gap was found.
+    pub source_ref: Option<UpstreamRef>,
 }
 
 /// One item in a chat doc — text message, attachment-bearing message,
@@ -137,6 +145,52 @@ pub struct NormalizedChatItem {
     /// default for anything that doesn't set it. Grid-only; doesn't change
     /// the markdown layout.
     pub kind_label: Option<String>,
+    /// What this item is upstream, for the message-level grid_row's
+    /// backpointer columns. `None` for providers not yet ported onto
+    /// `datalib_id`.
+    pub source_ref: Option<UpstreamRef>,
+}
+
+/// The upstream's own identity for one chat item, carried through to
+/// the message-level grid_row's `upstream_id` /
+/// `upstream_entity_kind`.
+///
+/// One field rather than two loose `Option`s because neither half is
+/// useful alone: a native id with no kind is ambiguous (GitHub numbers
+/// three comment types in overlapping sequences), and a kind with no id
+/// points at nothing. Making them inseparable means a provider cannot
+/// half-populate the backpointer.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpstreamRef {
+    /// The upstream's identifier for this item, within the chat's
+    /// scope — an Anthropic `message_uuid`, a Slack `ts`, a JMAP
+    /// `email_id`. The `natural_key` fed to `datalib_id::entity_id`.
+    pub native_id: String,
+    /// The `entity_kind` component of the same recipe, in the
+    /// upstream's vocabulary (`"message"`, `"tool_use"`,
+    /// `"thinking_block"`). Distinct from `kind_label`, which is a
+    /// display string for the grid's Kind column: that one may be
+    /// reworded freely, this one may not, because `uuid` derives from
+    /// it.
+    pub entity_kind: String,
+}
+
+impl UpstreamRef {
+    /// Build from an ids-module `Identity`'s own `entity_kind` and
+    /// `natural_key` — never from the expression that was *passed* to
+    /// the id function.
+    ///
+    /// The two are usually the same string, which is the hazard: a
+    /// recipe that later gains a prefix or a scope component leaves the
+    /// call site still storing the raw upstream value, and the
+    /// backpointer silently stops regenerating the row. Only
+    /// `ingested_tng_test`'s round-trip check would notice.
+    pub fn new(entity_kind: impl Into<String>, native_id: impl Into<String>) -> Self {
+        Self {
+            native_id: native_id.into(),
+            entity_kind: entity_kind.into(),
+        }
+    }
 }
 
 /// One rendered-markdown bucket: a slice of a chat covering a single
@@ -178,9 +232,28 @@ pub struct NormalizedChat {
     /// channel-network). Surfaced in `project`.
     pub project: Option<String>,
     /// Upstream id used by the source app (matrix room id, WhatsApp
-    /// JID, signal recipient identifier). Goes into the
-    /// chat-level grid_row's `external_id` and the .md frontmatter.
+    /// JID, Anthropic conversation UUID, Slack
+    /// `{channel_id}:{thread_ts}`). Goes into the chat-level grid_row's
+    /// `upstream_id` column and the .md frontmatter.
+    ///
+    /// Set it even when it currently equals the row's `uuid`: providers
+    /// that pass an upstream id through as the primary key lose that
+    /// route the moment they move onto `datalib_id`, and this column is
+    /// what the grid's "Copy source ID(s)" action reads.
     pub external_id: Option<String>,
+    /// The `Scope::Upstream` value every row in this chat was minted
+    /// under — the exact provider-issued string fed to
+    /// `datalib_id::entity_id`, stamped into `grid_rows.upstream_scope`.
+    /// `None` for chats minted under `ProviderGlobal` or `Content`.
+    ///
+    /// Per-chat rather than per-item because a chat belongs to exactly
+    /// one workspace/account, and every row inside it inherits that.
+    ///
+    /// Related to `account` but not the same: `account` is a display
+    /// and filter value the UI shows, and a provider may prettify it.
+    /// This one must stay byte-exact, because the round-trip check
+    /// recomputes `uuid` from it.
+    pub upstream_scope: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`
     /// link in the page title and the chat-level grid_row's `source_url`.
