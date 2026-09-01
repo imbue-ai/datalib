@@ -1,6 +1,6 @@
 // Catalog icon name → bundled asset URL.
 //
-// `ui/src/assets/` carries brand marks for eleven services; the rest of
+// `ui/src/assets/` carries brand marks for twelve services; the rest of
 // the catalog has none, so `iconUrl` returns null and callers render a
 // per-kind glyph. Used nominatively to identify a service — don't
 // restyle or recolor them.
@@ -16,6 +16,9 @@ import signalIconUrl from "@/assets/signal.svg";
 import slackIconUrl from "@/assets/slack.svg";
 import smsIconUrl from "@/assets/sms.svg";
 import whatsappIconUrl from "@/assets/whatsapp.svg";
+// PNG, not SVG: YoLink publishes no vector mark. This is the circle
+// logo shop.yosmart.com serves as its own favicon.
+import yolinkIconUrl from "@/assets/yolink.png";
 
 const ICONS: Record<string, string> = {
   chatgpt: chatgptIconUrl,
@@ -29,6 +32,7 @@ const ICONS: Record<string, string> = {
   slack: slackIconUrl,
   sms: smsIconUrl,
   whatsapp: whatsappIconUrl,
+  yolink: yolinkIconUrl,
 };
 
 export function iconUrl(name: string | null | undefined): string | null {

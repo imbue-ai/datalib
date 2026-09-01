@@ -305,29 +305,119 @@ pub struct GridIndexSummary {
     pub rows_inserted: usize,
 }
 
-/// Apply DDL for `grid_rows`, `markdowns`, and `edges`. The schema is
-/// the truth for fresh DBs; no migration support is provided because we
-/// don't promise back-compat with pre-`markdowns` databases — wipe and
-/// re-ingest if you're upgrading from an older release. The `edges`
-/// table is created here so older data roots (which never had it) gain
-/// the table on the next pipeline run; sidecars that don't
-/// carry edges leave the table empty.
+/// Every `CREATE TABLE` in the grid index, in creation order.
+///
+/// One list so the DDL pass and the schema check below can't drift into
+/// covering different sets of tables — a table missing from the check
+/// would keep an old shape forever while the ones beside it healed.
+fn index_ddl() -> impl Iterator<Item = &'static str> {
+    GRID_ROWS_DDL
+        .iter()
+        .map(|(_table, ddl)| *ddl)
+        .chain(std::iter::once(MARKDOWNS_DDL))
+        .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
+}
+
+/// Apply DDL for `grid_rows`, `markdowns`, and `edges`, and rebuild them
+/// from scratch if what's on disk no longer matches.
+///
+/// `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already
+/// exists, so without the reconcile below an index created under an
+/// older schema never gains a column a later change introduced — and
+/// then every statement naming that column fails. That is not
+/// hypothetical: #216 renamed `grid_rows.external_id` to `upstream_id`
+/// and added two columns beside it, and every data root predating it
+/// answered both the read path and the write path with
+/// `no such column: upstream_id`.
+///
+/// **Drop and rebuild, rather than `ALTER TABLE … ADD COLUMN`.** This is
+/// the opposite of [`crate::doltlite_raw::open`]'s policy for raw
+/// stores, deliberately, because the two hold different kinds of row.
+/// A raw store's rows cost a network fetch, so adding the column and
+/// keeping the rows is the cheap correct answer. Every row here is a
+/// pure function of a `.grid_rows.json` sidecar already on disk, so a
+/// rebuild costs one local scan — and it is the *only* answer that
+/// yields correct values: an `ADD COLUMN` leaves existing rows NULL in
+/// the new column, and `markdowns.source_fingerprint` then makes the
+/// next run skip exactly those documents, so the NULLs are permanent.
+///
+/// All three tables go together even when only one drifted, because
+/// `markdowns` holds the fingerprints that drive that skip. Dropping
+/// `grid_rows` alone would leave every document looking up-to-date and
+/// the index permanently empty.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_DDL {
+    for ddl in index_ddl() {
         sqlx::query(ddl)
             .execute(pool)
             .await
-            .context("create grid_rows")?;
+            .with_context(|| format!("create {}", table_of(ddl)))?;
     }
-    sqlx::query(MARKDOWNS_DDL)
-        .execute(pool)
-        .await
-        .context("create markdowns")?;
-    for (_table, ddl) in EDGES_DDL {
+    reconcile_index_schema(pool).await
+}
+
+/// The table a DDL statement creates, for error messages. Every
+/// statement in [`index_ddl`] is a `CREATE TABLE`, so the fallback is
+/// unreachable in practice; it degrades to the raw SQL rather than
+/// panicking.
+fn table_of(ddl: &str) -> String {
+    crate::doltlite_raw::parse_create_table_name(ddl).unwrap_or_else(|| ddl.to_string())
+}
+
+/// Drop and recreate every index table if any one of them disagrees
+/// with its DDL. See [`init_schema`] for why it is all-or-nothing and
+/// why rebuilding beats `ADD COLUMN` here.
+async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
+    let mut drift: Vec<String> = Vec::new();
+    for ddl in index_ddl() {
+        let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
+            continue;
+        };
+        let declared = crate::doltlite_raw::declared_column_names(pool, ddl, &table)
+            .await
+            .with_context(|| format!("declared columns for {table}"))?;
+        let actual = crate::doltlite_raw::actual_column_names(pool, &table)
+            .await
+            .with_context(|| format!("actual columns for {table}"))?;
+        if declared == actual {
+            continue;
+        }
+        let missing: Vec<&str> = declared
+            .difference(&actual)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let extra: Vec<&str> = actual
+            .difference(&declared)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        drift.push(format!(
+            "{table} (missing: [{}], unexpected: [{}])",
+            missing.join(", "),
+            extra.join(", ")
+        ));
+    }
+    if drift.is_empty() {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        drift = %drift.join("; "),
+        "grid_index: index schema predates this build; dropping and rebuilding \
+         every index table from the sidecar trees (no re-download, no re-render)"
+    );
+    for ddl in index_ddl() {
+        let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
+            continue;
+        };
+        sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+            .execute(pool)
+            .await
+            .with_context(|| format!("drop {table} for index rebuild"))?;
+    }
+    for ddl in index_ddl() {
         sqlx::query(ddl)
             .execute(pool)
             .await
-            .context("create edges")?;
+            .with_context(|| format!("recreate {}", table_of(ddl)))?;
     }
     Ok(())
 }
@@ -993,11 +1083,12 @@ async fn insert_grid_row(
     let res = sqlx::query(
         "INSERT INTO grid_rows \
          (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, author, account, \
-          project, channel, conversation_name, conversation_uuid, message_index, entire_chat, text, \
+          project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
+          message_index, entire_chat, text, \
           slack_link, qmd_path, source_url, git_sha, upstream_id, upstream_entity_kind, \
           upstream_scope, notion_page_uuid, notion_block_uuid, \
           markdown_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&row.uuid)
     .bind(&row.provider)
@@ -1009,6 +1100,8 @@ async fn insert_grid_row(
     .bind(&row.author)
     .bind(&row.account)
     .bind(&row.project)
+    .bind(&row.org_uuid)
+    .bind(&row.org_name)
     .bind(&row.channel)
     .bind(&row.conversation_name)
     .bind(&row.conversation_uuid)
@@ -1061,6 +1154,130 @@ async fn insert_grid_row(
         };
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod insert_round_trip_tests {
+    //! Every `GridRow` field has to actually reach the index.
+    //! [`insert_grid_row`] spells its column list and its bindings out
+    //! by hand, so a field can be declared on the struct, populated by
+    //! a renderer, selected by the read path and given a grid column —
+    //! and still be dropped silently on the way in. The row lands with
+    //! a NULL, every layer reports success, and the column is just
+    //! empty.
+    //!
+    //! That is not hypothetical: `org_uuid` / `org_name` shipped that
+    //! way. Both were declared with `#[col(sql = …)]`, set by
+    //! chat-common's renderer from real Anthropic org data, read back
+    //! by `SEARCH_ROW_COLUMNS`, and surfaced as the grid's "Org"
+    //! column — while the INSERT never listed them, so the column was
+    //! empty for every row from the day it appeared.
+    //!
+    //! Rather than pin those two names, this fills every column with a
+    //! distinct sentinel and asserts nothing reads back NULL. The next
+    //! forgotten column fails here instead of in the UI.
+    use super::*;
+    use datalib_schema::grid_rows::GridRow;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::{Column, Row, ValueRef};
+    use std::str::FromStr;
+    use tempfile::tempdir;
+
+    /// A row with every `Option` field `Some` and every scalar
+    /// non-empty, so any NULL read back is a binding that was dropped
+    /// rather than a value that was genuinely absent.
+    fn fully_populated_row() -> GridRow {
+        GridRow {
+            uuid: "row-everything".into(),
+            provider: "anthropic".into(),
+            kind: "Chat".into(),
+            source_label: "Claude".into(),
+            // Offset-bearing and parseable, so the two `#[derived]`
+            // columns (`when_ts_utc` / `when_offset`) are non-NULL too.
+            when_ts: Some("2026-06-02T13:00:00-07:00".into()),
+            author: Some("Jean-Luc Picard".into()),
+            account: Some("acct-1701".into()),
+            project: Some("proj-1701".into()),
+            org_uuid: Some("org-1701".into()),
+            org_name: Some("Starfleet".into()),
+            channel: Some("bridge".into()),
+            conversation_name: Some("Klingon Diplomatic Greeting".into()),
+            conversation_uuid: "conv-1701".into(),
+            message_index: Some(3),
+            entire_chat: "/chat/conv-1701".into(),
+            text: "Tea. Earl Grey. Hot.".into(),
+            slack_link: Some("https://example.test/archives/C1/p1".into()),
+            qmd_path: Some("chats/conv-1701.md".into()),
+            source_url: Some("https://claude.ai/chat/conv-1701".into()),
+            git_sha: Some("0123456789abcdef".into()),
+            upstream_id: Some("upstream-1701".into()),
+            upstream_entity_kind: Some("conversation".into()),
+            upstream_scope: Some("claude.ai".into()),
+            notion_page_uuid: Some("notion-page-1701".into()),
+            notion_block_uuid: Some("notion-block-1701".into()),
+            markdown_uuid: Some("md-1701".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_grid_row_column_survives_the_insert() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("round_trip.doltlite_db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("open pool");
+        init_schema(&pool).await.expect("init_schema");
+
+        let row = fully_populated_row();
+        let mut conn = pool.acquire().await.expect("acquire");
+        insert_grid_row(&mut conn, &row)
+            .await
+            .expect("insert_grid_row");
+        drop(conn);
+
+        // `SELECT *` on purpose: the point is to see every column the
+        // DDL declares, including ones this test predates.
+        let read_back = sqlx::query("SELECT * FROM grid_rows WHERE uuid = ?")
+            .bind(&row.uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("read grid_rows back");
+
+        let dropped: Vec<&str> = read_back
+            .columns()
+            .iter()
+            .filter(|c| {
+                read_back
+                    .try_get_raw(c.ordinal())
+                    .map(|v| v.is_null())
+                    .unwrap_or(false)
+            })
+            .map(|c| c.name())
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "every column of a fully-populated GridRow should come back \
+             non-NULL, but these read back NULL: {dropped:?}. Each is \
+             declared on GridRow (or derived in insert_grid_row) but \
+             missing from the INSERT's column list or its bindings."
+        );
+
+        // Spot-check the two that motivated this test, so a failure
+        // names them rather than only counting NULLs.
+        assert_eq!(
+            read_back.try_get::<Option<String>, _>("org_uuid").unwrap(),
+            row.org_uuid
+        );
+        assert_eq!(
+            read_back.try_get::<Option<String>, _>("org_name").unwrap(),
+            row.org_name
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1473,5 +1690,203 @@ mod write_lock_tests {
         assert_eq!(m.avg_wait(), Duration::ZERO);
         assert_eq!(m.avg_hold(), Duration::ZERO);
         let _ = StdArc::new(()).as_ref();
+    }
+}
+
+#[cfg(test)]
+mod schema_reconcile_tests {
+    //! The index must survive a schema change to `grid_rows`,
+    //! `markdowns` or `edges` without a human deleting the file.
+    //!
+    //! Both directions matter and fail silently in opposite ways. A
+    //! reconcile that doesn't fire leaves every statement naming a new
+    //! column erroring against an older data root — the #216 bug these
+    //! tests were written for. One that fires when it shouldn't wipes a
+    //! healthy index on every single pipeline run, and because the
+    //! rebuild that follows repopulates it, the only visible symptom is
+    //! that the run got slower.
+
+    use std::path::Path;
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use tempfile::tempdir;
+
+    use crate::doltlite_raw::actual_column_names;
+    use crate::grid_index::{init_schema, EDGES_DDL, MARKDOWNS_DDL};
+
+    /// `grid_rows` exactly as data roots created before #216 have it on
+    /// disk — read out of a real one with the doltlite shell. `git_sha`
+    /// is followed by `external_id`, and none of the three `upstream_*`
+    /// columns that replaced it exist.
+    ///
+    /// Written out longhand rather than derived from the current DDL:
+    /// the point is to pin a shape from history, and a shape computed
+    /// from today's struct would silently become "today's shape" again
+    /// the next time a column moves.
+    const PRE_216_GRID_ROWS_DDL: &str = "CREATE TABLE IF NOT EXISTS grid_rows (
+        uuid VARCHAR(96) NOT NULL,
+        provider VARCHAR(32) NOT NULL,
+        kind VARCHAR(32) NOT NULL,
+        source_label VARCHAR(32) NOT NULL,
+        when_ts VARCHAR(40),
+        when_ts_utc VARCHAR(40),
+        when_offset VARCHAR(8),
+        author VARCHAR(255),
+        account VARCHAR(96),
+        project VARCHAR(96),
+        org_uuid VARCHAR(96),
+        org_name VARCHAR(255),
+        channel VARCHAR(255),
+        conversation_name TEXT,
+        conversation_uuid VARCHAR(96) NOT NULL,
+        message_index INT,
+        entire_chat VARCHAR(255) NOT NULL,
+        text LONGTEXT NOT NULL,
+        slack_link VARCHAR(512),
+        qmd_path VARCHAR(512),
+        source_url VARCHAR(1024),
+        git_sha VARCHAR(64),
+        external_id VARCHAR(128),
+        notion_page_uuid VARCHAR(96),
+        notion_block_uuid VARCHAR(96),
+        markdown_uuid VARCHAR(96),
+        PRIMARY KEY (uuid)
+    )";
+
+    async fn open_pool(db: &Path) -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+            .unwrap()
+            .create_if_missing(true);
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap()
+    }
+
+    async fn count(pool: &SqlitePool, table: &str) -> i64 {
+        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Seed one indexed document in the pre-#216 shape: a `markdowns`
+    /// row carrying the fingerprint that drives the skip, and the
+    /// `grid_rows` row it produced.
+    async fn seed_pre_216(pool: &SqlitePool) {
+        sqlx::query(PRE_216_GRID_ROWS_DDL)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(MARKDOWNS_DDL).execute(pool).await.unwrap();
+        for (_table, ddl) in EDGES_DDL {
+            sqlx::query(ddl).execute(pool).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \
+             VALUES ('md-1', 'claude_web', 'anthropic', 'Chat', 'fp-1')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
+             entire_chat, text, external_id, markdown_uuid) \
+             VALUES ('row-1', 'anthropic', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
+             'upstream-1', 'md-1')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// An index written before #216 is brought to the current schema,
+    /// and its fingerprints are cleared so the rebuild actually runs.
+    ///
+    /// The `markdowns` assertion is the load-bearing half. Recreating
+    /// `grid_rows` alone would satisfy every "does the column exist"
+    /// check while leaving `markdowns.source_fingerprint` in place — and
+    /// `build_grid_index` skips a document whose fingerprint still
+    /// matches, so the index would stay empty for as long as nothing
+    /// upstream changed.
+    #[tokio::test]
+    async fn an_index_predating_a_column_rename_is_rebuilt() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
+        seed_pre_216(&pool).await;
+
+        init_schema(&pool).await.expect("init_schema");
+
+        let cols = actual_column_names(&pool, "grid_rows").await.unwrap();
+        for added in ["upstream_id", "upstream_entity_kind", "upstream_scope"] {
+            assert!(cols.contains(added), "grid_rows must have gained {added}");
+        }
+        assert!(
+            !cols.contains("external_id"),
+            "the column upstream_id replaced must be gone"
+        );
+        assert_eq!(
+            count(&pool, "markdowns").await,
+            0,
+            "fingerprints must be cleared, or build_grid_index skips every \
+             document and the rebuilt index stays empty"
+        );
+        assert_eq!(count(&pool, "grid_rows").await, 0);
+    }
+
+    /// The write path works afterwards. This is the statement that
+    /// actually failed on a real data root — `no such column:
+    /// upstream_id` from inside `insert_grid_row` — so asserting the
+    /// column list alone would leave the thing users hit untested.
+    #[tokio::test]
+    async fn the_rebuilt_index_accepts_a_write() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
+        seed_pre_216(&pool).await;
+        init_schema(&pool).await.expect("init_schema");
+
+        sqlx::query(
+            "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
+             entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid) \
+             VALUES ('row-2', 'anthropic', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
+             'upstream-1', 'conversation', '', 'md-1')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert naming the post-#216 columns must succeed");
+    }
+
+    /// An index already at the current schema is left completely alone.
+    ///
+    /// Without this, a reconcile whose comparison is subtly wrong (a
+    /// name normalized differently, a set compared against a list)
+    /// would drop and rebuild the whole index on every run. Nothing
+    /// downstream would notice — the rebuild puts the rows back — so
+    /// the only symptom would be a pipeline that quietly stopped being
+    /// incremental.
+    #[tokio::test]
+    async fn a_current_index_is_not_touched() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("grid.doltlite_db")).await;
+        init_schema(&pool).await.expect("first init_schema");
+
+        sqlx::query(
+            "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \
+             VALUES ('md-1', 'claude_web', 'anthropic', 'Chat', 'fp-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        init_schema(&pool).await.expect("second init_schema");
+
+        assert_eq!(
+            count(&pool, "markdowns").await,
+            1,
+            "a matching schema must not be rebuilt; the fingerprints that make \
+             the index incremental would be thrown away on every run"
+        );
     }
 }

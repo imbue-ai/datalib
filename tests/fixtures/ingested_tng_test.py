@@ -492,7 +492,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         ]
         result = subprocess.run(
             argv,
-            check=True,
+            check=False,
             cwd=str(self.cwd),
             env=env,
             capture_output=True,
@@ -500,8 +500,16 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         # Print the captured streams so a test failure leaves the
         # orchestrator's output in the test's own log for debugging.
+        #
+        # `check=False` plus an explicit raise below, rather than
+        # `check=True`: raising inside `subprocess.run` skipped these two
+        # writes entirely, so the one case this printing exists for — the
+        # pipeline exiting non-zero — was the one case that printed
+        # nothing, and the failure reached the log as a bare
+        # `CalledProcessError` naming a 25-argument command line.
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
+        result.check_returncode()
         return result
 
     def test_pipeline_resume_and_reset(self) -> None:

@@ -100,7 +100,7 @@
 //! that opens a `SqlitePool` against a `.doltlite_db` file MUST
 //! do the same. If you find a callsite that doesn't, fix it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
@@ -691,10 +691,68 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
     Ok(cols)
 }
 
+/// The columns a `CREATE TABLE` DDL *declares*, learned by letting
+/// SQLite parse the statement into a throwaway probe table.
+///
+/// The probe exists so nothing here hand-rolls a parser for column
+/// definitions: whatever SQLite makes of the DDL is by definition what
+/// the real table would have got.
+async fn declared_columns(
+    pool: &SqlitePool,
+    create_sql: &str,
+    table: &str,
+) -> Result<Vec<ColumnInfo>> {
+    const PROBE: &str = "__datalib_schema_probe__";
+    // The table name's first occurrence is the name itself (the CREATE /
+    // TABLE / IF NOT EXISTS keywords never equal a table name).
+    let probe_sql = create_sql.replacen(table, PROBE, 1);
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
+        .execute(pool)
+        .await;
+    sqlx::query(&probe_sql)
+        .execute(pool)
+        .await
+        .with_context(|| format!("build schema probe for {table}"))?;
+    let cols = table_columns(pool, PROBE).await;
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
+        .execute(pool)
+        .await;
+    cols
+}
+
+/// Column *names* a `CREATE TABLE` DDL declares. The name-only view of
+/// [`declared_columns`], for callers that only need to answer "does the
+/// on-disk shape still match the code's?" — see
+/// [`crate::grid_index::init_schema`].
+pub(crate) async fn declared_column_names(
+    pool: &SqlitePool,
+    create_sql: &str,
+    table: &str,
+) -> Result<BTreeSet<String>> {
+    Ok(declared_columns(pool, create_sql, table)
+        .await?
+        .into_iter()
+        .map(|c| c.name)
+        .collect())
+}
+
+/// Column names `table` actually has on disk. Empty when the table does
+/// not exist, matching [`table_columns`].
+pub(crate) async fn actual_column_names(
+    pool: &SqlitePool,
+    table: &str,
+) -> Result<BTreeSet<String>> {
+    Ok(table_columns(pool, table)
+        .await?
+        .into_iter()
+        .map(|c| c.name)
+        .collect())
+}
+
 /// Extract the table name from a `CREATE TABLE [IF NOT EXISTS] <name>
 /// (…)` statement. `None` for anything that isn't a `CREATE TABLE`
 /// (e.g. `CREATE INDEX`), which has no columns to reconcile.
-fn parse_create_table_name(sql: &str) -> Option<String> {
+pub(crate) fn parse_create_table_name(sql: &str) -> Option<String> {
     let s = sql.trim_start();
     if !s.get(..12)?.eq_ignore_ascii_case("CREATE TABLE") {
         return None;
@@ -737,23 +795,9 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
     let Some(table) = parse_create_table_name(create_sql) else {
         return Ok(());
     };
-    const PROBE: &str = "__datalib_schema_probe__";
 
-    // 1. Desired columns, via a probe built from this exact DDL. The
-    //    table name's first occurrence is the name itself (the CREATE /
-    //    TABLE / IF NOT EXISTS keywords never equal a table name).
-    let probe_sql = create_sql.replacen(&table, PROBE, 1);
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
-        .execute(pool)
-        .await;
-    sqlx::query(&probe_sql)
-        .execute(pool)
-        .await
-        .with_context(|| format!("build schema probe for {table}"))?;
-    let desired = table_columns(pool, PROBE).await?;
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
-        .execute(pool)
-        .await;
+    // 1. Desired columns, via a probe built from this exact DDL.
+    let desired = declared_columns(pool, create_sql, &table).await?;
 
     // 2. Actual columns. Empty ⇒ table doesn't exist (defensive: the DDL
     //    pass should have created it) ⇒ create and return.

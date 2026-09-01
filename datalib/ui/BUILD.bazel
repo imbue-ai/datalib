@@ -117,6 +117,23 @@ _E2E_DATA = [
     # in the runfiles or every grid spec sees an empty page.
     "//datalib/backend/applets:datalib_applet",
     "//tests/fixtures:materialize_tng_root",
+    # The step host, for the spec that drives a real sync. The fixture
+    # root is a temp dir with nothing on PATH and no `binary_dir`, so a
+    # step's `command:` has to name an absolute path — which means the
+    # binary has to be in the runfiles. `fsindex` is the step it runs:
+    # file-backed, no network, no credentials, and read-only against the
+    # tree it scans (`stamp` defaults off).
+    # The DAG runner the http server's sync worker shells out to. Without
+    # it every sync fails at startup with "datalib-dag binary not found",
+    # which no spec noticed until one of them actually ran a sync.
+    "//datalib/backend/dag:datalib_dag_bin",
+    "//datalib/backend/datalib_step:datalib_step",
+    # A local PDF corpus for that same spec. `pdf` is the local-only
+    # provider that has BOTH halves — download and render — so a config
+    # built on it exercises a real `raw -> rendered_md` edge, which is
+    # what makes "everything downstream is queued too" a real assertion
+    # rather than a contrived one.
+    "//datalib/backend/etl/providers/pdf:pdf_fixture",
     # rules_js-linked node_modules built from pnpm-lock.yaml; replaces
     # the host `pnpm install` for the `bazel test` path.
     ":node_modules",

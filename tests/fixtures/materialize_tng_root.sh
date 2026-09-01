@@ -64,12 +64,19 @@ chmod u+w "$OUT_ROOT/unified_index/grid/db.doltlite_db"
 # declare it or the app comes up with no search. An absolute command
 # rather than a bare name: this root is materialized into a temp dir with
 # no `binary_dir` and nothing installed on PATH.
+#
+# Single-quoted, because a `command` is split shell-style and the path
+# may contain spaces — a checkout under, say, `~/Imbue Dropbox/` yields
+# a runfiles path that unquoted splits into `/Users/you/Imbue` and dies
+# with "Permission denied". `bazel test` happens to stage runfiles under
+# a space-free cache dir, so this only bites the `bazelisk run
+# //datalib:dev_tng` path, which resolves through the source tree.
 cat > "$OUT_ROOT/config.toml" <<EOF
 data_root = "$OUT_ROOT"
 
 [[applets]]
 id = "unified_index"
-command = "$APPLET_BIN unified_index"
+command = "'$APPLET_BIN' unified_index"
 EOF
 
 # qmd models live once in ~/.cache/qmd/models (~1.6 GB) and every data

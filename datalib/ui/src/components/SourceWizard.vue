@@ -547,7 +547,7 @@ function submit() {
           <input
             v-if="f.kind === 'bool'"
             type="checkbox"
-            class="wiz-check"
+            class="wiz-bool"
             :checked="!!values[f.target]"
             @change="values[f.target] = ($event.target as HTMLInputElement).checked"
           />
@@ -697,7 +697,13 @@ function submit() {
   font: inherit;
 }
 .wiz-filter { margin-bottom: 16px; }
-.wiz-check { width: 16px; height: 16px; }
+/* A bool field's own checkbox. Named apart from `.wiz-check` — the
+   "also render this" card further down — because the two were one
+   class, and this 16px box was being applied to that whole card:
+   its label and its paragraph of help got a 16px-wide column to wrap
+   inside, and overlapped the disclosure below it. Two elements, two
+   names. */
+.wiz-bool { width: 16px; height: 16px; }
 
 .wiz-group h3 {
   font-size: 11px;

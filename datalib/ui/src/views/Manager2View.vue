@@ -51,11 +51,14 @@ import {
   fetchPipelineStorage,
   fetchFrontend,
   enqueueJob,
+  cancelJob,
   openJobStream,
   type DagRun,
   type DagStep,
   type DagStepProgress,
   type SyncJob,
+  type SyncTask,
+  type JobProgressEvent,
   type OutputStorage,
 } from "@/api";
 import {
@@ -76,6 +79,19 @@ import {
 } from "@/config/sourceSteps";
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
+import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
+import {
+  claimedBy as claimedByJob,
+  sourcesFeeding as sourcesFeedingIn,
+  stepStatus as statusOf,
+  waitingOn,
+  pushedOverlay,
+  boardWentTerminal,
+  withOverlay,
+  effectiveRun,
+  type Overlay,
+  type StatusView,
+} from "@/config/pipelineStatus";
 import SourceWizard from "@/components/SourceWizard.vue";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
@@ -191,10 +207,12 @@ type Row = {
   renderBlocked: string | null;
   revealBlocked: string | null;
   lastSynced: string | null;
-  lastStatus: string;
-  /// Why the status is what it is — a failure message, or how a run
-  /// came to be interrupted. Null when the status speaks for itself.
-  statusDetail: string | null;
+  status: StatusView;
+  /// The active job that has claimed this step, when one has. Non-null
+  /// is exactly the condition that turns Run into Stop: work is already
+  /// queued or in flight for this row, so the useful button is the one
+  /// that calls it off.
+  stopJobId: string | null;
   /// Live position in the run currently in flight, from the progress
   /// bus. Null when the step isn't running or hasn't reported anything.
   progress: DagStepProgress | null;
@@ -218,39 +236,45 @@ const PHASE_LABEL: Record<StepPhase, string> = {
   other: "Step",
 };
 
-/// What a step is doing right now, or did last — read off the runner's
-/// record rather than inferred from the job queue.
-///
-/// The queue records whole *runs*, so a run naming several steps could
-/// only ever attribute one timestamp and one status to all of them;
-/// that is what the old `~` marker was apologizing for. The runner
-/// knows per step, and now says so.
-///
-/// A run whose record has no `finished_at` and whose lock nobody holds
-/// is a run that died. Its steps say `interrupted` rather than spinning
-/// forever.
-function stepStatus(id: string): { label: string; at: string | null; detail?: string } {
-  const step = dagSteps.value[id];
-  const run = dagRun.value;
-  const live = run?.live ?? false;
+/// The DAG edges and the claimed-step map, recomputed whenever the
+/// config or the queue moves. The logic itself is in
+/// `config/pipelineStatus.ts`, where it is testable without a grid.
+const claimedBy = computed(() => claimedByJob(sources.value, jobs.value));
 
-  const current = step?.current_state;
-  if (current && run && !run.finished_at) {
-    if (live) return { label: current, at: step?.last_run?.started_at ?? run.started_at };
-    return {
-      label: "interrupted",
-      at: step?.last_run?.started_at ?? run.started_at,
-      detail: `Started ${run.started_at} and never finished — no runner holds this root now, so it was killed or crashed.`,
-    };
-  }
+/// Per-step state from the newest pushed task board, overlaid on what
+/// the last `/api/dag` poll knew.
+///
+/// This is what makes the grid react rather than wait. The worker
+/// publishes the board over SSE within 400 ms of any change — and the
+/// enqueue and cancel handlers publish the instant they write a job
+/// row — so a step going running reaches this ref without a round trip.
+/// Cleared when a run ends, since a board outlives nothing.
+const liveTasks = ref<Record<string, Overlay>>({});
 
-  const last = step?.last_run;
-  if (!last) return { label: "never run", at: null };
-  return {
-    label: last.status || "running",
-    at: last.finished_at ?? last.started_at,
-    detail: last.error ?? undefined,
-  };
+/// The job the pushed board belongs to. Only one job runs at a time
+/// (the worker claims them one by one), so this is unambiguous.
+const liveJob = computed(() => jobs.value.find((j) => j.state === "running"));
+
+/// Has this step reached a terminal state in the run now in flight?
+///
+/// A step with no state has not been reached; one that is `running` is
+/// still going. Everything else the runner reports — including
+/// `not_selected` — means it will not move again this run, which is
+/// what "no longer blocking anything downstream" means.
+function finishedThisRun(id: string): boolean {
+  const state = withOverlay(dagSteps.value[id], id, liveTasks.value[id])?.current_state;
+  return !!state && state !== "running";
+}
+
+function stepStatus(id: string): StatusView {
+  return statusOf({
+    id,
+    step: withOverlay(dagSteps.value[id], id, liveTasks.value[id]),
+    run: effectiveRun(dagRun.value, liveJob.value),
+    claim: claimedBy.value.get(id),
+    waitingOn: waitingOn(sources.value, id, finishedThisRun),
+    formatStamp,
+  });
 }
 
 const rows = computed<Row[]>(() =>
@@ -266,13 +290,23 @@ const rows = computed<Row[]>(() =>
           );
     const onDisk = outputs.filter((o) => o.present);
 
-    // Run: the DAG schedules steps, so a source and a plain step can
-    // both be targeted; an applet is spawned by the gateway on demand
-    // and has nothing to enqueue.
+    // Run: a sync is started at a *source* step — one with no declared
+    // inputs — and everything downstream follows change propagation.
+    // `datalib-dag` rejects a `--sync` naming anything else outright
+    // ("not a source step: …"), so offering the button on a render or
+    // index row would only ever queue a job that fails on startup.
+    // Naming the sources that would carry it is the useful half of
+    // saying no.
+    const seeds = s.kind === "step" ? sourcesFeedingIn(sources.value, s.id) : [];
     const runBlocked =
       s.kind === "applet"
         ? "Applets aren't scheduled — the server starts one when something asks for it."
-        : null;
+        : s.inputs.length === 0
+          ? null
+          : seeds.length === 1
+            ? `A sync starts at a source step. Run ${seeds[0]} — this runs with it.`
+            : `A sync starts at a source step. This one runs whenever any of its ` +
+              `sources does: ${seeds.join(", ") || "none it can reach"}.`;
 
     // Edit: the wizard's forms describe provider steps. Everything else
     // is hand-written config, and the honest answer is to say so.
@@ -316,12 +350,15 @@ const rows = computed<Row[]>(() =>
 
     // An applet's health is its own thing: it isn't scheduled, so the
     // runner's record says nothing about it. `GET /api/frontend` does.
-    const lastStatus =
+    // It is up or it is not — there is no history to show, which is why
+    // the timestamp stays null on these rows rather than borrowing one.
+    const appletErr = appletErrors.value[s.id];
+    const status: StatusView =
       s.kind === "applet"
-        ? appletErrors.value[s.id]
-          ? "failed"
-          : "running"
-        : run!.label;
+        ? appletErr
+          ? { key: "failed", label: "Failed to start", at: null, detail: appletErr }
+          : { key: "succeeded", label: "Up", at: null, detail: "The gateway has this applet up." }
+        : run!;
 
     return {
       id: s.id,
@@ -337,9 +374,9 @@ const rows = computed<Row[]>(() =>
       editBlocked,
       renderBlocked,
       revealBlocked,
-      lastSynced: run?.at ?? null,
-      lastStatus,
-      statusDetail: run?.detail ?? null,
+      lastSynced: status.at,
+      status,
+      stopJobId: claimedBy.value.get(s.id)?.id ?? null,
       progress: s.kind === "applet" ? null : (dagSteps.value[s.id]?.progress ?? null),
       bytes: onDisk.length ? outputs.reduce((n, o) => n + o.bytes, 0) : null,
       outputs,
@@ -363,10 +400,46 @@ function formatBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
+/// The largest value in the Bytes column, which is what every bar is
+/// drawn against. Zero when nothing is on disk, and the renderer draws
+/// no bar at all rather than dividing by it.
+const maxBytes = computed(() =>
+  rows.value.reduce((m, r) => Math.max(m, r.bytes ?? 0), 0),
+);
+
+/// Timestamps in the viewer's own locale, on a 24-hour clock.
+///
+/// `hourCycle` rather than the locale's default: the times here are
+/// operational — "did this run before or after that one" — and a
+/// 12-hour clock makes that a two-token comparison. Everything else
+/// (field order, month name, separators) still follows the system.
+const STAMP_FMT = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/// Render one of the tree's ISO-8601-with-offset stamps. Returns the
+/// string unchanged when it isn't a date we can parse — a stamp we
+/// can't read is still worth showing verbatim.
+function formatStamp(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
+}
+
 /// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
 /// button's own colour through hover, disabled and the dark theme.
 const ICON_PATHS: Record<string, string> = {
   run: "M8 5v14l11-7z",
+  // The play button's other face. A row whose work is already queued or
+  // in flight can't usefully be started again, so the button becomes
+  // the one thing left to do with it.
+  stop: "M6 6h12v12H6z",
   edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
   reveal: "M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z",
   trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
@@ -424,15 +497,8 @@ const columnDefs: ColDef<Row>[] = [
     // the on-disk layout is meant to be legible, and a grid that
     // stopped naming it would give that away for a prettier row.
     cellRenderer: (p: ICellRendererParams<Row>) => {
-      const url = iconUrl(p.data?.icon);
       const wrap = document.createElement("span");
       wrap.className = "m2-cell-source";
-      if (url) {
-        const img = document.createElement("img");
-        img.src = url;
-        img.alt = "";
-        wrap.appendChild(img);
-      }
       const text = document.createElement("span");
       text.textContent = p.data?.name ?? "";
       wrap.appendChild(text);
@@ -447,71 +513,129 @@ const columnDefs: ColDef<Row>[] = [
     },
   },
   {
-    headerName: "Kind",
-    field: "kindLabel",
-    width: 90,
-    minWidth: 90,
+    // The service, as its own mark. No text: a brand mark is more
+    // legible at a glance than its name is, and the name is one hover
+    // away — which is the trade the whole row makes.
+    headerName: "Type",
+    field: "typeLabel",
+    width: 70,
+    minWidth: 70,
     cellRenderer: (p: ICellRendererParams<Row>) => {
-      const span = document.createElement("span");
-      span.className = `m2-kind m2-kind-${p.data?.kind}`;
-      span.textContent = p.data?.kindLabel ?? "";
-      return span;
+      const row = p.data;
+      const wrap = document.createElement("span");
+      wrap.className = "m2-cell-type";
+      if (!row) return wrap;
+      const url = iconUrl(row.icon);
+      if (url) {
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = row.typeLabel;
+        img.title = row.typeLabel;
+        wrap.appendChild(img);
+      } else {
+        // No brand mark for this type. The word is what we have, and a
+        // blank cell would read as "no type" rather than "no logo".
+        const abbr = document.createElement("span");
+        abbr.className = "m2-type-word";
+        abbr.textContent = row.typeLabel;
+        abbr.title = row.typeLabel;
+        wrap.appendChild(abbr);
+      }
+      return wrap;
     },
   },
-  { headerName: "Type", field: "typeLabel", width: 130, minWidth: 130 },
+  {
+    // What this row does in the pipeline: brings data in, turns it into
+    // markdown, indexes it, or serves it.
+    headerName: "Step",
+    field: "kindLabel",
+    width: 64,
+    minWidth: 64,
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const row = p.data;
+      const wrap = document.createElement("span");
+      wrap.className = "m2-cell-step";
+      if (!row) return wrap;
+      const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
+      wrap.title = row.kindLabel;
+      wrap.appendChild(glyphSvg(glyph, row.kindLabel));
+      return wrap;
+    },
+  },
+  {
+    headerName: "Status",
+    field: "status",
+    width: 96,
+    minWidth: 96,
+    // Sort and filter on the word, not on the object — otherwise both
+    // operate on "[object Object]" and quietly do nothing useful.
+    valueGetter: (p: ValueGetterParams<Row>) => p.data?.status.label ?? "",
+    // No `tooltipValueGetter` here: the renderer sets a native `title`,
+    // and AG Grid's own tooltip on top of it means two tooltips racing
+    // on one cell. One mechanism, carrying the whole sentence.
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const row = p.data;
+      const wrap = document.createElement("span");
+      if (!row) return wrap;
+      const { key, label } = row.status;
+      wrap.className = `m2-status m2-status-${key.replace(/[\s_]+/g, "-")}`;
+      // The word, and then why it is that word: a failure message, how
+      // a run died, or which steps a queued row is behind. The column
+      // is icons, so this is the only place either appears.
+      //
+      // While it is running the step's own words beat everything — more
+      // than "Running" ever is.
+      const why = row.progress?.msg ?? row.status.detail;
+      wrap.title = why ? `${label} — ${why}` : label;
+
+      if (key === "running") {
+        // A still frame can't say "still going", so running is the one
+        // state drawn rather than glyphed.
+        const spin = document.createElement("span");
+        spin.className = "m2-spinner";
+        spin.setAttribute("role", "img");
+        spin.setAttribute("aria-label", label);
+        wrap.appendChild(spin);
+
+        const prog = row.progress;
+        // A known total gets a bar. An unknown one gets none: a bar at
+        // an invented fraction claims more than we know, and the
+        // spinner is already the honest signal that something is
+        // happening.
+        if (prog && prog.total != null && prog.total > 0 && prog.done != null) {
+          const frac = Math.max(0, Math.min(1, prog.done / prog.total));
+          const bar = document.createElement("span");
+          bar.className = "m2-progress";
+          const fill = document.createElement("span");
+          fill.style.width = `${frac * 100}%`;
+          bar.appendChild(fill);
+          wrap.appendChild(bar);
+        }
+        return wrap;
+      }
+
+      const glyph = STATUS_GLYPHS[key];
+      if (glyph) {
+        wrap.appendChild(glyphSvg(glyph, label));
+      } else {
+        // A status this sheet hasn't met. Say the word rather than
+        // drawing nothing — an unknown state is exactly when a reader
+        // most needs to know what it was.
+        wrap.textContent = label;
+      }
+      return wrap;
+    },
+  },
   {
     headerName: "Last synced",
     field: "lastSynced",
-    width: 175,
-    minWidth: 175,
-    valueFormatter: (p) => (p.value ? new Date(p.value as string).toLocaleString() : "—"),
-  },
-  {
-    headerName: "Last status",
-    field: "lastStatus",
-    width: 140,
-    minWidth: 140,
-    tooltipValueGetter: (p: { data?: Row }) => {
-      const row = p.data;
-      if (!row) return undefined;
-      if (row.kind === "applet") {
-        return appletErrors.value[row.id] ?? "The gateway has this applet up.";
-      }
-      // While it is running, the step's own words are the most useful
-      // thing we have — more than "running" ever is.
-      return row.progress?.msg ?? row.statusDetail ?? undefined;
-    },
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const span = document.createElement("span");
-      const label = p.data?.lastStatus ?? "";
-      // `skipped_up_to_date` is the runner's word; "up to date" is what
-      // it means to someone looking at a table.
-      span.className = `m2-status m2-status-${label.replace(/[\s_]+/g, "-")}`;
-      let text = label.replace(/_/g, " ").replace("skipped up to date", "up to date");
-
-      const prog = p.data?.progress;
-      if (label === "running" && prog) {
-        // A known total gets a count and a bar drawn as the pill's own
-        // background. An unknown one gets neither: "6" with no
-        // denominator, or a bar at an invented fraction, both claim more
-        // than we know. The pill keeps pulsing, which is the honest
-        // signal that something is happening.
-        if (prog.total != null && prog.total > 0 && prog.done != null) {
-          const frac = Math.max(0, Math.min(1, prog.done / prog.total));
-          text += ` ${prog.done}/${prog.total}`;
-          span.style.background = `linear-gradient(to right, var(--m2-progress-fill) ${
-            frac * 100
-          }%, transparent ${frac * 100}%)`;
-        }
-      }
-      span.textContent = text;
-      return span;
-    },
+    width: 190,
+    minWidth: 190,
+    valueFormatter: (p) => formatStamp(p.value as string | null),
   },
   {
     headerName: "Bytes on disk",
     field: "bytes",
-    type: "numericColumn",
     width: 140,
     minWidth: 140,
     // The breakdown is what answers "why is this 40 GB?" — attachments
@@ -522,18 +646,57 @@ const columnDefs: ColDef<Row>[] = [
       if (row.kind === "applet") return "An applet owns no artifacts.";
       const present = row.outputs.filter((o) => o.present);
       if (present.length === 0) return "Nothing on disk yet — this hasn't produced anything.";
-      // Per declared output, with the entities/attachments split where
-      // the backend found one. That split is the answer to "why is this
-      // so big" far more often than the total is.
-      return present
+      // The total leads, because it is the number the bar stands for
+      // and the bar alone can't say it. The per-output breakdown —
+      // entities vs attachments, where the backend found a split —
+      // follows, and is the answer to "why is this so big" far more
+      // often than the total is.
+      const detail = present
         .map((o) =>
           o.parts?.length
             ? `${o.path}: ${o.parts.map((x) => `${x.label} ${formatBytes(x.bytes)}`).join(", ")}`
             : `${o.path}: ${formatBytes(o.bytes)}`,
         )
         .join(" · ");
+      const total = formatBytes(row.bytes ?? 0);
+      return present.length === 1 && !present[0].parts?.length ? total : `${total} — ${detail}`;
     },
-    valueFormatter: (p) => (p.value === null ? "—" : formatBytes(p.value as number)),
+    // A bar rather than a number, on a linear scale against the largest
+    // row. Linear is the point: the question this column answers is
+    // "how much of my disk is this", and on a real root one source
+    // routinely dwarfs every other — which a log scale would flatter
+    // away. Small rows get a sliver rather than nothing, so "tiny" and
+    // "absent" stay distinguishable.
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const row = p.data;
+      const wrap = document.createElement("span");
+      wrap.className = "m2-bytes";
+      if (!row || row.bytes === null) {
+        // Null is "nothing on disk yet", which is not a zero-length
+        // bar — it's the absence of a bar.
+        wrap.textContent = "—";
+        wrap.classList.add("m2-bytes-none");
+        return wrap;
+      }
+      const max = maxBytes.value;
+      const frac = max > 0 ? row.bytes / max : 0;
+      const track = document.createElement("span");
+      track.className = "m2-bar";
+      const fill = document.createElement("span");
+      fill.className = "m2-bar-fill";
+      fill.style.width = `${Math.max(frac * 100, row.bytes > 0 ? 1.5 : 0)}%`;
+      track.appendChild(fill);
+      // The size, centred over the bar. The bar answers "how does this
+      // compare to the others" at a glance and the number answers "how
+      // much is it" exactly; neither replaces the other, and stacking
+      // them costs no width in a column that has little to spare.
+      const label = document.createElement("span");
+      label.className = "m2-bar-label";
+      label.textContent = formatBytes(row.bytes);
+      track.appendChild(label);
+      wrap.appendChild(track);
+      return wrap;
+    },
   },
   {
     headerName: "Actions",
@@ -549,9 +712,27 @@ const columnDefs: ColDef<Row>[] = [
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
       const row = p.data!;
-      wrap.appendChild(
-        iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.id)),
-      );
+      // One button, two faces. While a job has this row claimed the
+      // only useful thing to do with it is call it off — starting a
+      // second sync of work already queued is never what was meant.
+      if (row.stopJobId) {
+        const claim = claimedBy.value.get(row.id);
+        wrap.appendChild(
+          iconButton(
+            "stop",
+            claim?.source_name
+              ? `Stop the sync of ${claim.source_name}`
+              : "Stop the sync in progress",
+            null,
+            true,
+            () => stopSource(row.id),
+          ),
+        );
+      } else {
+        wrap.appendChild(
+          iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.id)),
+        );
+      }
       wrap.appendChild(
         iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.id)),
       );
@@ -634,13 +815,42 @@ async function loadConfig() {
   }
 }
 
+/// Repaint the columns whose content is a `cellRenderer` over state
+/// that lives outside the row's identity.
+///
+/// AG Grid reuses a cell whose row id hasn't changed, so everything
+/// these renderers read — the runner's record, the job queue, the
+/// column-wide byte maximum — would otherwise stay frozen at whatever
+/// it was when the row first rendered. Same repaint the qmd columns do
+/// in GridCard for the same reason.
+///
+/// `actions` is in the list because the Run/Stop face and every
+/// button's disabled state are baked in at render time.
+function repaint() {
+  gridApi?.refreshCells({
+    columns: ["status", "lastSynced", "bytes", "actions"],
+    force: true,
+  });
+}
+
 async function loadJobs() {
   try {
     jobs.value = await fetchAllJobs(100);
+    // The queue decides "Queued" and the Run/Stop face, so a new job is
+    // a repaint even when the runner's record hasn't moved.
+    repaint();
   } catch {
     // The grid is still useful without status; leave the columns empty.
   }
 }
+
+/// A job the worker is about to start, or has started. What makes the
+/// grid poll quickly: between the click and the runner's first written
+/// state there is nothing to see in the DAG record, and that gap is
+/// precisely the one that used to read as "nothing happened".
+const jobActive = computed(() =>
+  jobs.value.some((j) => j.state === "pending" || j.state === "running"),
+);
 
 /// The runner's per-step record. Polled rather than pushed: the SSE
 /// stream only carries runs *this server* started, and the whole point
@@ -651,10 +861,7 @@ async function loadDag() {
     const dag = await fetchDag();
     dagSteps.value = Object.fromEntries(dag.steps.map((st) => [st.id, st]));
     dagRun.value = dag.run;
-    // Statuses live in a `cellRenderer`, and AG Grid reuses a cell whose
-    // row id hasn't changed — so the painted status would otherwise
-    // stay at whatever it was when the row first rendered.
-    gridApi?.refreshCells({ columns: ["lastStatus", "lastSynced"], force: true });
+    repaint();
   } catch {
     // A missing record reads as "never run", which is what a fresh root
     // looks like anyway.
@@ -864,6 +1071,10 @@ async function runSource(id: string) {
   try {
     await enqueueJob({ kind: "all", source_name: target });
     banner.value = { ok: true, text: `Queued a sync for ${step?.name ?? id}.` };
+    // Before returning: the queue is what puts this row and everything
+    // downstream of it into "Queued" and flips the button to Stop, and
+    // the whole complaint this answers is that pressing play looked
+    // like nothing happened.
     await loadJobs();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -872,24 +1083,133 @@ async function runSource(id: string) {
   }
 }
 
+/// Call off the job that has this row claimed.
+///
+/// The unit of cancellation is the job, not the row: one job is one
+/// `datalib-dag` process covering a whole subgraph, and there is no way
+/// to drop a single step out of a run in flight. The button says which
+/// sync it stops for exactly that reason.
+async function stopSource(id: string) {
+  const job = claimedBy.value.get(id);
+  if (!job) return;
+  busy.value = true;
+  banner.value = null;
+  try {
+    await cancelJob(job.id);
+    banner.value = {
+      ok: true,
+      text: `Stopping the sync of ${job.source_name || "everything"}. Steps in flight ` +
+        `checkpoint what they have and exit.`,
+    };
+    await loadJobs();
+  } catch (e) {
+    banner.value = { ok: false, text: (e as Error).message };
+  } finally {
+    busy.value = false;
+  }
+}
+
+/// One pushed job update, applied without a round trip.
+///
+/// The stream carries everything the grid needs to change state: the
+/// job row (which decides Queued and the Run/Stop face) and the task
+/// board (which decides Running and the progress message). Both used to
+/// be discarded — the handler here simply refetched — so every update
+/// cost two HTTP requests and arrived a poll late. Pressing Sync looked
+/// like nothing had happened partly for that reason.
+///
+/// What still needs a fetch, and why: a step reaching a *terminal*
+/// state. The board says "done"; it does not say when, or with what
+/// error, and those are the two things the finished row shows. Only the
+/// runner's record has them. So terminal transitions ask, and
+/// everything else is painted from the push.
+///
+/// The stream carries only runs *this server* started. A `datalib-dag`
+/// run from a terminal is invisible to it, which is why the poll below
+/// stays — it is the fallback, not the mechanism.
+function onJobEvent(e: JobProgressEvent) {
+  mergeJob(e);
+  const tasks: SyncTask[] = e.tasks ?? [];
+  const active = e.state === "pending" || e.state === "running";
+  liveTasks.value = active ? pushedOverlay(tasks, new Date().toISOString()) : {};
+  repaint();
+  // A step finishing is exactly when its record moves — and the record
+  // is the only place its finish time and error live.
+  if (!active || boardWentTerminal(tasks)) {
+    void loadDag();
+    void loadStorage();
+  }
+}
+
+/// Fold a pushed job update into the queue we hold, so the Run/Stop
+/// face and every Queued row move on the push rather than on the next
+/// `GET /api/sync/jobs/all`.
+///
+/// The event is a subset of `SyncJob` — it carries no timestamps — so
+/// an update patches the row we already have and an unseen job is
+/// stubbed with the arrival time. That stub matters: `stepStatus`
+/// compares a step's last run against the claiming job's `started_at`
+/// to decide whether the job has already been past it, and a missing
+/// value there reads as "not yet", which is the safe answer.
+function mergeJob(e: JobProgressEvent) {
+  const now = new Date().toISOString();
+  const at = jobs.value.findIndex((j) => j.id === e.id);
+  if (at >= 0) {
+    const prev = jobs.value[at];
+    const next: SyncJob = {
+      ...prev,
+      state: e.state,
+      progress_pct: e.progress_pct,
+      progress_msg: e.progress_msg,
+      started_at: prev.started_at ?? (e.state === "running" ? now : null),
+      finished_at:
+        prev.finished_at ??
+        (e.state === "done" || e.state === "failed" || e.state === "canceled" ? now : null),
+    };
+    jobs.value = [...jobs.value.slice(0, at), next, ...jobs.value.slice(at + 1)];
+    return;
+  }
+  jobs.value = [
+    {
+      id: e.id,
+      kind: e.kind,
+      source_name: e.source_name,
+      state: e.state,
+      progress_pct: e.progress_pct,
+      progress_msg: e.progress_msg,
+      error: null,
+      created_at: now,
+      started_at: e.state === "running" ? now : null,
+      finished_at: null,
+    },
+    ...jobs.value,
+  ];
+}
+
 let stream: EventSource | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 let progressPoll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
   await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
-  stream = openJobStream(() => {
-    void loadJobs();
-    // A step finishing is exactly when its record moves.
-    void loadDag();
-  });
-  // Progress moves much faster than anything else here, and only while
-  // a run is live — so poll the DAG on its own quick cadence then, and
-  // leave the rest on the slow one. Off entirely when nothing is
-  // running, so an idle tab is not asking twice a second forever.
+  stream = openJobStream(onJobEvent);
+  // The fallback, not the mechanism. A sync this server started is
+  // pushed (see `onJobEvent`); this covers the two cases the stream
+  // cannot:
+  //
+  //   * a `datalib-dag` run started from a terminal, which the stream
+  //     never carries because no job row exists for it, and
+  //   * a dropped SSE connection between the browser's reconnects.
+  //
+  // Only while something is in flight, so an idle tab isn't asking
+  // once a second forever — and `jobActive` as well as `dagRun.live`,
+  // because a job the worker hasn't spawned yet has no runner to
+  // report on.
   progressPoll = setInterval(() => {
-    if (dagRun.value?.live) void loadDag();
-  }, 1000);
+    if (!dagRun.value?.live && !jobActive.value) return;
+    void loadDag();
+    void loadJobs();
+  }, 2000);
   // The config can change under us — an agent PUTs it, or the Manage
   // tab saves. Same cadence the Manage tab polls at.
   poll = setInterval(() => {
@@ -965,10 +1285,14 @@ onUnmounted(() => {
       index <b>steps</b> that make them searchable, and the <b>applets</b> the app spawns to serve
       them. Actions that don’t apply to a kind are disabled and say why. Account and
       document-count columns aren’t here yet — each needs a backend endpoint the design calls for.
-      “Bytes on disk” is a directory walk over each row’s declared outputs; hover a value for the
-      breakdown. “Last synced” and “Last status” are per step, read from the runner’s own
-      record — so a sync you start from a terminal shows up here too. A run whose record never
-      closed and whose lock nobody holds reads as <b>interrupted</b>: it was killed, not lost.
+      <b>Type</b>, <b>Step</b> and <b>Status</b> are icons; hover any of them for the word.
+      “Bytes on disk” is a directory walk over each row’s declared outputs, drawn against the
+      largest row — hover for the size and the breakdown. “Last synced” and “Status” are per
+      step, read from the runner’s own record — so a sync you start from a terminal shows up
+      here too. A run whose record never closed and whose lock nobody holds reads as
+      <b>interrupted</b>: it was killed, not lost. A step a queued sync will reach reads as
+      <b>queued</b>, and its Sync button becomes a Stop — one job is one runner process over a
+      whole subgraph, so stopping is per sync, not per row.
     </p>
 
     <details class="m2-advanced" :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
@@ -1139,43 +1463,134 @@ onUnmounted(() => {
 <style>
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
-.m2-cell-source img { width: 16px; height: 16px; }
 .m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 
-.m2-kind {
+/* Type and Step: one mark each, centred in a narrow column, with the
+   word on `title`. Both cells fill the row height so the glyph sits on
+   the text baseline's optical centre rather than at the top. */
+.m2-cell-type,
+.m2-cell-step {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+}
+.m2-cell-type img { width: 18px; height: 18px; object-fit: contain; }
+/* The fallback when a type has no brand mark. Clipped rather than
+   wrapped: the column is sized for an icon, and the full name is on
+   `title` like every other cell here. */
+.m2-type-word {
   font-size: 11px;
-  letter-spacing: 0.03em;
-  padding: 1px 7px;
-  border-radius: 10px;
-  border: 1px solid var(--datalib-border);
+  color: var(--datalib-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m2-cell-step { color: var(--datalib-muted); }
+
+/* The status vocabulary. Anything unstyled falls through to the default
+   colour, which is the right outcome for a status this sheet hasn't
+   met — and that case renders the word rather than a glyph. */
+.m2-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
   color: var(--datalib-muted);
 }
-.m2-kind-source { color: var(--datalib-fg); border-color: var(--datalib-fg); }
-
-/* The runner's status vocabulary. Anything unstyled falls through to
-   the default colour, which is the right outcome for a status this
-   sheet hasn't met. */
-.m2-status { text-transform: capitalize; }
-.m2-status-running { color: var(--datalib-accent); font-weight: 600; }
-/* The progress bar is the running pill's own background, so a step with
-   a known total fills left-to-right in place. Kept faint: it has to sit
-   under the label without fighting it for legibility. */
-.m2-status-running {
-  --m2-progress-fill: color-mix(in srgb, var(--datalib-accent) 22%, transparent);
-  border-radius: 3px;
-  padding: 1px 4px;
-  margin: -1px -4px;
-}
-.m2-status-failed { color: var(--datalib-log-error); font-weight: 600; }
+.m2-status-running { color: var(--datalib-accent); }
+.m2-status-queued { color: var(--datalib-muted); }
+.m2-status-failed { color: var(--datalib-log-error); }
 /* A run that died mid-step: not a failure anyone reported, but not a
    success either, so it reads as a warning rather than an error. */
 .m2-status-interrupted { color: var(--datalib-log-warn); }
-.m2-status-blocked { color: var(--datalib-muted); }
-.m2-status-succeeded { color: var(--datalib-muted); }
-.m2-status-up-to-date { color: var(--datalib-muted); }
-.m2-status-not-selected { color: var(--datalib-muted); }
-.m2-status-never-run { color: var(--datalib-muted); }
-.m2-status-done { color: var(--datalib-muted); }
+/* Both tick glyphs are green, and for the same reason the failure "!"
+   is red: the column is icons now, so colour is doing the work the
+   words used to. A grey tick beside a red exclamation reads as "no
+   answer yet" rather than "fine".
+   `succeeded` is one tick, `skipped_up_to_date` ("Up to date") is two —
+   different facts, both good news, so they share the colour and are
+   told apart by the glyph. */
+.m2-status-succeeded,
+.m2-status-skipped-up-to-date { color: var(--datalib-log-ok); }
+/* Never run is the emptiest state in the column, and reads as such. */
+.m2-status-never-run { opacity: 0.55; }
+
+/* Running is drawn, not glyphed — a still frame can't say "still
+   going". A ring with one lit quarter, turning once a second. */
+.m2-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: m2-spin 1s linear infinite;
+}
+@keyframes m2-spin {
+  to { transform: rotate(360deg); }
+}
+/* Motion is the signal here, not decoration — but a static ring still
+   reads as "running" beside a column of finished ticks, so honour the
+   preference rather than exempting ourselves from it. */
+@media (prefers-reduced-motion: reduce) {
+  .m2-spinner { animation: none; }
+}
+/* Shown only when the step reported a total to be a fraction of. */
+.m2-progress {
+  flex: 1 1 auto;
+  min-width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  overflow: hidden;
+}
+.m2-progress > span {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+/* Bytes on disk: a bar against the largest row, with the size centred
+   over it and the per-output breakdown on `title`. */
+.m2-bytes {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+}
+.m2-bytes-none { color: var(--datalib-muted); opacity: 0.55; }
+.m2-bar {
+  position: relative;
+  flex: 1 1 auto;
+  /* Tall enough to hold the label: the bar is the label's background
+     now, not a rule beside it. */
+  height: 18px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--datalib-fg) 10%, transparent);
+  overflow: hidden;
+}
+/* Absolute so the label can sit over it rather than after it. */
+.m2-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
+}
+/* The number reads across both halves of the bar — over the fill on the
+   left and the empty track on the right — so it can't take its contrast
+   from either. `--datalib-fg` against a fill kept at 55% opacity holds
+   up in both themes; the shadow is what keeps the glyph edges legible
+   where the two meet. */
+.m2-bar-label {
+  position: relative;
+  display: block;
+  text-align: center;
+  line-height: 18px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--datalib-fg);
+  text-shadow: 0 0 3px var(--datalib-bg);
+}
 
 .m2-actions {
   display: inline-flex;

@@ -17,7 +17,13 @@
 //! * A step reports a content-derived version per output. Two runs over
 //!   the same data report the same string, so "unchanged" is derived
 //!   rather than asserted, and consumers skip. An output the step says
-//!   nothing about is content hashed instead.
+//!   nothing about is content hashed instead — the one place the runner
+//!   hashes anything, and only ever for a step that just ran.
+//! * A step that does *not* run contributes the version recorded for its
+//!   output last time, or `version::UNKNOWN` if there is none. The
+//!   runner never reads a tree to version it on a step's behalf: it
+//!   would be reading gigabytes to answer a question the step can answer
+//!   from a commit hash, for work this run already decided not to do.
 //! * A failed step blocks its dependents *this run*, but any partial
 //!   output versions it reported are recorded — steps are
 //!   incremental, so the next run resumes from the committed partial
@@ -40,7 +46,7 @@ use crate::state::{CurrentRun, DagState, LastRun, StepState};
 use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
 };
-use crate::version::tree_version;
+use crate::version::{tree_version, UNKNOWN};
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -205,8 +211,10 @@ enum Decision {
         ctx: StepCtx,
     },
     /// Up to date, or outside the runnable subgraph. Either way the
-    /// step's outputs keep the versions recorded for them, so consumers
-    /// compare against the right thing.
+    /// step's output keeps the version recorded for it, so consumers
+    /// compare against the right thing — or, with nothing recorded,
+    /// [`crate::version::UNKNOWN`]. The runner does not read the tree
+    /// to invent one.
     Skip {
         status: StepStatus,
     },
@@ -253,10 +261,10 @@ impl Runner {
 
         let n = graph.steps.len();
         // Current version of every concrete artifact, filled in as
-        // producers reach a terminal state. Every artifact has a
-        // producer: `Graph::build` synthesizes a source step for any
-        // path the config leaves unwritten, so there is nothing for the
-        // scheduler to hash on its own behalf.
+        // producers reach a terminal state. Every artifact has exactly
+        // one producer — `Graph::build` rejects an input that names no
+        // declared step — and a version is that producer's to report,
+        // so the scheduler never hashes a tree on its own behalf.
         let mut versions: HashMap<String, String> = HashMap::new();
         // Whether each artifact's version moved this run (drives the
         // per-output `changed` flag in the report).
@@ -275,23 +283,30 @@ impl Runner {
             // Dispatch as many ready steps as parallelism allows.
             // Skip/block decisions are made inline (no slot consumed);
             // real work is spawned.
+            let mut dispatched = false;
             while running < self.parallelism {
                 let Some(i) = ready.pop_front() else { break };
                 match self.decide(graph, &state, &status, &runnable, &versions, i) {
                     Decision::Skip { status: st } => {
-                        // The output keeps its last-recorded version.
-                        let prev = state.steps.get(&graph.steps[i].id);
-                        {
-                            let out = graph.steps[i].output();
-                            let v = match prev.and_then(|s| s.output_versions.get(out.as_str())) {
-                                Some(v) => v.clone(),
-                                // Succeeded before but no recorded
-                                // version — hash what's on disk.
-                                None => tree_version(&self.data_root.join(out.as_str()))?,
-                            };
-                            versions.insert(out.as_str().to_string(), v);
-                            changed_now.insert(out.as_str().to_string(), false);
-                        }
+                        // The output keeps its last-recorded version,
+                        // and if there isn't one we say so. There is
+                        // deliberately no fallback here: hashing a tree
+                        // the run was told not to touch is how a
+                        // `--sync` of one small source came to spend
+                        // forty seconds reading 3.4 GB of somebody
+                        // else's Slack (#225). The cost was invisible
+                        // because the fallback *succeeded* — a correct
+                        // version, arrived at the slowest possible way,
+                        // for a step nobody was going to run.
+                        let out = graph.steps[i].output();
+                        let v = state
+                            .steps
+                            .get(&graph.steps[i].id)
+                            .and_then(|s| s.output_versions.get(out.as_str()))
+                            .cloned()
+                            .unwrap_or_else(|| UNKNOWN.to_string());
+                        versions.insert(out.as_str().to_string(), v);
+                        changed_now.insert(out.as_str().to_string(), false);
                         self.finish(graph, &mut state, &mut status, i, st, None, 0);
                         release_dependents(graph, &mut remaining_deps, &mut ready, i);
                     }
@@ -309,6 +324,7 @@ impl Runner {
                     }
                     Decision::Run { ctx } => {
                         running += 1;
+                        dispatched = true;
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
                         let run = graph.steps[i].run.clone();
                         let retry = self.retry.clone();
@@ -321,6 +337,24 @@ impl Runner {
                         });
                     }
                 }
+            }
+
+            // Persist the dispatch before waiting on it. `mark_running`
+            // only mutates memory, and until this landed the *only*
+            // writes were on terminal states — so a step's "running"
+            // never reached the file, and the record went straight from
+            // "not reached yet" to "succeeded". A reader polling
+            // `dag_state.json` (which is every reader: `GET /api/dag`,
+            // and so the Manage grid) could therefore never see a step
+            // running, no matter how long it ran. Pressing Sync looked
+            // like nothing had happened, which is exactly what it was
+            // reported as.
+            //
+            // One write per dispatch batch, not per step, so the budget
+            // this file documents — O(steps) per run, state transitions
+            // only — still holds.
+            if dispatched {
+                state.save(&self.data_root).context("save dag state")?;
             }
 
             if running == 0 {
@@ -347,6 +381,7 @@ impl Runner {
                         spec,
                         &graph.fingerprints[i],
                         &outcome.outputs,
+                        &*self.sink,
                     ) {
                         Ok(resolved) => {
                             let mut changed = 0usize;
@@ -406,6 +441,7 @@ impl Runner {
                             spec,
                             &graph.fingerprints[i],
                             &step_err.outputs,
+                            &*self.sink,
                         ) {
                             let entry = state.steps.entry(spec.id.clone()).or_default();
                             for (path, v) in resolved {
@@ -466,7 +502,7 @@ impl Runner {
                                         .get(&spec.id)
                                         .and_then(|s| s.output_versions.get(&path).cloned())
                                 })
-                                .unwrap_or_else(|| "unknown".into());
+                                .unwrap_or_else(|| UNKNOWN.to_string());
                             let changed = changed_now.get(&path).copied().unwrap_or(false);
                             (path, now, changed)
                         })
@@ -567,10 +603,10 @@ impl Runner {
         let prev = state.steps.get(&spec.id);
 
         // Clause 1: no declared inputs. Its real input is outside the
-        // graph — a remote service for a download, a staged directory
-        // for a synthesized `staged:` step — so the scheduler cannot
-        // version it and always runs the step. Internal incrementality
-        // is what makes that cheap.
+        // graph — a remote service for a download, a hand-staged
+        // directory named by `params.common.input_path` — so the
+        // scheduler cannot version it and always runs the step.
+        // Internal incrementality is what makes that cheap.
         let no_inputs = spec.inputs.is_empty();
         // Clause 2: never completed. Aborted last run, failed last run,
         // or added to the config since — all the same fact, and all
@@ -660,15 +696,28 @@ impl Runner {
         if let Some(run) = state.current_run.as_mut() {
             run.states.insert(id.clone(), st.as_str().to_string());
         }
-        let entry = state.steps.entry(id.clone()).or_default();
-        let last = entry.last_run.get_or_insert_with(|| LastRun {
-            started_at: stamp.clone(),
-            ..Default::default()
-        });
-        last.finished_at = Some(stamp);
-        last.status = st.as_str().to_string();
-        last.attempts = attempts;
-        last.error = error;
+        // `NotSelected` is a fact about this *run*, not about the step:
+        // the run didn't ask for it, so nothing happened to it. Writing
+        // that into `last_run` overwrote a real history — a step that
+        // succeeded yesterday came back as "not selected", stamped with
+        // the time of a run that never touched it, because every
+        // per-source sync walks the whole graph to publish output
+        // versions and reaches every step it isn't running.
+        //
+        // The run record still carries it (`current_run.states` above),
+        // which is where "not in this sync" belongs: that map describes
+        // one run, and is replaced wholesale by the next.
+        if st != StepStatus::NotSelected {
+            let entry = state.steps.entry(id.clone()).or_default();
+            let last = entry.last_run.get_or_insert_with(|| LastRun {
+                started_at: stamp.clone(),
+                ..Default::default()
+            });
+            last.finished_at = Some(stamp);
+            last.status = st.as_str().to_string();
+            last.attempts = attempts;
+            last.error = error;
+        }
         status[i] = Some(st);
     }
 }
@@ -728,6 +777,12 @@ fn step_summary(r: &StepReport) -> crate::events::StepSummary {
 /// correct and always slower — it reads every file under the output —
 /// so first-party steps report a version for everything they declare.
 ///
+/// This is the runner's only call to [`tree_version`], and it is only
+/// reached with a step that just ran. When it fires it says so on the
+/// event stream: an unreported version costs a full read of the output
+/// tree, and #225 is the case for what a slow path nobody can see costs
+/// in the end.
+///
 /// The step's `fingerprint` is folded into every recorded version. A
 /// step reports on its *content*, and it has no way to know that its
 /// own definition changed — the runner never tells it. Without this, a
@@ -741,6 +796,7 @@ fn resolve_outputs(
     spec: &StepSpec,
     fingerprint: &str,
     reported: &[ArtifactState],
+    sink: &dyn EventSink,
 ) -> Result<Vec<(String, String)>> {
     let output = spec.output();
     let mut by_path: BTreeMap<&str, &ArtifactState> = BTreeMap::new();
@@ -762,7 +818,16 @@ fn resolve_outputs(
         // the step's business.
         Some(a) => a.version.clone(),
         // Said nothing about its output: decide for ourselves.
-        None => tree_version(&data_root.join(path))?,
+        None => {
+            sink.emit(&Event::Log {
+                step: spec.id.clone(),
+                level: crate::events::LogLevel::Info,
+                msg: format!(
+                    "reported no version for {path}; reading the whole tree to hash it.                      A version the step derives from what it wrote would be cheaper."
+                ),
+            });
+            tree_version(&data_root.join(path))?
+        }
     };
     Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
 }
@@ -1256,6 +1321,160 @@ mod tests {
         );
     }
 
+    /// Regression: "running" has to reach the *file*, while the step is
+    /// still running.
+    ///
+    /// `mark_running` has always written it into the in-memory state,
+    /// but the only `save` calls were on terminal states — so
+    /// `dag_state.json` went straight from "not reached yet" to
+    /// "succeeded", and a reader could never catch a step in flight no
+    /// matter how long it ran. That file is the *only* channel to a
+    /// reader who did not spawn the run: `GET /api/dag` reads it, and
+    /// the Manage grid reads that. Pressing Sync therefore looked like
+    /// nothing had happened, all the way until the step finished.
+    ///
+    /// The assertion is deliberately made from disk, in another task,
+    /// while the step is parked — reading `state` in-process would pass
+    /// against the broken version.
+    #[tokio::test]
+    async fn a_running_step_is_visible_on_disk_while_it_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let g = Graph::build(vec![StepSpec::new("gate/raw", {
+            let (started, release) = (started.clone(), release.clone());
+            StepRun::in_process(move |ctx: StepCtx| {
+                let (started, release) = (started.clone(), release.clone());
+                async move {
+                    std::fs::create_dir_all(ctx.path_str(&ctx.step_id)).unwrap();
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(StepOutcome::default())
+                }
+            })
+        })])
+        .unwrap();
+
+        let r = runner(root.path());
+        let run = tokio::spawn(async move { r.run(&g).await });
+
+        started.notified().await;
+        // The step is parked inside its body. Whatever the file says
+        // now is what a poller would see for as long as the step runs.
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let st = DagState::load(root.path()).unwrap();
+                if let Some(cur) = st
+                    .current_run
+                    .as_ref()
+                    .and_then(|c| c.states.get("gate/raw"))
+                {
+                    return (
+                        cur.clone(),
+                        st.steps.get("gate/raw").and_then(|s| s.last_run.clone()),
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a step in flight must be readable as running from dag_state.json");
+
+        assert_eq!(seen.0, "running");
+        let last = seen.1.expect("a dispatched step has an open last_run");
+        assert!(
+            last.finished_at.is_none(),
+            "an in-flight step has no finish time yet: {last:?}"
+        );
+        assert!(
+            !last.started_at.is_empty(),
+            "…but it does have a start time, which is what the grid shows"
+        );
+
+        release.notify_one();
+        assert!(run.await.unwrap().unwrap().all_ok());
+    }
+
+    /// Regression: a subset sync must not rewrite the history of the
+    /// steps it did not select.
+    ///
+    /// Every run walks the whole graph — out-of-scope steps still get a
+    /// terminal status so the report is complete and so consumers see
+    /// their recorded output versions. That walk used to write
+    /// `NotSelected` into `last_run` like any other outcome, which meant
+    /// a `--sync slack` erased email's record: a step that succeeded
+    /// yesterday came back as "not selected", stamped with the time of a
+    /// run that never touched it. In the grid that read as a source
+    /// whose "last synced" moved every time some *other* source synced.
+    ///
+    /// `current_run.states` is where "not in this sync" belongs — it
+    /// describes one run and is replaced wholesale by the next.
+    #[tokio::test]
+    async fn a_subset_sync_leaves_unselected_steps_history_alone() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let r = runner(fx.root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+
+        let before = DagState::load(fx.root.path()).unwrap().steps["email/raw"]
+            .last_run
+            .clone()
+            .expect("the first run recorded email/raw");
+        assert_eq!(before.status, "succeeded");
+
+        // A sync of a different source. It walks email/raw and reports
+        // it not-selected, but nothing happened to email/raw.
+        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let rep = r2.run(&g).await.unwrap();
+        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        let after = st.steps["email/raw"]
+            .last_run
+            .as_ref()
+            .expect("email/raw keeps its record");
+        assert_eq!(
+            after.status, "succeeded",
+            "a run that did not select this step must not restate what it did"
+        );
+        assert_eq!(
+            after.finished_at, before.finished_at,
+            "nor when it did it — this is the timestamp the grid shows as \
+             'last synced', and it moved on every unrelated sync"
+        );
+
+        // The run record still carries the fact, because that map is
+        // about the run rather than about the step.
+        assert_eq!(
+            st.current_run.expect("a run leaves a record").states["email/raw"],
+            "not_selected"
+        );
+    }
+
+    /// A step no run has ever selected has no history to keep, and must
+    /// not acquire a fake one: `not_selected` is not something that
+    /// happened to it, so it stays "never run" rather than becoming a
+    /// row stamped with a run that skipped it.
+    #[tokio::test]
+    async fn a_never_selected_step_has_no_last_run_at_all() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        assert!(r.run(&g).await.unwrap().all_ok());
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        assert!(
+            st.steps
+                .get("email/raw")
+                .and_then(|s| s.last_run.as_ref())
+                .is_none(),
+            "a step this run never selected has not run, and must not \
+             claim to have: {:#?}",
+            st.steps.get("email/raw"),
+        );
+    }
+
     /// Regression: subset-sync on a *fresh* data root. Out-of-scope
     /// steps must stay untouched even when nothing has ever run here.
     /// A step with no recorded successful run counts as dirty, and that
@@ -1369,6 +1588,99 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(fx.root.path().join("unified_index/grid/index.txt")).unwrap(),
             "EMAIL V1\nSLACK V1\n"
+        );
+    }
+
+    /// A step this run isn't touching is never content-hashed, however
+    /// much data its output tree holds.
+    ///
+    /// This is the shape #225 was found in: an aborted download leaves
+    /// `succeeded: false` and no recorded version behind, with the
+    /// store still on disk. The runner used to hash that store to get a
+    /// version for a step it had already ruled out of the run — forty
+    /// seconds per `--sync`, for a 3.4 GB Slack store, producing a
+    /// number nothing in the run compared against.
+    ///
+    /// The tree here is tiny, so the test asserts *what* the runner
+    /// reported rather than how long it took. The two are the same
+    /// fact: hashing a tree with a file in it yields a 64-character
+    /// digest, and `unknown` is what you get only by not reading the
+    /// tree at all.
+    #[tokio::test]
+    async fn an_unselected_step_with_data_on_disk_is_not_hashed() {
+        let fx = Fixture::new();
+        // Writes its store, then fails without reporting a version.
+        let aborted_email_download = StepSpec::new(
+            "email/raw",
+            StepRun::in_process(|ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("data.txt"), "email v1").unwrap();
+                Err(StepError::new(
+                    FailureKind::Data,
+                    anyhow::anyhow!("boom: unparseable page 3"),
+                ))
+            }),
+        );
+        let broken = Graph::build(vec![
+            download(
+                "slack",
+                fx.slack_content.clone(),
+                fx.runs["slack/raw"].clone(),
+            ),
+            render("slack", fx.runs["slack/rendered_md"].clone()),
+            aborted_email_download,
+            render("email", fx.runs["email/rendered_md"].clone()),
+            index(
+                fx.runs["unified_index/grid"].clone(),
+                fx.index_changed_inputs.clone(),
+            ),
+        ])
+        .unwrap();
+
+        // Run 1 (full): email's download writes and then fails.
+        let rep1 = runner(fx.root.path()).run(&broken).await.unwrap();
+        assert!(matches!(
+            rep1.step("email/raw").status,
+            StepStatus::Failed { .. }
+        ));
+        let store = fx.root.path().join("email/raw/data.txt");
+        assert!(
+            store.exists(),
+            "the test needs data on disk, or hashing would give ABSENT and prove nothing"
+        );
+
+        // Run 2: sync slack only. `email/raw` is out of scope and has
+        // no recorded version, and the runner says so rather than
+        // reading the store to invent one.
+        let g = fx.graph();
+        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let rep2 = r.run(&g).await.unwrap();
+        assert!(rep2.all_ok(), "{rep2:#?}");
+        assert_eq!(rep2.step("email/raw").status, StepStatus::NotSelected);
+        assert_eq!(rep2.step("email/raw").outputs[0].1, UNKNOWN);
+        assert_eq!(
+            rep2.step("email/rendered_md").outputs[0].1,
+            UNKNOWN,
+            "never ran, nothing recorded"
+        );
+        // The chain that was asked for still reaches the index.
+        assert_eq!(fx.run_count("unified_index/grid"), 1);
+
+        // Run 3, identical: "we don't know" compares equal to itself,
+        // so the fan-in is not dirtied every single run. This is the
+        // property that makes dropping the hash safe — the hash was
+        // stable across runs too, just three billion bytes slower.
+        let rep3 = runner(fx.root.path())
+            .only_fringe(["slack/raw".to_string()])
+            .run(&g)
+            .await
+            .unwrap();
+        assert!(rep3.all_ok(), "{rep3:#?}");
+        assert_eq!(
+            fx.run_count("unified_index/grid"),
+            1,
+            "an unversioned unselected input must not re-dirty the fan-in"
         );
     }
 

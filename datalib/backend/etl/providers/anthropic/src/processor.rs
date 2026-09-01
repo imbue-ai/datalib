@@ -120,6 +120,12 @@ impl DataProcessor for AnthropicRender {
         &self.id
     }
 
+    /// The value every sidecar this processor writes carries: the render
+    /// path stamps `profile.render_version`, which is this constant.
+    fn render_version(&self) -> Option<u32> {
+        Some(crate::render::render::RENDER_VERSION)
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);

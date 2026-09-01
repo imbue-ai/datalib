@@ -93,6 +93,25 @@ lead somewhere.
 | **Storage** | http stats the source's directories itself |
 | **Actions** | Run · Edit · Delete |
 
+*What shipped differs from this table, 2026-09-01.* The built grid names
+the columns **Name · Type · Step · Status · Last synced · Bytes on disk ·
+Actions**. Three of them are icons with the word on hover: **Type** is
+the service's brand mark (the text column this table imagined is gone —
+a logo is faster to scan and the name is one hover away), **Step** is
+the wave (**Fetch** / **Render** / **Index** / **Applet**), and
+**Status** is the outcome. "Last status" lost its "Last": the column
+shows what a step *is* doing when a run is in flight, so the word was
+wrong half the time. Bytes on disk is a bar against the largest row
+rather than a number, with the size and the per-output breakdown on
+hover. The status cell is not yet a button — the log panel below is
+still a proposal.
+
+Status has two states this table has no row for, both about work that
+has not happened yet: **Queued** (a sync is enqueued and will reach this
+step) and **Running** (with the step's own progress). They come from
+the job queue and the pushed task board respectively — see "Watching a
+sync from the grid" below.
+
 ### The status cell is the way into the logs
 
 A source that failed should not make you go hunting. The **Last status**
@@ -131,6 +150,60 @@ Live runs stream into the same panel over the existing
 `/api/sync/stream` SSE, so clicking status on a running source is how
 you watch it — which is most of what "part two" wanted, reachable from
 the grid rather than as a separate screen.
+
+### Watching a sync from the grid
+
+*(Built, 2026-09-01.)*
+
+Pressing Sync used to look like nothing had happened. Three separate
+causes, and it is worth keeping them apart because only one of them was
+in the UI:
+
+1. **The runner never wrote "running" to disk.** `mark_running` mutated
+   the in-memory `DagState`, but the only `save` calls were on terminal
+   states — so `dag_state.json` went straight from "not reached" to
+   "succeeded". `GET /api/dag` reads that file, so no reader could ever
+   observe a step in flight, however long it ran. The scheduler now
+   persists once per dispatch batch (`a_running_step_is_visible_on_disk_while_it_runs`).
+2. **There is a gap where no runner exists at all.** A click writes a
+   `sync_jobs` row; the worker claims it on its next poll. For that
+   second the runner's record still describes the *previous* run. The
+   grid fills the gap from the queue: a pending or running job claims
+   the step it names plus its transitive dependents — the same
+   reachability `Runner::runnable_subgraph` computes — and those rows
+   read **Queued**. That is also what turns Sync into Stop, since work
+   already queued cannot usefully be started again.
+3. **The UI threw away the push it was already subscribed to.**
+   `/api/sync/stream` carries a per-step task board — `running`, and the
+   step's own `done/total msg` — published within 400 ms of any change,
+   and the enqueue and cancel handlers publish the instant they write a
+   row. `Manager2View` used the event only as a "something changed"
+   ping and then refetched twice over HTTP. It now folds the payload in
+   directly.
+
+The board speaks the same per-step vocabulary as the runner's
+`current_state`, so it is folded in as the *same* source arriving
+earlier, not as a new precedence tier. Only the live half is taken: a
+terminal board state carries neither the finish time nor the error the
+row has to show, and both live in the runner's record — so a step going
+terminal is the one transition that still costs a fetch.
+
+Polling stays, demoted to a fallback on a 2 s tick while work is in
+flight, for the two cases the stream cannot cover: a `datalib-dag` run
+started from a terminal (no job row exists, so nothing is published) and
+a dropped SSE connection.
+
+The precedence, and the reason for its order, is the doc comment on
+`stepStatus` in `ui/src/config/pipelineStatus.ts`. That module is pure
+functions over (config, queue, runner record) precisely so the whole
+state machine can be replayed as an ordered sequence of frames in
+`pipelineStatus.test.ts` — a snapshot assertion cannot express "never
+goes backwards", and that is the property the interesting bugs violate.
+The two independent fetches make it easy to violate: a snapshot pairing
+a closed run with a job row not yet marked done sent a finished step
+back to **Queued**, which reads as "about to run again".
+`manager2-sync.spec.ts` then drives one real `fsindex` run end to end
+and asserts the same properties against frames a real backend produced.
 
 ### Two of those columns had no data source, and now do
 
@@ -998,10 +1071,18 @@ fetch step and a render step have separate options, separate outputs,
 separate disk footprints and separate reasons to re-run; the runner has
 always treated them as two steps.
 
-So the table is one row per `[[steps]]` entry, and the Kind column says
-which wave each is — **Fetch**, **Render**, **Index** — derived from the
-shape of the id (`phaseOf`). Each row edits, runs, reveals and deletes
-on its own.
+So the table is one row per `[[steps]]` entry, and the **Step** column
+says which wave each is — **Fetch**, **Render**, **Index** (and
+**Applet** for the other kind of entry) — derived from the shape of the
+id (`phaseOf`). It shipped as `Kind`; the word was renamed because
+"Kind" and "Type" name the same thing in English and the two sat side by
+side. Each row edits, runs, reveals and deletes on its own.
+
+One consequence worth stating, because a button existed for it and could
+not work: **only a source step can be synced.** `datalib-dag` rejects a
+`--sync` naming anything with declared inputs ("not a source step"), so
+Run is disabled on Render and Index rows and names the source steps that
+would carry them (`sourcesFeeding` in `ui/src/config/pipelineStatus.ts`).
 
 What survives is a *display* relationship: two steps sharing an id stem
 are siblings under one directory. `stemOf` and `renderIdFor` are the

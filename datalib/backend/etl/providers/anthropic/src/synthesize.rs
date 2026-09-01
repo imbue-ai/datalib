@@ -65,6 +65,19 @@ fn org_uuid_of(conv: &Value) -> Option<String> {
         .map(String::from)
 }
 
+/// Display name for the org a conversation or project belongs to,
+/// read from the same `_source` block as the uuid.
+/// [`crate::download::normalize::normalize_to_export_shape`] stamps
+/// `org_name` alongside `org_uuid` on everything the API downloader
+/// writes, so a real captured snapshot carries it; a bulk export
+/// (which has no org scope at all) does not.
+fn org_name_of(v: &Value) -> Option<String> {
+    v.get("_source")
+        .and_then(|s| s.get("org_name"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
 /// Which org a project belongs to. Same `_source.org_uuid` convention
 /// the conversation fixtures use; `None` when the file predates it (a
 /// real bulk export has no org scope), in which case the caller files
@@ -143,8 +156,15 @@ impl Synthesizer for AnthropicSynth {
         let projects = read_projects(&self.api_dir)?;
 
         let mut by_org: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+        // Display names, keyed by org uuid. Collected from both
+        // conversations and projects because either kind of file can
+        // be the only one that mentions a given org.
+        let mut org_names: BTreeMap<String, String> = BTreeMap::new();
         for c in &convs {
             if let Some(org) = org_uuid_of(c) {
+                if let Some(name) = org_name_of(c) {
+                    org_names.entry(org.clone()).or_insert(name);
+                }
                 by_org.entry(org).or_default().push(c);
             }
         }
@@ -153,6 +173,9 @@ impl Synthesizer for AnthropicSynth {
         // downloader will never ask about it.
         for p in &projects {
             if let Some(org) = project_org_uuid(p) {
+                if let Some(name) = org_name_of(p) {
+                    org_names.entry(org.clone()).or_insert(name);
+                }
                 by_org.entry(org).or_default();
             }
         }
@@ -174,9 +197,21 @@ impl Synthesizer for AnthropicSynth {
         let mut count = 0usize;
 
         // /organizations
+        //
+        // The `name` emitted here is what the downloader stores as the
+        // `org_name` column (see `download::org_identity`), which
+        // becomes `grid_rows.org_name`. Emitting the uuid as the name —
+        // as this did originally — makes `org_name` and `org_uuid`
+        // indistinguishable everywhere downstream, so a fixture-backed
+        // test cannot tell the two columns apart and a transposed
+        // binding reads as correct. Fall back to the uuid only when the
+        // snapshot genuinely carries no name.
         let orgs: Vec<Value> = by_org
             .keys()
-            .map(|uuid| json!({"uuid": uuid, "name": uuid}))
+            .map(|uuid| {
+                let name = org_names.get(uuid).unwrap_or(uuid);
+                json!({"uuid": uuid, "name": name})
+            })
             .collect();
         let req = req_get(&format!("{BASE}/organizations"));
         write_fixture(out_root, &req, &json_response(&Value::Array(orgs)))?;

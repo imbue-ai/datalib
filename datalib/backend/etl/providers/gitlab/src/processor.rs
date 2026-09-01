@@ -112,6 +112,12 @@ impl DataProcessor for GitlabRender {
         &self.id
     }
 
+    /// The value every sidecar this processor writes carries; the
+    /// render step refuses to finish if the two disagree.
+    fn render_version(&self) -> Option<u32> {
+        Some(crate::render::grid_rows::RENDER_VERSION)
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_gitlab};
         let parsed = parse_api_dir(&self.raw_path)

@@ -30,8 +30,7 @@ use crate::download::photos::load_photo_blobs;
 use crate::download::schema_raw::{connection_uuid, ns_id};
 use crate::download::{db_path_for, RawDb};
 
-/// Bump when the connection → contact mapping changes meaningfully.
-const RENDER_VERSION: u32 = 1;
+use crate::render::RENDER_VERSION;
 
 /// Human label + grouping for every LinkedIn connection.
 const GROUP_LABEL: &str = "Connections";

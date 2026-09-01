@@ -36,7 +36,13 @@ use super::parse::{
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v4: render via chat-common.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: ids are minted through `datalib_id` instead of passing OpenAI's
+///     through (#216). Every uuid this renderer emits changed,
+///     `chat_uuid` among them — and `chat_uuid` names the output
+///     directory, so a tree written by v4 cannot be updated in place.
+///     The render step discards it wholesale; see
+///     `DataProcessor::render_version`.
+pub const RENDER_VERSION: u32 = 5;
 
 fn profile() -> RenderProfile {
     RenderProfile {
