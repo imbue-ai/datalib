@@ -42,7 +42,13 @@ use super::{slack_link, Message, ParsedSlack};
 
 /// Bump when the on-disk render layout changes in a way that must
 /// invalidate stale docs. v3: render via chat-common.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: ids are minted through `datalib_id` (#216). Slack's scoping was
+///     already right, but the recipes changed their join character, so
+///     every uuid moved — `chat_uuid` among them, which names the
+///     output directory. A v3 tree cannot be updated in place; the
+///     render step discards it wholesale. See
+///     `DataProcessor::render_version`.
+pub const RENDER_VERSION: u32 = 4;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {

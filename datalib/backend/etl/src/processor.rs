@@ -47,6 +47,30 @@ pub trait DataProcessor: Send + Sync {
     /// *structured* outcome with a content-version is a Program-B concern;
     /// Program A keeps the string.)
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
+
+    /// The renderer version this processor stamps into every sidecar
+    /// header it writes, when it writes sidecars at all.
+    ///
+    /// The render step uses it to tell a tree rendered by *this* build
+    /// from one left behind by an older one. That distinction only
+    /// matters because a version bump can move a document's output
+    /// path: `rendered_md/<chat_uuid>/…` is named for an id the
+    /// renderer mints, so a change to the id recipe writes the new
+    /// document beside the old one instead of over it, and both then
+    /// load into the index as separate rows. Re-rendering in place —
+    /// what a bumped `source_fingerprint` gets you on its own — is only
+    /// correct while the path is stable.
+    ///
+    /// `None` (the default) means "unversioned as far as this check is
+    /// concerned", and the render step then leaves the tree alone.
+    /// **Before overriding it, confirm the value returned here is the
+    /// same one that reaches [`datalib_index_lib::emit_sidecar`].** A
+    /// processor that reports one number and writes another declares
+    /// every tree stale, including the one it just wrote, and re-renders
+    /// the source from scratch on every single run.
+    fn render_version(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// The genuinely-runtime inputs a provider's `plan()` needs that are NOT part

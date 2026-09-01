@@ -304,8 +304,36 @@ compare row content rather than just the id.
    easy to miss — that was a real bug).
 3. Add the provider to `SCOPE_TAG_BY_PROVIDER` and `PORTED_PROVIDERS`
    in `ingested_tng_test`.
-4. Re-key: existing data roots must be wiped and re-ingested. Filed
-   feedback pointing at old ids does not survive.
+4. Bump the provider's `RENDER_VERSION` and return it from its render
+   processor's `DataProcessor::render_version`. A re-key moves
+   `chat_uuid`, which *names the output directory*, so the new
+   documents land beside the old ones rather than over them and the
+   index loads both. The render step handles that — a tree whose
+   sidecars carry a version this build doesn't produce is deleted and
+   re-rendered from the raw store — but only for a provider that
+   declares its version. Skip this and the port silently does nothing
+   to any data root that already exists: the fingerprints still match,
+   so nothing re-renders and the old ids stay.
+
+### What a re-key costs an existing data root
+
+Ids change, so anything holding one breaks. Filed feedback pointing at
+old `grid_rows.uuid`s does not survive, and that is not recoverable.
+
+What *is* handled, as of the fix for #216's fallout — neither needs a
+human to delete anything:
+
+- **The index.** `grid_index::init_schema` compares the on-disk
+  `grid_rows` / `markdowns` / `edges` against their DDL and rebuilds all
+  three from the sidecars when they disagree. Before that, a root
+  predating the `external_id` → `upstream_id` rename answered every
+  read *and* every write with `no such column: upstream_id`.
+- **The rendered tree.** The render step discards a tree stamped with a
+  foreign `render_version`, cursor included, and re-renders from the
+  raw store.
+
+Both are derived data, so the cost is a re-render plus a re-index. No
+re-download.
 
 The round-trip check is not a formality. It caught three real bugs
 across the first three ports, each invisible to every other test: a

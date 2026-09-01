@@ -81,6 +81,8 @@ rust_test(
     size = "small",
     crate = ":datalib_step",
     edition = "2021",
+    # Stub `DataProcessor`s for the render-version staleness tests.
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "@datalib_crates//:tempfile",
     ],

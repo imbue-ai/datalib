@@ -3,18 +3,22 @@
 //! grid-row / sidecar plumbing to
 //! [`datalib_etl_chat_common::render::render_all`].
 //!
-//! One conversation → one [`NormalizedChat`] (single `"all"` bucket);
-//! `chat_uuid`/`markdown_uuid` are the upstream `conversation_uuid`, so
-//! page identities / links stay stable. The page title links out to
-//! `claude.ai/chat/<uuid>`, and `org_uuid`/`org_name` ride along on
+//! One conversation → one [`NormalizedChat`] (single `"all"` bucket).
+//! `chat_uuid`/`markdown_uuid` are minted by [`super::ids`] through
+//! `datalib_id` from the upstream `conversation_uuid` — they were that
+//! id verbatim until #216. The upstream one is still what the page
+//! title links out to (`claude.ai/chat/<conversation_uuid>`) and what
+//! `grid_rows.upstream_id` carries; `org_uuid`/`org_name` ride along on
 //! every grid row.
 //!
 //! Each Claude message is *exploded* into one [`NormalizedChatItem`] for
 //! its text (+ extracted-text attachments + downloadable files) plus one
-//! item per `thinking` / `tool_use` / `tool_result` block. The block
-//! items keep their stable `tu-`/`tr-`/`th-` ids and the role-/block-
-//! distinguished `kind_label` ("LLM Thinking" / "Tool Call"), so the
-//! per-block grid rows the UI links to are preserved.
+//! item per `thinking` / `tool_use` / `tool_result` block. Every one of
+//! those gets its own minted id and the role-/block-distinguished
+//! `kind_label` ("LLM Thinking" / "Tool Call"), so the per-block grid
+//! rows the UI links to are preserved. (The `tu-`/`tr-`/`th-` prefixed
+//! ids these used to carry are gone; [`super::ids`] says why each was
+//! wrong.)
 //!
 //! Incrementality is unchanged and still dolt-diff driven: `parse`
 //! narrowed to changed conversations, so we pass an empty
@@ -46,7 +50,13 @@ use super::parse::{
 /// v3: render via chat-common (block-explosion).
 /// v4: projects render as their own pages, and a conversation's
 ///     `project` grid column carries the project name, not its UUID.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: ids are minted through `datalib_id` instead of passing
+///     Anthropic's through (#216). Every uuid this renderer emits
+///     changed, `chat_uuid` among them — and `chat_uuid` names the
+///     output directory, so a tree written by v4 cannot be updated in
+///     place. The render step discards it wholesale; see
+///     `DataProcessor::render_version`.
+pub const RENDER_VERSION: u32 = 5;
 
 fn profile() -> RenderProfile {
     RenderProfile {
