@@ -235,7 +235,14 @@ const VOLATILE_KEYS: &[&str] = &[
     // "now" on every fetch attempt, so they churn on every run even
     // when the upstream payload is byte-identical.
     "last_attempt_at",
-    "captured_at",
+    // NB: `captured_at` was here, filed under the same heading. Nothing
+    // in the tree stamps a `captured_at` to "now" — checked 2026-09-01,
+    // the only emitter is `media_visual.captured_at`, which is the
+    // moment the shutter opened, parsed out of fixed EXIF bytes. It is
+    // as deterministic as a blake3, and redacting it meant the golden
+    // could not have caught a regression in EXIF timestamp parsing —
+    // including the offset handling that `media`'s DOWNLOAD.md calls
+    // out as its one deviation from the repo timestamp convention.
     // CAS blob "first stored" wall-clock stamp (the `blobs` table's
     // `first_seen_at`). Identical bytes (content-addressed by blake3) land at
     // the same PK, but the timestamp is whenever this run first wrote them.
@@ -1649,7 +1656,6 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "qmd_status",
         "source_fingerprint",
         "last_attempt_at",
-        "captured_at",
         "first_seen_at",
         "last_finished_at",
         "last_seen_at",

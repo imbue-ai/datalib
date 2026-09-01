@@ -30,5 +30,21 @@ export INSTA_UPDATE=always
 export INSTA_WORKSPACE_ROOT="${BUILD_WORKSPACE_DIRECTORY}"
 echo "[insta-update] INSTA_WORKSPACE_ROOT=${INSTA_WORKSPACE_ROOT}" >&2
 
+# Hand the test our runfiles tree.
+#
+# `bazel run` of an sh_binary leaves RUNFILES_DIR unset and drops us in
+# `<target>.runfiles/<workspace>`. That is fine for a test that reaches
+# its data deps through `$(rootpath …)` env vars — most of them — but a
+# test that uses the runfiles *library* finds nothing: it is not the
+# runfiles owner, so there is no `<binary>.runfiles` beside it either,
+# and `Runfiles::create()` fails with `RunfilesDirNotFound`.
+#
+# The tree it wants is this wrapper's, which is where `extra_data`
+# staged the deps. Derive it by cutting `$PWD` at `.runfiles/` rather
+# than assuming the workspace directory is named `_main`.
+if [[ -z "${RUNFILES_DIR:-}" && "$PWD" == *.runfiles/* ]]; then
+    export RUNFILES_DIR="${PWD%%.runfiles/*}.runfiles"
+fi
+
 # shellcheck disable=SC2086
 exec "${INSTA_TEST_BIN}" ${INSTA_TEST_ARGS:-} --nocapture
