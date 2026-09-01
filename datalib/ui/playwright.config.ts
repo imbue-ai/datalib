@@ -222,6 +222,15 @@ export default defineConfig({
       env: {
         DATALIB_BIND: `127.0.0.1:${BACKEND_PORT}`,
         DATALIB_TOKEN: API_TOKEN,
+        // The sync worker shells out to `datalib-dag`. Under bazel it
+        // lives in the runfiles, not beside the server binary, so the
+        // worker's directory-then-PATH fallbacks both miss it and every
+        // sync dies at startup with "datalib-dag binary not found".
+        // run_e2e.sh resolves it; passed through here because this
+        // `env` block is what the child actually gets.
+        ...(process.env.DATALIB_DAG_BIN
+          ? { DATALIB_DAG_BIN: process.env.DATALIB_DAG_BIN }
+          : {}),
       },
     },
     {

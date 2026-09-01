@@ -84,12 +84,20 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   await expect(page.getByText(/Added Personal Claude, with a step to render it\./)).toBeVisible();
 
   // Two rows, not one. Addressed by row id (`getRowId` is the step id).
+  //
+  // The Step column is a glyph, so the phase is asserted through the
+  // accessible name rather than cell text — which is the same string a
+  // person gets by hovering it, and the only place the word survives.
   await expect(row(page, "personal-claude/raw")).toContainText("Personal Claude");
-  await expect(row(page, "personal-claude/raw")).toContainText("Fetch");
+  await expect(
+    row(page, "personal-claude/raw").locator('[col-id="kindLabel"] [role="img"]'),
+  ).toHaveAttribute("aria-label", "Fetch");
   await expect(row(page, "personal-claude/rendered_md")).toContainText(
     "Personal Claude (render markdown)",
   );
-  await expect(row(page, "personal-claude/rendered_md")).toContainText("Render");
+  await expect(
+    row(page, "personal-claude/rendered_md").locator('[col-id="kindLabel"] [role="img"]'),
+  ).toHaveAttribute("aria-label", "Render");
 
   // The render step is written once, as its own entry. The fixture
   // root's config declares no index steps (its grid db is pre-baked),

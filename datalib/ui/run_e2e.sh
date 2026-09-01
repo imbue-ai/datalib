@@ -136,5 +136,31 @@ if [[ -n "$MATERIALIZE_RUNFILE" && -x "$MATERIALIZE_RUNFILE" ]]; then
   export FW_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
 fi
 
+# Resolve the step host so the sync spec can name it as a step's
+# `command:`. The fixture data root is a temp dir with nothing on PATH,
+# so an absolute path is the only way a step can be spawned there —
+# same reason the materializer writes the applet's path absolutely.
+STEP_BIN_RUNFILE="$(rlocation _main/datalib/backend/datalib_step/datalib_step)" || STEP_BIN_RUNFILE=""
+if [[ -n "$STEP_BIN_RUNFILE" && -x "$STEP_BIN_RUNFILE" ]]; then
+  export FW_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
+fi
+
+# The DAG runner. The http server's sync worker resolves it from
+# $DATALIB_DAG_BIN, then from its own directory, then PATH — and under
+# `bazel test` it sits in the runfiles rather than beside the server, so
+# the env var is the only one of the three that finds it.
+DAG_BIN_RUNFILE="$(rlocation _main/datalib/backend/dag/datalib_dag_bin)" || DAG_BIN_RUNFILE=""
+if [[ -n "$DAG_BIN_RUNFILE" && -x "$DAG_BIN_RUNFILE" ]]; then
+  export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
+fi
+
+# The local PDF corpus the sync spec scans. Anchor off one file and
+# hand over its directory, the way materialize_tng_root.sh anchors the
+# fsindex tree off its breadcrumb.
+PDF_ANCHOR="$(rlocation _main/datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng/captains_log.pdf)" || PDF_ANCHOR=""
+if [[ -n "$PDF_ANCHOR" && -f "$PDF_ANCHOR" ]]; then
+  export FW_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
+fi
+
 cd "$UI_DIR"
 exec "${PLAYWRIGHT_CMD[@]}" "$@"

@@ -275,6 +275,7 @@ impl Runner {
             // Dispatch as many ready steps as parallelism allows.
             // Skip/block decisions are made inline (no slot consumed);
             // real work is spawned.
+            let mut dispatched = false;
             while running < self.parallelism {
                 let Some(i) = ready.pop_front() else { break };
                 match self.decide(graph, &state, &status, &runnable, &versions, i) {
@@ -309,6 +310,7 @@ impl Runner {
                     }
                     Decision::Run { ctx } => {
                         running += 1;
+                        dispatched = true;
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
                         let run = graph.steps[i].run.clone();
                         let retry = self.retry.clone();
@@ -321,6 +323,24 @@ impl Runner {
                         });
                     }
                 }
+            }
+
+            // Persist the dispatch before waiting on it. `mark_running`
+            // only mutates memory, and until this landed the *only*
+            // writes were on terminal states — so a step's "running"
+            // never reached the file, and the record went straight from
+            // "not reached yet" to "succeeded". A reader polling
+            // `dag_state.json` (which is every reader: `GET /api/dag`,
+            // and so the Manage grid) could therefore never see a step
+            // running, no matter how long it ran. Pressing Sync looked
+            // like nothing had happened, which is exactly what it was
+            // reported as.
+            //
+            // One write per dispatch batch, not per step, so the budget
+            // this file documents — O(steps) per run, state transitions
+            // only — still holds.
+            if dispatched {
+                state.save(&self.data_root).context("save dag state")?;
             }
 
             if running == 0 {
@@ -660,15 +680,28 @@ impl Runner {
         if let Some(run) = state.current_run.as_mut() {
             run.states.insert(id.clone(), st.as_str().to_string());
         }
-        let entry = state.steps.entry(id.clone()).or_default();
-        let last = entry.last_run.get_or_insert_with(|| LastRun {
-            started_at: stamp.clone(),
-            ..Default::default()
-        });
-        last.finished_at = Some(stamp);
-        last.status = st.as_str().to_string();
-        last.attempts = attempts;
-        last.error = error;
+        // `NotSelected` is a fact about this *run*, not about the step:
+        // the run didn't ask for it, so nothing happened to it. Writing
+        // that into `last_run` overwrote a real history — a step that
+        // succeeded yesterday came back as "not selected", stamped with
+        // the time of a run that never touched it, because every
+        // per-source sync walks the whole graph to publish output
+        // versions and reaches every step it isn't running.
+        //
+        // The run record still carries it (`current_run.states` above),
+        // which is where "not in this sync" belongs: that map describes
+        // one run, and is replaced wholesale by the next.
+        if st != StepStatus::NotSelected {
+            let entry = state.steps.entry(id.clone()).or_default();
+            let last = entry.last_run.get_or_insert_with(|| LastRun {
+                started_at: stamp.clone(),
+                ..Default::default()
+            });
+            last.finished_at = Some(stamp);
+            last.status = st.as_str().to_string();
+            last.attempts = attempts;
+            last.error = error;
+        }
         status[i] = Some(st);
     }
 }
@@ -1253,6 +1286,160 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V2\nSLACK V2\n"
+        );
+    }
+
+    /// Regression: "running" has to reach the *file*, while the step is
+    /// still running.
+    ///
+    /// `mark_running` has always written it into the in-memory state,
+    /// but the only `save` calls were on terminal states — so
+    /// `dag_state.json` went straight from "not reached yet" to
+    /// "succeeded", and a reader could never catch a step in flight no
+    /// matter how long it ran. That file is the *only* channel to a
+    /// reader who did not spawn the run: `GET /api/dag` reads it, and
+    /// the Manage grid reads that. Pressing Sync therefore looked like
+    /// nothing had happened, all the way until the step finished.
+    ///
+    /// The assertion is deliberately made from disk, in another task,
+    /// while the step is parked — reading `state` in-process would pass
+    /// against the broken version.
+    #[tokio::test]
+    async fn a_running_step_is_visible_on_disk_while_it_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let g = Graph::build(vec![StepSpec::new("gate/raw", {
+            let (started, release) = (started.clone(), release.clone());
+            StepRun::in_process(move |ctx: StepCtx| {
+                let (started, release) = (started.clone(), release.clone());
+                async move {
+                    std::fs::create_dir_all(ctx.path_str(&ctx.step_id)).unwrap();
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(StepOutcome::default())
+                }
+            })
+        })])
+        .unwrap();
+
+        let r = runner(root.path());
+        let run = tokio::spawn(async move { r.run(&g).await });
+
+        started.notified().await;
+        // The step is parked inside its body. Whatever the file says
+        // now is what a poller would see for as long as the step runs.
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let st = DagState::load(root.path()).unwrap();
+                if let Some(cur) = st
+                    .current_run
+                    .as_ref()
+                    .and_then(|c| c.states.get("gate/raw"))
+                {
+                    return (
+                        cur.clone(),
+                        st.steps.get("gate/raw").and_then(|s| s.last_run.clone()),
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a step in flight must be readable as running from dag_state.json");
+
+        assert_eq!(seen.0, "running");
+        let last = seen.1.expect("a dispatched step has an open last_run");
+        assert!(
+            last.finished_at.is_none(),
+            "an in-flight step has no finish time yet: {last:?}"
+        );
+        assert!(
+            !last.started_at.is_empty(),
+            "…but it does have a start time, which is what the grid shows"
+        );
+
+        release.notify_one();
+        assert!(run.await.unwrap().unwrap().all_ok());
+    }
+
+    /// Regression: a subset sync must not rewrite the history of the
+    /// steps it did not select.
+    ///
+    /// Every run walks the whole graph — out-of-scope steps still get a
+    /// terminal status so the report is complete and so consumers see
+    /// their recorded output versions. That walk used to write
+    /// `NotSelected` into `last_run` like any other outcome, which meant
+    /// a `--sync slack` erased email's record: a step that succeeded
+    /// yesterday came back as "not selected", stamped with the time of a
+    /// run that never touched it. In the grid that read as a source
+    /// whose "last synced" moved every time some *other* source synced.
+    ///
+    /// `current_run.states` is where "not in this sync" belongs — it
+    /// describes one run and is replaced wholesale by the next.
+    #[tokio::test]
+    async fn a_subset_sync_leaves_unselected_steps_history_alone() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let r = runner(fx.root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+
+        let before = DagState::load(fx.root.path()).unwrap().steps["email/raw"]
+            .last_run
+            .clone()
+            .expect("the first run recorded email/raw");
+        assert_eq!(before.status, "succeeded");
+
+        // A sync of a different source. It walks email/raw and reports
+        // it not-selected, but nothing happened to email/raw.
+        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let rep = r2.run(&g).await.unwrap();
+        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        let after = st.steps["email/raw"]
+            .last_run
+            .as_ref()
+            .expect("email/raw keeps its record");
+        assert_eq!(
+            after.status, "succeeded",
+            "a run that did not select this step must not restate what it did"
+        );
+        assert_eq!(
+            after.finished_at, before.finished_at,
+            "nor when it did it — this is the timestamp the grid shows as \
+             'last synced', and it moved on every unrelated sync"
+        );
+
+        // The run record still carries the fact, because that map is
+        // about the run rather than about the step.
+        assert_eq!(
+            st.current_run.expect("a run leaves a record").states["email/raw"],
+            "not_selected"
+        );
+    }
+
+    /// A step no run has ever selected has no history to keep, and must
+    /// not acquire a fake one: `not_selected` is not something that
+    /// happened to it, so it stays "never run" rather than becoming a
+    /// row stamped with a run that skipped it.
+    #[tokio::test]
+    async fn a_never_selected_step_has_no_last_run_at_all() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        assert!(r.run(&g).await.unwrap().all_ok());
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        assert!(
+            st.steps
+                .get("email/raw")
+                .and_then(|s| s.last_run.as_ref())
+                .is_none(),
+            "a step this run never selected has not run, and must not \
+             claim to have: {:#?}",
+            st.steps.get("email/raw"),
         );
     }
 
