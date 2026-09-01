@@ -545,7 +545,20 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     // will fall back to the implicit "next commit folds it in"
     // behavior, which is what we had before.
     rescue_dirty_working_tree(&pool, db_path).await;
-    for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
+    // The DDL is applied in two passes, tables before indexes, with the
+    // schema reconcile in between. The ordering is load-bearing: an
+    // index over a column that a later schema change introduced cannot
+    // be created against a store predating that column, so a single
+    // pass fails with `no such column` and returns from `open` before
+    // the reconcile that would have ADDed it ever runs. (Live example:
+    // #206 added `content_blake3` to `pdf_documents` plus
+    // `idx_pdf_documents_content` over it; every pre-#206 pdf store was
+    // then unopenable.) `parse_create_table_name` returns `None` for
+    // exactly the statements that must wait — indexes and anything else
+    // that isn't a `CREATE TABLE`.
+    let ddl = || extra_ddl.iter().chain(SHARED_DDL.iter());
+    let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
+    for stmt in ddl().filter(is_create_table) {
         sqlx::query(stmt).execute(&pool).await.with_context(|| {
             format!(
                 "apply DDL: {}",
@@ -559,29 +572,24 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     // `volatile_payload` on the bookkeeping sidecars). Reconcile each
     // table against its DDL — add missing columns, or drop+recreate when
     // ADD can't express the change. See [`reconcile_table_schema`].
-    let mut recreated_any = false;
-    for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
-        recreated_any |= reconcile_table_schema(&pool, stmt).await.with_context(|| {
+    for stmt in ddl() {
+        reconcile_table_schema(&pool, stmt).await.with_context(|| {
             format!(
                 "reconcile schema: {}",
                 stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
             )
         })?;
     }
-    // A drop+recreate inside reconcile also drops the table's indexes
-    // (they were created by the DDL pass above). Re-run the DDL once more
-    // to re-assert them; everything is `IF NOT EXISTS`, so it's a no-op
-    // except for indexes on a just-recreated table. Skipped entirely when
-    // nothing was recreated (the common path).
-    if recreated_any {
-        for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
-            sqlx::query(stmt).execute(&pool).await.with_context(|| {
-                format!(
-                    "re-apply DDL after recreate: {}",
-                    stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
-                )
-            })?;
-        }
+    // Indexes last, so they see the reconciled columns. This also makes
+    // reconcile's drop+recreate path free: the dropped table's indexes
+    // hadn't been created yet this open, and are created now.
+    for stmt in ddl().filter(|s| !is_create_table(s)) {
+        sqlx::query(stmt).execute(&pool).await.with_context(|| {
+            format!(
+                "apply DDL: {}",
+                stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
+            )
+        })?;
     }
     // Seal the schema into its own commit before handing back the pool.
     // doltlite only materializes the `dolt_diff_<table>` virtual table for
@@ -721,12 +729,13 @@ fn parse_create_table_name(sql: &str) -> Option<String> {
 /// keeps the dropped rows in history. Non-`CREATE TABLE` statements
 /// (indexes) are skipped.
 ///
-/// Returns `true` iff the table was dropped and recreated (so the caller
-/// knows it must re-assert indexes); `false` for a no-op or an
-/// `ADD COLUMN`-only reconcile.
-async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<bool> {
+/// `open` runs this between the `CREATE TABLE` and the `CREATE INDEX`
+/// halves of the DDL, so a reconciled column is in place before any
+/// index over it is created, and a drop+recreate here loses no index
+/// (they are all asserted afterwards).
+async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<()> {
     let Some(table) = parse_create_table_name(create_sql) else {
-        return Ok(false);
+        return Ok(());
     };
     const PROBE: &str = "__datalib_schema_probe__";
 
@@ -754,7 +763,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<b
             .execute(pool)
             .await
             .with_context(|| format!("create missing table {table}"))?;
-        return Ok(true);
+        return Ok(());
     }
 
     let actual_names: std::collections::HashSet<&str> =
@@ -768,7 +777,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<b
         .collect();
 
     if !has_extra && missing.is_empty() {
-        return Ok(false);
+        return Ok(());
     }
 
     // 3. Additive-only and no generated columns missing → ALTER ADD.
@@ -795,7 +804,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<b
             }
         }
         if added_all {
-            return Ok(false);
+            return Ok(());
         }
     }
 
@@ -814,7 +823,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<b
         .execute(pool)
         .await
         .with_context(|| format!("recreate {table}"))?;
-    Ok(true)
+    Ok(())
 }
 
 /// Stamp a dolt commit of any orphaned working-tree changes inherited
@@ -2001,6 +2010,58 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_adds_column_and_its_index_together() {
+        // The shape every column-adding schema change actually takes:
+        // a new column AND an index over it, landing on a store that
+        // predates both. The index must not be created until the
+        // reconcile has ADDed the column, or `open` dies with
+        // "no such column" before it can self-heal (the pre-#206 pdf
+        // stores, 2026-09-01).
+        let d = tempdir().unwrap();
+        let p = d.path().join("col_and_index.doltlite_db");
+        {
+            let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+            sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        const NEW_WIDGETS_DDL: &str = "CREATE TABLE IF NOT EXISTS widgets (
+            id TEXT PRIMARY KEY,
+            name TEXT NULL,
+            payload TEXT NULL,
+            tag TEXT NULL
+        )";
+        const NEW_INDEX: &str = "CREATE INDEX IF NOT EXISTS idx_widgets_tag ON widgets(tag)";
+        let pool = open(&p, &[NEW_WIDGETS_DDL, NEW_INDEX])
+            .await
+            .expect("open must self-heal a column that a new index covers");
+
+        let cols = table_columns(&pool, "widgets").await.unwrap();
+        assert!(
+            cols.iter().any(|c| c.name == "tag"),
+            "tag should have been ADDed"
+        );
+        // ADD COLUMN, not a recreate: the pre-existing row survived.
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets WHERE id = 'w1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        // And the index really exists — the second DDL pass ran.
+        let idx: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'index' AND name = 'idx_widgets_tag'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(idx, 1, "idx_widgets_tag should have been created");
     }
 
     #[tokio::test]
