@@ -21,6 +21,7 @@ use sqlx::Row;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
+use super::canonicalize::canonicalize_payload;
 use super::schema_raw::{full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, DATA_TABLES};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -52,6 +53,7 @@ impl RawDb {
     // ── self_identity ───────────────────────────────────────────────
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
+        let payload = &canonicalize_payload(payload);
         let row = SelfIdentityRow::from_payload(payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
@@ -76,6 +78,7 @@ impl RawDb {
     // ── merge_requests ──────────────────────────────────────────────
 
     pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
+        let payload = &canonicalize_payload(payload);
         let row = MergeRequestRow::from_payload(proj, iid, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin merge_request tx")?;
@@ -87,6 +90,7 @@ impl RawDb {
     // ── discussions ─────────────────────────────────────────────────
 
     pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
+        let payload = &canonicalize_payload(payload);
         let row = DiscussionRow::from_payload(proj, iid, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin discussion tx")?;
@@ -105,7 +109,7 @@ impl RawDb {
         }
         let rows: Vec<DiscussionRow> = payloads
             .iter()
-            .map(|p| DiscussionRow::from_payload(proj, iid, p))
+            .map(|p| DiscussionRow::from_payload(proj, iid, &canonicalize_payload(p)))
             .collect::<Result<Vec<_>>>()?;
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self
