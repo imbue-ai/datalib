@@ -993,11 +993,12 @@ async fn insert_grid_row(
     let res = sqlx::query(
         "INSERT INTO grid_rows \
          (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, author, account, \
-          project, channel, conversation_name, conversation_uuid, message_index, entire_chat, text, \
+          project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
+          message_index, entire_chat, text, \
           slack_link, qmd_path, source_url, git_sha, upstream_id, upstream_entity_kind, \
           upstream_scope, notion_page_uuid, notion_block_uuid, \
           markdown_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&row.uuid)
     .bind(&row.provider)
@@ -1009,6 +1010,8 @@ async fn insert_grid_row(
     .bind(&row.author)
     .bind(&row.account)
     .bind(&row.project)
+    .bind(&row.org_uuid)
+    .bind(&row.org_name)
     .bind(&row.channel)
     .bind(&row.conversation_name)
     .bind(&row.conversation_uuid)
@@ -1061,6 +1064,130 @@ async fn insert_grid_row(
         };
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod insert_round_trip_tests {
+    //! Every `GridRow` field has to actually reach the index.
+    //! [`insert_grid_row`] spells its column list and its bindings out
+    //! by hand, so a field can be declared on the struct, populated by
+    //! a renderer, selected by the read path and given a grid column —
+    //! and still be dropped silently on the way in. The row lands with
+    //! a NULL, every layer reports success, and the column is just
+    //! empty.
+    //!
+    //! That is not hypothetical: `org_uuid` / `org_name` shipped that
+    //! way. Both were declared with `#[col(sql = …)]`, set by
+    //! chat-common's renderer from real Anthropic org data, read back
+    //! by `SEARCH_ROW_COLUMNS`, and surfaced as the grid's "Org"
+    //! column — while the INSERT never listed them, so the column was
+    //! empty for every row from the day it appeared.
+    //!
+    //! Rather than pin those two names, this fills every column with a
+    //! distinct sentinel and asserts nothing reads back NULL. The next
+    //! forgotten column fails here instead of in the UI.
+    use super::*;
+    use datalib_schema::grid_rows::GridRow;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::{Column, Row, ValueRef};
+    use std::str::FromStr;
+    use tempfile::tempdir;
+
+    /// A row with every `Option` field `Some` and every scalar
+    /// non-empty, so any NULL read back is a binding that was dropped
+    /// rather than a value that was genuinely absent.
+    fn fully_populated_row() -> GridRow {
+        GridRow {
+            uuid: "row-everything".into(),
+            provider: "anthropic".into(),
+            kind: "Chat".into(),
+            source_label: "Claude".into(),
+            // Offset-bearing and parseable, so the two `#[derived]`
+            // columns (`when_ts_utc` / `when_offset`) are non-NULL too.
+            when_ts: Some("2026-06-02T13:00:00-07:00".into()),
+            author: Some("Jean-Luc Picard".into()),
+            account: Some("acct-1701".into()),
+            project: Some("proj-1701".into()),
+            org_uuid: Some("org-1701".into()),
+            org_name: Some("Starfleet".into()),
+            channel: Some("bridge".into()),
+            conversation_name: Some("Klingon Diplomatic Greeting".into()),
+            conversation_uuid: "conv-1701".into(),
+            message_index: Some(3),
+            entire_chat: "/chat/conv-1701".into(),
+            text: "Tea. Earl Grey. Hot.".into(),
+            slack_link: Some("https://example.test/archives/C1/p1".into()),
+            qmd_path: Some("chats/conv-1701.md".into()),
+            source_url: Some("https://claude.ai/chat/conv-1701".into()),
+            git_sha: Some("0123456789abcdef".into()),
+            upstream_id: Some("upstream-1701".into()),
+            upstream_entity_kind: Some("conversation".into()),
+            upstream_scope: Some("claude.ai".into()),
+            notion_page_uuid: Some("notion-page-1701".into()),
+            notion_block_uuid: Some("notion-block-1701".into()),
+            markdown_uuid: Some("md-1701".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_grid_row_column_survives_the_insert() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("round_trip.doltlite_db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("open pool");
+        init_schema(&pool).await.expect("init_schema");
+
+        let row = fully_populated_row();
+        let mut conn = pool.acquire().await.expect("acquire");
+        insert_grid_row(&mut conn, &row)
+            .await
+            .expect("insert_grid_row");
+        drop(conn);
+
+        // `SELECT *` on purpose: the point is to see every column the
+        // DDL declares, including ones this test predates.
+        let read_back = sqlx::query("SELECT * FROM grid_rows WHERE uuid = ?")
+            .bind(&row.uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("read grid_rows back");
+
+        let dropped: Vec<&str> = read_back
+            .columns()
+            .iter()
+            .filter(|c| {
+                read_back
+                    .try_get_raw(c.ordinal())
+                    .map(|v| v.is_null())
+                    .unwrap_or(false)
+            })
+            .map(|c| c.name())
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "every column of a fully-populated GridRow should come back \
+             non-NULL, but these read back NULL: {dropped:?}. Each is \
+             declared on GridRow (or derived in insert_grid_row) but \
+             missing from the INSERT's column list or its bindings."
+        );
+
+        // Spot-check the two that motivated this test, so a failure
+        // names them rather than only counting NULLs.
+        assert_eq!(
+            read_back.try_get::<Option<String>, _>("org_uuid").unwrap(),
+            row.org_uuid
+        );
+        assert_eq!(
+            read_back.try_get::<Option<String>, _>("org_name").unwrap(),
+            row.org_name
+        );
+    }
 }
 
 #[cfg(test)]

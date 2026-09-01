@@ -19,7 +19,8 @@
     "project": {"uuid": "70000001-1701-4d00-8000-000000000701"},
     "_source": {
       "via": "claude.ai/api",
-      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise"
     },
     "chat_messages": [
       {
@@ -138,7 +139,8 @@
     "project": null,
     "_source": {
       "via": "claude.ai/api",
-      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise"
     },
     "chat_messages": [
       {
@@ -210,7 +212,8 @@
     "project": null,
     "_source": {
       "via": "claude.ai/api",
-      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise"
     },
     "chat_messages": [
       {
