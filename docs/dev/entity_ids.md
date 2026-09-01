@@ -42,12 +42,31 @@ sources can collide.
 
 | Variant | When | Examples |
 |---|---|---|
-| `Upstream(id)` | Default. The natural key is unique within one upstream account / workspace / org. | Slack `team_id`, JMAP `account_id`, Anthropic `org_uuid`, Signal account identifier |
-| `ProviderGlobal` | The upstream genuinely guarantees the natural key is unique provider-wide. | GitHub `{repo}:pr:{n}`, Notion `page_id`, WhatsApp `chat_jid` |
+| `Upstream(id)` | Default. The natural key is unique within one upstream account / workspace / org, and the scope value is **always present**. | Slack `team_id`, JMAP `account_id`, Signal account identifier |
+| `ProviderGlobal` | The upstream genuinely guarantees the natural key is unique provider-wide. | GitHub `{repo}:pr:{n}`, Notion `page_id`, WhatsApp `chat_jid`, Anthropic and ChatGPT conversation/message uuids |
 | `Content` | Identity **is** the bytes, and two sources finding the same file *should* collapse to one row. | pdf `blake3`, perseus canonical work id |
 
 "Probably unique" is `Upstream` with the account id. It costs nothing
-extra and cannot be wrong.
+extra — *provided the account id is always there*.
+
+**A scope component has to be present-or-never.** This is the one way
+`Upstream` can be wrong, and it is not obvious: if the value is
+`Option` and merely *usually* set, then the first ingest that finds it
+populated re-keys every row minted while it was empty. That is precisely
+the silent re-keying this crate exists to prevent, arrived at from the
+inside.
+
+Anthropic is the worked example, and the reason it appears under
+`ProviderGlobal` above rather than here. Scoping its ids on `org_uuid`
+looks like the textbook `Upstream` case — right until you notice the
+column is empty whenever orgs aren't mirrored (`sync.projects = false`,
+or an older ingest) and populated afterwards. It issues service-wide
+unique uuids anyway, so `ProviderGlobal` is both correct and safe. See
+`anthropic/src/render/ids.rs` §Scope for the full argument.
+
+So the test is not "is this key unique within the account?" but "will
+this scope value be identical on every future ingest, including the ones
+configured differently?" If it can appear later, it is not a scope.
 
 `Content` deliberately makes two overlapping sources contend for one id.
 That is the intended behaviour; `IdClaims` turns the contention into an
