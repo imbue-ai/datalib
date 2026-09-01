@@ -73,6 +73,21 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   // rather than a second dialog — and the preview shows both steps, so
   // the checkbox demonstrates its consequence instead of asserting it.
   await expect(alsoRender(page)).toBeChecked();
+
+  // ...and the card around it is a real block, not a sliver.
+  //
+  // `.wiz-check` was once the class on *two* things: this label, and a
+  // bool field's own `<input type=checkbox>`, whose `width: 16px;
+  // height: 16px` therefore applied to the whole card. Its heading and
+  // its paragraph of help wrapped inside a 16px column and overlapped
+  // the disclosure below it. Every other assertion in this file passed
+  // throughout — a crushed label still contains a checked input, and
+  // the preview still says what it writes — which is why the check has
+  // to be on the geometry. Same shape as `expectGridPainted`.
+  const card = wizard(page).locator("label.wiz-check");
+  const box = await card.boundingBox();
+  expect(box, "the also-render card should be laid out").not.toBeNull();
+  expect(box!.width, "the also-render card collapsed to its checkbox").toBeGreaterThan(200);
   await wizard(page).getByText("Review the TOML this writes").click();
   const preview = wizard(page).locator(".wiz-review pre");
   await expect(preview).toContainText('id = "personal-claude/raw"');
