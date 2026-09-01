@@ -9,6 +9,7 @@
 //! - **Incremental sync state** lives in the DB itself (`sync_scope_state`
 //!   table), narrowing each run via `updated_after`.
 
+pub mod canonicalize;
 pub mod client;
 pub mod db;
 pub mod schema_raw;
