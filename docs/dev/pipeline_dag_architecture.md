@@ -331,6 +331,14 @@ rough dependency order:
   content-hashes the output tree (blake3, content not mtime). The
   fallback is the safety net — real steps should report logical
   versions. The grid_index step's version is its dolt commit hash.
+  Since a step's version is only cheap for the step that wrote the
+  tree, the runner content-hashes **only for a step that just ran**. A
+  step it skipped contributes the version recorded for its output last
+  time, or `version::UNKNOWN` if there is none; the runner does not
+  read the tree to invent one. That distinction was missing until
+  #225: a `--sync` of one small source spent forty seconds hashing a
+  3.4 GB Slack raw store, for a step it had already ruled out of the
+  run and whose only consumer was equally out of it.
 * **Scheduler state** lives at `system/dag_state.json`
   (per-step input/output versions, saved after every terminal step).
   Input versions are recorded only on *success*, so a failed step stays
@@ -390,7 +398,9 @@ rough dependency order:
   Steps outside the subgraph are still *walked*, because an in-subgraph
   fan-in can depend on them: walking publishes their recorded output
   versions, so consumers compare against the right thing, and gives
-  every step a terminal status for the report. They are never invoked.
+  every step a terminal status for the report. They are never invoked,
+  and — since #225 — never read either: walking one costs a lookup in
+  `dag_state.json`, whatever its output tree holds.
   `not_selected` is deliberately its own status rather than
   `skipped_up_to_date` — "not part of this run" and "checked, and
   current" are different facts, and the UI shows them differently.
@@ -428,12 +438,14 @@ rough dependency order:
   correct, and always slower, since it reads every byte. See
   `docs/dev/step_protocol.md`.
 
-* **Every input has a producer.** An input path no step writes (a
-  staged Takeout export, a Signal backup) gets a synthesized `staged:`
-  source step that hashes the path and reports the hash as its output
-  version. The scheduler therefore never reads an input path itself,
-  there is no "external artifact" special case anywhere in it, and
-  `--sync staged:<path>` works like any other source.
+* **Every input has a producer.** An input names a step id, not a path
+  on disk: `Graph::build` rejects an input that names no declared step,
+  with an error pointing at `params.common.input_path` as the way to
+  name a directory you staged by hand. The scheduler therefore never
+  reads an input path itself, and there is no "external artifact"
+  special case anywhere in it. (An earlier design synthesized a
+  `staged:` source step per unwritten path and hashed it; nothing in
+  the tree does that today.)
 * **Run-wide `--now`** is exported by the runner to every step as
   `DATALIB_DAG_NOW` (sampled once when omitted) so all stamped
   outputs agree; reset controls (`--reset-and-redownload`,
