@@ -85,10 +85,9 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 /// answer the question rather than copy whichever neighbour it read
 /// first.
 ///
-/// There is deliberately **no `SourceName` variant**. Scoping an id to
-/// the config's `source_name` means renaming a source re-keys every
-/// row it produced, silently orphaning filed feedback — and the name
-/// is editable from the Manage tab, so that is a one-click data loss.
+/// The variant to reach for last is [`Scope::SourceInstance`]: it keys
+/// on configuration rather than on data, so two roots ingesting the
+/// same upstream data under different step ids get different ids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope<'a> {
     /// Unique within one upstream account / workspace / organization,

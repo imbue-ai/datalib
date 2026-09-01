@@ -57,13 +57,18 @@ other (see [Guardrails](#guardrails)).
 ### `SourceInstance` is the last resort, not the default
 
 Four providers — signal, whatsapp, yolink, contacts — key on our
-config's source name. That used to be flatly unsafe: one editable string
-was both the display name and the identity, so renaming a source from
-the Manage tab silently re-keyed every row it ever produced and orphaned
-every `feedback.target_uuids` entry pointing at them.
+config's source name.
 
-Config now has two names (#201), and the split is what makes
-[`Scope::SourceInstance`] offerable:
+An earlier draft of this file said that was flatly unsafe, because one
+editable string served as both the display name and the identity, so a
+rename would silently re-key every row a source ever produced. **That
+was wrong, and it was wrong before #201 too.** `SourceWizard.vue` has
+carried `:disabled="isEdit"` on the name field since it shipped, with a
+comment saying renaming is a migration rather than a form field. There
+was never a rename button to press.
+
+What #201 changed is that the split is now *explicit and enforced in
+the config format* rather than a property of one Vue component:
 
 | | |
 |---|---|
@@ -73,13 +78,16 @@ Config now has two names (#201), and the split is what makes
 A renderer receives `source_name(tree)` — the first segment of the
 step's `id` — so only the stable half ever reaches an id.
 
-What is left is weaker but real: an id scoped this way is a function of
-*configuration* rather than of data, so two roots ingesting the same
-upstream data under different step ids get different uuids. Prefer
-`Upstream` wherever the provider gives you anything to key on; reach for
-`SourceInstance` when it genuinely gives you nothing, as with yolink's
-per-source timeseries page — a document datalib composes, with no
-YoLink-side object behind it.
+So the real argument against scoping on it was never the rename hazard.
+It is that such an id is a function of *configuration* rather than of
+data: two roots ingesting the same upstream content under different step
+ids get different uuids, which costs the reproducibility the fixture
+suite and every insta golden rest on.
+
+Prefer `Upstream` wherever the provider gives you anything to key on;
+reach for `SourceInstance` when it genuinely gives you nothing, as with
+yolink's per-source timeseries page — a document datalib composes, with
+no YoLink-side object behind it.
 
 **The source *type* was never the missing piece.** It is already the
 first recipe component: `provider` is a hardcoded `&'static str` per

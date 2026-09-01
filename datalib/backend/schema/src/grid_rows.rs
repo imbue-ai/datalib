@@ -418,12 +418,13 @@ pub struct GridRow {
     /// minted under `Scope::ProviderGlobal` or `Scope::Content`, where
     /// the natural key needs no further scoping.
     ///
-    /// Deliberately a provider-issued value (Anthropic `org_uuid`,
-    /// Slack `team_id`, JMAP `account_id`) and never our config's
-    /// `source_name`: the name is editable from the Manage tab, so
-    /// keying on it means a rename silently re-keys every row the
-    /// source ever produced and orphans every `feedback.target_uuids`
-    /// entry pointing at them. See `datalib_id::Scope`.
+    /// Preferably a provider-issued value (Anthropic `org_uuid`, Slack
+    /// `team_id`, JMAP `account_id`) rather than our own step id: an
+    /// upstream-scoped id is a function of the data, so a fresh data
+    /// root re-ingesting the same upstream content reproduces it. A
+    /// `Scope::SourceInstance` value here is our step id instead, and
+    /// reproduces only within a root configured the same way. See
+    /// `datalib_id::Scope`.
     ///
     /// Overlaps `account` in spirit but not in contract: `account` is a
     /// display/filter value the UI shows and may be a human-readable
