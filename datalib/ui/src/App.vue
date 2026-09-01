@@ -79,6 +79,7 @@ onMounted(checkConfig);
   /* Log severity highlights: dark shades on the light background… */
   --datalib-log-error: #991b1b;
   --datalib-log-warn: #854d0e;
+  --datalib-log-ok: #166534;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -95,6 +96,7 @@ onMounted(checkConfig);
     /* …and light shades on the dark background. */
     --datalib-log-error: #f87171;
     --datalib-log-warn: #facc15;
+    --datalib-log-ok: #4ade80;
   }
 }
 

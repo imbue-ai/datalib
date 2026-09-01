@@ -683,8 +683,17 @@ const columnDefs: ColDef<Row>[] = [
       const track = document.createElement("span");
       track.className = "m2-bar";
       const fill = document.createElement("span");
+      fill.className = "m2-bar-fill";
       fill.style.width = `${Math.max(frac * 100, row.bytes > 0 ? 1.5 : 0)}%`;
       track.appendChild(fill);
+      // The size, centred over the bar. The bar answers "how does this
+      // compare to the others" at a glance and the number answers "how
+      // much is it" exactly; neither replaces the other, and stacking
+      // them costs no width in a column that has little to spare.
+      const label = document.createElement("span");
+      label.className = "m2-bar-label";
+      label.textContent = formatBytes(row.bytes);
+      track.appendChild(label);
       wrap.appendChild(track);
       return wrap;
     },
@@ -1495,7 +1504,15 @@ onUnmounted(() => {
 /* A run that died mid-step: not a failure anyone reported, but not a
    success either, so it reads as a warning rather than an error. */
 .m2-status-interrupted { color: var(--datalib-log-warn); }
-.m2-status-succeeded { color: var(--datalib-log-ok, var(--datalib-muted)); }
+/* Both tick glyphs are green, and for the same reason the failure "!"
+   is red: the column is icons now, so colour is doing the work the
+   words used to. A grey tick beside a red exclamation reads as "no
+   answer yet" rather than "fine".
+   `succeeded` is one tick, `skipped_up_to_date` ("Up to date") is two —
+   different facts, both good news, so they share the colour and are
+   told apart by the glyph. */
+.m2-status-succeeded,
+.m2-status-skipped-up-to-date { color: var(--datalib-log-ok); }
 /* Never run is the emptiest state in the column, and reads as such. */
 .m2-status-never-run { opacity: 0.55; }
 
@@ -1533,8 +1550,8 @@ onUnmounted(() => {
   background: currentColor;
 }
 
-/* Bytes on disk: a bar against the largest row, with the size on
-   `title`. */
+/* Bytes on disk: a bar against the largest row, with the size centred
+   over it and the per-output breakdown on `title`. */
 .m2-bytes {
   display: flex;
   align-items: center;
@@ -1543,17 +1560,36 @@ onUnmounted(() => {
 }
 .m2-bytes-none { color: var(--datalib-muted); opacity: 0.55; }
 .m2-bar {
+  position: relative;
   flex: 1 1 auto;
-  height: 8px;
-  border-radius: 2px;
+  /* Tall enough to hold the label: the bar is the label's background
+     now, not a rule beside it. */
+  height: 18px;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--datalib-fg) 10%, transparent);
   overflow: hidden;
 }
-.m2-bar > span {
+/* Absolute so the label can sit over it rather than after it. */
+.m2-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
+}
+/* The number reads across both halves of the bar — over the fill on the
+   left and the empty track on the right — so it can't take its contrast
+   from either. `--datalib-fg` against a fill kept at 55% opacity holds
+   up in both themes; the shadow is what keeps the glyph edges legible
+   where the two meet. */
+.m2-bar-label {
+  position: relative;
   display: block;
-  height: 100%;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--datalib-accent) 60%, transparent);
+  text-align: center;
+  line-height: 18px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--datalib-fg);
+  text-shadow: 0 0 3px var(--datalib-bg);
 }
 
 .m2-actions {
