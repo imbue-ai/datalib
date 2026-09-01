@@ -233,15 +233,26 @@ chunking parameters, quantization)`. §4.4 makes the index store *offsets
 into rendered markdown* rather than text, which means a renderer change
 silently invalidates every offset. So the fingerprint must also cover:
 
-- **`renderer_version`** — already an existing concept, stored on
-  `markdowns.renderer_version` and documented as invalidating every
-  cached render at once.
-- **`row_set_hash`** — the existing per-document content key on
-  `markdowns`.
+- **`renderer_version`** — the renderer that produced the bytes the
+  offsets point into.
+- **`row_set_hash`** — the per-document content key.
 
-Together those two already define "is this document's rendered text the
-same text I indexed?" We do not need to invent a freshness key; we need
-to stop throwing away the one that exists.
+Both columns exist on `markdowns`, and both are **write-only today.**
+`compute_row_set_hash` runs at
+[`grid_index.rs:777`](../../datalib/backend/etl/src/grid_index.rs) and
+`format!("{RENDERER_VERSION}.{}", md.render_version)` at `:778`; both are
+`INSERT`ed at `:796` and never selected again outside tests. The only
+render-skip reader is `load_fingerprints` (`:676`), which selects
+`source_fingerprint` alone — a **provider-supplied** value that does not
+move when the renderer changes. `pdf` patches around this locally by
+folding its own `RENDER_VERSION` into `render_fingerprint`; no other
+provider does. This is **imbue-ai/datalib#172**, and the schema's own
+doc comment asserting the opposite is what that issue is about.
+
+So: we are not "keeping a freshness key that exists" — we are building
+one. The columns are the right shape and the values are already computed;
+what is missing is a reader. **#172 is a dependency of this design, not
+an adjacent tidy-up** — see §4.5.
 
 QMD retrofitted a narrower version of this and it shows: `qmd doctor`
 explicitly warns when it finds multiple non-empty fingerprints in one
@@ -441,14 +452,24 @@ Target state, measured corpus, D1–D4 applied and int8 stage 2:
 
 This is the question the previous draft did not ask. Taking it seriously:
 
-**The enabler already exists.** `markdowns.row_set_hash` +
-`markdowns.renderer_version`
-([`schema/src/markdowns.rs`](../../datalib/backend/schema/src/markdowns.rs))
-already model rendering as a **pure function with a cache key** — ingest
-recomputes `row_set_hash` from the canonical grid-row tuples and re-emits
-the file only on mismatch. "Render on the fly" is that same cache with
-capacity zero. The architecture is already there; only the policy is
-hardcoded.
+**The shape of the enabler exists; the mechanism does not.** Rendering
+*is* a deterministic function of the raw rows plus the renderer, and
+`markdowns` already carries the two columns that would express it
+(`row_set_hash`, `renderer_version`). But per §3.5 those columns are
+written and never read: the render-skip in force keys on
+`source_fingerprint`, which is provider-supplied and does not move when
+the renderer changes (**#172**).
+
+That matters more here than it looks. "Render on the fly" is the same
+cache with capacity zero — but a capacity-zero cache is only correct if
+the key is. Today it is not, and the failure is silent in a specific way:
+under §4.4 the index holds byte offsets into rendered markdown, so a
+renderer change that invalidates nothing leaves every offset pointing
+into a file that was never re-rendered. Nothing errors; snippets just
+drift off their spans. `pdf`'s per-provider workaround does not help,
+because the *index* is the thing that needs to know.
+
+**So #172 gates D1 and D4 regardless of which way §4.5 is decided.**
 
 **QMD is what forecloses it.** Its only indexing entry point is a
 filesystem scan, so while qmd is the index, the files must exist.
@@ -488,6 +509,8 @@ may never.
 What this buys by being a policy rather than a decision: if the 250k-mail
 numbers come back hostile, the escape hatch is a config value on one
 step, not a redesign.
+
+Either way, fix #172 first. Both branches depend on it.
 
 ---
 
@@ -623,6 +646,14 @@ and resumed on re-run. Our runner needs equivalent resumability from the
 start, and the §7 item 8 failure mode — partial vectors on an interrupted
 run being treated as complete — is the specific bug to design against.
 
+**Stale offsets fail silently.** The single sharpest risk in the design.
+Storing spans instead of text means correctness depends on the indexed
+bytes and the rendered bytes being the same bytes — and the freshness key
+that would guarantee that is currently write-only (#172). A wrong offset
+does not error; it returns a snippet from the wrong place. Any test for
+this has to watch it fail against a stale render, per `AGENTS.md` on
+self-concealing test claims.
+
 **D4 couples the grid to an unbuilt component.** Mitigated by staging it
 last and by its being optional (§4.4).
 
@@ -671,6 +702,12 @@ to the full corpus.**
 
 **M0 — Verify.** §7 item 4 (ingest a real mailbox and measure) and item
 5. Item 1–3 are done. No new code.
+
+**M0.1 — Fix imbue-ai/datalib#172.** `markdowns.renderer_version` and
+`row_set_hash` are written and never read, so a renderer change
+invalidates nothing. Everything downstream of D1 stores offsets into
+rendered markdown, and offsets against a stale render fail *silently*
+(§3.5, §4.5). This is the one prerequisite that is not measurement.
 
 **M0.5 — Storage wins that need none of this.** D2 (compress at rest)
 and D3 (attachments in CAS only). Both are independent of the retrieval
