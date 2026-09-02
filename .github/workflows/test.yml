@@ -191,13 +191,23 @@ jobs:
         run: |
           libdir="${{ steps.env.outputs.libclang-path }}"
           # FIXME(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
-          # e2e suite from the CI gate. It needs `rsync` + a Chromium
-          # browser cache the *current* `:latest` devcontainer image does
-          # not carry; both are now added to `.devcontainer/Dockerfile`, so
-          # once a new image is published on the next `v*` tag, DROP this
-          # negative pattern to re-enable the suite as a merge gate. (Local
-          # `bazel test //...` is unaffected and still runs it.) The `--`
-          # keeps the leading `-` from being read as a flag.
+          # e2e suite from the CI gate. It needs three things from the
+          # image: `rsync`, a Chromium browser cache, and a WebKit one —
+          # the suite's `webkit` project re-runs the grid specs in the
+          # engine the desktop app's WKWebView matches, and a browser
+          # without its apt-installed shared libraries cannot launch.
+          #
+          # All three are now in `.devcontainer/Dockerfile`. What is left
+          # is a *published* image built from it, which happens on the
+          # next `v*` tag: `:latest` is whatever the last release built,
+          # so dropping this pattern earlier would point CI at an image
+          # with no WebKit. Once that image exists, DROP the negative
+          # pattern to re-enable the suite as a merge gate.
+          #
+          # (Local `bazel test //...` is unaffected and still runs it,
+          # both engines. The `e2e onboarding recording` job below runs a
+          # chromium-only slice today for the same image reason.) The
+          # `--` keeps the leading `-` from being read as a flag.
           #
           # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
           # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
@@ -250,11 +260,14 @@ jobs:
   #     this one blocking would re-enable that gate by the back door,
   #     which is a decision to take on its own.
   #   * `--test_arg=onboarding-pdf` runs the two onboarding specs only.
-  #     They are chromium-only, which matters: the Linux image bakes
-  #     Chromium and its OS libraries but not WebKit's, so a full-suite
-  #     run here would download a WebKit that cannot launch.
-  #   * `E2E_BROWSERS=chromium` says that out loud to run_e2e.sh, so no
-  #     ~100 MB WebKit download is paid for a browser nothing starts.
+  #     They are chromium-only, and this job wants the recording rather
+  #     than the coverage — the suite as a whole belongs to the gate
+  #     above, not here.
+  #   * `E2E_BROWSERS=chromium` keeps this job from provisioning an
+  #     engine none of its specs start. `.devcontainer/Dockerfile` bakes
+  #     WebKit too, but only as of a `:latest` published after that
+  #     change lands, and this job should not be the thing that
+  #     discovers the image is older than it expects.
   e2e-recording:
     name: e2e onboarding recording (non-gating)
     runs-on: ubuntu-latest

@@ -55,10 +55,8 @@ download it from the run's summary page and use the commands above.
 That job is not a merge gate: `bazel test //...` still excludes
 `//datalib/ui:e2e_test` (see the FIXME in `.github/workflows/test.yml`),
 and this job exists to publish the recording, not to re-enable that gate
-by the back door. It also runs the onboarding specs only, with
-`E2E_BROWSERS=chromium` — the Linux image bakes Chromium and its OS
-libraries but not WebKit's, so a full-suite run there would download a
-WebKit that cannot launch.
+by the back door. It runs the onboarding specs only, with
+`E2E_BROWSERS=chromium`, since those specs start no other engine.
 
 When the invocation went to BuildBuddy, the same `outputs.zip` is on the
 invocation page under Artifacts.
