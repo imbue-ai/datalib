@@ -117,25 +117,45 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && rm -rf /root/.bun \
     && bun --version
 
-# Playwright Chromium + its OS libraries, for `//datalib/ui:e2e_test`.
-# The test resolves the browser from `~/.cache/ms-playwright` via
-# `env_inherit = ["HOME"]` (HOME=/root here) but never runs
-# `playwright install` itself, so the browser must be baked in. `npx
-# playwright@<ver> install --with-deps chromium` both apt-installs the
-# shared libs Chromium needs and downloads the browser build that this
-# exact Playwright version expects.
+# Playwright's browsers + their OS libraries, for `//datalib/ui:e2e_test`.
+# The test resolves them from `~/.cache/ms-playwright` via
+# `env_inherit = ["HOME"]` (HOME=/root here).
+#
+# **Both engines the suite drives.** Chromium runs the bulk of it;
+# WebKit runs the `webkit` project, which re-runs the grid-bearing specs
+# in the engine the Tauri desktop app actually uses (WKWebView). That
+# project is not redundant coverage — WebKit resolves a child's
+# percentage `height` against the parent's *specified* height, and the
+# resulting collapsed AG Grid has shipped twice while every Chromium
+# assertion passed. See the project's comment in
+# `datalib/ui/playwright.config.ts`.
+#
+# `run_e2e.sh` does call `playwright install` at test time, so the
+# browser *downloads* could in principle happen there. What cannot is
+# `--with-deps`: apt-installing the shared libraries each engine needs
+# takes root and a package index, and a bazel test action has neither.
+# So both engines are baked here, dependencies and all, and the call in
+# run_e2e.sh becomes a no-op that fetches only what this image lacks.
+# `E2E_BROWSERS` narrows that call for a caller that wants one engine.
+#
+# WebKit is the more expensive of the two — its apt closure is
+# substantially larger than Chromium's, and it is most of what this
+# layer adds to the image. It is worth it: without WebKit here, CI can
+# only ever run a Chromium-shaped subset of the suite.
 #
 # PLAYWRIGHT_VERSION MUST match the resolved `playwright` /
 # `@playwright/test` version in `datalib/ui/pnpm-lock.yaml` — a
 # mismatch means the bazel-linked Playwright looks for a browser
 # revision that isn't on disk. Bump both together.
 #
-# NOTE: until a new image is published (on the next `v*` tag), CI still
-# excludes e2e_test from the gate — see the FIXME in
-# `.github/workflows/test.yml`. This bake is what lets that exclusion be
-# lifted.
+# NOTE: CI still excludes e2e_test from the gate — see the FIXME in
+# `.github/workflows/test.yml`. Both halves of that FIXME's precondition
+# (rsync, and now both browsers) are satisfied *in this file*; what is
+# still outstanding is a published image built from it, which happens on
+# the next `v*` tag. Dropping the exclusion before then would point CI
+# at a `:latest` that has no WebKit.
 ARG PLAYWRIGHT_VERSION=1.59.1
-RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
+RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/*
 
 # uv — `precommit_test` drives ruff / pyright through `uv run`, so the

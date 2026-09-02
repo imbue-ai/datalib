@@ -2,6 +2,19 @@ common --enable_bzlmod
 common --noenable_workspace
 test --test_output=errors
 
+# Undeclared test outputs as one downloadable `outputs.zip` rather than
+# a loose directory tree.
+#
+# `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
+# trace per test, with the trace viewer bundled — into
+# TEST_UNDECLARED_OUTPUTS_DIR. Zipped, it arrives as a single artifact
+# on the BuildBuddy invocation page that you can download and open;
+# unzipped it is ~200 loose files, which is both harder to find and
+# what some BES consumers decline to list at all. Nothing else in the
+# tree writes undeclared outputs, so this costs one zip of one
+# directory on one test.
+test --zip_undeclared_test_outputs=true
+
 # Every bazel action inherits a fixed PATH, not the developer's host
 # PATH. Build and test actions resolve `npx`, `cmake`, etc. against
 # this PATH, so those tools must be installed somewhere here
