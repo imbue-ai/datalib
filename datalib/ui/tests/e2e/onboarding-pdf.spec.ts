@@ -113,6 +113,21 @@ async function openExplore(page: Page) {
   await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
 }
 
+// Record this file, always — video and trace, passing or failing.
+//
+// It is the widest UI path the suite has: first run, the wizard twice,
+// the Pipeline table, real syncs, and the Explore grid. That makes it
+// the run worth having a picture of when something downstream breaks,
+// and the one to watch when you want to see what the onboarding
+// actually looks like without building the app.
+//
+// `"on"` rather than `"retain-on-failure"` on purpose: a recording that
+// only exists after a failure cannot answer "what did this look like
+// before?", which is the question a regression usually raises. The rest
+// of the suite keeps the cheaper `retain-on-failure` from the top-level
+// `use` block; this is the one file that pays for always-on.
+test.use({ video: "on", trace: "on" });
+
 test.describe("onboarding: empty folder → indexed PDFs", () => {
   // One real `datalib-dag` run per sync, on a cold data root. The first
   // one creates the doltlite stores, which is most of its cost.

@@ -282,6 +282,38 @@ const backendBin =
     "bazel-bin/datalib/backend/http/datalib_http_bin",
   );
 
+// ── where the recordings go ──────────────────────────────────────────
+//
+// Playwright's per-test artifacts — video, trace, screenshots — plus
+// the HTML report that embeds them.
+//
+// Under `bazel test`, TEST_UNDECLARED_OUTPUTS_DIR is a directory bazel
+// zips into
+// `bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip`
+// and uploads alongside the invocation, so anything written here
+// survives the sandbox and is downloadable from BuildBuddy's Artifacts
+// tab. That is the whole reason artifacts are addressed through this
+// variable rather than the default `test-results/`: written anywhere
+// else they exist only inside a sandbox bazel deletes.
+//
+// Outside bazel (plain `pnpm exec playwright test`) it falls back to
+// Playwright's usual location, next to the specs.
+//
+// Only the *report* is an undeclared output. The report embeds a copy
+// of every video and trace it references, so shipping `outputDir` as
+// well would put the same 13 MB trace in the zip twice — measured, and
+// it doubled the artifact.
+//
+// So `outputDir` goes to the test's scratch directory, which bazel
+// cleans up on its own, and exists only long enough for the reporter
+// to copy out of it.
+const REPORT_DIR = process.env.TEST_UNDECLARED_OUTPUTS_DIR
+  ? path.join(process.env.TEST_UNDECLARED_OUTPUTS_DIR, "playwright-report")
+  : path.join(here, "playwright-report");
+const ARTIFACT_DIR = process.env.TEST_TMPDIR
+  ? path.join(process.env.TEST_TMPDIR, "playwright-artifacts")
+  : path.join(here, "test-results");
+
 export default defineConfig({
   testDir: "tests/e2e",
   testMatch: /.*\.spec\.ts$/,
@@ -297,7 +329,16 @@ export default defineConfig({
   fullyParallel: false,
   workers: 4,
   globalSetup: "./tests/e2e/global-setup.ts",
-  reporter: [["list"]],
+  outputDir: ARTIFACT_DIR,
+  // `list` is what a person watching the terminal reads. `html` is the
+  // artifact: a self-contained report that embeds each test's video and
+  // trace, with the trace viewer built in — open it and you can scrub
+  // the run action by action, with a DOM snapshot before and after
+  // each. See tests/e2e/README-artifacts.md for how to open one.
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: REPORT_DIR, open: "never" }],
+  ],
   // Drop Playwright's default `-{projectName}-{platform}` suffix on
   // snapshot filenames. Our snapshots today are text dumps of API
   // payloads (see grid-fixture-golden.spec.ts) — identical on every
