@@ -1,34 +1,76 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 // Scroll a (possibly virtualized-away) row into view via the grid api
-// the GridCard exposes on window, then click it. Returns after the
-// click; callers assert on the consequences.
-export async function clickRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await page.evaluate(
-    ({ uuid }) => {
-      type Node = {
-        rowIndex: number | null;
-        data?: { uuid: string };
-      };
-      const w = window as unknown as {
-        __fwGridApi?: {
-          forEachNode: (cb: (n: Node) => void) => void;
-          ensureNodeVisible: (n: Node, pos: "middle") => void;
+// the GridCard exposes on window, and return its row index once the DOM
+// node for it actually exists.
+//
+// The scroll and the wait cannot be one step. `ensureNodeVisible` moves
+// the viewport, but AG Grid renders the newly-visible window on its own
+// schedule, so the node at that index may not be in the DOM yet when
+// `evaluate` returns. A plain locator wait on the index is not enough
+// either: if the viewport did not end up where the call asked (a
+// re-layout, a grid that has just been resized), waiting alone never
+// converges and the click fails at its 30s default having never
+// re-asked. So the nudge is inside the poll, and gets repeated until
+// the row is there.
+//
+// This is a race the suite could always lose and mostly didn't; it
+// surfaced when the specs started running four at a time and rendering
+// got slower relative to the scroll.
+async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
+  // Annotated: `found` is only ever assigned inside the forEachNode
+  // callback, so TypeScript infers the evaluate's return as plain
+  // `null` and the cast below would be rejected as a mistake.
+  const nudge = (): Promise<number | null> =>
+    page.evaluate(
+      ({ uuid }) => {
+        type Node = {
+          rowIndex: number | null;
+          data?: { uuid: string };
         };
-      };
-      const api = w.__fwGridApi!;
-      let found: number | null = null;
-      api.forEachNode((node) => {
-        if (node.data && node.data.uuid === uuid) {
-          api.ensureNodeVisible(node, "middle");
-          found = node.rowIndex;
-        }
-      });
-      return found;
-    },
-    { uuid },
-  );
+        const w = window as unknown as {
+          __fwGridApi?: {
+            forEachNode: (cb: (n: Node) => void) => void;
+            ensureNodeVisible: (n: Node, pos: "middle") => void;
+          };
+        };
+        const api = w.__fwGridApi!;
+        let found: number | null = null;
+        api.forEachNode((node) => {
+          if (node.data && node.data.uuid === uuid) {
+            api.ensureNodeVisible(node, "middle");
+            found = node.rowIndex;
+          }
+        });
+        return found;
+      },
+      { uuid },
+    );
+
+  const rowIndex = await nudge();
   expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
+  await expect
+    .poll(
+      async () => {
+        await nudge();
+        return page
+          .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
+          .count();
+      },
+      {
+        timeout: 15_000,
+        intervals: [100, 250, 250, 500],
+        message: `row ${rowIndex} (uuid=${uuid}) never rendered after being scrolled to`,
+      },
+    )
+    .toBeGreaterThan(0);
+  return rowIndex as number;
+}
+
+// Scroll a (possibly virtualized-away) row into view, then click it.
+// Returns after the click; callers assert on the consequences.
+export async function clickRowByUuid(page: Page, uuid: string) {
+  const rowIndex = await scrollRowIntoView(page, uuid);
   await page
     .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
     .click();
@@ -39,31 +81,7 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 // node to dispatch at — but opens the context menu instead of
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await page.evaluate(
-    ({ uuid }) => {
-      type Node = {
-        rowIndex: number | null;
-        data?: { uuid: string };
-      };
-      const w = window as unknown as {
-        __fwGridApi?: {
-          forEachNode: (cb: (n: Node) => void) => void;
-          ensureNodeVisible: (n: Node, pos: "middle") => void;
-        };
-      };
-      const api = w.__fwGridApi!;
-      let found: number | null = null;
-      api.forEachNode((node) => {
-        if (node.data && node.data.uuid === uuid) {
-          api.ensureNodeVisible(node, "middle");
-          found = node.rowIndex;
-        }
-      });
-      return found;
-    },
-    { uuid },
-  );
-  expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
+  const rowIndex = await scrollRowIntoView(page, uuid);
   await page
     .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
     .click({ button: "right" });

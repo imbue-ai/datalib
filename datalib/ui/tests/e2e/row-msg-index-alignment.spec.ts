@@ -100,20 +100,36 @@ test("clicked grid row highlights the section with the matching uuid", async ({
     // Each click opens a fresh documentView card; gate on the card
     // for the clicked row's markdown being in place before reading
     // the selection.
-    await page
-      .locator(
-        `.chat-preview[data-markdown-uuid="${pick.markdown_uuid ?? pick.uuid}"]`,
-      )
-      .waitFor({ timeout: 10_000 });
-    // Allow applySelection's nextTick + scrollTop write to settle.
-    // We can't gate on `.msg.selected` existing — a row whose section
-    // uuid doesn't resolve to anything in the body leaves nothing
-    // selected, and "nothing selected" is itself a misalignment we
-    // want to report (not time out on).
-    await page.waitForTimeout(150);
+    const card = page.locator(
+      `.chat-preview[data-markdown-uuid="${pick.markdown_uuid ?? pick.uuid}"]`,
+    );
+    await card.waitFor({ timeout: 10_000 });
 
-    const selectedSectionUuid = await page
-      .locator(".chat-preview .msg.selected")
+    // Wait for `applySelection`'s nextTick + scrollTop write, but only
+    // as long as it actually takes. This cannot be a plain `waitFor`:
+    // a row whose section uuid resolves to nothing in the body leaves
+    // nothing selected, and "nothing selected" is a misalignment this
+    // test exists to *report*, not to time out on. So the wait is
+    // swallowed, and a card that never gets a selection falls through
+    // to the null case below.
+    //
+    // The pause used to be an unconditional `waitForTimeout(150)`,
+    // which is a real cost here rather than a rounding error: this
+    // loop runs once per conversation in the fixture (44 of them), so
+    // the sleep alone was ~6.6s per engine and made this the slowest
+    // spec in the suite. Paying only on the failing rows takes it to
+    // roughly nothing.
+    await card
+      .locator(".msg.selected")
+      .first()
+      .waitFor({ timeout: 2_000 })
+      .catch(() => {});
+
+    // Scoped to *this* card, not to `.chat-preview` at large. The
+    // previous pick's card can still be in the DOM, and an unscoped
+    // lookup would happily read its selection and call it this row's.
+    const selectedSectionUuid = await card
+      .locator(".msg.selected")
       .first()
       .getAttribute("data-section-uuid")
       .catch(() => null);

@@ -42,15 +42,35 @@
 // The config is shared by every spec in the run (workers: 1), so it is
 // restored in afterEach — including on failure.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
 const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const FIXTURE_ROOT = process.env.FW_E2E_FIXTURE_ROOT;
 const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
+
+/// This spec's own data root, asked of the backend rather than read
+/// from the environment.
+///
+/// It rewrites `config.toml`, so it runs against a data root nobody
+/// else touches (`tests/e2e/config-mutating.ts`; the project's
+/// `baseURL` is what points it there). The config it writes names
+/// `data_root` absolutely, so it has to name *that* root — pointing at
+/// the shared fixture root instead would have every sync here writing
+/// into the tree twenty other specs are reading.
+///
+/// `GET /api/config` reports the absolute path of the config file the
+/// backend is serving, so its directory is the answer, and it comes
+/// from the same server the page is talking to by construction.
+let dataRoot = "";
+async function resolveDataRoot(request: APIRequestContext): Promise<string> {
+  const { path } = (await (await request.get("/api/config")).json()) as {
+    path: string;
+  };
+  return path.slice(0, path.lastIndexOf("/"));
+}
 
 const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
 const statusIcon = (page: Page, id: string) =>
@@ -94,6 +114,25 @@ async function writeConfig(page: Page, text: string) {
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
+
+  // Reload, so the rows this test then watches were painted from the
+  // config *and* the runner's record together.
+  //
+  // Saving re-derives the table from the config text at once — that is
+  // the point of the Advanced editor — but the per-step history behind
+  // the Status and Last synced columns comes from `GET /api/dag`, which
+  // is refetched on a timer. Between the two, a row that has run before
+  // paints as "Never run": it exists because the config declares it,
+  // and nothing has yet said what it did. Mounting the page afresh
+  // fetches config, jobs and the DAG record in one `Promise.all`, so
+  // that in-between state cannot be observed.
+  //
+  // Without this the sequence sampler below recorded
+  // `["Queued", "Never run", "Succeeded"]` and failed the monotonicity
+  // check — correctly, by its own rule that "Never run" after a queue
+  // is going backwards. The status was a rendering artifact of the save
+  // rather than anything the runner did.
+  await openManager(page);
 }
 
 const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
@@ -105,19 +144,66 @@ const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 /// timeout reports the state it was stuck on ("expected 'Queued' to
 /// match …") instead of just expiring.
 async function settle(page: Page, id: string, timeout = 60_000): Promise<string> {
+  // The value the poll matched, not a fresh read. Re-reading after the
+  // poll succeeds is a race: the row can be claimed by the *next* job
+  // between the two reads, and the function then returns "Queued" from
+  // a call whose whole contract is to return a terminal status.
+  let last = "(no status)";
   await expect
-    .poll(async () => (await statusOf(page, id)) ?? "(no status)", {
-      timeout,
-      intervals: [250],
-      message: `${id} never reached a terminal status`,
-    })
+    .poll(
+      async () => {
+        last = (await statusOf(page, id)) ?? "(no status)";
+        return last;
+      },
+      {
+        timeout,
+        intervals: [250],
+        message: `${id} never reached a terminal status`,
+      },
+    )
     .toMatch(TERMINAL);
-  return (await statusOf(page, id)) ?? "";
+
+  // A terminal row is not a finished run, and the difference is what
+  // made three tests in this file flaky.
+  //
+  // The runner walks the whole graph to publish output versions, so it
+  // is still writing records after the step you asked for went green —
+  // and those writes move `Last synced` on rows this file then reads.
+  // The failures all looked like time going wrong rather than like a
+  // race: two stamps four seconds apart across one header click, a
+  // stamp that "changed while the clock was merely ticking".
+  //
+  // `run.live` is the lock on the data root (see `DagRun`), so it is
+  // the one signal that means *nobody is writing*. `page.request`
+  // rather than the `request` fixture: it shares the page's context, so
+  // it carries the same auth header and needs no plumbing at the call
+  // sites.
+  await expect
+    .poll(
+      async () => {
+        const dag = await (await page.request.get("/api/dag")).json();
+        return dag.run?.live === true;
+      },
+      {
+        timeout,
+        intervals: [200],
+        message: `a runner still holds the data root after ${id} went ${last}`,
+      },
+    )
+    .toBe(false);
+
+  // ...and the page has to be showing that. The grid re-reads on a
+  // timer (2s while a run is live, 5s otherwise), so even once the
+  // backend is done the columns can be a poll behind. Mounting afresh
+  // fetches config, jobs and the DAG record in one `Promise.all`.
+  await openManager(page);
+  return last;
 }
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
+  dataRoot = await resolveDataRoot(request);
   await openManager(page);
   original = await page.locator(".m2-editor").inputValue();
 });
@@ -134,8 +220,8 @@ test.describe("a real sync, driven from the grid", () => {
   test.setTimeout(120_000);
 
   test.skip(
-    !STEP_BIN || !FIXTURE_ROOT || !PDF_DIR,
-    "needs FW_E2E_DATALIB_STEP + FW_E2E_FIXTURE_ROOT + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
+    !STEP_BIN || !PDF_DIR,
+    "needs FW_E2E_DATALIB_STEP + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
   );
 
   // A step's `command` is split shell-style, so a binary path is
@@ -163,7 +249,7 @@ test.describe("a real sync, driven from the grid", () => {
     return at === -1 ? "" : `\n${original.slice(at)}`;
   };
 
-  const config = () => `data_root = "${FIXTURE_ROOT}"
+  const config = () => `data_root = "${dataRoot}"
 
 [[steps]]
 id = "pdfs/raw"
@@ -180,7 +266,7 @@ inputs = ["pdfs/raw"]
 id = "docs/raw"
 command = "'${STEP_BIN}' download fsindex"
 [steps.params.common]
-input_path = "${FIXTURE_ROOT}/fsindex_scan"
+input_path = "${dataRoot}/fsindex_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
 # a state the grid can be observed handling — a Last synced of "—", and
@@ -192,7 +278,7 @@ input_path = "${FIXTURE_ROOT}/fsindex_scan"
 id = "unsynced/raw"
 command = "'${STEP_BIN}' download fsindex"
 [steps.params.common]
-input_path = "${FIXTURE_ROOT}/fsindex_scan"
+input_path = "${dataRoot}/fsindex_scan"
 ${applets()}`;
 
   test("syncing one source leaves another source's history untouched", async ({
@@ -242,8 +328,15 @@ ${applets()}`;
     };
 
     await syncBtn(page, "pdfs/raw").click();
-    // The first sample is deliberately taken with no await in between:
-    // the push from the enqueue handler is what has to have landed.
+    // Gate on the queue having accepted, then sample. `click()` resolves
+    // when the event is dispatched, not when the async handler behind it
+    // finishes, so sampling straight after it is a race with the enqueue
+    // — and losing it reads the *previous* test's "Succeeded" as this
+    // run's first frame. The banner is set by `runSource` between the
+    // POST returning and the job list being re-read, which is exactly
+    // the moment this test is about: the queue has the job, and the
+    // question is what the rows say.
+    await expect(page.getByText(/Queued a sync for/)).toBeVisible();
     await record();
 
     // Syncing a source claims everything downstream of it, so the
