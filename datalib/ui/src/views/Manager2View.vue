@@ -609,10 +609,11 @@ const columnDefs: ColDef<Row>[] = [
     // Sort on the instant. The cell paints "5 minutes ago", and AG Grid
     // sorts the row's *value* rather than what a renderer drew — but
     // the value is an ISO string carrying its source's own UTC offset,
-    // which does not compare correctly as text either. See
+    // which does not compare correctly as text either. A row that never
+    // ran sorts as "forever ago", so reversing the column reverses all
+    // of it and one click groups the never-run rows. See
     // `compareStamps`.
-    comparator: (a: string | null, b: string | null, _na, _nb, inverted?: boolean) =>
-      compareStamps(a, b, inverted),
+    comparator: compareStamps,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const iso = p.data?.lastSynced ?? null;
       const span = document.createElement("span");

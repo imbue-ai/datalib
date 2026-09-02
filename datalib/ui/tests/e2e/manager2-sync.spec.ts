@@ -425,21 +425,47 @@ input_path = "${FIXTURE_ROOT}/fsindex_scan"
     // ...and it really did reverse, rather than the click doing nothing.
     expect(descTimes).toEqual([...ascTimes].reverse());
 
-    // A row with no stamp is not a time, so it sits at the bottom both
-    // ways rather than flipping to the top on the second click.
-    const unstamped = (rows: { stamp: string | null }[]) =>
-      rows.findIndex((r) => r.stamp === null);
-    for (const [dir, rows] of [
-      ["ascending", asc],
-      ["descending", desc],
-    ] as const) {
-      const at = unstamped(rows);
-      expect(at, `${dir}: expected an un-synced row to place`).toBeGreaterThan(-1);
-      expect(
-        rows.slice(at).every((r) => r.stamp === null),
-        `${dir}: a never-run row sorted above one that has run — ${JSON.stringify(rows)}`,
-      ).toBe(true);
-    }
+    // A row that never ran sorts as "forever ago" — older than anything
+    // that has run. So it leads ascending and trails descending, and
+    // the reversal above covers the whole column rather than stopping
+    // short of the nulls. Sorting by this header once is how you ask
+    // "what has never run?".
+    const unrun = (rows: { id: string; stamp: string | null }[]) =>
+      rows.filter((r) => r.stamp === null).map((r) => r.id);
+    expect(unrun(asc), "the un-synced row should be in the table").toContain(
+      "unsynced/raw",
+    );
+    expect(
+      asc.slice(0, unrun(asc).length).every((r) => r.stamp === null),
+      `ascending: never-run rows should lead — ${JSON.stringify(asc)}`,
+    ).toBe(true);
+    expect(
+      desc.slice(-unrun(desc).length).every((r) => r.stamp === null),
+      `descending: never-run rows should trail — ${JSON.stringify(desc)}`,
+    ).toBe(true);
+
+    // The whole column reversed, nulls included — not just its stamped
+    // middle. This is the property that makes the order a single total
+    // one rather than two rules stitched together.
+    //
+    // Worth knowing what this test does NOT pin: deleting
+    // `compareStamps` entirely leaves the whole suite green (measured).
+    // Same-offset ISO stamps sort correctly as text by accident, and
+    // "forever ago" is what AG Grid's default already does with nulls,
+    // so nothing observable here distinguishes the two. The comparator
+    // earns its place on stamps in *different* UTC offsets, which one
+    // machine cannot produce — that case lives in
+    // src/config/timeFormat.test.ts and is the real coverage.
+    //
+    // Compared on stamps, not row ids: `pdfs/raw` and its render step
+    // finish inside the same second, so they compare equal, and a
+    // stable sort leaves tied rows in the order it found them rather
+    // than swapping them on reversal. Their stamps are equal too, so
+    // the stamp sequence reverses cleanly whichever way the tie fell.
+    expect(
+      desc.map((r) => r.stamp),
+      "descending should be ascending reversed, end to end",
+    ).toEqual([...asc].reverse().map((r) => r.stamp));
   });
 
   test("a downstream step can't be synced on its own, and says what would carry it", async ({

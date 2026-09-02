@@ -51,20 +51,20 @@ export function formatStamp(iso: string | null): string {
 /// and neither text order nor equality survives it. Parse, then
 /// compare.
 ///
-/// `inverted` is AG Grid's `isDescending`. It is threaded through
-/// because AG Grid negates a comparator's result for a descending
-/// sort, which would otherwise flip "never" from the bottom of the
-/// column to the top: "never run" is the absence of a time, not the
-/// largest or smallest one, so it belongs last whichever way the
-/// column is pointed.
-export function compareStamps(
-  a: string | null,
-  b: string | null,
-  inverted = false,
-): number {
+/// A row that has never run sorts as **forever ago** — older than any
+/// real stamp, rather than as a special case pinned to one end.
+///
+/// That makes this a plain total order, which is the point: reversing
+/// the sort reverses the whole column, so "never run" leads ascending
+/// and trails descending, and one click on the header is how you ask
+/// "what has never run?". The alternative — keeping nulls at the
+/// bottom whichever way the column points — needs the sort direction
+/// threaded in and negated back out, which is two orders wearing one
+/// function's clothes.
+export function compareStamps(a: string | null, b: string | null): number {
   if (a === b) return 0;
-  if (!a) return inverted ? -1 : 1;
-  if (!b) return inverted ? 1 : -1;
+  if (!a) return -1;
+  if (!b) return 1;
   return Date.parse(a) - Date.parse(b);
 }
 

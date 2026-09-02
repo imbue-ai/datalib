@@ -102,8 +102,7 @@ describe("the exact stamp behind the hover", () => {
 // what these pin is that the value comparison is on instants and not on
 // the strings the value happens to be.
 describe("ordering by when, not by how it reads", () => {
-  const sorted = (xs: (string | null)[], inverted = false) =>
-    [...xs].sort((a, b) => compareStamps(a, b, inverted));
+  const sorted = (xs: (string | null)[]) => [...xs].sort(compareStamps);
 
   it("orders by instant even when the text order disagrees", () => {
     // Same offset, so these DO sort correctly as text — included so a
@@ -133,17 +132,27 @@ describe("ordering by when, not by how it reads", () => {
     ).toBe(0);
   });
 
-  it("keeps 'never run' at the bottom whichever way the column points", () => {
-    // AG Grid negates a comparator's result for a descending sort, so
-    // the null branches have to pre-invert or "never" jumps to the top
-    // the moment someone clicks the header twice. "Never run" is the
-    // absence of a time, not the largest or smallest one.
+  it("sorts 'never run' as forever ago, so reversing really reverses", () => {
+    // A step that has never run is older than anything that has, not a
+    // special case pinned to one end of the column. That keeps this a
+    // plain total order: AG Grid negates a comparator's result for a
+    // descending sort, and the whole column — nulls included — turns
+    // over with it. It is also how one click on the header groups every
+    // never-run step together.
     const a = "2026-09-01T09:00:00+00:00";
     const b = "2026-09-01T11:00:00+00:00";
-    expect(sorted([a, null, b])).toEqual([a, b, null]);
+    expect(sorted([a, null, b]), "ascending: oldest first").toEqual([null, a, b]);
 
-    // Descending: AG Grid applies the negation, so model it here.
-    const desc = [b, null, a].sort((x, y) => -compareStamps(x, y, true));
-    expect(desc).toEqual([b, a, null]);
+    // Descending is exactly that reversed, which is the property worth
+    // having. Modelled the way AG Grid applies it: negate the result.
+    const desc = [a, null, b].sort((x, y) => -compareStamps(x, y));
+    expect(desc, "descending is the ascending order reversed").toEqual([b, a, null]);
+    expect(desc).toEqual([...sorted([a, null, b])].reverse());
+  });
+
+  it("treats two never-run rows as equal rather than ordering them", () => {
+    // Neither is older than the other; whatever secondary order the
+    // grid settles on is not this function's business.
+    expect(compareStamps(null, null)).toBe(0);
   });
 });
