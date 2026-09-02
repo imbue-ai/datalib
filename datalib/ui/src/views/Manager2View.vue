@@ -96,6 +96,7 @@ import {
   boardWentTerminal,
   withOverlay,
   effectiveRun,
+  statusFloor,
   type Overlay,
   type StatusView,
 } from "@/config/pipelineStatus";
@@ -350,14 +351,30 @@ function finishedThisRun(id: string): boolean {
   return !!state && state !== "running";
 }
 
+/// The floor that keeps a row's status from going backwards within one
+/// run. See `statusFloor` for why this cannot live inside `stepStatus`.
+///
+/// A plain closure rather than a `ref`: it is not state this view
+/// renders *from*, it is a bound on what `stepStatus` may report, and
+/// making it reactive would have a computed writing to its own
+/// dependencies.
+const holdRank = statusFloor();
+
 function stepStatus(id: string): StatusView {
-  return statusOf({
+  const claim = claimedBy.value.get(id);
+  const run = effectiveRun(dagRun.value, liveJob.value);
+  const view = statusOf({
     id,
     step: stepNow(id),
-    run: effectiveRun(dagRun.value, liveJob.value),
-    claim: claimedBy.value.get(id),
+    run,
+    claim,
     waitingOn: waitingOn(sources.value, id, finishedThisRun),
   });
+  // Keyed on the claiming job, which exists from the enqueue frame —
+  // before the runner has minted a run id of its own. When the job
+  // finishes the key changes, the floor lifts, and the next sync is
+  // free to start at Queued again.
+  return holdRank(id, claim?.id ?? run?.run_id ?? "", view);
 }
 
 const rows = computed<Row[]>(() =>

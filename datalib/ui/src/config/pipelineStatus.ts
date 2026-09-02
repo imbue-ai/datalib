@@ -176,6 +176,69 @@ export function effectiveRun(
   };
 }
 
+/// How far through a run each status is.
+///
+/// A total order over the whole vocabulary, and total on purpose: an
+/// unranked status would silently opt out of the floor below, which is
+/// the one place a gap would go unnoticed. Every terminal state shares
+/// the top rank — they are different outcomes of the same progress.
+///
+/// "Never run" sits *below* Queued: it is the absence of history, so
+/// seeing it after a sync was queued really is going backwards.
+export const STATUS_RANK: Record<string, number> = {
+  never_run: -1,
+  queued: 0,
+  running: 1,
+  succeeded: 2,
+  skipped_up_to_date: 2,
+  failed: 2,
+  blocked: 2,
+  interrupted: 2,
+};
+
+/// A floor under a row's status, holding it to the furthest it has got
+/// within one run.
+///
+/// **Why this cannot be done inside `stepStatus`.** That function
+/// describes a single snapshot, and the snapshot is genuinely
+/// ambiguous: when neither the pushed board nor the runner's record
+/// says anything about this step in the run now in flight, "the runner
+/// has not reached it" (Queued) and "this is what it last did"
+/// (`last_run`'s outcome) are both consistent with what we hold. Which
+/// one is *right* depends on what the row already showed — before the
+/// step was seen running, Queued; after, the outcome. A reducer over
+/// one snapshot has no way to know, and both readings shipped as bugs:
+/// picking the outcome painted the previous run's `Succeeded` between
+/// `Queued` and `Running`, and picking Queued sent a row that had been
+/// Running back to Queued.
+///
+/// So the ordering is enforced where the history lives. This is not a
+/// cosmetic smoothing of a correct sequence — it is the missing input.
+///
+/// `run` keys the memory: a new sync is a new key, so the floor resets
+/// and the next run is free to start at Queued again. The claiming
+/// job's id is the natural key, because it exists from the enqueue
+/// frame — before the runner has minted a run id of its own.
+export function statusFloor(): (id: string, run: string, next: StatusView) => StatusView {
+  const seen = new Map<string, { run: string; view: StatusView }>();
+  return (id, run, next) => {
+    const prev = seen.get(id);
+    const nextRank = STATUS_RANK[next.key];
+    // A status outside the vocabulary is passed through and forgotten.
+    // Holding a row at a rank we cannot compare would be worse than the
+    // flicker this exists to stop.
+    if (nextRank === undefined) {
+      seen.delete(id);
+      return next;
+    }
+    if (prev && prev.run === run && STATUS_RANK[prev.view.key] > nextRank) {
+      return prev.view;
+    }
+    seen.set(id, { run, view: next });
+    return next;
+  };
+}
+
 /// One row's status, reduced to a vocabulary the Status column can draw.
 ///
 /// `key` picks the glyph and the colour; `label` is the word it stands

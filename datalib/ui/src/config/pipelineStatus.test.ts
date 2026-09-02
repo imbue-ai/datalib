@@ -22,7 +22,10 @@ import {
   effectiveRun,
   pushedOverlay,
   sourcesFeeding,
+  statusFloor,
   stepStatus,
+  STATUS_LABEL,
+  STATUS_RANK,
   waitingOn,
   withOverlay,
   type Overlay,
@@ -625,5 +628,70 @@ describe("a second sync of a row that has already run", () => {
       ).toBeGreaterThanOrEqual(rank[seen[i - 1]]);
     }
     expect(seen[seen.length - 1]).toBe("succeeded");
+  });
+});
+
+describe("the floor under a row's status within one run", () => {
+  // `stepStatus` describes one snapshot, and the snapshot is genuinely
+  // ambiguous when neither the board nor the record says anything about
+  // this step in the run now in flight. Both readings of that silence
+  // shipped as bugs — see `statusFloor`. This is the missing input.
+  const view = (key: string): StatusView => ({ key, label: key, at: null, detail: null });
+
+  it("holds a row that has been Running against a lapse back to Queued", () => {
+    const hold = statusFloor();
+    expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
+    expect(hold("a/raw", "job-1", view("running")).key).toBe("running");
+    // The frame the e2e caught: claim still running, no `current_state`
+    // from either source, so `stepStatus` reads it as Queued.
+    expect(hold("a/raw", "job-1", view("queued")).key).toBe("running");
+    expect(hold("a/raw", "job-1", view("succeeded")).key).toBe("succeeded");
+  });
+
+  it("lets the next sync of the same row start at Queued again", () => {
+    const hold = statusFloor();
+    hold("a/raw", "job-1", view("running"));
+    hold("a/raw", "job-1", view("succeeded"));
+    // A new job is a new key, so the floor lifts. Without this a row
+    // could never be seen queued twice.
+    expect(hold("a/raw", "job-2", view("queued")).key).toBe("queued");
+  });
+
+  it("keeps rows apart", () => {
+    const hold = statusFloor();
+    hold("a/raw", "job-1", view("running"));
+    expect(hold("b/raw", "job-1", view("queued")).key).toBe("queued");
+  });
+
+  it("returns the held view whole, not just its rank", () => {
+    // The tooltip and the timestamp have to travel with the status, or
+    // a held frame would describe itself with the wrong sentence.
+    const hold = statusFloor();
+    const running: StatusView = {
+      key: "running",
+      label: "Running",
+      at: T.runStart,
+      detail: "downloading 3/10",
+    };
+    hold("a/raw", "job-1", running);
+    expect(hold("a/raw", "job-1", view("queued"))).toEqual(running);
+  });
+
+  it("passes through a status it cannot rank rather than freezing on it", () => {
+    // A vocabulary this table has not met is exactly when holding a row
+    // would be worst: we would be pinning it at a rank we invented.
+    const hold = statusFloor();
+    hold("a/raw", "job-1", view("running"));
+    expect(hold("a/raw", "job-1", view("something_new")).key).toBe("something_new");
+    // ...and having forgotten it, the next real status is free too.
+    expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
+  });
+
+  it("ranks every status the column can draw", () => {
+    // Total on purpose: an unranked status silently opts out of the
+    // floor, which is the one gap that would go unnoticed.
+    for (const key of Object.keys(STATUS_LABEL)) {
+      expect(STATUS_RANK[key], `${key} has no rank`).toBeDefined();
+    }
   });
 });

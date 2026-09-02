@@ -278,9 +278,23 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
         );
         const s = el?.getAttribute("aria-label");
         const seen = (log[id] ??= []);
-        if (s && seen[seen.length - 1] !== s) seen.push(s);
+        if (s && label(seen[seen.length - 1]) !== s) {
+          // The cell's tooltip carries *why* the status is what it is —
+          // which upstream step a queued row is behind, how a run died.
+          // Recording it costs nothing and is the difference between
+          // "went backwards: [Queued, Running, Queued]" and knowing
+          // which branch produced that third frame. The status is
+          // everything up to the first " — ", so `label` splits it
+          // back off for the comparison and for callers that only want
+          // the word.
+          const why = el?.closest("[title]")?.getAttribute("title") ?? "";
+          seen.push(why.startsWith(`${s} — `) ? why : s);
+        }
       }
     };
+    /// The status word out of a recorded frame, which may carry its
+    /// tooltip after an em dash.
+    const label = (frame: string | undefined) => frame?.split(" — ")[0];
     sample();
     // Exposed so `statusLog` can take a reading of its own — see there.
     w.__sampleStatuses = sample;
@@ -291,6 +305,13 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
       attributeFilter: ["aria-label"],
     });
   }, ids as string[]);
+}
+
+/// The status word out of a frame `statusLog` returned. Frames carry
+/// their tooltip after an em dash, so the whole frame is what you want
+/// in a failure message and this is what you want to compare.
+export function statusWord(frame: string): string {
+  return frame.split(" — ")[0];
 }
 
 /// What `recordStatuses` has seen for one row, oldest first, ending
