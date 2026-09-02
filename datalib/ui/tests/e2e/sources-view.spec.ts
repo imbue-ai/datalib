@@ -11,6 +11,7 @@
 // (the fixture root is shared by every spec in the run).
 
 import { test, expect, type Page } from "@playwright/test";
+import { writeFileSync } from "node:fs";
 
 async function openSources(page: Page) {
   await page.goto("/sources");
@@ -131,4 +132,45 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
   // The file on disk is unchanged.
   await page.reload();
   await expect(page.locator(".editor")).toHaveValue(original);
+});
+
+test("a config written on disk reaches the open editor, with nothing asking", async ({
+  page,
+  request,
+}) => {
+  // The claim the push channel exists to make, stated the way a person
+  // would notice it: an agent (or a text editor, or
+  // `datalib-migrate-config`) rewrites `config.toml`, and the open
+  // Sources tab shows the new text without anyone touching the browser.
+  //
+  // This is the assertion that can *fail*, and that is the point of
+  // writing it. The editor used to refetch the whole config every two
+  // seconds, so it would have passed this no matter how the backend
+  // behaved — including with no notification mechanism at all. Now
+  // nothing in the page asks on a timer, so if `config_changed` never
+  // arrives (the watcher did not start, the path did not resolve, the
+  // frame was not delivered) this waits out its timeout and says so.
+  await openSources(page);
+  const editor = page.locator(".editor");
+  const original = await editor.inputValue();
+
+  // Where this project's backend keeps its config. Asked of the server
+  // rather than assumed: `sources-view` is on the config-mutating list
+  // and so runs against a data root of its own.
+  const { path } = (await (await request.get("/api/config")).json()) as {
+    path: string;
+  };
+
+  // A comment line: a real change to the file, and valid TOML, so the
+  // editor adopts it rather than raising the parse banner.
+  const marker = "# written straight to disk by the e2e suite";
+  writeFileSync(path, `${original}\n${marker}\n`);
+
+  // No reload, no click, no keystroke between the write and this.
+  await expect(editor).toHaveValue(new RegExp(marker), { timeout: 15_000 });
+
+  // Put it back, which exercises the same channel in the other
+  // direction and leaves the root as the other specs here expect it.
+  writeFileSync(path, original);
+  await expect(editor).not.toHaveValue(new RegExp(marker), { timeout: 15_000 });
 });

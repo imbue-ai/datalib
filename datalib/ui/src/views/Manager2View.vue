@@ -27,8 +27,10 @@
 //
 // Reading the runner's record has a second consequence worth knowing:
 // a sync started from a terminal shows up here, because `datalib-dag`
-// writes that record whoever spawned it. The SSE stream only carries
-// runs this server started, which is why this polls as well.
+// writes that record whoever spawned it. The job half of the SSE stream
+// only carries runs this server started; the `root` half carries the
+// record moving whoever wrote it, which is how that terminal run
+// reaches this table.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
@@ -53,7 +55,6 @@ import {
   fetchFrontend,
   enqueueJob,
   cancelJob,
-  openJobStream,
   type DagRun,
   type DagStep,
   type DagStepProgress,
@@ -96,6 +97,7 @@ import {
   type Overlay,
   type StatusView,
 } from "@/config/pipelineStatus";
+import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
@@ -294,7 +296,7 @@ const PHASE_LABEL: Record<StepPhase, string> = {
 const claimedBy = computed(() => claimedByJob(sources.value, jobs.value));
 
 /// Per-step state from the newest pushed task board, overlaid on what
-/// the last `/api/dag` poll knew.
+/// the last `/api/dag` fetch knew.
 ///
 /// This is what makes the grid react rather than wait. The worker
 /// publishes the board over SSE within 400 ms of any change — and the
@@ -916,7 +918,7 @@ async function loadConfig() {
     configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
-    // The poll must never overwrite what someone is typing into the
+    // A reload must never overwrite what someone is typing into the
     // Advanced editor. Their text wins until they save or discard.
     if (configDirty.value) return;
     configText.value = cfg.text;
@@ -961,9 +963,9 @@ async function loadJobs() {
     // a repaint even when the runner's record hasn't moved.
     repaint();
     // Both paths retire the banner, because either can be the one that
-    // learns the job stopped: the push covers a sync this server ran,
-    // the poll covers a dropped SSE connection and a run started from a
-    // terminal.
+    // learns the job stopped: the job push covers a sync this server
+    // ran, this refetch covers a run started from a terminal (which has
+    // no job row to push) and a stream that dropped frames.
     if (bannerJob.value) {
       const j = jobs.value.find((x) => x.id === bannerJob.value);
       // A job that has fallen off the end of the queue we hold is not
@@ -976,18 +978,20 @@ async function loadJobs() {
   }
 }
 
-/// A job the worker is about to start, or has started. What makes the
-/// grid poll quickly: between the click and the runner's first written
-/// state there is nothing to see in the DAG record, and that gap is
-/// precisely the one that used to read as "nothing happened".
-const jobActive = computed(() =>
-  jobs.value.some((j) => j.state === "pending" || j.state === "running"),
-);
-
-/// The runner's per-step record. Polled rather than pushed: the SSE
-/// stream only carries runs *this server* started, and the whole point
-/// of reading the runner's own file is that a terminal `datalib-dag`
-/// shows up here too.
+/// The runner's per-step record.
+///
+/// Fetched when the server says it moved (`dag_changed`), not on a
+/// timer. It is a separate channel from the job stream on purpose: the
+/// job stream only carries runs *this server* started, and the whole
+/// point of reading the runner's own file is that a `datalib-dag` run
+/// from a terminal shows up here too. The watcher behind `dag_changed`
+/// sees that run's writes exactly as it sees ours.
+///
+/// This used to be a 2-second poll gated on "is a job in flight",
+/// which had a gap it could not close: between the click and the
+/// runner's first written state there is nothing in the record to see,
+/// so the gate had to include the job queue as well to avoid the
+/// window reading as "nothing happened".
 async function loadDag() {
   try {
     const dag = await fetchDag();
@@ -1252,8 +1256,8 @@ async function stopSource(id: string) {
 /// job row (which decides Queued and the Run/Stop face) and the task
 /// board (which decides Running and the progress message). Both used to
 /// be discarded — the handler here simply refetched — so every update
-/// cost two HTTP requests and arrived a poll late. Pressing Sync looked
-/// like nothing had happened partly for that reason.
+/// cost two HTTP requests and arrived a fetch late. Pressing Sync
+/// looked like nothing had happened partly for that reason.
 ///
 /// What still needs a fetch, and why: a step reaching a *terminal*
 /// state. The board says "done"; it does not say when, or with what
@@ -1261,9 +1265,10 @@ async function stopSource(id: string) {
 /// runner's record has them. So terminal transitions ask, and
 /// everything else is painted from the push.
 ///
-/// The stream carries only runs *this server* started. A `datalib-dag`
-/// run from a terminal is invisible to it, which is why the poll below
-/// stays — it is the fallback, not the mechanism.
+/// This handler sees only runs *this server* started. A `datalib-dag`
+/// run from a terminal is invisible to it, which is what the `root`
+/// channel in `onMounted` is for — not a fallback, a second mechanism
+/// for a case the first structurally cannot reach.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
   retireBanner(e.id, e.state);
@@ -1324,9 +1329,7 @@ function mergeJob(e: JobProgressEvent) {
   ];
 }
 
-let stream: EventSource | null = null;
-let poll: ReturnType<typeof setInterval> | null = null;
-let progressPoll: ReturnType<typeof setInterval> | null = null;
+let unsubscribe: (() => void) | null = null;
 let relativePoll: ReturnType<typeof setInterval> | null = null;
 
 /// The Last synced column reads "5 minutes ago", which goes stale on
@@ -1348,44 +1351,70 @@ function tickRelative() {
   gridApi?.refreshCells({ columns: ["lastSynced"], force: true });
 }
 
+/// Everything this table shows, refetched together.
+///
+/// Together is the point, and it is why this is one function rather
+/// than five calls at five cadences. The rows are derived from the
+/// config; the Status and Last synced columns come from the runner's
+/// record. Fetch the first without the second and a row that has run
+/// paints as "Never run" — it exists because the config declares it,
+/// and nothing has yet said what it did. That intermediate state is
+/// real enough that `manager2-sync.spec.ts` had to reload the page to
+/// avoid observing it (see `writeConfig` there).
+async function reloadAll() {
+  await Promise.all([
+    loadConfig(),
+    loadJobs(),
+    loadDag(),
+    loadStorage(),
+    loadAppletHealth(),
+  ]);
+}
+
 onMounted(async () => {
-  await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
-  stream = openJobStream(onJobEvent);
+  await reloadAll();
   window.addEventListener("keydown", onWindowKeydown);
-  // The fallback, not the mechanism. A sync this server started is
-  // pushed (see `onJobEvent`); this covers the two cases the stream
-  // cannot:
+
+  // Two push channels, and the split matters.
   //
-  //   * a `datalib-dag` run started from a terminal, which the stream
-  //     never carries because no job row exists for it, and
-  //   * a dropped SSE connection between the browser's reconnects.
+  // `job` carries syncs *this server* started — it is what makes the
+  // Run/Stop face and the Queued rows move on the click rather than on
+  // the next fetch.
   //
-  // Only while something is in flight, so an idle tab isn't asking
-  // once a second forever — and `jobActive` as well as `dagRun.live`,
-  // because a job the worker hasn't spawned yet has no runner to
-  // report on.
-  progressPoll = setInterval(() => {
-    if (!dagRun.value?.live && !jobActive.value) return;
-    void loadDag();
-    void loadJobs();
-  }, 2000);
-  // The config can change under us — an agent PUTs it, or the Manage
-  // tab saves. Same cadence the Manage tab polls at.
+  // `root` carries what the job stream structurally cannot: a
+  // `datalib-dag` run started from a terminal, which has no job row to
+  // report on, and an agent (or a hand) editing config.toml. Those two
+  // cases are the entire reason this view used to poll — five endpoints
+  // every 5 s forever, plus two more every 2 s during a run. On an idle
+  // tab that was 60 requests a minute, each `/api/dag` among them
+  // reloading the config, rebuilding the graph and taking the runner's
+  // lock, to answer "nothing has changed" every time.
+  unsubscribe = subscribeLive({
+    job: onJobEvent,
+    root: (e) => {
+      if (e.kind === "dag_changed") {
+        // The record moved: a step finished, or a run wrote progress.
+        void loadDag();
+        void loadStorage();
+      } else if (e.kind === "config_changed") {
+        // Config and record together, for the "Never run" reason above.
+        void reloadAll();
+      }
+    },
+    resync: () => void reloadAll(),
+  });
+
+  // The one timer left, and the only one that was ever right: "5
+  // minutes ago" goes stale with nothing happening, so it needs a
+  // clock rather than an event. See `tickRelative` — it repaints only
+  // when a row would actually read differently.
   relativePoll = setInterval(tickRelative, 1000);
-  poll = setInterval(() => {
-    void loadConfig();
-    void loadJobs();
-    void loadDag();
-    void loadStorage();
-    void loadAppletHealth();
-  }, 5000);
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
-  if (stream) stream.close();
-  if (poll) clearInterval(poll);
-  if (progressPoll) clearInterval(progressPoll);
+  unsubscribe?.();
+  unsubscribe = null;
   if (relativePoll) clearInterval(relativePoll);
   gridApi = null;
 });
@@ -1663,7 +1692,7 @@ onUnmounted(() => {
 
 /* The per-step log panel. Modal, because it is a full answer to a
    question the grid can only gesture at, and because the grid behind it
-   keeps repainting on every poll — a panel docked inside it would be
+   repaints whenever a step moves — a panel docked inside it would be
    fighting that. */
 .m2-logs-backdrop {
   position: fixed;

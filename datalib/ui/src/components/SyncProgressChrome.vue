@@ -6,18 +6,13 @@
 // navigates there; the tooltip lists the active jobs.
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
-import {
-  fetchActiveJobs,
-  openJobStream,
-  type SyncJob,
-  type JobProgressEvent,
-} from "@/api";
+import { fetchActiveJobs, type SyncJob, type JobProgressEvent } from "@/api";
+import { subscribeLive } from "@/live";
 
 const router = useRouter();
 // Active jobs, keyed by id for O(1) patching from the SSE stream.
 const active = ref<Map<string, SyncJob>>(new Map());
-let stream: EventSource | null = null;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let unsubscribe: (() => void) | null = null;
 
 const count = computed(() => active.value.size);
 const tooltip = computed(() =>
@@ -26,8 +21,10 @@ const tooltip = computed(() =>
     .join(", "),
 );
 
-// Seed from the API (covers jobs already running when this mounts), then
-// keep current via SSE push.
+// Seed from the API (covers jobs already running when this mounts), and
+// again whenever the live stream says it may have missed something.
+// This used to run on a 15 s timer as well, unconditionally — see
+// `@/live` for what replaced that.
 async function seed() {
   try {
     const list = await fetchActiveJobs();
@@ -67,14 +64,12 @@ function goSources() {
 
 onMounted(() => {
   seed();
-  stream = openJobStream(onProgress);
-  // Slow reconnect/stall fallback (SSE is the primary path).
-  pollTimer = setInterval(seed, 15000);
+  unsubscribe = subscribeLive({ job: onProgress, resync: seed });
 });
 
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer);
-  if (stream) stream.close();
+  unsubscribe?.();
+  unsubscribe = null;
 });
 </script>
 

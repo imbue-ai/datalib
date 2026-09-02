@@ -18,11 +18,10 @@ import type { CardRender } from "../types";
 import {
   fetchActiveJobs,
   fetchDag,
-  openJobStream,
   type DagStep,
-  type JobProgressEvent,
   type SyncTask,
 } from "@/api";
+import { subscribeLive } from "@/live";
 import { parseTasks } from "@/sync/progress";
 
 const NODE_H = 30;
@@ -263,19 +262,27 @@ export function sourceDagView(): CardRender {
       }
     }
 
-    const stream = openJobStream((ev: JobProgressEvent) => {
-      if (disposed) return;
-      applyTasks(ev.tasks ?? parseTasks(ev.progress_msg));
+    const unsubscribe = subscribeLive({
+      job: (ev) => {
+        if (disposed) return;
+        applyTasks(ev.tasks ?? parseTasks(ev.progress_msg));
+      },
+      // The shape of the graph is the config, so it is redrawn when the
+      // config moves — instead of the 15-second poll this replaces,
+      // which every mounted card ran independently and which made a
+      // saved config take up to fifteen seconds to show.
+      root: (e) => {
+        if (!disposed && e.kind === "config_changed") void load();
+      },
+      resync: () => {
+        if (!disposed) void load();
+      },
     });
-    // The DAG changes when the config is saved; a slow poll keeps the
-    // picture current without config-save push machinery.
-    const refresh = setInterval(load, 15_000);
     void load();
 
     return () => {
       disposed = true;
-      stream.close();
-      clearInterval(refresh);
+      unsubscribe();
     };
   };
 }

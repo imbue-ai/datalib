@@ -21,11 +21,11 @@ import {
   fetchJobLog,
   enqueueJob,
   cancelJob,
-  openJobStream,
   type SyncSource,
   type SyncJob,
   type JobProgressEvent,
 } from "@/api";
+import { subscribeLive } from "@/live";
 import StepProgress from "@/components/StepProgress.vue";
 import DagPanel from "@/components/DagPanel.vue";
 import { listSources, type SourceRow } from "@/config/configSources";
@@ -85,9 +85,9 @@ function onEdit() {
 const serverSources = ref<SyncSource[]>([]);
 const serverIds = computed(() => new Set(serverSources.value.map((s) => s.id)));
 
-// What's on disk server-side, as of the last fetch — the baseline the
-// auto-refresh poll compares against ("" while the file doesn't exist,
-// so the scaffold draft never reads as an on-disk change).
+// What's on disk server-side, as of the last fetch — the baseline
+// `reloadIfDiskMoved` compares against ("" while the file doesn't
+// exist, so the scaffold draft never reads as an on-disk change).
 const serverText = ref("");
 // The file changed on disk while the editor held unsaved edits; we
 // won't clobber those, so surface a banner instead.
@@ -118,12 +118,16 @@ async function loadConfig() {
 
 // The config can change under us — that's the point of the agent
 // hand-off (the agent PUTs /api/config, or edits the file directly).
-// Poll the backend for external changes: with no unsaved edits the
-// editor reloads silently; with unsaved edits we keep the user's text
-// and raise the diskChanged banner instead of clobbering.
-const CONFIG_POLL_MS = 2000;
-async function pollConfig() {
-  // Our own PUT is in flight — whatever the poll sees is stale.
+// With no unsaved edits the editor reloads silently; with unsaved edits
+// we keep the user's text and raise the diskChanged banner instead of
+// clobbering.
+//
+// Driven by the server telling us the file moved, not by a timer. This
+// used to run every 2 seconds and pull the whole config text down each
+// time, so an editor left open all afternoon fetched it ~1,800 times to
+// learn nothing. See `@/live` and `backend/http/src/watch.rs`.
+async function reloadIfDiskMoved() {
+  // Our own PUT is in flight — whatever we read now is stale.
   if (saving.value) return;
   try {
     const cfg = await fetchConfig();
@@ -135,7 +139,7 @@ async function pollConfig() {
     }
     await reloadFromDisk();
   } catch {
-    // Backend blip — try again next tick.
+    // Backend blip. The next change — or the next resync — asks again.
   }
 }
 
@@ -196,12 +200,14 @@ async function onSave() {
       dirty.value = false;
       existed.value = true;
       // Saving is an explicit choice over whatever landed on disk
-      // meanwhile — retire the banner and rebase the poll on our text.
+      // meanwhile — retire the banner and rebase the baseline on our
+      // text.
       serverText.value = configText.value;
       diskChanged.value = false;
       // Re-read what we just wrote, so the legacy-config banner
-       // retires itself the moment config.toml exists. The poll below
-       // can't notice: it compares text, which now matches by
+       // retires itself the moment config.toml exists. The
+       // `config_changed` our own write is about to produce can't do
+       // it: `reloadIfDiskMoved` compares text, which now matches by
        // construction.
       await loadConfig();
       await loadSources();
@@ -266,9 +272,7 @@ const logLines = computed(() =>
   }),
 );
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let configPollTimer: ReturnType<typeof setInterval> | null = null;
-let stream: EventSource | null = null;
+let unsubscribe: (() => void) | null = null;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function loadSources() {
@@ -320,12 +324,11 @@ function scheduleReload() {
   }, 250);
 }
 
-// Reconnect fallback: SSE auto-reconnects, but if the page was
-// backgrounded or the stream silently stalled we still want eventual
-// consistency. A slow full reload covers the gap without the old
-// sub-second hammering.
-async function slowReload() {
-  await loadJobs();
+// Everything this view holds, refetched. Runs when the live stream says
+// it may have missed frames — after a reconnect, or when a backgrounded
+// tab comes back — and not on a timer, which is what it used to be.
+async function resync() {
+  await Promise.all([loadJobs(), reloadIfDiskMoved()]);
 }
 
 // One job syncing every checked source: comma-joined step ids become
@@ -409,21 +412,24 @@ onMounted(async () => {
   loading.value = true;
   await Promise.all([loadConfig(), loadSources(), loadJobs()]);
   loading.value = false;
-  // Realtime push: the backend streams every job state change over SSE,
-  // so progress moves the instant the worker writes it — no polling.
-  stream = openJobStream(onProgress);
-  // Reconnect/safety fallback: a slow full reload covers a silently
-  // stalled stream (backgrounded tab, proxy timeout) without hammering.
-  pollTimer = setInterval(slowReload, 15000);
-  // Fast poll for external config edits (agents saving via PUT).
-  configPollTimer = setInterval(() => void pollConfig(), CONFIG_POLL_MS);
+  // Everything this view shows now arrives as a push: job state from
+  // the worker, and `config_changed` when the file moves on disk —
+  // which is what the agent hand-off produces (the agent PUTs
+  // /api/config, or edits the file directly). The two timers this
+  // replaces asked every 15 s and every 2 s regardless.
+  unsubscribe = subscribeLive({
+    job: onProgress,
+    root: (e) => {
+      if (e.kind === "config_changed") void reloadIfDiskMoved();
+    },
+    resync: () => void resync(),
+  });
 });
 
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer);
-  if (configPollTimer) clearInterval(configPollTimer);
   if (reloadTimer) clearTimeout(reloadTimer);
-  if (stream) stream.close();
+  unsubscribe?.();
+  unsubscribe = null;
 });
 </script>
 

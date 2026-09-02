@@ -45,10 +45,21 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
   });
 
   const result = await page.evaluate(async () => {
+    // The two directives the assertions below are about. Collected as
+    // they fire, and — the part that matters — *waited on* rather than
+    // slept through: the listener resolves `settled` as soon as both
+    // have been seen.
+    const want = new Set(["script-src-elem", "connect-src"]);
     const violations: string[] = [];
-    document.addEventListener("securitypolicyviolation", (e) =>
-      violations.push(e.violatedDirective),
-    );
+    let seenBoth = () => {};
+    const settled = new Promise<void>((resolve) => {
+      seenBoth = resolve;
+    });
+    document.addEventListener("securitypolicyviolation", (e) => {
+      violations.push(e.violatedDirective);
+      want.delete(e.violatedDirective);
+      if (want.size === 0) seenBoth();
+    });
     const w = window as unknown as {
       loadscript: (n: string) => Promise<unknown>;
       loadscript_namespaced: (n: string, ns: string) => Promise<unknown>;
@@ -75,7 +86,20 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
     } catch {
       evalWorks = false;
     }
-    await new Promise((r) => setTimeout(r, 300));
+    // A CSP violation report is dispatched asynchronously, after the
+    // load it blocked has already rejected — so the `blocked()` calls
+    // above can finish before the events arrive, and something has to
+    // wait for them.
+    //
+    // This used to be an unconditional 300 ms sleep, which is a guess
+    // in both directions: too long when the events have already landed
+    // (the normal case, and 300 ms of every run), and silently too
+    // short on a loaded machine, where it would report a partial list
+    // and fail the assertion below about the policy rather than about
+    // the timing. The race is a *deadline*, not a wait: it only
+    // expires when the events never come, and then the assertion below
+    // says which one was missing.
+    await Promise.race([settled, new Promise((r) => setTimeout(r, 5_000))]);
     return { scriptTag, fetched, evalWorks, violations };
   });
 

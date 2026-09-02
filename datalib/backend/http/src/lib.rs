@@ -44,6 +44,7 @@ pub mod boot;
 mod embed;
 pub mod frontend;
 pub mod lock;
+pub mod watch;
 pub mod worker;
 
 pub use auth::ApiToken;
@@ -63,6 +64,13 @@ pub struct AppState {
     /// `GET /api/sync/stream` subscribes and pushes them to the UI over
     /// SSE, so progress is realtime push, not poll.
     pub progress_tx: worker::ProgressTx,
+    /// Fan-out channel for everything that changes in the data root
+    /// *without* a job behind it: the config, the runner's own record,
+    /// the component store — plus a heartbeat so a client can tell an
+    /// idle stream from a dead one. Published by [`crate::watch`] and
+    /// merged into the same SSE response as `progress_tx`. See that
+    /// module for why this exists rather than a timer in the browser.
+    pub root_tx: watch::RootTx,
     /// The configured applets: their components, their gallery
     /// entries, the module store behind `/modules/`, and the
     /// supervisor behind `/applet/`. Empty when the config declares none,
@@ -1477,27 +1485,58 @@ async fn sync_enqueue(
     Ok(Json(row))
 }
 
-/// SSE stream of live job progress. Each `message` event is a JSON
-/// [`worker::ProgressEvent`]. The UI keeps its job list patched from this
-/// instead of polling; a slow poll remains as a reconnect fallback.
+/// SSE stream of everything live: sync-job progress, and everything
+/// that changes in the data root without a job behind it.
+///
+/// **Two event types on one connection, and the split is load-bearing.**
+/// Job updates stay *unnamed* frames carrying a JSON
+/// [`worker::ProgressEvent`], which is what `EventSource.onmessage`
+/// receives — so every existing consumer of this endpoint keeps working
+/// untouched. Root updates are named `root` frames carrying a JSON
+/// [`watch::RootEvent`], delivered only to
+/// `addEventListener("root", …)`. Adding the second kind therefore
+/// cannot disturb the first: a client that has never heard of `root`
+/// frames does not see them at all.
+///
+/// The two channels are merged rather than served as two endpoints
+/// because a client wants one connection, one reconnect policy, and one
+/// answer to "have I heard from the server lately" — which is what the
+/// heartbeat riding the `root` channel provides.
 async fn sync_stream(
     State(s): State<AppState>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     use tokio::sync::broadcast::error::RecvError;
-    let rx = s.progress_tx.subscribe();
-    let stream = futures::stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(ev) => {
-                    let data = serde_json::to_string(&ev).unwrap_or_default();
-                    return Some((Ok(Event::default().data(data)), rx));
+
+    /// One broadcast receiver as a stream of SSE frames, dropping the
+    /// gap when a slow client lags rather than disconnecting it.
+    fn frames<T: Clone + Send + serde::Serialize + 'static>(
+        rx: tokio::sync::broadcast::Receiver<T>,
+        name: Option<&'static str>,
+    ) -> impl futures::Stream<Item = Result<Event, std::convert::Infallible>> {
+        futures::stream::unfold(rx, move |mut rx| async move {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => {
+                        let data = serde_json::to_string(&ev).unwrap_or_default();
+                        let event = match name {
+                            Some(n) => Event::default().event(n).data(data),
+                            None => Event::default().data(data),
+                        };
+                        return Some((Ok(event), rx));
+                    }
+                    // Slow consumer dropped some events; keep going
+                    // with the next.
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => return None,
                 }
-                // Slow consumer dropped some events; keep going with the next.
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return None,
             }
-        }
-    });
+        })
+    }
+
+    let stream = futures::stream::select(
+        frames(s.progress_tx.subscribe(), None),
+        frames(s.root_tx.subscribe(), Some("root")),
+    );
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 

@@ -37,6 +37,13 @@ anyhow = { workspace = true }
 axum = { workspace = true }
 # `flock(2)` for the one-server-per-data-root claim (src/lock.rs).
 libc = "0.2"
+# Filesystem watching for src/watch.rs: the data root changes under us
+# (an agent PUTs the config, a terminal `datalib-dag` writes its state)
+# and the UI used to find out by polling. Default features only —
+# that is FSEvents on macOS and inotify on Linux, and deliberately
+# NOT `crossbeam-channel`, since the watcher hands events straight to
+# a tokio channel from notify's own callback.
+notify = "8"
 chrono = { workspace = true }
 futures = "0.3"
 tokio = { workspace = true }

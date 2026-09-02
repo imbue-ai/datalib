@@ -33,6 +33,7 @@ async fn state(root: &Path) -> AppState {
         root: root.clone(),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        root_tx: tokio::sync::broadcast::channel(16).0,
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }

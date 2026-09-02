@@ -41,6 +41,7 @@ async fn fetch(path: &str) -> (StatusCode, String) {
         root: root.clone(),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        root_tx: tokio::sync::broadcast::channel(16).0,
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),
