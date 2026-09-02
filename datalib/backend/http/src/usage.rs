@@ -1,88 +1,45 @@
 //! Bytes on disk, over time.
 //!
-//! One background task walks the data root and keeps two things: the
-//! newest measurement of every tree (what the Pipeline table's size
-//! column shows) and a short window of recent samples (what its
-//! sparklines draw). The same samples are appended to
-//! `system/usage.doltlite_db`, which is the permanent record — nothing
-//! prunes it, so it answers "how has this root grown" long after the
-//! window has scrolled past.
+//! One background task walks the data root and keeps the newest
+//! measurement of every tree (the Pipeline table's size column) plus a
+//! short window of samples (its sparklines). The same samples are
+//! appended to `system/usage.doltlite_db`, which nothing prunes — so it
+//! answers "how has this root grown" long after the window scrolled by.
 //!
-//! ## It only walks while a run is walking the disk
+//! **It walks only while a run is in flight, and has no timer.** Nothing
+//! else writes the data root, so between runs there is nothing to find;
+//! an idle server measuring forever would read tens of gigabytes an
+//! hour to learn a number that cannot have moved. The loop wakes on
+//! [`crate::watch::RootEvent`] and asks [`pipeline_is_running`] whether
+//! to walk. A run rewrites `system/dag_state.json` and the progress bus
+//! continuously, so those events are its pulse; otherwise the only
+//! traffic is that channel's ten-second heartbeat, which costs one
+//! `flock` and walks nothing. (The heartbeat is load-bearing, and
+//! [`crate::watch::spawn`] starts it even when the watcher itself fails
+//! to build — so an unwatchable filesystem still gets the run-ended
+//! walk, just later.)
 //!
-//! Nothing else on this machine writes the data root, so between runs
-//! there is nothing to find: an idle server measuring every five
-//! seconds forever would be reading tens of gigabytes an hour to learn
-//! a number that cannot have moved. So there is no timer here at all.
-//! The loop wakes on [`crate::watch::RootEvent`] — the same channel the
-//! UI's live updates ride — and each time asks
-//! [`pipeline_is_running`] whether to walk. A run in flight rewrites
-//! `system/dag_state.json` and the progress bus continuously, so those
-//! events *are* the run's own pulse; between runs the only traffic is
-//! the watcher's ten-second heartbeat, which costs one `flock` and
-//! walks nothing.
+//! The cost of the gate is resolution, not correctness: a change made
+//! from outside datalib is not seen until the next walk, and its sample
+//! carries the instant it was *measured*. Readers already treat the
+//! series that way — see Compaction.
 //!
-//! That makes this depend on the heartbeat existing, which is worth
-//! knowing: [`crate::watch::spawn`] starts it before it tries to build
-//! the watcher and independently of whether that succeeds, so a data
-//! root on a filesystem that cannot be watched still gets a pulse —
-//! coarser, but the run-ended walk still lands.
+//! **One walk, not one per tree.** Every declared tree is under the
+//! root, so [`measure`] totals the root and records each subtree's
+//! subtotal on the way back up. Walking each tree and then the root
+//! again would read most of the disk twice.
 //!
-//! What this costs is resolution, not correctness. A change made by
-//! something outside datalib — a file dropped into a scanned folder, a
-//! store deleted by hand — is not noticed until the next walk, and the
-//! sample then carries the instant it was *measured* rather than the
-//! instant it happened. The stored series has always been a step
-//! function read that way (see Compaction below), so nothing
-//! downstream has to change; the steps are just coarser while nothing
-//! is running.
+//! **Compaction**, in [`UsageMonitor::observe`]: a value equal to the
+//! series' last recorded value is dropped (a repeat says nothing), and
+//! two samples of one series are never recorded closer than
+//! [`MIN_SAMPLE_GAP`]. So a reader must carry the last value forward
+//! rather than assume a fixed interval.
 //!
-//! ## Why a sampler rather than a walk per request
-//!
-//! `GET /api/pipeline/storage` used to walk every declared output tree
-//! itself, on every poll, from every open tab. That is the same I/O
-//! this task does, minus a timeseries — and it made the answer's cost
-//! scale with the number of readers rather than with the root. Moving
-//! the walk here also means the history exists whether or not anyone
-//! has the Pipeline tab open, which is the whole point of recording it.
-//!
-//! ## One walk, not one per tree
-//!
-//! Every declared tree is under the root, so a single recursive walk
-//! can total the root *and* every subtree in it: [`measure`] records a
-//! directory's subtotal on the way back up whenever its data-root-
-//! relative path is one it was asked about. Walking each tree
-//! separately and then the root again would read most of the disk
-//! twice.
-//!
-//! ## Compaction
-//!
-//! Two rules, applied in [`UsageMonitor::observe`]:
-//!
-//!   * a value equal to the series' last recorded value is dropped —
-//!     the series is a step function, and a repeat says nothing;
-//!   * two samples for one series are never recorded closer than
-//!     [`MIN_SAMPLE_GAP`] apart.
-//!
-//! So a reader must carry the last value forward rather than assume a
-//! fixed interval, and a flat series is one row, not one row per tick.
-//!
-//! ## The cost, stated plainly
-//!
-//! While a run is in flight this is a recursive `read_dir` of the whole
-//! data root every [`SAMPLE_INTERVAL`] — the same tree the run is
-//! already writing, so the cache is warm, but on a large root it is
-//! still real I/O next to real work. The gate above bounds it to the
-//! window where the number actually moves; it does not make it cheap.
-//!
-//! The next step, if it becomes worth it, is to stop re-reading the
-//! tree and let the watcher say which subtree moved — `crate::watch`
-//! already has the events and deliberately drops them (it watches
-//! `<root>` and `<root>/system` non-recursively, precisely to avoid
-//! being told about every blob a sync writes). Re-measuring only the
-//! subtree named by an event would make the walk proportional to the
-//! change rather than to the root.
-
+//! `GET /api/pipeline/storage` used to do this walk itself, per poll,
+//! per open tab — the same I/O minus a timeseries, with the answer's
+//! cost scaling by reader. If this ever needs to be cheaper, the move
+//! is to let the watcher say which subtree changed rather than
+//! re-reading the tree.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
