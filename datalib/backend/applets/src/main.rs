@@ -117,7 +117,63 @@ pub fn announce_port(port: u16) {
     let _ = out.flush();
 }
 
+/// Exit when the gateway that started us does.
+///
+/// An applet is a child the gateway is supposed to kill on its way
+/// out, and for an orderly exit or a signal it does. It cannot on
+/// SIGKILL — no code runs in a process that is SIGKILLed — and an
+/// applet that missed that had no other way to notice. It was
+/// re-parented to init and stayed there, holding its port and its
+/// data root, until somebody found it with `ps`. They accumulated:
+/// 186 on one laptop, the oldest up for five days (#238).
+///
+/// So the gateway hands us a pipe on stdin and holds the write end for
+/// as long as it lives. Nothing is ever sent through it; the point is
+/// the closing. However the gateway ends, the kernel closes its end
+/// and this read hits EOF — which is the one notification that
+/// survives a signal nobody can catch.
+///
+/// Only when `DATALIB_APPLET_PARENT_PIPE` says stdin is that pipe.
+/// Run by hand, an applet's stdin is a terminal or `/dev/null`, and
+/// reading it would either swallow what someone typed or take an
+/// immediate EOF as bad news and quit on the spot.
+fn exit_with_parent() {
+    if std::env::var_os("DATALIB_APPLET_PARENT_PIPE").is_none() {
+        return;
+    }
+    std::thread::spawn(|| {
+        use std::io::{Read, Write};
+        let mut stdin = std::io::stdin().lock();
+        let mut scratch = [0u8; 64];
+        loop {
+            match stdin.read(&mut scratch) {
+                // The gateway is gone. Leave the way it would have made
+                // us leave.
+                Ok(0) => break,
+                // Nothing is supposed to arrive, but a byte is not a
+                // reason to die.
+                Ok(_) => continue,
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        // Best effort, and it matters which way round: stderr is a
+        // pipe to the same gateway that just died, so this write takes
+        // EPIPE — and `eprintln!` *panics* on a failed write, which
+        // would kill this thread and leave the process running. Which
+        // is exactly the leak being fixed, reintroduced one line from
+        // the exit that fixes it. `announce_port` above writes
+        // best-effort for the same reason.
+        let _ = writeln!(
+            std::io::stderr(),
+            "datalib-applet: parent pipe closed, exiting"
+        );
+        std::process::exit(0);
+    });
+}
+
 fn main() {
+    exit_with_parent();
     if let Err(e) = run() {
         eprintln!("datalib-applet: {e:#}");
         std::process::exit(1);
