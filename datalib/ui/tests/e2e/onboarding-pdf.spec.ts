@@ -61,15 +61,15 @@ const SIGNAL_BACKUP_DIR = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
 const SYNCED_ROWS = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"];
 
 /// "Bytes on disk" as a number, read back off the label drawn over the
-/// bar — the number a person actually sees. `null` for a row with
+/// sparkline — the number a person actually sees. `null` for a row with
 /// nothing on disk, which the column renders as an em dash rather than
-/// as a zero-length bar.
+/// as a flat line at zero.
 ///
 /// The label is rounded to three significant figures, so this is only
 /// good for comparisons coarser than that. The growth it is asked about
 /// here is ~23 kB against ~142 kB, which is far outside that.
 async function bytesOf(page: Page, id: string): Promise<number | null> {
-  const label = row(page, id).locator('[col-id="bytes"] .m2-bar-label');
+  const label = row(page, id).locator('[col-id="bytes"] .m2-plot-label');
   if ((await label.count()) === 0) return null;
   const text = ((await label.first().textContent()) ?? "").trim();
   const m = /^([\d.]+)\s*(B|kB|MB|GB|TB)$/.exec(text);

@@ -103,6 +103,34 @@ const PHASE_BY_LEAF: Record<string, StepPhase> = {
   rendered_md: "render",
 };
 
+/// What to call the shared entries when nobody has named them.
+///
+/// Three of a config's rows are not anybody's data source: two fan-in
+/// steps and the applet that serves what they build. Their ids say what
+/// they *write* — `unified_index/grid`, `unified_index/qmd` — which is
+/// the right identity and a poor label, and one of them (the applet)
+/// has no `name` key to set at all: `AppletEntry` deliberately has
+/// none, because an applet's own params carry whatever label it wants
+/// (see the type's docs, and 00633dd5).
+///
+/// So the default lives here rather than in the config. Nothing is
+/// written to anyone's file, every existing root gets the better label
+/// without being rewritten, and a `name =` someone did set still wins —
+/// this is consulted only when a step declares none. The id stays
+/// visible beside the name in the grid, so the tree on disk is never
+/// hidden by the label.
+const DEFAULT_NAMES: Record<string, string> = {
+  "unified_index/grid": "Unified Index (table)",
+  "unified_index/qmd": "Unified Index (QMD)",
+  "unified_index": "Unified Index (Applet)",
+};
+
+/// The label to show for an entry that declares no `name`. Falls back
+/// to the id, which is what an unnamed step has always shown.
+export function defaultName(id: string): string {
+  return DEFAULT_NAMES[id] ?? id;
+}
+
 /// A step's phase, from the shape of its id.
 export function phaseOf(id: string): StepPhase {
   const segs = id.split("/");
@@ -176,7 +204,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         // give it something addressable rather than an empty row.
         id: id || `step ${i + 1}`,
         kind: "step",
-        name: name ?? (id || `step ${i + 1}`),
+        name: name ?? (id ? defaultName(id) : `step ${i + 1}`),
         phase: phaseOf(id),
         type: stepType(typeof step?.command === "string" ? step.command : ""),
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
@@ -203,8 +231,10 @@ export function listSteps(text: string): ConfiguredStep[] {
         id,
         kind: "applet",
         // `AppletEntry` has no `name` key — an applet takes its display
-        // label through its own `params` — so it is shown by its id.
-        name: id,
+        // label through its own `params` — so it is shown by its id,
+        // or by the default label when it is one of the shared entries
+        // the app ships (see `DEFAULT_NAMES`).
+        name: defaultName(id),
         phase: "other",
         // The word after `datalib-applet`, when it is one — the same
         // shape as a step's provider word, and what names the applet.

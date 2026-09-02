@@ -81,7 +81,12 @@ describe("names on the other kinds of entry", () => {
   // The Pipeline table lists sources, the shared index steps, and
   // applets. A name is a property of a *step*, so the fan-ins carry one
   // too; applets cannot — `AppletEntry` is deny_unknown_fields with no
-  // `name` key — and fall back to their id.
+  // `name` key.
+  //
+  // Neither falls back to its bare id, though. The three entries every
+  // config ships get a readable default label from `DEFAULT_NAMES`,
+  // which is UI-side precisely because the applet has nowhere in the
+  // config to put one. A `name =` someone did write still wins.
   const OTHER = `data_root = "/tmp/data"
 
 [[steps]]
@@ -100,17 +105,35 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 `;
 
-  it("names a shared index step, and leaves an unnamed one alone", () => {
+  it("lets a written name beat the shared step's default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
     expect(byId.get("unified_index/grid")?.kind).toBe("step");
     expect(byId.get("unified_index/grid")?.name).toBe("Search index");
-    expect(byId.get("unified_index/qmd")?.name).toBe("unified_index/qmd");
   });
 
-  it("shows an applet by its id", () => {
+  it("gives an unnamed shared step its default label", () => {
+    const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
+    expect(byId.get("unified_index/qmd")?.name).toBe("Unified Index (QMD)");
+  });
+
+  it("labels the applet too, which has no config key to name it", () => {
     const applet = listSteps(OTHER).find((e) => e.kind === "applet");
     expect(applet?.id).toBe("unified_index");
-    expect(applet?.name).toBe("unified_index");
+    expect(applet?.name).toBe("Unified Index (Applet)");
+  });
+
+  it("still shows an entry the defaults don't know by its id", () => {
+    const custom = `[[steps]]
+id = "notes/raw"
+command = "datalib-step download fsindex"
+
+[[applets]]
+id = "slack"
+command = "datalib-applet slack"
+`;
+    const byId = new Map(listSteps(custom).map((e) => [e.id, e]));
+    expect(byId.get("notes/raw")?.name).toBe("notes/raw");
+    expect(byId.get("slack")?.name).toBe("slack");
   });
 });
 

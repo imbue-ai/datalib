@@ -88,6 +88,10 @@ async fn app_for(root: &Path) -> axum::Router {
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,
+        // No sampler running here, so the monitor is empty and every
+        // tree reports as absent — the state a root nobody has walked
+        // is in.
+        usage: Default::default(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::build(Vec::new(), (*root).clone(), None)),
     })
