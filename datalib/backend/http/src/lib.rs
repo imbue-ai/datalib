@@ -302,8 +302,11 @@ async fn submit_feedback(
 async fn get_frontend(State(s): State<AppState>) -> Json<applets::FrontendView> {
     // Pick up a config edit before answering. Cheap when nothing moved
     // (one `stat`); blocking when it did, since a rebuild execs one
-    // child per applet — hence the blocking thread. The UI polls this
-    // endpoint, so a saved config becomes a live gallery update.
+    // child per applet — hence the blocking thread. The UI calls this
+    // on `config_changed`, so a saved config becomes a live gallery
+    // update. That it *reads* the store here is why `crate::watch`
+    // must not treat a read as a change: the two would drive each
+    // other. See the `Access` filter there.
     let registry = s.applets.clone();
     let _ = tokio::task::spawn_blocking(move || registry.refresh_if_config_changed()).await;
     Json(s.applets.frontend_view())

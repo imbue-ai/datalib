@@ -43,7 +43,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::{RecursiveMode, Watcher};
+use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -170,6 +170,29 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     let watch_root = root.clone();
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(ev) = res else { return };
+        // Reading something is not changing it, and on Linux this is
+        // not a nicety — it is the difference between a push channel
+        // and a feedback loop.
+        //
+        // inotify reports `IN_OPEN` / `IN_ACCESS`, which notify
+        // surfaces as `EventKind::Access`; macOS's FSEvents has no
+        // equivalent and reports content changes only. So on Linux,
+        // *reading* `system/frontend/` looks exactly like writing to
+        // it — and `GET /api/frontend` reads that directory on every
+        // call (`rescan_if_store_changed`). Left in, one request would
+        // publish `FrontendChanged`, the UI would refetch, that
+        // refetch would read the directory again, and the two would
+        // drive each other at the debounce interval for as long as the
+        // page stayed open. Poll replaced by something worse than a
+        // poll, on the platform CI and the container image run.
+        //
+        // Blacklisting `Access` rather than whitelisting the kinds we
+        // want: an access is definitively not a change, while the
+        // remaining kinds vary per backend (some report `Any`), and a
+        // whitelist would silently drop a platform's real events.
+        if matches!(ev.kind, EventKind::Access(_)) {
+            return;
+        }
         for path in &ev.paths {
             if let Some(kind) = classify(&watch_root, path) {
                 let _ = raw_tx.send(kind);
@@ -393,6 +416,42 @@ mod tests {
             std::fs::rename(&tmp, real.join("config.toml")).unwrap();
         })
         .await;
+    }
+
+    /// Reading the component store is not a change to it.
+    ///
+    /// The loop this prevents is specific and was live on Linux only.
+    /// inotify reports opens and reads (`IN_OPEN` / `IN_ACCESS`);
+    /// FSEvents does not, which is why it passed on macOS and failed in
+    /// CI. `GET /api/frontend` reads `system/frontend/` on every call,
+    /// so a read publishing `FrontendChanged` meant: one request →
+    /// event → the UI refetches → another read → another event, at the
+    /// debounce interval, for as long as the page was open.
+    ///
+    /// Reads the directory the way the gateway's rescan does, and
+    /// listens for the silence that should follow.
+    #[tokio::test]
+    async fn reading_the_component_store_is_not_a_change_to_it() {
+        let td = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = broadcast::channel(64);
+        spawn(td.path().to_path_buf(), tx);
+
+        let frontend = td.path().join("system/frontend");
+        for _ in 0..20 {
+            // What `FrontendStore::scan` does: walk it and open what
+            // it finds.
+            let entries: Vec<_> = std::fs::read_dir(&frontend).unwrap().collect();
+            for e in entries.into_iter().flatten() {
+                let _ = std::fs::read(e.path());
+            }
+            let _ = std::fs::read(td.path().join("config.toml"));
+        }
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "reading the data root was reported as changing it — on Linux \
+             that is a feedback loop, not just a spurious refetch"
+        );
     }
 
     /// The control for the filter, and the reason `classify` is not
