@@ -148,7 +148,33 @@ _E2E_DATA = [
     # the host `pnpm install` for the `bazel test` path.
     ":node_modules",
     ":e2e_inputs",
+    # Node + the qmd package tree, which run_e2e.sh symlinks into a
+    # `DATALIB_RUNTIME_DIR` layout so the applet's qmd resolves through
+    # `bundled_command` instead of `npx -y @tobilu/qmd@<v>`.
+    #
+    # This is a correctness fix, not a speed one. npm keys the npx cache
+    # (`~/.npm/_npx/<hash>`) on the package spec ALONE — no Node version
+    # in it — so one directory is shared by every Node on the machine,
+    # while the better-sqlite3 binding inside it is built for exactly one
+    # ABI (`node-v127`, see MODULE.bazel). This test is the one qmd
+    # consumer that reached npx, and it also `env_inherit`s PATH, so it
+    # ran under whatever `node` the developer had while every Bazel
+    # action uses the pinned PATH's Homebrew node. The two poisoned each
+    # other's cache in a loop: whoever installed first won, and everyone
+    # else died on NODE_MODULE_VERSION. Staging the same Bazel-managed
+    # Node the fixture genrule uses removes the second Node entirely.
+    "@nodejs_host//:node_bin",
+    "//third-party/qmd/runtime:qmd_tree",
+    "//third-party/qmd/runtime:package.json",
 ]
+
+# Runfiles paths of the two staging inputs above, handed to run_e2e.sh
+# rather than hardcoded: bzlmod mangles `@nodejs_host`'s repo name, so
+# there is no stable string to write down.
+_E2E_ENV = {
+    "FW_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    "FW_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
+}
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
 
@@ -156,6 +182,7 @@ sh_binary(
     name = "e2e",
     srcs = ["run_e2e.sh"],
     data = _E2E_DATA,
+    env = _E2E_ENV,
     deps = _E2E_DEPS,
 )
 
@@ -163,6 +190,7 @@ sh_test(
     name = "e2e_test",
     srcs = ["run_e2e.sh"],
     data = _E2E_DATA,
+    env = _E2E_ENV,
     deps = _E2E_DEPS,
     # Needs network (Playwright fetches any missing browser binary —
     # chromium and webkit) and the host's pnpm / node / Playwright

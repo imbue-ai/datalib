@@ -26,14 +26,16 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
-# Temp dirs this script mints, removed by one EXIT trap. Two of them and
-# only one `trap ... EXIT` slot, so they are named here rather than each
-# installing a handler that would silently replace the other's.
+# Temp dirs this script mints, removed by one EXIT trap. Several of them
+# and only one `trap ... EXIT` slot, so they are named here rather than
+# each installing a handler that would silently replace the other's.
 STAGE_DIR=""
 BIN_STAGE=""
+RUNTIME_STAGE=""
 cleanup() {
   [[ -n "$STAGE_DIR" ]] && rm -rf "$STAGE_DIR"
   [[ -n "$BIN_STAGE" ]] && rm -rf "$BIN_STAGE"
+  [[ -n "$RUNTIME_STAGE" ]] && rm -rf "$RUNTIME_STAGE"
   return 0
 }
 trap cleanup EXIT
@@ -223,6 +225,74 @@ SIGNAL_SPEC="$(rlocation _main/datalib/backend/etl/providers/signal/tests/fixtur
 if [[ -n "$SIGNAL_SPEC" && -f "$SIGNAL_SPEC" ]]; then
   export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
 fi
+
+# --- the Node that runs qmd ------------------------------------------
+#
+# Stage a `DATALIB_RUNTIME_DIR` from the Bazel-managed Node and qmd
+# package tree, the same two symlinks `tests/fixtures/build_qmd_index.py`
+# makes. With it set, `datalib_core::node_runtime::bundled_command` wins
+# and the `npx -y @tobilu/qmd@<v>` fallback is never reached.
+#
+# Why it matters here specifically: npm keys the npx cache on the package
+# spec alone (`~/.npm/_npx/<hash-of-@tobilu/qmd@2.5.3>`), with no Node
+# version in the key, so every Node on the machine shares one directory —
+# but the better-sqlite3 binding installed into it is built for a single
+# ABI. This test inherits the developer's PATH while every other Bazel
+# action uses the pinned PATH from `.bazelrc`, so the two raced to
+# populate that directory and whichever lost died with
+# "NODE_MODULE_VERSION 147 ... requires 127". Pinning the Node removes
+# the race rather than papering over it.
+#
+# Deliberately fatal on a miss. A silent fall-through to npx is exactly
+# the bug this block exists to delete, and it would look like a pass.
+NODE_BIN_RUNFILE="$(rlocation "${FW_E2E_NODE_BIN_RLOC:-}")" || NODE_BIN_RUNFILE=""
+QMD_PKG_RUNFILE="$(rlocation "${FW_E2E_QMD_PKG_RLOC:-}")" || QMD_PKG_RUNFILE=""
+if [[ ! -x "$NODE_BIN_RUNFILE" ]]; then
+  echo "ERROR: bazel-managed node not in runfiles (FW_E2E_NODE_BIN_RLOC='${FW_E2E_NODE_BIN_RLOC:-}')" >&2
+  echo "Did @nodejs_host//:node_bin drop out of _E2E_DATA / _E2E_ENV?" >&2
+  exit 1
+fi
+if [[ ! -f "$QMD_PKG_RUNFILE" ]]; then
+  echo "ERROR: qmd runtime package.json not in runfiles (FW_E2E_QMD_PKG_RLOC='${FW_E2E_QMD_PKG_RLOC:-}')" >&2
+  exit 1
+fi
+
+# The version names the staged directory, and `bundled_command` looks it
+# up by the Rust constant — so read it from the package.json that
+# //tools:version_pins_test already holds equal to DEFAULT_QMD_VERSION
+# rather than writing the number down a seventh time.
+QMD_VERSION="$(sed -n 's/.*"@tobilu\/qmd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$QMD_PKG_RUNFILE")"
+if [[ -z "$QMD_VERSION" ]]; then
+  echo "ERROR: no @tobilu/qmd version in $QMD_PKG_RUNFILE" >&2
+  exit 1
+fi
+
+# The whole package store sits beside that package.json in the runfiles
+# tree; qmd resolves its deps from siblings inside it, which is why
+# `:qmd_tree` (the entire store) is the data dep rather than the single
+# `@tobilu/qmd` link.
+QMD_STORE="$(dirname "$QMD_PKG_RUNFILE")/node_modules"
+if [[ ! -d "$QMD_STORE" ]]; then
+  echo "ERROR: qmd package store not in runfiles at $QMD_STORE" >&2
+  echo "Did //third-party/qmd/runtime:qmd_tree drop out of _E2E_DATA?" >&2
+  exit 1
+fi
+
+RUNTIME_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-runtime.XXXXXX")"
+mkdir -p "$RUNTIME_STAGE/node/bin" "$RUNTIME_STAGE/qmd/$QMD_VERSION"
+ln -sfn "$NODE_BIN_RUNFILE" "$RUNTIME_STAGE/node/bin/node"
+ln -sfn "$QMD_STORE" "$RUNTIME_STAGE/qmd/$QMD_VERSION/node_modules"
+
+# Assert the entry `bundled_command` will look for actually resolves.
+# Without this the staging can be subtly wrong (bad version, moved store)
+# and the only symptom is qmd quietly running from npx again.
+QMD_ENTRY="$RUNTIME_STAGE/qmd/$QMD_VERSION/node_modules/@tobilu/qmd/dist/cli/qmd.js"
+if [[ ! -f "$QMD_ENTRY" ]]; then
+  echo "ERROR: staged qmd entry missing: $QMD_ENTRY" >&2
+  echo "The runtime tree is wrong, and qmd would silently fall back to npx." >&2
+  exit 1
+fi
+export DATALIB_RUNTIME_DIR="$RUNTIME_STAGE"
 
 cd "$UI_DIR"
 exec "${PLAYWRIGHT_CMD[@]}" "$@"

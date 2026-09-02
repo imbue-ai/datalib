@@ -37,10 +37,21 @@ test --zip_undeclared_test_outputs=true
 # bazel doesn't propagate it into the action graph.
 # Resolver:
 #   * NPX_BIN  — datalib_etl::latchkey::latchkey_command (the manual
-#                `*_live` tests). `datalib_qmd_indexer::run_qmd` no
-#                longer reaches npx under bazel: the fixture genrule
-#                stages a DATALIB_RUNTIME_DIR from Bazel-managed inputs,
-#                so `bundled_command` wins before the npx fallback.
+#                `*_live` tests). Nothing qmd-shaped reaches npx under
+#                bazel any more: both consumers stage a
+#                DATALIB_RUNTIME_DIR from Bazel-managed inputs, so
+#                `bundled_command` wins before the npx fallback — the
+#                fixture genrule (//tests/fixtures:ingested_tng_qmd) and
+#                //datalib/ui:e2e_test (see run_e2e.sh).
+#
+# That second one matters because of the PATH pinned just below. The
+# e2e test `env_inherit`s PATH, so it ran under the developer's `node`
+# while every other action ran under this line's — and npm keys its npx
+# cache on the package spec alone, no Node version in it. Two Nodes,
+# one directory, an ABI-specific better-sqlite3 inside it: whichever
+# installed first won and the other died on NODE_MODULE_VERSION. The
+# staged runtime removes the second Node; `npx_cache_dir` in
+# core/src/node_runtime.rs covers the paths bazel never sees.
 build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
