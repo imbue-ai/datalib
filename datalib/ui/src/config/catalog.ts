@@ -69,6 +69,19 @@ export type Field =
       /// wrongly excludes.
       extensions?: string[];
     })
+  /// A closed set of values — one Rust enum, one dropdown. Prefer this
+  /// over `text` whenever the backend parses the string against a fixed
+  /// list: a typo becomes unreachable rather than a sync-time error,
+  /// and the options themselves carry the documentation the help text
+  /// would otherwise have to spell out.
+  ///
+  /// `default` must be one of `options` and is what the form starts on,
+  /// so the value is always written explicitly — there is no "unset"
+  /// choice. Keep it equal to the backend's own default.
+  | ({ kind: "select" } & FieldBase & {
+      options: { value: string; label: string }[];
+      default: string;
+    })
   | ({ kind: "date" } & FieldBase)
   | ({ kind: "bool" } & FieldBase & { default?: boolean })
   | ({ kind: "int" } & FieldBase)
@@ -263,12 +276,18 @@ export const CATALOG: CatalogEntry[] = [
           "The backend reads it at download time. Leave empty for the default.",
       },
       {
-        kind: "text",
+        kind: "select",
         target: "period",
         phase: "render",
         label: "Document span",
-        placeholder: "month",
-        help: "How much of a conversation goes in one rendered page: day, month, year or all.",
+        default: "month",
+        options: [
+          { value: "day", label: "A day" },
+          { value: "month", label: "A month" },
+          { value: "year", label: "A year" },
+          { value: "all", label: "The whole conversation" },
+        ],
+        help: "How much of a conversation goes in one rendered page.",
       },
     ],
   },
@@ -308,7 +327,48 @@ export const CATALOG: CatalogEntry[] = [
   { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", wizard: false },
   { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", wizard: false },
 
-  { type: "pdf", label: "PDFs", blurb: "Convert a directory tree of PDFs into searchable markdown.", keywords: ["pdf", "documents", "papers", "files"], kind: "local", icon: null, defaultName: "pdfs", wizard: false },
+  {
+    type: "pdf",
+    label: "PDFs",
+    blurb: "Convert a directory tree of PDFs into searchable markdown.",
+    keywords: ["pdf", "documents", "papers", "files"],
+    kind: "local",
+    icon: null,
+    defaultName: "pdfs",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of PDFs to index",
+        required: true,
+        target: "common.input_path",
+        label: "PDF folder",
+        placeholder: "~/Documents",
+        help:
+          "Scanned recursively for PDFs. Documents are identified by their bytes, so the " +
+          "same file in two places is one document; a PDF with no extractable text is " +
+          "recorded as scanned and left unconverted rather than indexed as empty.",
+      },
+      {
+        kind: "string_list",
+        target: "ignore",
+        label: "Ignore patterns",
+        placeholder: "drafts/**, **/scans/**",
+        help:
+          "Gitignore-shaped patterns pruned from the scan, on top of any .gitignore files " +
+          "found in the tree. Leave empty to walk everything.",
+      },
+      {
+        kind: "int",
+        target: "max_bytes",
+        label: "Skip files larger than (bytes)",
+        help:
+          "A multi-gigabyte PDF is nearly always a scanned book, and either way one " +
+          "document shouldn't stall a whole scan. Leave empty for the 512 MiB default.",
+      },
+    ],
+  },
   { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
   {
     type: "media",

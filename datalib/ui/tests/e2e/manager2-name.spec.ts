@@ -30,10 +30,6 @@ const nameField = (page: Page) => field(page, "Name");
 const idField = (page: Page) => field(page, "Id");
 const alsoRender = (page: Page) => wizard(page).locator(".wiz-check input");
 const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
-/// A path field's own input, whose label carries a "required" badge, so
-/// the caption can't be matched with `text-is` the way `field` does.
-const pathField = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(.wiz-label:has-text("${caption}")) .wiz-path`);
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
 /// survives, which is also what a person gets by hovering it.
@@ -207,13 +203,20 @@ test("a provider whose render step has options writes the sibling id, not the st
   // The name is checked alongside the id because it is the second
   // witness to the same reuse: on the broken build it stayed "Signal
   // Work" instead of picking up the render dialog's own default.
+  //
+  // `wizard-select.spec.ts` reaches the same form and deliberately
+  // *dismisses* this confirm, taking the row action instead so that it
+  // doesn't depend on the offer. That is the complement of this spec,
+  // not a duplicate of it: the row action opens a fresh dialog, which
+  // is the one path where the reuse bug cannot show up. Accepting the
+  // confirm is the whole point here.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
     .click();
   await nameField(page).fill("Signal Work");
-  await pathField(page, "Backup folder").fill("/tmp/SignalBackups");
+  await wizard(page).locator("input.wiz-path").fill("/tmp/SignalBackups");
   await expect(idField(page)).toHaveValue("signal-work");
 
   // No checkbox: this provider's render step has a `period` option, so
