@@ -153,6 +153,40 @@ function pdfScanDir(): string {
 }
 pdfScanDir();
 
+// The Signal backup the onboarding spec's second source points at.
+//
+// Nothing to copy here, unlike the PDF corpus: a Signal backup is an
+// encrypted blob, so the checked-in fixture is a JSON *spec* and
+// `signal_make_fixture` expands it into a real snapshot directory —
+// the same binary and the same spec `//tests/fixtures:ingested_tng`
+// uses, so the e2e and the golden pipeline mirror one backup.
+//
+// Generated here rather than in the spec for the same reason the PDF
+// tree is: a spec that touches the filesystem is a spec that can leave
+// one behind. Cached in env across config reloads, so Playwright's
+// worker subprocesses reuse the one the parent made instead of each
+// minting (and re-encrypting) their own.
+//
+// The AEP is 64 zeros — the fixture passphrase, public by design, and
+// documented as such in the signal-backup crate. It is what makes a
+// credentialed provider's decrypt path runnable in a test at all.
+export const FIXTURE_SIGNAL_AEP = "0".repeat(64);
+const SIGNAL_MAKE_FIXTURE = process.env.FW_E2E_SIGNAL_MAKE_FIXTURE;
+const SIGNAL_SPEC = process.env.FW_E2E_SIGNAL_SPEC;
+function signalBackupDir(): string | undefined {
+  const existing = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
+  if (existing) return existing;
+  // Absent outside bazel (`pnpm exec playwright test` straight from the
+  // source tree). The spec skips its Signal half rather than failing,
+  // the same way the sync spec skips without its step binary.
+  if (!SIGNAL_MAKE_FIXTURE || !SIGNAL_SPEC) return undefined;
+  const dir = mkdtempSync(path.join(tmpdir(), "datalib-e2e-signal-"));
+  execFileSync(SIGNAL_MAKE_FIXTURE, [SIGNAL_SPEC, dir], { stdio: "pipe" });
+  process.env.FW_E2E_SIGNAL_BACKUP_DIR = dir;
+  return dir;
+}
+signalBackupDir();
+
 // The backend requires its API token on every route (see
 // datalib/backend/http/src/auth.rs). Pin one via DATALIB_TOKEN rather
 // than letting the binary mint a random one we'd have to read back out
@@ -335,6 +369,12 @@ export default defineConfig({
         DATALIB_BIND: `127.0.0.1:${ONBOARDING_PORT}`,
         DATALIB_TOKEN: API_TOKEN,
         PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        // Signal's download step reads its passphrase from the
+        // environment — the wizard writes the *name* of the variable,
+        // never the secret. The step inherits this from the runner,
+        // which inherits it from this server, which is the same chain a
+        // real install has from the user's shell.
+        SIGNAL_BACKUP_PASSPHRASE: FIXTURE_SIGNAL_AEP,
       },
     },
   ],

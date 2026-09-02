@@ -43,6 +43,14 @@
 // restored in afterEach — including on failure.
 
 import { test, expect, type Page } from "@playwright/test";
+import {
+  ROW_SETTLE,
+  settleRow,
+  stateAtOf,
+  stateOf,
+  syncAndSettle,
+  TERMINAL_STATES,
+} from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -53,18 +61,14 @@ const FIXTURE_ROOT = process.env.FW_E2E_FIXTURE_ROOT;
 const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
 
 const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
-const statusIcon = (page: Page, id: string) =>
-  row(page, id).locator('[col-id="status"] [role="img"]');
 const syncBtn = (page: Page, id: string) =>
   row(page, id).getByRole("button", { name: "Sync now" });
 
-/// The Status column is icons, so a row's state is its accessible name.
-/// Returns null while the cell is mid-repaint or the row is offscreen.
-async function statusOf(page: Page, id: string): Promise<string | null> {
-  const el = statusIcon(page, id);
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("aria-label");
-}
+/// A row's state, in the runner's own vocabulary (`skipped_up_to_date`)
+/// rather than the label the column paints ("Up to date"). Asserting on
+/// state rather than prose is what lets these tests and the scheduler
+/// share one word for one thing. Shared: see `stateOf` in grid-helpers.
+const statusOf = stateOf;
 
 /// "Last synced" as the *exact stamp*, from the cell's `title`.
 ///
@@ -96,24 +100,10 @@ async function writeConfig(page: Page, text: string) {
   await expect(page.getByText("Saved the config.")).toBeVisible();
 }
 
-const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
-
-/// Wait for a row to settle on a terminal status, then return it.
-/// Polls the DOM the way a person watches the screen.
-///
-/// `expect.poll` on the status string rather than a bespoke loop, so a
-/// timeout reports the state it was stuck on ("expected 'Queued' to
-/// match …") instead of just expiring.
-async function settle(page: Page, id: string, timeout = 60_000): Promise<string> {
-  await expect
-    .poll(async () => (await statusOf(page, id)) ?? "(no status)", {
-      timeout,
-      intervals: [250],
-      message: `${id} never reached a terminal status`,
-    })
-    .toMatch(TERMINAL);
-  return (await statusOf(page, id)) ?? "";
-}
+/// Settling lives in grid-helpers now, along with the terminal
+/// vocabulary. The copy that used to be here is the reason: it drifted
+/// from `onboarding-pdf`'s copy, and #235 had to fix the same
+/// three-of-five terminal set in only one of the two places it existed.
 
 let original = "";
 
@@ -201,8 +191,7 @@ ${applets()}`;
     await writeConfig(page, config());
 
     // Give docs a real history to protect.
-    await syncBtn(page, "docs/raw").click();
-    expect(await settle(page, "docs/raw")).toBe("Succeeded");
+    expect((await syncAndSettle(page, "docs/raw"))["docs/raw"]).toBe("succeeded");
     const docsStatus = await statusOf(page, "docs/raw");
     const docsSynced = await lastSyncedOf(page, "docs/raw");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
@@ -210,8 +199,7 @@ ${applets()}`;
     // Now sync the *other* source. The runner still walks docs/raw, to
     // publish its output version, and reports it `not_selected` — the
     // fact that used to be written over its record.
-    await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
+    expect((await syncAndSettle(page, "pdfs/raw"))["pdfs/raw"]).toBe("succeeded");
 
     expect(
       await statusOf(page, "docs/raw"),
@@ -241,6 +229,12 @@ ${applets()}`;
       return s;
     };
 
+    // The run stamps on screen *before* the click. The loop below stops
+    // at the first terminal state, and without these it would stop at
+    // the one a previous test left painted — recording a one-frame
+    // sequence of somebody else's run.
+    const wasRaw = await stateAtOf(page, "pdfs/raw");
+    const wasRender = await stateAtOf(page, "pdfs/rendered_md");
     await syncBtn(page, "pdfs/raw").click();
     // The first sample is deliberately taken with no await in between:
     // the push from the enqueue handler is what has to have landed.
@@ -252,21 +246,27 @@ ${applets()}`;
     // download-only provider could not support, and the reason this
     // spec is built on `pdf`.
     expect(downstream[0], `downstream sequence was ${JSON.stringify(downstream)}`).toBe(
-      "Queued",
+      "queued",
     );
     // ...while the unrelated source is not claimed at all.
-    expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
+    expect(await statusOf(page, "docs/raw")).not.toBe("queued");
 
-    const deadline = Date.now() + 60_000;
-    // `TERMINAL`, not a set spelled out again here. The local copy this
-    // replaces listed three of the five terminal statuses, so a run
-    // ending `Blocked` or `Interrupted` was never recognized as over:
-    // the loop spun to the deadline and reported "never settled" about a
-    // row that had settled a minute earlier, naming neither the status
-    // nor the reason.
+    const deadline = Date.now() + ROW_SETTLE;
+    // `TERMINAL_STATES`, from grid-helpers, not a set spelled out again
+    // here. The local copy this replaces listed three of the five
+    // terminal statuses, so a run ending `blocked` or `interrupted` was
+    // never recognized as over: the loop spun to the deadline and
+    // reported "never settled" about a row that had settled a minute
+    // earlier, naming neither the status nor the reason. There is now
+    // one such set in the suite, which is the only way that stays
+    // true.
     for (;;) {
       const s = await record();
-      if (s && TERMINAL.test(s)) break;
+      // Terminal *and* from this run: a stale terminal frame is exactly
+      // what the stamp is here to rule out.
+      if (s && TERMINAL_STATES.has(s) && (await stateAtOf(page, "pdfs/raw")) !== wasRaw) {
+        break;
+      }
       expect(Date.now(), `never settled; saw ${JSON.stringify(seen)}`).toBeLessThan(
         deadline,
       );
@@ -276,8 +276,8 @@ ${applets()}`;
     // What the sequence must contain. "Queued" is the frame that used
     // to be missing entirely — the click produced no visible change
     // until the whole run was over.
-    expect(seen[0], `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
-    expect(seen[seen.length - 1]).toBe("Succeeded");
+    expect(seen[0], `sequence was ${JSON.stringify(seen)}`).toBe("queued");
+    expect(seen[seen.length - 1]).toBe("succeeded");
 
     // ...and it must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one. Running is
@@ -291,14 +291,14 @@ ${applets()}`;
     // "Never run" ranks *below* Queued: it is the absence of history,
     // so seeing it after a sync was queued really is going backwards.
     const rank: Record<string, number> = {
-      "Never run": -1,
-      Queued: 0,
-      Running: 1,
-      Succeeded: 2,
-      "Up to date": 2,
-      Failed: 2,
-      Blocked: 2,
-      Interrupted: 2,
+      never_run: -1,
+      queued: 0,
+      running: 1,
+      succeeded: 2,
+      skipped_up_to_date: 2,
+      failed: 2,
+      blocked: 2,
+      interrupted: 2,
     };
     const rankOf = (s: string) => {
       expect(
@@ -317,16 +317,18 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. `pdfs/raw` is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await settleRow(page, "pdfs/rendered_md", { after: wasRender })).toMatch(
+      /^(succeeded|skipped_up_to_date)$/,
+    );
     await record(); // capture the settled state in the sequence
     expect(
       downstream[0],
-      `downstream never started Queued: ${JSON.stringify(downstream)}`,
-    ).toBe("Queued");
+      `downstream never started queued: ${JSON.stringify(downstream)}`,
+    ).toBe("queued");
     expect(
       downstream[downstream.length - 1],
       `downstream never finished: ${JSON.stringify(downstream)}`,
-    ).toMatch(/^(Succeeded|Up to date)$/);
+    ).toMatch(/^(succeeded|skipped_up_to_date)$/);
   });
 
   test("Last synced counts up on its own, and hover reveals the exact stamp", async ({
@@ -341,8 +343,12 @@ ${applets()}`;
     // absolute stamp survives as the hover, and that the cell keeps
     // counting with nobody touching the page.
     await writeConfig(page, config());
-    await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
+    // `syncAndSettle`, not click-then-settle. The stamp captured below
+    // is the whole subject of this test, and a settle that returned on
+    // a *previous* run's "Succeeded" let the real run finish partway
+    // through — rewriting the stamp under the final assertion, which
+    // then failed by the handful of seconds the run had taken.
+    expect((await syncAndSettle(page, "pdfs/raw"))["pdfs/raw"]).toBe("succeeded");
 
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
@@ -390,12 +396,17 @@ ${applets()}`;
     // "4 seconds ago", while chronologically it follows it.
     await writeConfig(page, config());
 
-    // Two rows with a real gap between them, so the orders differ.
-    await syncBtn(page, "docs/raw").click();
-    expect(await settle(page, "docs/raw")).toBe("Succeeded");
-    await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
+    // Two rows with a real gap between them, so the orders differ. The
+    // gap is the point, so each sync has to be *finished* before the
+    // next begins — a settle satisfied by an earlier run would let the
+    // two overlap and put the stamps in either order.
+    expect((await syncAndSettle(page, "docs/raw"))["docs/raw"]).toBe("succeeded");
+    const second = await syncAndSettle(page, "pdfs/raw", [
+      "pdfs/raw",
+      "pdfs/rendered_md",
+    ]);
+    expect(second["pdfs/raw"]).toBe("succeeded");
+    expect(second["pdfs/rendered_md"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
 
     /// Row ids top to bottom, paired with the exact stamp each is
     /// claiming — read off `title`, so the check is against instants

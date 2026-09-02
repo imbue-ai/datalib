@@ -29,7 +29,15 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
-import { expectGridPainted } from "./grid-helpers";
+import {
+  expectGridPainted,
+  pipelineRow,
+  searchAndSettle,
+  settleRow,
+  stateAtOf,
+  stateOf,
+  syncAndSettle,
+} from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -41,32 +49,17 @@ const BASE = process.env.FW_E2E_ONBOARDING_URL;
 const SCAN_DIR = process.env.FW_E2E_PDF_SCAN_DIR;
 /// The held-back document, copied in at step 12.
 const LATECOMER = process.env.FW_E2E_PDF_LATECOMER;
+/// The folder holding the generated `signal-backup-*` snapshot, which
+/// is what a Signal source's "Backup folder" field wants — the
+/// downloader scans it for the newest snapshot rather than being handed
+/// one. Built by playwright.config.ts from the checked-in TNG spec.
+const SIGNAL_BACKUP_DIR = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
 
-const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
-
-/// A row's status, which the column paints as an icon — so the state is
-/// the icon's accessible name. Null while the cell is mid-repaint.
-async function statusOf(page: Page, id: string): Promise<string | null> {
-  const el = row(page, id).locator('[col-id="status"] [role="img"]');
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("aria-label");
-}
-
-const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
-
-/// Wait for a row to settle, then return the status it settled on.
-/// `expect.poll` rather than a bespoke loop so a timeout reports the
-/// state it was stuck on instead of just expiring.
-async function settle(page: Page, id: string, timeout = 60_000): Promise<string> {
-  await expect
-    .poll(async () => (await statusOf(page, id)) ?? "(no status)", {
-      timeout,
-      intervals: [200],
-      message: `${id} never reached a terminal status`,
-    })
-    .toMatch(TERMINAL);
-  return (await statusOf(page, id)) ?? "";
-}
+const row = pipelineRow;
+/// Every row this spec's syncs are expected to reach, in the order the
+/// scheduler does: the source, its render sibling, and the fan-in that
+/// makes the documents searchable.
+const PIPELINE = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"];
 
 /// "Bytes on disk" as a number, read back off the label drawn over the
 /// bar — the number a person actually sees. `null` for a row with
@@ -198,7 +191,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // disk. This is the state the sync below has to move.
     await expect(row(page, "pdfs/raw")).toHaveCount(1);
     await expect(row(page, "pdfs/rendered_md")).toHaveCount(1);
-    expect(await statusOf(page, "pdfs/raw")).toBe("Never run");
+    expect(await stateOf(page, "pdfs/raw")).toBe("never_run");
     expect(await bytesOf(page, "pdfs/raw")).toBeNull();
     await expect(row(page, "pdfs/raw").locator('[col-id="lastSynced"]')).toHaveText("—");
 
@@ -209,14 +202,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(wired.text).toContain('inputs = ["pdfs/rendered_md"]');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
-    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
-
     // Download, render and index all run — syncing a source claims
     // everything downstream of it, and the index step is the reason the
     // grid below has anything in it.
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
-    expect(await settle(page, "unified_index/grid")).toMatch(/^(Succeeded|Up to date)$/);
+    const firstRun = await syncAndSettle(page, "pdfs/raw", PIPELINE);
+    expect(firstRun["pdfs/raw"]).toBe("succeeded");
+    expect(firstRun["pdfs/rendered_md"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
+    expect(firstRun["unified_index/grid"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
@@ -256,10 +248,15 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const beforeSecond = await bytesOf(page, "pdfs/raw");
     expect(beforeSecond).toBe(rawBytes);
 
-    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
-    expect(await settle(page, "unified_index/grid")).toMatch(/^(Succeeded|Up to date)$/);
+    // The second run, and the one the old helper could not wait for: on
+    // arrival every row still shows `succeeded` from the first sync, so
+    // "is it terminal?" was already true before the click landed.
+    // `syncAndSettle` reads each row's run stamp first and waits for a
+    // later one.
+    const secondRun = await syncAndSettle(page, "pdfs/raw", PIPELINE);
+    expect(secondRun["pdfs/raw"]).toBe("succeeded");
+    expect(secondRun["pdfs/rendered_md"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
+    expect(secondRun["unified_index/grid"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
 
     // A document more on disk.
     //
@@ -318,5 +315,125 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       "the document added to the folder should be in the grid",
     ).toContain("warp_core_manual.pdf");
     expect(second.map((r) => r.sender)).toContain("Geordi La Forge");
+  });
+
+  test("a second source joins the first, and Sync everything brings both up to date", async ({
+    page,
+  }) => {
+    // Runs against the root the test above built, in declaration order
+    // under `workers: 1`. That is the point rather than a shortcut: a
+    // library with *one* source cannot show any of what follows. Only a
+    // second source makes "this row synced and that one never did" a
+    // distinguishable state, and only then does a button that runs
+    // everything mean something a per-row Sync does not.
+    //
+    // Signal is the second source on purpose. `pdf` is a local scan
+    // with no credentials; Signal is the shape almost every real source
+    // has — a download step that decrypts a backup with a passphrase it
+    // reads from the environment, and a render step with an option of
+    // its own, so the wizard takes its *second dialog* path rather than
+    // the checkbox.
+    test.skip(
+      !SIGNAL_BACKUP_DIR,
+      "needs FW_E2E_SIGNAL_BACKUP_DIR — signal_make_fixture from run_e2e.sh",
+    );
+    page.on("dialog", (d) => void d.accept());
+
+    await page.goto(`${BASE}/sources2`);
+    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+
+    // ── 1. add Signal through the wizard ─────────────────────────────
+    const wizard = page.getByRole("dialog");
+    await page.getByRole("button", { name: "+ Add Data Source" }).click();
+    await wizard.getByRole("searchbox").fill("signal");
+    await wizard
+      .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
+      .click();
+    await wizard.locator("input.wiz-path").fill(SIGNAL_BACKUP_DIR!);
+
+    // The render step has a `period` option, so the offer is a confirm
+    // and then a second dialog — not the checkbox `pdf` got. The
+    // `page.on("dialog")` above accepts it.
+    await expect(wizard.locator("label.wiz-check")).toHaveCount(0);
+    await wizard.getByRole("button", { name: "Add source" }).click();
+    // The second dialog, for the render step. Its defaults are what we
+    // want; taking them is still a click a person makes.
+    await expect(wizard.getByRole("button", { name: "Add render step" })).toBeEnabled();
+    await wizard.getByRole("button", { name: "Add render step" }).click();
+    await expect(wizard).toHaveCount(0);
+
+    // ── 2. two sources in the table ──────────────────────────────────
+    for (const id of ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"]) {
+      await expect(pipelineRow(page, id), `${id} should be a row`).toHaveCount(1);
+    }
+
+    // ── 3. one has history, the other has none ───────────────────────
+    //
+    // The distinction the whole test rests on, so it is asserted on
+    // both columns: a never-run row has no state to report *and* no
+    // instant to report it at.
+    expect(await stateOf(page, "pdfs/raw")).toBe("succeeded");
+    expect(await stateOf(page, "signal/raw")).toBe("never_run");
+    await expect(pipelineRow(page, "signal/raw").locator('[col-id="lastSynced"]')).toHaveText(
+      "—",
+    );
+    expect(
+      await bytesOf(page, "signal/raw"),
+      "a source that never ran has written nothing",
+    ).toBeNull();
+
+    // ── 4. re-running one source leaves the other alone ──────────────
+    const pdfBefore = await stateAtOf(page, "pdfs/raw");
+    const signalBefore = await stateAtOf(page, "signal/raw");
+    await syncAndSettle(page, "pdfs/raw", ["pdfs/raw"]);
+    expect(
+      await stateAtOf(page, "pdfs/raw"),
+      "the row that was synced should carry a newer instant",
+    ).not.toBe(pdfBefore);
+    expect(
+      await stateAtOf(page, "signal/raw"),
+      "a sync of pdfs must not give signal a history it never earned",
+    ).toBe(signalBefore);
+    expect(await stateOf(page, "signal/raw")).toBe("never_run");
+
+    // ── 5. Sync everything reaches both ──────────────────────────────
+    const was: Record<string, string | null> = {};
+    const ALL = ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"];
+    for (const id of ALL) was[id] = await stateAtOf(page, id);
+
+    await page.getByRole("button", { name: "Sync everything" }).click();
+    for (const id of ALL) {
+      const state = await settleRow(page, id, { after: was[id] });
+      expect(state, `${id} after Sync everything`).toMatch(
+        /^(succeeded|skipped_up_to_date)$/,
+      );
+    }
+
+    // Everything now has a history and something on disk. `signal/raw`
+    // is the row that proves it: it had neither a moment ago, and no
+    // per-row button was pressed for it.
+    for (const id of ALL) {
+      await expect(
+        pipelineRow(page, id).locator('[col-id="lastSynced"]'),
+        `${id} should report when it last ran`,
+      ).not.toHaveText("—");
+      expect(await bytesOf(page, id), `${id} should have bytes on disk`).toBeGreaterThan(0);
+    }
+
+    // ── 6. and the Signal messages are searchable ────────────────────
+    //
+    // `source:`, not `type:` — `type` is the row *shape*
+    // (chat/message/all) and `source` is the provider, matched against
+    // `grid_rows.source_label`, which Signal's renderer sets to
+    // "Signal". Asking for `type:Signal` would silently parse as free
+    // text and route through qmd.
+    await openExplore(page);
+    await searchAndSettle(page, "source:Signal type:all");
+    const signalRows = await gridRows(page);
+    expect(signalRows.length, "the Signal messages should be indexed").toBeGreaterThan(0);
+    expect(
+      signalRows.every((r) => r.source === "Signal"),
+      `every row should be from Signal: ${JSON.stringify(signalRows.slice(0, 5))}`,
+    ).toBe(true);
   });
 });
