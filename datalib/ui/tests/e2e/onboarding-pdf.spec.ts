@@ -272,15 +272,26 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     //
     // That per-run growth is *not* a commit, though it reads like one:
     // measured over ten no-op runs, `dolt_log` stays put for most of
-    // them and the store still grows. It was ~3 kB and is now ~0.5 kB —
-    // the bulk of it was the schema self-heal building its probe table
-    // in the store itself (create+drop nets to nothing in the working
-    // tree, so nothing commits and nothing reads as dirty, but the
-    // chunks stay), one probe per table per open, which
-    // `doltlite_raw::declared_columns` now does in memory instead. What
-    // is left is doltlite's own storage churn per write session. Either
-    // way the 10 kB floor clears it by an order of magnitude, against
-    // ~23 kB for this document.
+    // them and the store still grows anyway. The bulk of it was the
+    // schema self-heal building its probe table in the store itself —
+    // create+drop nets to nothing in the working tree, so nothing
+    // commits and nothing reads as dirty, but the chunks stay — one
+    // probe per table per open, which `doltlite_raw::declared_columns`
+    // now does in memory instead. What is left is doltlite's own
+    // storage churn per write session.
+    //
+    // **The floor is calibrated to that, so it moved when the leak
+    // did.** Measured by running `datalib-step download pdf` over a
+    // copy of this scan directory: no-op runs add 2165 B once and then
+    // 507-676 B, and the run that picks up the late PDF adds 8279 B.
+    // 4 kB is above the worst no-op and half the real gain. The old
+    // 10 kB was above *both* once the probe stopped padding every run
+    // — which is how a real ingest came to fail an assertion about
+    // ingests, rather than by anything changing about the ingest.
+    //
+    // Both numbers are small and the margin is ~2x, so re-measure
+    // rather than nudge this constant if it ever goes red: the two
+    // quantities it sits between are the whole point of the check.
     //
     // Polled, because the storage figures are refetched when the run
     // goes terminal rather than painted from the event that says so.
@@ -293,8 +304,8 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       .toBeGreaterThan(renderedBytes!);
     expect(
       (await bytesOf(page, "pdfs/raw"))!,
-      "the raw store should have gained a document, not just a commit",
-    ).toBeGreaterThan(rawBytes! + 10_000);
+      "the raw store should have gained a document, not just per-run churn",
+    ).toBeGreaterThan(rawBytes! + 4_000);
 
     // ── 15. and it is searchable ─────────────────────────────────────
     await openExplore(page);
