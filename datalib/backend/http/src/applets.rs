@@ -743,7 +743,25 @@ impl Supervisor {
                     .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?,
             );
         }
-        cmd.stdin(Stdio::null());
+        // stdin is not an input channel — nothing is ever written to
+        // it. It is a liveness pipe, and the applet's only way to find
+        // out that this gateway is gone.
+        //
+        // The write end lives in the `Child` we hold, so it stays open
+        // exactly as long as this process does. Whatever ends us —
+        // an orderly exit, a SIGTERM, a SIGKILL that runs no code at
+        // all — the kernel closes it, and the applet's read end goes
+        // to EOF. That is the one signal that survives SIGKILL, which
+        // is why the handler in `main` is not enough by itself.
+        //
+        // `DATALIB_APPLET_PARENT_PIPE` is how the applet knows this
+        // stdin means that. Set here rather than assumed there because
+        // an applet is an ordinary program someone may run by hand:
+        // reading stdin unbidden would swallow a terminal's input, and
+        // treating an immediate EOF from `< /dev/null` as "my parent
+        // died" would make it exit at once. See docs/dev/applets.md.
+        cmd.stdin(Stdio::piped());
+        cmd.env("DATALIB_APPLET_PARENT_PIPE", "1");
         // stdout is the readiness channel; stderr is the log, captured
         // so a server that dies on startup can say why. Without the
         // latter the only symptom is a readiness failure, which names
@@ -913,17 +931,40 @@ impl Supervisor {
     }
 }
 
+impl AppletRegistry {
+    /// Stop every applet this gateway started.
+    ///
+    /// The same thing `Supervisor`'s `Drop` does, reachable by name —
+    /// because `Drop` only runs when the process ends of its own
+    /// accord, and the usual way a gateway ends is a signal. See the
+    /// shutdown handler in `datalib-http`'s `main`.
+    pub fn shutdown(&self) {
+        self.supervisor.stop_all();
+    }
+}
+
 impl Drop for Supervisor {
     fn drop(&mut self) {
         self.stop_all();
     }
 }
 
-// NOTE: `Drop` runs on an orderly shutdown, not when the gateway is
-// SIGKILLed — in that case the applet children are re-parented to init
-// and keep running. Putting each child in its own process group and
-// signalling the group is the fix; it is not done here because idle
-// shutdown will need the same plumbing.
+// `Drop` alone was never enough, and the two gaps needed different
+// answers (#238):
+//
+//   * It does not run on a signal. The gateway had no handler, so a
+//     SIGTERM stopped it mid-instruction and nothing here was reached.
+//     `datalib-http`'s `main` now serves with a graceful shutdown and
+//     calls `AppletRegistry::shutdown` on the way out.
+//   * It cannot run on SIGKILL, ever. Nothing in this process does. So
+//     the applet is given a pipe on stdin instead — see the spawn
+//     above — and exits when it reads EOF, which the kernel delivers
+//     however this process happens to die.
+//
+// Process groups would still be worth having, so that killing an
+// applet also takes anything the applet itself spawned. They do not
+// replace either of the above: signalling a group needs somebody alive
+// to send the signal, and after a SIGKILL there is nobody.
 
 // ---------------------------------------------------------------------------
 // The proxy

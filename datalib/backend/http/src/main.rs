@@ -138,6 +138,58 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!("config: {}", state.config_path().display());
 
-    axum::serve(listener, router(state)).await?;
+    // Serve until a signal, then stop the applets on the way out.
+    //
+    // Without this the process had no signal handling at all, so a
+    // SIGTERM landed on the default disposition and stopped it
+    // mid-instruction: no unwind, no `Drop`, and therefore no
+    // `Supervisor::drop` — the one thing that kills the applet
+    // children. They were re-parented to init and ran until the
+    // machine was rebooted. A laptop that had been running the app and
+    // its test suite for a week was holding 186 of them (#238).
+    //
+    // `Drop` on the way out of `main` would not be enough on its own
+    // either: `AppState` is cloned into the router and into the sync
+    // worker, so the registry's refcount does not necessarily reach
+    // zero here. Hence the explicit call.
+    let applets = state.applets.clone();
+    axum::serve(listener, router(state))
+        .with_graceful_shutdown(terminated())
+        .await?;
+    eprintln!("datalib-http: shutting down, stopping applets");
+    applets.shutdown();
     Ok(())
+}
+
+/// Resolve on the first signal that means "stop".
+///
+/// SIGKILL is deliberately absent because it cannot be caught — the
+/// gateway can do nothing on that path, which is why the applet also
+/// watches for its parent to disappear. See `applets.rs`.
+async fn terminated() {
+    let interrupt = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // No handler is worse than a handler that never fires, but
+            // both are survivable: the applet's own parent watch is the
+            // backstop either way.
+            Err(e) => {
+                eprintln!("datalib-http: cannot listen for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate => {}
+    }
 }
