@@ -26,6 +26,18 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
+# Temp dirs this script mints, removed by one EXIT trap. Two of them and
+# only one `trap ... EXIT` slot, so they are named here rather than each
+# installing a handler that would silently replace the other's.
+STAGE_DIR=""
+BIN_STAGE=""
+cleanup() {
+  [[ -n "$STAGE_DIR" ]] && rm -rf "$STAGE_DIR"
+  [[ -n "$BIN_STAGE" ]] && rm -rf "$BIN_STAGE"
+  return 0
+}
+trap cleanup EXIT
+
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"
 
 if [[ -n "$WORKSPACE" ]]; then
@@ -93,7 +105,6 @@ else
   # aborts with "too few X's in template 'datalib-e2e-stage'". The full
   # `$TMPDIR/...XXXXXX` form is accepted identically by both.
   STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-stage.XXXXXX")"
-  trap 'rm -rf "$STAGE_DIR"' EXIT
   rsync -aL \
     --exclude node_modules \
     --exclude e2e_test \
@@ -153,6 +164,32 @@ DAG_BIN_RUNFILE="$(rlocation _main/datalib/backend/dag/datalib_dag_bin)" || DAG_
 if [[ -n "$DAG_BIN_RUNFILE" && -x "$DAG_BIN_RUNFILE" ]]; then
   export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 fi
+
+# A directory holding every shipped binary under its **public
+# dash-separated name** — the layout `scripts/install.sh` produces on a
+# user's machine, and the one `//datalib/backend:bin` builds.
+#
+# The onboarding spec needs it, and nothing else here does. That spec
+# starts from an empty data root and clicks the button that writes the
+# starter config, so its config is the scaffold `datalib-http` emits:
+# bare `datalib-step …` / `datalib-applet …` commands, resolved against
+# PATH. Every other spec's config names an absolute runfiles path
+# instead, which is why they have never needed this. Symlinks rather
+# than a copy_to_directory dep: bazel names each output after its target
+# (`datalib_step`, `datalib_dag_bin`), and the rename is the whole point.
+BIN_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-bin.XXXXXX")"
+APPLET_BIN_RUNFILE="$(rlocation _main/datalib/backend/applets/datalib_applet)" || APPLET_BIN_RUNFILE=""
+for pair in \
+  "datalib-step:${STEP_BIN_RUNFILE:-}" \
+  "datalib-dag:${DAG_BIN_RUNFILE:-}" \
+  "datalib-applet:${APPLET_BIN_RUNFILE:-}"; do
+  public="${pair%%:*}"
+  built="${pair#*:}"
+  if [[ -n "$built" && -x "$built" ]]; then
+    ln -sfn "$built" "$BIN_STAGE/$public"
+  fi
+done
+export FW_E2E_BIN_DIR="$BIN_STAGE"
 
 # The local PDF corpus the sync spec scans. Anchor off one file and
 # hand over its directory, the way materialize_tng_root.sh anchors the

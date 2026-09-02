@@ -327,7 +327,48 @@ export const CATALOG: CatalogEntry[] = [
   { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", wizard: false },
   { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", wizard: false },
 
-  { type: "pdf", label: "PDFs", blurb: "Convert a directory tree of PDFs into searchable markdown.", keywords: ["pdf", "documents", "papers", "files"], kind: "local", icon: null, defaultName: "pdfs", wizard: false },
+  {
+    type: "pdf",
+    label: "PDFs",
+    blurb: "Convert a directory tree of PDFs into searchable markdown.",
+    keywords: ["pdf", "documents", "papers", "files"],
+    kind: "local",
+    icon: null,
+    defaultName: "pdfs",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of PDFs to index",
+        required: true,
+        target: "common.input_path",
+        label: "PDF folder",
+        placeholder: "~/Documents",
+        help:
+          "Scanned recursively for PDFs. Documents are identified by their bytes, so the " +
+          "same file in two places is one document; a PDF with no extractable text is " +
+          "recorded as scanned and left unconverted rather than indexed as empty.",
+      },
+      {
+        kind: "string_list",
+        target: "ignore",
+        label: "Ignore patterns",
+        placeholder: "drafts/**, **/scans/**",
+        help:
+          "Gitignore-shaped patterns pruned from the scan, on top of any .gitignore files " +
+          "found in the tree. Leave empty to walk everything.",
+      },
+      {
+        kind: "int",
+        target: "max_bytes",
+        label: "Skip files larger than (bytes)",
+        help:
+          "A multi-gigabyte PDF is nearly always a scanned book, and either way one " +
+          "document shouldn't stall a whole scan. Leave empty for the 512 MiB default.",
+      },
+    ],
+  },
   { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
   {
     type: "media",

@@ -1,6 +1,6 @@
 import { defineConfig } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { copyFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,13 +43,15 @@ function cachedPort(envVar: string): number {
 // interactive `pnpm exec playwright test` falls back to the source-tree
 // bazel-bin symlink.
 const here = path.dirname(fileURLToPath(import.meta.url));
+// `datalib/ui/..` — the workspace root, for the `bazel-bin/...`
+// fallbacks used when this config is loaded outside bazel.
+const workspaceDir = path.resolve(here, "..", "..");
 function ensureFixtureRoot(): string {
   const existing = process.env.FW_E2E_FIXTURE_ROOT;
   if (existing) return existing;
-  const workspace = path.resolve(here, "../..");
   const materializer =
     process.env.FW_E2E_MATERIALIZE_TNG_ROOT ||
-    path.join(workspace, "bazel-bin/tests/fixtures/materialize_tng_root");
+    path.join(workspaceDir, "bazel-bin/tests/fixtures/materialize_tng_root");
   const root = mkdtempSync(path.join(tmpdir(), "datalib-e2e-"));
   execFileSync(materializer, [root], { stdio: "inherit" });
   process.env.FW_E2E_FIXTURE_ROOT = root;
@@ -92,6 +94,65 @@ const EMPTY_PORT = cachedPort("FW_E2E_EMPTY_PORT");
 const EMPTY_URL = `http://127.0.0.1:${EMPTY_PORT}`;
 process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
 
+// ── the onboarding spec's world ──────────────────────────────────────
+//
+// A third backend, on a third empty root. `first-run.spec.ts` already
+// owns EMPTY_ROOT and initializes it, and the onboarding state is
+// one-shot: a root with a config can never go back to having none. So a
+// second spec that starts from scratch needs a second scratch root.
+//
+// What makes this one different from EMPTY_ROOT is its PATH. The
+// scaffold `POST /api/config/init` writes names its binaries bare
+// (`datalib-step grid_index`, `datalib-applet unified_index`) — the way
+// an installed user's config does — so this backend, and the
+// `datalib-dag` it spawns, need a directory of dash-named binaries to
+// resolve them against. run_e2e.sh stages one; outside bazel the
+// `//datalib/backend:bin` output directory is the same layout.
+function onboardingRoot(): string {
+  const existing = process.env.FW_E2E_ONBOARDING_ROOT;
+  if (existing) return existing;
+  const root = mkdtempSync(path.join(tmpdir(), "datalib-e2e-onboarding-"));
+  process.env.FW_E2E_ONBOARDING_ROOT = root;
+  return root;
+}
+const ONBOARDING_ROOT = onboardingRoot();
+const ONBOARDING_PORT = cachedPort("FW_E2E_ONBOARDING_PORT");
+const ONBOARDING_URL = `http://127.0.0.1:${ONBOARDING_PORT}`;
+process.env.FW_E2E_ONBOARDING_URL = ONBOARDING_URL;
+
+const binDir =
+  process.env.FW_E2E_BIN_DIR ||
+  path.join(workspaceDir, "bazel-bin/datalib/backend/bin");
+
+// The tree the onboarding spec points its PDF source at. Built here
+// rather than in the spec so the spec never has to touch the
+// filesystem: it is a *copy* of part of the checked-in corpus, because
+// the spec adds a file to it partway through and the corpus itself is a
+// bazel input shared with every other test.
+//
+// One document is deliberately held back — `engineering/warp_core_manual.pdf`,
+// which is the corpus's only renderable document with distinctive text
+// of its own. The spec copies it in to make "a new file appears in the
+// folder" a real event, and asserts on the words it contains.
+const PDF_CORPUS =
+  process.env.FW_E2E_PDF_FIXTURE_DIR ||
+  path.join(workspaceDir, "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng");
+process.env.FW_E2E_PDF_LATECOMER = path.join(
+  PDF_CORPUS,
+  "engineering/warp_core_manual.pdf",
+);
+function pdfScanDir(): string {
+  const existing = process.env.FW_E2E_PDF_SCAN_DIR;
+  if (existing) return existing;
+  const dir = mkdtempSync(path.join(tmpdir(), "datalib-e2e-pdfs-"));
+  for (const f of ["captains_log.pdf", "captains_log_v2.pdf"]) {
+    copyFileSync(path.join(PDF_CORPUS, f), path.join(dir, f));
+  }
+  process.env.FW_E2E_PDF_SCAN_DIR = dir;
+  return dir;
+}
+pdfScanDir();
+
 // The backend requires its API token on every route (see
 // datalib/backend/http/src/auth.rs). Pin one via DATALIB_TOKEN rather
 // than letting the binary mint a random one we'd have to read back out
@@ -124,11 +185,10 @@ const API_TOKEN = cachedToken();
 // beforehand. We avoid the symlink under bazel because it isn't a
 // declared input of e2e_test and races with parallel actions under
 // `bazel test //...`.
-const workspace = path.resolve(here, "../..");
 const backendBin =
   process.env.DATALIB_HTTP_BIN ||
   path.join(
-    workspace,
+    workspaceDir,
     "bazel-bin/datalib/backend/http/datalib_http_bin",
   );
 
@@ -244,6 +304,25 @@ export default defineConfig({
       env: {
         DATALIB_BIND: `127.0.0.1:${EMPTY_PORT}`,
         DATALIB_TOKEN: API_TOKEN,
+      },
+    },
+    {
+      // The onboarding backend: a third empty root, and the one server
+      // here whose PATH carries the dash-named binaries. Everything the
+      // onboarding spec runs — the `datalib-dag` the sync worker
+      // spawns, the steps that runner spawns, the `unified_index`
+      // applet the gateway spawns — is named bare by the scaffold
+      // config, so PATH is how all three are found. That is the
+      // installed-user arrangement; the other two servers here never
+      // exercise it because their configs use absolute paths.
+      command: `${JSON.stringify(backendBin)} ${JSON.stringify(ONBOARDING_ROOT)} --no-open`,
+      url: `${ONBOARDING_URL}/api/health?token=${API_TOKEN}`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        DATALIB_BIND: `127.0.0.1:${ONBOARDING_PORT}`,
+        DATALIB_TOKEN: API_TOKEN,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       },
     },
   ],
