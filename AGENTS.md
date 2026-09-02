@@ -783,6 +783,15 @@ Applies to nested arrays as well, and the sort has to be total: sort by
 the rendered string rather than by `as_str()`, so a mixed-type array
 gets an order instead of a panic.
 
+## Fallbacks: prefer failing loudly to succeeding quietly
+
+**Avoid fallbacks.** The dangerous ones *succeed*: a correct answer
+reached the slow or lossy way raises no error, so an assumption that
+expired weeks ago hides behind a vague "feels slow". If you add one
+anyway, log when it fires. Worked example: #225 — the DAG runner spent
+40s hashing 3.4GB to version a step it had already skipped, on every
+run, for two weeks, before anyone noticed.
+
 ## Timestamp convention
 
 Every timestamp stored anywhere in this project — Dolt columns, JSON cache
