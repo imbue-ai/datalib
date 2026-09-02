@@ -478,7 +478,7 @@ function submit() {
         </div>
 
         <p v-if="mode === 'render'" class="wiz-cred">
-          A second step that turns what
+          Configure an optional second step that turns what
           <code>{{ renderFor?.fetchId }}</code> downloaded into markdown, and makes it
           searchable. It runs on its own and can be re-run without re-downloading anything.
         </p>
@@ -613,7 +613,7 @@ function submit() {
           <span>
             <b>Also render this to markdown</b>
             <small>
-              A second step, <code>{{ stem || "…" }}/rendered_md</code>, that turns what this
+              An optional second step, <code>{{ stem || "…" }}/rendered_md</code>, that turns what this
               downloads into markdown and makes it searchable. It has no settings of its own,
               runs separately, and can be added later from the row’s actions.
             </small>
