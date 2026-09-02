@@ -24,6 +24,7 @@ import { catalogFor } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack_api")!;
 const LIGHTROOM = catalogFor("lightroom")!;
+const SIGNAL = catalogFor("signal_backup")!;
 
 /** One source's two steps plus both shared index steps. */
 const PAIR = `data_root = "~/datalib"
@@ -210,6 +211,34 @@ describe("buildStep", () => {
     });
     expect(body).toContain("dms = true");
     expect(body).toContain('dm_users = ["@riker", "Jean-Luc Picard"]');
+  });
+
+  // The one `select` field in the catalog. Its value is always written:
+  // the form seeds the backend's own default rather than offering an
+  // "unset" choice, so what the dropdown shows is what the file says.
+  it("writes a select's value", () => {
+    const body = buildStep({
+      entry: SIGNAL,
+      id: "signal/rendered_md",
+      name: "",
+      phase: "render",
+      values: { period: "year" },
+    });
+    expect(body).toContain('period = "year"');
+  });
+
+  // A hand-edited config can hold a value no option offers. Dropping it
+  // on save would silently rewrite someone's config; carrying it
+  // through means `Period::from_config` gets to reject it by name.
+  it("carries a select value the dropdown doesn't know", () => {
+    const body = buildStep({
+      entry: SIGNAL,
+      id: "signal/rendered_md",
+      name: "",
+      phase: "render",
+      values: { period: "fortnight" },
+    });
+    expect(body).toContain('period = "fortnight"');
   });
 
   // `SlackApiSync::validate` rejects `dm_users` with `dms = false`, so

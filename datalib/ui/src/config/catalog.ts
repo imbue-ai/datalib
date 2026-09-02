@@ -69,6 +69,19 @@ export type Field =
       /// wrongly excludes.
       extensions?: string[];
     })
+  /// A closed set of values — one Rust enum, one dropdown. Prefer this
+  /// over `text` whenever the backend parses the string against a fixed
+  /// list: a typo becomes unreachable rather than a sync-time error,
+  /// and the options themselves carry the documentation the help text
+  /// would otherwise have to spell out.
+  ///
+  /// `default` must be one of `options` and is what the form starts on,
+  /// so the value is always written explicitly — there is no "unset"
+  /// choice. Keep it equal to the backend's own default.
+  | ({ kind: "select" } & FieldBase & {
+      options: { value: string; label: string }[];
+      default: string;
+    })
   | ({ kind: "date" } & FieldBase)
   | ({ kind: "bool" } & FieldBase & { default?: boolean })
   | ({ kind: "int" } & FieldBase)
@@ -263,12 +276,18 @@ export const CATALOG: CatalogEntry[] = [
           "The backend reads it at download time. Leave empty for the default.",
       },
       {
-        kind: "text",
+        kind: "select",
         target: "period",
         phase: "render",
         label: "Document span",
-        placeholder: "month",
-        help: "How much of a conversation goes in one rendered page: day, month, year or all.",
+        default: "month",
+        options: [
+          { value: "day", label: "A day" },
+          { value: "month", label: "A month" },
+          { value: "year", label: "A year" },
+          { value: "all", label: "The whole conversation" },
+        ],
+        help: "How much of a conversation goes in one rendered page.",
       },
     ],
   },
