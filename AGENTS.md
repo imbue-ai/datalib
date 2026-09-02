@@ -785,71 +785,12 @@ gets an order instead of a panic.
 
 ## Fallbacks: prefer failing loudly to succeeding quietly
 
-**A fallback that returns a correct answer hides the fact that the path
-it replaced stopped working.** That is the whole problem with them, and
-it is why they should be the exception here rather than a reflex. A
-fallback that *fails* is fine — you find out. A fallback that succeeds
-more slowly, or less precisely, produces no error for anyone to chase,
-so the only symptom is a vague "feels slow" that gets attributed to the
-network, the disk, or the data being big.
-
-The dangerous case is specifically this: the primary path rests on an
-assumption, the assumption expires, and the fallback keeps the system
-correct so nothing surfaces the expiry. It is the same failure mode as
-the stale prose above — a comment that was true when written and false
-later — except the code agrees with the stale comment, so grepping
-can't find it either.
-
-Found this way on 2026-09-01 (#225, fixed by #227). The DAG scheduler
-used to version a skipped step's output folder from the version
-recorded in `dag_state.json`, falling back to blake3-ing the whole
-folder when there wasn't one (`scheduler.rs`, the `Decision::Skip`
-arm). Written 2026-07-17, when `Skip` could only mean "already up to
-date" — which implies the step succeeded before, so the fallback was
-rare self-repair and its comment (`// Succeeded before but no recorded
-version`) was accurate. `--sync` subsetting landed 2026-08-20 and
-created a second reason to skip a step ("outside this run"), which is
-usually a step that has *never* succeeded and has no recorded version.
-The rare branch became the common one and the comment became false.
-Nothing broke: every answer stayed correct, each one just cost a full
-read of the folder — 40s for a 3.4GB Slack store, on every run, for two
-weeks, until a human wondered why the CLI paused.
-
-**Distinguish a considered degradation from a silent default.** The two
-look identical in a diff. `download.rs::raw_store_version` also falls
-back to the runner's hash when it can't read a doltlite HEAD, and that
-one is defensible: it logs a warning, the rationale is written down ("a
-version we cannot read is a reason to fall back … not to throw away
-hours of successful work"), and it is protecting something real. The
-skip-arm one had no logging at all, which is most of why it survived
-two weeks — one sentence naming the folder and why the cheap answer was
-unavailable would have made #225 a ten-second diagnosis.
-
-**What #227 did about it is the shape to copy**, and it is more than
-pruning which folders get hashed: the runner has no business hashing on
-a step's behalf at all, because only the step knows what is cheap for
-its own store. So the skip arm now reports `version::UNKNOWN` rather
-than reading a tree to invent an answer, `tree_version` is left with
-exactly one caller (a step that *ran* and reported nothing), and that
-one remaining hash announces itself on the event stream. Note also that
-`UNKNOWN` is deliberately not `ABSENT`: `absent` is a claim about the
-disk ("nothing was produced here") that the runner cannot make about a
-tree it never opened, and here it would have been false — the tree held
-3.4GB. "I don't know" and "there is nothing there" are different facts
-and both are worth being able to say.
-
-So if you do add one:
-
-- **Log when it fires**, naming what was unavailable. An expensive path
-  taken silently is indistinguishable from a fast one.
-- **Prefer an explicit unknown to a correct-but-expensive substitute.**
-  `version::UNKNOWN` and `version::ABSENT` exist to say "I don't know"
-  and "nothing is there"; either is more honest than computing a costly
-  stand-in, and both compare for equality like a real version, so
-  saying so doesn't re-dirty every consumer each run.
-- **Write down the condition you expect to trigger it**, not just what
-  it does. That premise is the part that expires, and stating it is
-  what lets the next person notice when it has.
+**Avoid fallbacks.** The dangerous ones *succeed*: a correct answer
+reached the slow or lossy way raises no error, so an assumption that
+expired weeks ago hides behind a vague "feels slow". If you add one
+anyway, log when it fires. Worked example: #225 — the DAG runner spent
+40s hashing 3.4GB to version a step it had already skipped, on every
+run, for two weeks, before anyone noticed.
 
 ## Timestamp convention
 
