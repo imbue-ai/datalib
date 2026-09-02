@@ -30,8 +30,6 @@ import {
 import type { ConfiguredStep } from "./sourceSteps";
 import type { DagRun, DagStep, SyncJob, SyncTask } from "@/api";
 
-const fmt = (iso: string) => iso;
-
 /// A two-source graph with a shared fan-in, which is the shape every
 /// real config has: `a/raw → a/rendered_md → unified_index/grid`, and
 /// the same for `b`.
@@ -111,7 +109,6 @@ function statusIn(frame: Frame, id: string): StatusView {
     step: frame.dag[id],
     run: frame.run,
     claim: claimedBy(steps(), frame.jobs).get(id),
-    formatStamp: fmt,
   });
 }
 
@@ -385,7 +382,6 @@ describe("the pushed sequence, with the polled record still stale", () => {
       step: withOverlay(undefined, id, overlay[id]),
       run: effectiveRun(stalePoll, frame.state === "running" ? j : undefined),
       claim: claimedBy(steps(), [j]).get(id),
-      formatStamp: fmt,
     });
   }
 
@@ -490,7 +486,6 @@ describe("what a queued row is waiting for", () => {
       run: null,
       claim: claimedBy(steps(), [j]).get(id),
       waitingOn: blockers,
-      formatStamp: fmt,
     }).detail;
   }
 
