@@ -54,18 +54,63 @@ async function statusOf(page: Page, id: string): Promise<string | null> {
 
 const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 
-/// Wait for a row to settle, then return the status it settled on.
+/// The exact instant a row last ran, off the Last-synced cell's
+/// `title`. Null for a row that has never run, which renders "—" with
+/// no title to read.
+async function stampOf(page: Page, id: string): Promise<string | null> {
+  const el = row(page, id).locator('[col-id="lastSynced"] [title]');
+  if ((await el.count()) === 0) return null;
+  return await el.first().getAttribute("title");
+}
+
+/// Wait for a row to finish a run that started *after* `before`, and
+/// return the status it settled on.
+///
+/// Keyed on the row's timestamp changing, not on its status reaching a
+/// terminal word. "Terminal" cannot tell a finished run from the
+/// previous one: a second sync of an already-succeeded row leaves
+/// "Succeeded" on screen until the job claims it a moment later, so a
+/// status-only wait passes instantly against the *old* run and then
+/// reports whatever the row happens to say next — which is "Queued",
+/// the very state it was supposed to wait out. That is a race the
+/// first sync of a never-run row cannot show (its status starts
+/// "Never run" and its stamp starts null), which is why it survived
+/// until a second sync was added.
+///
 /// `expect.poll` rather than a bespoke loop so a timeout reports the
 /// state it was stuck on instead of just expiring.
-async function settle(page: Page, id: string, timeout = 60_000): Promise<string> {
+async function settle(
+  page: Page,
+  id: string,
+  before: string | null,
+  timeout = 60_000,
+): Promise<string> {
+  let last = "(no status)";
   await expect
-    .poll(async () => (await statusOf(page, id)) ?? "(no status)", {
-      timeout,
-      intervals: [200],
-      message: `${id} never reached a terminal status`,
-    })
-    .toMatch(TERMINAL);
-  return (await statusOf(page, id)) ?? "";
+    .poll(
+      async () => {
+        last = (await statusOf(page, id)) ?? "(no status)";
+        const stamp = await stampOf(page, id);
+        return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
+      },
+      {
+        timeout,
+        intervals: [200],
+        message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
+      },
+    )
+    .toBe("finished");
+  return last;
+}
+
+/// The three rows a sync of `pdfs/raw` drives, and what each is
+/// claiming before it starts — captured together so the settle below
+/// can tell this run's result from the last one's.
+const SYNCED_ROWS = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"] as const;
+async function stampsBefore(page: Page): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  for (const id of SYNCED_ROWS) out[id] = await stampOf(page, id);
+  return out;
 }
 
 /// "Bytes on disk" as a number, read back off the label drawn over the
@@ -209,19 +254,24 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(wired.text).toContain('inputs = ["pdfs/rendered_md"]');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
+    const firstRun = await stampsBefore(page);
     await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
 
     // Download, render and index all run — syncing a source claims
     // everything downstream of it, and the index step is the reason the
     // grid below has anything in it.
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
-    expect(await settle(page, "unified_index/grid")).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await settle(page, "pdfs/raw", firstRun["pdfs/raw"])).toBe("Succeeded");
+    expect(
+      await settle(page, "pdfs/rendered_md", firstRun["pdfs/rendered_md"]),
+    ).toMatch(/^(Succeeded|Up to date)$/);
+    expect(
+      await settle(page, "unified_index/grid", firstRun["unified_index/grid"]),
+    ).toMatch(/^(Succeeded|Up to date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
-    const stamp = await cell.locator("[title]").first().getAttribute("title");
+    const stamp = await stampOf(page, "pdfs/raw");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
       Math.abs(Date.now() - Date.parse(stamp!)),
@@ -256,10 +306,15 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const beforeSecond = await bytesOf(page, "pdfs/raw");
     expect(beforeSecond).toBe(rawBytes);
 
+    const secondRun = await stampsBefore(page);
     await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
-    expect(await settle(page, "unified_index/grid")).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await settle(page, "pdfs/raw", secondRun["pdfs/raw"])).toBe("Succeeded");
+    expect(
+      await settle(page, "pdfs/rendered_md", secondRun["pdfs/rendered_md"]),
+    ).toMatch(/^(Succeeded|Up to date)$/);
+    expect(
+      await settle(page, "unified_index/grid", secondRun["unified_index/grid"]),
+    ).toMatch(/^(Succeeded|Up to date)$/);
 
     // A document more on disk.
     //
