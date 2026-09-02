@@ -520,6 +520,7 @@ function submit() {
           Configure an optional second step that turns what
           <code>{{ renderFor?.fetchId }}</code> downloaded into markdown, and makes it
           searchable. It runs on its own and can be re-run without re-downloading anything.
+          It is written as <code>{{ stepId }}</code>, the sibling of the step it reads.
         </p>
 
         <p v-if="chosen.credentialService && phase === 'download'" class="wiz-cred">
@@ -541,25 +542,18 @@ function submit() {
           </small>
         </label>
 
-        <label class="wiz-field">
+        <!-- Only while creating. In the other two modes the id is not a
+             choice — editing cannot change it without a migration, and a
+             render step's is dictated by the step it reads — and a
+             disabled box holding a value you cannot alter is a control
+             that exists only to be refused. What it was telling you is
+             worth keeping, so it moves into prose: the render intro
+             above names the id it will write, and Edit shows it below
+             as the fact it is. -->
+        <label v-if="mode === 'create'" class="wiz-field">
           <span class="wiz-label">Id</span>
-          <input
-            v-model="id"
-            class="wiz-input"
-            :disabled="mode !== 'create'"
-            spellcheck="false"
-            @input="idTouched = true"
-          />
-          <small v-if="isEdit" class="wiz-help">
-            Fixed: the id is this step’s folder on disk and the path the search index has already
-            recorded for every document in it, so changing it is a migration rather than an edit.
-            Use Name above for something you can change.
-          </small>
-          <small v-else-if="mode === 'render'" class="wiz-help">
-            Fixed: the sibling of the step it reads, so both live under
-            <code>{{ id.split("/")[0] }}/</code> on disk.
-          </small>
-          <small v-else class="wiz-help">
+          <input v-model="id" class="wiz-input" spellcheck="false" @input="idTouched = true" />
+          <small class="wiz-help">
             Suggested from the name, and yours to override. Creates
             <code>{{ stepId }}</code> under the data root.
             <template v-if="chosen?.renderStep !== false">
@@ -567,10 +561,17 @@ function submit() {
               <code>{{ stem || "…" }}/rendered_md</code> beside it.
             </template>
           </small>
-          <small v-if="idError && (idTouched || mode !== 'create')" class="wiz-error">
-            {{ idError }}
-          </small>
+          <small v-if="idError && idTouched" class="wiz-error">{{ idError }}</small>
         </label>
+        <p v-else-if="isEdit" class="wiz-help wiz-fixed-id">
+          Writes <code>{{ stepId }}</code> — this step’s folder on disk, and the path the search
+          index has already recorded for every document in it, so it can’t change here. Use
+          <b>Name</b> above for something you can.
+        </p>
+        <!-- With no Id field there is nowhere for its validator to
+             speak, and `canSubmit` still consults it — so a bad
+             inherited id would disable Save with no explanation. -->
+        <p v-if="idError && mode !== 'create'" class="wiz-error wiz-fixed-id">{{ idError }}</p>
 
         <p v-if="shownFields.length === 0 && mode !== 'create'" class="wiz-help wiz-nofields">
           This step has no options — its id, its name and what it reads are its whole
@@ -819,6 +820,10 @@ function submit() {
 .wiz-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
 .wiz-label { font-size: 12.5px; font-weight: 600; }
 .wiz-nofields { margin: 0; }
+/* The id where it is a fact rather than a field, and the id error that
+   then has nowhere else to go. Both sit in the form's flow, so they
+   only need their default paragraph margin dropped. */
+.wiz-fixed-id { margin: 0; }
 .wiz-check {
   display: flex;
   gap: 10px;

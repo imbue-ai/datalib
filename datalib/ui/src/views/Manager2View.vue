@@ -48,6 +48,7 @@ import {
   saveConfig,
   fetchAllJobs,
   fetchDag,
+  fetchJobLog,
   fetchPipelineStorage,
   fetchFrontend,
   enqueueJob,
@@ -57,6 +58,7 @@ import {
   type DagStep,
   type DagStepProgress,
   type SyncJob,
+  type SyncJobState,
   type SyncTask,
   type JobProgressEvent,
   type OutputStorage,
@@ -80,6 +82,7 @@ import {
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
+import { stepLogLines, type StepLogLine } from "@/config/stepLog";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import {
   claimedBy as claimedByJob,
@@ -122,6 +125,35 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
+/// The job a banner is *about*, when it is about one.
+///
+/// "Queued a sync for Signal (Work)." is true for a few seconds and
+/// then isn't, and nothing was taking it down: the banner only ever
+/// cleared on the next action, so a finished sync left the page
+/// insisting one was still queued. Holding the job id lets the banner
+/// retire itself the moment that job stops running — the grid's Status
+/// column is what says how it went, and it says so per step, which the
+/// banner never could.
+const bannerJob = ref<string | null>(null);
+
+/// Put up a banner, optionally tying it to a job's lifetime.
+function say(ok: boolean, text: string, jobId: string | null = null) {
+  banner.value = { ok, text };
+  bannerJob.value = jobId;
+}
+
+/// Take the banner down, and with it any job it was tied to.
+function clearBanner() {
+  banner.value = null;
+  bannerJob.value = null;
+}
+
+/// Take down a job-scoped banner once its job has stopped running.
+function retireBanner(jobId: string, state: SyncJobState) {
+  if (bannerJob.value !== jobId) return;
+  if (state === "pending" || state === "running") return;
+  clearBanner();
+}
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
 const storage = ref<OutputStorage[]>([]);
@@ -148,6 +180,22 @@ const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
 const wizardOpen = ref(false);
+/// Bumped on every opening, and bound to the dialog's `key`.
+///
+/// Without it the chained "also render this?" flow writes the wrong
+/// step. `onWizardSubmit` closes the dialog and reopens it for the
+/// render step in one synchronous stretch — `window.confirm` blocks
+/// the event loop, so `wizardOpen` goes false and back to true inside
+/// a single tick. Vue never flushes the false, so `v-if` never
+/// unmounts, the component instance is *reused*, and every `ref` the
+/// wizard initialises in `setup()` keeps the value it had while
+/// creating the fetch step. The id is the one that matters: the render
+/// step was written as `signal-work` — the create-mode stem — instead
+/// of `signal-work/rendered_md`, which the runner then rejects with
+/// "a step writes only the tree its id names", and which `phaseOf`
+/// reads as `other`, so it was never wired into the fan-ins either.
+/// A key that changes forces the remount the flow was assuming.
+const wizardKey = ref(0);
 const editing = ref<{ step: ConfiguredStep; entry: CatalogEntry } | null>(null);
 /// Set while the wizard is being used to add the render step for a
 /// fetch step that was just written (or picked from a row action).
@@ -191,6 +239,9 @@ type Row = {
   id: string;
   kind: EntryKind;
   phase: StepPhase;
+  /// The word behind the step-role glyph that follows the name —
+  /// its `title`, and its accessible name. The only place the word
+  /// survives now that the mark has no column of its own.
   kindLabel: string;
   type: string | null;
   /// What to show in the Name column. Equal to `id` until someone sets
@@ -226,10 +277,10 @@ type Row = {
   revealPath: string | null;
 };
 
-/// What the Kind column says. A step is labelled by its phase rather
-/// than the word "step", because that is the distinction a reader
-/// actually wants: which of these brings data in, which turns it into
-/// markdown, which is shared index plumbing.
+/// The word behind a row's step-role glyph. A step is labelled by its
+/// phase rather than the word "step", because that is the distinction a
+/// reader actually wants: which of these brings data in, which turns it
+/// into markdown, which is shared index plumbing.
 const PHASE_LABEL: Record<StepPhase, string> = {
   fetch: "Fetch",
   render: "Render",
@@ -471,17 +522,32 @@ const columnDefs: ColDef<Row>[] = [
     // folder this is — the whole reason the name stays fixed is that
     // the on-disk layout is meant to be legible, and a grid that
     // stopped naming it would give that away for a prettier row.
+    //
+    // The step's role rides along as a glyph after the name, where a
+    // column of its own used to be. It belongs here: a fetch step and
+    // the render step reading it routinely carry the *same* name, so
+    // the mark is what tells two adjacent rows apart — and a 64px
+    // column holding one icon read as a column about nothing.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-cell-source";
+      const row = p.data;
       const text = document.createElement("span");
-      text.textContent = p.data?.name ?? "";
+      text.textContent = row?.name ?? "";
       wrap.appendChild(text);
-      if (p.data && p.data.name !== p.data.id) {
+      if (row) {
+        const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
+        const mark = document.createElement("span");
+        mark.className = "m2-name-step";
+        mark.title = row.kindLabel;
+        mark.appendChild(glyphSvg(glyph, row.kindLabel, 14));
+        wrap.appendChild(mark);
+      }
+      if (row && row.name !== row.id) {
         const dir = document.createElement("span");
         dir.className = "m2-cell-dir";
-        dir.textContent = p.data.id;
-        dir.title = `Id — stored in ${p.data.id}/ under the data root`;
+        dir.textContent = row.id;
+        dir.title = `Id — stored in ${row.id}/ under the data root`;
         wrap.appendChild(dir);
       }
       return wrap;
@@ -520,26 +586,9 @@ const columnDefs: ColDef<Row>[] = [
     },
   },
   {
-    // What this row does in the pipeline: brings data in, turns it into
-    // markdown, indexes it, or serves it.
-    headerName: "Step",
-    field: "kindLabel",
-    width: 64,
-    minWidth: 64,
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const row = p.data;
-      const wrap = document.createElement("span");
-      wrap.className = "m2-cell-step";
-      if (!row) return wrap;
-      const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
-      wrap.title = row.kindLabel;
-      wrap.appendChild(glyphSvg(glyph, row.kindLabel));
-      return wrap;
-    },
-  },
-  {
     headerName: "Status",
     field: "status",
+    colId: "status",
     width: 96,
     minWidth: 96,
     // Sort and filter on the word, not on the object — otherwise both
@@ -762,6 +811,86 @@ function onGridReady(e: GridReadyEvent<Row>) {
   gridApi = e.api;
 }
 
+// ── One step's log ───────────────────────────────────────────────────
+//
+// A red Status says *that* a step failed and, on hover, the runner's
+// one-line reason. The next question is always the same — what was it
+// doing — and until now the only answer was the whole job log, every
+// step's events interleaved and each `log` event's sentence buried
+// inside an escaped `tracing` envelope. Double-clicking the cell
+// narrows that to the one step, unwrapped: see `config/stepLog.ts`.
+//
+// It reads the job logs the worker already writes, so there is no new
+// endpoint behind this. The cost is that a run started from a terminal
+// has no job row and so no log to find — which the empty state says,
+// rather than leaving a blank panel implying the step said nothing.
+
+/// The row whose log is open, or null when the panel is closed.
+const logFor = ref<Row | null>(null);
+const logLines = ref<StepLogLine[]>([]);
+const logBusy = ref(false);
+/// Which job's log is on screen. Shown, because "this step's last run"
+/// is only meaningful if you can tell *which* run.
+const logJob = ref<SyncJob | null>(null);
+const logError = ref<string | null>(null);
+
+/// How far back to look for a job whose log mentions this step.
+///
+/// A step that is skipped as up-to-date still appears in its run's log,
+/// so the newest job is very nearly always the answer. The walk exists
+/// for the case that isn't: a step added since, or one whose last real
+/// work was several syncs ago. Bounded because each miss is a fetch of
+/// a whole log file.
+const LOG_SEARCH_DEPTH = 8;
+
+async function openStepLog(row: Row) {
+  logFor.value = row;
+  logLines.value = [];
+  logJob.value = null;
+  logError.value = null;
+  logBusy.value = true;
+  try {
+    // Newest first. `fetchAllJobs` returns them that way, but sorting
+    // here means this doesn't quietly depend on that.
+    const recent = [...jobs.value]
+      .sort((a, b) => compareStamps(b.created_at, a.created_at))
+      .slice(0, LOG_SEARCH_DEPTH);
+    for (const job of recent) {
+      let text: string;
+      try {
+        text = await fetchJobLog(job.id);
+      } catch {
+        // 404 while the worker has claimed the job but not yet opened
+        // the file, or a log already cleaned up. Neither is this
+        // step's problem; keep looking.
+        continue;
+      }
+      const lines = stepLogLines(text, row.id);
+      if (lines.length === 0) continue;
+      logLines.value = lines;
+      logJob.value = job;
+      return;
+    }
+  } catch (e) {
+    logError.value = (e as Error).message;
+  } finally {
+    logBusy.value = false;
+  }
+}
+
+/// Double-click on Status opens that row's log. Only that column: the
+/// rest of the row has its own meanings for a double-click, and
+/// overloading all of them would make the gesture unguessable.
+function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Row }) {
+  if (e.column?.getColId() !== "status" || !e.data) return;
+  void openStepLog(e.data);
+}
+
+/// Escape closes the log panel, which is what a modal owes its reader.
+function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" && logFor.value) logFor.value = null;
+}
+
 function reparse() {
   try {
     sources.value = listSteps(configText.value);
@@ -831,6 +960,17 @@ async function loadJobs() {
     // The queue decides "Queued" and the Run/Stop face, so a new job is
     // a repaint even when the runner's record hasn't moved.
     repaint();
+    // Both paths retire the banner, because either can be the one that
+    // learns the job stopped: the push covers a sync this server ran,
+    // the poll covers a dropped SSE connection and a run started from a
+    // terminal.
+    if (bannerJob.value) {
+      const j = jobs.value.find((x) => x.id === bannerJob.value);
+      // A job that has fallen off the end of the queue we hold is not
+      // running either, so the banner goes.
+      if (j) retireBanner(j.id, j.state);
+      else clearBanner();
+    }
   } catch {
     // The grid is still useful without status; leave the columns empty.
   }
@@ -884,7 +1024,7 @@ async function loadAppletHealth() {
 /// with the loader's message rather than a thrown error.
 async function writeConfig(text: string, what: string) {
   busy.value = true;
-  banner.value = null;
+  clearBanner();
   try {
     const res = await saveConfig(text);
     if (!res.ok) {
@@ -913,6 +1053,7 @@ function closeWizard() {
 function openAdd() {
   editing.value = null;
   renderFor.value = null;
+  wizardKey.value++;
   wizardOpen.value = true;
 }
 
@@ -923,6 +1064,7 @@ function openEdit(id: string) {
   if (!entry) return;
   renderFor.value = null;
   editing.value = { step, entry };
+  wizardKey.value++;
   wizardOpen.value = true;
 }
 
@@ -935,6 +1077,7 @@ function openRenderFor(fetchId: string) {
   if (!entry) return;
   editing.value = null;
   renderFor.value = { fetchId, fetchName: step.name, entry };
+  wizardKey.value++;
   wizardOpen.value = true;
 }
 
@@ -987,6 +1130,7 @@ async function onWizardSubmit(payload: {
     )
   ) {
     renderFor.value = { ...offer, entry: payload.entry };
+    wizardKey.value++;
     wizardOpen.value = true;
   }
 }
@@ -1040,7 +1184,7 @@ async function reveal(id: string) {
 
 function onConfigEdit() {
   configDirty.value = true;
-  banner.value = null;
+  clearBanner();
 }
 
 async function saveConfigEdits() {
@@ -1050,7 +1194,7 @@ async function saveConfigEdits() {
 async function discardConfigEdits() {
   configDirty.value = false;
   await loadConfig();
-  banner.value = null;
+  clearBanner();
 }
 
 async function runSource(id: string) {
@@ -1059,10 +1203,10 @@ async function runSource(id: string) {
   // no longer a pair to choose between.
   const target = id;
   busy.value = true;
-  banner.value = null;
+  clearBanner();
   try {
-    await enqueueJob({ kind: "all", source_name: target });
-    banner.value = { ok: true, text: `Queued a sync for ${step?.name ?? id}.` };
+    const job = await enqueueJob({ kind: "all", source_name: target });
+    say(true, `Queued a sync for ${step?.name ?? id}.`, job.id);
     // Before returning: the queue is what puts this row and everything
     // downstream of it into "Queued" and flips the button to Stop, and
     // the whole complaint this answers is that pressing play looked
@@ -1085,14 +1229,15 @@ async function stopSource(id: string) {
   const job = claimedBy.value.get(id);
   if (!job) return;
   busy.value = true;
-  banner.value = null;
+  clearBanner();
   try {
     await cancelJob(job.id);
-    banner.value = {
-      ok: true,
-      text: `Stopping the sync of ${job.source_name || "everything"}. Steps in flight ` +
+    say(
+      true,
+      `Stopping the sync of ${job.source_name || "everything"}. Steps in flight ` +
         `checkpoint what they have and exit.`,
-    };
+      job.id,
+    );
     await loadJobs();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1121,6 +1266,7 @@ async function stopSource(id: string) {
 /// stays — it is the fallback, not the mechanism.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
+  retireBanner(e.id, e.state);
   const tasks: SyncTask[] = e.tasks ?? [];
   const active = e.state === "pending" || e.state === "running";
   liveTasks.value = active ? pushedOverlay(tasks, new Date().toISOString()) : {};
@@ -1205,6 +1351,7 @@ function tickRelative() {
 onMounted(async () => {
   await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
   stream = openJobStream(onJobEvent);
+  window.addEventListener("keydown", onWindowKeydown);
   // The fallback, not the mechanism. A sync this server started is
   // pushed (see `onJobEvent`); this covers the two cases the stream
   // cannot:
@@ -1235,6 +1382,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener("keydown", onWindowKeydown);
   if (stream) stream.close();
   if (poll) clearInterval(poll);
   if (progressPoll) clearInterval(progressPoll);
@@ -1281,6 +1429,7 @@ onUnmounted(() => {
         :getRowId="(p: { data: Row }) => p.data.id"
         :tooltipShowDelay="200"
         @grid-ready="onGridReady"
+        @cell-double-clicked="onCellDoubleClicked"
       />
     </div>
 
@@ -1299,7 +1448,9 @@ onUnmounted(() => {
       index <b>steps</b> that make them searchable, and the <b>applets</b> the app spawns to serve
       them. Actions that don’t apply to a kind are disabled and say why. Account and
       document-count columns aren’t here yet — each needs a backend endpoint the design calls for.
-      <b>Type</b>, <b>Step</b> and <b>Status</b> are icons; hover any of them for the word.
+      <b>Type</b> and <b>Status</b> are icons, and the mark after a name says what that step
+      does — hover any of them for the word. <b>Double-click a Status</b> to read just that
+      step's log from the run it last took part in.
       “Bytes on disk” is a directory walk over each row’s declared outputs, drawn against the
       largest row — hover for the size and the breakdown. “Last synced” and “Status” are per
       step, read from the runner’s own record — so a sync you start from a terminal shows up
@@ -1336,8 +1487,45 @@ onUnmounted(() => {
     </details>
     </div>
 
+    <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
+      <div class="m2-logs" role="dialog" aria-modal="true" aria-label="Step log">
+        <header class="m2-logs-head">
+          <div>
+            <h3>{{ logFor.name }}</h3>
+            <p>
+              <code>{{ logFor.id }}</code>
+              <span v-if="logJob">
+                · from the sync of
+                <b>{{ logJob.source_name || "everything" }}</b>
+                <span :title="formatStamp(logJob.created_at)">
+                  {{ formatRelative(logJob.created_at, Date.now()) }}</span>
+              </span>
+            </p>
+          </div>
+          <button class="m2-btn" @click="logFor = null">Close</button>
+        </header>
+
+        <p v-if="logBusy" class="m2-logs-note">Reading the job logs…</p>
+        <p v-else-if="logError" class="m2-logs-note bad">{{ logError }}</p>
+        <p v-else-if="logLines.length === 0" class="m2-logs-note">
+          Nothing found for this step in the last {{ LOG_SEARCH_DEPTH }} syncs this app ran.
+          A run started from a terminal writes no job log here, and a step that has never
+          run has nothing to say yet.
+        </p>
+        <ol v-else class="m2-logs-body">
+          <li v-for="(l, i) in logLines" :key="i" :class="`m2-log-${l.level}`">
+            <span v-if="l.ts" class="m2-log-ts" :title="formatStamp(l.ts)">{{
+              l.ts.slice(11, 23)
+            }}</span>
+            <span class="m2-log-text">{{ l.text }}</span>
+          </li>
+        </ol>
+      </div>
+    </div>
+
     <SourceWizard
       v-if="wizardOpen"
+      :key="wizardKey"
       :taken-ids="takenIds"
       :render-for="renderFor"
       :editing="editing"
@@ -1472,18 +1660,88 @@ onUnmounted(() => {
   line-height: 1.6;
   max-width: 76ch;
 }
+
+/* The per-step log panel. Modal, because it is a full answer to a
+   question the grid can only gesture at, and because the grid behind it
+   keeps repainting on every poll — a panel docked inside it would be
+   fighting that. */
+.m2-logs-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+.m2-logs {
+  background: var(--datalib-bg);
+  border: 1px solid var(--datalib-border);
+  border-radius: 8px;
+  width: min(920px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+.m2-logs-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--datalib-border);
+  flex: 0 0 auto;
+}
+.m2-logs-head h3 { margin: 0 0 3px; font-size: 15px; }
+.m2-logs-head p { margin: 0; font-size: 12px; color: var(--datalib-muted); }
+.m2-logs-head button { margin-left: auto; }
+.m2-logs-note { margin: 0; padding: 16px; font-size: 13px; color: var(--datalib-muted); max-width: 70ch; }
+.m2-logs-note.bad { color: var(--datalib-log-error); }
+/* Monospace and scrolling on its own: a log line is not prose, and the
+   long ones (a path, a serialized error) must not reflow the panel. */
+.m2-logs-body {
+  margin: 0;
+  padding: 10px 16px 16px;
+  list-style: none;
+  overflow: auto;
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.m2-logs-body li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.m2-log-ts { color: var(--datalib-muted); flex: 0 0 auto; }
+.m2-log-text { flex: 1 1 auto; }
+.m2-log-warn .m2-log-text { color: var(--datalib-log-warn); }
+.m2-log-error .m2-log-text { color: var(--datalib-log-error); }
 </style>
 
 <style>
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
+/* The step-role mark, riding after the name. Muted and a size down
+   from the Type mark beside it: the name is what the eye should land
+   on, and this answers the follow-up question rather than competing
+   with it. `gap` on the parent already spaces it. */
+.m2-name-step {
+  display: inline-flex;
+  align-items: center;
+  color: var(--datalib-muted);
+  flex: 0 0 auto;
+}
 
-/* Type and Step: one mark each, centred in a narrow column, with the
-   word on `title`. Both cells fill the row height so the glyph sits on
-   the text baseline's optical centre rather than at the top. */
-.m2-cell-type,
-.m2-cell-step {
+/* Type: one mark, centred in a narrow column, with the word on
+   `title`. The cell fills the row height so the glyph sits on the text
+   baseline's optical centre rather than at the top. */
+.m2-cell-type {
   display: inline-flex;
   align-items: center;
   height: 100%;
@@ -1500,8 +1758,6 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m2-cell-step { color: var(--datalib-muted); }
-
 /* The status vocabulary. Anything unstyled falls through to the default
    colour, which is the right outcome for a status this sheet hasn't
    met — and that case renders the word rather than a glyph. */

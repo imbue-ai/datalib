@@ -13,18 +13,24 @@
 // A brand mark is a picture of a company and is used nominatively; a
 // glyph here is a picture of a verb and is recolored freely.
 
-/// Icons naming a step's role in the pipeline (the Step column), plus
+/// Icons naming a step's role in the pipeline (suffixed onto the name
+/// in the Manage grid), plus
 /// the two action buttons that switch on run state.
 ///
 /// The metaphors, since a glyph is only as good as the word behind it:
-/// a fetch *syncs* with something remote; a render makes a document you
-/// can read; an index is a card catalog over those documents; an applet
-/// is a small app the gateway hosts; anything else is an arbitrary
-/// command, which is a terminal.
+/// a fetch *downloads* — it brings bytes here that were somewhere else;
+/// a render makes a document you can read; an index is a card catalog
+/// over those documents; an applet is a small app the gateway hosts;
+/// anything else is an arbitrary command, which is a terminal.
 export const STEP_GLYPHS = {
-  // notification/sync — two arrows chasing each other round a circle.
-  fetch:
-    "M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z",
+  // file/file_download — an arrow into a tray.
+  //
+  // Deliberately not `sync`'s two circling arrows, which is what this
+  // was: those say "these two ends are being reconciled", and every
+  // row in the table is part of a sync. What distinguishes *this* step
+  // from the render and index steps beside it is direction — it is the
+  // one that pulls bytes in from somewhere else.
+  fetch: "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z",
   // communication/import_contacts — an open book.
   render:
     "M17.5,4.5c-1.95,0-4.05,0.4-5.5,1.5c-1.45-1.1-3.55-1.5-5.5-1.5S2.45,4.9,1,6v14.65c0,0.65,0.73,0.45,0.75,0.45 C3.1,20.45,5.05,20,6.5,20c1.95,0,4.05,0.4,5.5,1.5c1.35-0.85,3.8-1.5,5.5-1.5c1.65,0,3.35,0.3,4.75,1.05 C22.66,21.26,23,20.86,23,20.6V6C21.51,4.88,19.37,4.5,17.5,4.5z M21,18.5c-1.1-0.35-2.3-0.5-3.5-0.5c-1.7,0-4.15,0.65-5.5,1.5V8 c1.35-0.85,3.8-1.5,5.5-1.5c1.2,0,2.4,0.15,3.5,0.5V18.5z",

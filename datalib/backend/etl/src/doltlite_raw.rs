@@ -697,26 +697,42 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
 /// The probe exists so nothing here hand-rolls a parser for column
 /// definitions: whatever SQLite makes of the DDL is by definition what
 /// the real table would have got.
-async fn declared_columns(
-    pool: &SqlitePool,
-    create_sql: &str,
-    table: &str,
-) -> Result<Vec<ColumnInfo>> {
+///
+/// **The probe runs in memory, never against the store being opened.**
+/// A create+drop nets to nothing in the working tree — `dolt_status`
+/// stays clean and no commit is written — but both statements have
+/// already appended chunks to the file by then, and nothing collects
+/// them. Against the real store this made every `open` cost bytes
+/// *whether or not anything was ingested*: one probe per table per
+/// open, so a Signal root whose snapshot was already ingested grew
+/// 4,732 bytes (14 tables) on every press of Sync, for as long as
+/// anyone kept pressing it. Nothing about the answer needs the real
+/// store — it is a property of the DDL string — so it is read
+/// somewhere that costs nothing.
+async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInfo>> {
     const PROBE: &str = "__datalib_schema_probe__";
+    // A fresh database per call rather than one shared scratch pool:
+    // the probe table's name is a constant, so two reconciles running
+    // at once would drop each other's table out from under them. An
+    // in-memory open is cheap enough that owning one is the simpler
+    // answer than locking a shared one.
+    let probe = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::from_str("sqlite::memory:")
+                .context("sqlite uri for the schema probe")?,
+        )
+        .await
+        .context("open the in-memory schema probe")?;
     // The table name's first occurrence is the name itself (the CREATE /
     // TABLE / IF NOT EXISTS keywords never equal a table name).
     let probe_sql = create_sql.replacen(table, PROBE, 1);
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
-        .execute(pool)
-        .await;
     sqlx::query(&probe_sql)
-        .execute(pool)
+        .execute(&probe)
         .await
         .with_context(|| format!("build schema probe for {table}"))?;
-    let cols = table_columns(pool, PROBE).await;
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
-        .execute(pool)
-        .await;
+    let cols = table_columns(&probe, PROBE).await;
+    probe.close().await;
     cols
 }
 
@@ -725,11 +741,10 @@ async fn declared_columns(
 /// on-disk shape still match the code's?" — see
 /// [`crate::grid_index::init_schema`].
 pub(crate) async fn declared_column_names(
-    pool: &SqlitePool,
     create_sql: &str,
     table: &str,
 ) -> Result<BTreeSet<String>> {
-    Ok(declared_columns(pool, create_sql, table)
+    Ok(declared_columns(create_sql, table)
         .await?
         .into_iter()
         .map(|c| c.name)
@@ -797,7 +812,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
     };
 
     // 1. Desired columns, via a probe built from this exact DDL.
-    let desired = declared_columns(pool, create_sql, &table).await?;
+    let desired = declared_columns(create_sql, &table).await?;
 
     // 2. Actual columns. Empty ⇒ table doesn't exist (defensive: the DDL
     //    pass should have created it) ⇒ create and return.
@@ -1783,6 +1798,51 @@ mod tests {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    // ── Opening costs nothing ─────────────────────────────────────
+
+    /// Re-opening a store nobody wrote to must not change one byte of
+    /// it.
+    ///
+    /// This is the regression test for a leak that was invisible from
+    /// every angle you would normally check it from. `dolt_log` never
+    /// grew, `dolt_status` was always clean, and no step reported doing
+    /// any work — the download step short-circuited on "snapshot
+    /// already ingested" and returned. The file still grew, on every
+    /// single run, because [`declared_columns`] built its probe table
+    /// *in the store*: a create and a drop net to nothing in the
+    /// working tree, so nothing commits and nothing shows as dirty, but
+    /// the chunks both statements wrote are in the file and nothing
+    /// collects them. One probe per table per open. On a real Signal
+    /// root that was 4,732 bytes per press of Sync, forever.
+    ///
+    /// Asserting on the byte size is the point. Every cheaper proxy —
+    /// commit count, dirty status, rows — was already true while the
+    /// bug was live.
+    #[tokio::test]
+    async fn reopening_an_untouched_store_does_not_grow_it() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("entities.doltlite_db");
+
+        // First open creates the file and commits the schema, so it is
+        // the one open that is *supposed* to write. Settle it with a
+        // second before measuring.
+        open_test(&db).await.close().await;
+        open_test(&db).await.close().await;
+        let settled = std::fs::metadata(&db).unwrap().len();
+
+        for i in 0..3 {
+            open_test(&db).await.close().await;
+            let now = std::fs::metadata(&db).unwrap().len();
+            assert_eq!(
+                now,
+                settled,
+                "open #{} grew an untouched store by {} bytes",
+                i + 3,
+                now as i64 - settled as i64,
+            );
+        }
     }
 
     // ── HEAD as a content version ─────────────────────────────────

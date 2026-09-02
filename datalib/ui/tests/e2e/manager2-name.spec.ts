@@ -30,6 +30,11 @@ const nameField = (page: Page) => field(page, "Name");
 const idField = (page: Page) => field(page, "Id");
 const alsoRender = (page: Page) => wizard(page).locator(".wiz-check input");
 const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
+/// The step-role mark. It rides after the name — there is no Step
+/// column any more — and `aria-label` is the only place the word
+/// survives, which is also what a person gets by hovering it.
+const stepMark = (page: Page, id: string) =>
+  row(page, id).locator('[col-id="name"] .m2-name-step [role="img"]');
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
@@ -100,19 +105,17 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
 
   // Two rows, not one. Addressed by row id (`getRowId` is the step id).
   //
-  // The Step column is a glyph, so the phase is asserted through the
-  // accessible name rather than cell text — which is the same string a
-  // person gets by hovering it, and the only place the word survives.
+  // The phase is a glyph suffixed onto the name, so it is asserted
+  // through the accessible name rather than cell text.
   await expect(row(page, "personal-claude/raw")).toContainText("Personal Claude");
-  await expect(
-    row(page, "personal-claude/raw").locator('[col-id="kindLabel"] [role="img"]'),
-  ).toHaveAttribute("aria-label", "Fetch");
+  await expect(stepMark(page, "personal-claude/raw")).toHaveAttribute("aria-label", "Fetch");
   await expect(row(page, "personal-claude/rendered_md")).toContainText(
     "Personal Claude (render markdown)",
   );
-  await expect(
-    row(page, "personal-claude/rendered_md").locator('[col-id="kindLabel"] [role="img"]'),
-  ).toHaveAttribute("aria-label", "Render");
+  await expect(stepMark(page, "personal-claude/rendered_md")).toHaveAttribute(
+    "aria-label",
+    "Render",
+  );
 
   // The render step is written once, as its own entry. The fixture
   // root's config declares no index steps (its grid db is pre-baked),
@@ -124,12 +127,16 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
 
   // Edit the fetch step: name free, id fixed, and renaming leaves the
   // id alone — the property that keeps the index's paths honest.
+  //
+  // There is no Id *field* here any more: a disabled box holding a
+  // value you cannot change is a control that exists only to refuse
+  // you. The id is still stated, as the fact it is.
   await row(page, "personal-claude/raw").getByRole("button", { name: "Edit" }).click();
   await expect(nameField(page)).toHaveValue("Personal Claude");
-  await expect(idField(page)).toHaveValue("personal-claude/raw");
-  await expect(idField(page)).toBeDisabled();
+  await expect(idField(page)).toHaveCount(0);
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/raw");
   await nameField(page).fill("Claude Archive");
-  await expect(idField(page)).toHaveValue("personal-claude/raw");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/raw");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
 
@@ -157,8 +164,8 @@ test("declining the checkbox writes one step, and the row action adds the other"
   // The row action adds it later, minting the sibling id through the
   // same path the checkbox would have.
   await row(page, "fetch-only/raw").getByRole("button", { name: "Render to markdown" }).click();
-  await expect(idField(page)).toHaveValue("fetch-only/rendered_md");
-  await expect(idField(page)).toBeDisabled();
+  await expect(idField(page)).toHaveCount(0);
+  await expect(wizard(page)).toContainText("fetch-only/rendered_md");
   await expect(nameField(page)).toHaveValue("Fetch Only (render markdown)");
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
@@ -169,6 +176,74 @@ test("declining the checkbox writes one step, and the row action adds the other"
   const again = row(page, "fetch-only/raw").getByRole("button", { name: "Render to markdown" });
   await expect(again).toBeDisabled();
   await expect(again).toHaveAttribute("title", /already has a render step/);
+});
+
+test("a provider whose render step has options writes the sibling id, not the stem", async ({
+  page,
+}) => {
+  // The path Claude never takes, and the one that was broken.
+  //
+  // A provider whose *render* step has options gets a second dialog
+  // instead of the checkbox: `onWizardSubmit` closes the wizard and
+  // reopens it for the render step. Both happen in one synchronous
+  // stretch — `window.confirm` blocks the event loop — so `wizardOpen`
+  // went false and true again inside a single tick, Vue never flushed
+  // the false, and the component was *reused* rather than remounted.
+  // Every ref the wizard sets up in `setup()` therefore kept its
+  // create-mode value, and the id is the one that mattered: the render
+  // step was written as `signal-work` (the stem) instead of
+  // `signal-work/rendered_md`.
+  //
+  // That config is not merely untidy — it does not run. `datalib-dag`
+  // rejects it with "a step writes only the tree its id names", which
+  // is a red Status on a source that downloaded perfectly well, and
+  // `phaseOf` reads the stem as `other`, so the step is never wired
+  // into the fan-ins either. Two failures, one cause.
+  //
+  // The name is checked alongside the id because it is the second
+  // witness to the same reuse: on the broken build it stayed "Signal
+  // Work" instead of picking up the render dialog's own default.
+  //
+  // `wizard-select.spec.ts` reaches the same form and deliberately
+  // *dismisses* this confirm, taking the row action instead so that it
+  // doesn't depend on the offer. That is the complement of this spec,
+  // not a duplicate of it: the row action opens a fresh dialog, which
+  // is the one path where the reuse bug cannot show up. Accepting the
+  // confirm is the whole point here.
+  const editor = page.locator(".m2-editor");
+  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await wizard(page)
+    .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
+    .click();
+  await nameField(page).fill("Signal Work");
+  await wizard(page).locator("input.wiz-path").fill("/tmp/SignalBackups");
+  await expect(idField(page)).toHaveValue("signal-work");
+
+  // No checkbox: this provider's render step has a `period` option, so
+  // the offer is a confirm and then a second dialog.
+  await expect(wizard(page).locator("label.wiz-check")).toHaveCount(0);
+  page.once("dialog", (d) => {
+    expect(d.message()).toContain("Also render it to markdown?");
+    void d.accept();
+  });
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+
+  // The second dialog, freshly mounted: its own name default, and the
+  // sibling id — neither inherited from the dialog that just closed.
+  await expect(nameField(page)).toHaveValue("Signal Work (render markdown)");
+  await expect(wizard(page)).toContainText("signal-work/rendered_md");
+  await wizard(page).getByRole("button", { name: "Add render step" }).click();
+
+  await expect(row(page, "signal-work/rendered_md")).toBeVisible();
+  await expect(stepMark(page, "signal-work/rendered_md")).toHaveAttribute("aria-label", "Render");
+
+  const text = await editor.inputValue();
+  expect(text).toContain('id = "signal-work/rendered_md"');
+  expect(text).toContain('inputs = ["signal-work/raw"]');
+  // The stem, as a step id of its own, is the bug. `signal-work/raw`
+  // and `signal-work/rendered_md` both start with it, so the match has
+  // to be anchored on the closing quote.
+  expect(text).not.toContain('id = "signal-work"');
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {
