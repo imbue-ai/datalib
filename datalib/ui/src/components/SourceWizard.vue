@@ -200,15 +200,45 @@ const flat = computed(() => groups.value.flatMap((g) => g.entries));
 const cursor = ref(0);
 watch(query, () => (cursor.value = 0));
 
+/// The option a stored value corresponds to, or the value unchanged.
+///
+/// The backends parse these strings case-insensitively, so a config
+/// holding `"Month"` means the `month` option and should show as it —
+/// but a value that matches nothing is left alone rather than snapped
+/// to the default, so editing an unrelated field can't quietly rewrite
+/// a knob the wizard doesn't recognize. `selectOptions` then shows it.
+function matchOption(options: { value: string }[], value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const hit = options.find((o) => o.value === value.toLowerCase());
+  return hit ? hit.value : value;
+}
+
+/// A dropdown's options, plus the current value when it isn't one of
+/// them — so a hand-edited config renders as what it says instead of as
+/// a blank select, and saving round-trips it.
+function selectOptions(f: Field & { kind: "select" }): { value: string; label: string }[] {
+  const current = values.value[f.target];
+  if (typeof current !== "string" || f.options.some((o) => o.value === current)) {
+    return f.options;
+  }
+  return [...f.options, { value: current, label: `${current} (not a known value)` }];
+}
+
 function seedValues(entry: CatalogEntry, step?: ConfiguredStep) {
   const next: FieldValues = {};
   for (const field of entry.fields ?? []) {
     const existing = step ? getParam(step.params, field.target) : undefined;
     if (existing !== undefined) {
       next[field.target] =
-        field.kind === "string_list" ? (existing as string[]) ?? [] : existing;
+        field.kind === "string_list"
+          ? (existing as string[]) ?? []
+          : field.kind === "select"
+            ? matchOption(field.options, existing)
+            : existing;
     } else if (field.kind === "bool") {
       next[field.target] = field.default ?? false;
+    } else if (field.kind === "select") {
+      next[field.target] = field.default;
     } else if (field.kind === "string_list") {
       next[field.target] = [];
     } else {
@@ -302,8 +332,17 @@ const stepId = computed(() =>
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
 /// fails at deserialize time rather than at sync time. Caught here so
 /// the message lands under the field instead of in a job log.
+///
+/// Read off `shownFields`, not the whole descriptor: a required field
+/// belongs to one step, and this dialog is only ever writing one. Over
+/// the whole list it gated a render step on a *download* field, which
+/// nothing on the form could fill — `signal_backup` is the one entry
+/// with both a required download field and a render knob, and its
+/// render step was unreachable from the UI in both ways it is offered.
+/// This also lets `requires` do its job: a gated-off field is not
+/// missing, it is inapplicable.
 const missingRequired = computed(() =>
-  (chosen.value?.fields ?? [])
+  shownFields.value
     .filter((f) => "required" in f && f.required)
     .filter((f) => String(values.value[f.target] ?? "").trim() === "")
     .map((f) => f.label),
@@ -551,6 +590,16 @@ function submit() {
             :checked="!!values[f.target]"
             @change="values[f.target] = ($event.target as HTMLInputElement).checked"
           />
+          <select
+            v-else-if="f.kind === 'select'"
+            class="wiz-input wiz-select"
+            :value="values[f.target] as string"
+            @change="values[f.target] = ($event.target as HTMLSelectElement).value"
+          >
+            <option v-for="o in selectOptions(f)" :key="o.value" :value="o.value">
+              {{ o.label }}
+            </option>
+          </select>
           <input
             v-else-if="f.kind === 'date'"
             type="date"
@@ -704,6 +753,9 @@ function submit() {
    inside, and overlapped the disclosure below it. Two elements, two
    names. */
 .wiz-bool { width: 16px; height: 16px; }
+/* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
+   doesn't read as a text field you can type into. */
+.wiz-select { cursor: pointer; }
 
 .wiz-group h3 {
   font-size: 11px;
