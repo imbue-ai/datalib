@@ -357,6 +357,13 @@ function isSet(field: Field, value: unknown): boolean {
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
   if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
   if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
+  // A select normally holds one of its options (the form seeds the
+  // default), so it is always written. The membership test is
+  // deliberately *not* here: a hand-edited config can hold a value the
+  // dropdown doesn't know, and dropping it on save would silently
+  // rewrite someone's config. Carry it through and let the backend
+  // reject it loudly.
+  if (field.kind === "select") return String(value).trim() !== "";
   // A boolean is always meaningful — false is a real setting, and for
   // `media` (which defaults true) omitting it would change behavior.
   return true;

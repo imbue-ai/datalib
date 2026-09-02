@@ -47,7 +47,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
 
   // The user is told what will happen before anything is written: the
   // heading, the exact file, and that no source is added for them.
-  await expect(page.getByRole("heading", { name: "Set up your data library" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Set up a data library" })).toBeVisible();
   // `.first()`: getByText matches every ancestor whose text contains
   // the string, and strict mode rejects a multi-element locator.
   await expect(page.locator("code.root")).toContainText("config.toml");
@@ -85,6 +85,6 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
   await page.goto(`${EMPTY_URL}/sources`);
   await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Set up your data library" }),
+    page.getByRole("heading", { name: "Set up a data library" }),
   ).toHaveCount(0);
 });
