@@ -156,6 +156,43 @@ impl FileLock {
         Self::acquire(&data_root.join(RUNNER_LOCK_REL_PATH))
     }
 
+    /// Is this lock held by some other process right now?
+    ///
+    /// A **read-only** probe, and that is the whole reason it exists
+    /// separately from [`Self::acquire`]: acquiring creates the file if
+    /// absent and, on success, rewrites its contents with a holder
+    /// line. Both are right for a process claiming the root and wrong
+    /// for one merely asking — a caller on a timer would rewrite the
+    /// file every few seconds, and a root that had never run would
+    /// sprout a lock file from being looked at.
+    ///
+    /// A missing file means nobody has ever taken it, which is "not
+    /// held". So is a file we cannot open: an unreadable lock tells us
+    /// nothing, and claiming a run is in flight on that basis would be
+    /// a guess.
+    ///
+    /// Racy by nature — the holder may let go a microsecond later, and
+    /// the momentary claim this makes can refuse a runner starting in
+    /// the same instant. Both are only acceptable where being one poll
+    /// stale costs nothing; don't build an invariant on it.
+    pub fn is_held(path: &Path) -> bool {
+        let Ok(file) = File::open(path) else {
+            return false;
+        };
+        match take(&file) {
+            Ok(()) => {
+                release(&file);
+                false
+            }
+            Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+        }
+    }
+
+    /// Is a `datalib-dag` run holding this data root right now?
+    pub fn runner_is_held(data_root: &Path) -> bool {
+        Self::is_held(&data_root.join(RUNNER_LOCK_REL_PATH))
+    }
+
     /// Replace what this lock says about its holder, so a later
     /// would-be owner's refusal can point at something useful.
     /// Failure to write is not worth failing over.
@@ -187,6 +224,18 @@ fn take(file: &File) -> std::io::Result<()> {
     }
 }
 
+/// Drop a claim taken by [`take`] without closing the file. Only
+/// [`FileLock::is_held`] needs this — every other holder releases by
+/// dropping the `File`.
+#[cfg(unix)]
+fn release(file: &File) {
+    use std::os::unix::io::AsRawFd;
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+}
+
+#[cfg(not(unix))]
+fn release(_file: &File) {}
+
 /// No advisory-lock call on this platform, so the claim succeeds
 /// unconditionally. The shipped targets are macOS and Linux; leaving
 /// this permissive keeps a Windows build compiling rather than
@@ -199,6 +248,35 @@ fn take(_file: &File) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The read-only probe answers the same question `acquire` does,
+    /// without the two side effects that make `acquire` wrong on a
+    /// timer: it creates no file, and it rewrites no holder line.
+    #[test]
+    #[cfg(unix)]
+    fn is_held_answers_without_touching_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(RUNNER_LOCK_REL_PATH);
+
+        // Never taken: not held, and asking must not conjure the file.
+        assert!(!FileLock::runner_is_held(tmp.path()));
+        assert!(!path.exists(), "a probe created {}", path.display());
+
+        let mut held = FileLock::acquire_runner(tmp.path()).expect("claim");
+        held.describe("running a sync since 10:04");
+        assert!(FileLock::runner_is_held(tmp.path()));
+        // …and the holder's own line survives being asked about, which
+        // `acquire` would have overwritten on success.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().trim(),
+            "running a sync since 10:04"
+        );
+
+        drop(held);
+        assert!(!FileLock::runner_is_held(tmp.path()));
+        // Probing an existing-but-free lock must leave it takeable.
+        assert!(FileLock::acquire_runner(tmp.path()).is_ok());
+    }
 
     #[test]
     #[cfg(unix)]

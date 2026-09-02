@@ -101,10 +101,24 @@ a logo is faster to scan and the name is one hover away), **Step** is
 the wave (**Fetch** / **Render** / **Index** / **Applet**), and
 **Status** is the outcome. "Last status" lost its "Last": the column
 shows what a step *is* doing when a run is in flight, so the word was
-wrong half the time. Bytes on disk is a bar against the largest row
-rather than a number, with the size and the per-output breakdown on
-hover. The status cell is not yet a button — the log panel below is
+wrong half the time. Bytes on disk is the tree's size over the last
+five minutes, drawn against the largest row, with the number over the
+plot and the per-output breakdown on hover — it was a plain bar until
+the backend started keeping a timeseries
+(`datalib/backend/http/src/usage.rs`, which walks the root only while a
+run is in flight — between runs nothing writes it, so there is nothing
+to find). The status cell is not yet a button — the log panel below is
 still a proposal.
+
+Three things that were on this screen have moved, all for the same
+reason — the table is the page and the prose around it was crowding it
+out. The paragraph explaining every column is behind a **Help** button
+in the header; `config.toml`'s path sits with the **Advanced**
+disclosure that edits it, next to a reveal-in-the-file-manager button;
+and a status bar pinned under the table carries the whole data root's
+size — root, not the sum of the rows, so `system/` and anything a
+deleted step left behind are counted — over its own five-minute
+sparkline.
 
 Status has two states this table has no row for, both about work that
 has not happened yet: **Queued** (a sync is enqueued and will reach this

@@ -413,12 +413,29 @@ Where the stores live under a data root:
 <data_root>/unified_index/grid/db.doltlite_db   grid_rows / markdowns / edges
 <data_root>/system/feedback.doltlite_db         filed feedback
 <data_root>/system/jobs.doltlite_db             the sync job queue
+<data_root>/system/usage.doltlite_db            bytes-on-disk over time
 ```
 
 One writer per file, and it is load-bearing: doltlite's working set is
 per *file* and shared across processes, so two writers on one file
 commit each other's in-flight rows. The `grid_index` step owns the
-index; `datalib-http` owns feedback and jobs; the applet only reads.
+index; `datalib-http` owns feedback, jobs and usage; the applet only
+reads.
+
+`usage.doltlite_db` is the one store nothing ever commits. It is a
+timeseries — `datalib-http` walks the root every five seconds *while a
+run holds it* and appends a row per tree whose size moved — so the rows
+*are* the history, and a `dolt_commit` per sample would flood
+`dolt_log` with nothing the table doesn't already say. The gate matters
+when you read it: between runs nothing writes the root, so the series
+deliberately has no samples there, and a change made from outside
+datalib carries the instant it was next *measured* rather than the
+instant it happened. It has its own file for exactly
+the reason the others do: a `-Am` commit from the job store would
+otherwise sweep whatever samples happened to be dirty into it. Reading
+it is `SELECT path, measured_at, bytes FROM disk_usage`; note it is
+compacted (no repeated value, nothing closer than five seconds), so
+carry the last value forward rather than assuming a fixed interval.
 
 There is also a host `/usr/local/bin/doltlite` on some machines. Prefer
 the Bazel target: it is version-locked to `MODULE.bazel`'s pin, so it

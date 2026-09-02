@@ -6,8 +6,9 @@
 //! so the render pipeline's "universal schema" no longer has reach into
 //! UI feedback and the background job queue:
 //!
-//!   * `feedback`   — user-filed feedback on datalib surfaces
-//!   * `sync_jobs`  — background job queue for UI-driven sync
+//!   * `feedback`    — user-filed feedback on datalib surfaces
+//!   * `sync_jobs`   — background job queue for UI-driven sync
+//!   * `disk_usage`  — bytes-on-disk timeseries per tree under the root
 //!
 //! Each module is a hand-written row struct whose `CREATE TABLE` DDL and
 //! column metadata are derived from the struct by
@@ -20,6 +21,10 @@ pub mod feedback {
 
 pub mod sync_jobs {
     include!("sync_jobs.rs");
+}
+
+pub mod disk_usage {
+    include!("disk_usage.rs");
 }
 
 #[cfg(test)]
@@ -40,5 +45,23 @@ mod tests {
         let (_, cols) = super::sync_jobs::COLUMNS[0];
         assert!(cols.contains(&"id"));
         assert!(cols.contains(&"state"));
+    }
+
+    /// The disk-usage timeseries is keyed on (series, instant): one
+    /// series is many rows, and the pair is what makes each unique.
+    /// A single-column key would silently collapse the history to its
+    /// newest sample.
+    #[test]
+    fn disk_usage_is_keyed_on_path_and_instant() {
+        assert_eq!(super::disk_usage::TABLES.len(), 1);
+        let (_, cols) = super::disk_usage::COLUMNS[0];
+        assert!(cols.contains(&"path"));
+        assert!(cols.contains(&"measured_at"));
+        assert!(cols.contains(&"bytes"));
+        let (_, ddl) = super::disk_usage::DDL[0];
+        assert!(
+            ddl.contains("PRIMARY KEY (path, measured_at)"),
+            "expected a composite key, got: {ddl}"
+        );
     }
 }

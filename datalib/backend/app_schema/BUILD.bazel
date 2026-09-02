@@ -5,6 +5,7 @@ exports_files(["Cargo.toml"])
 rust_library(
     name = "app_schema",
     srcs = [
+        "src/disk_usage.rs",
         "src/feedback.rs",
         "src/lib.rs",
         "src/sync_jobs.rs",

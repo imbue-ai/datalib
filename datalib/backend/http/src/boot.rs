@@ -1,6 +1,6 @@
 //! Backend assembly: everything derived from a data root — the stores
-//! this server owns, where the config lives, the sync worker — in one
-//! place, so every packaging boots identically.
+//! this server owns, where the config lives, the sync worker, the disk
+//! usage sampler — in one place, so every packaging boots identically.
 //!
 //! The grid and qmd indexes are not here. They belong to the
 //! `unified_index` applet, which the gateway spawns from `config.toml`
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use datalib_core::app_store::AppStore;
 use datalib_core::repo::DynAppRepo;
 
-use crate::{auth::ApiToken, worker, AppState};
+use crate::{auth::ApiToken, usage, worker, AppState};
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the feedback and job stores, `<root>/config.toml`, the
@@ -89,6 +89,22 @@ pub async fn build_state(
         worker::run(worker_repo, worker_cfg).await;
     });
 
+    // Bytes on disk, over time: a walk of the root folded into a
+    // snapshot the storage endpoint reads and appended to
+    // `system/usage.doltlite_db`. Driven by `root_tx` rather than a
+    // timer of its own — a run in flight is exactly what that channel
+    // is already reporting, and between runs the disk cannot have
+    // moved. Spawned rather than awaited: the first walk of a large
+    // root is slow, and a boot that waited for it would delay the whole
+    // server for a number nothing needs yet.
+    let monitor = Arc::new(usage::UsageMonitor::new());
+    tokio::spawn(usage::run(
+        monitor.clone(),
+        app.clone(),
+        root.clone(),
+        root_tx.clone(),
+    ));
+
     // Applet discovery execs one child per configured applet, and
     // `build_state` runs on the tokio runtime — so it goes to a
     // blocking thread rather than stalling the executor while a slow
@@ -109,6 +125,7 @@ pub async fn build_state(
         root_tx,
         applets,
         api_token,
+        usage: monitor,
     })
 }
 
