@@ -325,6 +325,20 @@ const liveTasks = ref<Record<string, Overlay>>({});
 /// (the worker claims them one by one), so this is unambiguous.
 const liveJob = computed(() => jobs.value.find((j) => j.state === "running"));
 
+/// The runner's record for one step, as it applies to the run in
+/// flight: the pushed board folded over the last `/api/dag`, with the
+/// fetched `current_state` dropped when that fetch still describes a
+/// *previous* run (`run.synthesized` — see `withOverlay`).
+///
+/// One helper because both readers below have to agree. They ask
+/// different questions of the same field, and a `finishedThisRun` that
+/// trusted a stale state would tell a queued row its upstream had
+/// already finished this run, when what finished was the run before.
+function stepNow(id: string): DagStep | undefined {
+  const run = effectiveRun(dagRun.value, liveJob.value);
+  return withOverlay(dagSteps.value[id], id, liveTasks.value[id], !!run?.synthesized);
+}
+
 /// Has this step reached a terminal state in the run now in flight?
 ///
 /// A step with no state has not been reached; one that is `running` is
@@ -332,14 +346,14 @@ const liveJob = computed(() => jobs.value.find((j) => j.state === "running"));
 /// `not_selected` — means it will not move again this run, which is
 /// what "no longer blocking anything downstream" means.
 function finishedThisRun(id: string): boolean {
-  const state = withOverlay(dagSteps.value[id], id, liveTasks.value[id])?.current_state;
+  const state = stepNow(id)?.current_state;
   return !!state && state !== "running";
 }
 
 function stepStatus(id: string): StatusView {
   return statusOf({
     id,
-    step: withOverlay(dagSteps.value[id], id, liveTasks.value[id]),
+    step: stepNow(id),
     run: effectiveRun(dagRun.value, liveJob.value),
     claim: claimedBy.value.get(id),
     waitingOn: waitingOn(sources.value, id, finishedThisRun),

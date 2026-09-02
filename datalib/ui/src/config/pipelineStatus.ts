@@ -42,12 +42,32 @@ const TERMINAL_BOARD = new Set(["done", "skipped", "not_selected", "failed", "bl
 /// reached is exactly the absent-`current_state` case the queued branch
 /// of `stepStatus` already handles, and inventing a state for it here
 /// would only add a second way to say the same thing.
+///
+/// A step the board reports as **terminal** does produce one, and must.
+/// It used to be dropped like `todo`, on the reasoning that the board
+/// only exists to show a step *running* — but the two are not alike.
+/// `todo` means "not reached", which is what the queued branch says
+/// anyway; terminal means "reached, and finished in *this* run", and
+/// nothing else on screen knows that until `/api/dag` catches up.
+/// Dropping it sent a row that had just been Running back to Queued for
+/// the length of that fetch, which `manager2-sync`'s monotonicity check
+/// caught as `["Queued","Running","Queued","Succeeded"]`.
+///
+/// The state is carried verbatim rather than mapped: `stepStatus` only
+/// asks whether it is `running` or absent, so the board's own word is
+/// both sufficient and the least invented thing to store.
 export function pushedOverlay(
   tasks: SyncTask[],
   now: string,
 ): Record<string, Overlay> {
   const out: Record<string, Overlay> = {};
   for (const t of tasks) {
+    if (TERMINAL_BOARD.has(t.state)) {
+      // No progress: a finished step's last progress line is not news,
+      // and `withOverlay` keeps whatever the fetch had.
+      out[t.id] = { current_state: t.state, progress: null };
+      continue;
+    }
     if (t.state !== "running") continue;
     out[t.id] = {
       current_state: "running",
@@ -78,8 +98,19 @@ export function withOverlay(
   step: DagStep | undefined,
   id: string,
   overlay: Overlay | undefined,
+  /// True when the fetched record describes a *previous* run, so its
+  /// `current_state` is about different work and only the board can
+  /// speak for now. See [`EffectiveRun.synthesized`], which is where
+  /// this comes from.
+  ///
+  /// `last_run` is deliberately untouched: that is this row's history,
+  /// it is still correct, and blanking it would send the row to "Never
+  /// run" — which ranks *below* Queued and so is its own way of going
+  /// backwards.
+  baseStateIsStale = false,
 ): DagStep | undefined {
-  if (!overlay) return step;
+  if (!overlay && !baseStateIsStale) return step;
+  if (!overlay && !step) return step;
   const base: DagStep = step ?? {
     id,
     command: "",
@@ -92,11 +123,13 @@ export function withOverlay(
   };
   return {
     ...base,
-    current_state: overlay.current_state ?? base.current_state,
+    current_state:
+      overlay?.current_state ?? (baseStateIsStale ? null : base.current_state),
     // The fetched progress has real numbers; the pushed one has only a
     // message. Prefer whichever is more informative rather than letting
     // the newer one erase a bar.
-    progress: base.progress?.total != null ? base.progress : (overlay.progress ?? base.progress),
+    progress:
+      base.progress?.total != null ? base.progress : (overlay?.progress ?? base.progress),
   };
 }
 
@@ -111,14 +144,36 @@ export function withOverlay(
 /// The window is much shorter than it used to be — the fetch is
 /// triggered by the record actually moving rather than by a 2-second
 /// timer — but it is not zero, and this is what covers it.
+export type EffectiveRun = DagRun & {
+  /// True when this run was **not** reported by the runner — it was
+  /// inferred from the queue because a job is running and the fetched
+  /// record has not caught up.
+  ///
+  /// Load-bearing, and not merely informational. A synthesized run says
+  /// the runner has written nothing about *this* run yet, so every
+  /// per-step `current_state` in the fetched record still belongs to
+  /// the run before it. Reading one then is reading the wrong run's
+  /// answer, which is exactly how a re-synced row painted the previous
+  /// run's Succeeded between Queued and Running. `withOverlay` takes
+  /// this flag and drops the stale state; the pushed board is the only
+  /// source that can speak for a run this new.
+  synthesized?: boolean;
+};
+
 export function effectiveRun(
   fetched: DagRun | null,
   liveJob: SyncJob | undefined,
-): DagRun | null {
+): EffectiveRun | null {
   if (!liveJob || liveJob.state !== "running") return fetched;
   if (fetched && !fetched.finished_at) return fetched;
   const started = liveJob.started_at ?? liveJob.created_at;
-  return { run_id: started, started_at: started, finished_at: null, live: true };
+  return {
+    run_id: started,
+    started_at: started,
+    finished_at: null,
+    live: true,
+    synthesized: true,
+  };
 }
 
 /// One row's status, reduced to a vocabulary the Status column can draw.
@@ -325,7 +380,7 @@ export function stepStatus(args: {
   /// absent until a run has reached this row at least once.
   id: string;
   step: DagStep | undefined;
-  run: DagRun | null;
+  run: EffectiveRun | null;
   claim: SyncJob | undefined;
   /// The steps this one is queued behind, from `waitingOn`. Only read
   /// in the queued branch, where it turns "Queued" into a sentence that
