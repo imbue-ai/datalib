@@ -68,6 +68,13 @@ pub async fn build_state(
     // rather than blocks the worker.
     let (progress_tx, _) = tokio::sync::broadcast::channel(512);
 
+    // Everything that changes without a job behind it. One watcher per
+    // process, replacing the timers every UI surface used to keep — see
+    // `crate::watch`. Started before the worker so a sync that begins
+    // during startup is already being reported on.
+    let (root_tx, _) = tokio::sync::broadcast::channel(64);
+    crate::watch::spawn((*root).clone(), root_tx.clone());
+
     // Background sync worker: drains the `sync_jobs` queue the UI fills.
     // With no sync binary it still runs — UI-triggered syncs fail fast
     // with a clear message instead of hanging (search is unaffected).
@@ -99,6 +106,7 @@ pub async fn build_state(
         root,
         app,
         progress_tx,
+        root_tx,
         applets,
         api_token,
     })

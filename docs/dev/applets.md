@@ -269,9 +269,19 @@ separate because they cost different amounts:
 - **the store's own files moved** → rescan only.
 
 Conflating them would make a `PUT /api/lib` restart every applet. Both
-checks are `stat`-only when nothing changed, so they can sit on the
-endpoint the UI polls — which is what turns a saved config, or a file
-dropped in by hand, into a live gallery update without a restart.
+checks are `stat`-only when nothing changed, so they sit on
+`GET /api/frontend` itself — which is what turns a saved config, or a
+file dropped in by hand, into a live gallery update without a restart.
+
+**That reconcile is lazy, and the ordering matters.** A new applet
+writes nothing into `system/frontend/` until it has been *started*, and
+it is only started by this reconcile. So the client cannot wait for
+`system/frontend/` to move before asking: it has to refetch on
+`config_changed` as well as on `frontend_changed`
+(`ui/src/cards/frontendRegistry.ts`). While the UI polled this endpoint
+every four seconds the ordering was invisible — something always asked
+again soon enough. See `backend/http/src/watch.rs` for the push channel
+that replaced the poll.
 
 **Reconciling** compares the new applet list against the one the
 gateway last started, entry by entry:

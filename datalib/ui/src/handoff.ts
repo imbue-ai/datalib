@@ -20,8 +20,9 @@
 //     through GET/PUT /api/config instead of a component alias.
 //
 // As the agent re-saves the alias, the card live-reloads (see
-// ShadowCard's manifest watcher); the config editor polls the backend
-// and reloads the same way (SourcesView).
+// ShadowCard's manifest watcher); the config editor reloads the same
+// way (SourcesView), on the `config_changed` the agent's own write
+// produces.
 import { ref, watch } from "vue";
 import {
   freshUserName,
@@ -225,7 +226,7 @@ export async function createComponentWithAgent(host: HostCommands): Promise<void
     return;
   }
   // Register it locally before repointing the card, so the first
-  // compile doesn't blank-flash waiting for the manifest poll.
+  // compile doesn't blank-flash waiting for the manifest to catch up.
   noteUserComponent(name, entry.meta);
   host.setSource(`comp.${USER_NAMESPACE}.${name}()`);
 }

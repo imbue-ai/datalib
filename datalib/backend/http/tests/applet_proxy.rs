@@ -31,6 +31,7 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
         root: root.clone(),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        root_tx: tokio::sync::broadcast::channel(16).0,
         // Every route is behind the per-process token; these tests
         // send it on each request (see `get_json`).
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),

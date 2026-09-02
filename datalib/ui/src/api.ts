@@ -560,11 +560,14 @@ export type SyncTask = {
   detail?: string | null;
 };
 
-// One push update for a job, streamed from `GET /api/sync/stream` over
-// SSE. The worker + enqueue/cancel handlers emit these the instant they
-// write a job's state, so the UI updates without polling. `tasks` is
-// the per-task board (also recoverable from `progress_msg`, which
-// carries it as JSON — see src/sync/progress.ts).
+// One push update for a job: an *unnamed* frame on
+// `GET /api/sync/stream`. The worker + enqueue/cancel handlers emit
+// these the instant they write a job's state, so the UI updates without
+// polling. `tasks` is the per-task board (also recoverable from
+// `progress_msg`, which carries it as JSON — see src/sync/progress.ts).
+//
+// The same stream also carries named `root` frames for everything that
+// changes without a job behind it; those are `RootEvent` in `@/live`.
 export type JobProgressEvent = {
   id: string;
   kind: string;
@@ -575,20 +578,9 @@ export type JobProgressEvent = {
   tasks?: SyncTask[] | null;
 };
 
-// Open the live job-progress SSE stream. Returns the EventSource so the
-// caller can close it on unmount. `onEvent` fires per job update; the
-// browser auto-reconnects on transient drops.
-export function openJobStream(onEvent: (e: JobProgressEvent) => void): EventSource {
-  const es = new EventSource("/api/sync/stream");
-  es.onmessage = (m) => {
-    try {
-      onEvent(JSON.parse(m.data) as JobProgressEvent);
-    } catch {
-      // ignore malformed frames
-    }
-  };
-  return es;
-}
+// The stream itself is opened by `@/live`, not here: it multiplexes one
+// connection across every subscriber, and owns the reconnect and
+// stall-detection policy. This module keeps only the wire types.
 
 export function fetchActiveJobs(signal?: AbortSignal): Promise<SyncJob[]> {
   return getJson<SyncJob[]>("/api/sync/jobs", signal);

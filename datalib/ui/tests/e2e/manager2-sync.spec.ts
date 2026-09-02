@@ -45,9 +45,13 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
   pipelineRow as row,
+  recordStatuses,
   settle,
+  settleRow,
+  settleRunner,
   stampOf as lastSyncedOf,
   stampsBefore,
+  statusLog,
   statusOf,
   TERMINAL,
 } from "./grid-helpers";
@@ -101,7 +105,7 @@ async function writeConfig(page: Page, text: string) {
   // Saving re-derives the table from the config text at once — that is
   // the point of the Advanced editor — but the per-step history behind
   // the Status and Last synced columns comes from `GET /api/dag`, which
-  // is refetched on a timer. Between the two, a row that has run before
+  // is refetched separately. Between the two, a row that has run before
   // paints as "Never run": it exists because the config declares it,
   // and nothing has yet said what it did. Mounting the page afresh
   // fetches config, jobs and the DAG record in one `Promise.all`, so
@@ -231,58 +235,54 @@ ${applets()}`;
   }) => {
     await writeConfig(page, config());
 
-    // Sample the row the way the grid paints it, from the click until
-    // it settles. This is the real sequence — the unit suite replays a
-    // synthetic one through the same state machine.
-    const seen: string[] = [];
-    const downstream: string[] = [];
-    const record = async () => {
-      const s = await statusOf(page, "pdfs/raw");
-      if (s && seen[seen.length - 1] !== s) seen.push(s);
-      const d = await statusOf(page, "pdfs/rendered_md");
-      if (d && downstream[downstream.length - 1] !== d) downstream.push(d);
-      return s;
-    };
+    // Watch the row the way the grid paints it, from before the click
+    // until it settles. This is the real sequence — the unit suite
+    // replays a synthetic one through the same state machine.
+    //
+    // Recorded from mutations rather than sampled on a timer, which is
+    // what this used to do (a `for(;;)` loop around
+    // `waitForTimeout(150)`). Two things change as a result: the
+    // sleep is gone, and the sequence is *complete* — see
+    // `recordStatuses`.
+    await recordStatuses(page, ["pdfs/raw", "pdfs/rendered_md"]);
+    // Whatever the rows say before the click. The recorder seeds itself
+    // with the current value, so this is 1 for a row with a status and
+    // 0 for one still painting; everything past it is what the click
+    // caused.
+    const beforeUp = (await statusLog(page, "pdfs/raw")).length;
+    const beforeDown = (await statusLog(page, "pdfs/rendered_md")).length;
 
     const was = await stampsBefore(page, ["pdfs/raw", "pdfs/rendered_md"]);
     await syncBtn(page, "pdfs/raw").click();
-    // Gate on the queue having accepted, then sample. `click()` resolves
-    // when the event is dispatched, not when the async handler behind it
-    // finishes, so sampling straight after it is a race with the enqueue
-    // — and losing it reads the *previous* test's "Succeeded" as this
-    // run's first frame. The banner is set by `runSource` between the
-    // POST returning and the job list being re-read, which is exactly
-    // the moment this test is about: the queue has the job, and the
-    // question is what the rows say.
+    // Gate on the queue having accepted before *asserting*. `click()`
+    // resolves when the event is dispatched, not when the async handler
+    // behind it finishes, so an assertion straight after it races the
+    // enqueue. The banner is set by `runSource` between the POST
+    // returning and the job list being re-read, which is exactly the
+    // moment this test is about: the queue has the job, and the
+    // question is what the rows say. (The recorder was already running,
+    // so nothing is missed while this resolves — that is the point of
+    // starting it before the click.)
     await expect(page.getByText(/Queued a sync for/)).toBeVisible();
-    await record();
 
     // Syncing a source claims everything downstream of it, so the
     // render step is queued from the same first frame — before the
     // runner exists, let alone reaches it. This is the assertion a
     // download-only provider could not support, and the reason this
     // spec is built on `pdf`.
+    const downstream = (await statusLog(page, "pdfs/rendered_md")).slice(beforeDown);
     expect(downstream[0], `downstream sequence was ${JSON.stringify(downstream)}`).toBe(
       "Queued",
     );
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
 
-    const deadline = Date.now() + 60_000;
-    // `TERMINAL`, not a set spelled out again here. The local copy this
-    // replaces listed three of the five terminal statuses, so a run
-    // ending `Blocked` or `Interrupted` was never recognized as over:
-    // the loop spun to the deadline and reported "never settled" about a
-    // row that had settled a minute earlier, naming neither the status
-    // nor the reason.
-    for (;;) {
-      const s = await record();
-      if (s && TERMINAL.test(s)) break;
-      expect(Date.now(), `never settled; saw ${JSON.stringify(seen)}`).toBeLessThan(
-        deadline,
-      );
-      await page.waitForTimeout(150);
-    }
+    // `settleRow`, not `settle`: the log lives in the page, and
+    // `settle` remounts, which would throw it away. The before-stamp is
+    // still passed — a terminal status on its own is answerable by the
+    // *previous* run's frame, which is what #237 fixed.
+    await settleRow(page, "pdfs/raw", was["pdfs/raw"]);
+    const seen = (await statusLog(page, "pdfs/raw")).slice(beforeUp);
 
     // What the sequence must contain. "Queued" is the frame that used
     // to be missing entirely — the click produced no visible change
@@ -290,10 +290,30 @@ ${applets()}`;
     expect(seen[0], `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
     expect(seen[seen.length - 1]).toBe("Succeeded");
 
-    // ...and it must be monotonic. A status going backwards reads as
-    // "about to run again", which is worse than a stale one. Running is
-    // optional here — a scan of a small tree can finish inside one
-    // sample — but if it appears it must be in the right place.
+    // "Running" stays optional, and recording the transitions is what
+    // settled *why*.
+    //
+    // The sampler this replaces guessed: "a scan of a small tree can
+    // finish inside one sample". It could not tell a status that never
+    // appeared from one it blinked past, so it had to allow both. The
+    // recorder can, and the answer is the first: on this fixture the
+    // sequence is `["Queued","Succeeded"]` — the row never paints
+    // Running at all.
+    //
+    // That is not a sampling artifact and not a bug. The board the
+    // status comes from is published by the worker at ~400 ms
+    // (`backend/http/src/worker.rs`), and a PDF scan of two files
+    // starts and finishes well inside one of those windows — so no
+    // published frame ever carries the step as `running`, and there is
+    // nothing for any observer to see. Asserting it would be asserting
+    // that this fixture is slow.
+    //
+    // What the complete sequence *does* buy is the check below: a
+    // backwards transition that lasted less than a sample used to be
+    // invisible, and now is not.
+
+    // The sequence must be monotonic. A status going backwards reads as
+    // "about to run again", which is worse than a stale one.
     // Total over the whole vocabulary, on purpose. An unranked status
     // used to make this crash with "received value must be a number"
     // and no hint as to which status it choked on — a test that fails
@@ -328,18 +348,28 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. `pdfs/raw` is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settle(page, "pdfs/rendered_md", was["pdfs/rendered_md"])).toMatch(
+    //
+    // `settleRow` again, and the log re-read afterwards: the recorder
+    // has been running throughout, so this is the whole downstream
+    // sequence rather than its two ends plus whatever a sampler
+    // happened to catch in between.
+    expect(await settleRow(page, "pdfs/rendered_md", was["pdfs/rendered_md"])).toMatch(
       /^(Succeeded|Up to date)$/,
     );
-    await record(); // capture the settled state in the sequence
+    const downstreamFinal = (await statusLog(page, "pdfs/rendered_md")).slice(beforeDown);
     expect(
-      downstream[0],
-      `downstream never started Queued: ${JSON.stringify(downstream)}`,
+      downstreamFinal[0],
+      `downstream never started Queued: ${JSON.stringify(downstreamFinal)}`,
     ).toBe("Queued");
     expect(
-      downstream[downstream.length - 1],
-      `downstream never finished: ${JSON.stringify(downstream)}`,
+      downstreamFinal[downstreamFinal.length - 1],
+      `downstream never finished: ${JSON.stringify(downstreamFinal)}`,
     ).toMatch(/^(Succeeded|Up to date)$/);
+
+    // The run itself has to be over before the next test writes a
+    // config into this root — the half of `settleRows` that `settleRow`
+    // leaves out. Cheap here: every row is already terminal.
+    await settleRunner(page);
   });
 
   test("Last synced counts up on its own, and hover reveals the exact stamp", async ({

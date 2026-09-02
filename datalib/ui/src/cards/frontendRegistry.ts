@@ -20,6 +20,7 @@
 
 import { ref, type Ref } from "vue";
 import { fetchFrontend, type FrontendView, type Meta } from "@/api";
+import { subscribeLive } from "@/live";
 
 // namespace → name → metadata, as last reported.
 export const frontendManifest: Ref<Map<string, Map<string, Meta>>> = ref(new Map());
@@ -29,7 +30,6 @@ export const frontendManifest: Ref<Map<string, Map<string, Meta>>> = ref(new Map
 export const frontendErrors: Ref<Map<string, string>> = ref(new Map());
 
 let firstLoad: Promise<void> | null = null;
-const POLL_MS = 4000;
 
 function sameManifest(
   a: Map<string, Map<string, Meta>>,
@@ -74,11 +74,46 @@ async function refresh(): Promise<void> {
   }
 }
 
-/// Load the manifest once (awaitable) and start polling. Idempotent.
+/// Load the manifest once (awaitable) and keep it current. Idempotent.
+///
+/// It refetches when the server says `system/frontend/` moved, which is
+/// the only thing that can change the answer: an applet writing a
+/// component, an agent adding one, a rename tombstone appearing.
+///
+/// This used to be a 4-second `setInterval` — started by the first card
+/// control to mount, its handle discarded, so nothing could ever stop
+/// it. It asked fifteen times a minute for the life of the page and the
+/// answer changed perhaps twice in a session. The subscription is not
+/// torn down either, but for a better reason: the manifest is
+/// process-wide state that outlives every card holding a view of it,
+/// and `@/live` keeps one connection however many subscribers there
+/// are, so this costs a set entry rather than a socket.
 export function ensureFrontend(): Promise<void> {
   if (!firstLoad) {
     firstLoad = refresh();
-    setInterval(() => void refresh(), POLL_MS);
+    subscribeLive({
+      root: (e) => {
+        // `config_changed` as well as `frontend_changed`, and the
+        // config half is not belt-and-braces — without it, adding an
+        // applet to the config would never take effect.
+        //
+        // The gateway reconciles its applet processes lazily, inside
+        // `GET /api/frontend` (`refresh_if_config_changed` in
+        // backend/http/src/applets.rs). A new applet writes nothing
+        // into `system/frontend/` until it has been *started*, and it
+        // is only started by that reconcile — so waiting for
+        // `frontend_changed` would be waiting for an effect of the
+        // thing we are trying to cause. The 4-second poll this
+        // replaced hid the ordering by asking constantly.
+        if (e.kind === "frontend_changed" || e.kind === "config_changed") {
+          void refresh();
+        }
+      },
+      // A reconnect may have swallowed either event, and a stale
+      // manifest is a card that renders the wrong component or none at
+      // all.
+      resync: () => void refresh(),
+    });
   }
   return firstLoad;
 }
@@ -211,12 +246,12 @@ export function freshUserName(): string {
 }
 
 /// Fold a just-written `user` component into the local manifest without
-/// waiting for the next poll.
+/// waiting for the server to report the write back.
 ///
 /// The caller has the authoritative name and hash straight from the PUT
 /// response. Without this, a card repointed at the new component
 /// compiles against a manifest that does not know it yet — a blank or
-/// error flash until the poll lands.
+/// error flash until `frontend_changed` lands.
 export function noteUserComponent(name: string, meta: Meta): void {
   const next = new Map(frontendManifest.value);
   const user = new Map(next.get(USER_NAMESPACE) ?? []);
