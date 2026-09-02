@@ -136,7 +136,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # takes root and a package index, and a bazel test action has neither.
 # So both engines are baked here, dependencies and all, and the call in
 # run_e2e.sh becomes a no-op that fetches only what this image lacks.
-# `E2E_BROWSERS` narrows that call for callers who want one engine.
+# `E2E_BROWSERS` narrows that call for a caller that wants one engine.
 #
 # WebKit is the more expensive of the two — its apt closure is
 # substantially larger than Chromium's, and it is most of what this

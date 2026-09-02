@@ -48,18 +48,26 @@ npx playwright show-trace /tmp/e2e/playwright-report/data/<hash>.zip
 
 ## From CI
 
-The `e2e onboarding recording (non-gating)` job on every PR attaches the
-same zip as a run artifact named **`e2e-onboarding-recording`** —
-download it from the run's summary page and use the commands above.
+Nothing extra is needed, but nothing arrives yet either: `bazel test
+//...` still excludes `//datalib/ui:e2e_test` (see the FIXME in
+`.github/workflows/test.yml`), so no CI job runs this suite today.
 
-That job is not a merge gate: `bazel test //...` still excludes
-`//datalib/ui:e2e_test` (see the FIXME in `.github/workflows/test.yml`),
-and this job exists to publish the recording, not to re-enable that gate
-by the back door. It runs the onboarding specs only, with
-`E2E_BROWSERS=chromium`, since those specs start no other engine.
+When that exclusion comes off, the report rides along for free — the
+gate job builds and runs `e2e_test` like any other target, and
+`--zip_undeclared_test_outputs` puts `outputs.zip` on the BuildBuddy
+invocation page under Artifacts. If a GitHub-Actions artifact is wanted
+on top of that, it is an `actions/upload-artifact` step on the existing
+job pointing at
+`$(bazel info bazel-testlogs)/datalib/ui/e2e_test/test.outputs/outputs.zip`.
 
-When the invocation went to BuildBuddy, the same `outputs.zip` is on the
-invocation page under Artifacts.
+A dedicated job to run the suite early was tried and removed. It is not
+worth its own bazel invocation: a second invocation only shares the
+remote cache if its configuration matches the gate's exactly (`-c opt
+--config=release --config=ci`, `--action_env=LIBCLANG_PATH=…`, the qmd
+mount pair), and one that does match is redundant with the gate the
+moment e2e rejoins it. The version that did not match rebuilt 2664
+actions with zero cache hits, took 999s against the gate's 143s, and
+then failed building `boring-sys2` for want of `LIBCLANG_PATH`.
 
 ## Cost
 
