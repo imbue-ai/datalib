@@ -190,14 +190,37 @@ jobs:
       - name: bazel test //...
         run: |
           libdir="${{ steps.env.outputs.libclang-path }}"
-          # FIXME(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
-          # e2e suite from the CI gate. It needs `rsync` + a Chromium
-          # browser cache the *current* `:latest` devcontainer image does
-          # not carry; both are now added to `.devcontainer/Dockerfile`, so
-          # once a new image is published on the next `v*` tag, DROP this
-          # negative pattern to re-enable the suite as a merge gate. (Local
-          # `bazel test //...` is unaffected and still runs it.) The `--`
-          # keeps the leading `-` from being read as a flag.
+          # GAP(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
+          # e2e suite from the CI gate. **This is now a standing gap, not
+          # a pending bridge — the thing it was waiting for arrived long
+          # ago.**
+          #
+          # It was written as a FIXME: the suite needs `rsync` + a
+          # Chromium browser cache the then-current `:latest`
+          # devcontainer image did not carry, both were added to
+          # `.devcontainer/Dockerfile`, and the note said to drop this
+          # pattern "once a new image is published on the next `v*` tag".
+          # That happened in `74b75adf` (2026-06-18), which is contained
+          # in v0.12.1 and every release since — so the condition has
+          # been met for 22 releases while the exclusion stayed. A note
+          # that outlived its own completion, which is exactly what
+          # AGENTS.md's "prose can be stale" section is about.
+          #
+          # What the gap costs, concretely: AGENTS.md calls dropping
+          # this target the thing that "lets UI regressions through", and
+          # it does. Every e2e change since — #235, #236, #237, #239 —
+          # has been verified on a contributor's laptop and nowhere
+          # else, and at least two defects reached `main` that a running
+          # suite would have caught.
+          #
+          # Re-enabling is deleting the negative pattern below. It is
+          # untested rather than known-broken: nobody has run the suite
+          # in this container since the image gained what it needs, so
+          # the honest next step is to try it on a branch and see. If it
+          # fails, replace this block with the real reason rather than
+          # restoring a date-based one. (Local `bazel test //...` is
+          # unaffected and still runs it.) The `--` keeps the leading `-`
+          # from being read as a flag.
           #
           # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
           # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
