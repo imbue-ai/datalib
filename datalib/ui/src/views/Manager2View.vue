@@ -603,30 +603,6 @@ const columnDefs: ColDef<Row>[] = [
       if (!row) return wrap;
       const { key, label } = row.status;
       wrap.className = `m2-status m2-status-${key.replace(/[\s_]+/g, "-")}`;
-      // Which run this status describes, and the runner's own word for
-      // it — the two facts the painted cell otherwise throws away.
-      //
-      // A status string alone has no identity. "Succeeded" from the run
-      // that finished a minute ago and "Succeeded" from the run just
-      // started are the same six glyphs, so anything watching this cell
-      // for a run to finish can be satisfied by the previous one. That
-      // is not a hypothetical: it is what made the e2e suite's
-      // `settle()` return a stale terminal status and let assertions
-      // run against a sync that was still going.
-      //
-      // `status.at` is already the instant the status describes — the
-      // same value the Last synced column paints, which is what its doc
-      // means by "the two can never disagree about which run they
-      // describe". Publishing it here lets a reader distinguish runs
-      // instead of inferring. Same idea as GridCard's
-      // `data-shown-query`: say which thing is on screen, rather than
-      // leaving observers to guess from content that repeats.
-      //
-      // `data-status` is the runner's vocabulary (`skipped_up_to_date`)
-      // rather than the display label ("Up to date"), so a caller keys
-      // off state instead of prose.
-      wrap.dataset.status = key;
-      if (row.status.at) wrap.dataset.statusAt = row.status.at;
       // The word, and then why it is that word: a failure message, how
       // a run died, or which steps a queued row is behind. The column
       // is icons, so this is the only place either appears.
@@ -858,13 +834,28 @@ function onGridReady(e: GridReadyEvent<Row>) {
 function freshest<T>(commit: (value: T) => void) {
   let issued = 0;
   let committed = 0;
-  return async (load: () => Promise<T>) => {
+  const run = async (load: () => Promise<T>) => {
     const seq = ++issued;
     const value = await load();
     if (seq <= committed) return;
     committed = seq;
     commit(value);
   };
+  /// Drop everything already in flight.
+  ///
+  /// For when something *other* than a fetch becomes the newest truth —
+  /// `adoptJob` writing the row `POST /api/sync/jobs` just returned.
+  /// Sequencing the fetches against each other is not enough on its
+  /// own: a poll issued before the click still carries a list from
+  /// before the job existed, and committing it erases the job, drops
+  /// the step's claim, and the row falls back to whatever it said last
+  /// run. That is a stale "Succeeded" one frame after a sync was
+  /// queued, which is exactly the going-backwards `manager2-sync`
+  /// exists to catch.
+  run.invalidate = () => {
+    committed = issued;
+  };
+  return run as typeof run & { invalidate: () => void };
 }
 
 // ── One step's log ───────────────────────────────────────────────────
@@ -1296,6 +1287,8 @@ async function runSource(id: string) {
 /// and reads as Queued, on the same tick as the click rather than a
 /// round trip later.
 function adoptJob(job: SyncJob) {
+  // Newest truth wins: anything already in flight predates this job.
+  commitJobs.invalidate();
   const at = jobs.value.findIndex((j) => j.id === job.id);
   jobs.value =
     at >= 0

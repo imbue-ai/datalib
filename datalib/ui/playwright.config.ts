@@ -4,6 +4,7 @@ import { copyFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CONFIG_MUTATING } from "./tests/e2e/config-mutating";
 
 // Ask the kernel for a free ephemeral port. Shells out to a tiny Node
 // one-liner so we stay synchronous (Playwright's config module isn't
@@ -46,14 +47,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // `datalib/ui/..` — the workspace root, for the `bazel-bin/...`
 // fallbacks used when this config is loaded outside bazel.
 const workspaceDir = path.resolve(here, "..", "..");
-function ensureFixtureRoot(): string {
-  const existing = process.env.FW_E2E_FIXTURE_ROOT;
-  if (existing) return existing;
+function materializeRoot(prefix: string): string {
   const materializer =
     process.env.FW_E2E_MATERIALIZE_TNG_ROOT ||
     path.join(workspaceDir, "bazel-bin/tests/fixtures/materialize_tng_root");
-  const root = mkdtempSync(path.join(tmpdir(), "datalib-e2e-"));
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
   execFileSync(materializer, [root], { stdio: "inherit" });
+  return root;
+}
+function ensureFixtureRoot(): string {
+  const existing = process.env.FW_E2E_FIXTURE_ROOT;
+  if (existing) return existing;
+  const root = materializeRoot("datalib-e2e-");
   process.env.FW_E2E_FIXTURE_ROOT = root;
   return root;
 }
@@ -187,6 +192,57 @@ function signalBackupDir(): string | undefined {
 }
 signalBackupDir();
 
+// ── the config-mutating specs, one data root each ────────────────────
+//
+// **This is what lets the suite run in parallel.** Five specs rewrite
+// `config.toml` and restore it afterwards. On one shared data root that
+// forces `workers: 1` on the whole suite — not only because those five
+// conflict with each other, but because while one of them holds a
+// rewritten config every *read-only* spec is looking at a different
+// library than it expects: `grid-source-name` renames a source and the
+// Source column moves under `grid-fixture-golden`; `manager2-sync`
+// replaces the config wholesale and `manager2-grid` paints a different
+// Pipeline table.
+//
+// #235 has a worked example of the same collision in its slowest form:
+// `manager2-sync` replacing the config restarted the `unified_index`
+// applet and tore down the resident qmd daemon, so an unrelated later
+// spec paid a second model load. It fixed that by carrying the
+// `[[applets]]` stanza forward. Moving the spec onto a root of its own
+// removes the reach entirely — it can no longer restart the applet the
+// other specs are using, whatever it writes.
+//
+// So each gets its own materialized root, its own backend, and a
+// project whose `use.baseURL` points at it. The specs need no change:
+// they navigate relatively, and the project decides where "/" is. A
+// root is 4.5 MB and materializes in ~0.33s, so five of them cost about
+// 1.7s and buy the other twenty specs the right to run concurrently.
+//
+// Adding a spec that writes the config means adding its basename to
+// `tests/e2e/config-mutating.ts`. Leaving it out is not silent —
+// `global-setup.ts` fails the run and names the file.
+type Sandbox = { spec: string; root: string; port: number; url: string };
+
+/// Cached in env like the ports and the fixture root: worker
+/// subprocesses re-import this config and must attach to what the
+/// parent minted rather than minting their own.
+function sandboxes(): Sandbox[] {
+  const existing = process.env.FW_E2E_SANDBOXES;
+  if (existing) return JSON.parse(existing) as Sandbox[];
+  const made = CONFIG_MUTATING.map((spec) => {
+    const port = freePort();
+    return {
+      spec,
+      root: materializeRoot(`datalib-e2e-${spec}-`),
+      port,
+      url: `http://127.0.0.1:${port}`,
+    };
+  });
+  process.env.FW_E2E_SANDBOXES = JSON.stringify(made);
+  return made;
+}
+const SANDBOXES = sandboxes();
+
 // The backend requires its API token on every route (see
 // datalib/backend/http/src/auth.rs). Pin one via DATALIB_TOKEN rather
 // than letting the binary mint a random one we'd have to read back out
@@ -229,8 +285,18 @@ const backendBin =
 export default defineConfig({
   testDir: "tests/e2e",
   testMatch: /.*\.spec\.ts$/,
+  // Files run in parallel; tests *within* a file keep their declaration
+  // order. That is the right split: several specs are written as a
+  // sequence (write the config, sync, assert on what the sync did),
+  // while no two files share state any more — see `SANDBOXES`.
+  //
+  // Four rather than "as many as the box has": past four the suite is
+  // bounded by its longest single file rather than by how many run at
+  // once, so more workers only add browsers and memory. Measured on a
+  // 10-core machine.
   fullyParallel: false,
-  workers: 1,
+  workers: 4,
+  globalSetup: "./tests/e2e/global-setup.ts",
   reporter: [["list"]],
   // Drop Playwright's default `-{projectName}-{platform}` suffix on
   // snapshot filenames. Our snapshots today are text dumps of API
@@ -269,7 +335,25 @@ export default defineConfig({
       name: "chromium",
       use: { browserName: "chromium" },
       dependencies: ["warmup"],
+      // Everything that does not rewrite the config, against the one
+      // shared read-only fixture root. The rest get a project apiece
+      // below, pointed at a root of their own.
+      testIgnore: CONFIG_MUTATING.map(
+        (spec) => new RegExp(`${spec}\\.spec\\.ts`),
+      ),
     },
+    // One project per config-mutating spec, doing one job: pointing
+    // `baseURL` at that spec's own backend, so the spec itself can go
+    // on saying `page.goto("/sources2")`.
+    //
+    // No `dependencies: ["warmup"]` — that project warms the *shared*
+    // backend's qmd daemon, and nothing on a sandbox root issues a
+    // free-text query. Their applets are spawned by `global-setup.ts`.
+    ...SANDBOXES.map((s) => ({
+      name: `chromium-${s.spec}`,
+      testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
+      use: { browserName: "chromium" as const, baseURL: s.url },
+    })),
     {
       // The desktop app runs in a WKWebView, not Chromium, and WebKit's
       // layout differs in ways that have twice shipped an invisible AG
@@ -377,5 +461,26 @@ export default defineConfig({
         SIGNAL_BACKUP_PASSPHRASE: FIXTURE_SIGNAL_AEP,
       },
     },
+    // A backend apiece for the config-mutating specs. Same binary and
+    // same token as the shared one; the data root is the only thing
+    // that differs, which is the whole point.
+    //
+    // `DATALIB_DAG_BIN` rides along because `manager2-sync` runs real
+    // syncs, and under bazel the runner sits in the runfiles rather
+    // than beside the server — the env var is the only one of the sync
+    // worker's three lookups that finds it there.
+    ...SANDBOXES.map((s) => ({
+      command: `${JSON.stringify(backendBin)} ${JSON.stringify(s.root)} --no-open`,
+      url: `${s.url}/api/health?token=${API_TOKEN}`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        DATALIB_BIND: `127.0.0.1:${s.port}`,
+        DATALIB_TOKEN: API_TOKEN,
+        ...(process.env.DATALIB_DAG_BIN
+          ? { DATALIB_DAG_BIN: process.env.DATALIB_DAG_BIN }
+          : {}),
+      },
+    })),
   ],
 });

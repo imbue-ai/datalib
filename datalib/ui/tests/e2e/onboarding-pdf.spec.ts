@@ -31,12 +31,13 @@ import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
 import {
   expectGridPainted,
-  pipelineRow,
+  pipelineRow as row,
   searchAndSettle,
-  settleRow,
-  stateAtOf,
-  stateOf,
-  syncAndSettle,
+  settle,
+  settleRows,
+  stampOf,
+  stampsBefore,
+  statusOf,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -55,11 +56,9 @@ const LATECOMER = process.env.FW_E2E_PDF_LATECOMER;
 /// one. Built by playwright.config.ts from the checked-in TNG spec.
 const SIGNAL_BACKUP_DIR = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
 
-const row = pipelineRow;
-/// Every row this spec's syncs are expected to reach, in the order the
-/// scheduler does: the source, its render sibling, and the fan-in that
-/// makes the documents searchable.
-const PIPELINE = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"];
+/// The three rows a sync of `pdfs/raw` drives: the source, its render
+/// sibling, and the fan-in that makes the documents searchable.
+const SYNCED_ROWS = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"];
 
 /// "Bytes on disk" as a number, read back off the label drawn over the
 /// bar — the number a person actually sees. `null` for a row with
@@ -191,7 +190,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // disk. This is the state the sync below has to move.
     await expect(row(page, "pdfs/raw")).toHaveCount(1);
     await expect(row(page, "pdfs/rendered_md")).toHaveCount(1);
-    expect(await stateOf(page, "pdfs/raw")).toBe("never_run");
+    expect(await statusOf(page, "pdfs/raw")).toBe("Never run");
     expect(await bytesOf(page, "pdfs/raw")).toBeNull();
     await expect(row(page, "pdfs/raw").locator('[col-id="lastSynced"]')).toHaveText("—");
 
@@ -202,18 +201,21 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(wired.text).toContain('inputs = ["pdfs/rendered_md"]');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
+    const firstRun = await stampsBefore(page, SYNCED_ROWS);
+    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
+
     // Download, render and index all run — syncing a source claims
     // everything downstream of it, and the index step is the reason the
     // grid below has anything in it.
-    const firstRun = await syncAndSettle(page, "pdfs/raw", PIPELINE);
-    expect(firstRun["pdfs/raw"]).toBe("succeeded");
-    expect(firstRun["pdfs/rendered_md"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
-    expect(firstRun["unified_index/grid"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
+    const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
+    expect(firstDone["pdfs/raw"]).toBe("Succeeded");
+    expect(firstDone["pdfs/rendered_md"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(firstDone["unified_index/grid"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
-    const stamp = await cell.locator("[title]").first().getAttribute("title");
+    const stamp = await stampOf(page, "pdfs/raw");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
       Math.abs(Date.now() - Date.parse(stamp!)),
@@ -248,15 +250,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const beforeSecond = await bytesOf(page, "pdfs/raw");
     expect(beforeSecond).toBe(rawBytes);
 
-    // The second run, and the one the old helper could not wait for: on
-    // arrival every row still shows `succeeded` from the first sync, so
-    // "is it terminal?" was already true before the click landed.
-    // `syncAndSettle` reads each row's run stamp first and waits for a
-    // later one.
-    const secondRun = await syncAndSettle(page, "pdfs/raw", PIPELINE);
-    expect(secondRun["pdfs/raw"]).toBe("succeeded");
-    expect(secondRun["pdfs/rendered_md"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
-    expect(secondRun["unified_index/grid"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
+    const secondRun = await stampsBefore(page, SYNCED_ROWS);
+    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
+    const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
+    expect(secondDone["pdfs/raw"]).toBe("Succeeded");
+    expect(secondDone["pdfs/rendered_md"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(secondDone["unified_index/grid"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // A document more on disk.
     //
@@ -364,7 +363,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 2. two sources in the table ──────────────────────────────────
     for (const id of ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"]) {
-      await expect(pipelineRow(page, id), `${id} should be a row`).toHaveCount(1);
+      await expect(row(page, id), `${id} should be a row`).toHaveCount(1);
     }
 
     // ── 3. one has history, the other has none ───────────────────────
@@ -372,41 +371,36 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The distinction the whole test rests on, so it is asserted on
     // both columns: a never-run row has no state to report *and* no
     // instant to report it at.
-    expect(await stateOf(page, "pdfs/raw")).toBe("succeeded");
-    expect(await stateOf(page, "signal/raw")).toBe("never_run");
-    await expect(pipelineRow(page, "signal/raw").locator('[col-id="lastSynced"]')).toHaveText(
-      "—",
-    );
+    expect(await statusOf(page, "pdfs/raw")).toBe("Succeeded");
+    expect(await statusOf(page, "signal/raw")).toBe("Never run");
+    await expect(row(page, "signal/raw").locator('[col-id="lastSynced"]')).toHaveText("—");
+    expect(
+      await stampOf(page, "signal/raw"),
+      "a row that never ran has no instant to reveal",
+    ).toBeNull();
     expect(
       await bytesOf(page, "signal/raw"),
       "a source that never ran has written nothing",
     ).toBeNull();
 
     // ── 4. re-running one source leaves the other alone ──────────────
-    const pdfBefore = await stateAtOf(page, "pdfs/raw");
-    const signalBefore = await stateAtOf(page, "signal/raw");
-    await syncAndSettle(page, "pdfs/raw", ["pdfs/raw"]);
+    const pdfBefore = await stampOf(page, "pdfs/raw");
+    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
+    expect(await settle(page, "pdfs/raw", pdfBefore)).toBe("Succeeded");
     expect(
-      await stateAtOf(page, "pdfs/raw"),
-      "the row that was synced should carry a newer instant",
-    ).not.toBe(pdfBefore);
-    expect(
-      await stateAtOf(page, "signal/raw"),
+      await statusOf(page, "signal/raw"),
       "a sync of pdfs must not give signal a history it never earned",
-    ).toBe(signalBefore);
-    expect(await stateOf(page, "signal/raw")).toBe("never_run");
+    ).toBe("Never run");
+    expect(await stampOf(page, "signal/raw")).toBeNull();
 
     // ── 5. Sync everything reaches both ──────────────────────────────
-    const was: Record<string, string | null> = {};
     const ALL = ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"];
-    for (const id of ALL) was[id] = await stateAtOf(page, id);
+    const was = await stampsBefore(page, ALL);
 
     await page.getByRole("button", { name: "Sync everything" }).click();
+    const done = await settleRows(page, ALL, was);
     for (const id of ALL) {
-      const state = await settleRow(page, id, { after: was[id] });
-      expect(state, `${id} after Sync everything`).toMatch(
-        /^(succeeded|skipped_up_to_date)$/,
-      );
+      expect(done[id], `${id} after Sync everything`).toMatch(/^(Succeeded|Up to date)$/);
     }
 
     // Everything now has a history and something on disk. `signal/raw`
@@ -414,7 +408,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // per-row button was pressed for it.
     for (const id of ALL) {
       await expect(
-        pipelineRow(page, id).locator('[col-id="lastSynced"]'),
+        row(page, id).locator('[col-id="lastSynced"]'),
         `${id} should report when it last ran`,
       ).not.toHaveText("—");
       expect(await bytesOf(page, id), `${id} should have bytes on disk`).toBeGreaterThan(0);

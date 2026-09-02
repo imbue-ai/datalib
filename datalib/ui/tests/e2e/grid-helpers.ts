@@ -1,34 +1,76 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 // Scroll a (possibly virtualized-away) row into view via the grid api
-// the GridCard exposes on window, then click it. Returns after the
-// click; callers assert on the consequences.
-export async function clickRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await page.evaluate(
-    ({ uuid }) => {
-      type Node = {
-        rowIndex: number | null;
-        data?: { uuid: string };
-      };
-      const w = window as unknown as {
-        __fwGridApi?: {
-          forEachNode: (cb: (n: Node) => void) => void;
-          ensureNodeVisible: (n: Node, pos: "middle") => void;
+// the GridCard exposes on window, and return its row index once the DOM
+// node for it actually exists.
+//
+// The scroll and the wait cannot be one step. `ensureNodeVisible` moves
+// the viewport, but AG Grid renders the newly-visible window on its own
+// schedule, so the node at that index may not be in the DOM yet when
+// `evaluate` returns. A plain locator wait on the index is not enough
+// either: if the viewport did not end up where the call asked (a
+// re-layout, a grid that has just been resized), waiting alone never
+// converges and the click fails at its 30s default having never
+// re-asked. So the nudge is inside the poll, and gets repeated until
+// the row is there.
+//
+// This is a race the suite could always lose and mostly didn't; it
+// surfaced when the specs started running four at a time and rendering
+// got slower relative to the scroll.
+async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
+  // Annotated: `found` is only ever assigned inside the forEachNode
+  // callback, so TypeScript infers the evaluate's return as plain
+  // `null` and the cast below would be rejected as a mistake.
+  const nudge = (): Promise<number | null> =>
+    page.evaluate(
+      ({ uuid }) => {
+        type Node = {
+          rowIndex: number | null;
+          data?: { uuid: string };
         };
-      };
-      const api = w.__fwGridApi!;
-      let found: number | null = null;
-      api.forEachNode((node) => {
-        if (node.data && node.data.uuid === uuid) {
-          api.ensureNodeVisible(node, "middle");
-          found = node.rowIndex;
-        }
-      });
-      return found;
-    },
-    { uuid },
-  );
+        const w = window as unknown as {
+          __fwGridApi?: {
+            forEachNode: (cb: (n: Node) => void) => void;
+            ensureNodeVisible: (n: Node, pos: "middle") => void;
+          };
+        };
+        const api = w.__fwGridApi!;
+        let found: number | null = null;
+        api.forEachNode((node) => {
+          if (node.data && node.data.uuid === uuid) {
+            api.ensureNodeVisible(node, "middle");
+            found = node.rowIndex;
+          }
+        });
+        return found;
+      },
+      { uuid },
+    );
+
+  const rowIndex = await nudge();
   expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
+  await expect
+    .poll(
+      async () => {
+        await nudge();
+        return page
+          .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
+          .count();
+      },
+      {
+        timeout: 15_000,
+        intervals: [100, 250, 250, 500],
+        message: `row ${rowIndex} (uuid=${uuid}) never rendered after being scrolled to`,
+      },
+    )
+    .toBeGreaterThan(0);
+  return rowIndex as number;
+}
+
+// Scroll a (possibly virtualized-away) row into view, then click it.
+// Returns after the click; callers assert on the consequences.
+export async function clickRowByUuid(page: Page, uuid: string) {
+  const rowIndex = await scrollRowIntoView(page, uuid);
   await page
     .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
     .click();
@@ -39,31 +81,7 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 // node to dispatch at — but opens the context menu instead of
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await page.evaluate(
-    ({ uuid }) => {
-      type Node = {
-        rowIndex: number | null;
-        data?: { uuid: string };
-      };
-      const w = window as unknown as {
-        __fwGridApi?: {
-          forEachNode: (cb: (n: Node) => void) => void;
-          ensureNodeVisible: (n: Node, pos: "middle") => void;
-        };
-      };
-      const api = w.__fwGridApi!;
-      let found: number | null = null;
-      api.forEachNode((node) => {
-        if (node.data && node.data.uuid === uuid) {
-          api.ensureNodeVisible(node, "middle");
-          found = node.rowIndex;
-        }
-      });
-      return found;
-    },
-    { uuid },
-  );
-  expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
+  const rowIndex = await scrollRowIntoView(page, uuid);
   await page
     .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
     .click({ button: "right" });
@@ -170,127 +188,150 @@ export async function searchAndSettle(
 
 // ── The Pipeline table's rows ────────────────────────────────────────
 //
-// Shared because there were two copies of all of this — one in
-// `manager2-sync.spec.ts` and one in `onboarding-pdf.spec.ts` — and
-// they had already drifted: #235 fixed a terminal-status set that
-// listed three of the five statuses, in one of the two places it
-// existed. One vocabulary, one settle rule.
+// One implementation, because three specs and two pull requests
+// converged on this problem within a day of each other and each left a
+// copy behind. #235 fixed a terminal-status set that listed three of
+// the five states — in one of the two places that set existed. #236
+// then fixed settling twice over, once per spec, arriving at two
+// different answers: `onboarding-pdf` keyed on the row's stamp moving,
+// `manager2-sync` waited for the runner to drop the data-root lock.
+//
+// Both were right about different halves, and neither is sufficient
+// alone, so this is the union of them:
+//
+//   1. the row is terminal *and* reports an instant later than the one
+//      it showed before the click. "Terminal" alone cannot tell a
+//      finished run from the previous one — a second sync of an
+//      already-succeeded row leaves "Succeeded" up until the job claims
+//      it, so a status-only wait passes instantly against the old run.
+//   2. the runner has let go of the data root. A terminal *row* is not
+//      a finished *run*: the scheduler keeps walking the graph to
+//      publish output versions, and those writes move `Last synced` on
+//      rows a test then reads. `run.live` is the lock, so it is the
+//      only signal that means nobody is writing.
+//   3. the page is showing that. The grid re-reads on a 2s/5s timer, so
+//      the columns can be a poll behind the backend even once it is done.
 
 /// A Pipeline row, by the step id `getRowId` keys on.
 export const pipelineRow = (page: Page, id: string) =>
   page.locator(`.ag-row[row-id="${id}"]`);
 
-/// The status cell, which carries the state and the run it belongs to.
-const statusCell = (page: Page, id: string) =>
-  pipelineRow(page, id).locator('[col-id="status"] .m2-status');
-
-/// The runner's own word for a row's state (`skipped_up_to_date`), not
-/// the display label ("Up to date"). Null while the cell is mid-repaint
-/// or the row is virtualized away.
-export async function stateOf(page: Page, id: string): Promise<string | null> {
-  const el = statusCell(page, id);
+/// A row's status. The column paints an icon, so the state is the
+/// icon's accessible name — the same word a person gets by hovering.
+/// Null while the cell is mid-repaint or the row is virtualized away.
+export async function statusOf(page: Page, id: string): Promise<string | null> {
+  const el = pipelineRow(page, id).locator('[col-id="status"] [role="img"]');
   if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("data-status");
+  return await el.first().getAttribute("aria-label");
 }
 
-/// The instant the row's *currently painted* status describes — the
-/// same value the Last synced column shows. This is a run's identity:
-/// two runs of one step produce two different stamps, where the status
-/// word produces the same string every time.
-export async function stateAtOf(page: Page, id: string): Promise<string | null> {
-  const el = statusCell(page, id);
+/// The exact instant a row last ran, off the Last-synced cell's
+/// `title`. Not the visible text, which reads "5 minutes ago" and
+/// drifts on its own — comparing that across a sync would compare two
+/// clocks rather than two records. Null for a row that has never run,
+/// which renders "—" with no title to read.
+export async function stampOf(page: Page, id: string): Promise<string | null> {
+  const el = pipelineRow(page, id).locator('[col-id="lastSynced"] [title]');
   if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("data-status-at");
+  return await el.first().getAttribute("title");
 }
 
-/// States a run will not move a step out of. The runner's vocabulary,
-/// in one place.
-export const TERMINAL_STATES = new Set([
-  "succeeded",
-  "skipped_up_to_date",
-  "failed",
-  "blocked",
-  "interrupted",
-]);
+/// States a run will not move a step out of.
+export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 
-/// How long a row may take to settle. A real `datalib-dag` run over the
-/// fixture corpus, on a cold action cache, under `--runs_per_test=N`.
+/// How long a row may take to settle: a real `datalib-dag` run over the
+/// fixture corpus on a cold action cache.
 export const ROW_SETTLE = 60_000;
 
-/// Wait for a row to reach a terminal state, and return it.
+/// Wait for a row to finish a run newer than the one it was showing.
 ///
-/// `after` is what makes this honest. Without it the only question
-/// askable is "is this row terminal?", and immediately after clicking
-/// Sync the answer is *yes* — from the previous run, whose status is
-/// still painted because the click has not yet produced a new one. The
-/// poll is satisfied instantly, the caller proceeds, and the run it
-/// started is still going: assertions then race it. That is one bug
-/// with two faces — `onboarding-pdf` read a rendered_md row that was
-/// still "Running", and `manager2-sync` compared a Last synced stamp
-/// that the real run rewrote five seconds later.
-///
-/// Passing the stamp read *before* the click turns the question into
-/// "is this row terminal in a run later than the one I already saw",
-/// which no stale frame can answer yes to. Prefer `syncAndSettle`,
-/// which cannot forget to take that reading.
-///
-/// Returns the state the poll actually matched rather than re-reading
-/// the cell: a second, unsynchronized read can land after the row has
-/// moved on again, which is how the old helper returned "Queued" from
-/// a function whose poll had just proven the row terminal.
-export async function settleRow(
+/// `before` is that row's stamp read *before* the click — see
+/// `stampsBefore`, which takes the reading for a whole set at once so a
+/// caller cannot forget one.
+async function settleRowOnly(
   page: Page,
   id: string,
-  opts: { after?: string | null; timeout?: number } = {},
+  before: string | null,
+  timeout: number,
 ): Promise<string> {
-  let settled: string | null = null;
+  let last = "(no status)";
   await expect
     .poll(
       async () => {
-        const state = await stateOf(page, id);
-        if (!state || !TERMINAL_STATES.has(state)) return null;
-        // Same stamp as before the click ⇒ this is the previous run's
-        // status still on screen, not an outcome for this one.
-        if (opts.after !== undefined && (await stateAtOf(page, id)) === opts.after) {
-          return null;
-        }
-        settled = state;
-        return state;
+        last = (await statusOf(page, id)) ?? "(no status)";
+        const stamp = await stampOf(page, id);
+        return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
       },
       {
-        timeout: opts.timeout ?? ROW_SETTLE,
+        timeout,
         intervals: [200],
-        message:
-          `${id} never reached a terminal state` +
-          (opts.after !== undefined ? ` in a run after ${opts.after ?? "(never run)"}` : ""),
+        message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
       },
     )
-    .not.toBeNull();
-  return settled!;
+    .toBe("finished");
+  // The value the poll matched, never a fresh read: the row can be
+  // claimed by the next job between the two, and the function would
+  // then return "Queued" from a call whose contract is a terminal
+  // status.
+  return last;
 }
 
-/// Press a source row's Sync button and wait for the run it starts to
-/// reach every row named.
+/// Wait until no runner holds the data root, then remount so the page
+/// is not a poll behind it.
 ///
-/// Takes the "before" reading itself, between locating the button and
-/// pressing it, so no caller can start a run and then ask a question
-/// that its own previous run already answers. Returns each row's
-/// settled state, keyed by id.
-export async function syncAndSettle(
+/// `page.request` rather than the `request` fixture: it shares the
+/// page's context, so it carries the same auth header and the same
+/// baseURL — which matters now that config-mutating specs each have a
+/// backend of their own.
+export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
+  await expect
+    .poll(
+      async () => {
+        const dag = await (await page.request.get("/api/dag")).json();
+        return dag.run?.live === true;
+      },
+      { timeout, intervals: [200], message: "a runner still holds the data root" },
+    )
+    .toBe(false);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+}
+
+/// Every row's stamp, keyed by id — the reading a settle compares
+/// against. Taken for the whole set before the click that starts a run.
+export async function stampsBefore(
   page: Page,
-  seedId: string,
-  watch: string[] = [seedId],
-  opts: { timeout?: number } = {},
+  ids: readonly string[],
+): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  for (const id of ids) out[id] = await stampOf(page, id);
+  return out;
+}
+
+/// Settle every row a run was expected to reach, then wait out the run
+/// itself. Returns each row's settled status, keyed by id.
+///
+/// The runner wait happens once at the end rather than per row: it is a
+/// fact about the run, not about any one step, and remounting between
+/// rows would only cost page loads.
+export async function settleRows(
+  page: Page,
+  ids: readonly string[],
+  before: Record<string, string | null>,
+  timeout = ROW_SETTLE,
 ): Promise<Record<string, string>> {
-  const before: Record<string, string | null> = {};
-  for (const id of watch) before[id] = await stateAtOf(page, id);
-  await pipelineRow(page, seedId).getByRole("button", { name: "Sync now" }).click();
-  const settled: Record<string, string> = {};
-  for (const id of watch) {
-    settled[id] = await settleRow(page, id, {
-      after: before[id],
-      timeout: opts.timeout,
-    });
-  }
-  return settled;
+  const out: Record<string, string> = {};
+  for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
+  await settleRunner(page, timeout);
+  return out;
+}
+
+/// One row's form of `settleRows`.
+export async function settle(
+  page: Page,
+  id: string,
+  before: string | null,
+  timeout = ROW_SETTLE,
+): Promise<string> {
+  return (await settleRows(page, [id], { [id]: before }, timeout))[id];
 }

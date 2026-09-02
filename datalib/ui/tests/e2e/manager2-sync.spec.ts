@@ -42,14 +42,14 @@
 // The config is shared by every spec in the run (workers: 1), so it is
 // restored in afterEach — including on failure.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
-  ROW_SETTLE,
-  settleRow,
-  stateAtOf,
-  stateOf,
-  syncAndSettle,
-  TERMINAL_STATES,
+  pipelineRow as row,
+  settle,
+  stampOf as lastSyncedOf,
+  stampsBefore,
+  statusOf,
+  TERMINAL,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -57,35 +57,31 @@ import {
 declare const process: { env: Record<string, string | undefined> };
 
 const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const FIXTURE_ROOT = process.env.FW_E2E_FIXTURE_ROOT;
 const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
 
-const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
+/// This spec's own data root, asked of the backend rather than read
+/// from the environment.
+///
+/// It rewrites `config.toml`, so it runs against a data root nobody
+/// else touches (`tests/e2e/config-mutating.ts`; the project's
+/// `baseURL` is what points it there). The config it writes names
+/// `data_root` absolutely, so it has to name *that* root — pointing at
+/// the shared fixture root instead would have every sync here writing
+/// into the tree twenty other specs are reading.
+///
+/// `GET /api/config` reports the absolute path of the config file the
+/// backend is serving, so its directory is the answer, and it comes
+/// from the same server the page is talking to by construction.
+let dataRoot = "";
+async function resolveDataRoot(request: APIRequestContext): Promise<string> {
+  const { path } = (await (await request.get("/api/config")).json()) as {
+    path: string;
+  };
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
 const syncBtn = (page: Page, id: string) =>
   row(page, id).getByRole("button", { name: "Sync now" });
-
-/// A row's state, in the runner's own vocabulary (`skipped_up_to_date`)
-/// rather than the label the column paints ("Up to date"). Asserting on
-/// state rather than prose is what lets these tests and the scheduler
-/// share one word for one thing. Shared: see `stateOf` in grid-helpers.
-const statusOf = stateOf;
-
-/// "Last synced" as the *exact stamp*, from the cell's `title`.
-///
-/// Not the visible text: that reads "5 minutes ago" and drifts on its
-/// own, so comparing it across a sync would be comparing two clocks
-/// rather than two records. The title is the instant the row is
-/// actually claiming, which is the thing these tests are about.
-/// Null when the row has never run and there is no stamp to reveal.
-async function lastSyncedOf(page: Page, id: string): Promise<string | null> {
-  // Count first, like `statusOf`. A never-run row renders "—" with no
-  // `title` at all, and calling `getAttribute` on a locator that
-  // matches nothing *waits* for it rather than answering null — the
-  // whole test times out instead of reporting "no stamp".
-  const el = row(page, id).locator('[col-id="lastSynced"] [title]');
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("title");
-}
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
@@ -98,16 +94,31 @@ async function writeConfig(page: Page, text: string) {
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
-}
 
-/// Settling lives in grid-helpers now, along with the terminal
-/// vocabulary. The copy that used to be here is the reason: it drifted
-/// from `onboarding-pdf`'s copy, and #235 had to fix the same
-/// three-of-five terminal set in only one of the two places it existed.
+  // Reload, so the rows this test then watches were painted from the
+  // config *and* the runner's record together.
+  //
+  // Saving re-derives the table from the config text at once — that is
+  // the point of the Advanced editor — but the per-step history behind
+  // the Status and Last synced columns comes from `GET /api/dag`, which
+  // is refetched on a timer. Between the two, a row that has run before
+  // paints as "Never run": it exists because the config declares it,
+  // and nothing has yet said what it did. Mounting the page afresh
+  // fetches config, jobs and the DAG record in one `Promise.all`, so
+  // that in-between state cannot be observed.
+  //
+  // Without this the sequence sampler below recorded
+  // `["Queued", "Never run", "Succeeded"]` and failed the monotonicity
+  // check — correctly, by its own rule that "Never run" after a queue
+  // is going backwards. The status was a rendering artifact of the save
+  // rather than anything the runner did.
+  await openManager(page);
+}
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
+  dataRoot = await resolveDataRoot(request);
   await openManager(page);
   original = await page.locator(".m2-editor").inputValue();
 });
@@ -124,8 +135,8 @@ test.describe("a real sync, driven from the grid", () => {
   test.setTimeout(120_000);
 
   test.skip(
-    !STEP_BIN || !FIXTURE_ROOT || !PDF_DIR,
-    "needs FW_E2E_DATALIB_STEP + FW_E2E_FIXTURE_ROOT + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
+    !STEP_BIN || !PDF_DIR,
+    "needs FW_E2E_DATALIB_STEP + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
   );
 
   // A step's `command` is split shell-style, so a binary path is
@@ -153,7 +164,7 @@ test.describe("a real sync, driven from the grid", () => {
     return at === -1 ? "" : `\n${original.slice(at)}`;
   };
 
-  const config = () => `data_root = "${FIXTURE_ROOT}"
+  const config = () => `data_root = "${dataRoot}"
 
 [[steps]]
 id = "pdfs/raw"
@@ -170,7 +181,7 @@ inputs = ["pdfs/raw"]
 id = "docs/raw"
 command = "'${STEP_BIN}' download fsindex"
 [steps.params.common]
-input_path = "${FIXTURE_ROOT}/fsindex_scan"
+input_path = "${dataRoot}/fsindex_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
 # a state the grid can be observed handling — a Last synced of "—", and
@@ -182,7 +193,7 @@ input_path = "${FIXTURE_ROOT}/fsindex_scan"
 id = "unsynced/raw"
 command = "'${STEP_BIN}' download fsindex"
 [steps.params.common]
-input_path = "${FIXTURE_ROOT}/fsindex_scan"
+input_path = "${dataRoot}/fsindex_scan"
 ${applets()}`;
 
   test("syncing one source leaves another source's history untouched", async ({
@@ -191,7 +202,9 @@ ${applets()}`;
     await writeConfig(page, config());
 
     // Give docs a real history to protect.
-    expect((await syncAndSettle(page, "docs/raw"))["docs/raw"]).toBe("succeeded");
+    const docsWas = await lastSyncedOf(page, "docs/raw");
+    await syncBtn(page, "docs/raw").click();
+    expect(await settle(page, "docs/raw", docsWas)).toBe("Succeeded");
     const docsStatus = await statusOf(page, "docs/raw");
     const docsSynced = await lastSyncedOf(page, "docs/raw");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
@@ -199,7 +212,9 @@ ${applets()}`;
     // Now sync the *other* source. The runner still walks docs/raw, to
     // publish its output version, and reports it `not_selected` — the
     // fact that used to be written over its record.
-    expect((await syncAndSettle(page, "pdfs/raw"))["pdfs/raw"]).toBe("succeeded");
+    const pdfsWas = await lastSyncedOf(page, "pdfs/raw");
+    await syncBtn(page, "pdfs/raw").click();
+    expect(await settle(page, "pdfs/raw", pdfsWas)).toBe("Succeeded");
 
     expect(
       await statusOf(page, "docs/raw"),
@@ -229,15 +244,17 @@ ${applets()}`;
       return s;
     };
 
-    // The run stamps on screen *before* the click. The loop below stops
-    // at the first terminal state, and without these it would stop at
-    // the one a previous test left painted — recording a one-frame
-    // sequence of somebody else's run.
-    const wasRaw = await stateAtOf(page, "pdfs/raw");
-    const wasRender = await stateAtOf(page, "pdfs/rendered_md");
+    const was = await stampsBefore(page, ["pdfs/raw", "pdfs/rendered_md"]);
     await syncBtn(page, "pdfs/raw").click();
-    // The first sample is deliberately taken with no await in between:
-    // the push from the enqueue handler is what has to have landed.
+    // Gate on the queue having accepted, then sample. `click()` resolves
+    // when the event is dispatched, not when the async handler behind it
+    // finishes, so sampling straight after it is a race with the enqueue
+    // — and losing it reads the *previous* test's "Succeeded" as this
+    // run's first frame. The banner is set by `runSource` between the
+    // POST returning and the job list being re-read, which is exactly
+    // the moment this test is about: the queue has the job, and the
+    // question is what the rows say.
+    await expect(page.getByText(/Queued a sync for/)).toBeVisible();
     await record();
 
     // Syncing a source claims everything downstream of it, so the
@@ -246,27 +263,21 @@ ${applets()}`;
     // download-only provider could not support, and the reason this
     // spec is built on `pdf`.
     expect(downstream[0], `downstream sequence was ${JSON.stringify(downstream)}`).toBe(
-      "queued",
+      "Queued",
     );
     // ...while the unrelated source is not claimed at all.
-    expect(await statusOf(page, "docs/raw")).not.toBe("queued");
+    expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
 
-    const deadline = Date.now() + ROW_SETTLE;
-    // `TERMINAL_STATES`, from grid-helpers, not a set spelled out again
-    // here. The local copy this replaces listed three of the five
-    // terminal statuses, so a run ending `blocked` or `interrupted` was
-    // never recognized as over: the loop spun to the deadline and
-    // reported "never settled" about a row that had settled a minute
-    // earlier, naming neither the status nor the reason. There is now
-    // one such set in the suite, which is the only way that stays
-    // true.
+    const deadline = Date.now() + 60_000;
+    // `TERMINAL`, not a set spelled out again here. The local copy this
+    // replaces listed three of the five terminal statuses, so a run
+    // ending `Blocked` or `Interrupted` was never recognized as over:
+    // the loop spun to the deadline and reported "never settled" about a
+    // row that had settled a minute earlier, naming neither the status
+    // nor the reason.
     for (;;) {
       const s = await record();
-      // Terminal *and* from this run: a stale terminal frame is exactly
-      // what the stamp is here to rule out.
-      if (s && TERMINAL_STATES.has(s) && (await stateAtOf(page, "pdfs/raw")) !== wasRaw) {
-        break;
-      }
+      if (s && TERMINAL.test(s)) break;
       expect(Date.now(), `never settled; saw ${JSON.stringify(seen)}`).toBeLessThan(
         deadline,
       );
@@ -276,8 +287,8 @@ ${applets()}`;
     // What the sequence must contain. "Queued" is the frame that used
     // to be missing entirely — the click produced no visible change
     // until the whole run was over.
-    expect(seen[0], `sequence was ${JSON.stringify(seen)}`).toBe("queued");
-    expect(seen[seen.length - 1]).toBe("succeeded");
+    expect(seen[0], `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
+    expect(seen[seen.length - 1]).toBe("Succeeded");
 
     // ...and it must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one. Running is
@@ -291,14 +302,14 @@ ${applets()}`;
     // "Never run" ranks *below* Queued: it is the absence of history,
     // so seeing it after a sync was queued really is going backwards.
     const rank: Record<string, number> = {
-      never_run: -1,
-      queued: 0,
-      running: 1,
-      succeeded: 2,
-      skipped_up_to_date: 2,
-      failed: 2,
-      blocked: 2,
-      interrupted: 2,
+      "Never run": -1,
+      Queued: 0,
+      Running: 1,
+      Succeeded: 2,
+      "Up to date": 2,
+      Failed: 2,
+      Blocked: 2,
+      Interrupted: 2,
     };
     const rankOf = (s: string) => {
       expect(
@@ -317,18 +328,18 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. `pdfs/raw` is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settleRow(page, "pdfs/rendered_md", { after: wasRender })).toMatch(
-      /^(succeeded|skipped_up_to_date)$/,
+    expect(await settle(page, "pdfs/rendered_md", was["pdfs/rendered_md"])).toMatch(
+      /^(Succeeded|Up to date)$/,
     );
     await record(); // capture the settled state in the sequence
     expect(
       downstream[0],
-      `downstream never started queued: ${JSON.stringify(downstream)}`,
-    ).toBe("queued");
+      `downstream never started Queued: ${JSON.stringify(downstream)}`,
+    ).toBe("Queued");
     expect(
       downstream[downstream.length - 1],
       `downstream never finished: ${JSON.stringify(downstream)}`,
-    ).toMatch(/^(succeeded|skipped_up_to_date)$/);
+    ).toMatch(/^(Succeeded|Up to date)$/);
   });
 
   test("Last synced counts up on its own, and hover reveals the exact stamp", async ({
@@ -343,12 +354,9 @@ ${applets()}`;
     // absolute stamp survives as the hover, and that the cell keeps
     // counting with nobody touching the page.
     await writeConfig(page, config());
-    // `syncAndSettle`, not click-then-settle. The stamp captured below
-    // is the whole subject of this test, and a settle that returned on
-    // a *previous* run's "Succeeded" let the real run finish partway
-    // through — rewriting the stamp under the final assertion, which
-    // then failed by the handful of seconds the run had taken.
-    expect((await syncAndSettle(page, "pdfs/raw"))["pdfs/raw"]).toBe("succeeded");
+    const countUpWas = await lastSyncedOf(page, "pdfs/raw");
+    await syncBtn(page, "pdfs/raw").click();
+    expect(await settle(page, "pdfs/raw", countUpWas)).toBe("Succeeded");
 
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
@@ -396,17 +404,17 @@ ${applets()}`;
     // "4 seconds ago", while chronologically it follows it.
     await writeConfig(page, config());
 
-    // Two rows with a real gap between them, so the orders differ. The
-    // gap is the point, so each sync has to be *finished* before the
-    // next begins — a settle satisfied by an earlier run would let the
-    // two overlap and put the stamps in either order.
-    expect((await syncAndSettle(page, "docs/raw"))["docs/raw"]).toBe("succeeded");
-    const second = await syncAndSettle(page, "pdfs/raw", [
-      "pdfs/raw",
-      "pdfs/rendered_md",
-    ]);
-    expect(second["pdfs/raw"]).toBe("succeeded");
-    expect(second["pdfs/rendered_md"]).toMatch(/^(succeeded|skipped_up_to_date)$/);
+    // Two rows with a real gap between them, so the orders differ. Each
+    // sync must be finished before the next begins, or the stamps can
+    // land in either order — which is the thing being sorted.
+    const sortWas = await stampsBefore(page, ["docs/raw", "pdfs/raw", "pdfs/rendered_md"]);
+    await syncBtn(page, "docs/raw").click();
+    expect(await settle(page, "docs/raw", sortWas["docs/raw"])).toBe("Succeeded");
+    await syncBtn(page, "pdfs/raw").click();
+    expect(await settle(page, "pdfs/raw", sortWas["pdfs/raw"])).toBe("Succeeded");
+    expect(await settle(page, "pdfs/rendered_md", sortWas["pdfs/rendered_md"])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
 
     /// Row ids top to bottom, paired with the exact stamp each is
     /// claiming — read off `title`, so the check is against instants
