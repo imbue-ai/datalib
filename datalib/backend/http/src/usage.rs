@@ -13,11 +13,20 @@
 //! Nothing else on this machine writes the data root, so between runs
 //! there is nothing to find: an idle server measuring every five
 //! seconds forever would be reading tens of gigabytes an hour to learn
-//! a number that cannot have moved. So the tick is gated on
-//! [`pipeline_is_running`] — a run holding the runner lock, whoever
-//! started it, terminal included — plus one walk at startup, one more
-//! after a run lets go (that one is what records where it left
-//! things), and whatever `?refresh=1` asks for.
+//! a number that cannot have moved. So there is no timer here at all.
+//! The loop wakes on [`crate::watch::RootEvent`] — the same channel the
+//! UI's live updates ride — and each time asks
+//! [`pipeline_is_running`] whether to walk. A run in flight rewrites
+//! `system/dag_state.json` and the progress bus continuously, so those
+//! events *are* the run's own pulse; between runs the only traffic is
+//! the watcher's ten-second heartbeat, which costs one `flock` and
+//! walks nothing.
+//!
+//! That makes this depend on the heartbeat existing, which is worth
+//! knowing: [`crate::watch::spawn`] starts it before it tries to build
+//! the watcher and independently of whether that succeeds, so a data
+//! root on a filesystem that cannot be watched still gets a pulse —
+//! coarser, but the run-ended walk still lands.
 //!
 //! What this costs is resolution, not correctness. A change made by
 //! something outside datalib — a file dropped into a scanned folder, a
@@ -65,11 +74,14 @@
 //! already writing, so the cache is warm, but on a large root it is
 //! still real I/O next to real work. The gate above bounds it to the
 //! window where the number actually moves; it does not make it cheap.
-//! The fix for that is to watch the tree for changes instead of
-//! re-reading it (a `notify` watcher, re-measuring only the subtrees
-//! that reported an event), which would also let the idle case keep
-//! full resolution for free. Nothing here is built that way yet, and
-//! this comment is the marker for when it is.
+//!
+//! The next step, if it becomes worth it, is to stop re-reading the
+//! tree and let the watcher say which subtree moved — `crate::watch`
+//! already has the events and deliberately drops them (it watches
+//! `<root>` and `<root>/system` non-recursively, precisely to avoid
+//! being told about every blob a sync writes). Re-measuring only the
+//! subtree named by an event would make the walk proportional to the
+//! change rather than to the root.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -85,16 +97,7 @@ use tokio::sync::RwLock;
 /// runs it isn't walked at all — see the module docs.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// How often the loop asks whether a run is in flight.
-///
-/// Much shorter than [`SAMPLE_INTERVAL`], and it has to be: the two
-/// are different questions with different costs. Walking the root is
-/// expensive and only worth doing every few seconds; *asking* is one
-/// `flock` on one file, and asking only every five seconds means a run
-/// shorter than that can begin and end entirely between two questions —
-/// leaving no sample of it at all. A real sync in a small root takes
-/// about two seconds, so that is not a corner case.
-const RUNNING_POLL: Duration = Duration::from_secs(1);
+
 
 /// The floor on the spacing between two recorded samples of one series.
 /// Equal to [`SAMPLE_INTERVAL`] today, so in practice every changed
@@ -612,14 +615,15 @@ pub fn pipeline_is_running(root: &Path) -> bool {
     datalib_dag::lock::FileLock::runner_is_held(root)
 }
 
-/// Should this tick walk?
+/// Should this wake-up walk?
 ///
 /// Split out from the loop so the four cases can be stated once and
 /// tested without a clock:
 ///
 ///   * a run just started — walk now, so the series has a point at the
 ///     beginning of it rather than only after the first interval;
-///   * a run is continuing — walk on [`SAMPLE_INTERVAL`];
+///   * a run is continuing — walk on [`SAMPLE_INTERVAL`], however many
+///     events arrive in between;
 ///   * a run just ended — walk once more. **This is the load-bearing
 ///     one.** It records where the run left the disk; without it the
 ///     series would stop at the last mid-run sample and the final size
@@ -636,24 +640,42 @@ fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> b
 ///
 /// Walks once at startup — an idle root is the usual state, and the
 /// table needs a number before anyone asks — and then only around a
-/// run. See the module docs for why an unconditional tick was the
-/// wrong shape, and [`should_walk`] for exactly when it walks.
-pub async fn run(monitor: Arc<UsageMonitor>, repo: DynAppRepo, root: Arc<PathBuf>) {
+/// run. See the module docs for why there is no timer here, and
+/// [`should_walk`] for exactly when it walks.
+///
+/// `events` is the data root's own change channel. What arrives on it
+/// is ignored: a run's events and the idle heartbeat are equally good
+/// as "look again", and the lock — not the event — is what says
+/// whether a run is in flight. Subscribing rather than polling is what
+/// makes the idle case free.
+pub async fn run(
+    monitor: Arc<UsageMonitor>,
+    repo: DynAppRepo,
+    root: Arc<PathBuf>,
+    events: crate::watch::RootTx,
+) {
     match repo.recent_disk_usage(SEED_ROWS).await {
         Ok(rows) => monitor.seed(rows).await,
         Err(e) => eprintln!("usage: could not read the recorded history: {e}"),
     }
-    let mut tick = tokio::time::interval(RUNNING_POLL);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // `interval` fires its first tick immediately; spend it on the
-    // startup walk rather than waiting for one.
-    tick.tick().await;
+    // Subscribe before the startup walk, so a run that begins during it
+    // is not missed.
+    let mut rx = events.subscribe();
     sample_once(&monitor, &repo, root.clone(), None).await;
 
     let mut was_running = false;
     let mut last_walk = Instant::now();
     loop {
-        tick.tick().await;
+        match rx.recv().await {
+            Ok(_) => {}
+            // Lagged means a burst outran this receiver, which is only
+            // ever a reason to look sooner rather than later — the
+            // events carry nothing this loop reads.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            // The watcher and its heartbeat are gone, which happens
+            // only at shutdown. Nothing left to wake us.
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
         let running = pipeline_is_running(&root);
         if should_walk(running, was_running, last_walk.elapsed()) {
             sample_once(&monitor, &repo, root.clone(), None).await;
@@ -801,10 +823,10 @@ mod tests {
     /// When the loop walks, stated as a table.
     ///
     /// The case that made this worth pulling out of the loop is the
-    /// third: a two-second sync — which is what a small root actually
-    /// takes — begins and ends between two five-second ticks, so
-    /// "walk while running" on the walk cadence caught nothing at all.
-    /// Hence a fast predicate poll and a slow walk.
+    /// last one: a two-second sync — which is what a small root
+    /// actually takes — begins and ends well inside one walk interval,
+    /// so "walk every interval while running" caught nothing at all.
+    /// The edges are what make a short run visible.
     #[test]
     fn a_walk_is_owed_at_the_edges_of_a_run_and_never_between_them() {
         let idle = Duration::ZERO;

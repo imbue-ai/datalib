@@ -100,6 +100,31 @@ Everything on stdout other than that one line is ignored. stderr is the
 log: the gateway forwards it line by line and keeps the tail, which
 becomes the error message if the applet never announces.
 
+**stdin is a liveness pipe, not an input channel.** Nothing is ever
+sent through it. The gateway holds the write end for exactly as long as
+it runs, so when it stops — cleanly, on a signal, or on a SIGKILL that
+runs no code at all — the kernel closes that end and the applet's read
+hits EOF. An applet that sees EOF on stdin should exit.
+
+The gateway sets `DATALIB_APPLET_PARENT_PIPE=1` to say that stdin means
+this. Without it, treat stdin as ordinary: an applet run by hand has a
+terminal there, or `/dev/null`, and reading it would swallow input or
+take an instant EOF as bad news.
+
+Honouring this is what stops an applet outliving the gateway. It is not
+merely tidy: an orphan keeps its port and its data root open, nothing
+ever reaps it, and they accumulate — a machine that had been running
+the app and its tests for a week was holding 186 of them (#238). The
+gateway kills its applets on every exit it can still run code for; this
+is the one path where it cannot, so the applet has to notice by itself.
+
+One trap if you write the exit path yourself: by the time EOF arrives,
+stderr is a pipe to a process that no longer exists, so writing to it
+takes `EPIPE`. `eprintln!` *panics* on a failed write, and a panic in
+the watching thread leaves the process running — the leak you were
+fixing, one line from the exit that fixes it. Write best-effort
+(`let _ = writeln!(…)`), the way `announce_port` does.
+
 That is the whole contract. There is no protocol version, no handshake,
 and no registration call.
 
@@ -244,9 +269,19 @@ separate because they cost different amounts:
 - **the store's own files moved** → rescan only.
 
 Conflating them would make a `PUT /api/lib` restart every applet. Both
-checks are `stat`-only when nothing changed, so they can sit on the
-endpoint the UI polls — which is what turns a saved config, or a file
-dropped in by hand, into a live gallery update without a restart.
+checks are `stat`-only when nothing changed, so they sit on
+`GET /api/frontend` itself — which is what turns a saved config, or a
+file dropped in by hand, into a live gallery update without a restart.
+
+**That reconcile is lazy, and the ordering matters.** A new applet
+writes nothing into `system/frontend/` until it has been *started*, and
+it is only started by this reconcile. So the client cannot wait for
+`system/frontend/` to move before asking: it has to refetch on
+`config_changed` as well as on `frontend_changed`
+(`ui/src/cards/frontendRegistry.ts`). While the UI polled this endpoint
+every four seconds the ordering was invisible — something always asked
+again soon enough. See `backend/http/src/watch.rs` for the push channel
+that replaced the poll.
 
 **Reconciling** compares the new applet list against the one the
 gateway last started, entry by entry:

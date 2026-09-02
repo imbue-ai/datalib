@@ -68,6 +68,13 @@ pub async fn build_state(
     // rather than blocks the worker.
     let (progress_tx, _) = tokio::sync::broadcast::channel(512);
 
+    // Everything that changes without a job behind it. One watcher per
+    // process, replacing the timers every UI surface used to keep — see
+    // `crate::watch`. Started before the worker so a sync that begins
+    // during startup is already being reported on.
+    let (root_tx, _) = tokio::sync::broadcast::channel(64);
+    crate::watch::spawn((*root).clone(), root_tx.clone());
+
     // Background sync worker: drains the `sync_jobs` queue the UI fills.
     // With no sync binary it still runs — UI-triggered syncs fail fast
     // with a clear message instead of hanging (search is unaffected).
@@ -82,13 +89,21 @@ pub async fn build_state(
         worker::run(worker_repo, worker_cfg).await;
     });
 
-    // Bytes on disk, over time: one walk of the root per tick, folded
-    // into a snapshot the storage endpoint reads and appended to
-    // `system/usage.doltlite_db`. Spawned rather than awaited — the
-    // first walk of a large root is slow, and a boot that waited for it
-    // would delay the whole server for a number nothing needs yet.
+    // Bytes on disk, over time: a walk of the root folded into a
+    // snapshot the storage endpoint reads and appended to
+    // `system/usage.doltlite_db`. Driven by `root_tx` rather than a
+    // timer of its own — a run in flight is exactly what that channel
+    // is already reporting, and between runs the disk cannot have
+    // moved. Spawned rather than awaited: the first walk of a large
+    // root is slow, and a boot that waited for it would delay the whole
+    // server for a number nothing needs yet.
     let monitor = Arc::new(usage::UsageMonitor::new());
-    tokio::spawn(usage::run(monitor.clone(), app.clone(), root.clone()));
+    tokio::spawn(usage::run(
+        monitor.clone(),
+        app.clone(),
+        root.clone(),
+        root_tx.clone(),
+    ));
 
     // Applet discovery execs one child per configured applet, and
     // `build_state` runs on the tokio runtime — so it goes to a
@@ -107,6 +122,7 @@ pub async fn build_state(
         root,
         app,
         progress_tx,
+        root_tx,
         applets,
         api_token,
         usage: monitor,
