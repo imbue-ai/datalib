@@ -43,6 +43,14 @@
 // restored in afterEach — including on failure.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  pipelineRow as row,
+  settle,
+  stampOf as lastSyncedOf,
+  stampsBefore,
+  statusOf,
+  TERMINAL,
+} from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -72,36 +80,8 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
   return path.slice(0, path.lastIndexOf("/"));
 }
 
-const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
-const statusIcon = (page: Page, id: string) =>
-  row(page, id).locator('[col-id="status"] [role="img"]');
 const syncBtn = (page: Page, id: string) =>
   row(page, id).getByRole("button", { name: "Sync now" });
-
-/// The Status column is icons, so a row's state is its accessible name.
-/// Returns null while the cell is mid-repaint or the row is offscreen.
-async function statusOf(page: Page, id: string): Promise<string | null> {
-  const el = statusIcon(page, id);
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("aria-label");
-}
-
-/// "Last synced" as the *exact stamp*, from the cell's `title`.
-///
-/// Not the visible text: that reads "5 minutes ago" and drifts on its
-/// own, so comparing it across a sync would be comparing two clocks
-/// rather than two records. The title is the instant the row is
-/// actually claiming, which is the thing these tests are about.
-/// Null when the row has never run and there is no stamp to reveal.
-async function lastSyncedOf(page: Page, id: string): Promise<string | null> {
-  // Count first, like `statusOf`. A never-run row renders "—" with no
-  // `title` at all, and calling `getAttribute` on a locator that
-  // matches nothing *waits* for it rather than answering null — the
-  // whole test times out instead of reporting "no stamp".
-  const el = row(page, id).locator('[col-id="lastSynced"] [title]');
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("title");
-}
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
@@ -133,71 +113,6 @@ async function writeConfig(page: Page, text: string) {
   // is going backwards. The status was a rendering artifact of the save
   // rather than anything the runner did.
   await openManager(page);
-}
-
-const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
-
-/// Wait for a row to settle on a terminal status, then return it.
-/// Polls the DOM the way a person watches the screen.
-///
-/// `expect.poll` on the status string rather than a bespoke loop, so a
-/// timeout reports the state it was stuck on ("expected 'Queued' to
-/// match …") instead of just expiring.
-async function settle(page: Page, id: string, timeout = 60_000): Promise<string> {
-  // The value the poll matched, not a fresh read. Re-reading after the
-  // poll succeeds is a race: the row can be claimed by the *next* job
-  // between the two reads, and the function then returns "Queued" from
-  // a call whose whole contract is to return a terminal status.
-  let last = "(no status)";
-  await expect
-    .poll(
-      async () => {
-        last = (await statusOf(page, id)) ?? "(no status)";
-        return last;
-      },
-      {
-        timeout,
-        intervals: [250],
-        message: `${id} never reached a terminal status`,
-      },
-    )
-    .toMatch(TERMINAL);
-
-  // A terminal row is not a finished run, and the difference is what
-  // made three tests in this file flaky.
-  //
-  // The runner walks the whole graph to publish output versions, so it
-  // is still writing records after the step you asked for went green —
-  // and those writes move `Last synced` on rows this file then reads.
-  // The failures all looked like time going wrong rather than like a
-  // race: two stamps four seconds apart across one header click, a
-  // stamp that "changed while the clock was merely ticking".
-  //
-  // `run.live` is the lock on the data root (see `DagRun`), so it is
-  // the one signal that means *nobody is writing*. `page.request`
-  // rather than the `request` fixture: it shares the page's context, so
-  // it carries the same auth header and needs no plumbing at the call
-  // sites.
-  await expect
-    .poll(
-      async () => {
-        const dag = await (await page.request.get("/api/dag")).json();
-        return dag.run?.live === true;
-      },
-      {
-        timeout,
-        intervals: [200],
-        message: `a runner still holds the data root after ${id} went ${last}`,
-      },
-    )
-    .toBe(false);
-
-  // ...and the page has to be showing that. The grid re-reads on a
-  // timer (2s while a run is live, 5s otherwise), so even once the
-  // backend is done the columns can be a poll behind. Mounting afresh
-  // fetches config, jobs and the DAG record in one `Promise.all`.
-  await openManager(page);
-  return last;
 }
 
 let original = "";
@@ -287,8 +202,9 @@ ${applets()}`;
     await writeConfig(page, config());
 
     // Give docs a real history to protect.
+    const docsWas = await lastSyncedOf(page, "docs/raw");
     await syncBtn(page, "docs/raw").click();
-    expect(await settle(page, "docs/raw")).toBe("Succeeded");
+    expect(await settle(page, "docs/raw", docsWas)).toBe("Succeeded");
     const docsStatus = await statusOf(page, "docs/raw");
     const docsSynced = await lastSyncedOf(page, "docs/raw");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
@@ -296,8 +212,9 @@ ${applets()}`;
     // Now sync the *other* source. The runner still walks docs/raw, to
     // publish its output version, and reports it `not_selected` — the
     // fact that used to be written over its record.
+    const pdfsWas = await lastSyncedOf(page, "pdfs/raw");
     await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
+    expect(await settle(page, "pdfs/raw", pdfsWas)).toBe("Succeeded");
 
     expect(
       await statusOf(page, "docs/raw"),
@@ -327,6 +244,7 @@ ${applets()}`;
       return s;
     };
 
+    const was = await stampsBefore(page, ["pdfs/raw", "pdfs/rendered_md"]);
     await syncBtn(page, "pdfs/raw").click();
     // Gate on the queue having accepted, then sample. `click()` resolves
     // when the event is dispatched, not when the async handler behind it
@@ -410,7 +328,9 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. `pdfs/raw` is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await settle(page, "pdfs/rendered_md", was["pdfs/rendered_md"])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
     await record(); // capture the settled state in the sequence
     expect(
       downstream[0],
@@ -434,8 +354,9 @@ ${applets()}`;
     // absolute stamp survives as the hover, and that the cell keeps
     // counting with nobody touching the page.
     await writeConfig(page, config());
+    const countUpWas = await lastSyncedOf(page, "pdfs/raw");
     await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
+    expect(await settle(page, "pdfs/raw", countUpWas)).toBe("Succeeded");
 
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
@@ -483,12 +404,17 @@ ${applets()}`;
     // "4 seconds ago", while chronologically it follows it.
     await writeConfig(page, config());
 
-    // Two rows with a real gap between them, so the orders differ.
+    // Two rows with a real gap between them, so the orders differ. Each
+    // sync must be finished before the next begins, or the stamps can
+    // land in either order — which is the thing being sorted.
+    const sortWas = await stampsBefore(page, ["docs/raw", "pdfs/raw", "pdfs/rendered_md"]);
     await syncBtn(page, "docs/raw").click();
-    expect(await settle(page, "docs/raw")).toBe("Succeeded");
+    expect(await settle(page, "docs/raw", sortWas["docs/raw"])).toBe("Succeeded");
     await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md")).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await settle(page, "pdfs/raw", sortWas["pdfs/raw"])).toBe("Succeeded");
+    expect(await settle(page, "pdfs/rendered_md", sortWas["pdfs/rendered_md"])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
 
     /// Row ids top to bottom, paired with the exact stamp each is
     /// claiming — read off `title`, so the check is against instants

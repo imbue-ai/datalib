@@ -185,3 +185,153 @@ export async function searchAndSettle(
     timeout: opts.timeout ?? SEARCH_SETTLE,
   });
 }
+
+// ── The Pipeline table's rows ────────────────────────────────────────
+//
+// One implementation, because three specs and two pull requests
+// converged on this problem within a day of each other and each left a
+// copy behind. #235 fixed a terminal-status set that listed three of
+// the five states — in one of the two places that set existed. #236
+// then fixed settling twice over, once per spec, arriving at two
+// different answers: `onboarding-pdf` keyed on the row's stamp moving,
+// `manager2-sync` waited for the runner to drop the data-root lock.
+//
+// Both were right about different halves, and neither is sufficient
+// alone, so this is the union of them:
+//
+//   1. the row is terminal *and* reports an instant later than the one
+//      it showed before the click. "Terminal" alone cannot tell a
+//      finished run from the previous one — a second sync of an
+//      already-succeeded row leaves "Succeeded" up until the job claims
+//      it, so a status-only wait passes instantly against the old run.
+//   2. the runner has let go of the data root. A terminal *row* is not
+//      a finished *run*: the scheduler keeps walking the graph to
+//      publish output versions, and those writes move `Last synced` on
+//      rows a test then reads. `run.live` is the lock, so it is the
+//      only signal that means nobody is writing.
+//   3. the page is showing that. The grid re-reads on a 2s/5s timer, so
+//      the columns can be a poll behind the backend even once it is done.
+
+/// A Pipeline row, by the step id `getRowId` keys on.
+export const pipelineRow = (page: Page, id: string) =>
+  page.locator(`.ag-row[row-id="${id}"]`);
+
+/// A row's status. The column paints an icon, so the state is the
+/// icon's accessible name — the same word a person gets by hovering.
+/// Null while the cell is mid-repaint or the row is virtualized away.
+export async function statusOf(page: Page, id: string): Promise<string | null> {
+  const el = pipelineRow(page, id).locator('[col-id="status"] [role="img"]');
+  if ((await el.count()) === 0) return null;
+  return await el.first().getAttribute("aria-label");
+}
+
+/// The exact instant a row last ran, off the Last-synced cell's
+/// `title`. Not the visible text, which reads "5 minutes ago" and
+/// drifts on its own — comparing that across a sync would compare two
+/// clocks rather than two records. Null for a row that has never run,
+/// which renders "—" with no title to read.
+export async function stampOf(page: Page, id: string): Promise<string | null> {
+  const el = pipelineRow(page, id).locator('[col-id="lastSynced"] [title]');
+  if ((await el.count()) === 0) return null;
+  return await el.first().getAttribute("title");
+}
+
+/// States a run will not move a step out of.
+export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
+
+/// How long a row may take to settle: a real `datalib-dag` run over the
+/// fixture corpus on a cold action cache.
+export const ROW_SETTLE = 60_000;
+
+/// Wait for a row to finish a run newer than the one it was showing.
+///
+/// `before` is that row's stamp read *before* the click — see
+/// `stampsBefore`, which takes the reading for a whole set at once so a
+/// caller cannot forget one.
+async function settleRowOnly(
+  page: Page,
+  id: string,
+  before: string | null,
+  timeout: number,
+): Promise<string> {
+  let last = "(no status)";
+  await expect
+    .poll(
+      async () => {
+        last = (await statusOf(page, id)) ?? "(no status)";
+        const stamp = await stampOf(page, id);
+        return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
+      },
+      {
+        timeout,
+        intervals: [200],
+        message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
+      },
+    )
+    .toBe("finished");
+  // The value the poll matched, never a fresh read: the row can be
+  // claimed by the next job between the two, and the function would
+  // then return "Queued" from a call whose contract is a terminal
+  // status.
+  return last;
+}
+
+/// Wait until no runner holds the data root, then remount so the page
+/// is not a poll behind it.
+///
+/// `page.request` rather than the `request` fixture: it shares the
+/// page's context, so it carries the same auth header and the same
+/// baseURL — which matters now that config-mutating specs each have a
+/// backend of their own.
+export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
+  await expect
+    .poll(
+      async () => {
+        const dag = await (await page.request.get("/api/dag")).json();
+        return dag.run?.live === true;
+      },
+      { timeout, intervals: [200], message: "a runner still holds the data root" },
+    )
+    .toBe(false);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+}
+
+/// Every row's stamp, keyed by id — the reading a settle compares
+/// against. Taken for the whole set before the click that starts a run.
+export async function stampsBefore(
+  page: Page,
+  ids: readonly string[],
+): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  for (const id of ids) out[id] = await stampOf(page, id);
+  return out;
+}
+
+/// Settle every row a run was expected to reach, then wait out the run
+/// itself. Returns each row's settled status, keyed by id.
+///
+/// The runner wait happens once at the end rather than per row: it is a
+/// fact about the run, not about any one step, and remounting between
+/// rows would only cost page loads.
+export async function settleRows(
+  page: Page,
+  ids: readonly string[],
+  before: Record<string, string | null>,
+  timeout = ROW_SETTLE,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
+  await settleRunner(page, timeout);
+  return out;
+}
+
+/// One row's form of `settleRows`.
+export async function settle(
+  page: Page,
+  id: string,
+  before: string | null,
+  timeout = ROW_SETTLE,
+): Promise<string> {
+  return (await settleRows(page, [id], { [id]: before }, timeout))[id];
+}

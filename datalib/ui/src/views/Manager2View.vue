@@ -811,6 +811,53 @@ function onGridReady(e: GridReadyEvent<Row>) {
   gridApi = e.api;
 }
 
+/// Commit only the newest answer, whatever order the answers arrive in.
+///
+/// Every loader below can be in flight more than once at a time: a 2s
+/// progress poll, a 5s full poll, and the explicit calls the enqueue,
+/// cancel and SSE handlers make. Nothing orders those, so an older
+/// request can answer *after* a newer one — and each of these assigns
+/// its ref wholesale, so the older snapshot wins and the screen walks
+/// backwards.
+///
+/// That is not theoretical. A list of jobs fetched before the sync was
+/// enqueued, landing after it, drops the job we just created; the step
+/// loses its claim, and `stepStatus` falls past the queued branch to
+/// "never run" — a row that reads as *never synced* one frame after
+/// being queued, and then as succeeded. `manager2-sync`'s monotonicity
+/// test catches it as `["queued","never_run","succeeded"]`.
+///
+/// Sequenced on when each request *started*, and a late answer is
+/// dropped rather than applied. An answer still commits if nothing
+/// newer has committed yet, so a failed newer request doesn't strand
+/// the older one's data.
+function freshest<T>(commit: (value: T) => void) {
+  let issued = 0;
+  let committed = 0;
+  const run = async (load: () => Promise<T>) => {
+    const seq = ++issued;
+    const value = await load();
+    if (seq <= committed) return;
+    committed = seq;
+    commit(value);
+  };
+  /// Drop everything already in flight.
+  ///
+  /// For when something *other* than a fetch becomes the newest truth —
+  /// `adoptJob` writing the row `POST /api/sync/jobs` just returned.
+  /// Sequencing the fetches against each other is not enough on its
+  /// own: a poll issued before the click still carries a list from
+  /// before the job existed, and committing it erases the job, drops
+  /// the step's claim, and the row falls back to whatever it said last
+  /// run. That is a stale "Succeeded" one frame after a sync was
+  /// queued, which is exactly the going-backwards `manager2-sync`
+  /// exists to catch.
+  run.invalidate = () => {
+    committed = issued;
+  };
+  return run as typeof run & { invalidate: () => void };
+}
+
 // ── One step's log ───────────────────────────────────────────────────
 //
 // A red Status says *that* a step failed and, on hover, the runner's
@@ -954,23 +1001,27 @@ function repaint() {
   });
 }
 
+const commitJobs = freshest<SyncJob[]>((list) => {
+  jobs.value = list;
+  // The queue decides "Queued" and the Run/Stop face, so a new job is
+  // a repaint even when the runner's record hasn't moved.
+  repaint();
+  // Both paths retire the banner, because either can be the one that
+  // learns the job stopped: the push covers a sync this server ran,
+  // the poll covers a dropped SSE connection and a run started from a
+  // terminal.
+  if (bannerJob.value) {
+    const j = list.find((x) => x.id === bannerJob.value);
+    // A job that has fallen off the end of the queue we hold is not
+    // running either, so the banner goes.
+    if (j) retireBanner(j.id, j.state);
+    else clearBanner();
+  }
+});
+
 async function loadJobs() {
   try {
-    jobs.value = await fetchAllJobs(100);
-    // The queue decides "Queued" and the Run/Stop face, so a new job is
-    // a repaint even when the runner's record hasn't moved.
-    repaint();
-    // Both paths retire the banner, because either can be the one that
-    // learns the job stopped: the push covers a sync this server ran,
-    // the poll covers a dropped SSE connection and a run started from a
-    // terminal.
-    if (bannerJob.value) {
-      const j = jobs.value.find((x) => x.id === bannerJob.value);
-      // A job that has fallen off the end of the queue we hold is not
-      // running either, so the banner goes.
-      if (j) retireBanner(j.id, j.state);
-      else clearBanner();
-    }
+    await commitJobs(() => fetchAllJobs(100));
   } catch {
     // The grid is still useful without status; leave the columns empty.
   }
@@ -988,21 +1039,28 @@ const jobActive = computed(() =>
 /// stream only carries runs *this server* started, and the whole point
 /// of reading the runner's own file is that a terminal `datalib-dag`
 /// shows up here too.
+const commitDag = freshest<Awaited<ReturnType<typeof fetchDag>>>((dag) => {
+  dagSteps.value = Object.fromEntries(dag.steps.map((st) => [st.id, st]));
+  dagRun.value = dag.run;
+  repaint();
+});
+
 async function loadDag() {
   try {
-    const dag = await fetchDag();
-    dagSteps.value = Object.fromEntries(dag.steps.map((st) => [st.id, st]));
-    dagRun.value = dag.run;
-    repaint();
+    await commitDag(() => fetchDag());
   } catch {
     // A missing record reads as "never run", which is what a fresh root
     // looks like anyway.
   }
 }
 
+const commitStorage = freshest<OutputStorage[]>((s) => {
+  storage.value = s;
+});
+
 async function loadStorage() {
   try {
-    storage.value = await fetchPipelineStorage();
+    await commitStorage(() => fetchPipelineStorage());
   } catch {
     // Same: a missing size column beats an error banner over the grid.
   }
@@ -1206,11 +1264,55 @@ async function runSource(id: string) {
   clearBanner();
   try {
     const job = await enqueueJob({ kind: "all", source_name: target });
+    adoptJob(job);
     say(true, `Queued a sync for ${step?.name ?? id}.`, job.id);
     // Before returning: the queue is what puts this row and everything
     // downstream of it into "Queued" and flips the button to Stop, and
     // the whole complaint this answers is that pressing play looked
     // like nothing happened.
+    await loadJobs();
+  } catch (e) {
+    banner.value = { ok: false, text: (e as Error).message };
+  } finally {
+    busy.value = false;
+  }
+}
+
+/// Fold a job we have in hand into the queue we hold.
+///
+/// `POST /api/sync/jobs` answers with the row it created, which is the
+/// authoritative fact that the job exists — more so than the list read
+/// that follows it, which is a separate query against a store the write
+/// may not be visible in yet. Seeding it here means the row is claimed,
+/// and reads as Queued, on the same tick as the click rather than a
+/// round trip later.
+function adoptJob(job: SyncJob) {
+  // Newest truth wins: anything already in flight predates this job.
+  commitJobs.invalidate();
+  const at = jobs.value.findIndex((j) => j.id === job.id);
+  jobs.value =
+    at >= 0
+      ? [...jobs.value.slice(0, at), job, ...jobs.value.slice(at + 1)]
+      : [job, ...jobs.value];
+  repaint();
+}
+
+/// Sync everything the config declares, in one run.
+///
+/// `source_name: null` is the runner's own "all sources" — the same job
+/// kind a row's Sync enqueues, minus the narrowing. Worth its own
+/// button because the per-row one deliberately refuses on anything that
+/// isn't a source step: with several sources configured, "bring
+/// everything up to date" otherwise meant finding each source row and
+/// pressing them one at a time, and getting one run per source instead
+/// of one run over the whole graph.
+async function runEverything() {
+  busy.value = true;
+  clearBanner();
+  try {
+    const job = await enqueueJob({ kind: "all" });
+    adoptJob(job);
+    say(true, "Queued a sync of everything.", job.id);
     await loadJobs();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1400,9 +1502,25 @@ onUnmounted(() => {
           <code>{{ configPath }}</code>
         </p>
       </div>
-      <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
-        + Add Data Source
-      </button>
+      <div class="m2-head-actions">
+        <button
+          class="m2-btn m2-runall"
+          :disabled="busy || !!parseError || !!configError || jobActive || rows.length === 0"
+          :title="
+            jobActive
+              ? 'A sync is already running.'
+              : rows.length === 0
+                ? 'Nothing configured yet.'
+                : 'Run every step the config declares, in one sync.'
+          "
+          @click="runEverything"
+        >
+          Sync everything
+        </button>
+        <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
+          + Add Data Source
+        </button>
+      </div>
     </header>
 
     <p v-if="loadError" class="m2-msg bad">Could not load the config: {{ loadError }}</p>
@@ -1549,10 +1667,21 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 .m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
+/* The two header actions travel together, pinned right. */
+.m2-head-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+/* Sized to sit level with "Add Data Source", but outlined rather than
+   filled: running what is already configured is the routine act, adding
+   a source the deliberate one, and only one of them should read as the
+   primary thing to do on this screen. */
+.m2-runall {
+  padding: 8px 14px;
+  font-size: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .m2-head h2 { margin: 0 0 4px; font-size: 19px; }
 .m2-path { margin: 0; color: var(--datalib-muted); font-size: 12px; }
 .m2-add {
-  margin-left: auto;
   padding: 8px 14px;
   border: 1px solid var(--datalib-accent);
   border-radius: 5px;
