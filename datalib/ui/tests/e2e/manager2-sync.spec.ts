@@ -52,6 +52,7 @@ import {
   stampOf as lastSyncedOf,
   stampsBefore,
   statusLog,
+  statusWord,
   statusOf,
   TERMINAL,
 } from "./grid-helpers";
@@ -271,9 +272,10 @@ ${applets()}`;
     // download-only provider could not support, and the reason this
     // spec is built on `pdf`.
     const downstream = (await statusLog(page, "pdfs/rendered_md")).slice(beforeDown);
-    expect(downstream[0], `downstream sequence was ${JSON.stringify(downstream)}`).toBe(
-      "Queued",
-    );
+    expect(
+      statusWord(downstream[0]),
+      `downstream sequence was ${JSON.stringify(downstream)}`,
+    ).toBe("Queued");
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
 
@@ -287,8 +289,8 @@ ${applets()}`;
     // What the sequence must contain. "Queued" is the frame that used
     // to be missing entirely — the click produced no visible change
     // until the whole run was over.
-    expect(seen[0], `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
-    expect(seen[seen.length - 1]).toBe("Succeeded");
+    expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
+    expect(statusWord(seen[seen.length - 1])).toBe("Succeeded");
 
     // "Running" stays optional, and recording the transitions is what
     // settled *why*.
@@ -331,7 +333,8 @@ ${applets()}`;
       Blocked: 2,
       Interrupted: 2,
     };
-    const rankOf = (s: string) => {
+    const rankOf = (frame: string) => {
+      const s = statusWord(frame);
       expect(
         rank[s],
         `unranked status ${JSON.stringify(s)} in ${JSON.stringify(seen)}`,
@@ -358,11 +361,11 @@ ${applets()}`;
     );
     const downstreamFinal = (await statusLog(page, "pdfs/rendered_md")).slice(beforeDown);
     expect(
-      downstreamFinal[0],
+      statusWord(downstreamFinal[0]),
       `downstream never started Queued: ${JSON.stringify(downstreamFinal)}`,
     ).toBe("Queued");
     expect(
-      downstreamFinal[downstreamFinal.length - 1],
+      statusWord(downstreamFinal[downstreamFinal.length - 1]),
       `downstream never finished: ${JSON.stringify(downstreamFinal)}`,
     ).toMatch(/^(Succeeded|Up to date)$/);
 
