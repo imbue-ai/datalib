@@ -147,6 +147,22 @@ test.describe("a real sync, driven from the grid", () => {
   // The render step needs no params: it reads the scan root back out of
   // the raw store, so it always converts exactly the tree the download
   // step walked.
+
+  // Carry the `[[applets]]` stanza forward from whatever was there.
+  //
+  // Replacing the file without it *removes* the unified_index applet,
+  // and the gateway restarts applets on any config change that drops or
+  // alters their entry — which tears down the resident qmd daemon and
+  // re-arms a model load for whichever spec searches next
+  // (`score-sort-order` and `search-qmd-routing` both sort after this
+  // file). Applets are invisible to the scheduler, so keeping the
+  // stanza changes nothing this spec asserts; dropping it was incidental
+  // and made an unrelated spec slower.
+  const applets = () => {
+    const at = original.indexOf("[[applets]]");
+    return at === -1 ? "" : `\n${original.slice(at)}`;
+  };
+
   const config = () => `data_root = "${FIXTURE_ROOT}"
 
 [[steps]]
@@ -177,7 +193,7 @@ id = "unsynced/raw"
 command = "'${STEP_BIN}' download fsindex"
 [steps.params.common]
 input_path = "${FIXTURE_ROOT}/fsindex_scan"
-`;
+${applets()}`;
 
   test("syncing one source leaves another source's history untouched", async ({
     page,
@@ -242,10 +258,15 @@ input_path = "${FIXTURE_ROOT}/fsindex_scan"
     expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
 
     const deadline = Date.now() + 60_000;
-    const terminal = new Set(["Succeeded", "Up to date", "Failed"]);
+    // `TERMINAL`, not a set spelled out again here. The local copy this
+    // replaces listed three of the five terminal statuses, so a run
+    // ending `Blocked` or `Interrupted` was never recognized as over:
+    // the loop spun to the deadline and reported "never settled" about a
+    // row that had settled a minute earlier, naming neither the status
+    // nor the reason.
     for (;;) {
       const s = await record();
-      if (s && terminal.has(s)) break;
+      if (s && TERMINAL.test(s)) break;
       expect(Date.now(), `never settled; saw ${JSON.stringify(seen)}`).toBeLessThan(
         deadline,
       );
