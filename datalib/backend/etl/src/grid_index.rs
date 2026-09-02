@@ -372,7 +372,7 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
         let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
             continue;
         };
-        let declared = crate::doltlite_raw::declared_column_names(pool, ddl, &table)
+        let declared = crate::doltlite_raw::declared_column_names(ddl, &table)
             .await
             .with_context(|| format!("declared columns for {table}"))?;
         let actual = crate::doltlite_raw::actual_column_names(pool, &table)
