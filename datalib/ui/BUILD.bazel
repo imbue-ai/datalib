@@ -134,6 +134,16 @@ _E2E_DATA = [
     # what makes "everything downstream is queued too" a real assertion
     # rather than a contrived one.
     "//datalib/backend/etl/providers/pdf:pdf_fixture",
+    # Signal, for the second source the onboarding spec adds. Two
+    # pieces, because a Signal backup cannot be checked in: the spec
+    # JSON, and the binary that expands it into a real *encrypted*
+    # snapshot dir. That is the point of using it here — `pdf` proves a
+    # local scan, and Signal proves the shape almost every real source
+    # has: a credentialed provider whose download step decrypts with a
+    # passphrase it reads from the environment. The AEP is 64 zeros and
+    # public, which is what makes the crypto path runnable in a test.
+    "//datalib/backend/signal-backup:signal_make_fixture",
+    "//datalib/backend/etl/providers/signal:tng_fixture",
     # rules_js-linked node_modules built from pnpm-lock.yaml; replaces
     # the host `pnpm install` for the `bazel test` path.
     ":node_modules",

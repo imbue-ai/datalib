@@ -199,5 +199,19 @@ if [[ -n "$PDF_ANCHOR" && -f "$PDF_ANCHOR" ]]; then
   export FW_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
 fi
 
+# Signal, for the onboarding spec's second source. Unlike the PDF
+# corpus there is nothing to point at directly: a Signal backup is an
+# encrypted blob, so it is *generated* from a checked-in JSON spec.
+# Hand playwright.config.ts both halves and let it expand them once per
+# config load, next to where it seeds the PDF scan directory.
+SIGNAL_FIXTURE_BIN="$(rlocation _main/datalib/backend/signal-backup/signal_make_fixture)" || SIGNAL_FIXTURE_BIN=""
+if [[ -n "$SIGNAL_FIXTURE_BIN" && -x "$SIGNAL_FIXTURE_BIN" ]]; then
+  export FW_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
+fi
+SIGNAL_SPEC="$(rlocation _main/datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json)" || SIGNAL_SPEC=""
+if [[ -n "$SIGNAL_SPEC" && -f "$SIGNAL_SPEC" ]]; then
+  export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
+fi
+
 cd "$UI_DIR"
 exec "${PLAYWRIGHT_CMD[@]}" "$@"
