@@ -15,8 +15,15 @@
 // in afterEach: the root is shared by every spec in the run
 // (workers: 1, fullyParallel: false).
 import { test, expect, type Page } from "@playwright/test";
+import { searchAndSettle } from "./grid-helpers";
 
 const SOURCE_CELLS = '.ag-center-cols-container [col-id="source_name"]';
+
+/// The distinct, non-empty texts in the Source column, in set order.
+async function distinctSourceCells(page: Page): Promise<string[]> {
+  const seen = await page.locator(SOURCE_CELLS).allInnerTexts();
+  return [...new Set(seen.map((t) => t.trim()).filter(Boolean))];
+}
 
 async function openGrid(page: Page) {
   await page.goto("/");
@@ -56,6 +63,10 @@ test.afterEach(async ({ page }) => {
 test("the Source column shows the configured name, and source_name: filters by id", async ({
   page,
 }) => {
+  // Two config writes plus four searches, any of which may land after
+  // an applet restart and pay a qmd model load — see `SEARCH_SETTLE`.
+  test.setTimeout(180_000);
+
   // --- With no config entry, the column falls back to the id -------
   await openGrid(page);
   await expect(page.locator(SOURCE_CELLS, { hasText: "slack" }).first()).toBeVisible();
@@ -63,24 +74,18 @@ test("the Source column shows the configured name, and source_name: filters by i
   // --- `source_name:` narrows to one source ------------------------
   // Every visible cell must read `slack` — the filter is a whole-segment
   // prefix test on qmd_path, not a substring match on anything.
-  await page.getByTestId("search-input").fill("source_name:slack type:all");
+  await searchAndSettle(page, "source_name:slack type:all");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
-  await expect
-    .poll(async () => {
-      const seen = await page.locator(SOURCE_CELLS).allInnerTexts();
-      return [...new Set(seen.map((t) => t.trim()).filter(Boolean))];
-    })
-    .toEqual(["slack"]);
+  expect(
+    await distinctSourceCells(page),
+  ).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await page.getByTestId("search-input").fill("source_name:anthropic-api type:all");
-  await expect
-    .poll(async () => {
-      const seen = await page.locator(SOURCE_CELLS).allInnerTexts();
-      return [...new Set(seen.map((t) => t.trim()).filter(Boolean))];
-    })
-    .toEqual(["anthropic-api"]);
+  await searchAndSettle(page, "source_name:anthropic-api type:all");
+  expect(
+    await distinctSourceCells(page),
+  ).toEqual(["anthropic-api"]);
 
   // --- A name in the config changes the column's text --------------
   await writeConfig(
@@ -99,21 +104,31 @@ inputs = ["slack/raw"]
   );
 
   await openGrid(page);
-  await page.getByTestId("search-input").fill("source_name:slack type:all");
-  await expect
-    .poll(async () => {
-      const seen = await page.locator(SOURCE_CELLS).allInnerTexts();
-      return [...new Set(seen.map((t) => t.trim()).filter(Boolean))];
-    })
-    .toEqual(["Work Slack"]);
+  await searchAndSettle(page, "source_name:slack type:all");
+  expect(
+    await distinctSourceCells(page),
+  ).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
   //
-  // Polled, not asserted once. The grid keeps the previous result set
-  // painted while a query is in flight — deliberately, so it doesn't
-  // flash empty on every keystroke — and a bare `toHaveCount(0)` races
-  // that, passing or failing on how fast the search came back.
-  await page.getByTestId("search-input").fill("source_name:Work Slack type:all");
-  await expect.poll(async () => page.locator(SOURCE_CELLS).count()).toBe(0);
+  // The name is quoted because it contains a space. Unquoted, the
+  // parser takes `source_name:Work` and leaves `Slack` as a bare term
+  // (`tokenize` splits on unquoted whitespace, `split_field` only
+  // claims up to the first unquoted `:`) — and a bare term is free
+  // text, which routes through qmd. This spec sorts long before
+  // `search-qmd-routing`, so that stray word made it the session's
+  // *first* qmd call and it silently paid the model load the `warmup`
+  // project now owns. It read as a flake — fine on a warm idle machine,
+  // dead under `--runs_per_test=N` where every sandbox pays at once —
+  // and it weakened the assertion too, since zero rows could have come
+  // from the free-text clause rather than from `source_name:`. Quoted,
+  // this is one structured filter and no qmd at all.
+  //
+  // A flat `toHaveCount(0)` is safe here only because `searchAndSettle`
+  // has already established that the grid is painting *this* query —
+  // otherwise it would race the repaint and pass or fail on how fast
+  // the search came back.
+  await searchAndSettle(page, 'source_name:"Work Slack" type:all');
+  await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });
