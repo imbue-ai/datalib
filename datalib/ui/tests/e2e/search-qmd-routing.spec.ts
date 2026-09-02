@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { searchAndSettle } from "./grid-helpers";
 
 // Free-text search routes through qmd (BM25 + vector + reranker by
 // default). The bug this guards: previously the Rust backend did
@@ -18,44 +19,44 @@ import { test, expect } from "@playwright/test";
 // scores, LIKE-fallback rows don't, so the header showing up is the
 // signal that the query actually routed through qmd.
 
-async function qmdSearch(
-  page: import("@playwright/test").Page,
-  q: string,
-  timeout: number,
-) {
+async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto("/");
   await page
     .locator('.ag-center-cols-container [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
-  await page.getByTestId("search-input").fill(q);
-  await expect(
-    page.locator('.ag-header-cell[col-id="score"]'),
-  ).toBeVisible({ timeout });
+  // Settle first, then assert. The score column is only ever populated
+  // by qmd-routed rows, so once the grid is painting this query its
+  // presence *is* the routing assertion — no timeout needed, and a
+  // query that silently stopped routing now fails immediately instead
+  // of after a 90s wait indistinguishable from a slow daemon.
+  await searchAndSettle(page, q);
+  await expect(page.locator('.ag-header-cell[col-id="score"]')).toBeVisible();
   await expect(
     page.locator('.ag-center-cols-container [role="row"]').first(),
-  ).toBeVisible({ timeout: 30_000 });
+  ).toBeVisible();
 }
 
 test.describe("free-text search routes through qmd", () => {
-  // The first qmd call in this session pays for npx package fetch + model
-  // load. Subsequent calls are fast. Lift the per-test timeout for the
-  // first sub-test so the warm-up doesn't trip Playwright's 30s default.
-  test.setTimeout(120_000);
+  // The `warmup` project pays the cold start before any spec runs, but
+  // the applet restarts on config changes and `manager2-sync` (which
+  // sorts earlier) rewrites config.toml wholesale — so the first query
+  // here may still pay a qmd model load. See `SEARCH_SETTLE`.
+  test.setTimeout(180_000);
 
   test("bare 'grey earl' returns rows (qmd hybrid; was zero under LIKE)", async ({
     page,
   }) => {
-    await qmdSearch(page, "grey earl", 90_000);
+    await qmdSearch(page, "grey earl");
   });
 
   test('explicit qmd:"..." predicate also returns rows', async ({ page }) => {
-    await qmdSearch(page, 'qmd:"earl grey"', 30_000);
+    await qmdSearch(page, 'qmd:"earl grey"');
   });
 
   test('qmd_vsearch:"..." predicate routes to vector-only mode', async ({
     page,
   }) => {
-    await qmdSearch(page, 'qmd_vsearch:"earl grey"', 30_000);
+    await qmdSearch(page, 'qmd_vsearch:"earl grey"');
   });
 });

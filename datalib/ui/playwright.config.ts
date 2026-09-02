@@ -162,8 +162,19 @@ export default defineConfig({
   },
   projects: [
     {
+      // The qmd cold start, owned and named — see
+      // tests/e2e/qmd-warmup.setup.ts for why it can't be left to
+      // whichever spec sorts first. `testMatch` here overrides the
+      // top-level `*.spec.ts` pattern, so this file and only this file
+      // runs in the project.
+      name: "warmup",
+      testMatch: /qmd-warmup\.setup\.ts/,
+      use: { browserName: "chromium" },
+    },
+    {
       name: "chromium",
       use: { browserName: "chromium" },
+      dependencies: ["warmup"],
     },
     {
       // The desktop app runs in a WKWebView, not Chromium, and WebKit's
@@ -185,6 +196,7 @@ export default defineConfig({
       // config load, so it cannot run twice in one session.
       name: "webkit",
       use: { browserName: "webkit" },
+      dependencies: ["warmup"],
       testMatch: [
         // Explore / GridCard — the search grid.
         /grid-populated\.spec\.ts/,

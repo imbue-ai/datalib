@@ -105,6 +105,18 @@ watch(
   { immediate: true },
 );
 const rows = ref<SearchRow[]>([]);
+// The query whose results are actually painted right now — not `query`
+// (what is typed) and not `!loading` (which flips in both directions
+// within one tick, so an observer can miss the transition entirely).
+//
+// The grid deliberately keeps the previous result set on screen while a
+// query is in flight, so "still the old rows" and "the new rows happen
+// to look like the old ones" are indistinguishable from the DOM. This
+// makes them distinguishable: it changes exactly once per completed
+// search, when the rows it describes go up. `null` until the first
+// result set lands. Surfaced as `data-shown-query` for the e2e suite,
+// which otherwise has to poll cell contents and race the repaint.
+const shownQuery = ref<string | null>(null);
 const total = ref(0);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -602,6 +614,7 @@ async function runSearch(q: string) {
     loading.value = false;
     error.value = null;
     qmdError.value = cached.qmdError;
+    shownQuery.value = q;
     return;
   }
   inflight = new AbortController();
@@ -616,6 +629,7 @@ async function runSearch(q: string) {
       typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     qmdError.value = qe;
     cachePut(q, { rows: r.rows, total: r.total_estimated, qmdError: qe });
+    shownQuery.value = q;
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     error.value = (e as Error).message;
@@ -1313,7 +1327,7 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <p v-if="error" class="error">error: {{ error }}</p>
 
-    <div class="grid-wrap">
+    <div class="grid-wrap" :data-shown-query="shownQuery">
       <AgGridVue
         class="grid"
         :class="{ 'grid--loading': loading }"

@@ -124,3 +124,46 @@ export async function expectGridPainted(
     })
     .toBeGreaterThan(100);
 }
+
+// How long a search may take to come back.
+//
+// This is not a guess at network latency — it is the cost of the qmd
+// daemon's model load. The applet holds a long-lived `qmd mcp` child
+// (backend/unified_index/src/qmd/daemon.rs); the first free-text query
+// after it starts pays for loading the embedding model, and every
+// query after that is sub-second. The child is torn down and respawned
+// whenever the applet restarts, which the http gateway does on any
+// config change that touches its entry — so specs that rewrite
+// config.toml re-arm that cost for whatever runs next. Under
+// `--runs_per_test=N` every sandbox pays it at once.
+//
+// So: one named constant, big enough for a cold model load under
+// contention, rather than a per-assertion number that silently becomes
+// wrong when a query starts or stops routing through qmd.
+export const SEARCH_SETTLE = 90_000;
+
+// Type a query and wait until the grid has actually painted *its*
+// results.
+//
+// The naive form — fill, then poll the cells — races a repaint that has
+// no completion signal: GridCard keeps the previous result set on
+// screen while a query is in flight (deliberately, so it doesn't flash
+// empty on every keystroke), so a poll that runs early sees stale rows
+// and cannot tell them from the answer. Asserting on the spinner has
+// the opposite race, since `loading` flips both ways inside one tick.
+//
+// `data-shown-query` is the unambiguous signal: GridCard sets it to the
+// query whose rows it just put up, so waiting for it to equal `q` means
+// the grid is showing this search and not the last one. Callers assert
+// on cell contents afterwards, with no polling needed.
+export async function searchAndSettle(
+  page: Page,
+  q: string,
+  opts: { grid?: Locator; timeout?: number } = {},
+) {
+  const grid = opts.grid ?? page.locator(".grid-wrap");
+  await page.getByTestId("search-input").fill(q);
+  await expect(grid).toHaveAttribute("data-shown-query", q, {
+    timeout: opts.timeout ?? SEARCH_SETTLE,
+  });
+}

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { searchAndSettle } from "./grid-helpers";
 
 // Two contracts a single qmd-routed query has to satisfy. They share
 // the same setup (open page → type free-text → qmd routes → score
@@ -25,9 +26,12 @@ import { test, expect } from "@playwright/test";
 //    virtualizer ingests the new rowData.
 
 test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
-  // First qmd call in a session warms up the npx package + the model;
-  // give it a generous budget.
-  test.setTimeout(120_000);
+  // The `warmup` project pays the qmd cold start before any spec runs,
+  // but the applet restarts on config changes and `manager2-sync`
+  // (which sorts earlier) rewrites config.toml — so this may still land
+  // on a freshly respawned daemon and pay the model load again. See
+  // `SEARCH_SETTLE`.
+  test.setTimeout(180_000);
 
   test("score column is non-increasing and viewport lands at row 0", async ({
     page,
@@ -49,16 +53,22 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     ).toBeGreaterThan(0);
 
     // 2. Type a free-text query — qmd routes it.
-    await page.getByTestId("search-input").fill("grey earl");
+    //
+    // `searchAndSettle` absorbs the search latency, so the two
+    // assertions below are about the *result*, not about waiting: the
+    // score column exists only on qmd-routed rows, so once the grid is
+    // painting this query, its presence is the proof that the query
+    // routed. Gating on the header with a 90s timeout used to conflate
+    // those two things — a slow daemon and a query that never reached
+    // qmd failed identically.
+    await searchAndSettle(page, "grey earl");
 
-    // Score column appears when qmd returns and the result set is in
-    // place.
     const scoreHeader = page.locator('.ag-header-cell[col-id="score"]');
-    await expect(scoreHeader).toBeVisible({ timeout: 90_000 });
+    await expect(scoreHeader).toBeVisible();
     const firstRow = page
       .locator('.ag-center-cols-container [role="row"]')
       .first();
-    await expect(firstRow).toBeVisible({ timeout: 30_000 });
+    await expect(firstRow).toBeVisible();
 
     // 3. Score column values are non-increasing in DOM order.
     //    Virtualization means we only see the on-screen window, but a
