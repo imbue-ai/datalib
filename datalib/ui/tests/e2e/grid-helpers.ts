@@ -209,8 +209,10 @@ export async function searchAndSettle(
 //      publish output versions, and those writes move `Last synced` on
 //      rows a test then reads. `run.live` is the lock, so it is the
 //      only signal that means nobody is writing.
-//   3. the page is showing that. The grid re-reads on a 2s/5s timer, so
-//      the columns can be a poll behind the backend even once it is done.
+//   3. the page is showing that. The grid refetches when the runner's
+//      record moves, but that is debounced (300 ms, see
+//      backend/http/src/watch.rs), so it can still be a beat behind the
+//      backend right after the lock drops.
 
 /// A Pipeline row, by the step id `getRowId` keys on.
 export const pipelineRow = (page: Page, id: string) =>
@@ -242,6 +244,58 @@ export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 /// How long a row may take to settle: a real `datalib-dag` run over the
 /// fixture corpus on a cold action cache.
 export const ROW_SETTLE = 60_000;
+
+/// Record every status a set of rows *passes through*, from now until
+/// the page navigates.
+///
+/// Sampling on a timer — a `for(;;)` loop around `waitForTimeout(150)`,
+/// which is what this replaces — can only see the states that happen to
+/// be on screen when it looks, so a transition shorter than one
+/// interval is invisible. That is not merely slow: a status that goes
+/// *backwards* for less than a sample is exactly the bug
+/// `manager2-sync`'s monotonicity check exists to catch, and the
+/// sampler could miss it. Observing mutations instead makes the
+/// sequence complete.
+///
+/// Watches `aria-label` because that is where the state lives (the
+/// column paints icons), and `childList` because AG Grid rebuilds a
+/// cell's DOM on `refreshCells` rather than mutating it in place.
+///
+/// The log lives in the page, so a navigation ends it — see
+/// `settleRow`, which is the settle that does not remount.
+export async function recordStatuses(page: Page, ids: readonly string[]) {
+  await page.evaluate((ids: string[]) => {
+    const w = window as unknown as { __statusLog?: Record<string, string[]> };
+    const log: Record<string, string[]> = {};
+    w.__statusLog = log;
+    const sample = () => {
+      for (const id of ids) {
+        const el = document.querySelector(
+          `.ag-row[row-id="${CSS.escape(id)}"] [col-id="status"] [role="img"]`,
+        );
+        const s = el?.getAttribute("aria-label");
+        const seen = (log[id] ??= []);
+        if (s && seen[seen.length - 1] !== s) seen.push(s);
+      }
+    };
+    sample();
+    new MutationObserver(sample).observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["aria-label"],
+    });
+  }, ids as string[]);
+}
+
+/// What `recordStatuses` has seen for one row, oldest first.
+export async function statusLog(page: Page, id: string): Promise<string[]> {
+  return page.evaluate(
+    (id: string) =>
+      (window as unknown as { __statusLog?: Record<string, string[]> }).__statusLog?.[id] ?? [],
+    id,
+  );
+}
 
 /// Wait for a row to finish a run newer than the one it was showing.
 ///
@@ -277,7 +331,7 @@ async function settleRowOnly(
 }
 
 /// Wait until no runner holds the data root, then remount so the page
-/// is not a poll behind it.
+/// is not a beat behind it.
 ///
 /// `page.request` rather than the `request` fixture: it shares the
 /// page's context, so it carries the same auth header and the same
@@ -324,6 +378,21 @@ export async function settleRows(
   for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
   await settleRunner(page, timeout);
   return out;
+}
+
+/// `settleRows` for one row, without the remount.
+///
+/// For a caller holding a transition log recorded by `recordStatuses`:
+/// the log lives in the page, so the `page.reload()` inside
+/// `settleRunner` would throw it away before it could be read. Such a
+/// caller has to settle the runner itself once it has the log.
+export async function settleRow(
+  page: Page,
+  id: string,
+  before: string | null,
+  timeout = ROW_SETTLE,
+): Promise<string> {
+  return settleRowOnly(page, id, before, timeout);
 }
 
 /// One row's form of `settleRows`.

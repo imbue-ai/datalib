@@ -17,7 +17,8 @@ import { formatStamp } from "@/config/timeFormat";
 ///
 /// The board (`tasks` on a `GET /api/sync/stream` frame) speaks the
 /// same per-step vocabulary as the runner's `current_state`, and
-/// arrives up to 400 ms after the fact instead of on the next poll. So
+/// arrives up to 400 ms after the fact instead of on the next fetch of
+/// the runner's record. So
 /// it is not a new source of truth — it is the *same* one, earlier, and
 /// is folded in as such rather than given its own precedence tier.
 ///
@@ -68,7 +69,8 @@ export function boardWentTerminal(tasks: SyncTask[]): boolean {
   return tasks.some((t) => TERMINAL_BOARD.has(t.state));
 }
 
-/// Apply an overlay to what the last poll knew about a step.
+/// Apply an overlay to what the last fetch of the runner's record knew
+/// about a step.
 ///
 /// Kept here rather than in the view so the fold is covered by the same
 /// timeline tests as everything else it feeds.
@@ -91,7 +93,7 @@ export function withOverlay(
   return {
     ...base,
     current_state: overlay.current_state ?? base.current_state,
-    // The polled progress has real numbers; the pushed one has only a
+    // The fetched progress has real numbers; the pushed one has only a
     // message. Prefer whichever is more informative rather than letting
     // the newer one erase a bar.
     progress: base.progress?.total != null ? base.progress : (overlay.progress ?? base.progress),
@@ -100,17 +102,21 @@ export function withOverlay(
 
 /// The run a row should be judged against.
 ///
-/// `/api/dag` is polled, so right after a sync starts it may still
-/// describe the *previous* run — closed, and therefore vetoing every
-/// live reading. The pushed board proves a run is in flight before that
-/// poll lands, and when it does, it wins: a closed record cannot
-/// out-rank evidence of a step currently running.
+/// `/api/dag` is fetched, not pushed, so right after a sync starts it
+/// may still describe the *previous* run — closed, and therefore
+/// vetoing every live reading. The pushed board proves a run is in
+/// flight before that fetch lands, and when it does, it wins: a closed
+/// record cannot out-rank evidence of a step currently running.
+///
+/// The window is much shorter than it used to be — the fetch is
+/// triggered by the record actually moving rather than by a 2-second
+/// timer — but it is not zero, and this is what covers it.
 export function effectiveRun(
-  polled: DagRun | null,
+  fetched: DagRun | null,
   liveJob: SyncJob | undefined,
 ): DagRun | null {
-  if (!liveJob || liveJob.state !== "running") return polled;
-  if (polled && !polled.finished_at) return polled;
+  if (!liveJob || liveJob.state !== "running") return fetched;
+  if (fetched && !fetched.finished_at) return fetched;
   const started = liveJob.started_at ?? liveJob.created_at;
   return { run_id: started, started_at: started, finished_at: null, live: true };
 }
@@ -165,7 +171,7 @@ function listOf(items: string[]): string {
 /// claimed by the worker yet, so nothing can have been reached.
 ///
 /// Unparsable input answers "no": that leaves the row queued, which is
-/// the reading that stays true for longest — the next poll corrects it
+/// the reading that stays true for longest — the next fetch corrects it
 /// either way.
 function reachedSince(
   last: { started_at: string; finished_at: string | null } | null,
