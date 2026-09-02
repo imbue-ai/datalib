@@ -265,7 +265,10 @@ export const ROW_SETTLE = 60_000;
 /// `settleRow`, which is the settle that does not remount.
 export async function recordStatuses(page: Page, ids: readonly string[]) {
   await page.evaluate((ids: string[]) => {
-    const w = window as unknown as { __statusLog?: Record<string, string[]> };
+    const w = window as unknown as {
+      __statusLog?: Record<string, string[]>;
+      __sampleStatuses?: () => void;
+    };
     const log: Record<string, string[]> = {};
     w.__statusLog = log;
     const sample = () => {
@@ -279,6 +282,8 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
       }
     };
     sample();
+    // Exposed so `statusLog` can take a reading of its own — see there.
+    w.__sampleStatuses = sample;
     new MutationObserver(sample).observe(document.body, {
       subtree: true,
       childList: true,
@@ -288,13 +293,32 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
   }, ids as string[]);
 }
 
-/// What `recordStatuses` has seen for one row, oldest first.
+/// What `recordStatuses` has seen for one row, oldest first, ending
+/// with what the row reads *now*.
+///
+/// The trailing sample is not belt-and-braces; without it this is
+/// flaky, and was. A caller reaches here after `settleRow`, which
+/// decides the row is terminal from its own reads — two Playwright
+/// round-trips, on their own schedule. The observer's callback for that
+/// same repaint is delivered separately, and nothing orders the two, so
+/// the log could still end at "Running" while `settleRow` had already
+/// returned "Succeeded". Seen once as
+/// `expect(seen[seen.length - 1]).toBe("Succeeded")` receiving
+/// "Running".
+///
+/// Sampling here closes it by construction: whatever the observer has
+/// or has not delivered, the log ends with the state on screen at the
+/// moment it was read. The dedupe in `sample` makes it a no-op when the
+/// observer did get there first, which is the common case.
 export async function statusLog(page: Page, id: string): Promise<string[]> {
-  return page.evaluate(
-    (id: string) =>
-      (window as unknown as { __statusLog?: Record<string, string[]> }).__statusLog?.[id] ?? [],
-    id,
-  );
+  return page.evaluate((id: string) => {
+    const w = window as unknown as {
+      __statusLog?: Record<string, string[]>;
+      __sampleStatuses?: () => void;
+    };
+    w.__sampleStatuses?.();
+    return w.__statusLog?.[id] ?? [];
+  }, id);
 }
 
 /// Wait for a row to finish a run newer than the one it was showing.
