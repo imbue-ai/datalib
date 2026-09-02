@@ -536,6 +536,12 @@ which Bazel respects on its own — `external` is reserved for tests
 that hit third-party services you don't want CI talking to. Prefer
 `bazelisk` over `bazel` so the workspace's pinned Bazel version wins.
 
+**CI currently excludes `//datalib/ui:e2e_test` anyway**, so a green
+cross on a PR does not mean the Playwright suite passed — run it
+locally before claiming a UI change is verified. See the `GAP(e2e)`
+comment in `.github/workflows/test.yml` for why, and for what
+re-enabling it would take.
+
 **Beware consuming Bazel outputs from outside Bazel**: anything that
 reads `bazel-bin/tests/fixtures/ingested/*` is reading a genrule output.
 Tools outside Bazel don't know how to rebuild it, so if you change any
