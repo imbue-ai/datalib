@@ -258,10 +258,15 @@ ${applets()}`;
     expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
 
     const deadline = Date.now() + 60_000;
-    const terminal = new Set(["Succeeded", "Up to date", "Failed"]);
+    // `TERMINAL`, not a set spelled out again here. The local copy this
+    // replaces listed three of the five terminal statuses, so a run
+    // ending `Blocked` or `Interrupted` was never recognized as over:
+    // the loop spun to the deadline and reported "never settled" about a
+    // row that had settled a minute earlier, naming neither the status
+    // nor the reason.
     for (;;) {
       const s = await record();
-      if (s && terminal.has(s)) break;
+      if (s && TERMINAL.test(s)) break;
       expect(Date.now(), `never settled; saw ${JSON.stringify(seen)}`).toBeLessThan(
         deadline,
       );
