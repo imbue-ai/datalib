@@ -80,20 +80,20 @@ async function initialize() {
       </template>
 
       <template v-else>
-        <h2>Set up your data library</h2>
+        <h2>Set up a data library</h2>
         <p>
           This folder is empty — there is no data library in it yet:
           <code class="root">{{ config.path }}</code>
         </p>
-        <p>Initializing writes that one file, and nothing else. It:</p>
+        <p>Initializing writes that one config file, and nothing else. It:</p>
         <ul>
           <li>
             declares the two index steps every source feeds — the grid index
-            and the semantic (qmd) index
+            and the semantic vector index
           </li>
           <li>
-            declares the <code>unified_index</code> applet, which is what
-            actually serves the grid, search and document views
+            declares the <code>Unified Index</code> applet, which is what
+            actually serves the table, search and document views
           </li>
           <li>
             adds <strong>no data sources</strong>: nothing is downloaded, no
