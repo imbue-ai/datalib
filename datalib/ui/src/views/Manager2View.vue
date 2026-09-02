@@ -29,7 +29,7 @@
 // a sync started from a terminal shows up here, because `datalib-dag`
 // writes that record whoever spawned it. The SSE stream only carries
 // runs this server started, which is why this polls as well.
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -62,6 +62,7 @@ import {
   type SyncTask,
   type JobProgressEvent,
   type OutputStorage,
+  type PipelineStorage,
 } from "@/api";
 import {
   listSteps,
@@ -79,6 +80,7 @@ import {
   type ConfiguredStep,
   type StepPhase,
 } from "@/config/sourceSteps";
+import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
 import { catalogFor, type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
@@ -156,7 +158,17 @@ function retireBanner(jobId: string, state: SyncJobState) {
 }
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
-const storage = ref<OutputStorage[]>([]);
+/// Bytes on disk, per declared tree and for the root as a whole, each
+/// with the last few minutes behind it. Measured by the backend on a
+/// tick *while a sync is running*, rather than walked per request —
+/// see `datalib/backend/http/src/usage.rs`. Between runs nothing walks,
+/// which is why the two loads that matter ask for a fresh one.
+const storage = ref<PipelineStorage | null>(null);
+const outputs = computed(() => storage.value?.outputs ?? []);
+/// How far back the histories reach, in ms. Read from the response
+/// rather than hardcoded here, so the plot can't disagree with the data
+/// about what "recent" means.
+const historyWindowMs = computed(() => (storage.value?.window_secs ?? 300) * 1000);
 /// The runner's own per-step record, from `GET /api/dag`. What makes
 /// "last synced" and "last status" exact per step — and what makes a
 /// run started from a terminal visible here at all, since the runner
@@ -271,6 +283,10 @@ type Row = {
   /// Null when nothing is on disk yet — rendered as "—", not "0 B",
   /// which would read as "ran, and produced nothing".
   bytes: number | null;
+  /// Recent measurements of this row's tree, oldest first — what the
+  /// size cell's sparkline draws. Compacted (see `api.ts`), so it is a
+  /// step function, not an evenly-spaced series.
+  history: UsageSample[];
   /// Storage rows for this entry's declared outputs.
   outputs: OutputStorage[];
   /// Absolute path to reveal: the first output that exists.
@@ -333,13 +349,13 @@ const rows = computed<Row[]>(() =>
     const entry = s.type ? catalogFor(s.type) : undefined;
     const run = s.kind === "applet" ? null : stepStatus(s.id);
     // A step writes exactly one tree, and it is the step's id.
-    const outputs =
+    const trees =
       s.kind === "applet"
         ? []
-        : [storage.value.find((x) => x.path === s.id)].filter(
+        : [outputs.value.find((x) => x.path === s.id)].filter(
             (x): x is OutputStorage => !!x,
           );
-    const onDisk = outputs.filter((o) => o.present);
+    const onDisk = trees.filter((o) => o.present);
 
     // Run: a sync is started at a *source* step — one with no declared
     // inputs — and everything downstream follows change propagation.
@@ -429,8 +445,9 @@ const rows = computed<Row[]>(() =>
       status,
       stopJobId: claimedBy.value.get(s.id)?.id ?? null,
       progress: s.kind === "applet" ? null : (dagSteps.value[s.id]?.progress ?? null),
-      bytes: onDisk.length ? outputs.reduce((n, o) => n + o.bytes, 0) : null,
-      outputs,
+      bytes: onDisk.length ? trees.reduce((n, o) => n + o.bytes, 0) : null,
+      history: trees[0]?.history ?? [],
+      outputs: trees,
       revealPath: onDisk[0]?.abs ?? null,
     };
   }),
@@ -451,12 +468,69 @@ function formatBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
-/// The largest value in the Bytes column, which is what every bar is
-/// drawn against. Zero when nothing is on disk, and the renderer draws
-/// no bar at all rather than dividing by it.
-const maxBytes = computed(() =>
-  rows.value.reduce((m, r) => Math.max(m, r.bytes ?? 0), 0),
-);
+/// The value the top of every sparkline in the size column stands for.
+///
+/// One number for the whole column — that is what makes the rows
+/// comparable, and it is the only reason a row's height means anything.
+/// It covers each row's history as well as its current size: a source
+/// that has just shrunk would otherwise draw its own past off the top
+/// of its box.
+const maxBytes = computed(() => calibrationMax(rows.value));
+
+/// The plot box for a size cell, in user units. Small and fixed: the
+/// column is 140px and the cell has a number sitting over it.
+const ROW_SPARK = { width: 120, height: 18 };
+
+/// Build the `<svg>` for one series, or null when there is nothing to
+/// draw yet.
+///
+/// `nowMs` is passed in rather than sampled here so every cell in one
+/// repaint shares a right edge — otherwise the rows are plotted against
+/// instants milliseconds apart, which is invisible but means the column
+/// is not quite one picture.
+function sparkSvg(
+  history: UsageSample[],
+  box: { width: number; height: number },
+  scale: { min?: number; max: number },
+  nowMs: number,
+): SVGSVGElement | null {
+  const spark = sparkline(history, {
+    nowMs,
+    windowMs: historyWindowMs.value,
+    min: scale.min,
+    max: scale.max,
+    width: box.width,
+    height: box.height,
+    // Half the 1px stroke, so a line pinned to the top or the bottom
+    // isn't sliced in half by the viewBox edge.
+    inset: 0.5,
+  });
+  if (!spark) return null;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("m2-spark");
+  const area = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  area.setAttribute("points", spark.area);
+  area.classList.add("m2-spark-area");
+  svg.appendChild(area);
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", spark.line);
+  line.classList.add("m2-spark-line");
+  svg.appendChild(line);
+  return svg;
+}
+
+/// How long ago the window opens, in words — "the last 5 minutes".
+/// Built from the response's own window so the sentence and the plot
+/// agree.
+const windowPhrase = computed(() => {
+  const secs = storage.value?.window_secs ?? 300;
+  return secs % 60 === 0
+    ? `the last ${secs / 60} minute${secs === 60 ? "" : "s"}`
+    : `the last ${secs} seconds`;
+});
 
 /// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
 /// button's own colour through hover, disabled and the dark theme.
@@ -700,39 +774,46 @@ const columnDefs: ColDef<Row>[] = [
         )
         .join(" · ");
       const total = formatBytes(row.bytes ?? 0);
-      return present.length === 1 && !present[0].parts?.length ? total : `${total} — ${detail}`;
+      const size =
+        present.length === 1 && !present[0].parts?.length ? total : `${total} — ${detail}`;
+      return `${size} · the line is ${windowPhrase.value}, drawn against the largest row`;
     },
-    // A bar rather than a number, on a linear scale against the largest
-    // row. Linear is the point: the question this column answers is
+    // The recent history rather than a bar, on a linear scale against
+    // the largest row. Two things at once, and the column has room for
+    // both because they stack: the sparkline says which way this tree
+    // is going and how fast, the number says how big it is now.
+    //
+    // Linear, and shared across rows, is the point: the question is
     // "how much of my disk is this", and on a real root one source
-    // routinely dwarfs every other — which a log scale would flatter
-    // away. Small rows get a sliver rather than nothing, so "tiny" and
-    // "absent" stay distinguishable.
+    // routinely dwarfs every other — which a per-row scale would
+    // flatter away, drawing a 2 kB tree and a 40 GB one identically.
+    //
+    // A bar used to be here. It answered "how does this compare" and
+    // nothing else; the sparkline answers that at its right edge and
+    // "what has it been doing" as well, for the same pixels.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const row = p.data;
       const wrap = document.createElement("span");
       wrap.className = "m2-bytes";
       if (!row || row.bytes === null) {
-        // Null is "nothing on disk yet", which is not a zero-length
-        // bar — it's the absence of a bar.
+        // Null is "nothing on disk yet", which is not a flat line at
+        // zero — it's the absence of a plot.
         wrap.textContent = "—";
         wrap.classList.add("m2-none");
         return wrap;
       }
-      const max = maxBytes.value;
-      const frac = max > 0 ? row.bytes / max : 0;
       const track = document.createElement("span");
-      track.className = "m2-bar";
-      const fill = document.createElement("span");
-      fill.className = "m2-bar-fill";
-      fill.style.width = `${Math.max(frac * 100, row.bytes > 0 ? 1.5 : 0)}%`;
-      track.appendChild(fill);
-      // The size, centred over the bar. The bar answers "how does this
-      // compare to the others" at a glance and the number answers "how
-      // much is it" exactly; neither replaces the other, and stacking
-      // them costs no width in a column that has little to spare.
+      track.className = "m2-plot";
+      const svg = sparkSvg(row.history, ROW_SPARK, { max: maxBytes.value }, Date.now());
+      // No history yet means the backend hasn't finished its first walk
+      // of the root. The size still shows; there is just nothing behind
+      // it to draw.
+      if (svg) track.appendChild(svg);
+      // The size, centred over the plot. Neither replaces the other,
+      // and stacking them costs no width in a column that has little to
+      // spare.
       const label = document.createElement("span");
-      label.className = "m2-bar-label";
+      label.className = "m2-plot-label";
       label.textContent = formatBytes(row.bytes);
       track.appendChild(label);
       wrap.appendChild(track);
@@ -925,6 +1006,108 @@ async function openStepLog(row: Row) {
   }
 }
 
+// ── The status bar ───────────────────────────────────────────────────
+//
+// One number for the whole root, and the shape of the last few minutes
+// of it. It is deliberately the *root* and not the sum of the rows:
+// `system/` (the stores, the job logs, the served attachments) and
+// anything a step left behind after being deleted from the config are
+// on the disk whether or not a row claims them, and "how much is
+// datalib costing me" has to include them or it is the wrong number.
+
+/// The width of the status bar's plot, in user units. Wider than a
+/// row's, because it is the only thing on its line.
+const ROOT_SPARK = { width: 260, height: 20 };
+
+/// The root's series, scaled to its own range rather than to zero.
+///
+/// This is the one place a non-zero floor is right, and the reason is
+/// arithmetic: on a 40 GB root, five minutes of a sync moves the total
+/// by a fraction of a percent, which against a zero floor is a flat
+/// line at the ceiling — a plot that cannot show the thing it is for.
+/// Against the window's own range it shows the shape, and the two
+/// endpoints are spelled out beside it so nobody reads the height as a
+/// size.
+const rootScale = computed(() => {
+  const h = storage.value?.root.history ?? [];
+  const values = h.map((x) => x.bytes);
+  if (storage.value?.measured_at) values.push(storage.value.root.bytes);
+  if (values.length === 0) return { min: 0, max: 0 };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  // A series that hasn't moved has no range to scale to. Straddle the
+  // value so it draws through the middle of the box — a flat line at
+  // the ceiling or the floor reads as "pinned at the top of something",
+  // which is a claim, and there is nothing here to claim.
+  if (min !== max) return { min, max };
+  return min === 0 ? { min: 0, max: 1 } : { min: min * 0.99, max: max * 1.01 };
+});
+
+/// How much the root has grown across the window, or null when there is
+/// nothing to compare against.
+///
+/// Against `history[0]` rather than against the oldest sample *inside*
+/// the window, and they are the same thing on purpose: the response's
+/// first entry is the carry-in — the value the window opens at — so
+/// this is the change over the window even when nothing was recorded
+/// during it.
+const rootDelta = computed(() => {
+  const h = storage.value?.root.history ?? [];
+  if (h.length < 2 || !storage.value) return null;
+  return storage.value.root.bytes - h[0].bytes;
+});
+
+/// What the status bar's plot is actually showing, in words.
+///
+/// The line has no axis, and its floor is not zero — so the sentence
+/// naming both endpoints is not decoration, it is the scale. Without it
+/// a full-height rise reads as "doubled" when it may be 0.3%.
+const rootSparkTitle = computed(() => {
+  // A response whose `measured_at` is null is a server that hasn't
+  // finished its first walk. Its zero is not an empty disk, and saying
+  // "0 B" would be the one genuinely wrong thing this line can say.
+  if (!storage.value?.measured_at) return "Measuring the data root…";
+  const now = formatBytes(storage.value.root.bytes);
+  const moved = rootDelta.value;
+  if (moved === null || moved === 0) {
+    return `${now} on disk. No change recorded over ${windowPhrase.value}.`;
+  }
+  // Said as a change rather than as two endpoints. Both endpoints round
+  // to the same three significant figures whenever the movement is
+  // small against the total — which is the usual case — so "ranged
+  // 4.3 MB to 4.3 MB" sat next to a "+62 kB" that contradicted it.
+  return (
+    `${now} on disk — ${moved > 0 ? "grew" : "shrank"} by ` +
+    `${formatBytes(Math.abs(moved))} over ${windowPhrase.value}. The line is scaled ` +
+    `to that change rather than to zero, so its height is the shape, not the size.`
+  );
+});
+
+/// The status bar's plot, rebuilt whenever the measurement moves.
+const rootSparkHost = ref<HTMLElement | null>(null);
+function paintRootSpark() {
+  const host = rootSparkHost.value;
+  if (!host) return;
+  host.replaceChildren();
+  const svg = sparkSvg(
+    storage.value?.root.history ?? [],
+    ROOT_SPARK,
+    rootScale.value,
+    Date.now(),
+  );
+  if (svg) host.appendChild(svg);
+}
+watch([storage, rootSparkHost], paintRootSpark, { flush: "post" });
+
+// ── Help ─────────────────────────────────────────────────────────────
+//
+// What every column means used to be a paragraph under the table,
+// permanently on screen. It is worth having and it is not worth the
+// room: a reader needs it once and then never again, and while it sat
+// there it pushed the Advanced disclosure — and the config path beside
+// it — below the fold.
+const helpOpen = ref(false);
+
 /// Double-click on Status opens that row's log. Only that column: the
 /// rest of the row has its own meanings for a double-click, and
 /// overloading all of them would make the gesture unguessable.
@@ -933,9 +1116,13 @@ function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Ro
   void openStepLog(e.data);
 }
 
-/// Escape closes the log panel, which is what a modal owes its reader.
+/// Escape closes whichever panel is open, which is what a modal owes
+/// its reader. Innermost first: the log panel can be opened from behind
+/// the help panel, so one Escape should not close both.
 function onWindowKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape" && logFor.value) logFor.value = null;
+  if (e.key !== "Escape") return;
+  if (logFor.value) logFor.value = null;
+  else if (helpOpen.value) helpOpen.value = false;
 }
 
 function reparse() {
@@ -1054,13 +1241,19 @@ async function loadDag() {
   }
 }
 
-const commitStorage = freshest<OutputStorage[]>((s) => {
+const commitStorage = freshest<PipelineStorage>((s) => {
   storage.value = s;
+  // The size column is a `cellRenderer` over data that lives outside
+  // the row's identity, so a new measurement only reaches the screen if
+  // the cells are told to repaint.
+  gridApi?.refreshCells({ columns: ["bytes"], force: true });
 });
 
-async function loadStorage() {
+/// Read the sizes. `refresh` asks the backend to walk before answering
+/// rather than serving its last tick — see `fetchPipelineStorage`.
+async function loadStorage(refresh = false) {
   try {
-    await commitStorage(() => fetchPipelineStorage());
+    await commitStorage(() => fetchPipelineStorage(refresh));
   } catch {
     // Same: a missing size column beats an error banner over the grid.
   }
@@ -1234,6 +1427,13 @@ async function deleteSource(id: string) {
 async function reveal(id: string) {
   const path = rows.value.find((r) => r.id === id)?.revealPath;
   if (!path) return;
+  await revealPath(path);
+}
+
+/// Show a path where it lives. Shared by the row action and the config
+/// file's own button — both fail the same way, and both should say so
+/// rather than doing nothing.
+async function revealPath(path: string) {
   const ok = await revealInFileManager(path);
   if (!ok) {
     banner.value = { ok: false, text: `Could not open ${path} in the file manager.` };
@@ -1377,7 +1577,11 @@ function onJobEvent(e: JobProgressEvent) {
   // is the only place its finish time and error live.
   if (!active || boardWentTerminal(tasks)) {
     void loadDag();
-    void loadStorage();
+    // A step that just finished is exactly when the size on screen is
+    // about to be read and is about to be wrong — so this one asks for
+    // a fresh walk. It is also the last chance for a while: the
+    // backend's own tick stops as soon as the run lets go of the root.
+    void loadStorage(true);
   }
 }
 
@@ -1451,7 +1655,16 @@ function tickRelative() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), loadJobs(), loadDag(), loadStorage(), loadAppletHealth()]);
+  await Promise.all([
+    loadConfig(),
+    loadJobs(),
+    loadDag(),
+    // Fresh on the first paint. The backend only walks while a run is
+    // in flight, so on an idle root — the usual state — this is the
+    // walk that produces the numbers on screen.
+    loadStorage(true),
+    loadAppletHealth(),
+  ]);
   stream = openJobStream(onJobEvent);
   window.addEventListener("keydown", onWindowKeydown);
   // The fallback, not the mechanism. A sync this server started is
@@ -1498,11 +1711,17 @@ onUnmounted(() => {
     <header class="m2-head">
       <div>
         <h2>Pipeline</h2>
-        <p class="m2-path">
-          <code>{{ configPath }}</code>
-        </p>
+        <p class="m2-sub">Everything <code>config.toml</code> declares.</p>
       </div>
       <div class="m2-head-actions">
+        <button
+          class="m2-btn m2-help-btn"
+          :aria-expanded="helpOpen"
+          title="What the rows, columns and actions on this screen mean."
+          @click="helpOpen = true"
+        >
+          Help
+        </button>
         <button
           class="m2-btn m2-runall"
           :disabled="busy || !!parseError || !!configError || jobActive || rows.length === 0"
@@ -1561,24 +1780,25 @@ onUnmounted(() => {
       Nothing configured yet. <b>Add Data Source</b> walks you through one.
     </p>
 
-    <p class="m2-note">
-      Every row is something <code>config.toml</code> declares: your <b>sources</b>, the shared
-      index <b>steps</b> that make them searchable, and the <b>applets</b> the app spawns to serve
-      them. Actions that don’t apply to a kind are disabled and say why. Account and
-      document-count columns aren’t here yet — each needs a backend endpoint the design calls for.
-      <b>Type</b> and <b>Status</b> are icons, and the mark after a name says what that step
-      does — hover any of them for the word. <b>Double-click a Status</b> to read just that
-      step's log from the run it last took part in.
-      “Bytes on disk” is a directory walk over each row’s declared outputs, drawn against the
-      largest row — hover for the size and the breakdown. “Last synced” and “Status” are per
-      step, read from the runner’s own record — so a sync you start from a terminal shows up
-      here too. A run whose record never closed and whose lock nobody holds reads as
-      <b>interrupted</b>: it was killed, not lost. A step a queued sync will reach reads as
-      <b>queued</b>, and its Sync button becomes a Stop — one job is one runner process over a
-      whole subgraph, so stopping is per sync, not per row.
-    </p>
-
-    <details class="m2-advanced" :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
+    <div class="m2-advanced">
+      <!-- Outside the disclosure, not inside it: the path answers
+           "which root am I looking at", which is a question you have
+           before you have decided to edit anything. It sits here rather
+           than under the page heading so that it, the offer to edit the
+           file, and the button that opens it in the file manager are
+           one thing to find instead of three. -->
+      <p class="m2-file">
+        <code>{{ configPath }}</code>
+        <button
+          v-if="canReveal"
+          class="m2-btn m2-file-reveal"
+          :title="`${revealLabel} — the config file everything above is a view of`"
+          @click="revealPath(configPath)"
+        >
+          {{ revealLabel }}
+        </button>
+      </p>
+      <details :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
       <summary>Advanced — edit <code>config.toml</code> directly</summary>
       <p class="m2-advanced-note">
         The file is the source of truth; everything above is a view of it. This is where to go
@@ -1602,7 +1822,75 @@ onUnmounted(() => {
           Unsaved — the grid above still shows the last saved version.
         </span>
       </div>
-    </details>
+      </details>
+    </div>
+    </div>
+
+    <footer class="m2-rootbar">
+      <span class="m2-rootbar-label">Data root</span>
+      <code class="m2-rootbar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
+      <span class="m2-rootbar-spark" ref="rootSparkHost" :title="rootSparkTitle"></span>
+      <span class="m2-rootbar-size" :title="rootSparkTitle">
+        <b>{{ storage?.measured_at ? formatBytes(storage.root.bytes) : "—" }}</b>
+        <span v-if="rootDelta !== null && rootDelta !== 0" class="m2-rootbar-delta">
+          {{ rootDelta > 0 ? "+" : "−" }}{{ formatBytes(Math.abs(rootDelta)) }}
+        </span>
+      </span>
+      <button
+        v-if="canReveal && storage"
+        class="m2-btn"
+        :title="`${revealLabel} — the data root itself`"
+        @click="revealPath(storage.root.abs)"
+      >
+        {{ revealLabel }}
+      </button>
+    </footer>
+
+    <div v-if="helpOpen" class="m2-logs-backdrop" @click.self="helpOpen = false">
+      <div class="m2-logs m2-help" role="dialog" aria-modal="true" aria-label="About this screen">
+        <header class="m2-logs-head">
+          <div>
+            <h3>What this screen shows</h3>
+            <p>The Pipeline table, column by column.</p>
+          </div>
+          <button class="m2-btn" @click="helpOpen = false">Close</button>
+        </header>
+        <div class="m2-help-body">
+          <p>
+            Every row is something <code>config.toml</code> declares: your <b>sources</b>, the
+            shared index <b>steps</b> that make them searchable, and the <b>applets</b> the app
+            spawns to serve them. Actions that don’t apply to a kind are disabled and say why.
+            Account and document-count columns aren’t here yet — each needs a backend endpoint
+            the design calls for.
+          </p>
+          <p>
+            <b>Type</b> and <b>Status</b> are icons, and the mark after a name says what that
+            step does — hover any of them for the word. <b>Double-click a Status</b> to read
+            just that step's log from the run it last took part in.
+          </p>
+          <p>
+            <b>Bytes on disk</b> is a directory walk over each row’s tree, plotted over
+            {{ windowPhrase }} and drawn against the largest row — so a row’s height means its
+            size, and its shape means what that size has been doing. Hover for the total and
+            the breakdown.
+          </p>
+          <p>
+            <b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
+            record — so a sync you start from a terminal shows up here too. A run whose record
+            never closed and whose lock nobody holds reads as <b>interrupted</b>: it was
+            killed, not lost. A step a queued sync will reach reads as <b>queued</b>, and its
+            Sync button becomes a Stop — one job is one runner process over a whole subgraph,
+            so stopping is per sync, not per row.
+          </p>
+          <p>
+            The bar along the bottom is the <b>whole data root</b>, not the sum of the rows:
+            it includes <code>system/</code> — the stores, the job logs, the served
+            attachments — and anything a deleted step left behind. Its line is scaled to its
+            own range over {{ windowPhrase }} rather than to zero, because five minutes of a
+            sync moves a large root by a fraction of a percent and would otherwise draw flat.
+          </p>
+        </div>
+      </div>
     </div>
 
     <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
@@ -1680,7 +1968,10 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .m2-head h2 { margin: 0 0 4px; font-size: 19px; }
-.m2-path { margin: 0; color: var(--datalib-muted); font-size: 12px; }
+.m2-sub { margin: 0; color: var(--datalib-muted); font-size: 12px; }
+/* Sized to sit level with the two buttons beside it, but plain: it
+   opens a panel, it doesn't do anything to the pipeline. */
+.m2-help-btn { padding: 8px 14px; font-size: inherit; }
 .m2-add {
   padding: 8px 14px;
   border: 1px solid var(--datalib-accent);
@@ -1747,13 +2038,13 @@ onUnmounted(() => {
   border-top: 1px solid var(--datalib-border);
   padding-top: 14px;
 }
-.m2-advanced > summary {
+.m2-advanced summary {
   cursor: pointer;
   font-size: 13px;
   color: var(--datalib-muted);
   user-select: none;
 }
-.m2-advanced > summary:hover { color: var(--datalib-fg); }
+.m2-advanced summary:hover { color: var(--datalib-fg); }
 .m2-advanced-note {
   margin: 12px 0 8px;
   font-size: 12.5px;
@@ -1782,13 +2073,86 @@ onUnmounted(() => {
 }
 .m2-advanced-dirty { font-size: 12px; color: var(--datalib-muted); }
 
-.m2-note {
-  margin-top: 20px;
-  color: var(--datalib-muted);
+/* The config's own path, where the offer to edit it is. It used to sit
+   under the heading at the top, three screens away from the editor and
+   from the button that opens it in Finder. */
+.m2-file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 8px;
   font-size: 12px;
-  line-height: 1.6;
-  max-width: 76ch;
+  color: var(--datalib-muted);
 }
+.m2-file code { word-break: break-all; }
+.m2-file-reveal { flex: 0 0 auto; }
+
+/* The status bar: one line, pinned under everything, saying what the
+   whole root weighs right now. Outside `.m2-foot` deliberately — that
+   block scrolls, and a status bar that scrolls away is not one.
+   Named `rootbar` rather than anything with "status" in it: `.m2-status`
+   is the Status *cell*, and its rules live in the unscoped block below
+   (cell renderers build plain DOM, so their classes can't be scoped).
+   An unscoped rule still reaches a template element, so sharing the
+   name handed this footer `display: inline-flex` and `height: 100%`
+   from a table cell. */
+.m2-rootbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--datalib-border);
+  font-size: 12px;
+  color: var(--datalib-muted);
+}
+.m2-rootbar-label { flex: 0 0 auto; font-weight: 600; }
+/* The path yields first when the window narrows — the number and the
+   plot are the point of the line. */
+.m2-rootbar-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Pushed right, so the number and its plot sit together at the end of
+   the line whatever the path's length. */
+.m2-rootbar-spark {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: block;
+  width: 260px;
+  height: 20px;
+}
+.m2-rootbar-size {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.m2-rootbar-size b { color: var(--datalib-fg); }
+/* The change over the window, in the same colour as the line that
+   shows it. Not green: growth is not good news and shrinkage is not
+   bad — the sign is the whole message. */
+.m2-rootbar-delta { color: var(--datalib-accent); }
+
+/* The help panel reuses the log panel's modal chrome; only its body
+   differs, being prose rather than a log. */
+.m2-help-body {
+  padding: 4px 16px 16px;
+  overflow: auto;
+  flex: 1 1 auto;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--datalib-muted);
+  max-width: 78ch;
+}
+.m2-help-body p { margin: 10px 0; }
+.m2-help-body b { color: var(--datalib-fg); }
 
 /* The per-step log panel. Modal, because it is a full answer to a
    question the grid can only gesture at, and because the grid behind it
@@ -1949,8 +2313,8 @@ onUnmounted(() => {
   background: currentColor;
 }
 
-/* Bytes on disk: a bar against the largest row, with the size centred
-   over it and the per-output breakdown on `title`. */
+/* Bytes on disk: the recent history against the largest row, with the
+   size centred over it and the per-output breakdown on `title`. */
 .m2-bytes {
   display: flex;
   align-items: center;
@@ -1961,29 +2325,31 @@ onUnmounted(() => {
    (no artifacts on disk) and Last synced (never run). Shared,
    because it is one meaning. */
 .m2-none { color: var(--datalib-muted); opacity: 0.55; }
-.m2-bar {
+/* The plot box the number sits over. */
+.m2-plot {
   position: relative;
   flex: 1 1 auto;
-  /* Tall enough to hold the label: the bar is the label's background
-     now, not a rule beside it. */
   height: 18px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--datalib-fg) 10%, transparent);
+  background: color-mix(in srgb, var(--datalib-fg) 8%, transparent);
   overflow: hidden;
 }
-/* Absolute so the label can sit over it rather than after it. */
-.m2-bar-fill {
+/* Absolute so the label sits over the plot rather than after it. The
+   svg stretches to the cell's real width — `preserveAspectRatio:
+   none` on the element means the user-unit box is a coordinate system,
+   not a shape. */
+.m2-plot > .m2-spark {
   position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
-/* The number reads across both halves of the bar — over the fill on the
-   left and the empty track on the right — so it can't take its contrast
-   from either. `--datalib-fg` against a fill kept at 55% opacity holds
-   up in both themes; the shadow is what keeps the glyph edges legible
-   where the two meet. */
-.m2-bar-label {
+/* The number reads across the plot — over the filled region on one
+   side and the empty one on the other — so it can't take its contrast
+   from either. `--datalib-fg` against a fill kept well under half
+   opacity holds up in both themes; the shadow is what keeps the glyph
+   edges legible where the two meet. */
+.m2-plot-label {
   position: relative;
   display: block;
   text-align: center;
@@ -1992,6 +2358,27 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
   color: var(--datalib-fg);
   text-shadow: 0 0 3px var(--datalib-bg);
+}
+
+/* The sparkline itself, shared by the size column and the status bar.
+   Unscoped along with the rest of this block because the cell renderers
+   build plain DOM.
+
+   `vector-effect: non-scaling-stroke` is load-bearing: the svg is
+   stretched from its 120-unit box to whatever the column is wide, and
+   without it the stroke stretches too — a 1px line drawn as an ellipse
+   two pixels wide horizontally and one vertically. */
+.m2-spark { display: block; overflow: visible; }
+.m2-spark-line {
+  fill: none;
+  stroke: var(--datalib-accent);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.m2-spark-area {
+  fill: color-mix(in srgb, var(--datalib-accent) 22%, transparent);
+  stroke: none;
 }
 
 .m2-actions {

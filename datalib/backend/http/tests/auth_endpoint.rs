@@ -45,6 +45,10 @@ async fn app() -> (axum::Router, ApiToken) {
         root: root.clone(),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
+        // No sampler running here, so the monitor is empty and every
+        // tree reports as absent — the state a root nobody has walked
+        // is in.
+        usage: Default::default(),
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),

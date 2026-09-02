@@ -44,6 +44,7 @@ pub mod boot;
 mod embed;
 pub mod frontend;
 pub mod lock;
+pub mod usage;
 pub mod worker;
 
 pub use auth::ApiToken;
@@ -72,6 +73,12 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
+    /// Bytes on disk, over time. A background task walks the root on a
+    /// tick and folds what it finds in here; `GET
+    /// /api/pipeline/storage` reads it rather than walking the disk
+    /// itself, so the answer's cost no longer scales with the number
+    /// of open tabs. See [`crate::usage`].
+    pub usage: Arc<usage::UsageMonitor>,
 }
 
 impl AppState {
@@ -1133,13 +1140,20 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     // The runner's own record. Absent on a root that has never synced,
     // which is not an error — every step just reports no last run.
     let state = datalib_dag::state::DagState::load(&s.root).unwrap_or_default();
-    // Is a runner actually holding this root? Taking the lock and
-    // dropping it immediately is the cheapest honest test: success
-    // means nobody had it. Racy by nature — a run could start a
-    // microsecond later — but the answer is only ever used to say "that
-    // open record belongs to a run that died", where being one poll
-    // stale costs nothing.
-    let live = datalib_dag::lock::FileLock::acquire_runner(&s.root).is_err();
+    // Is a runner actually holding this root? Momentarily taking the
+    // lock is the cheapest honest test: success means nobody had it.
+    // Racy by nature — a run could start a microsecond later — but the
+    // answer is only ever used to say "that open record belongs to a
+    // run that died", where being one poll stale costs nothing.
+    //
+    // `is_held` rather than `acquire(...).is_err()`: acquiring creates
+    // the lock file when it is absent and rewrites its contents on
+    // success, so a root that had never synced grew a `system/runner-
+    // lock` from being *looked at*, and a live holder's own
+    // description — the only thing a refused runner has to name it
+    // with — was overwritten by whoever polled last. This endpoint is
+    // polled every few seconds by every open tab.
+    let live = datalib_dag::lock::FileLock::runner_is_held(&s.root);
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),
@@ -1297,120 +1311,55 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     Json(sources.into_iter().map(|id| SourceInfo { id }).collect())
 }
 
-/// Bytes on disk per declared output path, for the Manage grid's
-/// storage column.
+/// Query for [`pipeline_storage`].
+#[derive(Debug, Deserialize)]
+struct StorageParams {
+    /// Held as text rather than as a `bool`, and read leniently below.
+    /// `serde_urlencoded` accepts only the literals `true` and `false`
+    /// for a bool, so `?refresh=1` — what a person, a curl, or an agent
+    /// actually writes — comes back as a 400 on the whole request
+    /// rather than as a flag that didn't take.
+    #[serde(default)]
+    refresh: Option<String>,
+}
+
+/// Is a query flag set? A bare `?refresh`, `=1`, `=true` and `=yes` all
+/// mean yes; anything else, including absence, means no.
+fn flag_is_set(v: Option<&str>) -> bool {
+    matches!(v, Some("") | Some("1") | Some("true") | Some("yes"))
+}
+
+/// Bytes on disk — the whole data root, and each declared output tree
+/// inside it — with the recent history of each behind the number.
 ///
-/// Deliberately a plain directory walk rather than anything that opens
-/// a store: the numbers people want ("why is this 40 GB?") are file
-/// sizes, and asking doltlite would mean counting rows in every table
-/// of every source on every poll — the cost that got the download
-/// report deleted in 6dae9185.
+/// The walk itself is not here: [`crate::usage`] owns it, on a tick
+/// while a run is in flight, so the numbers exist whether or not a tab
+/// is open and one reader costs no more than none. This handler only
+/// names the trees (from the config, in config order) and reads the
+/// snapshot.
 ///
 /// Keyed on the **declared output path**, not on a source, because the
 /// grid groups steps into rows and that grouping rule should live in
-/// exactly one place. A source row sums its two outputs; an index step
-/// row has one. Duplicating "what counts as a source" here would give
-/// it a second home to drift from.
-#[derive(Debug, Serialize)]
-pub struct OutputStorage {
-    /// The path as the config declares it, data-root-relative.
-    pub path: String,
-    /// Resolved absolute path, for the desktop app's reveal IPC. The
-    /// server is the side that knows where the root is.
-    pub abs: String,
-    /// The directory doesn't exist yet — nothing has written it.
-    /// Distinct from a real zero, so the UI can show "—" rather than
-    /// "0 B", which would read as "ran, and produced nothing".
-    pub present: bool,
-    pub bytes: u64,
-    /// A breakdown worth showing, when the path has one. A raw store
-    /// splits into entity rows and attachment blobs, and the split is
-    /// the answer to "why is this so big" far more often than the
-    /// total is.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub parts: Vec<StoragePart>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct StoragePart {
-    pub label: String,
-    pub bytes: u64,
-}
-
-/// Recursive byte total of a directory tree.
+/// exactly one place. Duplicating "what counts as a source" here would
+/// give it a second home to drift from.
 ///
-/// Symlinks are counted as their own (tiny) entry and never followed —
-/// following them risks both cycles and double-counting a tree that
-/// another output already reported.
-fn dir_size(path: &std::path::Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        let Ok(meta) = entry.path().symlink_metadata() else {
-            continue;
-        };
-        if meta.is_dir() {
-            total += dir_size(&entry.path());
-        } else {
-            total += meta.len();
-        }
+/// `?refresh=1` walks before answering, for the two moments the stored
+/// answer is wrong on screen rather than merely old: the first paint of
+/// the page, and a sync going terminal. It matters more than it looks
+/// like it should — between runs nothing walks at all, so on an idle
+/// root the snapshot is as old as the last run. Refreshes that arrive
+/// together share one walk; one that arrives after every finished walk
+/// gets its own, because that is the only way it can see a change made
+/// since. The routine poll doesn't pass the flag and doesn't walk.
+async fn pipeline_storage(
+    State(s): State<AppState>,
+    Query(p): Query<StorageParams>,
+) -> Json<usage::PipelineStorage> {
+    if flag_is_set(p.refresh.as_deref()) {
+        usage::sample_on_demand(&s.usage, &s.app, s.root.clone()).await;
     }
-    total
-}
-
-fn file_size(path: &std::path::Path) -> u64 {
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
-async fn pipeline_storage(State(s): State<AppState>) -> Json<Vec<OutputStorage>> {
-    let Ok((cfg, _root)) = datalib_dag::config::load(&s.config_path()) else {
-        return Json(Vec::new());
-    };
-    let root = s.root.as_path();
-
-    // One tree per step, and it is the step's id. Deduped and in config
-    // order — a duplicate id is refused by the loader, so `seen` only
-    // guards against being called on a config that never got there.
-    let mut seen: std::collections::BTreeSet<&str> = Default::default();
-    let mut out = Vec::new();
-    for step in &cfg.steps {
-        {
-            let path = &step.id;
-            if !seen.insert(path.as_str()) {
-                continue;
-            }
-            let abs = root.join(path);
-            let bytes = dir_size(&abs);
-            // A per-source raw store is the one place a split earns its
-            // keep: `blobs.doltlite_db` routinely dwarfs the entity
-            // store beside it.
-            let blobs = file_size(&abs.join("blobs.doltlite_db"));
-            let parts = if blobs > 0 {
-                vec![
-                    StoragePart {
-                        label: "entities".into(),
-                        bytes: bytes.saturating_sub(blobs),
-                    },
-                    StoragePart {
-                        label: "attachments".into(),
-                        bytes: blobs,
-                    },
-                ]
-            } else {
-                Vec::new()
-            };
-            out.push(OutputStorage {
-                present: abs.is_dir(),
-                path: path.clone(),
-                abs: abs.to_string_lossy().into_owned(),
-                bytes,
-                parts,
-            });
-        }
-    }
-    Json(out)
+    let steps = usage::declared_trees(&s.config_path());
+    Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
 async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {

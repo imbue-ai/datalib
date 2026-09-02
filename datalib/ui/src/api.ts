@@ -531,6 +531,7 @@ export type StoragePart = { label: string; bytes: number };
 /// a source, because the grid groups steps into rows and that grouping
 /// rule lives in `config/sourceSteps.ts` alone.
 export type OutputStorage = {
+  /// The tree, data-root-relative: a step id, or "." for the root.
   path: string;
   /// Absolute, for the desktop app's reveal-in-file-manager IPC.
   abs: string;
@@ -539,10 +540,49 @@ export type OutputStorage = {
   present: boolean;
   bytes: number;
   parts?: StoragePart[];
+  /// Recent measurements, oldest first — the sparkline behind the
+  /// number. **Compacted**: the backend records a sample only when the
+  /// value moves, and never twice within five seconds, so this is a
+  /// step function and not an evenly-spaced series. The first entry may
+  /// predate the window; it is the value the window opens at. See
+  /// `config/sparkline.ts`, which is the only thing that should be
+  /// interpreting it.
+  history: UsageSample[];
 };
 
-export function fetchPipelineStorage(signal?: AbortSignal): Promise<OutputStorage[]> {
-  return getJson<OutputStorage[]>("/api/pipeline/storage", signal);
+/// One measurement. `at` is ISO-8601 with an explicit offset.
+export type UsageSample = { at: string; bytes: number };
+
+/// What the storage endpoint answers: the whole root, every declared
+/// tree in it, and how far back the histories reach.
+export type PipelineStorage = {
+  /// The data root as a whole — including trees no step declares
+  /// (`system/`, the stores). Its `path` is ".".
+  root: OutputStorage;
+  /// One per declared step, in config order.
+  outputs: OutputStorage[];
+  /// The span each `history` covers, in seconds. Read rather than
+  /// assumed, so the plot and the data can't disagree about what
+  /// "recent" means.
+  window_secs: number;
+  /// When the last walk finished, or null when none has yet — the only
+  /// case in which a zero doesn't mean an empty disk.
+  measured_at: string | null;
+};
+
+/// The backend walks the disk on a tick *while a sync is running*, and
+/// not at all between runs — so the routine poll is a cheap read of
+/// what it last found, and on an idle root that answer can be old.
+/// `refresh` asks it to walk first. Pass it at the two moments the
+/// stale answer would be wrong on screen rather than merely old: the
+/// first paint, and a sync going terminal. Refreshes that arrive
+/// together share one walk server-side.
+export function fetchPipelineStorage(
+  refresh = false,
+  signal?: AbortSignal,
+): Promise<PipelineStorage> {
+  const q = refresh ? "?refresh=1" : "";
+  return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
 }
 
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {

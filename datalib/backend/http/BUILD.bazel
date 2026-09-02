@@ -31,6 +31,7 @@ rust_library(
         "src/embed.rs",
         "src/lib.rs",
         "src/lock.rs",
+        "src/usage.rs",
         "src/worker.rs",
     ],
     crate_name = "datalib_http",
@@ -132,6 +133,23 @@ rust_test(
 
 # `GET /api/dag` carries the runner's per-step run record — what
 # replaced inferring a step's status from the whole-run job queue.
+# Bytes on disk: the shape of the answer, and the freshness contract
+# behind `?refresh=1`.
+rust_test(
+    name = "pipeline_storage_test",
+    srcs = ["tests/pipeline_storage.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
 rust_test(
     name = "dag_run_state_test",
     srcs = ["tests/dag_run_state.rs"],

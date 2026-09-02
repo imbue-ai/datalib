@@ -14,6 +14,7 @@
 //! data_root/unified_index/qmd/index.sqlite          qmd search index
 //! data_root/system/feedback.doltlite_db             filed feedback
 //! data_root/system/jobs.doltlite_db                 sync job queue + history
+//! data_root/system/usage.doltlite_db                bytes-on-disk timeseries
 //! data_root/system/media/…                          served attachments
 //! data_root/system/job-logs/…                       sync job logs
 //! data_root/system/lock                             one-server-per-root claim
@@ -61,6 +62,12 @@ pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 /// from [`FEEDBACK_DB`] so a job update and a feedback commit cannot
 /// land in each other's dolt history.
 pub const JOBS_DB: &str = "jobs.doltlite_db";
+/// The bytes-on-disk timeseries, relative to `system/`. Its own file
+/// for the reason every store here has one: doltlite's working set is
+/// per file, so a sample landing between two job transitions would be
+/// swept into whichever commit came next. Nothing commits this one at
+/// all — the rows are the history.
+pub const USAGE_DB: &str = "usage.doltlite_db";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are
 /// advisory, naming the holder so a refused server can say where the
@@ -123,6 +130,11 @@ pub fn feedback_db(data_root: &Path) -> PathBuf {
 /// `data_root/system/jobs.doltlite_db`.
 pub fn jobs_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(JOBS_DB)
+}
+
+/// `data_root/system/usage.doltlite_db`.
+pub fn usage_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(USAGE_DB)
 }
 
 /// `data_root/system/lock` — the advisory lock a running server holds

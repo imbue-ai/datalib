@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use app_schema::disk_usage::DiskUsageRow;
 use app_schema::feedback::FeedbackRow;
 use app_schema::sync_jobs::SyncJobRow;
 
@@ -123,6 +124,26 @@ pub trait AppRepo: Send + Sync {
     /// from a previous backend process that died mid-job) to `failed`.
     /// Returns the number of rows recovered.
     async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    // --- The disk-usage timeseries ------------------------------------
+
+    /// Append disk-usage samples. The caller has already applied the
+    /// compaction rules (drop an unchanged value; never two samples for
+    /// one series within five seconds) — this only writes.
+    ///
+    /// Deliberately not versioned: `disk_usage` rows *are* the history,
+    /// so a `dolt_commit` per sample would flood `dolt_log` and record
+    /// nothing the table doesn't already say.
+    async fn record_disk_usage(&self, _rows: &[DiskUsageRow]) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// The newest `limit` disk-usage samples across every series,
+    /// newest first. Used to seed the in-memory window the sparklines
+    /// draw, so a server restart doesn't blank them for five minutes.
+    async fn recent_disk_usage(&self, _limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
         Err(RepoError::ReadOnly)
     }
 }

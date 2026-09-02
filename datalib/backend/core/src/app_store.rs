@@ -1,5 +1,6 @@
-//! `AppStore` — the two stores this server owns: filed feedback and the
-//! sync job queue, one doltlite file each.
+//! `AppStore` — the three stores this server owns: filed feedback, the
+//! sync job queue, and the bytes-on-disk timeseries, one doltlite file
+//! each.
 //!
 //! doltlite is a SQLite fork: the C API and on-disk format are
 //! libsqlite3-compatible, so we drop the `dolt sql-server` subprocess
@@ -15,16 +16,18 @@
 
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
+use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-/// The two application stores: filed feedback and the sync job queue.
+/// The three application stores: filed feedback, the sync job queue,
+/// and the bytes-on-disk timeseries.
 ///
-/// One type, two files, because they share a writer (this process) but
-/// must not share a database. Doltlite's working set is per file and
+/// One type, three files, because they share a writer (this process)
+/// but must not share a database. Doltlite's working set is per file and
 /// shared across processes, so a `dolt_commit('-Am', …)` covers whatever
 /// else is dirty in the same file — which is why these live apart from
 /// the index the pipeline writes, and apart from each other.
@@ -34,6 +37,10 @@ pub struct AppStore {
     feedback_pool: SqlitePool,
     /// The sync job queue and its history.
     jobs_pool: SqlitePool,
+    /// The disk-usage timeseries. Written every few seconds while the
+    /// server is up, and never committed — so it must not share a file
+    /// with anything that is.
+    usage_pool: SqlitePool,
     /// Whether the linked libsqlite3 is doltlite (exposes `dolt_commit`).
     /// Probed once at connect time via `pragma_function_list`. When
     /// false, every `commit_version` call is a no-op — the row still
@@ -50,14 +57,17 @@ impl AppStore {
     pub async fn open(root: &std::path::Path) -> Result<Self, sqlx::Error> {
         let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
         let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
+        let usage_pool = open_pool(&crate::layout::usage_db(root)).await?;
         let has_dolt = probe_dolt_extensions(&feedback_pool).await;
         let store = Self {
             feedback_pool,
             jobs_pool,
+            usage_pool,
             has_dolt,
         };
         store.init_feedback_table().await?;
         store.init_sync_jobs_table().await?;
+        store.init_disk_usage_table().await?;
         Ok(store)
     }
 
@@ -91,6 +101,12 @@ impl AppStore {
     async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in SYNC_JOBS_DDL {
             sqlx::query(ddl).execute(&self.jobs_pool).await?;
+        }
+        Ok(())
+    }
+    async fn init_disk_usage_table(&self) -> Result<(), sqlx::Error> {
+        for (_table, ddl) in DISK_USAGE_DDL {
+            sqlx::query(ddl).execute(&self.usage_pool).await?;
         }
         Ok(())
     }
@@ -356,6 +372,55 @@ impl AppRepo for AppStore {
         let n = res.rows_affected() as usize;
         Ok(n)
     }
+
+    async fn record_disk_usage(&self, rows: &[DiskUsageRow]) -> Result<(), RepoError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self
+            .usage_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        for row in rows {
+            // INSERT OR REPLACE, not plain INSERT: the key is
+            // (path, measured_at) and the sampler stamps one instant per
+            // walk, so a second walk finishing inside the same
+            // whole-microsecond would otherwise fail the whole batch
+            // over a duplicate that carries the same number anyway.
+            sqlx::query(
+                "INSERT OR REPLACE INTO disk_usage (path, measured_at, bytes) VALUES (?, ?, ?)",
+            )
+            .bind(&row.path)
+            .bind(&row.measured_at)
+            .bind(row.bytes)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("insert disk_usage: {e}")))?;
+        }
+        // No DOLT_COMMIT: the rows are the history. See the module docs
+        // on `app_schema::disk_usage`.
+        Ok(())
+    }
+
+    async fn recent_disk_usage(&self, limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
+        let rows = sqlx::query(
+            "SELECT path, measured_at, bytes FROM disk_usage \
+             ORDER BY measured_at DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(rows
+            .iter()
+            .map(|r| DiskUsageRow {
+                path: r.try_get("path").unwrap_or_default(),
+                measured_at: r.try_get("measured_at").unwrap_or_default(),
+                bytes: r.try_get("bytes").unwrap_or_default(),
+            })
+            .collect())
+    }
 }
 
 /// Ask the linked libsqlite3 whether `dolt_commit` is a registered
@@ -386,5 +451,69 @@ fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
         pid: r.try_get::<i64, _>("pid").ok(),
         progress_pct: r.try_get("progress_pct").ok(),
         progress_msg: r.try_get("progress_msg").ok(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use app_schema::disk_usage::ROOT_PATH;
+
+    fn sample(path: &str, at: &str, bytes: i64) -> DiskUsageRow {
+        DiskUsageRow {
+            path: path.to_string(),
+            measured_at: at.to_string(),
+            bytes,
+        }
+    }
+
+    /// The disk-usage timeseries round-trips, and — the part worth
+    /// pinning — one series holds *many* rows. A single-column primary
+    /// key would make each write replace the last, which reads exactly
+    /// like a working store right up until someone asks for a history.
+    #[tokio::test]
+    async fn disk_usage_keeps_every_sample_of_a_series() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        store
+            .record_disk_usage(&[
+                sample(ROOT_PATH, "2026-09-02T10:00:00-07:00", 100),
+                sample(ROOT_PATH, "2026-09-02T10:00:05-07:00", 180),
+                sample("slack/raw", "2026-09-02T10:00:05-07:00", 80),
+            ])
+            .await
+            .unwrap();
+
+        let back = store.recent_disk_usage(50).await.unwrap();
+        assert_eq!(back.len(), 3, "a series must keep more than its newest row");
+        // Newest first, so the two root samples bracket the read.
+        assert_eq!(back[0].measured_at, "2026-09-02T10:00:05-07:00");
+        let root: Vec<i64> = back
+            .iter()
+            .filter(|r| r.path == ROOT_PATH)
+            .map(|r| r.bytes)
+            .collect();
+        assert_eq!(root, vec![180, 100]);
+    }
+
+    /// Re-recording the same (series, instant) overwrites rather than
+    /// failing the whole batch — two walks finishing inside one
+    /// timestamp tick carry the same number anyway.
+    #[tokio::test]
+    async fn a_repeated_instant_replaces_rather_than_erroring() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        let at = "2026-09-02T10:00:00-07:00";
+        store
+            .record_disk_usage(&[sample("a/raw", at, 1)])
+            .await
+            .unwrap();
+        store
+            .record_disk_usage(&[sample("a/raw", at, 2)])
+            .await
+            .unwrap();
+        let back = store.recent_disk_usage(50).await.unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].bytes, 2);
     }
 }
