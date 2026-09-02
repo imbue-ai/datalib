@@ -233,6 +233,82 @@ jobs:
             -- //... -//datalib/ui:e2e_test
 
   # PR-time gate for the fully-static musl release leg. The musl dist
+  # The onboarding walkthrough, recorded and published as an artifact.
+  #
+  # `//datalib/ui:e2e_test` writes a Playwright HTML report — a video
+  # and a full trace per test, with the trace viewer bundled — into
+  # TEST_UNDECLARED_OUTPUTS_DIR, which bazel zips to
+  # `<testlogs>/datalib/ui/e2e_test/test.outputs/outputs.zip`. This job
+  # exists to lift that zip out of the container and attach it to the
+  # run, so the widest UI path the suite has can be *watched* from a PR
+  # rather than only reproduced locally.
+  #
+  # Deliberately NOT a merge gate, and deliberately not the whole suite:
+  #
+  #   * `continue-on-error` — the `bazel test //...` job above is the
+  #     gate, and it still excludes e2e (see the FIXME there). Making
+  #     this one blocking would re-enable that gate by the back door,
+  #     which is a decision to take on its own.
+  #   * `--test_arg=onboarding-pdf` runs the two onboarding specs only.
+  #     They are chromium-only, which matters: the Linux image bakes
+  #     Chromium and its OS libraries but not WebKit's, so a full-suite
+  #     run here would download a WebKit that cannot launch.
+  #   * `E2E_BROWSERS=chromium` says that out loud to run_e2e.sh, so no
+  #     ~100 MB WebKit download is paid for a browser nothing starts.
+  e2e-recording:
+    name: e2e onboarding recording (non-gating)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    defaults:
+      run:
+        shell: bash
+
+    container:
+      image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/prepare-bazel
+        with:
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
+      - name: Record the onboarding walkthrough
+        run: |
+          bazel test --config=ci --nostamp --jobs=16 \
+            --build_metadata=ROLE=CI \
+            --test_env=E2E_BROWSERS=chromium \
+            --test_arg=onboarding-pdf \
+            --test_output=summary \
+            //datalib/ui:e2e_test
+
+      # `always()`: a failing run is exactly when the recording is worth
+      # having, and by then the step above has already gone red.
+      - name: Stage the report
+        if: always()
+        run: |
+          out="$(bazel info bazel-testlogs)/datalib/ui/e2e_test/test.outputs/outputs.zip"
+          mkdir -p /tmp/e2e-recording
+          if [[ -f "$out" ]]; then
+            cp "$out" /tmp/e2e-recording/playwright-report.zip
+          else
+            echo "no outputs.zip at $out — the test did not get far enough to write one" \
+              > /tmp/e2e-recording/MISSING.txt
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-onboarding-recording
+          path: /tmp/e2e-recording
+          retention-days: 14
+
   # build only otherwise runs at tag time (release.yml), and this repo
   # has been burned before by release-only build paths rotting between
   # tags (see the incident notes in release.yml). Building `:dist` under

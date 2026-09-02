@@ -182,6 +182,10 @@ sh_test(
     env_inherit = [
         "PATH",
         "HOME",
+        # Which browser engines run_e2e.sh provisions; unset means both.
+        # CI narrows it to chromium, whose OS libraries are the only
+        # ones the Linux image bakes.
+        "E2E_BROWSERS",
     ],
 )
 

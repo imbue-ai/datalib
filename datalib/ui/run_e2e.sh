@@ -38,6 +38,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Which browser engines to provision. Both by default: the suite has a
+# `webkit` project so the AG-Grid specs also run in the engine the Tauri
+# desktop app uses (WKWebView).
+#
+# Overridable because the Linux CI image bakes Chromium *and its OS
+# libraries* but not WebKit's — see `.devcontainer/Dockerfile`. There,
+# `install webkit` would download ~100 MB of browser that cannot launch
+# for want of shared libraries, so a chromium-only run says so up front
+# rather than paying for a download it will not use.
+E2E_BROWSERS="${E2E_BROWSERS:-chromium webkit}"
+
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"
 
 if [[ -n "$WORKSPACE" ]]; then
@@ -56,10 +67,8 @@ if [[ -n "$WORKSPACE" ]]; then
   if [[ ! -d "$UI_DIR/node_modules" ]]; then
     (cd "$UI_DIR" && pnpm install)
   fi
-  # Both engines: the suite has a `webkit` project so the specs that
-  # render an AG Grid also run in the engine the Tauri desktop app
-  # actually uses (WKWebView).
-  (cd "$UI_DIR" && pnpm exec playwright install chromium webkit >/dev/null)
+  # shellcheck disable=SC2086  # E2E_BROWSERS is a deliberate word list
+  (cd "$UI_DIR" && pnpm exec playwright install $E2E_BROWSERS >/dev/null)
   PLAYWRIGHT_CMD=(pnpm exec playwright test)
 else
   # ─── `bazel test` mode ───────────────────────────────────────────────
@@ -125,8 +134,10 @@ else
   # "Executable doesn't exist". It is a no-op once the revisions the
   # pinned playwright wants are cached, which is why the target carries
   # `requires-network`. `webkit` is the one the desktop app's WKWebView
-  # matches; `chromium` covers the rest of the suite.
-  node "$PLAYWRIGHT_CLI" install chromium webkit >/dev/null
+  # matches; `chromium` covers the rest of the suite. `E2E_BROWSERS`
+  # narrows it — see the note where it is defined.
+  # shellcheck disable=SC2086  # E2E_BROWSERS is a deliberate word list
+  node "$PLAYWRIGHT_CLI" install $E2E_BROWSERS >/dev/null
   PLAYWRIGHT_CMD=(node "$PLAYWRIGHT_CLI" test)
 fi
 
