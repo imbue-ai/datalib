@@ -55,7 +55,16 @@ are relative to the repo root.
   — the download (ingestion) architecture: raw stores, incrementality,
   resumability, wire tape. Companion:
   [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
-  (how to build a new provider).
+  (how to build a new provider). The two split along a
+  principles/practitioner line in `dab2c3d9`; both are scoped to
+  **download**.
+- [`docs/dev/data_architecture_render.md`](docs/dev/data_architecture_render.md)
+  — the **render** stage, the third sibling: the projection from raw
+  payload to `GridRow` + markdown, the data-quality rules (§4 —
+  adopted in principle, *not implemented*), and render's
+  incrementality. Read it before adding a renderer or changing a
+  projection. Its §1 says why there are three of these and §6 lists
+  the render material still sitting in the two ingestion docs.
 - [`datalib/backend/etl/providers/media/DOWNLOAD.md`](datalib/backend/etl/providers/media/DOWNLOAD.md)
   — the `media` source: local music/photos/video/playlists. Read it
   before touching anything about **`payload_blake3`**, the

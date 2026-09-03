@@ -7,6 +7,9 @@ This document collects the practitioner-facing material: how we test, how to
 add a provider, how the schema is allowed to evolve, the downstream contract
 download has to honor, and the open questions we haven't resolved yet.
 
+For the stage *after* download, see
+[`data_architecture_render.md`](data_architecture_render.md).
+
 ## Testing with TNG fixtures
 
 We try to have test coverage for as much of the ETL code as possible
@@ -187,6 +190,12 @@ Two halves to this:
     exists today; see [Detecting upstream shape drift](#detecting-upstream-shape-drift).
 
 ## Render and downstream stages
+
+> The render stage now has its own document,
+> [`data_architecture_render.md`](data_architecture_render.md) — the
+> projection model, the data-quality rules, and the incrementality
+> mechanisms. This section is the sidecar contract, and is one of the
+> pieces that doc's §6 proposes moving there.
 
 After download, we run transformations for display and indexing —
 render to markdown with YAML frontmatter, index the markdown with qmd,

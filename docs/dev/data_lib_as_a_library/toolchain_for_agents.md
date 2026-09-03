@@ -218,8 +218,9 @@ fallback lists are the caller's. Shipping a built-in vocabulary of
 source field names is how this becomes a parser for whichever corpus we
 happened to test against.
 
-What the caller gets without writing it: the P6 order-independent merge
-with the ledger in the same transaction; the P1 problem sink; parallel
+What the caller gets without writing it: the order-independent
+`max((version, batch))` merge with the ledger in the same transaction;
+the R1 problem sink; parallel
 read with a single writer; a content version so downstream steps skip;
 and `status --json` from the ledger. Which is to say — **the deliverable
 here is the practices doc's output, packaged.** If those aren't real
@@ -319,7 +320,7 @@ already has.
    belongs on a sidecar, or every diff is noisy and unchanged content
    looks changed. Their §7b puts problem *counts* in the ledger row,
    which is right; the general rule is worth stating.
-5. **Absent is not malformed** — and, per our own P2, malformed-isolated
+5. **Absent is not malformed** — and, per our own R2, malformed-isolated
    is not malformed-systemic either. Three categories, not two. We got
    this wrong in the other direction and are fixing it.
 

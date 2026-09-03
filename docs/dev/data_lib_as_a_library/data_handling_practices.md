@@ -82,73 +82,46 @@ is self-concealing" — and our provider goldens are exactly that shape.
 
 ## 2. The practices
 
-Stated as rules, in the register of the existing ingestion docs. **P1–P5
-are new. P6–P7 are scoped narrower than the skill states them.**
+**The rules themselves now live in
+[`docs/dev/data_architecture_render.md` §4](../data_architecture_render.md#4-data-quality-rules)**,
+because that is where they belong: they are durable architecture for
+the render stage, not a project plan. They were written up here first
+only because render had no architecture document to put them in — which
+is itself the finding that produced one.
 
-**P1 — Every value we drop or null is counted, with a reason.**
-One sink, `problem(source, stage, key, field, reason)`, and one
-taxonomy:
+In short, and in the order that doc states them:
 
-| what happened | what we do |
+| | rule |
 | --- | --- |
-| unreadable file / unparseable document | drop the record |
-| no usable identity | drop the record |
-| a field fails its declared coercion | null **that field**, keep the record |
-| a value whose type the contract does not cover | null that field — never pass it through untyped |
+| R1 | **Drop, count, log; never abort, never hide** — one sink, one taxonomy, `{source, stage, key, field, reason, sample}` |
+| R2 | **Three failure categories, not two** — absent / malformed-but-isolated / malformed-systemic |
+| R3 | **Any rule that turns a non-null source value into null is a judgment call** — and gets a generated table row with a count |
+| R4 | **A run that drops too much stops** |
+| R5 | **Verify against the source, not against yesterday's output** |
+| R6 | **Findings are for the consumer, not fixes for the projection** — normalization belongs to the display layer |
+| R7 | **Bound what grows, and say so where it shows** |
 
-Every one produces a line carrying `{source, stage, key_or_path, field,
-reason, sample}` where `sample` is the first 80 characters. Never a
-bare count without a reason, and never a reason without a sample: the
-point of the sink is that one pass over the log tells you what to fix.
+Two scope notes that belong to this plan rather than to the
+architecture doc:
 
-**P2 — Malformed-but-isolated is a third failure category.**
-[`step_protocol.md`](../step_protocol.md) currently draws one line,
-absent vs malformed, and classifies a record render cannot deserialize
-as a `data` failure — which fails the render step and poisons its whole
-downstream subtree, including the shared `grid_index` fan-in that depends on
-*every* source. That is right for "the store will not open" and wrong
-for "one of forty thousand Slack messages has a field we did not
-expect." Three categories, not two:
+- **R6's order-independence sibling is out of scope for the retrofit.**
+  `max((version, batch))` beats last-complete-write-wins only when
+  inputs arrive in batches in arbitrary order. Our twenty providers
+  each have one writer walking a live upstream whose newest state is by
+  definition the truth, so retrofitting them buys nothing. It is a
+  requirement for **new multi-batch-input code** — see the `docs`
+  provider in [`toolchain_for_agents.md`](toolchain_for_agents.md).
+- **R7 is half-blocked** and should not gate R1–R5. Bounding anything
+  in a `.doltlite_db` reclaims no disk today; stating the bounds is not
+  blocked and comes first.
 
-- **absent** — nothing to do, emit nothing, exit 0.
-- **malformed-but-isolated** — this record is bad, the rest are fine:
-  drop it, count it, continue, exit 0.
-- **malformed systemically** — the input as a whole is not what we
-  think it is: exit non-zero, `data`, poison the subtree.
-
-**P3 — A run that drops too much stops.** The line between P2's second
-and third categories is a number. Start at "more than 20% of the
-records read in one step were dropped," print the log path, exit
-non-zero. Crude on purpose: it is a working answer to the shape-drift
-question we left open, and it fails in the direction that gets a human
-to look.
-
-**P4 — Verify against the source, not against yesterday's output.**
-Every provider needs at least one assertion that compares a rendered
-row back to the raw payload it came from, sharing no code with the
-render path. Goldens stay — they are good at catching *unintended*
-change — but they cannot establish correctness, and we should stop
-talking as though they can.
-
-**P5 — Lossiness is a published artifact.** Every rule that turns a
-non-null source value into null gets a row in a per-provider table:
-the rule, why it exists, and how many records it affected on the last
-run. Generated from P1's counts, not hand-maintained. If we cannot
-generate the row, the rule is not allowed.
-
-**P6 — Order-independent merge, for any input that arrives in batches.**
-`max((version, batch))` rather than last-write-wins. **Scope: new
-multi-batch-input code only.** Our twenty current providers each have
-one writer walking a live upstream whose newest state is by definition
-the truth, which makes last-write-wins sound *there*; retrofitting them
-buys nothing. It stops being sound the moment overlapping exports
-arrive from disk in arbitrary order.
-
-**P7 — Bound what grows, or say why it doesn't.** Every append-only
-thing gets a stated bound or an explicit "unbounded, because X" in its
-module doc. Blocked in part on doltlite never actually deleting
-(see [§3c of the toolchain doc](toolchain_for_agents.md)); the
-*stating* half is not blocked and should happen first.
+**What we already get right** stays unchanged and is not in question:
+upstream-id primary keys; complete single-writer upserts; per-attempt
+bookkeeping on a sidecar table; wire fidelity with normalization
+deferred to render; the timestamp convention; sorting a bag before
+storing it; absent-vs-malformed for a whole source; a
+consecutive-failure budget on fetch; `--reset-and-redownload` as a
+completeness check.
 
 ## 3. The audit
 
@@ -176,7 +149,7 @@ exactly that from identity to **content**:
 > `author`, `when_ts`, `source_url`, and a prefix of `text`.
 
 Every failure is one of three things: a real loss, a deliberate rule
-that belongs in P5's table, or a mapping we cannot express in SQL (fine
+that belongs in R3's table, or a mapping we cannot express in SQL (fine
 — exclude it by name, with a comment saying why).
 
 ### Pass B — the silent-fallback inventory
@@ -200,7 +173,7 @@ data loss. The triage question per site is one line:
 > it does, does the row that lands differ from the truth?
 
 Three outcomes: **harmless** (leave, no comment needed); **lossy but
-intended** (route through P1's sink, add the P5 row); **lossy and
+intended** (route through R1's sink, add the R3 row); **lossy and
 unintended** (a bug — fix it). Notion, chatgpt, slack and email are 60%
 of the surface between them and are where to start.
 
@@ -211,7 +184,7 @@ already: `grid_index`'s per-sidecar loop propagates every error with
 `?` (an unreadable sidecar, or a uuid claimed by two sources, ends the
 whole load), and each provider's render entry does the same for a
 payload that will not deserialize. Walk each provider's render entry
-and classify every `?` as P2's second or third category. The output is
+and classify every `?` as R2's second or third category. The output is
 a list of places to convert, not a count.
 
 ### Pass D — growth
@@ -235,7 +208,7 @@ at once, and an issue tracker cannot show you that. File issues for the
 
 **Order.** Pass A first, and land the harness before triaging anything,
 because it converts the rest of the work from speculative to
-evidence-driven. Then P1's sink (it is the precondition for P3 and P5).
+evidence-driven. Then R1's sink (it is the precondition for R3 and R4).
 Then providers in Pass B order — notion, chatgpt, slack, email — since
 that is where the surface is.
 
@@ -243,8 +216,8 @@ that is where the surface is.
 
 1. Its render path routes every drop and every null through `problem()`.
 2. Its Pass B sites are triaged: each is harmless, or sinks, or fixed.
-3. It has a P5 table, generated, with real counts from a real run.
-4. It fails the step only for P2's third category.
+3. It has an R3 table, generated, with real counts from a real run.
+4. It fails the step only for R2's third category.
 5. Pass A's spot check covers its pass-through columns, or names the
    ones it deliberately skips.
 
@@ -285,17 +258,18 @@ optional, a type the contract does not cover — written *before* the
 projection, so each row is one line to add.
 
 **When writing the render path:** every drop and null through
-`problem()` (P1); no fallback without a one-line comment saying what it
-means when it fires; the P5 table generated from the first real run.
+`problem()` (R1); no fallback without a one-line comment saying what it
+means when it fires; the R3 table generated from the first real run.
 
-**When writing tests:** the spot check against source (P4) alongside the
+**When writing tests:** the spot check against source (R5) alongside the
 golden, not instead of it.
 
-**When the input arrives in batches:** `max((version, batch))` (P6), and
-one test asserting the export is identical for every batch ordering.
+**When the input arrives in batches:** an order-independent merge —
+`max((version, batch))`, per §2's scope note — and one test asserting
+the export is identical for every batch ordering.
 
 **Before calling it done:** what does this grow without bound, and is
-that written down (P7)?
+that written down (R7)?
 
 ## 6. What we are not adopting
 
@@ -314,7 +288,8 @@ that written down (P7)?
   from burning its budget measuring; we have the opposite problem —
   `practices.md` §"Quantitative bound on 'fast incremental'" records
   that we *don't* measure and should.
-- **Retrofitting P6 onto existing providers.** See P6.
+- **Retrofitting an order-independent merge onto existing providers.**
+  See §2's scope note.
 
 ## See also
 
@@ -324,6 +299,6 @@ that written down (P7)?
   — storage, identity, incrementality; the layer under this one.
 - [`data_architecture_ingestion_practices.md`](../data_architecture_ingestion_practices.md)
   — the new-provider recipe §5 extends, and the open questions G4 and
-  P3 speak to.
-- [`step_protocol.md`](../step_protocol.md) — where P2's third category
+  R4 speak to.
+- [`step_protocol.md`](../step_protocol.md) — where R2's third category
   has to be written down for it to mean anything.

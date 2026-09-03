@@ -15,7 +15,7 @@ Parts of this are not novel — the data pipeline aspect shares shape with Flume
 This document describes the principles we strive towards for the **ingestion (download) side**: how raw data lands on disk, what shape it has at rest, and the operational properties (monitorable, stoppable, resumable, incrementally cheap, verifiable) the download stage aims for. It is aspirational as much as descriptive: a new provider, table, or transformation should be judged against it, and divergences should be either justified or fixed.
 
 ## Related documents
-The downstream stages — render, grid_index, qmd indexing, view, annotation — are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the sidecar contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
+The **render stage** — the projection from raw payload to `GridRow` + markdown, its data-quality rules, and its incrementality — is [`data_architecture_render.md`](data_architecture_render.md). Some render material still lives in this file and in the practices companion for historical reasons; that doc's §6 lists what should move. The tables render writes into are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the sidecar contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
 
 Practitioner-facing material — how we test, how to add a provider, how the schema evolves, and the open questions — lives in the companion [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md).
 
@@ -73,7 +73,7 @@ We lean **heavily** on upstream-provided UUIDs to establish permanent object ide
 - Every raw-store entity table keys by the upstream provider's identifier — no surrogate `AUTOINCREMENT`. That's what makes `dolt diff` stable across re-fetches, what makes `ON CONFLICT(id) DO UPDATE` work, and what makes cross-table references (e.g. `messages.conversation_id`) mean something.
 - When an upstream doesn't expose a stable UUID, we **synthesize one via UUIDv5** from a per-provider namespace and the most stable available fields. This is done in the data source's schema_raw.rs DDL.
 - We do **not** use row autoincrement or hashes-of-content as identity for objects. Both break the Ship-of-Theseus property: autoincrement isn't deterministic across re-ingest; content hashes change every time the content does.
-- **(NOT download/ingest related) Backpointers and outlinks are first-class** in the projection schema. `GridRow` (one of our indexed representations, not a raw format) carries:
+- **Backpointers and outlinks are first-class** in the projection schema — a render-stage concern that lives here for historical reasons; see [`data_architecture_render.md`](data_architecture_render.md#identity-and-backpointers-are-first-class-in-the-projection). `GridRow` (one of our indexed representations, not a raw format) carries:
     - `uuid` — the Ship-of-Theseus identity, deterministic from upstream so re-ingest is idempotent.
     - `external_id` — the provider-native primary id (numeric GH/GL id, PR number, …) preserved alongside our UUID so we can round-trip back to the provider's API.
     - `source_url` — the canonical URL on the provider's web UI (e.g. `pull_request.html_url`, GitLab `note.web_url` with `#note_<id>` anchor), populated everywhere we can construct it.
@@ -246,6 +246,12 @@ The skip-check is keyed by the **upstream identifier** (known before fetch), not
 `cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. A `blob_cas::gc_orphans()` sweep existed once and was removed, uncalled, in `7f588ba1`; three docs went on recommending it for months. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
 ## Time and ordering discipline
+
+> Half of this section is a render-stage policy (what goes in
+> `GridRow.when_ts`) and half is workspace-wide (the `datalib-time`
+> crate, which download uses for its own `fetched_at` stamps). See
+> [`data_architecture_render.md` §6](data_architecture_render.md#6-what-should-move-here)
+> for the proposed split.
 
 If [Object identity](#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal sibling: **timestamps give global temporal ordering** across every provider that has a time-shape to its data. That global ordering is what makes the UI's union grid time-sortable, what makes `before:` / `after:` queries mean the same thing across Slack and GitHub and Notion, and what lets a sync delta be "what happened in the last week" instead of "what happened to be at the top of each provider's result list."
 
