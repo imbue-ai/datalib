@@ -21,4 +21,8 @@ rust_test(
     size = "small",
     crate = ":datalib_source_common",
     edition = "2021",
+    # Test-only. The library itself stays serde-only (see above) so that
+    # every provider config crate can compose it for free; the tests need
+    # a concrete format to prove the deserialize contract in.
+    deps = ["@datalib_crates//:serde_json"],
 )

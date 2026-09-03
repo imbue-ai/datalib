@@ -2,7 +2,7 @@
 //! (Program A goal #1). Schema-only (serde + anyhow), so the orchestrator and
 //! `http` can name `AnthropicConfig` without linking the provider.
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The anthropic-owned slice of a `claude_api` (or `claude_export`) source.
@@ -14,12 +14,20 @@ pub struct AnthropicConfig {
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
+    /// Which latchkey identity this source mirrors. Composed only by the
+    /// providers that authenticate through the `latchkey` CLI, and
+    /// forwarded whole to the download client — see [`LatchkeySettings`].
+    #[serde(default)]
+    pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
     pub sync: Option<ClaudeApiSync>,
 }
 
 impl AnthropicConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.latchkey_settings
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         Ok(())
     }
 }

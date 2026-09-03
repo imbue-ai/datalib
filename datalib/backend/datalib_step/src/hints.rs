@@ -63,6 +63,38 @@ pub fn emit_auth_hint_on_failure(
     }
 }
 
+/// Source types whose downloader authenticates through latchkey, and so
+/// accept a `latchkey_settings.account` naming which stored identity to
+/// mirror. The list exists to decide whether [`MULTI_ACCOUNT_NOTE`]
+/// applies; the schema itself is enforced by which provider config crates
+/// compose `LatchkeySettings` at all.
+const LATCHKEY_ACCOUNT_SOURCE_TYPES: &[&str] = &[
+    "carddav",
+    "chatgpt_api",
+    "claude_api",
+    "email",
+    "github_api",
+    "gitlab_api",
+    "notion_api",
+    "slack_api",
+];
+
+/// Appended to every per-provider hint whose service can hold more than
+/// one stored account, so the multi-account case is answered where the
+/// user is already looking rather than only in the docs.
+const MULTI_ACCOUNT_NOTE: &str = "\n\n\
+Signed in to this service with more than one account? Store the \
+credential under the one you mean (`--account` is a latchkey *global* \
+option, so it precedes the subcommand):\n\
+  {LK} --account \"you@example.com\" auth set <service> -H \"...\"\n\
+then name that same account on the source, so the download \
+authenticates as it:\n\
+  [steps.params.latchkey_settings]\n\
+  account = \"you@example.com\"\n\
+`{LK} auth list` shows what is stored for each service. With two \
+stored and none named, latchkey refuses the request as ambiguous \
+rather than guessing.";
+
 const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
 This usually means latchkey credentials are missing or expired. \
 See <provider>/DOWNLOAD.md for setup. Confirm the in-tree curl shim is \
@@ -210,8 +242,10 @@ service and routes to it by URL host:
        {LK} curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile
   3. Point the source at it — an empty table is a complete config:
        [steps.params.gmail_api]
-     Add `account = \"you@gmail.com\"` only if `google-gmail` holds more
-     than one credential; latchkey requires the flag once it does.
+     Signed in as more than one Google account? Name which one this
+     source mirrors — latchkey requires it once a service holds two:
+       [steps.params.latchkey_settings]
+       account = \"you@gmail.com\"
 
   ACCESS_TOKEN_SCOPE_INSUFFICIENT means some scopes were not approved at
   consent time — run `{LK} auth browser google-gmail` again and approve
@@ -237,7 +271,14 @@ See datalib/backend/etl/providers/beeper/DOWNLOAD.md for details."
         }
         _ => GENERIC_AUTH_HINT,
     };
-    template.replace("{LK}", &datalib_core::node_runtime::latchkey_cli_hint())
+    // The multi-account note only makes sense where latchkey holds the
+    // credential; `beeper` reads an on-disk SQLite and has no service.
+    let hint = if LATCHKEY_ACCOUNT_SOURCE_TYPES.contains(&provider) {
+        format!("{template}{MULTI_ACCOUNT_NOTE}")
+    } else {
+        template.to_string()
+    };
+    hint.replace("{LK}", &datalib_core::node_runtime::latchkey_cli_hint())
 }
 
 #[cfg(test)]

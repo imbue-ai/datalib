@@ -31,7 +31,9 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use thiserror::Error;
 
-use datalib_etl::http::{latchkey_curl, HttpError, HttpMethod, HttpRequest, HttpResponse};
+use datalib_etl::http::{
+    latchkey_curl, HttpError, HttpMethod, HttpRequest, HttpResponse, LatchkeySettings,
+};
 
 /// Latchkey provider tag for every CardDAV request. The trailing
 /// host-specific keying happens inside latchkey based on the URL
@@ -179,7 +181,12 @@ fn escape_xml(s: &str) -> String {
 
 /// Issue a PROPFIND with the given XML body and depth header. Caller
 /// supplies the parsed multistatus.
-pub async fn propfind(url: &str, depth: &str, body: &str) -> Result<Multistatus, CarddavError> {
+pub async fn propfind(
+    url: &str,
+    depth: &str,
+    body: &str,
+    latchkey: &LatchkeySettings,
+) -> Result<Multistatus, CarddavError> {
     let req = HttpRequest {
         provider: PROVIDER,
         method: HttpMethod::Propfind,
@@ -196,7 +203,7 @@ pub async fn propfind(url: &str, depth: &str, body: &str) -> Result<Multistatus,
         body: Some(body.as_bytes().to_vec()),
         timeout: std::time::Duration::from_secs(60),
         bypass_latchkey: false,
-        latchkey_account: None,
+        latchkey: latchkey.clone(),
     };
     let resp = latchkey_curl(&req).await?;
     expect_dav_status(&req.method, &req.url, &resp)?;
@@ -205,7 +212,11 @@ pub async fn propfind(url: &str, depth: &str, body: &str) -> Result<Multistatus,
 
 /// Issue a sync-collection REPORT. Depth defaults to `0` per
 /// RFC 6578 §3.
-pub async fn report(url: &str, body: &str) -> Result<Multistatus, CarddavError> {
+pub async fn report(
+    url: &str,
+    body: &str,
+    latchkey: &LatchkeySettings,
+) -> Result<Multistatus, CarddavError> {
     let req = HttpRequest {
         provider: PROVIDER,
         method: HttpMethod::Report,
@@ -222,7 +233,7 @@ pub async fn report(url: &str, body: &str) -> Result<Multistatus, CarddavError> 
         body: Some(body.as_bytes().to_vec()),
         timeout: std::time::Duration::from_secs(120),
         bypass_latchkey: false,
-        latchkey_account: None,
+        latchkey: latchkey.clone(),
     };
     let resp = latchkey_curl(&req).await?;
     expect_dav_status(&req.method, &req.url, &resp)?;
