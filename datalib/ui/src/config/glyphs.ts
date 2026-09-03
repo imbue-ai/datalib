@@ -76,6 +76,17 @@ export const STATUS_GLYPHS: Record<string, string> = {
   // behind. The tooltip answers that by name.
   queued:
     "M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z",
+  // alert/error_outline — the config declares this entry and the
+  // loader would not take it, so it is not in the pipeline at all.
+  // Outline rather than the filled `failed` mark: nothing ran and
+  // nothing failed, which is a different kind of bad news.
+  config_rejected:
+    "M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z",
+  // content/block, the same mark as `blocked` — because it is the same
+  // fact reached one step earlier: something this entry depends on
+  // isn't there, so it was never a candidate to run.
+  config_blocked:
+    "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z",
   // content/remove_circle_outline — an empty slot, not a bad outcome.
   never_run:
     "M7 11v2h10v-2H7zm5-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z",

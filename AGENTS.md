@@ -29,7 +29,12 @@ are relative to the repo root.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
-
+- [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
+  — **read before changing how a config is validated**: why the loader
+  returns a list of diagnostics rather than an `Err`, and what
+  separates the four severities (blast radius — how much of the file
+  one problem costs). The rules themselves sit beside them in
+  `config.rs::accept_steps` and `graph.rs::build_graded`.
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
   write a custom step command**: the config entry, the `--params` /
   `--inputs` / `--outputs` flags, `DATALIB_DAG_*` env vars, the
@@ -240,7 +245,15 @@ two shared fan-in steps index every source's `rendered_md` tree:
 `grid_index` (SQL index at `unified_index/grid/db.doltlite_db`) and
 `qmd_index` (semantic search at `unified_index/qmd/`). Both are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
-not open them. Scheduler state lives at `system/dag_state.json`. The http server's sync worker shells out
+not open them. Scheduler state lives at `system/dag_state.json`. A config entry the
+loader cannot use costs that entry and nothing else — it is dropped,
+the rest of the pipeline runs, and `datalib-dag --check <config>` (or
+`diagnostics` on `GET /api/config`) says what went and why. A config
+the app cannot serve anything from — not TOML at all, or carrying no
+`unified_index` applet — comes back as `app_ready: false` and blocks
+the UI behind `ConfigErrorView`, live in both directions, so a
+hand-edit that breaks or fixes the file takes effect with no reload.
+The http server's sync worker shells out
 to `datalib-dag`; the UI's Manage tab edits the config. A root with no
 config at all is the new-user case: the desktop shell's launcher
 (`datalib/tauri/launcher-dist/`) offers recent roots, a folder picker,

@@ -35,8 +35,11 @@
 //!   edge-derivation primitive, incl. `*`/`**` wildcard inputs).
 //! * [`step`] — [`StepSpec`], [`StepRun`], [`StepOutcome`],
 //!   [`FailureKind`]: the declared contract.
-//! * [`graph`] — edge derivation, output-ownership conflicts, cycle
-//!   detection, topological order.
+//! * [`graph`] — the declared edges (a step's `inputs` name the step
+//!   ids it reads), cycle detection, topological order.
+//! * [`diagnostics`] — what is wrong with a config and how much of the
+//!   file it costs: the vocabulary `config` and `graph` report in,
+//!   instead of failing the whole file on the first problem.
 //! * [`state`] — persisted `step id → input/output versions` so
 //!   change detection survives across runs.
 //! * [`version`] — default content-hash for artifacts whose producer
@@ -55,6 +58,7 @@
 
 pub mod artifact;
 pub mod config;
+pub mod diagnostics;
 pub mod events;
 pub mod graph;
 pub mod lock;
@@ -66,6 +70,7 @@ pub mod subprocess;
 pub mod version;
 
 pub use artifact::ArtifactPath;
+pub use diagnostics::{Diagnostic, EntryKind, EntryRef, Severity};
 pub use events::{Event, EventSink, NdjsonSink, StepProgress};
 pub use graph::Graph;
 pub use scheduler::{RunReport, Runner, StepReport, StepStatus};
