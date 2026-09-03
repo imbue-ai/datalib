@@ -54,6 +54,8 @@ use tokio::sync::RwLock;
 /// runs it isn't walked at all — see the module docs.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
+
+
 /// The floor on the spacing between two recorded samples of one series.
 /// Equal to [`SAMPLE_INTERVAL`] today, so in practice every changed
 /// measurement is recorded; it is stated separately because it is a
@@ -298,7 +300,10 @@ impl UsageMonitor {
             // Both rules, and both have to hold: a repeat says nothing,
             // and two samples closer than the floor are noise even when
             // they differ.
-            let unchanged = s.history.back().is_some_and(|last| last.bytes == u.bytes);
+            let unchanged = s
+                .history
+                .back()
+                .is_some_and(|last| last.bytes == u.bytes);
             let too_soon = s
                 .last_recorded
                 .is_some_and(|t| now_mono.duration_since(t) < MIN_SAMPLE_GAP);
@@ -329,11 +334,8 @@ impl UsageMonitor {
         // `record` borrows `st` mutably per call, so the tree loop can't
         // hold an iterator into `m.trees` and `st` at once — clone the
         // small map of names first.
-        let trees: Vec<(String, TreeUsage)> = m
-            .trees
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let trees: Vec<(String, TreeUsage)> =
+            m.trees.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         for (path, u) in &trees {
             record(&mut st, path, u);
         }
@@ -434,9 +436,7 @@ impl MonitorState {
             present: s.map(|s| s.present).unwrap_or(false),
             bytes,
             parts,
-            history: s
-                .map(|s| s.history.iter().cloned().collect())
-                .unwrap_or_default(),
+            history: s.map(|s| s.history.iter().cloned().collect()).unwrap_or_default(),
         }
     }
 }
@@ -729,11 +729,7 @@ mod tests {
 
         // Changed, and far enough out.
         let good = mon
-            .observe(
-                &m,
-                t0 + Duration::from_secs(30),
-                "2026-09-02T10:00:30-07:00",
-            )
+            .observe(&m, t0 + Duration::from_secs(30), "2026-09-02T10:00:30-07:00")
             .await;
         assert_eq!(good.len(), 1);
         assert_eq!(good[0].path, ROOT_PATH);
@@ -837,7 +833,9 @@ mod tests {
     #[test]
     fn asking_whether_a_run_is_in_flight_leaves_no_trace() {
         let td = tempfile::tempdir().unwrap();
-        let lock = td.path().join(datalib_dag::lock::RUNNER_LOCK_REL_PATH);
+        let lock = td
+            .path()
+            .join(datalib_dag::lock::RUNNER_LOCK_REL_PATH);
         assert!(!pipeline_is_running(td.path()));
         assert!(!lock.exists(), "the probe created {}", lock.display());
     }
@@ -859,12 +857,8 @@ mod tests {
         assert!(!mon.walked_since(t0).await);
 
         // A walk finishes at t0+1s.
-        mon.observe(
-            &Measurement::default(),
-            t0 + Duration::from_secs(1),
-            "2026-09-02T10:00:01-07:00",
-        )
-        .await;
+        mon.observe(&Measurement::default(), t0 + Duration::from_secs(1), "2026-09-02T10:00:01-07:00")
+            .await;
 
         // Someone who arrived before it finished is covered by it…
         assert!(mon.walked_since(t0).await);
