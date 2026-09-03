@@ -1687,10 +1687,12 @@ let relativePoll: ReturnType<typeof setInterval> | null = null;
 /// moving, so this is the one clock the column needs.
 ///
 /// It ticks every second but repaints only when at least one row would
-/// actually read differently — on a table whose newest row is hours
-/// old that is a handful of short string builds per second and no DOM
-/// work at all, and in the seconds after a sync it is the per-second
-/// update that makes "2 seconds ago" mean it.
+/// actually read differently, which since the sub-minute band became a
+/// flat "seconds ago" is at most once a minute per row — a handful of
+/// short string builds per second and, nearly always, no DOM work at
+/// all. The second-granularity tick is still what keeps the *crossing*
+/// prompt: a row goes from "seconds ago" to "1 minute ago" within a
+/// second of actually doing so, rather than up to a minute late.
 let lastRelativePaint = "";
 function tickRelative() {
   const now = Date.now();
