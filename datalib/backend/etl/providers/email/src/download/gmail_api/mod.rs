@@ -42,6 +42,7 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -67,6 +68,11 @@ pub struct FetchOptions {
     pub db_path: PathBuf,
     pub db: Option<RawDb>,
     pub config: EmailGmailApi,
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block. `google-gmail` routinely holds
+    /// both a work and a personal account, which is the case this setting
+    /// was introduced for.
+    pub latchkey: LatchkeySettings,
     /// When non-empty, only ingest messages carrying at least one label
     /// whose canonical path exactly matches one of these.
     pub only_labels: Vec<String>,
@@ -81,6 +87,7 @@ impl Default for FetchOptions {
             db_path: PathBuf::new(),
             db: None,
             config: EmailGmailApi::default(),
+            latchkey: LatchkeySettings::default(),
             only_labels: Vec::new(),
             blob_size_limit_bytes: None,
             progress: Progress::noop(),
@@ -135,7 +142,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.pool(),
         &json!({
             "user_id": opts.config.user_id(),
-            "account": opts.config.account,
+            "account": opts.latchkey.account(),
             "full_resync": opts.config.full_resync,
             "only_extract_labels": opts.only_labels,
             "message_budget": opts.config.message_budget,
@@ -154,7 +161,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
     let cfg = &opts.config;
-    let account = cfg.account.as_deref();
     let user_id = cfg.user_id().to_string();
 
     let mut throttle = QuotaThrottle::new(cfg.quota_units_per_minute());
@@ -163,7 +169,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
 
     // ── account ─────────────────────────────────────────────────────
     throttle.acquire(api::UNITS_GET_PROFILE).await;
-    let profile = api::get_profile(&user_id, account)
+    let profile = api::get_profile(&user_id, &opts.latchkey)
         .await
         .context("users.getProfile — is `latchkey auth browser google-gmail` done?")?;
     let account_id = cfg
@@ -194,7 +200,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
 
     // ── labels → mailboxes ──────────────────────────────────────────
     throttle.acquire(api::UNITS_LABELS_LIST).await;
-    let index = LabelIndex::new(api::list_labels(&user_id, account).await?);
+    let index = LabelIndex::new(api::list_labels(&user_id, &opts.latchkey).await?);
     let mailbox_payloads: Vec<Value> = index
         .mailboxes(&account_id)
         .into_iter()
@@ -227,7 +233,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
         None => Plan::Full,
         Some(cursor) => {
             throttle.acquire(api::UNITS_HISTORY_LIST).await;
-            match collect_history(&user_id, account, cursor, &mut throttle).await {
+            match collect_history(&user_id, &opts.latchkey, cursor, &mut throttle).await {
                 Ok(changes) => Plan::Partial(changes),
                 Err(e) if is_history_too_old(&e) => {
                     warn!(
@@ -253,7 +259,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
         index: &index,
         account_id: &account_id,
         user_id: &user_id,
-        account,
+        latchkey: &opts.latchkey,
         now: &now,
         only_labels: opts.only_labels.iter().cloned().collect(),
         blob_size_limit_bytes: opts.blob_size_limit_bytes,
@@ -349,14 +355,14 @@ fn is_history_too_old(e: &anyhow::Error) -> bool {
 /// Drain every page of `history.list` from `cursor`.
 async fn collect_history(
     user_id: &str,
-    account: Option<&str>,
+    latchkey: &LatchkeySettings,
     cursor: &str,
     throttle: &mut QuotaThrottle,
 ) -> Result<Changes> {
     let mut out = Changes::default();
     let mut token: Option<String> = None;
     loop {
-        let page = api::list_history(user_id, account, cursor, token.as_deref()).await?;
+        let page = api::list_history(user_id, latchkey, cursor, token.as_deref()).await?;
         out.added.extend(page.added);
         out.relabeled.extend(page.relabeled);
         out.deleted.extend(page.deleted);
@@ -389,7 +395,7 @@ struct RunState<'a> {
     index: &'a LabelIndex,
     account_id: &'a str,
     user_id: &'a str,
-    account: Option<&'a str>,
+    latchkey: &'a LatchkeySettings,
     now: &'a str,
     /// Belt-and-braces client-side label check. The enumeration is
     /// already narrowed server-side; this catches the case where a
@@ -432,7 +438,7 @@ async fn full_sync(
         throttle.acquire(api::UNITS_MESSAGES_LIST).await;
         let page = api::list_messages(
             state.user_id,
-            state.account,
+            state.latchkey,
             token.as_deref(),
             LIST_PAGE_SIZE,
             label_ids,
@@ -474,7 +480,7 @@ async fn fetch_ids(
             return Ok(());
         }
         throttle.acquire(api::UNITS_MESSAGES_GET).await;
-        let msg = match api::get_message_raw(state.user_id, state.account, id).await {
+        let msg = match api::get_message_raw(state.user_id, state.latchkey, id).await {
             Ok(m) => m,
             Err(e) => {
                 // A message deleted between the list and the get is

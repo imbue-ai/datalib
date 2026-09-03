@@ -22,6 +22,14 @@ are relative to the repo root.
   the six places that recover an identity by splitting a string go away.
   Nothing in it is built; the `name` / `id` split that did ship is in
   `source_wizard.md`.
+- [`docs/dev/streaming_steps.md`](docs/dev/streaming_steps.md) —
+  *proposal*, nothing built: letting a consumer step start before its
+  producer finishes. Splits the two meanings an edge carries today
+  ("B consumes A's output" and "B may assume A is finished"). The
+  doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
+  we thought we didn't have, and a plain `SELECT` reads the *working
+  set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
+
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
   write a custom step command**: the config entry, the `--params` /
   `--inputs` / `--outputs` flags, `DATALIB_DAG_*` env vars, the
@@ -162,6 +170,13 @@ behavior.
 
 When prose and the tree disagree, the tree wins. Fix the prose in the same
 change.
+
+## Write plainspoken
+
+Be clear and unhurried, explain a term the first time it appears, and
+don't assume the reader already shares your context — and note that a lot
+of the docs and comments already here are terser and more jargony than
+they should be, so the surrounding prose is not the register to match.
 
 ## Repo layout
 

@@ -25,8 +25,9 @@ use chrono::DateTime;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::http::IMPERSONATE_MARKER_HEADER;
-use datalib_etl::latchkey::latchkey_tokio_command;
+use datalib_etl::latchkey::latchkey_curl_command;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -49,6 +50,10 @@ const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block. Default = the only stored
+    /// account for the service.
+    pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
     /// created if needed). Ignored for opening when `db` is `Some`.
@@ -147,7 +152,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .clone()
         .unwrap_or_else(|| IsoOffsetTimestamp::now_local().to_rfc3339());
 
-    let mut client = ChatGPTClient::new();
+    let mut client = ChatGPTClient::with_latchkey(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
 
     // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
@@ -660,11 +665,12 @@ async fn download_one_file(
     // (which uses `-o <path>`) and side-steps any binary-stdio
     // weirdness. The tempfile is deleted automatically.
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
-    let mut cmd = latchkey_tokio_command();
     // The signed CDN URL is CF-fronted; mark the request so the dispatch
-    // curl routes it to the impersonating curl.
-    cmd.arg("curl")
-        .arg("-fSL")
+    // curl routes it to the impersonating curl. The helper supplies
+    // `[--account <acct>] curl`, so the blob fetch runs as the same
+    // identity as the API calls that discovered it.
+    let mut cmd = latchkey_curl_command(client.latchkey());
+    cmd.arg("-fSL")
         .arg("-H")
         .arg(IMPERSONATE_MARKER_HEADER)
         .arg("-o")

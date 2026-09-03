@@ -365,7 +365,10 @@ $dl $db "SELECT * FROM dolt_history_Adobe_images WHERE id_global = '…';"
 
 `dolt_history_<table>` is the one to reach for day to day: it carries the
 full row at every commit, which is how a deleted photo's metadata is
-recovered. There is no `AS OF` in doltlite.
+recovered. There is no MySQL-style `AS OF` clause in doltlite — the
+equivalent is the table-valued `dolt_at_<table>('<commit-ish>')`, which
+accepts `HEAD`, `HEAD~N` or a raw commit hash and reads *committed*
+state only (it ignores a dirty working set).
 
 To see a whole catalog as it was — including columns or tables that HEAD
 no longer has — branch at the commit and check it out. The active branch
