@@ -18,14 +18,20 @@ it beat the agents that don't on exactly the axes you'd expect —
 merging, resilience to bad records, not reprocessing on re-run.
 
 Read that SKILL.md next to `docs/dev/data_architecture_ingestion.md`
-and it is uncanny. The two documents were written independently, for
-different products, and they reach the same conclusions in the same
-order: upstream identity as the primary key, `ON CONFLICT DO UPDATE`
-as the only write shape, one batch per transaction, a ledger written
-in that same transaction, a bad record dropped-and-counted rather than
-raised, the raw inputs as the archive and the store as rebuildable
-from them. Datalib has been building that engine in Rust for a year
-across twenty provider crates.
+and the **storage core** converges, closely and independently:
+upstream identity as the primary key with no surrogates, `ON CONFLICT
+(id) DO UPDATE` with every column from `excluded` as the only write
+shape, chunked multi-row writes inside one transaction, and a raw
+layer preserved verbatim with everything downstream derived and
+rebakeable from it. Datalib has been building that engine in Rust
+since May 2026 across twenty provider crates.
+
+**The data-quality surface does not converge, and the skill is ahead
+of us on most of it.** An earlier draft of this document called the
+whole comparison "uncanny" and scored several rows in our favour that
+do not survive checking. The corrected reading is below; the summary
+is that we have thought hard about *storing* records correctly and
+much less about *what to do with a record we cannot store*.
 
 Three things follow, and they are the three claims of this document.
 
@@ -72,25 +78,82 @@ falsifiable rather than decorative.
 | §1 Profile the data before writing the tool | **nothing.** No profiler, no field-role inference. Closest thing is `download_metrics::snapshot_db_file`, which `COUNT(*)`s every table before/after a run | `etl/src/download_metrics.rs` |
 | §2 Test-first pure `parse(record) -> row`, table-driven, ≤8 oddity rows | Same shape: per-provider `render/schema_translate.rs` holds the pure projection, insta goldens over TNG fixtures assert it, `.update` targets regenerate | `providers/*/src/render/`, `tools/insta.bzl` |
 | §3 Storage by access pattern → embedded SQLite | Same answer, one level further: **doltlite** — SQLite's API and JSONB, plus git-shaped history, so "what changed since commit X" is a native query rather than something you compute | `docs/dev/doltlite.md` |
-| §4 identity = verified unique key; version = `(record version, batch)`; merge = keep the max; ledger in the same transaction | Same rule, arrived at independently, with one deliberate difference (below): PK is always the **upstream** id, never a surrogate; every write is a complete `ON CONFLICT(id) DO UPDATE SET <every col> = excluded.<col>`; one commit per source per run | `etl/src/bulk.rs`, `etl/src/doltlite_raw.rs` |
+| §4 identity = verified unique key; version = `(record version, batch)`; merge = keep the max; ledger in the same transaction | **Identity: same rule.** PK is always the upstream id, never a surrogate; every write is a complete `ON CONFLICT(id) DO UPDATE SET <every col> = excluded.<col>`; one commit per source per run. **Version and ledger: no equivalent.** Datalib has no notion of an input *batch* at all, so there is no batch identity, no `(version, batch)` ordering, no "skip a batch the ledger already has," and no `--force` to re-read one. The nearest thing is `file_checkpoint`, a per-*file* `(scope, path, size, mtime)` cursor upserted in the same tx as that file's last flush | `etl/src/bulk.rs`, `etl/src/file_checkpoint.rs` |
 | §5 Parallel readers, single writer, one tx per batch, WAL | Same: single writer per doltlite file is load-bearing (two writers on one file commit each other's in-flight rows), chunked multi-row INSERT at `SQL_CHUNK = 400`, one entity tx + one CAS tx per batch | `etl/src/bulk.rs`, `AGENTS.md` §"Inspecting doltlite stores" |
 | §7 `load` / `status --json` / resumable / documented columns | `datalib-dag <config.toml>`, NDJSON on stderr (`run_plan`, `step_start`, `progress_*`, `step_finish`, `run_summary`), per-step versions in `system/dag_state.json`, `GET /api/dag`, Ctrl-C checkpoints and the next run resumes | `docs/agent_user.md`, `dag/src/scheduler.rs` |
-| §7b Drop, count, log; never abort, never hide; `<store>.ingest.jsonl` | Richer: an append-only JSONL wire tape per entity table (`<name>/raw/events/<table>.jsonl`), plus `<t>_bookkeeping` carrying `attempt_count` / `last_error` per row, plus a **failure taxonomy the scheduler acts on** — `transient` / `rate_limited` / `auth` / `data` / `cancelled` drive retry-with-backoff vs fail-fast | `etl/src/event_tape.rs`, `docs/dev/step_protocol.md` |
+| §7b Drop, count, log; never abort, never hide; `<store>.ingest.jsonl` | **Only for fetch failures, and the opposite policy for parse failures.** A per-item network/API failure is tolerated: `warn!`, a counter, `last_error` stamped on `<t>_bookkeeping`. A record that will not *parse* fails the step — `grid_index`'s per-sidecar loop propagates every error with `?` (an unreadable sidecar, or an id claimed by two sources, ends the whole load), and the step protocol classifies an unparseable row as a `data` failure, which poisons the downstream subtree. There is no problem sink, no per-reason counts, no field-nulling policy | `data_architecture_ingestion.md` §"Error handling", `etl/src/grid_index.rs` |
 | §7c Retention: bound the store, the ledger, and the log inside `load` | **Nothing, and structurally awkward** — see §3c. The skill is ahead of us here | — |
-| §8 Verify: full load in background; export identical for every batch ordering; 20-record spot check | `--reset-and-redownload` is the industrial version of the same instinct: wipe entity tables and cursors, refetch, and let dolt's diff report what incremental silently dropped. Plus the live-golden e2e, which asserts a second run is a no-op | `docs/dev/data_architecture_ingestion.md` §"Verifiable via `--reset-and-redownload`" |
+| §8 Verify: full load in background; export identical for every batch ordering; 20-record spot check sharing no code with `parse` | **Partly, and the weaker parts.** `--reset-and-redownload` checks *completeness* (refetch from scratch, let dolt's diff report what incremental dropped) and the live-golden asserts a second run is a no-op. Neither order-independence nor the independent spot check has an equivalent — see below | `data_architecture_ingestion.md` §"Verifiable via `--reset-and-redownload`" |
 | "Environment hygiene": no orphaned workers, kill only your own | `dag/src/lock.rs` guards the data root; SIGINT is a graceful checkpoint path with a 130 convention | `docs/dev/step_protocol.md` §Signals |
 
-One genuine semantic difference in §4 worth naming, because it will
-matter if these two ever share a store. The skill merges by
-**`max(version, batch)`** — an older batch carrying an older version
-cannot regress a newer one. Datalib merges by **last complete write
-wins**, and gets order-independence a different way: the raw store is
-fed by one writer walking an upstream whose newest state *is* the
-truth, and the version-ordering question is pushed down into doltlite's
-commit history instead of into a column. Both are correct for their
-input model. The skill's is correct for *overlapping re-exports from
-disk*, which is the case datalib has never had to handle, and it is
-the better rule for a generic ingest (§4B).
+The §4 merge difference is the load-bearing one, and it is not a
+wash. The skill merges by **`max((version, batch))`**, so an older
+batch carrying an older version cannot regress a newer one and any
+load order produces the same store — order-independence by
+construction. Datalib merges by **last complete write wins**, which is
+sound *only* because the raw store is fed by one writer walking an
+upstream whose newest state is by definition the truth, and because
+the version question is pushed into doltlite's commit history rather
+than into a column. Take that assumption away — overlapping re-exports
+arriving from disk in arbitrary order, which is exactly the case
+datalib has never had to handle — and last-write-wins is simply
+wrong. So this is not "two rules for two input models": the skill's
+rule is strictly more general, and §4B should adopt it rather than
+port ours.
+
+### Where the skill is ahead of us
+
+Seven things, checked against the tree rather than against our own
+prose. The pattern is consistent: they are all about **the record we
+cannot store**, which is the question we have thought least about.
+
+1. **Profiling before building** (§1). We have nothing. The nearest is
+   `download_metrics::snapshot_db_file`, which counts rows per table
+   before and after a run — useful for "did anything land," useless for
+   "is this field an identity."
+2. **One problem sink with a reason taxonomy** (§7b). Unreadable file,
+   non-object document and no-usable-identity are *dropped*; a field
+   failing coercion is *nulled*; a value whose type the contract does
+   not cover is nulled rather than passed through. Each is one line in
+   one log with a reason and a sample. We have a single `errors=N` for
+   fetch failures and nothing at all for projection.
+3. **A field-nulling policy, stated as policy.** "Any rule that turns a
+   non-null source value into null is a judgment call." We have no such
+   concept, which means we also cannot count them.
+4. **The judgment-call table** (§8) — every lossy rule listed in the
+   README with the number of records it affected, drawn from the
+   ingestion log. This is the best idea in the skill and we have no
+   analogue anywhere. It makes lossiness a reviewable artifact instead
+   of a property you would have to go read the parser to discover.
+5. **The systematic-breakage exit** — stop non-zero when a batch looks
+   broken as a whole (say >20% of its records dropped), so a schema
+   change is not swallowed one warning at a time. Compare
+   `data_architecture_ingestion_practices.md`
+   §"Detecting upstream shape drift", which says in as many words:
+   "not implemented today, and we don't know yet what we want. A
+   previous attempt (`endpoint_shapes`) was deleted." The skill's rule
+   is crude, and it is a real answer to the question we left open.
+6. **A spot check that shares no code with the parser** (§8): for 20
+   random records, the exported row must equal the raw record for every
+   pass-through and simple scalar field. Our provider goldens assert
+   that output matches *what it matched last time*, which enshrines
+   whatever the parser did — including a bug — and `AGENTS.md` warns in
+   its own voice that a test which cannot fail is self-concealing. The
+   skill's check compares against the source instead. That is a
+   strictly stronger property and we do not have it.
+7. **Order-independence as an asserted property** (§8: the export is
+   identical for every batch ordering). This is downstream of the merge
+   rule: `max((version, batch))` is order-independent by construction,
+   last-complete-write-wins is not. `--reset-and-redownload` checks
+   completeness, not order.
+
+**§7c retention** is an eighth, already covered in §3c.
+
+None of these are hard to add in isolation; the reason we don't have
+them is that datalib grew from the download side, where the
+interesting failures are network-shaped, and the skill grew from the
+parse side, where they are data-shaped. That is also why the exchange
+is worth having in both directions — §6 is the other half.
 
 ### What datalib has that the skill doesn't ask for
 
@@ -229,8 +292,9 @@ chat-flavored names. The field docs should lead with the general
 meaning and give the chat mapping second.
 
 **c. Retention is unbuilt, and doltlite makes it harder than it looks.**
-The skill's §7c is the one section where it is straightforwardly ahead
-of us. There is no pruning anywhere in the ingestion path. And the
+Retention is one of the several places §1 finds the skill ahead of us,
+and the one with an architectural obstacle behind it rather than just
+absence. There is no pruning anywhere in the ingestion path. And the
 property that makes doltlite valuable works against retention: per
 `data_architecture_ingestion.md`, "SQL operations (even DROP TABLE) do
 not actually delete anything." `system/usage.doltlite_db` is documented
