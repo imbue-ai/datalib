@@ -14,8 +14,9 @@
 //!   * If the request carries the marker header
 //!     `X-Imbue-Latchkey-Desktop-Proxy`, it is rewritten to go through
 //!     the latchkey gateway on the user's own computer (reached over a
-//!     tunnel whose URL minds exports to us, see
-//!     [`DESKTOP_PROXY_GATEWAY_URL_ENV`]) and handed to the system curl.
+//!     tunnel whose URL the gateway that runs us already has in its
+//!     environment, see [`DESKTOP_PROXY_GATEWAY_URL_ENV`]) and handed to
+//!     the system curl.
 //!     The marker is dropped, and the request is marked for that gateway
 //!     to forward as-is, credentials and all (see
 //!     [`GATEWAY_NO_CREDENTIALS_HEADER`]). Any `X-Imbue-Impersonate`
@@ -69,17 +70,23 @@ const DESKTOP_PROXY_MARKER_HEADER_NAME: &str = "X-Imbue-Latchkey-Desktop-Proxy";
 
 /// Env var holding the base URL of the latchkey gateway on the user's
 /// computer, as reachable from this machine (in minds, a reverse tunnel
-/// into the VPS loopback). Set by minds in the environment of the
-/// gateway that runs us, so it is inherited here. Required whenever a
-/// request carries the desktop-proxy marker; a marked request with no
-/// gateway to send it to is an error, not a silent direct request, since
-/// the caller asked for a different source address on purpose.
-const DESKTOP_PROXY_GATEWAY_URL_ENV: &str = "MINDS_DESKTOP_PROXY_GATEWAY_URL";
+/// into the VPS loopback). It is the variable minds already gives the
+/// VPS gateway for its own desktop-forwarding extension; the gateway
+/// runs us as a child, so we inherit it rather than needing one of our
+/// own. Required whenever a request carries the desktop-proxy marker; a
+/// marked request with no gateway to send it to is an error, not a
+/// silent direct request, since the caller asked for a different source
+/// address on purpose.
+const DESKTOP_PROXY_GATEWAY_URL_ENV: &str = "LATCHKEY_EXTENSION_DESKTOP_GATEWAY_URL";
 
-/// Env var holding that gateway's password, sent as
-/// [`GATEWAY_PASSWORD_HEADER_NAME`]. Optional: an empty or unset value
+/// Env var holding the password to send as [`GATEWAY_PASSWORD_HEADER_NAME`].
+/// This is the password the gateway running us listens with: in minds,
+/// the desktop and every VPS gateway share one password (derived on the
+/// desktop and handed to each machine at provisioning), which is also
+/// what lets the VPS's forwarding extension pass a caller's password
+/// through to the desktop unchanged. Optional: an empty or unset value
 /// sends no password header, for a gateway that requires none.
-const DESKTOP_PROXY_GATEWAY_PASSWORD_ENV: &str = "MINDS_DESKTOP_PROXY_GATEWAY_PASSWORD";
+const DESKTOP_PROXY_GATEWAY_PASSWORD_ENV: &str = "LATCHKEY_GATEWAY_LISTEN_PASSWORD";
 
 /// The latchkey gateway's outbound-proxy endpoint: `<gateway>/gateway/<target-url>`.
 const GATEWAY_PATH_PREFIX: &str = "/gateway/";
@@ -178,7 +185,7 @@ fn choose_route(argv: &[String]) -> Route {
 }
 
 /// The desktop latchkey gateway a marked request is sent to, read from
-/// the environment minds gives the gateway that runs us.
+/// the environment inherited from the gateway that runs us.
 struct DesktopGateway {
     /// Base URL without a trailing slash, so the endpoint path can be
     /// appended directly.
