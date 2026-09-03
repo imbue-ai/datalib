@@ -454,7 +454,7 @@ ${applets()}`;
     /// rather than against the prose the cell happens to render.
     const ordering = async () => {
       const ids = await page
-        .locator('.ag-center-cols-container .ag-row')
+        .locator('.ag-grid-scrolling-rows .ag-row')
         .evaluateAll((rows) =>
           rows
             .sort(

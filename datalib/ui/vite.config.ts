@@ -30,11 +30,49 @@ function warnIfUnauthenticated() {
   );
 }
 
-export default defineConfig({
+// `import.meta.dirname` rather than `__dirname`: Vite 8 warns that
+// `__dirname` is unsupported by `configLoader: 'native'`, which is
+// slated to become the default.
+const CONFIG_DIR = import.meta.dirname;
+
+// Vite 8 resolves a module to its realpath before loading it; Vite 7 did
+// not. Everything Bazel hands us is a symlink into bazel-out, so that
+// broke this package from both ends at once — and, annoyingly, the two
+// ends want opposite fixes.
+//
+//   * `bazel build` (js_run_binary, chdir into the sandbox): the staged
+//     `index.html` resolves through to the real output base while the
+//     cwd is a sandbox path. Vite names an emitted asset by relativizing
+//     it against `root`, so `index.html` came out with ten `../` in it,
+//     and rolldown — Vite 8's bundler — rejects any emitted name that is
+//     absolute or relative. Fix: pin `root` to the config's own resolved
+//     directory, putting `root` on the same side as the file.
+//
+//   * `bazel test` (vitest, runfiles): the runfiles symlinks point *out
+//     of* the sandbox, so every spec resolved to `/@fs/<real execroot>/…`
+//     — a path that exists but that the sandbox will not let the test
+//     read. All 16 suites failed with "Cannot find module". Fix:
+//     `preserveSymlinks`, so resolution stays inside the runfiles tree.
+//
+// Applying either fix to both modes breaks the other one, which is why
+// this is keyed on `command`. Neither is needed for a host `pnpm build`
+// / `pnpm test`, where nothing is a symlink and both branches are inert.
+export default defineConfig(({ command }) => ({
+  // Build half of the note above. `outDir` has to be pinned to the CWD
+  // alongside it: `outDir` is resolved against `root`, so moving `root`
+  // to the resolved path also moves the output there — outside the
+  // sandbox Bazel is watching. That failed *silently*, which is the
+  // worst version of this bug: vite printed "built in 626ms", the
+  // `dist` action succeeded with an empty declared output, and the
+  // first thing to notice was 60 e2e tests reporting "UI bundle not
+  // embedded in this binary".
+  ...(command === "build"
+    ? { root: CONFIG_DIR, build: { outDir: path.join(process.cwd(), "dist") } }
+    : {}),
   plugins: [vue()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src"),
+      "@": path.resolve(CONFIG_DIR, "src"),
     },
     // Under aspect_rules_js, npm deps land at virtual paths like
     // `node_modules/.aspect_rules_js/<pkg>@<ver>/node_modules/<pkg>`
@@ -50,6 +88,8 @@ export default defineConfig({
     // this because its node_modules layout doesn't expose the double
     // path; the issue is specific to the aspect_rules_js virtual tree.
     dedupe: ["vue", "vue-router", "pinia"],
+    // Test/serve half of the note above.
+    ...(command === "build" ? {} : { preserveSymlinks: true }),
   },
   server: {
     host: "127.0.0.1",
@@ -81,4 +121,4 @@ export default defineConfig({
     // Playwright's `test.describe` (different test runner).
     exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**"],
   },
-});
+}));

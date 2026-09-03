@@ -154,7 +154,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # still outstanding is a published image built from it, which happens on
 # the next `v*` tag. Dropping the exclusion before then would point CI
 # at a `:latest` that has no WebKit.
-ARG PLAYWRIGHT_VERSION=1.59.1
+ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/*
 

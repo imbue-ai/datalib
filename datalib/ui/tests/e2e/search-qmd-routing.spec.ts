@@ -22,7 +22,7 @@ import { searchAndSettle } from "./grid-helpers";
 async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto("/");
   await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
   // Settle first, then assert. The score column is only ever populated
@@ -33,7 +33,7 @@ async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await searchAndSettle(page, q);
   await expect(page.locator('.ag-header-cell[col-id="score"]')).toBeVisible();
   await expect(
-    page.locator('.ag-center-cols-container [role="row"]').first(),
+    page.locator('.ag-grid-scrolling-rows [role="row"]').first(),
   ).toBeVisible();
 }
 

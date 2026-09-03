@@ -19,7 +19,7 @@ test("right-click on a grid row suppresses the native browser menu", async ({
 
   await page.goto("/");
   const firstRow = page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first();
   await firstRow.waitFor({ timeout: 10_000 });
 

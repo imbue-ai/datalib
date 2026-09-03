@@ -17,7 +17,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { searchAndSettle } from "./grid-helpers";
 
-const SOURCE_CELLS = '.ag-center-cols-container [col-id="source_name"]';
+const SOURCE_CELLS = '.ag-grid-scrolling-rows [col-id="source_name"]';
 
 /// The distinct, non-empty texts in the Source column, in set order.
 async function distinctSourceCells(page: Page): Promise<string[]> {
@@ -28,7 +28,7 @@ async function distinctSourceCells(page: Page): Promise<string[]> {
 async function openGrid(page: Page) {
   await page.goto("/");
   await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
 }

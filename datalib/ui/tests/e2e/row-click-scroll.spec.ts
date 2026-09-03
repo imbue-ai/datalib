@@ -92,7 +92,7 @@ test("row clicks highlight and scroll to the right message", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
 

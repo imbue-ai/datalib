@@ -107,7 +107,7 @@ async function gridRows(
 /// Open Explore and wait for it to have painted rows from the applet.
 async function openExplore(page: Page) {
   await page.goto(`${BASE}/`);
-  await expect(page.locator('.ag-center-cols-container [role="row"]').first()).toBeVisible({
+  await expect(page.locator('.ag-grid-scrolling-rows [role="row"]').first()).toBeVisible({
     timeout: 20_000,
   });
   await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
