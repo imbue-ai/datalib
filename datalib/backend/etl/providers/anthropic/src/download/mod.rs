@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::{latchkey_curl, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -74,6 +74,10 @@ fn project_docs_sweep_key(project_uuid: &str) -> String {
 /// opt out of the project mirror while their config said otherwise.
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block. Default = the only stored
+    /// account for the service.
+    pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
     /// created if needed). Ignored for opening when `db` is `Some`.
@@ -112,6 +116,7 @@ pub struct FetchOptions {
 impl Default for FetchOptions {
     fn default() -> Self {
         Self {
+            latchkey: LatchkeySettings::default(),
             db_path: PathBuf::new(),
             db: None,
             export_dir: None,
@@ -198,7 +203,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "conv_uuids": opts.conv_uuids,
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
-    let mut client = ClaudeClient::new();
+    let mut client = ClaudeClient::with_latchkey(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
     // One `now` per fetch — threaded into every bulk upsert so all
     // `<table>_bookkeeping.fetched_at` stamps from a single sync share

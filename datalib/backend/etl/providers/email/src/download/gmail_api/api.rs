@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpResponse};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpResponse, LatchkeySettings};
 
 /// Playback / impersonation key. Not in `IMPERSONATE_PROVIDERS` — Google
 /// does not front the API with a JA3 wall.
@@ -116,10 +116,10 @@ fn wait_seconds(available: f64, cost: f64, units_per_minute: u32) -> f64 {
 }
 
 /// One authenticated GET against the Gmail API, returning parsed JSON.
-async fn get_json(url: &str, account: Option<&str>) -> Result<Value> {
+async fn get_json(url: &str, latchkey: &LatchkeySettings) -> Result<Value> {
     let req = HttpRequest::get(PROVIDER, url)
         .timeout(REQUEST_TIMEOUT)
-        .account(account);
+        .latchkey(latchkey.clone());
     let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;
     if !(200..300).contains(&resp.status) {
         return Err(api_error(url, &resp));
@@ -166,8 +166,8 @@ pub enum GmailApiError {
 
 /// `users.getProfile` — the account address and the mailbox's current
 /// `historyId`, which is the cursor a first full sync will store.
-pub async fn get_profile(user_id: &str, account: Option<&str>) -> Result<Profile> {
-    let v = get_json(&format!("{BASE}/{user_id}/profile"), account).await?;
+pub async fn get_profile(user_id: &str, latchkey: &LatchkeySettings) -> Result<Profile> {
+    let v = get_json(&format!("{BASE}/{user_id}/profile"), latchkey).await?;
     Ok(Profile {
         email_address: str_field(&v, "emailAddress")
             .ok_or_else(|| anyhow!("users.getProfile returned no emailAddress"))?,
@@ -185,8 +185,8 @@ pub struct Profile {
 
 /// `users.labels.list` — every label, so `labelIds` on a message can be
 /// resolved to names.
-pub async fn list_labels(user_id: &str, account: Option<&str>) -> Result<Vec<Label>> {
-    let v = get_json(&format!("{BASE}/{user_id}/labels"), account).await?;
+pub async fn list_labels(user_id: &str, latchkey: &LatchkeySettings) -> Result<Vec<Label>> {
+    let v = get_json(&format!("{BASE}/{user_id}/labels"), latchkey).await?;
     Ok(v.get("labels")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Label::from_json).collect())
@@ -232,7 +232,7 @@ pub struct MessagePage {
 /// instead of seconds.
 pub async fn list_messages(
     user_id: &str,
-    account: Option<&str>,
+    latchkey: &LatchkeySettings,
     page_token: Option<&str>,
     page_size: u32,
     label_ids: &[String],
@@ -246,7 +246,7 @@ pub async fn list_messages(
         url.push_str("&pageToken=");
         url.push_str(&urlencode(token));
     }
-    let v = get_json(&url, account).await?;
+    let v = get_json(&url, latchkey).await?;
     Ok(MessagePage {
         ids: v
             .get("messages")
@@ -265,12 +265,12 @@ pub async fn list_messages(
 /// share one envelope-synthesis path and one CAS entry per message.
 pub async fn get_message_raw(
     user_id: &str,
-    account: Option<&str>,
+    latchkey: &LatchkeySettings,
     id: &str,
 ) -> Result<GmailMessage> {
     let v = get_json(
         &format!("{BASE}/{user_id}/messages/{id}?format=RAW"),
-        account,
+        latchkey,
     )
     .await?;
     GmailMessage::from_json(&v)
@@ -341,7 +341,7 @@ pub struct HistoryPage {
 /// aged out; the caller must fall back to a full sync.
 pub async fn list_history(
     user_id: &str,
-    account: Option<&str>,
+    latchkey: &LatchkeySettings,
     start_history_id: &str,
     page_token: Option<&str>,
 ) -> Result<HistoryPage> {
@@ -350,7 +350,7 @@ pub async fn list_history(
         url.push_str("&pageToken=");
         url.push_str(&urlencode(token));
     }
-    let v = get_json(&url, account).await?;
+    let v = get_json(&url, latchkey).await?;
     Ok(parse_history(&v))
 }
 

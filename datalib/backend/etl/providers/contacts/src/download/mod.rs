@@ -26,6 +26,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use tracing::{info, warn};
 
@@ -35,6 +36,9 @@ use db::{addressbook_pk, ContactRow};
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
 /// other provider crate exposes.
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block.
+    pub latchkey: LatchkeySettings,
     /// Doltlite database path. [`db_path_for`] places the entity db
     /// inside the per-source directory as `entities.doltlite_db` (the
     /// dir is created if needed). Ignored for opening when `db` is `Some`.
@@ -88,7 +92,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // ── Discovery ──────────────────────────────────────────────────
     let server_url = opts.server_url.trim_end_matches('/').to_string();
-    let (principal_url, home_set_url) = discover(&server_url, &mut summary).await?;
+    let (principal_url, home_set_url) = discover(&server_url, &mut summary, &opts.latchkey).await?;
     db.upsert_account(
         &account_id,
         &server_url,
@@ -102,7 +106,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         addressbook_home_set = %home_set_url,
     );
 
-    let books = list_addressbooks(&home_set_url, &mut summary).await?;
+    let books = list_addressbooks(&home_set_url, &mut summary, &opts.latchkey).await?;
     info!(event = "carddav_addressbook_count", n = books.len());
     for book in &books {
         db.upsert_addressbook(
@@ -133,7 +137,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
-        match sync_addressbook(&db, &book_id, &book.url, &prev_token, &mut summary).await {
+        match sync_addressbook(
+            &db,
+            &book_id,
+            &book.url,
+            &prev_token,
+            &mut summary,
+            &opts.latchkey,
+        )
+        .await
+        {
             Ok(()) => {}
             Err(e) => {
                 summary.errors += 1;
@@ -169,10 +182,14 @@ struct Book {
     ctag: Option<String>,
 }
 
-async fn discover(server_url: &str, summary: &mut FetchSummary) -> Result<(String, String)> {
+async fn discover(
+    server_url: &str,
+    summary: &mut FetchSummary,
+    latchkey: &LatchkeySettings,
+) -> Result<(String, String)> {
     // Step 1: current-user-principal.
     summary.requests += 1;
-    let ms = api::propfind(server_url, "0", api::BODY_CURRENT_USER_PRINCIPAL)
+    let ms = api::propfind(server_url, "0", api::BODY_CURRENT_USER_PRINCIPAL, latchkey)
         .await
         .map_err(|e| anyhow::anyhow!("propfind current-user-principal: {e}"))?;
     let principal_href = ms
@@ -184,9 +201,14 @@ async fn discover(server_url: &str, summary: &mut FetchSummary) -> Result<(Strin
 
     // Step 2: addressbook-home-set.
     summary.requests += 1;
-    let ms = api::propfind(&principal_url, "0", api::BODY_ADDRESSBOOK_HOME_SET)
-        .await
-        .map_err(|e| anyhow::anyhow!("propfind addressbook-home-set: {e}"))?;
+    let ms = api::propfind(
+        &principal_url,
+        "0",
+        api::BODY_ADDRESSBOOK_HOME_SET,
+        latchkey,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("propfind addressbook-home-set: {e}"))?;
     let home_set_href = ms
         .responses
         .iter()
@@ -197,9 +219,13 @@ async fn discover(server_url: &str, summary: &mut FetchSummary) -> Result<(Strin
     Ok((principal_url, home_set_url))
 }
 
-async fn list_addressbooks(home_set_url: &str, summary: &mut FetchSummary) -> Result<Vec<Book>> {
+async fn list_addressbooks(
+    home_set_url: &str,
+    summary: &mut FetchSummary,
+    latchkey: &LatchkeySettings,
+) -> Result<Vec<Book>> {
     summary.requests += 1;
-    let ms = api::propfind(home_set_url, "1", api::BODY_LIST_ADDRESSBOOKS)
+    let ms = api::propfind(home_set_url, "1", api::BODY_LIST_ADDRESSBOOKS, latchkey)
         .await
         .map_err(|e| anyhow::anyhow!("propfind list-addressbooks: {e}"))?;
     let mut out = Vec::new();
@@ -225,10 +251,11 @@ async fn sync_addressbook(
     book_url: &str,
     prev_token: &str,
     summary: &mut FetchSummary,
+    latchkey: &LatchkeySettings,
 ) -> Result<()> {
     summary.requests += 1;
     let body = api::body_sync_collection(prev_token);
-    let ms = match api::report(book_url, &body).await {
+    let ms = match api::report(book_url, &body, latchkey).await {
         Ok(ms) => ms,
         Err(CarddavError::Http {
             status: 403 | 405 | 501,

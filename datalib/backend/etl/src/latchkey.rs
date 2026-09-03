@@ -263,6 +263,27 @@ pub fn latchkey_tokio_command() -> tokio::process::Command {
     tokio::process::Command::from(latchkey_command())
 }
 
+/// `latchkey [--account <acct>] curl` — a tokio `Command` with the
+/// account selector and the `curl` subcommand already pushed.
+///
+/// The ordering is the whole reason this exists: `--account` is a latchkey
+/// **global** option, so it must precede the subcommand. Two providers
+/// (slack's file fetch, chatgpt's image fetch) build their curl invocation
+/// by hand rather than going through [`crate::http::HttpRequest`], and a
+/// hand-rolled `--account` placed after `curl` is rejected by latchkey — so
+/// both they and [`crate::http`] come through here and the rule is written
+/// down once.
+pub fn latchkey_curl_command(
+    settings: &datalib_source_common::LatchkeySettings,
+) -> tokio::process::Command {
+    let mut cmd = latchkey_tokio_command();
+    if let Some(account) = settings.account() {
+        cmd.arg("--account").arg(account);
+    }
+    cmd.arg("curl");
+    cmd
+}
+
 fn warn_if_missing() {
     // In gateway mode the gateway supplies its own dispatch curl, so a
     // missing local one costs nothing and the warning would be misleading.
@@ -289,6 +310,48 @@ mod tests {
     fn exports_dispatch_curl_when_latchkey_talks_to_the_third_party() {
         assert!(should_export_curl_dispatch(None, None));
         assert!(should_export_curl_dispatch(None, Some(os(""))));
+    }
+
+    /// `--account` is a latchkey **global** option: placed after the
+    /// subcommand it is rejected outright. Nothing else in the tree
+    /// asserts the order, and getting it wrong fails only at runtime
+    /// against a real multi-account store -- which is exactly the setup
+    /// nobody has while developing.
+    #[test]
+    fn account_selector_precedes_the_curl_subcommand() {
+        let settings = datalib_source_common::LatchkeySettings {
+            account: Some("thad@imbue.com".to_string()),
+        };
+        let cmd = latchkey_curl_command(&settings);
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let account_at = args.iter().position(|a| a == "--account");
+        let curl_at = args.iter().position(|a| a == "curl");
+        let (Some(account_at), Some(curl_at)) = (account_at, curl_at) else {
+            panic!("expected both `--account` and `curl` in {args:?}");
+        };
+        assert!(
+            account_at < curl_at,
+            "`--account` must precede the subcommand, got {args:?}",
+        );
+        assert_eq!(args[account_at + 1], "thad@imbue.com", "{args:?}");
+    }
+
+    /// The common case: no account configured means no selector at all,
+    /// so latchkey resolves the single stored credential itself.
+    #[test]
+    fn no_account_configured_passes_no_selector() {
+        let cmd = latchkey_curl_command(&datalib_source_common::LatchkeySettings::default());
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.iter().any(|a| a == "--account"), "{args:?}");
+        assert!(args.iter().any(|a| a == "curl"), "{args:?}");
     }
 
     /// A caller's explicit `LATCHKEY_CURL` always wins.

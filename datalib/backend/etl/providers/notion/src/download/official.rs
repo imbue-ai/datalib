@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
 
 pub const BASE: &str = "https://api.notion.com/v1";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(180);
@@ -26,6 +26,9 @@ pub enum NotionOfficialError {
 pub struct NotionOfficialClient {
     requests: AtomicU64,
     network_ms: AtomicU64,
+    /// The source's latchkey settings, forwarded onto every request this
+    /// client issues (see `HttpRequest::latchkey`).
+    latchkey: LatchkeySettings,
 }
 
 impl Default for NotionOfficialClient {
@@ -33,6 +36,7 @@ impl Default for NotionOfficialClient {
         Self {
             requests: AtomicU64::new(0),
             network_ms: AtomicU64::new(0),
+            latchkey: LatchkeySettings::default(),
         }
     }
 }
@@ -40,6 +44,15 @@ impl Default for NotionOfficialClient {
 impl NotionOfficialClient {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Build a client that authenticates as the source's configured
+    /// latchkey identity. Every request it issues carries the settings.
+    pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
+        Self {
+            latchkey,
+            ..Self::default()
+        }
     }
 
     pub fn request_count(&self) -> u64 {
@@ -65,11 +78,13 @@ impl NotionOfficialClient {
         let req = match method {
             "GET" => HttpRequest::get("notion", &url)
                 .header("Accept", "application/json")
+                .latchkey(self.latchkey.clone())
                 .timeout(LATCHKEY_TIMEOUT),
             "POST" => {
                 let payload = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
                 HttpRequest::post_json("notion", &url, payload)
                     .header("Accept", "application/json")
+                    .latchkey(self.latchkey.clone())
                     .timeout(LATCHKEY_TIMEOUT)
             }
             other => {
