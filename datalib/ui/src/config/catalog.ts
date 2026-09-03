@@ -84,7 +84,18 @@ export type Field =
     })
   | ({ kind: "date" } & FieldBase)
   | ({ kind: "bool" } & FieldBase & { default?: boolean })
-  | ({ kind: "int" } & FieldBase)
+  /// `default` pre-fills the box on a **new** source only, and is
+  /// deliberately not applied when editing an existing one.
+  ///
+  /// The asymmetry is the point. A `bool`/`select` default matches the
+  /// backend's own default, so seeding it while editing changes
+  /// nothing. An `int` default here is a *policy* the wizard imposes
+  /// where the backend has none — `blob_size_limit_bytes` means "no
+  /// limit" when absent — so seeding it on edit would silently cap a
+  /// source that was deliberately uncapped, the next time someone
+  /// opened the form to change something unrelated. Absent stays
+  /// absent; only a value already in the config is shown back.
+  | ({ kind: "int" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & { placeholder?: string });
 
 export type CatalogEntry = {
@@ -150,6 +161,19 @@ export const CATALOG: CatalogEntry[] = [
         label: "Download file attachments",
         default: true,
         help: "Off stores JSON metadata only.",
+      },
+      {
+        kind: "int",
+        target: "common.blob_size_limit_bytes",
+        requires: "sync.media",
+        label: "Skip attachments larger than (bytes)",
+        default: 5_000_000,
+        help:
+          "5 MB by default. A workspace's few largest uploads — screen recordings, design " +
+          "files, CI artifacts — are usually most of its bytes on disk and least of its " +
+          "text, so a cap here costs little and saves a lot. Raising it later backfills: " +
+          "Slack re-walks from the start date when the limit is relaxed. Clear it for no " +
+          "limit.",
       },
       {
         kind: "bool",
