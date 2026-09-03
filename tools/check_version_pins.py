@@ -28,14 +28,17 @@ you need to know where a version lives.
 Deliberately NOT in scope
 -------------------------
 * Single-site pins. A version written down once cannot drift, so
-  `bazel_dep` versions, the `better_sqlite3_prebuilt_*` sha256s and
-  friends have nothing to check. If one of them ever gains a second
-  home, that is exactly when it earns a family here.
+  `bazel_dep` versions, the doltlite archive sha256s and friends have
+  nothing to check. If one of them ever gains a second home, that is
+  exactly when it earns a family here.
 * Properties that need something built or run. `//third-party/doltlite:
-  cli_version_test` runs the CLI and compares what it reports;
-  `//third-party/qmd/runtime:node_abi_test` compares a live Node's ABI
-  against the prebuilt URLs. Text comparison can't do either, and those
-  tests stay where they are.
+  cli_version_test` runs the CLI and compares what it reports. Text
+  comparison can't do that, and it stays where it is. There used to be a
+  second one here, `//third-party/qmd/runtime:node_abi_test`, which
+  compared a live Node's ABI against the `node-v<abi>` in better-sqlite3
+  prebuilt URLs; qmd 2.8.3 moved to better-sqlite3 13, whose prebuilts
+  ship inside the npm tarball and are selected by platform rather than
+  by ABI, so both the URLs and the test are gone.
 * `.devcontainer/Dockerfile`'s qmd and latchkey: it inherits both from
   the prod image via `FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`,
   so it has no pin of its own to drift.

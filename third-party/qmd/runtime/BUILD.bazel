@@ -1,4 +1,3 @@
-load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@npm_qmd//:defs.bzl", "npm_link_all_packages")
 
 # The @tobilu/qmd pin, read by //tools:version_pins_test.
@@ -9,20 +8,6 @@ exports_files(["package.json"])
 # every tarball is integrity-checked and no install script runs (see the
 # empty `onlyBuiltDependencies` in package.json).
 npm_link_all_packages(name = "node_modules")
-
-# Guards the one pin the lockfile can't express. See node_abi_test.js.
-js_test(
-    name = "node_abi_test",
-    size = "small",
-    data = ["//:MODULE.bazel"],
-    entry_point = "node_abi_test.js",
-    env = {"MODULE_BAZEL": "$(rootpath //:MODULE.bazel)"},
-    # Read in place rather than copied into bazel-out: rules_js assumes
-    # data files get linked into a JS program, but this one is only ever
-    # `readFileSync`'d to scrape a version pin out of it.
-    no_copy_to_bin = ["//:MODULE.bazel"],
-)
-
 
 # The qmd package tree, for consumers that stage a `DATALIB_RUNTIME_DIR`
 # layout. Depending on the link target materializes the whole pnpm store
@@ -44,36 +29,5 @@ alias(
 alias(
     name = "qmd_tree",
     actual = ":node_modules",
-    visibility = ["//visibility:public"],
-)
-
-# The better-sqlite3 native binding for the target platform. See the
-# `better_sqlite3_prebuilt_*` http_archives in MODULE.bazel for why this
-# is fetched separately rather than coming from the lockfile.
-#
-# One `config_setting` per (os, cpu) pair because `select` cannot nest —
-# and `@platforms//os:macos` alone would not distinguish the two Mac
-# architectures, which need different binaries.
-[
-    config_setting(
-        name = "is_" + slug,
-        constraint_values = constraints,
-    )
-    for slug, constraints in {
-        "darwin_arm64": ["@platforms//os:macos", "@platforms//cpu:arm64"],
-        "darwin_x64": ["@platforms//os:macos", "@platforms//cpu:x86_64"],
-        "linux_arm64": ["@platforms//os:linux", "@platforms//cpu:arm64"],
-        "linux_x64": ["@platforms//os:linux", "@platforms//cpu:x86_64"],
-    }.items()
-]
-
-alias(
-    name = "better_sqlite3_binding",
-    actual = select({
-        ":is_darwin_arm64": "@better_sqlite3_prebuilt_darwin_arm64//:node_binding",
-        ":is_darwin_x64": "@better_sqlite3_prebuilt_darwin_x64//:node_binding",
-        ":is_linux_arm64": "@better_sqlite3_prebuilt_linux_arm64//:node_binding",
-        ":is_linux_x64": "@better_sqlite3_prebuilt_linux_x64//:node_binding",
-    }),
     visibility = ["//visibility:public"],
 )

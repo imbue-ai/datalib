@@ -16,7 +16,7 @@ exports_files(
 # This must match the version in the `doltlite_amalgamation` /
 # `doltlite_autoconf` URLs in MODULE.bazel; `:cli_version_test` is what
 # actually enforces that, by running the built CLI and comparing.
-DOLTLITE_VERSION = "0.11.53"
+DOLTLITE_VERSION = "0.50.3"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12

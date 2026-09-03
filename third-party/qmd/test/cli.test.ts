@@ -474,6 +474,99 @@ describe("CLI Add Command", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Collection:");
     expect(stdout).toContain("Indexed:");
+    expect(stdout).toContain("Collection 'fixtures' created successfully");
+  });
+
+  test("requires a path argument instead of silently indexing CWD (#684)", async () => {
+    const env = await createIsolatedTestEnv("collection-add-no-path");
+    const { stdout, stderr, exitCode } = await runQmd(["collection", "add"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Usage: qmd collection add <path>");
+    expect(stderr).toContain("Pass '.' to index the current directory");
+    expect(stdout).not.toContain("created successfully");
+    expect(readFileSync(join(env.configDir, "index.yml"), "utf8")).toBe("collections: {}\n");
+
+    const listResult = await runQmd(["collection", "list"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+    expect(listResult.stdout).toContain("No collections found");
+  });
+
+  test("rejects a nonexistent collection path without persisting it", async () => {
+    const env = await createIsolatedTestEnv("missing-collection-path");
+    const missingPath = join(fixturesDir, "does-not-exist");
+
+    const { stdout, stderr, exitCode } = await runQmd(["collection", "add", missingPath], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("Collection path does not exist");
+    expect(stderr).toContain(`Received: ${missingPath}`);
+    expect(stderr).toContain("Resolved:");
+    expect(stderr).toContain("Provide an existing directory");
+    expect(stdout).not.toContain("created successfully");
+    expect(readFileSync(join(env.configDir, "index.yml"), "utf8")).toBe("collections: {}\n");
+
+    const listResult = await runQmd(["collection", "list"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+    expect(listResult.stdout).not.toContain("does-not-exist");
+  });
+
+  test("rejects a path containing swallowed collection flags without persisting it", async () => {
+    const env = await createIsolatedTestEnv("swallowed-collection-flags");
+    const malformedPath = `${join(fixturesDir, "missing")} --name swallowed --mask *.md`;
+    const derivedName = "missing --name swallowed --mask *.md";
+
+    const { stdout, stderr, exitCode } = await runQmd(["collection", "add", malformedPath], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("Collection path does not exist");
+    expect(stderr).toContain(`Received: ${malformedPath}`);
+    expect(stderr).toContain("Resolved:");
+    expect(stdout).not.toContain("created successfully");
+    expect(readFileSync(join(env.configDir, "index.yml"), "utf8")).toBe("collections: {}\n");
+
+    const listResult = await runQmd(["collection", "list"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+    expect(listResult.stdout).not.toContain(derivedName);
+  });
+
+  test("rejects a regular file as a collection path without persisting it", async () => {
+    const env = await createIsolatedTestEnv("file-collection-path");
+    const filePath = join(fixturesDir, "README.md");
+
+    const { stdout, stderr, exitCode } = await runQmd(["collection", "add", filePath], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("Collection path is not a directory");
+    expect(stderr).toContain(`Received: ${filePath}`);
+    expect(stderr).toContain("Resolved:");
+    expect(stderr).toContain("Choose a directory");
+    expect(stdout).not.toContain("created successfully");
+    expect(readFileSync(join(env.configDir, "index.yml"), "utf8")).toBe("collections: {}\n");
+
+    const listResult = await runQmd(["collection", "list"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+    expect(listResult.stdout).not.toContain("README.md");
   });
 
   test("adds files with custom glob pattern", async () => {
@@ -485,6 +578,113 @@ describe("CLI Add Command", () => {
     expect(stdout).toContain("Collection:");
     // Should find meeting.md and ideas.md in notes/
     expect(stdout).toContain("notes/*.md");
+  });
+
+  test("accepts --glob as an alias for --mask so same-path collections do not collide (#536)", async () => {
+    const env = await createIsolatedTestEnv("glob-alias");
+    const collectionDir = join(testDir, `glob-alias-${testCounter}`);
+    await mkdir(collectionDir, { recursive: true });
+    await writeFile(join(collectionDir, "MEMORY.md"), "root memory\n");
+    await writeFile(join(collectionDir, "memory.md"), "alt memory\n");
+    await writeFile(join(collectionDir, "other.md"), "other\n");
+
+    const root = await runQmd(
+      ["collection", "add", collectionDir, "--name", "memory-root"],
+      { dbPath: env.dbPath, configDir: env.configDir, cwd: collectionDir },
+    );
+    expect(root.exitCode).toBe(0);
+
+    const alt = await runQmd(
+      ["collection", "add", collectionDir, "--name", "memory-alt", "--glob", "memory.md"],
+      { dbPath: env.dbPath, configDir: env.configDir, cwd: collectionDir },
+    );
+    if (alt.exitCode !== 0) {
+      console.error("Command failed:", alt.stderr);
+    }
+    expect(alt.exitCode).toBe(0);
+    expect(alt.stderr).not.toContain("already exists for this path and pattern");
+    expect(alt.stdout).toContain("memory.md");
+
+    const list = await runQmd(["collection", "list"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+    });
+    expect(list.stdout).toContain("memory-root");
+    expect(list.stdout).toContain("memory-alt");
+    expect(list.stdout).toContain("memory.md");
+  });
+
+  test("indexes comma-separated --mask patterns as a union (#557)", async () => {
+    const env = await createIsolatedTestEnv("comma-mask");
+    const collectionDir = join(testDir, `comma-mask-${testCounter}`);
+    await mkdir(collectionDir, { recursive: true });
+    await writeFile(join(collectionDir, "a.md"), "alpha\n");
+    await writeFile(join(collectionDir, "X - b.md"), "bravo\n");
+    await writeFile(join(collectionDir, "skip.txt"), "nope\n");
+
+    const { stdout, stderr, exitCode } = await runQmd(
+      ["collection", "add", collectionDir, "--name", "bug-demo", "--mask", "a.md,X - *.md"],
+      { dbPath: env.dbPath, configDir: env.configDir, cwd: collectionDir },
+    );
+    if (exitCode !== 0) {
+      console.error("Command failed:", stderr);
+    }
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Indexed: 2 new");
+  });
+
+  test("still accepts brace-expansion --mask (#557)", async () => {
+    const env = await createIsolatedTestEnv("brace-mask");
+    const collectionDir = join(testDir, `brace-mask-${testCounter}`);
+    await mkdir(collectionDir, { recursive: true });
+    await writeFile(join(collectionDir, "a.md"), "alpha\n");
+    await writeFile(join(collectionDir, "X - b.md"), "bravo\n");
+
+    const { stdout, stderr, exitCode } = await runQmd(
+      ["collection", "add", collectionDir, "--name", "bug-demo", "--mask", "{a.md,X - *.md}"],
+      { dbPath: env.dbPath, configDir: env.configDir, cwd: collectionDir },
+    );
+    if (exitCode !== 0) {
+      console.error("Command failed:", stderr);
+    }
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Indexed: 2 new");
+  });
+
+  test("warns and continues when a file is unreadable (#460)", async () => {
+    const env = await createIsolatedTestEnv("skip-unreadable");
+    const collectionDir = join(testDir, `skip-unreadable-${testCounter}`);
+    await mkdir(collectionDir, { recursive: true });
+    const goodPath = join(collectionDir, "good.md");
+    const badPath = join(collectionDir, "bad.md");
+    await writeFile(goodPath, "alpha\n");
+    await writeFile(badPath, "bravo\n");
+    await chmod(badPath, 0o000);
+
+    try {
+      let stillReadable = false;
+      try {
+        readFileSync(badPath, "utf-8");
+        stillReadable = true;
+      } catch {
+        stillReadable = false;
+      }
+      if (stillReadable) return;
+
+      const { stdout, stderr, exitCode } = await runQmd(
+        ["collection", "add", collectionDir, "--name", "skip-unreadable"],
+        { dbPath: env.dbPath, configDir: env.configDir, cwd: collectionDir },
+      );
+      if (exitCode !== 0) {
+        console.error("Command failed:", stderr);
+      }
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Indexed: 1 new");
+      expect(stderr).toMatch(/Skipped unreadable file: bad\.md \((?:EACCES|EPERM)\)/);
+      expect(stderr).toContain("Skipped 1 unreadable file(s)");
+    } finally {
+      try { await chmod(badPath, 0o644); } catch { /* restore so cleanup can unlink */ }
+    }
   });
 
   test("can recreate collection with remove and add", async () => {
@@ -589,6 +789,44 @@ describe("CLI Status Command", () => {
     expect(stdout).toContain("invalid 1");
     expect(stdout).toContain("HTML page, not a GGUF model");
     expect(stdout).toContain("qmd pull --refresh");
+  }, 20000);
+
+  test("qmd doctor ignores .etag sidecars beside a valid cached model", async () => {
+    // `qmd pull` writes a `<filename>.etag` HTTP sidecar next to each model
+    // blob. That sidecar matches the model-cache lookup's `includes(filename)`
+    // test, so a naive scan inspects it as a GGUF and reports the model
+    // "invalid" — order-dependently, whenever readdir yields the sidecar
+    // before the blob (#812). Only real `.gguf` files must be considered.
+    const env = await createIsolatedTestEnv("doctor-etag-sidecar");
+    // Mirror the embeddinggemma layout from #812: bare `<name>.gguf.etag`
+    // sorts before the node-llama-cpp `hf_<org>_<name>.gguf` blob.
+    const model = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+    await writeFile(join(env.configDir, "index.yml"), `collections: {}\nmodels:\n  embed: ${model}\n  generate: ${model}\n  rerank: ${model}\n`);
+    const cacheRoot = join(env.configDir, "cache");
+    const modelCacheDir = join(cacheRoot, "qmd", "models");
+    await mkdir(modelCacheDir, { recursive: true });
+    // Create the sidecar first so readdir is more likely to surface it before
+    // the blob on order-preserving filesystems (the bug's trigger condition).
+    await writeFile(join(modelCacheDir, "embeddinggemma-300M-Q8_0.gguf.etag"), '"9d3a1b2c3d4e5"\n');
+    await writeFile(
+      join(modelCacheDir, "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"),
+      Buffer.concat([Buffer.from("GGUF"), Buffer.alloc(60)]),
+    );
+
+    const { stdout, exitCode } = await runQmd(["doctor"], {
+      dbPath: env.dbPath,
+      configDir: env.configDir,
+      env: {
+        XDG_CACHE_HOME: cacheRoot,
+        QMD_DOCTOR_DEVICE_PROBE: "0",
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("model cache");
+    expect(stdout).toContain("downloaded and valid GGUF");
+    // The sidecar must not be reported as a bad model.
+    expect(stdout).not.toContain("not valid GGUF");
+    expect(stdout).not.toContain(".etag");
   }, 20000);
 
   test("qmd doctor says when models are overridden by env", async () => {
@@ -868,6 +1106,28 @@ describe("CLI Multi-Get Command", () => {
     expect(stdout).toContain("Team Meeting");
   });
 
+  test("comma-list accepts collection-prefixed paths (#759)", async () => {
+    const { stdout, stderr, exitCode } = await runQmd([
+      "multi-get",
+      "fixtures/docs/api.md, fixtures/README.md",
+    ], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("File not found");
+    expect(stdout).toContain("API Documentation");
+    expect(stdout).toContain("Test Project");
+  });
+
+  test("comma-list does not fetch a document from a filename fragment (#759)", async () => {
+    const { stdout, stderr, exitCode } = await runQmd([
+      "multi-get",
+      "pi.md, ZZZ-nonexistent.md",
+    ], { dbPath: localDbPath });
+    expect(stdout).not.toContain("API Documentation");
+    expect(stderr).toContain("File not found: pi.md");
+    expect(stderr).toContain("File not found: ZZZ-nonexistent.md");
+    expect(stderr).not.toMatch(/api\.md/i);
+  });
+
   test("--md output includes a #docid for each file", async () => {
     const { stdout, exitCode } = await runQmd(["multi-get", "notes/*.md", "--md"], { dbPath: localDbPath });
     expect(exitCode).toBe(0);
@@ -883,6 +1143,60 @@ describe("CLI Multi-Get Command", () => {
     for (const entry of parsed) {
       expect(entry.docid).toMatch(/^#[a-f0-9]{6}$/);
     }
+  });
+
+  test("--format files emits docid as its own CSV field (#760)", async () => {
+    const { stdout, exitCode } = await runQmd(
+      ["multi-get", "README.md", "--format", "files"],
+      { dbPath: localDbPath },
+    );
+    expect(exitCode).toBe(0);
+    const line = stdout.trim().split("\n")[0] ?? "";
+    // Shape: #docid,path[,"context"] — not "#docid path,..."
+    expect(line).toMatch(/^#[a-f0-9]{6},[^,\s]+/);
+    expect(line).not.toMatch(/^#[a-f0-9]{6} /);
+    const firstField = line.split(",")[0] ?? "";
+    expect(firstField).toMatch(/^#[a-f0-9]{6}$/);
+  });
+
+  test("retrieves a document by docid", async () => {
+    const lookup = await runQmd(["multi-get", "README.md", "--json"], { dbPath: localDbPath });
+    expect(lookup.exitCode).toBe(0);
+    const [entry] = JSON.parse(lookup.stdout);
+
+    const { stdout, stderr, exitCode } = await runQmd(["multi-get", entry.docid, "--json"], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("No files matched pattern");
+
+    const parsed = JSON.parse(stdout);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].docid).toBe(entry.docid);
+    expect(parsed[0].body).toContain("Test Project");
+  });
+
+  test("fails for a missing single docid", async () => {
+    const { stdout, stderr, exitCode } = await runQmd(["multi-get", "#000000", "--json"], { dbPath: localDbPath });
+    expect(exitCode).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("File not found: #000000");
+  });
+
+  test("retrieves docids in comma-separated lists", async () => {
+    const lookup = await runQmd(["multi-get", "README.md", "--json"], { dbPath: localDbPath });
+    expect(lookup.exitCode).toBe(0);
+    const [entry] = JSON.parse(lookup.stdout);
+
+    const { stdout, exitCode } = await runQmd([
+      "multi-get",
+      `${entry.docid},notes/meeting.md`,
+      "--json",
+    ], { dbPath: localDbPath });
+    expect(exitCode).toBe(0);
+
+    const parsed = JSON.parse(stdout);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].docid).toBe(entry.docid);
+    expect(parsed[1].file).toBe("qmd://fixtures/notes/meeting.md");
   });
 
   test("shows line numbers by default and --no-line-numbers disables them", async () => {
@@ -1034,6 +1348,97 @@ describe("CLI Cleanup Command", () => {
   test("cleans up orphaned entries", async () => {
     const { stdout, exitCode } = await runQmd(["cleanup"]);
     expect(exitCode).toBe(0);
+  });
+});
+
+describe("orphaned embedding vectors (#768)", () => {
+  let localDbPath: string;
+  let localConfigDir: string;
+
+  function seedOrphans(opts: { live?: number; orphaned?: number; cache?: number; inactive?: number } = {}) {
+    const live = opts.live ?? 1;
+    const orphaned = opts.orphaned ?? 3;
+    const cache = opts.cache ?? 2;
+    const inactive = opts.inactive ?? 1;
+    const db = openDatabase(localDbPath);
+    const now = new Date().toISOString();
+    const doc = db.prepare(`SELECT hash FROM documents WHERE active = 1 LIMIT 1`).get() as { hash: string } | undefined;
+    if (doc) {
+      for (let i = 0; i < live; i++) {
+        db.prepare(`
+          INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at)
+          VALUES (?, ?, 0, 'test', '', 1, ?)
+        `).run(doc.hash, i, now);
+      }
+    }
+    for (let i = 0; i < orphaned; i++) {
+      db.prepare(`
+        INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at)
+        VALUES (?, 0, 0, 'test', '', 1, ?)
+      `).run(`orphan-hash-${i}`, now);
+    }
+    for (let i = 0; i < cache; i++) {
+      db.prepare(`INSERT OR REPLACE INTO llm_cache (hash, result, created_at) VALUES (?, '{}', ?)`).run(`cache-${i}`, now);
+    }
+    for (let i = 0; i < inactive; i++) {
+      const hash = `inactive-hash-${i}`;
+      db.prepare(`INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?, 'gone', ?)`).run(hash, now);
+      db.prepare(`
+        INSERT OR REPLACE INTO documents (collection, path, title, hash, created_at, modified_at, active)
+        VALUES ('fixtures', ?, 'Gone', ?, ?, ?, 0)
+      `).run(`gone-${i}.md`, hash, now, now);
+    }
+    db.close();
+  }
+
+  beforeAll(async () => {
+    const env = await createIsolatedTestEnv("orphan-vectors");
+    localDbPath = env.dbPath;
+    localConfigDir = env.configDir;
+    const { exitCode, stderr } = await runQmd(
+      ["collection", "add", fixturesDir, "--name", "fixtures"],
+      { dbPath: localDbPath, configDir: localConfigDir },
+    );
+    if (exitCode !== 0) console.error("collection add failed:", stderr);
+    expect(exitCode).toBe(0);
+    seedOrphans();
+  });
+
+  test("status reports orphaned embedding chunks", async () => {
+    const { stdout, exitCode } = await runQmd(["status"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatch(/Orphaned:\s+3 embedding chunks \(75%\)/);
+    expect(stdout).toContain("qmd cleanup");
+  });
+
+  test("update hints when orphan ratio exceeds 10%", async () => {
+    const { stdout, exitCode } = await runQmd(["update"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("3 orphaned embedding chunks (75% of vectors)");
+    expect(stdout).toContain("run 'qmd cleanup' to reclaim space");
+  });
+
+  test("cleanup --dry-run reports what would be removed without deleting", async () => {
+    // `qmd update` clears llm_cache; re-seed so dry-run has something to report.
+    seedOrphans({ live: 0, orphaned: 0, cache: 2, inactive: 0 });
+    const { stdout, exitCode } = await runQmd(["cleanup", "--dry-run"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Dry run — no changes made");
+    expect(stdout).toContain("Would clear 2 cached API responses");
+    expect(stdout).toContain("Would remove 3 orphaned embedding chunks");
+    expect(stdout).toContain("Would remove 1 inactive document records");
+    expect(stdout).toContain("Would remove 1 orphaned content hashes");
+    expect(stdout).toContain("Would compact FTS and vacuum the database");
+    expect(stdout).not.toContain("Database vacuumed");
+
+    const db = openDatabase(localDbPath);
+    const vectors = (db.prepare(`SELECT COUNT(*) as c FROM content_vectors`).get() as { c: number }).c;
+    const cache = (db.prepare(`SELECT COUNT(*) as c FROM llm_cache`).get() as { c: number }).c;
+    const inactive = (db.prepare(`SELECT COUNT(*) as c FROM documents WHERE active = 0`).get() as { c: number }).c;
+    db.close();
+    expect(vectors).toBe(4);
+    expect(cache).toBe(2);
+    expect(inactive).toBe(1);
   });
 });
 
@@ -1980,6 +2385,69 @@ describe("get command path normalization", () => {
   });
 });
 
+describe("get command missing and ignored paths", () => {
+  let localDbPath: string;
+  let localConfigDir: string;
+  let getTestDir: string;
+
+  beforeAll(async () => {
+    const env = await createIsolatedTestEnv("get-missing-ignored");
+    localDbPath = env.dbPath;
+    localConfigDir = env.configDir;
+    getTestDir = join(testDir, "get-missing-ignored-fixtures");
+
+    await mkdir(join(getTestDir, "public"), { recursive: true });
+    await mkdir(join(getTestDir, "private"), { recursive: true });
+    await writeFile(join(getTestDir, "public", "prompt-log.md"), "# Public Log\nThis indexed file must not be returned for missing paths.");
+    await writeFile(join(getTestDir, "private", "log.md"), "# Private Log\nThis ignored file must not be indexed.");
+
+    await writeFile(
+      join(localConfigDir, "index.yml"),
+      `collections:
+  gettst:
+    path: ${getTestDir}
+    pattern: "**/*.md"
+    ignore:
+      - "private/**"
+`
+    );
+
+    const { exitCode, stderr } = await runQmd(["update"], {
+      cwd: getTestDir,
+      dbPath: localDbPath,
+      configDir: localConfigDir,
+    });
+    if (exitCode !== 0) console.error("update failed:", stderr);
+    expect(exitCode).toBe(0);
+  });
+
+  test("get reports ignored paths instead of falling back to same-basename fuzzy match", async () => {
+    const { stdout, stderr, exitCode } = await runQmd(["get", "private/log.md"], {
+      cwd: getTestDir,
+      dbPath: localDbPath,
+      configDir: localConfigDir,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).not.toContain("Public Log");
+    expect(stderr).toContain("excluded by ignore rule");
+    expect(stderr).toContain("private/log.md");
+    expect(stderr).toContain("private/**");
+  });
+
+  test("get does not fall back to same-basename fuzzy match for missing paths", async () => {
+    const { stdout, stderr, exitCode } = await runQmd(["get", "missing/log.md"], {
+      cwd: getTestDir,
+      dbPath: localDbPath,
+      configDir: localConfigDir,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).not.toContain("Public Log");
+    expect(stderr).toContain("Document not found");
+  });
+});
+
 // =============================================================================
 // Status and Collection List - No Full Paths
 // =============================================================================
@@ -2222,6 +2690,141 @@ describe("mcp http daemon", () => {
     }
   }, 10000);
 
+  test("daemon HTTP server honors --index, scopes pidfile, and queries the named store (#772)", async () => {
+    const customIndex = "mcp-daemon-alt-index";
+    const customCacheDir = join(daemonTestDir, `cache-daemon-index-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const customConfigDir = join(daemonTestDir, `config-daemon-index-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(customCacheDir, { recursive: true });
+    await mkdir(customConfigDir, { recursive: true });
+
+    const addResult = await runQmd(
+      ["--index", customIndex, "collection", "add", fixturesDir, "--name", "mcp-fixtures"],
+      {
+        dbPath: daemonDbPath,
+        configDir: customConfigDir,
+        env: {
+          INDEX_PATH: "",
+          XDG_CACHE_HOME: customCacheDir,
+        },
+      },
+    );
+    expect(addResult.exitCode).toBe(0);
+
+    const updateResult = await runQmd(
+      ["--index", customIndex, "update"],
+      {
+        dbPath: daemonDbPath,
+        configDir: customConfigDir,
+        env: {
+          INDEX_PATH: "",
+          XDG_CACHE_HOME: customCacheDir,
+        },
+      },
+    );
+    expect(updateResult.exitCode).toBe(0);
+
+    const port = randomPort();
+    const { stdout, stderr, exitCode } = await runQmd(
+      ["--index", customIndex, "mcp", "--http", "--daemon", "--port", String(port)],
+      {
+        dbPath: daemonDbPath,
+        configDir: customConfigDir,
+        env: {
+          INDEX_PATH: "",
+          XDG_CACHE_HOME: customCacheDir,
+        },
+      },
+    );
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("Already running");
+    expect(stdout).toContain(`http://localhost:${port}/mcp`);
+
+    const namedPidPath = join(customCacheDir, "qmd", `mcp-${customIndex}.pid`);
+    const defaultPidPath = join(customCacheDir, "qmd", "mcp.pid");
+    expect(existsSync(namedPidPath)).toBe(true);
+    expect(existsSync(defaultPidPath)).toBe(false);
+
+    const pid = parseInt(readFileSync(namedPidPath, "utf-8").trim());
+    spawnedPids.push(pid);
+
+    try {
+      const ready = await waitForServer(port);
+      expect(ready).toBe(true);
+
+      const res = await fetch(`http://localhost:${port}/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ searches: [{ type: "lex", query: "authentication" }], limit: 5, rerank: false }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const files = body.results.map((r: { file: string }) => r.file);
+      expect(files.some((file: string) => file.includes("mcp-fixtures/notes/meeting.md"))).toBe(true);
+
+      const { stdout: stopOut, exitCode: stopCode } = await runQmd(
+        ["--index", customIndex, "mcp", "stop"],
+        {
+          dbPath: daemonDbPath,
+          configDir: customConfigDir,
+          env: {
+            INDEX_PATH: "",
+            XDG_CACHE_HOME: customCacheDir,
+          },
+        },
+      );
+      expect(stopCode).toBe(0);
+      expect(stopOut).toContain("Stopped");
+      expect(existsSync(namedPidPath)).toBe(false);
+    } finally {
+      try { process.kill(pid, "SIGTERM"); } catch { /* already stopped */ }
+      await sleep(300);
+      try { unlinkSync(namedPidPath); } catch {}
+    }
+  }, 15000);
+
+  test("named-index daemon does not collide with the default daemon pidfile (#772)", async () => {
+    const portDefault = randomPort();
+    const portNamed = randomPort();
+    const namedIndex = "other-index";
+
+    const { exitCode: defaultCode } = await runDaemonQmd([
+      "mcp", "--http", "--daemon", "--port", String(portDefault),
+    ]);
+    expect(defaultCode).toBe(0);
+    expect(existsSync(pidPath())).toBe(true);
+    const defaultPid = parseInt(readFileSync(pidPath(), "utf-8").trim());
+    spawnedPids.push(defaultPid);
+
+    const { stdout, stderr, exitCode: namedCode } = await runDaemonQmd([
+      "--index", namedIndex, "mcp", "--http", "--daemon", "--port", String(portNamed),
+    ]);
+    const namedPidPath = join(daemonCacheDir, "qmd", `mcp-${namedIndex}.pid`);
+    try {
+      expect(namedCode).toBe(0);
+      expect(stderr).not.toContain("Already running");
+      expect(stdout).toContain(`http://localhost:${portNamed}/mcp`);
+      expect(existsSync(namedPidPath)).toBe(true);
+
+      const namedPid = parseInt(readFileSync(namedPidPath, "utf-8").trim());
+      spawnedPids.push(namedPid);
+      expect(namedPid).not.toBe(defaultPid);
+
+      expect(await waitForServer(portDefault)).toBe(true);
+      expect(await waitForServer(portNamed)).toBe(true);
+    } finally {
+      try { process.kill(defaultPid, "SIGTERM"); } catch {}
+      try {
+        if (existsSync(namedPidPath)) {
+          const namedPid = parseInt(readFileSync(namedPidPath, "utf-8").trim());
+          try { process.kill(namedPid, "SIGTERM"); } catch {}
+        }
+      } catch {}
+      await sleep(500);
+      try { unlinkSync(pidPath()); } catch {}
+      try { unlinkSync(namedPidPath); } catch {}
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Daemon lifecycle
   // -------------------------------------------------------------------------
@@ -2336,6 +2939,60 @@ describe("mcp http daemon", () => {
     await sleep(500);
     try { unlinkSync(pidPath()); } catch {}
   });
+
+  test("stop does not SIGTERM a live non-qmd PID from a recycled pidfile (#806)", async () => {
+    // Stand-in for a recycled PID owner (must not be killed)
+    const decoy = spawn("sleep", ["1000000"], { stdio: "ignore" });
+    expect(decoy.pid).toBeTruthy();
+    spawnedPids.push(decoy.pid!);
+    writeFileSync(pidPath(), String(decoy.pid));
+
+    try {
+      const { stdout, exitCode } = await runDaemonQmd(["mcp", "stop"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("stale");
+      expect(existsSync(pidPath())).toBe(false);
+
+      // Decoy must still be alive
+      expect(() => process.kill(decoy.pid!, 0)).not.toThrow();
+    } finally {
+      decoy.kill("SIGTERM");
+      await new Promise<void>((resolve) => decoy.once("close", () => resolve()));
+    }
+  });
+
+  test("--daemon treats live non-qmd pidfile PID as stale and starts (#806)", async () => {
+    const decoy = spawn("sleep", ["1000000"], { stdio: "ignore" });
+    expect(decoy.pid).toBeTruthy();
+    spawnedPids.push(decoy.pid!);
+    writeFileSync(pidPath(), String(decoy.pid));
+
+    const port = randomPort();
+    try {
+      const { stdout, stderr, exitCode } = await runDaemonQmd([
+        "mcp", "--http", "--daemon", "--port", String(port),
+      ]);
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain("Already running");
+      expect(stdout).toContain(`http://localhost:${port}/mcp`);
+
+      const pid = parseInt(readFileSync(pidPath(), "utf-8").trim());
+      spawnedPids.push(pid);
+      expect(pid).not.toBe(decoy.pid);
+
+      // Decoy must still be alive
+      expect(() => process.kill(decoy.pid!, 0)).not.toThrow();
+
+      const ready = await waitForServer(port);
+      expect(ready).toBe(true);
+      process.kill(pid, "SIGTERM");
+      await sleep(500);
+      try { unlinkSync(pidPath()); } catch {}
+    } finally {
+      decoy.kill("SIGTERM");
+      await new Promise<void>((resolve) => decoy.once("close", () => resolve()));
+    }
+  });
 });
 
 // =============================================================================
@@ -2348,17 +3005,23 @@ describe("mcp stdio launcher", () => {
     try {
       await mkdir(join(tempPackage, "bin"), { recursive: true });
       await mkdir(join(tempPackage, "dist", "cli"), { recursive: true });
-      await writeFile(join(tempPackage, "dist", "cli", "qmd.js"), "// fixture\n");
+      await writeFile(join(tempPackage, "dist", "cli", "qmd.js"), [
+        'if (process.env.GGML_BACKEND_SILENT !== "1") {',
+        '  process.stdout.write("llama.cpp native log on stdout\\n");',
+        '}',
+        'process.stdout.write(\'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\\n\');',
+        '',
+      ].join("\n"));
       await mkdir(join(tempPackage, "fake-bin"), { recursive: true });
 
       const qmdBin = join(tempPackage, "bin", "qmd");
       await copyFile(join(projectRoot, "bin", "qmd"), qmdBin);
       await chmod(qmdBin, 0o755);
 
-      // Force the wrapper down the Node branch, then put our fake `node` first
-      // in PATH. The fake node behaves like the native llama/ggml layer: it
-      // writes a non-JSON stdout line unless qmd pre-seeded the documented
-      // quiet env vars before launching JS.
+      // Force the wrapper down the Node branch. The trampoline now execs
+      // process.execPath (not PATH `node`) so the dist fixture is the child
+      // that observes the quiet env. Fake PATH `node` remains only to satisfy
+      // `#!/usr/bin/env node` and the bun-test fallback (`bun bin/qmd`).
       await writeFile(join(tempPackage, "package-lock.json"), "{}\n");
       const fakeNode = join(tempPackage, "fake-bin", "node");
       await writeFile(fakeNode, `#!/bin/sh
