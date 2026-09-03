@@ -111,7 +111,7 @@ RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 #
 # public-release assets are reachable anonymously, so curl is fine here
 # (no gh CLI dep just for this step).
-ARG DOLTLITE_CLI_VERSION=0.11.53
+ARG DOLTLITE_CLI_VERSION=0.50.3
 RUN arch="$(dpkg --print-architecture)" \
     && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
     && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
