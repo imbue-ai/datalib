@@ -19,7 +19,7 @@
 //! same way with different `info` strings; we don't need them for
 //! local backup decrypt.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;

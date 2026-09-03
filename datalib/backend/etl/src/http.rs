@@ -722,7 +722,13 @@ pub fn fixture_key(req: &HttpRequest) -> String {
     let digest = h.finalize();
     // 32 hex chars (128 bits) — plenty to avoid collisions in any
     // realistic fixture set, short enough to read in a directory listing.
-    format!("{}-{:.32x}.json", req.method.as_str(), digest)
+    //
+    // This was `{:.32x}` until the RustCrypto bump: sha2 0.11 returns a
+    // `hybrid_array::Array`, which has no `LowerHex`. Taking the first 16
+    // bytes reproduces that formatting exactly — which matters, because
+    // these strings are fixture file names already on disk.
+    let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    format!("{}-{hex}.json", req.method.as_str())
 }
 
 /// Canonicalize a URL for fixture-key hashing: sort query parameters by

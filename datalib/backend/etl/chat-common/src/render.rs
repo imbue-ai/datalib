@@ -720,7 +720,10 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
             h.update(r.emoji.as_bytes());
         }
     }
-    format!("{:x}", h.finalize())
+    h.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
 }
 
 // ─────────────────────────────────────────────────────────────────────

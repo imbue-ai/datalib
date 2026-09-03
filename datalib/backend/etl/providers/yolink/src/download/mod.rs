@@ -510,7 +510,11 @@ fn build_signed_url(dev: &YolinkDevice, start_ms: i64, end_ms: i64) -> Result<St
     hasher.update(start_ms.to_string().as_bytes());
     hasher.update(end_ms.to_string().as_bytes());
     hasher.update(dev.device_udid.as_bytes());
-    let sig = format!("{:x}", hasher.finalize());
+    let sig = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
 
     // Per-kind query params. `extParams` is a base64-url JSON blob the
     // app appends to control CSV content (humidity inclusion for the

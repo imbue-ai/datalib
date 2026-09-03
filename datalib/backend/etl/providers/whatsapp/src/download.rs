@@ -882,7 +882,11 @@ fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         let mut h = Sha256::new();
         h.update(&bytes);
-        let sha = format!("{:x}", h.finalize());
+        let sha = h
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         let meta = entry.metadata().ok();
         let size_bytes = bytes.len() as u64;
         let mtime_unix = meta

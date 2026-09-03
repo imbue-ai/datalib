@@ -26,7 +26,7 @@ sqlx = { workspace = true }
 # Google Voice takeout is XHTML; quick-xml pull-parses it (with a
 # `<br>`→newline pre-pass) into structured rows.
 quick-xml = "0.36"
-sha2 = "0.10"
+sha2 = { workspace = true }
 tracing = "0.1"
 
 [dev-dependencies]

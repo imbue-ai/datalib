@@ -2,13 +2,11 @@
 //! and modes come from `dump.py` in the Python reference — kept as
 //! `&[u8]` constants so the byte-for-byte match is easy to verify.
 
-use aes::cipher::{
-    generic_array::GenericArray, BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher,
-};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, StreamCipher};
 use aes::Aes256;
 use anyhow::{anyhow, Result};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -118,10 +116,7 @@ pub fn decrypt_metadata_backup_id(backup_key: &[u8; 32], metadata_bytes: &[u8]) 
     counter[..12].copy_from_slice(&bid.iv);
     // last 4 bytes already zero — matches `iv + b'\x00'*4`
     let meta_key = derive_metadata_key(backup_key);
-    let mut cipher = Aes256Ctr::new(
-        GenericArray::from_slice(&meta_key),
-        GenericArray::from_slice(&counter),
-    );
+    let mut cipher = Aes256Ctr::new((&meta_key).into(), (&counter).into());
     let mut out = bid.encrypted_id.clone();
     cipher.apply_keystream(&mut out);
     Ok(out)
@@ -139,10 +134,10 @@ pub fn decrypt_main(hmac_key: &[u8; 32], aes_key: &[u8; 32], main: &[u8]) -> Res
     let (iv, ct) = body.split_at(IV_LENGTH);
     let mut buf = ct.to_vec();
     let pt_len = Aes256CbcDec::new(
-        GenericArray::from_slice(aes_key),
-        GenericArray::from_slice(iv),
+        aes_key.into(),
+        iv.try_into().expect("split_at(IV_LENGTH) yields 16 bytes"),
     )
-    .decrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buf)
+    .decrypt_padded::<cipher::block_padding::Pkcs7>(&mut buf)
     .map_err(|e| anyhow!("CBC decrypt/unpad failed: {e}"))?
     .len();
     buf.truncate(pt_len);
@@ -170,10 +165,10 @@ pub fn decrypt_attachment_inplace(enc: &[u8], local_key: &[u8; 64]) -> Result<Ve
     let (iv, ct) = body.split_at(IV_LENGTH);
     let mut buf = ct.to_vec();
     let pt_len = Aes256CbcDec::new(
-        GenericArray::from_slice(aes_key),
-        GenericArray::from_slice(iv),
+        aes_key.into(),
+        iv.try_into().expect("split_at(IV_LENGTH) yields 16 bytes"),
     )
-    .decrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buf)
+    .decrypt_padded::<cipher::block_padding::Pkcs7>(&mut buf)
     .map_err(|e| anyhow!("attachment CBC decrypt/unpad failed: {e}"))?
     .len();
     buf.truncate(pt_len);
@@ -194,18 +189,15 @@ pub fn encrypt_attachment(plaintext: &[u8], local_key: &[u8; 64], iv: &[u8; 16])
     let mut buf = Vec::with_capacity(plaintext.len() + pad_len);
     buf.extend_from_slice(plaintext);
     buf.resize(plaintext.len() + pad_len, 0);
-    let ct_len = Aes256CbcEnc::new(
-        GenericArray::from_slice(aes_key),
-        GenericArray::from_slice(iv),
-    )
-    .encrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buf, plaintext.len())
-    .expect("CBC encrypt with PKCS7 padding succeeds for any plaintext length")
-    .len();
+    let ct_len = Aes256CbcEnc::new(aes_key.into(), iv.into())
+        .encrypt_padded::<cipher::block_padding::Pkcs7>(&mut buf, plaintext.len())
+        .expect("CBC encrypt with PKCS7 padding succeeds for any plaintext length")
+        .len();
     buf.truncate(ct_len);
     let mut body = Vec::with_capacity(IV_LENGTH + buf.len() + MAC_LENGTH);
     body.extend_from_slice(iv);
     body.extend_from_slice(&buf);
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(hmac_key).expect("hmac key length");
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(hmac_key).expect("hmac key length");
     mac.update(&body);
     let tag = mac.finalize().into_bytes();
     body.extend_from_slice(&tag);
@@ -213,7 +205,7 @@ pub fn encrypt_attachment(plaintext: &[u8], local_key: &[u8; 64], iv: &[u8; 16])
 }
 
 fn verify_hmac(key: &[u8; 32], body: &[u8], expected_mac: &[u8]) -> Result<()> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("hmac key length");
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).expect("hmac key length");
     mac.update(body);
     let computed = mac.finalize().into_bytes();
     if computed.ct_eq(expected_mac).into() {
