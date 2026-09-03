@@ -216,7 +216,10 @@ pub fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     let mut h = Sha256::new();
     h.update(&bytes);
-    Ok(format!("{:x}", h.finalize()))
+    Ok(h.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>())
 }
 
 /// One markdown's index state, as reported to a caller.

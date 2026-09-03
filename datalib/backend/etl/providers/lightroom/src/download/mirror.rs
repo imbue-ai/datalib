@@ -526,8 +526,19 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .begin()
         .await
         .with_context(|| format!("begin rebuild tx for {}", spec.name))?;
-    // Audited: `create_ddl()` / `copy_sql()` render every identifier through
-    // `plan::quote_ident`; see `plan.rs`.
+    // Audited: `create_ddl()` / `copy_sql()` render every *identifier* —
+    // table and column names — through `plan::quote_ident`, which
+    // double-quotes and escapes embedded quotes.
+    //
+    // NOT covered, and worth knowing: `ColumnSpec::decl()` also splices the
+    // column's declared type and DEFAULT expression in verbatim, and both
+    // come from `PRAGMA table_xinfo` on the attached source catalog — i.e.
+    // from the .lrcat file, which is outside our control. A crafted catalog
+    // can therefore influence this CREATE TABLE beyond the identifiers.
+    // Blast radius is the mirror we are building (a fresh doltlite file);
+    // the source is opened `read_only(true)` and copied via VACUUM INTO
+    // before anything is attached, so it cannot be written back. Tracked
+    // separately — this bump did not introduce it and does not fix it.
     sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
         .execute(&mut *tx)
         .await

@@ -18,10 +18,10 @@
 
 use std::path::Path;
 
-use aes::cipher::{generic_array::GenericArray, BlockEncryptMut, KeyIvInit, StreamCipher};
+use aes::cipher::{BlockModeEncrypt, KeyIvInit, StreamCipher};
 use aes::Aes256;
 use anyhow::{anyhow, Result};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use prost::Message;
 use sha2::Sha256;
 
@@ -101,11 +101,7 @@ fn encode_metadata(
     counter[..12].copy_from_slice(iv12);
     let meta_key = derive_metadata_key(backup_key);
     let mut encrypted_id = backup_id.to_vec();
-    Aes256Ctr::new(
-        GenericArray::from_slice(&meta_key),
-        GenericArray::from_slice(&counter),
-    )
-    .apply_keystream(&mut encrypted_id);
+    Aes256Ctr::new((&meta_key).into(), (&counter).into()).apply_keystream(&mut encrypted_id);
 
     let metadata = local::Metadata {
         version: 1,
@@ -150,20 +146,17 @@ fn encode_main(
     let mut buf = Vec::with_capacity(pt.len() + pad_len);
     buf.extend_from_slice(&pt);
     buf.resize(pt.len() + pad_len, 0);
-    let ct_len = Aes256CbcEnc::new(
-        GenericArray::from_slice(aes_key),
-        GenericArray::from_slice(iv),
-    )
-    .encrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buf, pt.len())
-    .map_err(|e| anyhow!("CBC encrypt failed: {e}"))?
-    .len();
+    let ct_len = Aes256CbcEnc::new(aes_key.into(), iv.into())
+        .encrypt_padded::<cipher::block_padding::Pkcs7>(&mut buf, pt.len())
+        .map_err(|e| anyhow!("CBC encrypt failed: {e}"))?
+        .len();
     buf.truncate(ct_len);
 
     let mut body = Vec::with_capacity(IV_LENGTH + buf.len());
     body.extend_from_slice(iv);
     body.extend_from_slice(&buf);
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(hmac_key).expect("hmac key length");
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(hmac_key).expect("hmac key length");
     mac.update(&body);
     let tag = mac.finalize().into_bytes();
     body.extend_from_slice(&tag);
