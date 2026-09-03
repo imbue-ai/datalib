@@ -59,7 +59,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
 
@@ -99,7 +99,7 @@ test("a row with no upstream id hides the upstream-id action", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
 

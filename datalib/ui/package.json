@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "pnpm@11.4.0",
+  "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -13,28 +13,27 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@tauri-apps/plugin-dialog": "^2.7.2",
-    "@tauri-apps/plugin-opener": "^2.5.4",
-    "ag-grid-community": "35.2.1",
-    "ag-grid-enterprise": "35.2.1",
-    "ag-grid-vue3": "35.2.1",
-    "highlight.js": "^11.11.1",
-    "markdown-it": "^14.1.1",
-    "pinia": "^3.0.4",
-    "toml-eslint-parser": "^0.10.0",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-opener": "^2.5.5",
+    "ag-grid-community": "36.1.0",
+    "ag-grid-enterprise": "36.1.0",
+    "ag-grid-vue3": "36.1.0",
+    "highlight.js": "^11.12.0",
+    "markdown-it": "^15.0.1",
+    "pinia": "^4.0.3",
+    "toml-eslint-parser": "^1.0.3",
     "vue": "^3.5.0",
-    "vue-router": "^4.5.1"
+    "vue-router": "5.3.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.0",
-    "@types/markdown-it": "^14.1.2",
-    "@vitejs/plugin-vue": "^6.0.6",
-    "@vue/test-utils": "^2.4.6",
-    "jsdom": "^29.1.1",
+    "@playwright/test": "^1.62.1",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/test-utils": "^2.5.0",
+    "jsdom": "^30.0.1",
     "typescript": "^6.0.3",
-    "vite": "7.3.3",
-    "vitest": "4.1.5",
-    "vue-tsc": "3.2.7"
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "vue-tsc": "3.3.11"
   },
   "pnpm": {
     "//": "Declares which transitive deps may run postinstall lifecycle scripts under aspect_rules_js. Required by npm_translate_lock to parse the v9 lockfile. (Modern pnpm 10+ reads this from pnpm-workspace.yaml#allowBuilds instead and ignores this field — we keep it here for aspect_rules_js to find.)",

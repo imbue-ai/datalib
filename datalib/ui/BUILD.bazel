@@ -155,8 +155,13 @@ _E2E_DATA = [
     # This is a correctness fix, not a speed one. npm keys the npx cache
     # (`~/.npm/_npx/<hash>`) on the package spec ALONE — no Node version
     # in it — so one directory is shared by every Node on the machine,
-    # while the better-sqlite3 binding inside it is built for exactly one
-    # ABI (`node-v127`, see MODULE.bazel). This test is the one qmd
+    # while a native module inside it may be built for exactly one ABI.
+    # (When this was written the offender was named: better-sqlite3 12's
+    # `node-v127` prebuilt. qmd 2.8.3 moved to better-sqlite3 13, whose
+    # bindings are per-platform rather than per-ABI, so that particular
+    # trap is closed — the staging below is kept because it also removes
+    # the registry fetch, which was never only about the ABI.)
+    # This test is the one qmd
     # consumer that reached npx, and it also `env_inherit`s PATH, so it
     # ran under whatever `node` the developer had while every Bazel
     # action uses the pinned PATH's Homebrew node. The two poisoned each

@@ -806,19 +806,19 @@ def main() -> None:
     write(
         "playlists/bridge_ambience.m3u",
         (
-            "#EXTM3U\n"
-            "#PLAYLIST:Bridge Ambience\n"
-            "#EXTINF:227,Data - Ode to Spot\n"
-            "../music/ode_to_spot.mp3\n"
-            "#EXTINF:-1,Geordi La Forge - Warp Core Hum\n"
-            "../music/warp_core_hum.flac\n"
-            "#EXTINF:12,A track that was deleted years ago\n"
-            "../music/deleted_long_ago.mp3\n"
-            "#EXTINF:0,A stream\n"
-            "http://holodeck.local/stream.mp3\n"
-            "/Volumes/Enterprise/tracks/tea_earl_grey.m4a\n"
-            "..\\music\\tea_earl_grey.wav\n"
-        ).encode(),
+            b"#EXTM3U\n"
+            b"#PLAYLIST:Bridge Ambience\n"
+            b"#EXTINF:227,Data - Ode to Spot\n"
+            b"../music/ode_to_spot.mp3\n"
+            b"#EXTINF:-1,Geordi La Forge - Warp Core Hum\n"
+            b"../music/warp_core_hum.flac\n"
+            b"#EXTINF:12,A track that was deleted years ago\n"
+            b"../music/deleted_long_ago.mp3\n"
+            b"#EXTINF:0,A stream\n"
+            b"http://holodeck.local/stream.mp3\n"
+            b"/Volumes/Enterprise/tracks/tea_earl_grey.m4a\n"
+            b"..\\music\\tea_earl_grey.wav\n"
+        ),
     )
     # Latin-1, as a desktop player would write it, and with the same
     # track twice — order is the content, so neither is dropped.
@@ -831,15 +831,15 @@ def main() -> None:
     write(
         "playlists/stream.m3u8",
         (
-            "#EXTM3U\n"
-            "#EXT-X-VERSION:3\n"
-            "#EXT-X-TARGETDURATION:10\n"
-            "#EXTINF:9.009,\n"
-            "segment0.ts\n"
-            "#EXTINF:9.009,\n"
-            "segment1.ts\n"
-            "#EXT-X-ENDLIST\n"
-        ).encode(),
+            b"#EXTM3U\n"
+            b"#EXT-X-VERSION:3\n"
+            b"#EXT-X-TARGETDURATION:10\n"
+            b"#EXTINF:9.009,\n"
+            b"segment0.ts\n"
+            b"#EXTINF:9.009,\n"
+            b"segment1.ts\n"
+            b"#EXT-X-ENDLIST\n"
+        ),
     )
 
     # ── things that must not derail a scan ───────────────────────────

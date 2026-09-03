@@ -168,46 +168,47 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     // unbounded channel rather than doing any work there.
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<RootEvent>();
     let watch_root = root.clone();
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(ev) = res else { return };
-        // Reading something is not changing it, and on Linux this is
-        // not a nicety — it is the difference between a push channel
-        // and a feedback loop.
-        //
-        // inotify reports `IN_OPEN` / `IN_ACCESS`, which notify
-        // surfaces as `EventKind::Access`; macOS's FSEvents has no
-        // equivalent and reports content changes only. So on Linux,
-        // *reading* `system/frontend/` looks exactly like writing to
-        // it — and `GET /api/frontend` reads that directory on every
-        // call (`rescan_if_store_changed`). Left in, one request would
-        // publish `FrontendChanged`, the UI would refetch, that
-        // refetch would read the directory again, and the two would
-        // drive each other at the debounce interval for as long as the
-        // page stayed open. Poll replaced by something worse than a
-        // poll, on the platform CI and the container image run.
-        //
-        // Blacklisting `Access` rather than whitelisting the kinds we
-        // want: an access is definitively not a change, while the
-        // remaining kinds vary per backend (some report `Any`), and a
-        // whitelist would silently drop a platform's real events.
-        if matches!(ev.kind, EventKind::Access(_)) {
-            return;
-        }
-        for path in &ev.paths {
-            if let Some(kind) = classify(&watch_root, path) {
-                let _ = raw_tx.send(kind);
+    let mut watcher =
+        match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            let Ok(ev) = res else { return };
+            // Reading something is not changing it, and on Linux this is
+            // not a nicety — it is the difference between a push channel
+            // and a feedback loop.
+            //
+            // inotify reports `IN_OPEN` / `IN_ACCESS`, which notify
+            // surfaces as `EventKind::Access`; macOS's FSEvents has no
+            // equivalent and reports content changes only. So on Linux,
+            // *reading* `system/frontend/` looks exactly like writing to
+            // it — and `GET /api/frontend` reads that directory on every
+            // call (`rescan_if_store_changed`). Left in, one request would
+            // publish `FrontendChanged`, the UI would refetch, that
+            // refetch would read the directory again, and the two would
+            // drive each other at the debounce interval for as long as the
+            // page stayed open. Poll replaced by something worse than a
+            // poll, on the platform CI and the container image run.
+            //
+            // Blacklisting `Access` rather than whitelisting the kinds we
+            // want: an access is definitively not a change, while the
+            // remaining kinds vary per backend (some report `Any`), and a
+            // whitelist would silently drop a platform's real events.
+            if matches!(ev.kind, EventKind::Access(_)) {
+                return;
             }
-        }
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!(
-                "watch: could not create a filesystem watcher ({e}); \
+            for path in &ev.paths {
+                if let Some(kind) = classify(&watch_root, path) {
+                    let _ = raw_tx.send(kind);
+                }
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!(
+                    "watch: could not create a filesystem watcher ({e}); \
                  the UI will not see external changes to this root"
-            );
-            return;
-        }
-    };
+                );
+                return;
+            }
+        };
 
     // Three watches rather than one recursive watch on the root: the
     // root *is* the data mirror, so a recursive watch would follow
@@ -236,7 +237,9 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             // Open a window on the first event, then coalesce
             // everything that lands inside it. One burst → one message
             // per kind.
-            let Some(first) = raw_rx.recv().await else { return };
+            let Some(first) = raw_rx.recv().await else {
+                return;
+            };
             let mut pending = HashSet::from([first]);
             let deadline = tokio::time::Instant::now() + DEBOUNCE;
             // Ends on the window closing (`Err`) or the sender going
@@ -304,7 +307,10 @@ mod tests {
     fn the_temp_half_of_an_atomic_write_is_not_a_change() {
         let root = Path::new("/data");
         assert_eq!(classify(root, &root.join("config.tmp")), None);
-        assert_eq!(classify(root, &root.join("system/dag_state.json.tmp")), None);
+        assert_eq!(
+            classify(root, &root.join("system/dag_state.json.tmp")),
+            None
+        );
     }
 
     /// Wait for `want` to arrive, re-performing `stimulus` until it

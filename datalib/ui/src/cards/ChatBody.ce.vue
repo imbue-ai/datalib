@@ -103,7 +103,13 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const srcIdx = token.attrIndex("src");
   if (srcIdx >= 0 && token.attrs) {
-    const src = token.attrs[srcIdx][1];
+    // markdown-it 15 types an attribute value as `string | number` (it
+    // ships its own types now; @types/markdown-it 14 said `string`).
+    // Anything the parser produces for `src` is a string — the number
+    // arm is for tokens built programmatically — so narrow rather than
+    // coerce, and leave a non-string alone.
+    const raw = token.attrs[srcIdx][1];
+    const src = typeof raw === "string" ? raw : null;
     const uuid = envUuid(env);
     if (uuid && src && !isAbsoluteOrUrl(src)) {
       token.attrs[srcIdx][1] = assetUrl(uuid, src);

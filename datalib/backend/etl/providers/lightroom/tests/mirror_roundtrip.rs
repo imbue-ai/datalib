@@ -248,12 +248,33 @@ async fn first_ingest_lands_every_table_and_row() -> Result<()> {
 async fn indexes_and_triggers_are_not_mirrored() -> Result<()> {
     let f = Fixture::new();
     f.ingest().await?;
+
+    // `sqlite_autoindex_*` rows are excluded because they are the storage
+    // engine's, not the source catalog's: doltlite 0.50 reports an
+    // implicit index for every non-INTEGER primary key, the way stock
+    // SQLite always has. It did not before 0.11.54's SQLite-compatibility
+    // work, so this assertion used to be able to say "zero of anything".
+    //
+    // GLOB rather than LIKE: `_` is a single-character wildcard to LIKE,
+    // and being sloppy about that in the pattern that decides what this
+    // test ignores is how it would go quietly toothless.
+    const NAMED_INDEXES_AND_TRIGGERS: &str = "SELECT COUNT(*) FROM sqlite_master \
+           WHERE type IN ('index', 'trigger') \
+             AND name NOT GLOB 'sqlite_autoindex_*'";
+
+    // Prove the assertion below is not vacuous: the source really does
+    // carry named indexes and a trigger for the mirror to drop.
+    let src = mirror::open_sqlite(&f.catalog, false).await?;
+    let in_source = scalar_i64(&src, NAMED_INDEXES_AND_TRIGGERS).await;
+    src.close().await;
+    assert!(
+        in_source > 0,
+        "the fixture catalog must define named indexes/triggers, else this \
+         test cannot fail"
+    );
+
     let pool = f.mirror_pool().await?;
-    let n = scalar_i64(
-        &pool,
-        "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('index', 'trigger')",
-    )
-    .await;
+    let n = scalar_i64(&pool, NAMED_INDEXES_AND_TRIGGERS).await;
     assert_eq!(
         n, 0,
         "the mirror keeps tables only — see lib.rs §What generic costs"

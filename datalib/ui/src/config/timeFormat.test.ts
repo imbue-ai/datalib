@@ -22,7 +22,6 @@ const WEEK = 7 * DAY;
 
 describe("how long ago", () => {
   it("picks the coarsest unit that still has a whole number in it", () => {
-    expect(formatRelative(ago(2 * SEC), NOW)).toBe("2 seconds ago");
     expect(formatRelative(ago(5 * MIN), NOW)).toBe("5 minutes ago");
     expect(formatRelative(ago(4 * HOUR), NOW)).toBe("4 hours ago");
     expect(formatRelative(ago(3 * DAY), NOW)).toBe("3 days ago");
@@ -30,7 +29,7 @@ describe("how long ago", () => {
   });
 
   it("changes unit at the boundary, not before it", () => {
-    expect(formatRelative(ago(59 * SEC), NOW)).toBe("59 seconds ago");
+    expect(formatRelative(ago(59 * SEC), NOW)).toBe("seconds ago");
     expect(formatRelative(ago(60 * SEC), NOW)).toBe("1 minute ago");
     expect(formatRelative(ago(59 * MIN), NOW)).toBe("59 minutes ago");
     expect(formatRelative(ago(60 * MIN), NOW)).toBe("1 hour ago");
@@ -42,17 +41,26 @@ describe("how long ago", () => {
     expect(formatRelative(ago(7 * DAY), NOW)).toBe("1 week ago");
   });
 
-  it("says 'just now' rather than '0 seconds ago'", () => {
-    expect(formatRelative(ago(0), NOW)).toBe("just now");
-    expect(formatRelative(ago(999), NOW)).toBe("just now");
-    expect(formatRelative(ago(1000), NOW)).toBe("1 second ago");
+  it("gives the whole sub-minute band one still answer, not a countup", () => {
+    // The point of the band is that nothing in it changes as you
+    // watch, so every one of these has to read identically — a cell
+    // that says "2 seconds ago" and then "3 seconds ago" a moment
+    // later is the thing this replaced.
+    expect(formatRelative(ago(0), NOW)).toBe("seconds ago");
+    expect(formatRelative(ago(999), NOW)).toBe("seconds ago");
+    expect(formatRelative(ago(1000), NOW)).toBe("seconds ago");
+    expect(formatRelative(ago(2 * SEC), NOW)).toBe("seconds ago");
+    expect(formatRelative(ago(30 * SEC), NOW)).toBe("seconds ago");
   });
 
   it("reads a future stamp forwards instead of as a negative past", () => {
     // Clock skew between the machine that ran the sync and the machine
     // reading this page is ordinary, and a moment of it must not read
     // as "-3 seconds ago".
-    expect(formatRelative(ago(-500), NOW)).toBe("just now");
+    expect(formatRelative(ago(-500), NOW)).toBe("seconds ago");
+    // Past a second it is a real disagreement rather than a moment of
+    // skew, and the sub-minute band deliberately doesn't swallow it.
+    expect(formatRelative(ago(-30 * SEC), NOW)).toBe("in 30 seconds");
     expect(formatRelative(ago(-3 * HOUR), NOW)).toBe("in 3 hours");
   });
 
@@ -76,7 +84,7 @@ describe("how long ago", () => {
   });
 
   it("shows an unparsable stamp verbatim rather than swallowing it", () => {
-    // Better a string that looks wrong than a confident "just now"
+    // Better a string that looks wrong than a confident "seconds ago"
     // over a value nobody can read.
     expect(formatRelative("not a date", NOW)).toBe("not a date");
     expect(formatStamp("not a date")).toBe("not a date");
@@ -96,8 +104,8 @@ describe("the exact stamp behind the hover", () => {
 });
 
 // Sorting the column. The rendered text is "5 minutes ago", and sorting
-// on *that* would order the column alphabetically — "10 seconds ago"
-// before "2 hours ago" before "just now". AG Grid sorts the row value
+// on *that* would order the column alphabetically — "10 minutes ago"
+// before "2 hours ago" before "seconds ago". AG Grid sorts the row value
 // rather than what a renderer painted, so the text is never the key;
 // what these pin is that the value comparison is on instants and not on
 // the strings the value happens to be.
