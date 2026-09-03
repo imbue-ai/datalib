@@ -294,7 +294,7 @@ write, `json(payload)` on read).
 
 Routed through
 [`datalib-time`](../../../datalib/backend/time/) per the
-[doc's rule](../data_architecture_ingestion.md#time-and-ordering-discipline).
+[doc's rule](../data_architecture_parse_and_render.md#6-timestamps).
 Two parsers we need to add (in `provider::time`):
 
   1. **Google Chat long-form English**:

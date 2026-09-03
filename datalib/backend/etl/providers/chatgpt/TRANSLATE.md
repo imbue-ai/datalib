@@ -52,7 +52,7 @@ the canonical JSON of the conversation row, every message row, and
 every content part (sorted by `(message_id, part_index)`). The Load
 step uses this to dedup the sidecar against prior runs.
 
-Bump [`RENDER_VERSION`](src/translate/grid_rows.rs) when the on-disk
+Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk
 render layout changes in a way that should invalidate stale `.md`
 files even though their `source_fingerprint` would otherwise still
 match.

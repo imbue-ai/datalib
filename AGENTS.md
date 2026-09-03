@@ -41,6 +41,23 @@ are relative to the repo root.
   NDJSON progress/outcome protocol, failure classification, and
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
+- [`docs/dev/data_lib_as_a_library/`](docs/dev/data_lib_as_a_library/)
+  — two linked *proposals* (nothing built) about datalib as something
+  others build on, prompted by the `data-pipeline-builder` skill in
+  `imbue-ai/default-workspace-template#534`.
+  [`data_handling_practices.md`](docs/dev/data_lib_as_a_library/data_handling_practices.md)
+  is the one to read first and the one that touches this repo: the
+  seven things that skill does better than we do, the four audit
+  passes over the providers we already shipped, and what a new
+  provider has to do from now on. Its §1 scorecard is the honest
+  version — we are behind on **everything about the record we cannot
+  store**.
+  [`toolchain_for_agents.md`](docs/dev/data_lib_as_a_library/toolchain_for_agents.md)
+  is downstream of it; its §1 inventories what the five file-backed
+  providers already share (`fswalk`, `file_checkpoint`, `input_path`,
+  the content-vs-path identity split) — read that before concluding
+  datalib only mirrors web APIs, and its §2 before claiming it can
+  ingest arbitrary records, which it can't yet.
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete,
   commented steps-format config, including the recipe for running
   `datalib-dag` from a bazel build.
@@ -51,7 +68,17 @@ are relative to the repo root.
   — the download (ingestion) architecture: raw stores, incrementality,
   resumability, wire tape. Companion:
   [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
-  (how to build a new provider).
+  (how to build a new provider). The two split along a
+  principles/practitioner line in `dab2c3d9`; both are scoped to
+  **download**.
+- [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md)
+  — the **parse and render** stage, the third sibling: deserializing a
+  stored payload, projecting it to `GridRow` + markdown, the
+  data-quality rules (§4 — adopted in principle, *not implemented*),
+  incrementality, and the `GridRow.when_ts` policy. Read it before
+  adding a renderer or changing a projection. There is no "parse
+  step": a record that "fails to parse" is one **render** could not
+  deserialize, and the fix is always a re-render, never a re-fetch.
 - [`datalib/backend/etl/providers/media/DOWNLOAD.md`](datalib/backend/etl/providers/media/DOWNLOAD.md)
   — the `media` source: local music/photos/video/playlists. Read it
   before touching anything about **`payload_blake3`**, the
@@ -836,6 +863,20 @@ expired weeks ago hides behind a vague "feels slow". If you add one
 anyway, log when it fires. Worked example: #225 — the DAG runner spent
 40s hashing 3.4GB to version a step it had already skipped, on every
 run, for two weeks, before anyone noticed.
+
+## Dynamic SQL needs `AssertSqlSafe` and a reason
+
+sqlx 0.9 only accepts `&'static str` as a query string. Anything built
+at runtime — a `?,?,?` run sized from a chunk, a `{table}` interpolated
+as an identifier — has to be wrapped in `sqlx::AssertSqlSafe(...)`,
+which is an assertion *you* are making, not a check sqlx performs.
+
+Wrap it with a comment saying why it is safe, the way the existing
+sites do. Two patterns cover almost everything here: placeholders built
+from a count with every value bound, and table/column names that are
+`&'static str` at every callsite. If yours is neither — you are
+interpolating something that came from upstream data — quote it
+(`lightroom`'s `plan::quote_ident`) or bind it instead.
 
 ## Timestamp convention
 
