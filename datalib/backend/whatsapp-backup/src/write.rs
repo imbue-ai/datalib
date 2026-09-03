@@ -69,13 +69,13 @@ pub fn encrypt_to_crypt15(
 
     // 4. Compute GCM auth tag with empty AAD.
     let mut g = GHash::new(GenericArray::from_slice(&h));
-    let full_blocks = ciphertext.len() / 16;
-    for chunk in ciphertext[..full_blocks * 16].chunks_exact(16) {
+    // See the note in crypto.rs::update_padded — same split, same lint.
+    let (blocks, tail) = ciphertext.as_chunks::<16>();
+    for chunk in blocks {
         g.update(&[GenericArray::clone_from_slice(chunk)]);
     }
-    if ciphertext.len() % 16 != 0 {
+    if !tail.is_empty() {
         let mut last = [0u8; 16];
-        let tail = &ciphertext[full_blocks * 16..];
         last[..tail.len()].copy_from_slice(tail);
         g.update(&[GenericArray::clone_from_slice(&last)]);
     }

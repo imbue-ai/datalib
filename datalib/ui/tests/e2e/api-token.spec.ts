@@ -63,7 +63,7 @@ test("?token= mints a session cookie, then the app runs on it", async ({
   // The app itself came up, which means the cookie carried the bundle,
   // the /applet/unified_index/search behind the grid, and everything else the page asked
   // for — no per-request token plumbing anywhere in the UI.
-  const firstRow = page.locator('.ag-center-cols-container [role="row"]').first();
+  const firstRow = page.locator('.ag-grid-scrolling-rows [role="row"]').first();
   await expect(firstRow).toBeVisible({ timeout: 20_000 });
 
   // And a fresh navigation with no token at all now works, because the

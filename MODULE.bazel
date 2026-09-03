@@ -4,8 +4,10 @@ Version policy: 7-day burn-in. We avoid versions released in the last 7
 days because hot releases are where regressions hide. When bumping a
 bazel_dep or a toolchain, check the upstream release date and prefer
 the newest version that is at least 7 days old. Today's working
-reference (2026-05-07): rules_python 2.0.0, rules_rust 0.70.0,
-Rust 1.95.0, Bazel 9.1.0.
+reference (2026-09-03): rules_python 2.3.2, rules_rust 0.73.0,
+Rust 1.98.0, Bazel 9.2.0. rules_rust 0.74.0 and protobuf 36.1 both
+exist and are both deliberately not taken here: each was published
+inside the burn-in window.
 
 Bazel owns:
   - `datalib/backend/*` Rust crates (Extract/Translate/Load + HTTP)
@@ -25,13 +27,13 @@ module(
 )
 
 # Rules Shell — provides sh_binary etc. (split out of bazel core in Bazel 8/9).
-bazel_dep(name = "rules_shell", version = "0.6.1")
+bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # Rules CC — needed for the cc_library that compiles doltlite's
 # amalgamation. Pulled in transitively by rules_rust today but worth
 # declaring explicitly since our own BUILD files use it directly.
-bazel_dep(name = "rules_cc", version = "0.2.18")
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "platforms", version = "1.1.0")
 
 # doltlite amalgamation — a single-translation-unit `doltlite.c` that
 # bundles the SQLite core, the prolly-tree storage engine, the
@@ -46,21 +48,36 @@ bazel_dep(name = "platforms", version = "1.0.0")
 # ~300-line file-curation that took). v0.11.4 fixed the amalgamation
 # pipeline, so we're back to the trivial single-file build.
 #
-# v0.11.53 is a deliberate exception to the 7-day burn-in above: it
-# carries dolthub/doltlite#2329, the fix for the silent large-value
-# corruption we hit building the lightroom mirror
-# (dolthub/doltlite#2327 — every value past the source file's local
-# payload limit collapsed onto the first row's bytes when read out of
-# a plain SQLite file). Waiting a week meant either keeping the
-# staging-table workaround or shipping known data corruption.
-# `hack/doltlite_blob_bug/run.sh` is the check: it reports 1 distinct
-# blob against the v0.11.52 release CLI and 3 against v0.11.53.
+# v0.50.3 is a deliberate exception to the 7-day burn-in above (it
+# was published the day it was pinned), and it is the second one in a
+# row — v0.11.53 before it carried dolthub/doltlite#2329, the fix for
+# the silent large-value corruption we hit building the lightroom
+# mirror (dolthub/doltlite#2327 — every value past the source file's
+# local payload limit collapsed onto the first row's bytes when read
+# out of a plain SQLite file). `hack/doltlite_blob_bug/run.sh` is
+# still the check for that one: 1 distinct blob against the v0.11.52
+# CLI, 3 against v0.11.53 and later.
+#
+# The 0.11.57 → 0.50.0 jump is a renumbering, not 39 minor versions of
+# churn: upstream's own release note for 0.50.0 says "There are no code
+# changes from 0.11.57". What it marks is DoltLite Beta, whose headline
+# claim is storage-format stability — which is the property this repo
+# cares about most, since every `.doltlite_db` under a user's data root
+# has to stay readable. Taking it now rather than in a week is the
+# point: the sooner the data roots are written by a format-stable
+# release, the smaller the set of files written by a pre-Beta one.
+#
+# 0.11.54 through 0.11.57 are real fixes and come along for the ride:
+# index corruption during merges and reverts (including keyless
+# tables), secondary-index corruption when merging tables with explicit
+# integer-PK index terms, and `VACUUM INTO`. `grid_index` merges on
+# every run, so those are ours.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.53/doltlite-amalgamation-0.11.53.zip"],
-    sha256 = "a16565665b7857b7e1788b7463a023cdf4026d88e3b33fcecd0de5e5890d7412",
-    strip_prefix = "doltlite-amalgamation-0.11.53",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.3/doltlite-amalgamation-0.50.3.zip"],
+    sha256 = "216ed94387cc7a5c8a07b1a72c412b3a2c8c2d22da6028eede7827fd3a9da639",
+    strip_prefix = "doltlite-amalgamation-0.50.3",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
@@ -80,9 +97,9 @@ http_archive(
 # fails the build if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.53/doltlite-autoconf-0.11.53.tar.gz"],
-    sha256 = "a8cf0120c4f2c19ee61246b24c9fed4fa19b48251941aa7e2055c4b955e52ee3",
-    strip_prefix = "doltlite-autoconf-0.11.53",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.3/doltlite-autoconf-0.50.3.tar.gz"],
+    sha256 = "fbe66215a3f214d92d1edab82d7125df8257690844541f9a75a3bc6435c2d714",
+    strip_prefix = "doltlite-autoconf-0.50.3",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
@@ -142,7 +159,7 @@ LIGHTROOM_DB_DIFF_COMMIT = "733187a5216ccf631a92969a8fc147a4885353df"
 ]
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
-bazel_dep(name = "rules_python", version = "2.0.0")
+bazel_dep(name = "rules_python", version = "2.3.2")
 
 PYTHON_VERSION = "3.13"
 
@@ -161,7 +178,7 @@ pip.parse(
 use_repo(pip, "py_pip")
 
 # Rust — rules_rust + crate_universe ingesting datalib/backend Cargo workspace.
-bazel_dep(name = "rules_rust", version = "0.70.0")
+bazel_dep(name = "rules_rust", version = "0.73.0")
 
 # Proto / prost — first introduced for `datalib-signal-backup`, which
 # parses Signal-Android's `Backup.proto`. We use the Bazel-native prost
@@ -189,16 +206,16 @@ bazel_dep(name = "rules_rust", version = "0.70.0")
 #     crate targets to use) lives at `//tools/prost_toolchain` so it
 #     can reach `@datalib_crates//:prost` etc.
 bazel_dep(name = "rules_proto", version = "7.1.0")
-bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
+bazel_dep(name = "protobuf", version = "36.0.bcr.1", repo_name = "com_google_protobuf")
 bazel_dep(name = "toolchains_protoc", version = "0.6.1")
-bazel_dep(name = "rules_rust_prost", version = "0.70.0")
+bazel_dep(name = "rules_rust_prost", version = "0.73.0")
 
 protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
 protoc.toolchain(
     # Pin a specific prebuilt-protoc release. Bumped on the same 7-day
     # burn-in cadence as everything else in this file.
     google_protobuf = "com_google_protobuf",
-    version = "v33.4",
+    version = "v36.0",
 )
 
 register_toolchains(
@@ -207,7 +224,7 @@ register_toolchains(
 
 RUST_EDITION = "2021"
 
-RUST_VERSION = "1.95.0"
+RUST_VERSION = "1.98.0"
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
@@ -441,7 +458,7 @@ crate.annotation(
 # bundle (consumed by datalib_http via rust-embed) is produced by
 # Bazel without any host pnpm/Node. Mirrors the install snippet
 # published with aspect_rules_js v3.1.2 (released 2026-05-13).
-bazel_dep(name = "aspect_rules_js", version = "3.1.2")
+bazel_dep(name = "aspect_rules_js", version = "3.4.1")
 # Pulled in transitively by aspect_rules_js, but we use it directly
 # via `copy_to_bin` to stage Vite inputs into bazel-out.
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
@@ -453,7 +470,7 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 # package tree) so `datalib_core::node_runtime::bundled_command` resolves,
 # which is what takes `npx` out of the build. Version tracks what
 # aspect_rules_js 3.1.2 already resolves, so this adds no new fetch.
-bazel_dep(name = "rules_nodejs", version = "6.7.3")
+bazel_dep(name = "rules_nodejs", version = "6.7.5")
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 use_repo(node, "nodejs_host")
@@ -499,120 +516,26 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_qmd")
 
-# The upstream better-sqlite3 package, fetched independently of the qmd
-# lockfile so the replacement below isn't circular (a package cannot be
-# built out of the very repo whose contents it replaces). `integrity` is
-# the exact sha512 the lockfile records, so this is the same tarball
-# `npm_translate_lock` would have fetched, verified the same way.
-http_archive(
-    name = "better_sqlite3_src",
-    urls = ["https://registry.npmjs.org/better-sqlite3/-/better-sqlite3-12.10.0.tgz"],
-    integrity = "sha512-CyzaZRQKyHkB2ZInfTTl2nvT33EbDpjkLEbE8/Zck3Ll6O0qqvuGdrJ45HgtH+HykRg88ITY3AdreBGN70aBSQ==",
-    strip_prefix = "package",
-    build_file_content = """load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
-load("@aspect_rules_js//npm:defs.bzl", "npm_package")
-
-# Land the pinned prebuilt exactly where the `bindings` package looks.
-copy_file(
-    name = "binding",
-    src = "@@//third-party/qmd/runtime:better_sqlite3_binding",
-    out = "build/Release/better_sqlite3.node",
-)
-
-# Upstream contents + that binary, as a drop-in replacement for the
-# lockfile's better-sqlite3. Registered via `npm.npm_replace_package`
-# below, which is what lets the whole tree declare
-# `onlyBuiltDependencies: []`: with the binary already in the package,
-# nothing needs a postinstall to go fetch one.
-npm_package(
-    name = "pkg",
-    srcs = glob(["**"], exclude = ["BUILD.bazel"]) + [":binding"],
-    package = "better-sqlite3",
-    version = "12.10.0",
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-npm.npm_replace_package(
-    package = "better-sqlite3@12.10.0",
-    replacement = "@better_sqlite3_src//:pkg",
-)
-
-# --- better-sqlite3 prebuilt native bindings -------------------------
+# better-sqlite3 needs no special handling here, and that is new as of
+# qmd 2.8.3. Until then it was the ONE package in the qmd tree the
+# lockfile could not deliver: 12.x published a tarball with `src/` +
+# `binding.gyp` and no `.node`, and got its binary from a
+# `prebuild-install` postinstall that downloaded a GitHub release asset
+# appearing in no lockfile and carrying no integrity hash. Closing that
+# hole cost an `npm_replace_package`, a re-packaged `better_sqlite3_src`,
+# four sha256-pinned `better_sqlite3_prebuilt_*` archives, and a
+# `node_abi_test` to catch the day a rules_nodejs bump silently
+# invalidated the `node-v<abi>` in their URLs.
 #
-# The ONE package in the qmd tree that the lockfile alone cannot deliver.
-# Its published tarball ships `src/` + `binding.gyp` and no `.node`; the
-# binary normally arrives from a `prebuild-install` postinstall, which
-# downloads a GitHub release asset that appears in no lockfile and
-# carries no integrity hash. That single fetch was the entire remaining
-# unpinned surface of `npx -y @tobilu/qmd`.
+# better-sqlite3 13 ships `prebuilds/<os>-<arch>.node` inside the npm
+# tarball for all eight platforms (including linuxmusl) and declares no
+# install script at all, so the lockfile's sha512 now covers the native
+# binary like everything else. All of the above is deleted, and the Node
+# ABI stops being a pin we have to track: prebuildify-style bindings are
+# selected by platform at require-time, not by NODE_MODULE_VERSION.
 #
-# Pinning it here closes that hole and is what lets
-# `third-party/qmd/runtime/package.json` declare `onlyBuiltDependencies:
-# []` — with the binary supplied, no package in the tree needs to run an
-# install script at all. Every other native dep is already covered by the
-# lockfile: node-llama-cpp's platform binaries are integrity-pinned
-# optional deps, and the tree-sitter grammars ship `prebuilds/*.node`
-# inside their own tarballs (verified: `prebuilds/darwin-arm64/…` et al
-# are present in the linked tree).
-#
-# `node-v127` is Node's ABI version (NODE_MODULE_VERSION), not a package
-# version — it must match the Node that rules_js resolves, currently
-# v22.22.0. If rules_nodejs moves to a Node with a different ABI these
-# pins stop matching and `require()` fails loudly at qmd startup rather
-# than silently degrading; bump to the matching `node-v<abi>` assets from
-# the same release. `//third-party/qmd/runtime:node_abi_test` asserts the
-# two agree so the breakage is caught at test time instead.
-
-http_archive(
-    name = "better_sqlite3_prebuilt_darwin_arm64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-darwin-arm64.tar.gz"],
-    sha256 = "35533f9ada82cb3f33760c1dc2f128f77c2b34ec2b2ede722824cb64cd50a46a",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-http_archive(
-    name = "better_sqlite3_prebuilt_darwin_x64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-darwin-x64.tar.gz"],
-    sha256 = "8d2ef0eb7f880f88882f0a7a7362a15e2d210a077681f0672d0dfc8b919bd91b",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-http_archive(
-    name = "better_sqlite3_prebuilt_linux_x64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-linux-x64.tar.gz"],
-    sha256 = "899dcec7d0e4e2ec35db783a9155b878ae15754512585de7352bbd33cb1d6c48",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-http_archive(
-    name = "better_sqlite3_prebuilt_linux_arm64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-linux-arm64.tar.gz"],
-    sha256 = "efb625877ea517be6003c14dbabdb748d0ac172ab50bc4e5af08c2cb272b70c6",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
+# `onlyBuiltDependencies: []` in third-party/qmd/runtime/package.json is
+# unchanged and still means what it said.
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for
 # refreshing the lockfile after editing datalib/ui/package.json.

@@ -68,7 +68,7 @@ test("the columns are off by default and render check marks once shown", async (
 }) => {
   await page.goto("/");
   await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
 
@@ -119,13 +119,13 @@ test("the columns are off by default and render check marks once shown", async (
   // which also pins that un-hiding actually fetches, instead of leaving
   // the columns permanently blank.
   const firstIndexed = page
-    .locator('.ag-center-cols-container [role="row"] [col-id="qmd_indexed"]')
+    .locator('.ag-grid-scrolling-rows [role="row"] [col-id="qmd_indexed"]')
     .first();
   await expect(firstIndexed).toHaveText(CHECK, { timeout: 15_000 });
 
   for (const colId of ["qmd_indexed", "qmd_embedded"]) {
     const cells = page.locator(
-      `.ag-center-cols-container [role="row"] [col-id="${colId}"]`,
+      `.ag-grid-scrolling-rows [role="row"] [col-id="${colId}"]`,
     );
     const texts = await cells.allInnerTexts();
     expect(texts.length, `${colId} cells rendered`).toBeGreaterThan(0);

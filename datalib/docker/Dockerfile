@@ -88,7 +88,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
 # Service running, so latchkey exits non-zero with "No encryption key
 # available." The entrypoint script (datalib-entrypoint.sh) handles
 # this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
-ARG LATCHKEY_VERSION=3.7.0
+ARG LATCHKEY_VERSION=3.8.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
 # Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
@@ -111,7 +111,7 @@ RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 #
 # public-release assets are reachable anonymously, so curl is fine here
 # (no gh CLI dep just for this step).
-ARG DOLTLITE_CLI_VERSION=0.11.53
+ARG DOLTLITE_CLI_VERSION=0.50.3
 RUN arch="$(dpkg --print-architecture)" \
     && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
     && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
@@ -149,7 +149,7 @@ RUN arch="$(dpkg --print-architecture)" \
 # fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
 # aggressive cleanup pulls node out from under us) and the marginal
 # disk-size savings don't matter against the model layer.
-ARG QMD_VERSION=2.5.3
+ARG QMD_VERSION=2.8.3
 # `QMD_PREFETCH_MODELS=false` skips `qmd pull`, which is what makes the
 # `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of a 6.45 GB
 # image. Prod keeps them (default `true`): a first sync would otherwise

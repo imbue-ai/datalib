@@ -128,7 +128,7 @@ def main() -> int:
         "--models-dir",
         str(models_dir),
     ]
-    r = subprocess.run(cmd, env=env)
+    r = subprocess.run(cmd, env=env, check=False)
     if r.returncode != 0:
         return r.returncode
 

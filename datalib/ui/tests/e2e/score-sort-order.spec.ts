@@ -41,10 +41,10 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     //    for the scroll-to-top assertion below.
     await page.goto("/");
     await page
-      .locator('.ag-center-cols-container [role="row"]')
+      .locator('.ag-grid-scrolling-rows [role="row"]')
       .first()
       .waitFor({ timeout: 10_000 });
-    const viewport = page.locator(".ag-body-viewport");
+    const viewport = page.locator(".ag-grid-viewport");
     await expect(viewport).toBeVisible();
     const beforeScrollTop = await viewport.evaluate((el) => el.scrollTop);
     expect(
@@ -66,7 +66,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     const scoreHeader = page.locator('.ag-header-cell[col-id="score"]');
     await expect(scoreHeader).toBeVisible();
     const firstRow = page
-      .locator('.ag-center-cols-container [role="row"]')
+      .locator('.ag-grid-scrolling-rows [role="row"]')
       .first();
     await expect(firstRow).toBeVisible();
 
@@ -74,7 +74,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     //    Virtualization means we only see the on-screen window, but a
     //    non-increasing prefix is enough to assert the sort direction.
     const cells = page.locator(
-      '.ag-center-cols-container [role="row"] [col-id="score"]',
+      '.ag-grid-scrolling-rows [role="row"] [col-id="score"]',
     );
     const count = await cells.count();
     expect(count, "expected qmd-routed search to surface score cells")

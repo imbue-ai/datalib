@@ -375,7 +375,7 @@ ${applets()}`;
     await settleRunner(page);
   });
 
-  test("Last synced counts up on its own, and hover reveals the exact stamp", async ({
+  test("Last synced holds still under a minute, and hover reveals the exact stamp", async ({
     page,
   }) => {
     // What only a browser can answer about this column. The arithmetic
@@ -384,37 +384,42 @@ ${applets()}`;
     // "6 days ago" from a live backend would mean forging the runner's
     // state file. What that unit test cannot show is any of the below:
     // that the column is wired to the relative form at all, that the
-    // absolute stamp survives as the hover, and that the cell keeps
-    // counting with nobody touching the page.
+    // absolute stamp survives as the hover, and that the cell does not
+    // tick while a person is looking at it.
     await writeConfig(page, config());
     const countUpWas = await lastSyncedOf(page, "pdfs/raw");
     await syncBtn(page, "pdfs/raw").click();
     expect(await settle(page, "pdfs/raw", countUpWas)).toBe("Succeeded");
 
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
-    await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
+    await expect(cell).toHaveText("seconds ago");
 
     // The exact instant is still reachable, on the hover.
     const stamp = await lastSyncedOf(page, "pdfs/raw");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(stamp).toMatch(/\d{2}:\d{2}:\d{2}/);
 
-    // ...and it counts up without anything else happening. This is the
-    // half that needs a real clock and a real repaint loop: the value
-    // is derived from `Date.now()` at paint time, so a column that
-    // never repaints would sit at "1 second ago" forever and every
-    // other assertion here would still pass.
-    const before = (await cell.textContent())?.trim() ?? "";
-    await expect
-      .poll(async () => (await cell.textContent())?.trim(), {
-        timeout: 15_000,
-        intervals: [500],
-        message: `Last synced never advanced past "${before}"`,
-      })
-      .not.toBe(before);
+    // ...and it stays put. The repaint loop is live and sampling
+    // `Date.now()` every second throughout this window, so against the
+    // per-second countup this column used to do, these samples would
+    // have read 3, 4, 5 — this is the assertion that fails if the
+    // countup ever comes back.
+    for (let i = 0; i < 4; i++) {
+      await page.waitForTimeout(700);
+      expect(
+        (await cell.textContent())?.trim(),
+        "Last synced ticked while nothing happened",
+      ).toBe("seconds ago");
+    }
 
-    // The stamp it advanced *against* is unchanged — the row is not
-    // re-syncing, the clock is just moving.
+    // NOT asserted here: the crossing to "1 minute ago", which is now
+    // the only self-repaint this column does. Catching it means waiting
+    // out a real minute, and this suite runs in about 40s — so the
+    // repaint loop itself is covered only by the unit test on the text
+    // it paints. If the tick regresses, a stale cell survives until the
+    // next data change repaints the grid.
+
+    // The stamp underneath is unchanged — the row is not re-syncing.
     expect(await lastSyncedOf(page, "pdfs/raw")).toBe(stamp);
 
     // A row that never ran has no time to be relative to, and nothing
@@ -434,7 +439,7 @@ ${applets()}`;
     // stamp. Those two orders genuinely disagree here, which is what
     // makes this worth asserting through the real header rather than
     // only against the comparator: alphabetically "1 hour ago" precedes
-    // "4 seconds ago", while chronologically it follows it.
+    // "seconds ago", while chronologically it follows it.
     await writeConfig(page, config());
 
     // Two rows with a real gap between them, so the orders differ. Each
@@ -454,7 +459,7 @@ ${applets()}`;
     /// rather than against the prose the cell happens to render.
     const ordering = async () => {
       const ids = await page
-        .locator('.ag-center-cols-container .ag-row')
+        .locator('.ag-grid-scrolling-rows .ag-row')
         .evaluateAll((rows) =>
           rows
             .sort(

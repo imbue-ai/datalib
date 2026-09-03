@@ -107,7 +107,7 @@ async function gridRows(
 /// Open Explore and wait for it to have painted rows from the applet.
 async function openExplore(page: Page) {
   await page.goto(`${BASE}/`);
-  await expect(page.locator('.ag-center-cols-container [role="row"]').first()).toBeVisible({
+  await expect(page.locator('.ag-grid-scrolling-rows [role="row"]').first()).toBeVisible({
     timeout: 20_000,
   });
   await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
@@ -229,7 +229,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
-    await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
+    await expect(cell).toHaveText("seconds ago");
     const stamp = await stampOf(page, "pdfs/raw");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(

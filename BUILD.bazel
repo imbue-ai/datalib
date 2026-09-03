@@ -3,7 +3,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
     ".bazelrc",  # read by //tools:qmd_model_cache_path_test
-    "MODULE.bazel",  # read by //third-party/qmd/runtime:node_abi_test
+    "MODULE.bazel",  # read by //tools:version_pins_test
     "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
     "requirements.txt",
 ])
