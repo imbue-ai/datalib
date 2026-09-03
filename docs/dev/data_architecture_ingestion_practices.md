@@ -303,9 +303,9 @@ a checked-in input. The flow is: synth reads JSONL → emits HTTP
 playback responses → download reads playback → writes the runtime
 `.doltlite_db`.
 
-This is stated in [port guide §3](../../datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
-but it's a project-wide invariant that belongs at the architecture
-level too.
+It is a project-wide invariant and this is now its only statement of
+record: it used to be duplicated in `DOLTLITE_RAW_PORT_GUIDE.md`,
+deleted 2026-09-03 (see [Deferred work](#deferred-work)).
 
 ### grid_rows itself lives in doltlite
 
@@ -322,21 +322,23 @@ Edits to these docs and their neighbors that we've agreed to do, but
 haven't yet. Each is intentionally not blocking the audit thread —
 they're listed here so they don't get lost.
 
-  - **Move `datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md` →
-    `docs/dev/doltlite_patterns.md`**, and reframe it from a porting
-    guide into "shape of how we use doltlite." The current doc reads
-    as one-time migration instructions (which JSONL-tree raw stores
-    looked like, the porting checklist, "we tried checking in a
-    `.doltlite_db` once and threw it away"); the durable content
-    inside it — the design rules, the table-and-blob shape, the
-    shared utilities — should be lifted into a stable reference.
-  - **Rename `docs/dev/doltlite.md` → `docs/dev/doltlite_tips.md`** to make
-    its scope (operational tips and dolt-history reading) explicit
-    against the new patterns doc above.
-  - Both of the above require updating inbound links across the
-    repo: this file, signal's `download/mod.rs`, each provider's
-    `DOWNLOAD.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
-    and any AGENTS.md / README pointers.
+  - ~~**Move `DOLTLITE_RAW_PORT_GUIDE.md` → `docs/dev/doltlite_patterns.md`**
+    and reframe it as "shape of how we use doltlite."~~ **Done
+    differently: deleted, 2026-09-03.** By the time anyone got to it,
+    the durable content had been written down elsewhere and what
+    remained was wrong — a checklist naming the retired
+    `datalib/backend/sync` crate, `src/extract/` module paths that
+    became `src/download/`, the retired `RefStub` / `pre_seed_ref`
+    blob API in its utilities table and code templates, and a
+    `journal_mode=DELETE` snippet that contradicts
+    `doltlite_raw::open()`, which deliberately does not set the pragma
+    because doltlite rejects it. Only §6a survived, inlined into
+    [the JSONB paragraph](data_architecture_ingestion.md#schema_rawrs-per-provider-schema-layout).
+  - **Rename `docs/dev/doltlite.md` → `docs/dev/doltlite_tips.md`** —
+    still open, but the motivation was to disambiguate it against the
+    patterns doc that no longer exists, so it is now optional. Its
+    scope (operational tips, reading dolt history) is already clear
+    from its own opening.
 
   - **VIRTUAL column projection from JSONB payload.** Each
     `WirePayloadRow`-derived row currently stores a small set of

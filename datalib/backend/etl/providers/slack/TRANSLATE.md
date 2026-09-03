@@ -50,7 +50,7 @@ from the canonical Slack JSON of every message in the thread. On the
 next run, if the existing `.md` already matches, the write is skipped
 and the sidecar is not regenerated.
 
-Bump [`RENDER_VERSION`](translate/render.rs) when the on-disk render
+Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
 layout changes in a way that should invalidate stale `.md` files even
 though their `source_fingerprint` would otherwise still match.
 

@@ -8,8 +8,8 @@ against any RFC 8620–conformant server in principle (Stalwart, etc.).
 Each phase upserts upstream payloads as JSONB into per-type tables;
 attachments and the full RFC5322 `.eml` source for every email land in
 the shared `blobs` table. See `db.rs` for the schema and
-[`DOLTLITE_RAW_PORT_GUIDE.md`](../../DOLTLITE_RAW_PORT_GUIDE.md) for
-the rationale behind the table shape.
+[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
+for the rationale behind the table shape.
 
 ## Auth (Fastmail)
 

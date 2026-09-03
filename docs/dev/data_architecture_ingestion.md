@@ -81,7 +81,15 @@ Within each provider crate the bytes-at-rest schema is its own file, deliberatel
 - **`providers/<name>/src/download/schema_raw.rs`** — the raw-store schema: DDL constants (one per table / index / bookkeeping sidecar), schema-evolution migration constants co-located with the table they touch, any synthesized-PK recipe functions, and a tiny `full_ddl()` composer that splices in `dr::bookkeeping_ddl_for(table)` for each entity. **No manipulation code** — `RawDb`, UPSERTs, SELECTs, and parameter binding stay in `download/db.rs` and import from `schema_raw`. The convention is proto/pydantic-flavored: opening the `schema_raw.rs` files at the same fixed path answers "what does the world look like at rest?" without opening anything else.
 - **`providers/<name>/src/render/schema_translate.rs`** (aspirational, landing per provider) — the normalized representation render emits: mostly serde-shaped Rust types, not SQL DDL, the in-memory POD form before it's shredded into sidecar rows. A provider may have multiple `schema_translate_<family>.rs` files; where a shape is shared across providers (chat-human, code-review, time-series, …) the canonical type lives in a shared crate and the per-provider file re-exports.
 
-Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port guide §6a](/datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads)) — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+
+**The JSONB convention, concretely.** Doltlite v0.11.2+ inherits SQLite 3.45's binary JSON. A `payload` column holds JSONB (a BLOB at the SQLite level): wrap the bind in `jsonb(?)` on INSERT, unwrap with `json(payload) AS payload` on SELECT. The Rust side still binds and reads a text JSON string; only the on-disk representation changes. Three things that are easy to get wrong:
+
+- `ON CONFLICT … DO UPDATE SET payload = excluded.payload` carries the JSONB through the upsert already — **don't re-wrap it**.
+- `dr::load_payloads()` unwraps for you; a hand-written SELECT that returns `payload` must call `json()` itself.
+- **Don't** wrap `sync_runs.config` / `summary`. Those are tiny single-row bookkeeping where `sqlite3 … SELECT` ergonomics beat binary-parse speed.
+
+Because dropping the `jsonb()` wrapper silently falls back to text storage with no other visible difference, providers assert the encoding directly — `SELECT typeof(payload)` must be `blob`. Five provider test modules do this today; a new one should too.
 
 ### More details
 
@@ -104,7 +112,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 - Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from.  Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
- Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). Full schema + helpers in [port guide §7](/datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+ Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). The universal edge shape and the three shared flush primitives are below; the code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs).
 
 **Per-provider CAS edge tables**
 
