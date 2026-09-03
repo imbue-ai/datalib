@@ -69,6 +69,11 @@ benchmark field name is a bug in the proposal, not a feature of the
 product. §5 lists what would count as overfitting, so the rule stays
 falsifiable rather than decorative.
 
+And the exchange runs both ways, which is the point of the last two
+sections: **§6 is what we should adopt from them, in the order I'd do
+it. §7 is what they could take from us.** §6 matters more — it is the
+half with a bug in it.
+
 ---
 
 ## 1. The skill read as a spec, checked against the tree
@@ -153,7 +158,8 @@ None of these are hard to add in isolation; the reason we don't have
 them is that datalib grew from the download side, where the
 interesting failures are network-shaped, and the skill grew from the
 parse side, where they are data-shaped. That is also why the exchange
-is worth having in both directions — §6 is the other half.
+is worth having in both directions: §6 is what we should adopt,
+§7 is what they could take back.
 
 ### What datalib has that the skill doesn't ask for
 
@@ -645,7 +651,89 @@ benchmark, it's overfitting.
 
 ---
 
-## 6. What the skill could take back
+## 6. Adopting it: the order I'd do these in
+
+The seven gaps in §1 are not equally worth closing, and only one of
+them can find a bug that exists *today*. Ordered by that.
+
+**1. The independent spot check — first, because it is the only one
+that is a test rather than a process.** Everything else changes how we
+handle future data; this one asks whether the twenty providers we
+already shipped are lossless right now, and our goldens cannot answer
+that: an insta snapshot asserts the output matches what it matched
+last time, so a field that has been silently dropped since the day the
+provider landed passes forever.
+
+The place to put it is already built and already independent.
+`tests/fixtures/ingested_tng_test.py` is **Python**, so it shares no
+code with the Rust render path by construction — the strongest form of
+the skill's "shares no code with `parse`" rule — and it already opens
+both the index db and the per-source entity stores through the
+doltlite shell. It also already contains the right idea applied to
+identity: `_roundtrip_failures` recomputes each row's uuid from its
+stored backpointer and fails when they disagree, on the grounds that
+"a mismatch means the backpointer is decorative … broken in a way
+nothing else would notice, because both columns still look perfectly
+plausible." Extend exactly that reasoning from identity to **content**:
+sample N rows per provider, pull the raw payload by upstream id, and
+assert the pass-through scalars (`author`, `when_ts`, `text` prefix,
+`source_url`) match what the payload says. Anything that fails is
+either a bug or a rule that belongs in the judgment-call table.
+
+**2. The problem sink, in render.** Today an unparseable record fails
+the step, and the step protocol classifies it as a `data` failure that
+poisons every downstream step — including `grid_index`, which fans in
+from *every* source. That is right for "the store will not open" and
+wrong for "one of forty thousand Slack messages has a field we did not
+expect." Add `problem(source, where, field, reason)` writing
+`<stanza>/rendered_md/_problems.jsonl` (beside `_render_cursor.json`,
+same lifecycle), with per-reason counts in the step's `outcome` event.
+This needs a third category in `step_protocol.md`'s absent-vs-malformed
+rule: **malformed-but-isolated**, which is neither.
+
+**3. The systematic-breakage threshold.** Falls out of (2) for almost
+free once the counts exist: fail the step when a run drops more than
+some fraction of what it read. Worth doing specifically because
+`data_architecture_ingestion_practices.md`
+§"Detecting upstream shape drift" records that we tried a
+shape-comparison approach (`endpoint_shapes`), deleted it, and "don't
+know yet what we want." Counting drops and thresholding them is cruder
+than shape comparison and would have caught the same class of problem.
+
+**4. The judgment-call table.** Once (2) exists this is generated
+rather than written: per provider, every rule that nulls a value and
+how many records it hit on the last run. Surface it wherever a user
+can see it — the Manage tab, or a generated section per provider.
+
+**5. Order-independence — adopt it in §4B, don't retrofit it.** Our
+last-complete-write-wins is genuinely sound for one writer walking a
+live upstream, and rewriting twenty providers onto `max((version,
+batch))` would buy nothing. But any generic on-disk ingest must have
+it from the first commit, because that is precisely the input model
+where our assumption fails.
+
+**6. Profiling — take the idea, skip the tool.** We write providers by
+hand against APIs we can read the docs for, so an agent-facing profiler
+is not the win here. Where it *does* apply is §4B: the `docs` provider
+should print what it found (identity candidates, null rates, timestamp
+shapes) on first run, because there nobody has read the corpus.
+
+**7. Retention** is real but blocked behind doltlite's never-deletes
+property (§3c). Separate track; don't let it gate 1–4.
+
+One meta-observation worth recording. The skill is a **procedure** with
+time budgets and an explicit list of things never to do ("NEVER run a
+full-data inspection or benchmark", "no sweeps, searches, floors, A/B
+or timing runs"). `AGENTS.md` is a **runbook of principles**. Both are
+aimed at the same failure modes — the ones this repo has hit and
+written up, like the DAG runner hashing 3.4 GB for two weeks to version
+a step it had already skipped. Principles are better for judgment
+calls; a numbered procedure with a stop-list is better at preventing a
+specific expensive detour. We have almost none of the second form.
+
+---
+
+## 7. What the skill could take back
 
 Six things this codebase learned by getting them wrong first, each
 mapping to a section the SKILL.md already has.
@@ -714,7 +802,7 @@ fallback, log when it fires.
 
 ---
 
-## 7. Open questions
+## 8. Open questions
 
 1. **Harness, store, or both?** If a skill-built pipeline is happy with
    its own SQLite and only wants scheduling, incrementality, retry and
