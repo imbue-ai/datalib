@@ -62,7 +62,7 @@ set -euo pipefail
 # Bumping NODE_VERSION means re-pinning ALL FOUR digests. Get them with:
 #   curl -fsSL https://nodejs.org/dist/<version>/SHASUMS256.txt \
 #     | grep -E '(darwin-(arm64|x64)|linux-(arm64|x64))\.tar\.gz$'
-NODE_VERSION="v22.23.1"
+NODE_VERSION="v22.23.2"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 backend_dir="$script_dir/../backend"

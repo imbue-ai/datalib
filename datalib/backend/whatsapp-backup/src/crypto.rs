@@ -128,11 +128,13 @@ pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
 /// Update GHASH with `data`, zero-padding the final partial block out to
 /// 16 bytes. Empty input contributes nothing.
 fn update_padded(ghash: &mut GHash, data: &[u8]) {
-    let full_blocks = data.len() / 16;
-    for chunk in data[..full_blocks * 16].chunks_exact(16) {
+    // `as_chunks` returns exactly the (whole blocks, remainder) split
+    // this used to compute by hand off `data.len() / 16`. Rust 1.98's
+    // clippy asks for it over `chunks_exact` with a constant size.
+    let (blocks, rem) = data.as_chunks::<16>();
+    for chunk in blocks {
         ghash.update(&[GenericArray::clone_from_slice(chunk)]);
     }
-    let rem = &data[full_blocks * 16..];
     if !rem.is_empty() {
         let mut last = [0u8; 16];
         last[..rem.len()].copy_from_slice(rem);

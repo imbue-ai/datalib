@@ -68,6 +68,7 @@ class ProgressBusEndToEnd(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,
         )
         self.assertEqual(
             proc.returncode,
@@ -84,12 +85,12 @@ class ProgressBusEndToEnd(unittest.TestCase):
 
         con = sqlite3.connect(f"file:{self.bus}?mode=ro", uri=True)
         try:
-            rows = dict(
-                (r[0], r)
+            rows = {
+                r[0]: r
                 for r in con.execute(
                     "SELECT step, run_id, state, done, total, msg FROM step_progress"
                 )
-            )
+            }
         finally:
             con.close()
 

@@ -4,7 +4,7 @@
   "private": true,
   "//": "Host-side lint tooling that Bazel runs hermetically. Kept in its own lock rather than datalib/ui's so a UI dependency bump can't churn the lint toolchain (and vice versa), and so the pyright test doesn't link the UI's 246 packages to typecheck Python. pyright is pinned to the same version //:requirements.txt pins for the PyPI wrapper, so `bazel test` and `uv run pyright` agree.",
   "devDependencies": {
-    "pyright": "1.1.409"
+    "pyright": "1.1.411"
   },
   "pnpm": {
     "//": "EMPTY ON PURPOSE: no package in this tree may run a postinstall script. aspect_rules_js requires the field to be declared, and declaring it empty is the strongest form of the guarantee we want here — pyright ships a prebuilt bundle and its one optional dep (fsevents) is unused. Required by npm_translate_lock to parse the v9 lockfile. (pnpm 10+ reads this from pnpm-workspace.yaml#allowBuilds instead and ignores this field — we keep it here for aspect_rules_js to find, same as datalib/ui/package.json.)",

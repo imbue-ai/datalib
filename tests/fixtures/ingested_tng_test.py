@@ -43,7 +43,6 @@ import unittest
 import uuid as uuidlib
 from pathlib import Path
 
-
 # Bazel runfiles layout: under bzlmod, the workspace dir is `_main`.
 _BAZEL_WORKSPACE_DIR = "_main"
 

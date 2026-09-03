@@ -110,7 +110,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # bun — not needed for the bazel build, but qmd's own dev workflow
 # uses it (`bun install`, `bun src/cli/qmd.ts <cmd>`) so working
 # inside `third-party/qmd/` doesn't need extra setup.
-ARG BUN_VERSION=1.1.45
+ARG BUN_VERSION=1.4.0
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && mv /root/.bun/bin/bun /usr/local/bin/bun \
     && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
@@ -167,7 +167,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 
 # bazelisk reads `.bazelversion` and downloads the matching bazel, so
 # we only pin bazelisk here.
-ARG BAZELISK_VERSION=1.22.0
+ARG BAZELISK_VERSION=1.29.0
 ARG TARGETARCH
 RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
             amd64) echo amd64 ;; \
