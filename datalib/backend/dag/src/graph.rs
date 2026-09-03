@@ -13,6 +13,15 @@
 //! * no step consumes its own output;
 //! * no cycles.
 //!
+//! A step that breaks one of those is *left out of the graph*, and
+//! [`Graph::build_graded`] says which and why (see
+//! `crate::diagnostics`). It is not carried in the graph with a failed
+//! status, and that is deliberate: the scheduler's invariant is that
+//! every artifact in the graph has exactly one producer, so a step
+//! whose input names nothing would make the runner invent a version for
+//! a tree nobody wrote. Excluding it keeps the invariant and is why
+//! none of #209 reached `scheduler.rs`.
+//!
 //! This module used to derive edges by testing every input pattern
 //! against every output path, and to synthesize source steps for
 //! producer-less inputs. Both are gone with the pattern machinery they
@@ -23,6 +32,7 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::{bail, Result};
 
 use crate::artifact::ArtifactPath;
+use crate::diagnostics::{Diagnostic, EntryRef, Severity};
 use crate::step::{StepId, StepSpec};
 
 #[derive(Debug)]
@@ -65,46 +75,174 @@ impl Graph {
             .collect()
     }
 
+    /// Assemble the graph, strictly: the first problem is an `Err`.
+    ///
+    /// The strict view of [`Graph::build_graded`]. Kept for callers
+    /// that build specs by hand and want a bad one to be a loud failure
+    /// rather than a silently smaller graph.
     pub fn build(steps: Vec<StepSpec>) -> Result<Graph> {
-        let mut by_id: HashMap<StepId, usize> = HashMap::new();
-        for (i, s) in steps.iter().enumerate() {
-            if by_id.insert(s.id.clone(), i).is_some() {
-                // Also the single-writer check: a step's id is the tree
-                // it writes, so two steps writing one tree is two steps
-                // sharing an id.
-                bail!("duplicate step id {:?}", s.id);
+        let (graph, diags) = Self::build_graded(steps);
+        if let Some(d) = diags.first() {
+            bail!("{}", d.describe());
+        }
+        Ok(graph)
+    }
+
+    /// Assemble what can be assembled, and say what could not.
+    ///
+    /// Three rules live here, because all three need the full set of
+    /// ids and nothing earlier has it:
+    ///
+    ///   * every input names a declared step;
+    ///   * no step consumes its own output;
+    ///   * no cycles.
+    ///
+    /// A step that breaks one is left out of the graph entirely rather
+    /// than carried in it with a failed status. That is what keeps the
+    /// scheduler's invariant true — every artifact in the graph has
+    /// exactly one producer, so the runner never has to invent a
+    /// version for a tree nobody wrote — and it is why the scheduler
+    /// needed no changes for any of this.
+    ///
+    /// Dropping cascades, and the diagnostics say so. A step whose
+    /// input names a step that was itself dropped is
+    /// [`Severity::Blocked`], not `Rejected`: nothing is wrong with it,
+    /// and sending the user to its line would send them to the wrong
+    /// line. The message names the entry that actually needs the edit.
+    pub fn build_graded(steps: Vec<StepSpec>) -> (Graph, Vec<Diagnostic>) {
+        let mut diags = Vec::new();
+
+        // Ids first: everything below indexes by id, so duplicates have
+        // to go before anything can be looked up. Config-side loading
+        // has normally removed these already; specs built by hand have
+        // not, and this is the only place that can tell.
+        let mut kept: Vec<StepSpec> = Vec::with_capacity(steps.len());
+        let mut ids: BTreeSet<String> = BTreeSet::new();
+        for s in steps {
+            if !ids.insert(s.id.clone()) {
+                diags.push(
+                    Diagnostic::new(
+                        Severity::Rejected,
+                        format!(
+                            "duplicate step id {:?}: a step's id is the tree it writes, so \
+                             two steps sharing one write the same files",
+                            s.id
+                        ),
+                    )
+                    .at_entry(EntryRef::step_id(s.id.clone())),
+                );
+                continue;
+            }
+            kept.push(s);
+        }
+
+        // Then drop to a fixpoint. One pass is not enough: a step
+        // dropped here can be the reason the next one has to go, and
+        // that chain can run any length.
+        //
+        // `dropped` remembers which ids are gone, which is what lets a
+        // cascade diagnostic say "the thing you named is broken"
+        // instead of "the thing you named does not exist". They send
+        // the reader to different lines, so the difference is the whole
+        // point of tracking it.
+        let mut dropped: BTreeSet<String> = BTreeSet::new();
+        loop {
+            let live: BTreeSet<&str> = kept.iter().map(|s| s.id.as_str()).collect();
+            let mut doomed: Option<(usize, Diagnostic)> = None;
+            'scan: for (i, s) in kept.iter().enumerate() {
+                for input in &s.inputs {
+                    let name = input.as_str();
+                    if name == s.id {
+                        doomed = Some((
+                            i,
+                            Diagnostic::new(
+                                Severity::Rejected,
+                                "names itself as an input; a step cannot consume what it \
+                                 produces",
+                            )
+                            .at_entry(EntryRef::step_id(s.id.clone()))
+                            .with_help("split it into two steps"),
+                        ));
+                        break 'scan;
+                    }
+                    if live.contains(name) {
+                        continue;
+                    }
+                    let d = if dropped.contains(name) {
+                        Diagnostic::new(
+                            Severity::Blocked,
+                            format!(
+                                "cannot run: its input {name:?} was itself dropped from this \
+                                 config"
+                            ),
+                        )
+                        .at_entry(EntryRef::step_id(s.id.clone()))
+                        .with_help(format!(
+                            "nothing is wrong with this step — fix {name:?} and this one runs \
+                             again"
+                        ))
+                    } else {
+                        Diagnostic::new(
+                            Severity::Blocked,
+                            format!("input {name:?} names no declared step"),
+                        )
+                        .at_entry(EntryRef::step_id(s.id.clone()))
+                        .with_help(format!(
+                            "an input is a step id, not a path on disk — a directory you \
+                             staged by hand is named by that step's \
+                             `params.common.input_path` instead. Declared steps: {}",
+                            id_list(&live, &s.id)
+                        ))
+                    };
+                    doomed = Some((i, d));
+                    break 'scan;
+                }
+            }
+            match doomed {
+                Some((i, d)) => {
+                    dropped.insert(kept[i].id.clone());
+                    kept.remove(i);
+                    diags.push(d);
+                }
+                None => break,
             }
         }
 
+        // Cycles. Kahn's algorithm leaves behind every node it could
+        // not order — the ring itself *and* everything downstream of it
+        // — so the two have to be told apart before either is
+        // described, or a step three hops below a cycle gets a message
+        // claiming it is in one.
+        let (graph, cycle_diags) = Self::assemble(kept);
+        diags.extend(cycle_diags);
+        (graph, diags)
+    }
+
+    /// Index the steps and order them, splitting off anything a cycle
+    /// makes unschedulable. Every input is known to resolve by the time
+    /// this is called.
+    fn assemble(steps: Vec<StepSpec>) -> (Graph, Vec<Diagnostic>) {
         let n = steps.len();
+        let mut by_id: HashMap<StepId, usize> = HashMap::new();
+        for (i, s) in steps.iter().enumerate() {
+            by_id.insert(s.id.clone(), i);
+        }
+
         let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
         let mut dependents: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
         let mut resolved_inputs: Vec<Vec<ArtifactPath>> = vec![Vec::new(); n];
 
         for (bi, b) in steps.iter().enumerate() {
             for input in &b.inputs {
-                let Some(&ai) = by_id.get(input.as_str()) else {
-                    bail!(
-                        "step {:?}: input {input:?} names no declared step. An input is a \
-                         step id, not a path on disk — a directory you staged by hand is \
-                         named by that step's `params.common.input_path` instead.",
-                        b.id
-                    );
-                };
-                if ai == bi {
-                    bail!(
-                        "step {:?} names itself as an input; a step cannot consume what it \
-                         produces — split it into two steps",
-                        b.id
-                    );
-                }
+                // Every input resolves: `build_graded` removed every
+                // step for which one didn't.
+                let ai = by_id[input.as_str()];
                 deps[bi].insert(ai);
                 dependents[ai].insert(bi);
                 resolved_inputs[bi].push(input.clone());
             }
         }
 
-        // Kahn's algorithm; leftover nodes → cycle.
         let mut indeg: Vec<usize> = deps.iter().map(|d| d.len()).collect();
         let mut ready: Vec<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
         let mut topo = Vec::with_capacity(n);
@@ -117,25 +255,111 @@ impl Graph {
                 }
             }
         }
+
         if topo.len() != n {
-            let stuck: Vec<&str> = (0..n)
-                .filter(|&i| indeg[i] > 0)
-                .map(|i| steps[i].id.as_str())
+            let stuck: Vec<usize> = (0..n).filter(|&i| indeg[i] > 0).collect();
+            let in_cycle: Vec<usize> = stuck
+                .iter()
+                .copied()
+                .filter(|&i| reaches_itself(&dependents, i))
                 .collect();
-            bail!("dependency cycle among steps: {}", stuck.join(", "));
+            let ring: Vec<&str> = in_cycle.iter().map(|&i| steps[i].id.as_str()).collect();
+            let mut diags = Vec::new();
+            for &i in &stuck {
+                let d = if in_cycle.contains(&i) {
+                    // A cycle has no innocent member and no root to
+                    // point at: the edit that breaks it could be any
+                    // one of them, so each gets the whole ring.
+                    Diagnostic::new(
+                        Severity::Blocked,
+                        format!("is in a dependency cycle: {}", ring.join(" → ")),
+                    )
+                    .with_help("remove one of the `inputs` entries that closes the ring")
+                } else {
+                    Diagnostic::new(
+                        Severity::Blocked,
+                        format!(
+                            "cannot run: it is downstream of a dependency cycle ({})",
+                            ring.join(" → ")
+                        ),
+                    )
+                    .with_help("nothing is wrong with this step — break the cycle above it")
+                };
+                diags.push(d.at_entry(EntryRef::step_id(steps[i].id.clone())));
+            }
+            let survivors: Vec<StepSpec> = steps
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !stuck.contains(i))
+                .map(|(_, s)| s)
+                .collect();
+            let (graph, more) = Self::assemble(survivors);
+            // The survivors are exactly what Kahn *did* order, so they
+            // are cycle-free and their inputs all resolved. Assert
+            // rather than quietly merge, so a rule that does start
+            // firing here is not swallowed.
+            debug_assert!(more.is_empty(), "second assemble pass produced {more:?}");
+            diags.extend(more);
+            return (graph, diags);
         }
 
         let fingerprints = steps.iter().map(fingerprint_of).collect();
+        (
+            Graph {
+                by_id,
+                deps,
+                dependents,
+                resolved_inputs,
+                topo,
+                fingerprints,
+                steps,
+            },
+            Vec::new(),
+        )
+    }
+}
 
-        Ok(Graph {
-            by_id,
-            deps,
-            dependents,
-            resolved_inputs,
-            topo,
-            fingerprints,
-            steps,
-        })
+/// Whether `start` is reachable from itself along dependent edges —
+/// i.e. it is in a cycle, rather than merely downstream of one.
+///
+/// Kahn's algorithm cannot tell those apart: it leaves behind
+/// everything it could not order, ring and tail alike. Telling the user
+/// a step three hops below a cycle is *in* the cycle sends them looking
+/// for an `inputs` entry that isn't there.
+fn reaches_itself(dependents: &[BTreeSet<usize>], start: usize) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![start];
+    while let Some(i) = stack.pop() {
+        for &j in &dependents[i] {
+            if j == start {
+                return true;
+            }
+            if seen.insert(j) {
+                stack.push(j);
+            }
+        }
+    }
+    false
+}
+
+/// The declared step ids, for a diagnostic that has to say what the
+/// valid choices were — minus the step doing the asking, which is
+/// never the answer and reads as noise in its own error message.
+///
+/// Capped: a config with sixty steps would push the actual message off
+/// the screen, and the point is to jog a memory, not to dump the file
+/// back at the reader.
+fn id_list(ids: &BTreeSet<&str>, excluding: &str) -> String {
+    const MAX: usize = 12;
+    let all: Vec<&str> = ids.iter().copied().filter(|id| *id != excluding).collect();
+    if all.is_empty() {
+        return "(none — this config declares no other steps)".to_string();
+    }
+    let shown: Vec<&str> = all.iter().copied().take(MAX).collect();
+    if all.len() > MAX {
+        format!("{}, … (+{} more)", shown.join(", "), all.len() - MAX)
+    } else {
+        shown.join(", ")
     }
 }
 
