@@ -147,7 +147,14 @@ impl IndexRepo for DoltRepo {
             where_sql
         );
 
-        let mut query = sqlx::query(&sql);
+        // Audited for injection per sqlx 0.9's `SqlSafeStr` bound. Everything
+        // interpolated into `sql` is a literal or comes from `build_where`,
+        // which only ever splices `&'static str` column names returned by
+        // `column_for_field`'s closed match — every user-supplied value
+        // leaves as a `?` in `params`. Same reasoning for the other
+        // `AssertSqlSafe` sites in this file, where the interpolated part is
+        // a `?,?,?` run built from a count.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for p in &params {
             query = query.bind(p);
         }
@@ -273,7 +280,7 @@ impl IndexRepo for DoltRepo {
             params.push(u.clone());
         }
         let sql = format!("SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{}", where_sql);
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for p in &params {
             query = query.bind(p);
         }
@@ -362,7 +369,7 @@ impl IndexRepo for DoltRepo {
                 "SELECT markdown_uuid, md_path FROM markdowns \
                   WHERE md_path IS NOT NULL AND markdown_uuid IN ({placeholders})"
             );
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
             for u in chunk {
                 q = q.bind(u);
             }

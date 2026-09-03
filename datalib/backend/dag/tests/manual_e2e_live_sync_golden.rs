@@ -1485,7 +1485,9 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
     for t in tables {
         // Pull column names so we know whether to wrap `payload` in
         // `json(...)` and which column to ORDER BY.
-        let info = sqlx::query(&format!("PRAGMA table_info(\"{t}\")"))
+        // Golden-test dump: `t` is a table name this test just read out of the
+        // store's own `sqlite_master`.
+        let info = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info(\"{t}\")")))
             .fetch_all(&pool)
             .await
             .expect("table_info");
@@ -1524,7 +1526,9 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
             ""
         };
         let q = format!("SELECT {select_list} FROM \"{t}\" {order_by}");
-        let rows = sqlx::query(&q)
+        // Same: `select_list` is built from the columns just introspected and
+        // `order_by` is one of a closed set of literals.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(q))
             .fetch_all(&pool)
             .await
             .unwrap_or_else(|e| panic!("select {t}: {e}"));

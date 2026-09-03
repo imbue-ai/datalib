@@ -94,19 +94,19 @@ impl AppStore {
     }
     async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in FEEDBACK_DDL {
-            sqlx::query(ddl).execute(&self.feedback_pool).await?;
+            sqlx::query(*ddl).execute(&self.feedback_pool).await?;
         }
         Ok(())
     }
     async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in SYNC_JOBS_DDL {
-            sqlx::query(ddl).execute(&self.jobs_pool).await?;
+            sqlx::query(*ddl).execute(&self.jobs_pool).await?;
         }
         Ok(())
     }
     async fn init_disk_usage_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in DISK_USAGE_DDL {
-            sqlx::query(ddl).execute(&self.usage_pool).await?;
+            sqlx::query(*ddl).execute(&self.usage_pool).await?;
         }
         Ok(())
     }
@@ -164,7 +164,11 @@ impl AppRepo for AppStore {
         } else {
             format!("{base} ORDER BY created_at DESC, id DESC LIMIT ?")
         };
-        let rows = sqlx::query(&sql)
+        // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is
+        // `format!` over two `&'static str` templates selected by a bool, and
+        // the only runtime value (`limit`) is a bound `?` parameter. Nothing
+        // caller-supplied reaches the string.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(limit as i64)
             .fetch_all(&self.jobs_pool)
             .await

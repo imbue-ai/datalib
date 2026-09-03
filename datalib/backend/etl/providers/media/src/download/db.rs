@@ -184,7 +184,9 @@ impl RawDb {
             let mut sql = format!("DELETE FROM {table} WHERE {column} IN (");
             datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
             sql.push(')');
-            let mut q = sqlx::query(&sql);
+            // Audited: `table` and `column` are literals at every callsite; the IN-list
+            // is a placeholder run and every id is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
             for id in chunk {
                 q = q.bind(id);
             }

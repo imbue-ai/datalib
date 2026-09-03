@@ -40,7 +40,12 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     // — `data_root = "x"` — it reads as a bare scalar). No legacy
     // config can be mistaken for TOML in the other direction: `steps:`
     // and `sources:` are not TOML key-value syntax.
-    if !text.trim().is_empty() && datalib_dag::config::parse(text).is_ok() {
+    //
+    // `is_toml` and not the full loader: an already-converted config
+    // that has a *problem* in it is still already converted, and
+    // sending it to the YAML parser would bury that problem under a
+    // parse error about a file that was never YAML.
+    if !text.trim().is_empty() && datalib_dag::config::is_toml(text) {
         bail!("this config is already TOML — there is nothing to migrate");
     }
     let v: serde_yaml::Value =

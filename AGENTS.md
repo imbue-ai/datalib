@@ -22,6 +22,19 @@ are relative to the repo root.
   the six places that recover an identity by splitting a string go away.
   Nothing in it is built; the `name` / `id` split that did ship is in
   `source_wizard.md`.
+- [`docs/dev/streaming_steps.md`](docs/dev/streaming_steps.md) —
+  *proposal*, nothing built: letting a consumer step start before its
+  producer finishes. Splits the two meanings an edge carries today
+  ("B consumes A's output" and "B may assume A is finished"). The
+  doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
+  we thought we didn't have, and a plain `SELECT` reads the *working
+  set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
+- [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
+  — **read before changing how a config is validated**: why the loader
+  returns a list of diagnostics rather than an `Err`, and what
+  separates the four severities (blast radius — how much of the file
+  one problem costs). The rules themselves sit beside them in
+  `config.rs::accept_steps` and `graph.rs::build_graded`.
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
   write a custom step command**: the config entry, the `--params` /
   `--inputs` / `--outputs` flags, `DATALIB_DAG_*` env vars, the
@@ -190,6 +203,13 @@ behavior.
 When prose and the tree disagree, the tree wins. Fix the prose in the same
 change.
 
+## Write plainspoken
+
+Be clear and unhurried, explain a term the first time it appears, and
+don't assume the reader already shares your context — and note that a lot
+of the docs and comments already here are terser and more jargony than
+they should be, so the surrounding prose is not the register to match.
+
 ## Repo layout
 
 ```
@@ -252,7 +272,15 @@ two shared fan-in steps index every source's `rendered_md` tree:
 `grid_index` (SQL index at `unified_index/grid/db.doltlite_db`) and
 `qmd_index` (semantic search at `unified_index/qmd/`). Both are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
-not open them. Scheduler state lives at `system/dag_state.json`. The http server's sync worker shells out
+not open them. Scheduler state lives at `system/dag_state.json`. A config entry the
+loader cannot use costs that entry and nothing else — it is dropped,
+the rest of the pipeline runs, and `datalib-dag --check <config>` (or
+`diagnostics` on `GET /api/config`) says what went and why. A config
+the app cannot serve anything from — not TOML at all, or carrying no
+`unified_index` applet — comes back as `app_ready: false` and blocks
+the UI behind `ConfigErrorView`, live in both directions, so a
+hand-edit that breaks or fixes the file takes effect with no reload.
+The http server's sync worker shells out
 to `datalib-dag`; the UI's Manage tab edits the config. A root with no
 config at all is the new-user case: the desktop shell's launcher
 (`datalib/tauri/launcher-dist/`) offers recent roots, a folder picker,
@@ -835,6 +863,20 @@ expired weeks ago hides behind a vague "feels slow". If you add one
 anyway, log when it fires. Worked example: #225 — the DAG runner spent
 40s hashing 3.4GB to version a step it had already skipped, on every
 run, for two weeks, before anyone noticed.
+
+## Dynamic SQL needs `AssertSqlSafe` and a reason
+
+sqlx 0.9 only accepts `&'static str` as a query string. Anything built
+at runtime — a `?,?,?` run sized from a chunk, a `{table}` interpolated
+as an identifier — has to be wrapped in `sqlx::AssertSqlSafe(...)`,
+which is an assertion *you* are making, not a check sqlx performs.
+
+Wrap it with a comment saying why it is safe, the way the existing
+sites do. Two patterns cover almost everything here: placeholders built
+from a count with every value bound, and table/column names that are
+`&'static str` at every callsite. If yours is neither — you are
+interpolating something that came from upstream data — quote it
+(`lightroom`'s `plan::quote_ident`) or bind it instead.
 
 ## Timestamp convention
 

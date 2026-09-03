@@ -160,7 +160,12 @@ pub async fn table_names(conn: &mut SqliteConnection, schema: &str) -> Result<Ve
          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
         quote_ident(schema)
     );
-    let rows = sqlx::query(&sql)
+    // Audited: every interpolated identifier goes through `plan::quote_ident`,
+    // which double-quotes and escapes embedded quotes (covered by
+    // `quote_ident_escapes_embedded_quotes`). Source catalog names are
+    // attacker-shaped only in the sense that they come from the user's own
+    // Lightroom file, and quoting is what makes that safe.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("list tables in {schema}"))?;
@@ -190,7 +195,7 @@ pub async fn table_columns(
         quote_ident(schema),
         quote_ident(table)
     );
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("table_xinfo({schema}.{table})"))?;
@@ -230,7 +235,7 @@ pub async fn unique_single_columns(
         quote_ident(schema),
         quote_ident(table)
     );
-    let idx_rows = sqlx::query(&sql)
+    let idx_rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("index_list({schema}.{table})"))?;
@@ -250,7 +255,7 @@ pub async fn unique_single_columns(
             quote_ident(schema),
             quote_ident(&idx_name)
         );
-        let cols = sqlx::query(&info_sql)
+        let cols = sqlx::query(sqlx::AssertSqlSafe(info_sql))
             .fetch_all(&mut *conn)
             .await
             .with_context(|| format!("index_info({schema}.{idx_name})"))?;

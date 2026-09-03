@@ -393,7 +393,11 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
         )",
     ];
     for s in stmts {
-        sqlx::query(s).execute(pool).await.context("create table")?;
+        // Fixture builder; `stmts` is a local const slice of CREATE TABLE literals.
+        sqlx::query(sqlx::AssertSqlSafe(*s))
+            .execute(pool)
+            .await
+            .context("create table")?;
     }
     Ok(())
 }

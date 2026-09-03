@@ -559,12 +559,19 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     let ddl = || extra_ddl.iter().chain(SHARED_DDL.iter());
     let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
     for stmt in ddl().filter(is_create_table) {
-        sqlx::query(stmt).execute(&pool).await.with_context(|| {
-            format!(
-                "apply DDL: {}",
-                stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
-            )
-        })?;
+        // Audited per sqlx 0.9's `SqlSafeStr` bound. DDL is not `&'static str`: every
+        // provider builds its array in `schema_raw.rs` from static consts plus
+        // `bookkeeping_ddl_for(table)`, which formats a `String` at runtime. The
+        // inputs are our own schema definitions, never user or upstream data.
+        sqlx::query(sqlx::AssertSqlSafe(*stmt))
+            .execute(&pool)
+            .await
+            .with_context(|| {
+                format!(
+                    "apply DDL: {}",
+                    stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
+                )
+            })?;
     }
     // Self-heal the schema. `CREATE TABLE IF NOT EXISTS` above is a no-op
     // for a table that already exists, so a DB created under an older
@@ -584,12 +591,15 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     // reconcile's drop+recreate path free: the dropped table's indexes
     // hadn't been created yet this open, and are created now.
     for stmt in ddl().filter(|s| !is_create_table(s)) {
-        sqlx::query(stmt).execute(&pool).await.with_context(|| {
-            format!(
-                "apply DDL: {}",
-                stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
-            )
-        })?;
+        sqlx::query(sqlx::AssertSqlSafe(*stmt))
+            .execute(&pool)
+            .await
+            .with_context(|| {
+                format!(
+                    "apply DDL: {}",
+                    stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
+                )
+            })?;
     }
     // Seal the schema into its own commit before handing back the pool.
     // doltlite only materializes the `dolt_diff_<table>` virtual table for
@@ -668,10 +678,15 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
 /// Introspect a table's columns via `PRAGMA table_xinfo`. Returns an
 /// empty vec if the table does not exist (no error).
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
-    let rows = sqlx::query(&format!("PRAGMA table_xinfo(\"{table}\")"))
-        .fetch_all(pool)
-        .await
-        .with_context(|| format!("table_xinfo({table})"))?;
+    // Audited: `table` is interpolated as a quoted identifier. Callers pass
+    // either a `&'static str` literal or a name parsed out of our own static
+    // DDL by `parse_create_table_name`; never user input.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA table_xinfo(\"{table}\")"
+    )))
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("table_xinfo({table})"))?;
     let mut cols = Vec::with_capacity(rows.len());
     for r in &rows {
         let name: String = r.try_get("name").unwrap_or_default();
@@ -727,7 +742,9 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
     // The table name's first occurrence is the name itself (the CREATE /
     // TABLE / IF NOT EXISTS keywords never equal a table name).
     let probe_sql = create_sql.replacen(table, PROBE, 1);
-    sqlx::query(&probe_sql)
+    // Audited: `probe_sql` is a static DDL statement with its table name
+    // replaced by the `PROBE` constant. Nothing runtime-derived reaches it.
+    sqlx::query(sqlx::AssertSqlSafe(probe_sql))
         .execute(&probe)
         .await
         .with_context(|| format!("build schema probe for {table}"))?;
@@ -818,7 +835,8 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
     //    pass should have created it) ⇒ create and return.
     let actual = table_columns(pool, &table).await?;
     if actual.is_empty() {
-        sqlx::query(create_sql)
+        // Audited: `create_sql` is one of the DDL statements described above.
+        sqlx::query(sqlx::AssertSqlSafe(create_sql))
             .execute(pool)
             .await
             .with_context(|| format!("create missing table {table}"))?;
@@ -844,7 +862,9 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
         let mut added_all = true;
         for col in &missing {
             let sql = format!("ALTER TABLE {table} ADD COLUMN {}", col.add_column_decl());
-            match sqlx::query(&sql).execute(pool).await {
+            // Audited: `table` comes from our own static DDL and `add_column_decl()`
+            // renders a column declaration from that same parsed DDL.
+            match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
                 Ok(_) => tracing::info!(
                     table = %table,
                     column = %col.name,
@@ -874,11 +894,12 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
         "doltlite_raw: schema not reconcilable by ADD COLUMN (column removed, \
          renamed, generated, or ADD failed); dropping and recreating from DDL"
     );
-    sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+    // Audited: `table` is parsed from our own static DDL.
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
         .execute(pool)
         .await
         .with_context(|| format!("drop {table} for schema recreate"))?;
-    sqlx::query(create_sql)
+    sqlx::query(sqlx::AssertSqlSafe(create_sql))
         .execute(pool)
         .await
         .with_context(|| format!("recreate {table}"))?;
@@ -1131,7 +1152,10 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
             format!("DELETE FROM {table}"),
             format!("DELETE FROM {table}_bookkeeping"),
         ] {
-            sqlx::query(&sql)
+            // Audited: table names are interpolated. This fn's doc comment already
+            // requires callers to pass trusted identifiers; every callsite passes a
+            // `&'static str`.
+            sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                 .execute(&mut *tx)
                 .await
                 .with_context(|| format!("truncate {sql}"))?;
@@ -1167,7 +1191,9 @@ pub async fn ensure_object_row(
     id: &str,
 ) -> Result<()> {
     let data_sql = format!("INSERT INTO {table} (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
-    sqlx::query(&data_sql)
+    // Audited: `table` interpolated as an identifier per this fn's documented
+    // contract; `id` is bound.
+    sqlx::query(sqlx::AssertSqlSafe(data_sql))
         .bind(id)
         .execute(&mut **tx)
         .await
@@ -1179,7 +1205,7 @@ pub async fn ensure_object_row(
     let bk_sql = format!(
         "INSERT INTO {table}_bookkeeping (id, attempt_count) VALUES (?, 0) ON CONFLICT(id) DO NOTHING"
     );
-    sqlx::query(&bk_sql)
+    sqlx::query(sqlx::AssertSqlSafe(bk_sql))
         .bind(id)
         .execute(&mut **tx)
         .await
@@ -1211,7 +1237,8 @@ pub async fn record_object_attempt(
     // callers (record_object_error before any successful fetch)
     // wouldn't have, so we INSERT OR IGNORE here. Cheap and idempotent.
     let stub_sql = format!("INSERT OR IGNORE INTO {table} (id) VALUES (?)");
-    sqlx::query(&stub_sql)
+    // Audited: `table` interpolated as an identifier; `id` is bound.
+    sqlx::query(sqlx::AssertSqlSafe(stub_sql))
         .bind(id)
         .execute(&mut **tx)
         .await
@@ -1236,7 +1263,8 @@ pub async fn record_object_attempt(
                 last_error = excluded.last_error"
         ),
     };
-    let q = sqlx::query(&sql).bind(id).bind(&now);
+    // Audited: both arms interpolate only `table`; id/now/err are bound.
+    let q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id).bind(&now);
     let q = match result {
         None => q,
         Some(err) => q.bind(err),
@@ -1481,11 +1509,18 @@ async fn set_volatile_payloads_in_tx(
         return Ok(());
     }
     let bk = format!("{table}_bookkeeping");
-    let sql = format!("UPDATE {bk} SET volatile_payload = jsonb(?) WHERE id = ?");
+    // `Arc<str>` rather than `String`: sqlx 0.9 takes the query string by
+    // value, so a per-row `AssertSqlSafe(&str)` would copy this statement
+    // once per row (0.8 borrowed it for free). Cloning the Arc is a
+    // refcount bump.
+    let sql: std::sync::Arc<str> =
+        format!("UPDATE {bk} SET volatile_payload = jsonb(?) WHERE id = ?").into();
     for (id, value) in volatile {
         let text = serde_json::to_string(value)
             .with_context(|| format!("serialize volatile_payload {bk}={id}"))?;
-        sqlx::query(&sql)
+        // Audited: only `bk` (= `{table}_bookkeeping`) is interpolated; the JSON
+        // text and id are bound.
+        sqlx::query(sqlx::AssertSqlSafe(std::sync::Arc::clone(&sql)))
             .bind(text)
             .bind(*id)
             .execute(&mut **tx)
@@ -1581,7 +1616,9 @@ pub async fn scan_buckets(
             "SELECT 1 FROM dolt_diff_{table} \
               WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1"
         );
-        let any: Option<i64> = sqlx::query_scalar(&sql)
+        // Audited: `table` comes from `spec.global_fanout_tables`, a static list;
+        // `from_ref` is bound.
+        let any: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(from_ref)
             .fetch_optional(pool)
             .await
@@ -1597,7 +1634,9 @@ pub async fn scan_buckets(
     }
 
     let started = std::time::Instant::now();
-    let res = sqlx::query(spec.bucket_query)
+    // Audited: `bucket_query` is a fixed projection each provider declares in
+    // its own source; `from_ref` is bound at parameter index 1.
+    let res = sqlx::query(sqlx::AssertSqlSafe(spec.bucket_query))
         .bind(from_ref)
         .fetch_all(pool)
         .await;
@@ -1658,7 +1697,8 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
          WHERE b.last_error IS NOT NULL \
             OR (t.payload IS NULL AND COALESCE(b.attempt_count, 0) > 0)"
     );
-    let rows = sqlx::query(&sql)
+    // Audited: `table` interpolated as an identifier; no runtime values.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
         .with_context(|| format!("select failed_ids({table})"))?;
@@ -1678,7 +1718,7 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     let sql = format!(
         "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
         .with_context(|| format!("select {table} payloads"))?;
@@ -1703,7 +1743,7 @@ pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec
     let sql = format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
         .with_context(|| format!("select {table} id+payloads"))?;

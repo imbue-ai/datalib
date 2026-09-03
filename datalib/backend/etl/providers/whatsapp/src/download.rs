@@ -192,7 +192,9 @@ async fn truncate_wa_tables(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await.context("begin truncate tx")?;
     for table in DATA_TABLES {
         let sql = format!("DELETE FROM {table}");
-        sqlx::query(&sql)
+        // Audited: `table` iterates a `&'static str` const array of our own
+        // table names; no runtime data reaches the statement.
+        sqlx::query(sqlx::AssertSqlSafe(sql))
             .execute(&mut *tx)
             .await
             .with_context(|| format!("truncate {table}"))?;

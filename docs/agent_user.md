@@ -86,7 +86,14 @@ CLI:
 ```sh
 datalib-dag <data_root>/config.toml            # everything
 datalib-dag <data_root>/config.toml --sync slack.download   # one source
+datalib-dag --check <data_root>/config.toml   # validate, run nothing
 ```
+
+`--check` prints *every* problem with the config rather than the first,
+as `file:line:col: severity: message` with the offending line and a
+`help:` line under each — so fixing a config takes one round-trip, not
+one per typo. Exit 0 clean, 1 if the file is not a config at all, 2 if
+some entries were dropped.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named download
 steps and everything downstream of them, and nothing else — pending
@@ -204,7 +211,15 @@ Pick the surface that fits the question:
   remote service).
 - **Wedged doltlite file** (`commit conflict` after a stray writer):
   recovery recipes in [`docs/dev/doltlite.md`](dev/doltlite.md).
-- **A config the runner rejects**: `PUT /api/config` (or the Setup tab)
-  returns the loader error inline. A data root still holding a
+- **A config the runner rejects**: `datalib-dag --check
+  <data_root>/config.toml` lists every problem with a line number;
+  `PUT /api/config` (or the Setup tab) returns the same list in
+  `diagnostics` and writes nothing. A data root still holding a
   pre-TOML `config.yaml` reads as unconfigured — run
   `datalib-migrate-config <data_root>` first.
+- **A step that silently stopped running**: check `diagnostics` on
+  `GET /api/config`, or `--check`. A config with one unusable entry
+  still loads — that entry is dropped and everything else runs — so a
+  source can leave the pipeline without anything failing. The Pipeline
+  table shows such a row as *Not loaded* or *Can't run*, with the
+  reason; `--check` prints it.

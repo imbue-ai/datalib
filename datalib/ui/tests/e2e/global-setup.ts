@@ -17,9 +17,11 @@ declare const process: { env: Record<string, string | undefined> };
 /// spec failing intermittently, which is worth catching by name here
 /// rather than by bisecting a flake later.
 ///
-/// The tell is the config editor: `.m2-editor` (the Pipeline screen's
-/// Advanced pane) or the older Sources screen's save banner. Both are
-/// how a spec can change the file at all.
+/// The tells are the two ways a spec can change the file: the config
+/// editor (`.m2-editor`, the Pipeline screen's Advanced pane, or the
+/// older Sources screen's save banner), and a direct `writeFileSync` —
+/// which `config-error.spec.ts` uses because the states it exercises
+/// are ones `PUT /api/config` refuses to produce.
 function assertOnlyKnownSpecsWriteTheConfig(dir: string): void {
   const offenders: string[] = [];
   for (const file of readdirSync(dir)) {
@@ -27,7 +29,11 @@ function assertOnlyKnownSpecsWriteTheConfig(dir: string): void {
     const base = file.replace(/\.spec\.ts$/, "");
     if ((CONFIG_MUTATING as readonly string[]).includes(base)) continue;
     const text = readFileSync(`${dir}/${file}`, "utf8");
-    if (text.includes(".m2-editor") || text.includes("Saved the config")) {
+    if (
+      text.includes(".m2-editor") ||
+      text.includes("Saved the config") ||
+      text.includes("writeFileSync")
+    ) {
       offenders.push(file);
     }
   }

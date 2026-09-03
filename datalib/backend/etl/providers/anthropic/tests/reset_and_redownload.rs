@@ -65,7 +65,9 @@ async fn snapshot_table(
     table: &str,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     // Fetch the column list so we know which need json() unwrapping.
-    let cols: Vec<String> = sqlx::query(&format!("PRAGMA table_info({table})"))
+    // Test snapshot helper: `table` is a literal at every callsite, and
+    // `select_list` is built from the columns just introspected.
+    let cols: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
         .fetch_all(pool)
         .await?
         .into_iter()
@@ -83,7 +85,9 @@ async fn snapshot_table(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("SELECT {select_list} FROM {table} ORDER BY id");
-    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
     let mut out = BTreeMap::new();
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();

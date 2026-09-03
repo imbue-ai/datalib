@@ -122,7 +122,9 @@ where
                 last_attempt_at = excluded.last_attempt_at,
                 last_error = NULL"
         ));
-        let mut q = sqlx::query(&sql);
+        // Audited: only `bk_table` (= `{table}_bookkeeping`) is interpolated, and
+        // the VALUES run is `push_placeholders` over `chunk.len()`. All bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for id in chunk {
             q = q
                 .bind(*id)
@@ -218,8 +220,8 @@ pub trait BulkUpsertable: Sync {
     /// payload); this method just calls `q.bind(...)` once per column.
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>>;
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments>;
 }
 
 /// Generic bulk-UPSERT for any [`BulkUpsertable`] row type. The one
@@ -320,7 +322,10 @@ pub async fn bulk_upsert_entity_in_tx<T: BulkUpsertable>(
         sql.push_str(&format!(" ON CONFLICT({id_col}) DO UPDATE SET "));
         sql.push_str(&set_csv);
 
-        let mut q = sqlx::query(&sql);
+        // Audited: `table`, `id_col`, `cols_csv` and `set_csv` all derive from the
+        // `BulkUpsert` impl's associated consts, not from row data; the per-row
+        // `tuple` is a `(?,?,?)` run. Every value is bound by `bind_into`.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for row in chunk {
             q = row.bind_into(q);
         }

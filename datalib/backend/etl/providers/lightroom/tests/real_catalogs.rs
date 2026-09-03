@@ -118,7 +118,8 @@ fn catalog(env_var: &str) -> PathBuf {
 }
 
 async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
-    sqlx::query(sql)
+    // Test helper; `sql` is a literal at every callsite.
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -148,7 +149,8 @@ async fn diffs(pool: &SqlitePool, table: &str, commit: &str) -> BTreeMap<String,
         "SELECT diff_type, COUNT(*) AS n FROM dolt_diff_{table} \
          WHERE to_commit = '{commit}' GROUP BY diff_type"
     );
-    sqlx::query(&sql)
+    // Test: `table`/`commit` name a `dolt_diff_*` vtab from the fixture.
+    sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .fetch_all(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))

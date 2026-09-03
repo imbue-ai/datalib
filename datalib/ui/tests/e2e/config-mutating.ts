@@ -6,6 +6,7 @@
 // list — the list is the thing that keeps the suite parallelizable, so
 // it should not be possible to be on one side of it and not the other.
 export const CONFIG_MUTATING = [
+  "config-error",
   "manager2-sync",
   "manager2-name",
   "grid-source-name",

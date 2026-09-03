@@ -183,23 +183,42 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         )?;
     }
     run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
-    if opts.embed {
-        run_qmd(&cache_home, &opts.qmd_version, &["embed"])?;
-    }
 
-    // Eagerly pull the query-expansion and reranker models so the first
-    // user query (via the UI or `qmd query` directly) doesn't pay the
-    // multi-hundred-MB download cost on the interactive path. The embed
-    // step above already pulled the embedding model; `qmd pull` is
-    // idempotent so re-pulling it is free (cache-checked).
+    // Pull BEFORE embed, and the order is the whole point.
     //
-    // Best-effort: a failure here doesn't fail the index build — the
-    // index is on disk and queries still work, just with the first one
-    // paying the download cost. Most likely failure mode is a network
-    // hiccup pulling from huggingface; we don't want that to mark an
-    // otherwise-fine sync as errored.
+    // Both steps can fetch the embedding model, but only `pull` writes
+    // the `<model>.gguf.etag` sidecar it later reads to decide whether a
+    // cached file is current. `embed` goes through node-llama-cpp's
+    // `resolveModelFile`, which writes no sidecar. So embedding first
+    // left a 318 MB embeddinggemma on disk with no etag, and the `pull`
+    // that followed read "file present, etag absent" as stale, deleted
+    // it, and downloaded it a second time — on every cold run.
+    //
+    // The comment this replaces asserted the opposite ("`qmd pull` is
+    // idempotent so re-pulling it is free (cache-checked)"). CI said
+    // otherwise in as many words: `(318.1 MB, refreshed)`, where
+    // `refreshed` is qmd's term for "there was a cached copy and I threw
+    // it away" — it is set from `cached.length > 0`, so it is also the
+    // proof that a copy existed. The two models that `pull` fetches
+    // itself report `cached/checked`, which is merely `!refreshed` and
+    // says nothing about whether a download happened.
+    //
+    // Pulling first still serves the original purpose — getting the
+    // query-expansion and reranker models in place so the first user
+    // query, via the UI or `qmd query`, doesn't pay a multi-hundred-MB
+    // download on the interactive path.
+    //
+    // Best-effort: a failure here doesn't fail the index build. `embed`
+    // below then fetches the embedding model on demand exactly as it did
+    // before, and queries still work with the first one paying for the
+    // rest. The likely failure is a network hiccup against huggingface,
+    // which shouldn't mark an otherwise-fine sync as errored.
     if let Err(e) = run_qmd(&cache_home, &opts.qmd_version, &["pull"]) {
         status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
+    }
+
+    if opts.embed {
+        run_qmd(&cache_home, &opts.qmd_version, &["embed"])?;
     }
 
     if !index_path.exists() {

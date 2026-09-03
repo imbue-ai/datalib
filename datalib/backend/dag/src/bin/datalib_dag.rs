@@ -5,7 +5,14 @@
 //! datalib-dag config.toml [--binary-dir DIR] [--sync STEP_ID[,…]]…
 //!     [--now RFC3339] [--parallelism N]
 //!     [--reset-and-redownload] [--refetch-blobs]
+//! datalib-dag --check config.toml
 //! ```
+//!
+//! * `--check` validates the config and runs nothing, printing *every*
+//!   problem rather than the first — which is the difference between
+//!   one round-trip and one per typo for whoever (or whatever) is
+//!   editing the file. Exit 0 clean, 1 if the file is not a config at
+//!   all, 2 if some entries were dropped.
 //!
 //! * `--binary-dir` is prepended to every step's `PATH`, so commands
 //!   can name step binaries bare (`datalib-step …`). Defaults to the
@@ -40,8 +47,15 @@
 //! SIGINT/SIGTERM are forwarded to running steps as SIGINT so they
 //! can checkpoint-commit and report a `cancelled` outcome; the
 //! scheduler then drains, emits the run summary, and exits 130.
-//! Exit codes: 0 all ok, 2 some step failed/blocked, 130 cancelled,
-//! 1 setup error.
+//! A config with a broken *entry* no longer stops the run: that entry
+//! is dropped, everything else runs, and the diagnostics are printed
+//! before the plan. See `datalib_dag::diagnostics`. A dropped entry is
+//! not "all ok", so the run exits 2 even when every step that did run
+//! succeeded.
+//!
+//! Exit codes: 0 all ok, 2 some step failed/blocked or some config
+//! entry was dropped, 130 cancelled, 1 setup error (including a config
+//! file that is not a config).
 //!
 //! Only one runner may hold a data root at a time (`system/runner-lock`,
 //! `flock(2)`), so a sync started from a terminal and one started by the
@@ -71,13 +85,14 @@ const VERSION_RESOLVED: &str = {
 use datalib_dag::events::FanOutSink;
 use datalib_dag::progress_bus::ProgressBusSink;
 use datalib_dag::step::FailureKind;
-use datalib_dag::{config, subprocess, EventSink, Graph, NdjsonSink, Runner};
+use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
          [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--parallelism N] \
-         [--reset-and-redownload] [--refetch-blobs]";
+         [--reset-and-redownload] [--refetch-blobs]\n       \
+         datalib-dag --check <config.toml>";
     let mut config_path: Option<PathBuf> = None;
     let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();
@@ -85,6 +100,7 @@ async fn main() -> Result<()> {
     let mut parallelism: Option<usize> = None;
     let mut reset_and_redownload = false;
     let mut refetch_blobs = false;
+    let mut check_only = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -108,6 +124,7 @@ async fn main() -> Result<()> {
             }
             "--reset-and-redownload" => reset_and_redownload = true,
             "--refetch-blobs" => refetch_blobs = true,
+            "--check" => check_only = true,
             "--version" | "-V" => {
                 #[allow(clippy::disallowed_macros)]
                 {
@@ -132,9 +149,46 @@ async fn main() -> Result<()> {
         bail!("--parallelism must be at least 1");
     }
 
-    let (cfg, data_root) = config::load(&config_path)?;
-    let specs = config::to_specs(&cfg)?;
-    let graph = Graph::build(specs)?;
+    let (checked, data_root) = config::load_graded(&config_path)?;
+
+    // Say what is wrong before doing anything, whether or not we are
+    // about to run. Printed to stderr so a `--check` used in a pipeline
+    // and a real run both put diagnostics in the same place, and
+    // neither mixes them into the per-step report on stdout.
+    if !checked.is_clean() {
+        #[allow(clippy::disallowed_macros)]
+        {
+            eprintln!("{}", checked.render(&config_path));
+        }
+    }
+    if checked.is_fatal() {
+        // Nothing loaded, so there is nothing to run and nothing more
+        // to say. Exit 1: a setup error, the same as an unreadable
+        // file, because that is what it is.
+        bail!(
+            "{} is not a config: nothing in it could be read",
+            config_path.display()
+        );
+    }
+    if check_only {
+        #[allow(clippy::disallowed_macros)]
+        {
+            println!(
+                "{}: {} step(s), {} applet(s){}",
+                config_path.display(),
+                checked.cfg.steps.len(),
+                checked.cfg.applets.len(),
+                match checked.dropped() {
+                    0 => String::new(),
+                    n => format!(", {n} entr{} dropped", if n == 1 { "y" } else { "ies" }),
+                }
+            );
+        }
+        std::process::exit(if checked.is_clean() { 0 } else { 2 });
+    }
+    let dropped_entries = checked.dropped();
+    let cfg = checked.cfg;
+    let graph = checked.graph;
 
     // One runner per data root, taken before anything is written.
     //
@@ -293,6 +347,25 @@ async fn main() -> Result<()> {
                     .unwrap_or_default()
             );
         }
+        // A dropped config entry is reported here as well as before
+        // the run, because the per-step report is the thing a person
+        // actually reads at the end — and an entry that was dropped has
+        // no row in it, so silence would read as "everything ran".
+        if dropped_entries > 0 {
+            #[allow(clippy::disallowed_macros)]
+            {
+                println!(
+                    "\n{dropped_entries} config entr{} dropped and did not run; \
+                     see the diagnostics above, or run `datalib-dag --check {}`",
+                    if dropped_entries == 1 {
+                        "y was"
+                    } else {
+                        "ies were"
+                    },
+                    config_path.display()
+                );
+            }
+        }
         let cancelled = report.steps.iter().any(|s| {
             matches!(
                 s.status,
@@ -303,7 +376,7 @@ async fn main() -> Result<()> {
         });
         if cancelled {
             130
-        } else if report.all_ok() {
+        } else if report.all_ok() && dropped_entries == 0 {
             0
         } else {
             2
