@@ -356,37 +356,57 @@ const IMPERSONATE_PROVIDERS: &[&str] = &[
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
 /// URL prefix that makes a request leave from the user's own machine rather
-/// than from the workspace's own egress, set by minds when (and only when) the
-/// two differ.
+/// than from the workspace's own egress: the older of the two mechanisms minds
+/// uses for this (the newer is [`DESKTOP_PROXY_HEADER_ENV`]), kept so that
+/// workspaces created by a minds that still publishes it keep working.
+///
+/// minds sets this to `https://latchkey-self.invalid/via-desktop` for remote
+/// workspaces and to the empty string for local ones. Prefixing the target URL
+/// makes the workspace's latchkey gateway hand the request to the gateway on
+/// the user's computer, which injects the credentials from its own store.
+/// Concatenating an empty prefix leaves the URL untouched; outside minds the
+/// variable is unset and this is inert.
+///
+/// A minds publishes one mechanism or the other, never both, so a request is
+/// either prefixed or marked. Remove this once no supported minds publishes
+/// the prefix any more.
+pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
+
+/// Env var naming the header that asks for a request to leave from the
+/// user's own machine rather than from the workspace's own egress. minds sets
+/// it when (and only when) the two differ.
 ///
 /// A remote minds workspace runs on a VPS and reaches third parties through a
 /// latchkey gateway on that same VPS, so its requests carry a datacenter IP.
 /// The providers that need TLS impersonation are the same ones that scrutinize
 /// the client hardest, and several of them (Cloudflare-fronted) block those IP
 /// ranges outright — a fingerprint fix does not help when the address is
-/// refused. Prefixing the target URL routes the request back through the
-/// gateway on the user's computer, which makes it from a residential
-/// connection.
+/// refused. Marking the request routes it back through the latchkey gateway on
+/// the user's computer, which makes it from a residential connection.
 ///
-/// minds sets this to `https://latchkey-self.invalid/via-desktop` for remote
-/// workspaces and to the empty string for local ones, whose gateway already
-/// runs on the user's machine. Concatenating an empty prefix leaves the URL
-/// untouched, so nothing here has to know which kind of workspace it is in;
-/// outside minds the variable is unset and this is inert.
+/// The VPS gateway injects the credentials and runs the permission check as
+/// for any other request, then hands the resulting curl invocation to the
+/// dispatch curl (`src/bin/latchkey_curl_dispatch.rs`), which sees the marker
+/// and sends the already-credentialed request to the desktop gateway instead of
+/// to the third party. The desktop gateway forwards it without touching it. So
+/// routing this way reaches nothing a direct request could not, with the same
+/// credentials it would have used.
 ///
-/// Credentials are still injected, and the permission check still runs, at the
-/// gateway that terminates the request — so routing this way reaches nothing a
-/// direct request could not.
+/// minds sets this to the marker's header name (the one the dispatch curl
+/// matches on) for remote workspaces and to the empty string for local ones,
+/// whose gateway already runs on the user's machine. The value is used as-is:
+/// an empty one adds no header, so nothing here has to know which kind of
+/// workspace it is in, and outside minds the variable is unset and this is
+/// inert.
 ///
-/// It is namespaced `MINDS_` rather than `LATCHKEY_` even though the value is a
-/// latchkey URL: a workspace's env names each var after the tool that *reads*
-/// it, and latchkey never reads this one — we hand it the concatenated result
-/// as a URL argument. minds is the authority that decides the value, since it
-/// follows from workspace topology.
-pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
+/// It is namespaced `MINDS_` rather than `LATCHKEY_`: a workspace's env names
+/// each var after the tool that *reads* it, and latchkey never reads this one
+/// (it only forwards the resulting header). minds is the authority that
+/// decides the value, since it follows from workspace topology.
+pub const DESKTOP_PROXY_HEADER_ENV: &str = "MINDS_DESKTOP_PROXY_HEADER";
 
-/// Prepend [`VIA_DESKTOP_URL_PREFIX_ENV`] to `url` when this request should
-/// leave from the user's machine.
+/// The `-H` argument marking a request for desktop egress, when this request
+/// should leave from the user's machine; `None` otherwise.
 ///
 /// Applied to exactly the providers that get [`IMPERSONATE_MARKER_HEADER`]:
 /// both exist for destinations that reject requests which do not look like a
@@ -395,8 +415,29 @@ pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
 /// fixed for one and not the other.
 ///
 /// Skipped for `bypass_latchkey` requests: those run plain `curl`, with no
-/// gateway to interpret the prefix, so prepending it would produce a URL that
-/// resolves nowhere.
+/// dispatch curl in the chain to act on the marker, so it would only leak to
+/// the third party as a stray header.
+///
+/// Like [`IMPERSONATE_MARKER_HEADER`], the marker carries a value so it
+/// survives the HTTP hop through the latchkey gateway (a value-less `-H` is
+/// curl's syntax for removing a header and has no representation on the wire).
+fn maybe_desktop_proxy_header(provider: &str, bypass_latchkey: bool) -> Option<String> {
+    if bypass_latchkey || !IMPERSONATE_PROVIDERS.contains(&provider) {
+        return None;
+    }
+    match std::env::var(DESKTOP_PROXY_HEADER_ENV) {
+        Ok(header_name) if !header_name.is_empty() => Some(format!("{header_name}: 1")),
+        _ => None,
+    }
+}
+
+/// Prepend [`VIA_DESKTOP_URL_PREFIX_ENV`] to `url` when this request should
+/// leave from the user's machine and minds asks for that the older way.
+///
+/// Same provider scoping and `bypass_latchkey` exemption as
+/// [`maybe_desktop_proxy_header`], for the same reasons: a bypass request runs
+/// plain `curl`, with no gateway to interpret the prefix, so prepending it
+/// would produce a URL that resolves nowhere.
 fn maybe_via_desktop_url(url: &str, provider: &str, bypass_latchkey: bool) -> String {
     if bypass_latchkey || !IMPERSONATE_PROVIDERS.contains(&provider) {
         return url.to_string();
@@ -533,6 +574,12 @@ mod live {
         // curl to act on the marker and would just send it upstream.
         if !req.bypass_latchkey && IMPERSONATE_PROVIDERS.contains(&req.provider) {
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
+        }
+        // Same providers, same reasoning: ask for the request to leave from
+        // the user's machine when minds says this workspace's egress differs
+        // from it (see `DESKTOP_PROXY_HEADER_ENV`).
+        if let Some(header) = maybe_desktop_proxy_header(req.provider, req.bypass_latchkey) {
+            cmd.arg("-H").arg(header);
         }
         let writes_body_to_stdin = req.body.is_some();
         if writes_body_to_stdin {
@@ -784,9 +831,51 @@ mod tests {
         out
     }
 
-    /// Serializes the tests that set `VIA_DESKTOP_URL_PREFIX_ENV`, for the same
+    /// Serializes the tests that set `DESKTOP_PROXY_HEADER_ENV`, for the same
     /// reason [`with_playback`] serializes its own: the variable is
     /// process-global and Rust runs unit tests on parallel threads.
+    fn with_desktop_proxy_header<T>(header_name: Option<&str>, body: impl FnOnce() -> T) -> T {
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
+        match header_name {
+            Some(value) => std::env::set_var(DESKTOP_PROXY_HEADER_ENV, value),
+            None => std::env::remove_var(DESKTOP_PROXY_HEADER_ENV),
+        }
+        let out = body();
+        std::env::remove_var(DESKTOP_PROXY_HEADER_ENV);
+        out
+    }
+
+    #[test]
+    fn desktop_proxy_header_marks_impersonating_providers_with_whatever_name_minds_gives() {
+        with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
+            assert_eq!(
+                maybe_desktop_proxy_header("slack", false).as_deref(),
+                Some("X-Imbue-Desktop-Proxy: 1"),
+            );
+        });
+        with_desktop_proxy_header(Some("X-Some-Other-Marker"), || {
+            assert_eq!(
+                maybe_desktop_proxy_header("slack", false).as_deref(),
+                Some("X-Some-Other-Marker: 1"),
+            );
+        });
+    }
+
+    #[test]
+    fn desktop_proxy_header_is_omitted_when_it_would_change_nothing() {
+        // A local workspace already egresses from the user's machine, so minds
+        // hands it an empty value; outside minds the variable is unset. Both
+        // must add no header rather than producing a nameless one.
+        for header_name in [Some(""), None] {
+            with_desktop_proxy_header(header_name, || {
+                assert_eq!(maybe_desktop_proxy_header("slack", false), None);
+            });
+        }
+    }
+
+    /// Serializes the tests that set `VIA_DESKTOP_URL_PREFIX_ENV`, like
+    /// [`with_desktop_proxy_header`] does for its variable.
     fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
         static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -813,9 +902,9 @@ mod tests {
 
     #[test]
     fn via_desktop_prefix_leaves_the_url_alone_when_it_would_change_nothing() {
-        // A local workspace already egresses from the user's machine, so minds
-        // hands it an empty prefix; outside minds the variable is unset. Both
-        // must leave the URL byte-identical rather than producing a bare "/".
+        // A local workspace gets an empty prefix, and outside minds the variable
+        // is unset. Both must leave the URL byte-identical rather than
+        // producing a bare "/".
         for prefix in [Some(""), None] {
             with_via_desktop_prefix(prefix, || {
                 assert_eq!(
@@ -829,14 +918,10 @@ mod tests {
     #[test]
     fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
         with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            // A provider that does not need impersonation does not need the
-            // user's IP either, and pays no extra hop for it.
             assert_eq!(
                 maybe_via_desktop_url("https://example.com/x", "linear", false),
                 "https://example.com/x",
             );
-            // A bypass_latchkey request runs plain curl, with no gateway to
-            // unwrap the prefix, so a wrapped URL would resolve nowhere.
             assert_eq!(
                 maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", true),
                 "https://slack.com/api/auth.test",
@@ -860,6 +945,18 @@ mod tests {
                     Some(url),
                 );
             }
+        });
+    }
+
+    #[test]
+    fn desktop_proxy_header_is_scoped_to_impersonating_latchkey_requests() {
+        with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
+            // A provider that does not need impersonation does not need the
+            // user's IP either, and pays no extra hop for it.
+            assert_eq!(maybe_desktop_proxy_header("linear", false), None);
+            // A bypass_latchkey request runs plain curl, with no dispatch curl
+            // to act on the marker, so it would only leak upstream.
+            assert_eq!(maybe_desktop_proxy_header("slack", true), None);
         });
     }
 
