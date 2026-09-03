@@ -274,8 +274,8 @@ impl BulkUpsertable for PdfDocumentRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.blake3)
             .bind(self.size)
             .bind(self.page_count)
@@ -332,8 +332,8 @@ impl BulkUpsertable for PdfPathRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.blake3)
             .bind(self.mtime_ns)
@@ -365,8 +365,8 @@ impl BulkUpsertable for PdfScanMetaRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id).bind(&self.abs_root).bind(&self.scanned_at)
     }
 }

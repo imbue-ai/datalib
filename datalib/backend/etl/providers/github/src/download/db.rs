@@ -168,7 +168,9 @@ impl RawDb {
             "SELECT id, repo_full_name, pr_number, json(payload) AS payload
              FROM {table} WHERE payload IS NOT NULL ORDER BY id"
         );
-        let rows = sqlx::query(&sql)
+        // Audited: `table` is a static identifier supplied by us, as the comment
+        // above already notes; `payload` is read, nothing is interpolated from it.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
             .with_context(|| format!("select {table}"))?;

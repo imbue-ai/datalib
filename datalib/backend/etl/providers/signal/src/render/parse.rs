@@ -419,7 +419,9 @@ async fn load_buckets(
           WHERE chat_id IN ({placeholders})
           ORDER BY chat_id, period_key, date_sent"
     );
-    let mut q = sqlx::query(&sql);
+    // Audited: `period_key_expr` comes from `period_key_sql(period)` over the
+    // `Period` enum; `placeholders` is a `?,?,?` run and chat ids are bound.
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for c in chat_ids {
         q = q.bind(c);
     }

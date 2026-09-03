@@ -191,8 +191,8 @@ impl BulkUpsertable for RoomRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.source)
             .bind(&self.network)
@@ -290,8 +290,8 @@ impl BulkUpsertable for UserRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.source)
             .bind(self.network.as_deref())
@@ -461,8 +461,8 @@ impl BulkUpsertable for EventRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.source)
             .bind(&self.network)

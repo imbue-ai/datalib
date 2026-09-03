@@ -158,7 +158,10 @@ impl BlobCas {
                  (blake3, byte_len, content_type, bytes, first_seen_at) VALUES ",
             );
             crate::bulk::push_placeholders(&mut sql, chunk.len(), 5);
-            let mut q = sqlx::query(&sql);
+            // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is a
+            // `&'static str` prefix plus a `(?,?,?),...` run that `push_placeholders`
+            // builds from `chunk.len()`. Every value is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
             for it in chunk {
                 q = q
                     .bind(it.blake3)
@@ -482,7 +485,11 @@ impl BlobBundle {
             .join(",");
         let occurrences = projection_sql_template.matches("{placeholders}").count();
         let sql = projection_sql_template.replace("{placeholders}", &placeholders);
-        let mut q = sqlx::query(&sql);
+        // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: the template is
+        // caller-supplied, but every caller passes a module-level `const &str`
+        // literal (`*_PROJECTION*` in the providers); the only substitution is
+        // `{placeholders}` -> a `?,?,?` run sized from `ref_ids.len()`.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for _ in 0..occurrences {
             for r in ref_ids {
                 q = q.bind(*r);
@@ -537,7 +544,9 @@ impl BlobBundle {
             "SELECT blake3, bytes, content_type \
                FROM cas_objects WHERE blake3 IN ({cas_placeholders})"
         );
-        let mut cq = sqlx::query(&cas_sql);
+        // Audited: static template; `cas_placeholders` is a `?,?,?` run built from
+        // `blake3_set.len()`, and every hash is bound.
+        let mut cq = sqlx::query(sqlx::AssertSqlSafe(cas_sql));
         for h in &blake3_set {
             cq = cq.bind(h);
         }
@@ -815,7 +824,11 @@ pub async fn load_blake3_index(
         "SELECT {ref_id_column} AS ref_id, blake3 FROM {table} \
           WHERE blake3 IS NOT NULL"
     );
-    let rows = sqlx::query(&sql)
+    // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `table` and
+    // `ref_id_column` are interpolated as bare identifiers, so they must stay
+    // literals. All three callers pass `&'static str` (anthropic/slack/chatgpt
+    // attachment tables); do not pass user input here.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
         .with_context(|| format!("load_blake3_index {table}.{ref_id_column}"))?;

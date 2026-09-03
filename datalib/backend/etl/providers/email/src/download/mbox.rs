@@ -986,7 +986,9 @@ async fn bulk_insert_email_mailboxes(
         let mut sql = String::from("DELETE FROM email_mailboxes WHERE email_id IN (");
         push_placeholder_list(&mut sql, chunk.len());
         sql.push(')');
-        let mut q = sqlx::query(&sql);
+        // Audited: static template; the only interpolation is a `?,?,?` run sized
+        // from the chunk length. Every value is bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for r in chunk {
             q = q.bind(r.id());
         }
@@ -1015,7 +1017,7 @@ async fn bulk_insert_email_keywords(
         let mut sql = String::from("DELETE FROM email_keywords WHERE email_id IN (");
         push_placeholder_list(&mut sql, chunk.len());
         sql.push(')');
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for r in chunk {
             q = q.bind(r.id());
         }
@@ -1056,7 +1058,7 @@ async fn bulk_insert_mailboxes(
                 role = COALESCE(excluded.role, mailboxes.role),
                 payload = jsonb(excluded.payload)",
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for (id, name, role, payload) in chunk {
             q = q
                 .bind(id)
@@ -1090,7 +1092,7 @@ async fn bulk_insert_threads(
                 email_count = excluded.email_count,
                 payload = jsonb(excluded.payload)",
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for (id, count, payload) in chunk {
             q = q.bind(id).bind(account_id).bind(*count).bind(payload);
         }

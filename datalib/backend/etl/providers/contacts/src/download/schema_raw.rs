@@ -88,8 +88,8 @@ impl BulkUpsertable for AccountRow {
     }
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(self.server_url.as_deref())
             .bind(self.principal_href.as_deref())
@@ -154,8 +154,8 @@ impl BulkUpsertable for AddressbookRow {
     }
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.account_id)
             .bind(&self.href)

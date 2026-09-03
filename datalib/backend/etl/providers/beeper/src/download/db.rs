@@ -99,10 +99,13 @@ impl RawDb {
     /// these instead.
     pub async fn row_counts(&self) -> Result<RowCounts> {
         async fn one(pool: &SqlitePool, table: &str) -> Result<i64> {
-            let row = sqlx::query(&format!("SELECT COUNT(*) AS n FROM {table}"))
-                .fetch_one(pool)
-                .await
-                .with_context(|| format!("count {table}"))?;
+            // Audited: `table` is a literal at every callsite of this helper.
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT COUNT(*) AS n FROM {table}"
+            )))
+            .fetch_one(pool)
+            .await
+            .with_context(|| format!("count {table}"))?;
             Ok(row.try_get("n").unwrap_or(0))
         }
         let rooms = one(&self.pool, "rooms").await? as usize;

@@ -367,7 +367,8 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
 
 async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
-    let rows = sqlx::query(&sql)
+    // Audited: `table` is a literal at both callsites.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
         .with_context(|| format!("load_payloads {table}"))?;
@@ -416,7 +417,9 @@ async fn load_buckets(
           WHERE thread_id IN ({placeholders})
           ORDER BY thread_id, received_at, id"
     );
-    let mut q = sqlx::query(&sql);
+    // Audited: static template; the only interpolation is a `?,?,?` run sized
+    // from the chunk length. Every value is bound.
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for t in &wanted_thread_ids {
         q = q.bind(t);
     }
@@ -476,7 +479,7 @@ async fn load_buckets(
     let sql = format!(
         "SELECT email_id, mailbox_id FROM email_mailboxes WHERE email_id IN ({placeholders})"
     );
-    let mut q = sqlx::query(&sql);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
         q = q.bind(e);
     }
@@ -496,7 +499,7 @@ async fn load_buckets(
     // keywords
     let sql =
         format!("SELECT email_id, keyword FROM email_keywords WHERE email_id IN ({placeholders})");
-    let mut q = sqlx::query(&sql);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
         q = q.bind(e);
     }

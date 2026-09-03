@@ -101,8 +101,8 @@ impl BulkUpsertable for YolinkDeviceRow {
     }
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.family_device_id)
             .bind(&self.kind)

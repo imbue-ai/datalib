@@ -195,7 +195,13 @@ async fn compute_deltas(pool: &SqlitePool) -> Option<BTreeMap<String, RowDelta>>
             "SELECT diff_type, COUNT(*) FROM dolt_diff_{table} \
              WHERE to_commit = 'WORKING' GROUP BY diff_type"
         );
-        let rows: Vec<(String, i64)> = match sqlx::query_as(&sql).fetch_all(pool).await {
+        // Audited: `table` is interpolated into the `dolt_diff_<table>` vtab name,
+        // and the `is_safe_identifier` guard above rejects anything that is not a
+        // plain identifier before we get here.
+        let rows: Vec<(String, i64)> = match sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(pool)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(table = %table, error = %format!("{e:#}"),

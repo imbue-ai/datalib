@@ -101,7 +101,9 @@ impl RawDb {
             "SELECT id, update_time FROM conversations \
               WHERE id IN ({placeholders}) AND update_time IS NOT NULL"
         );
-        let mut q = sqlx::query(&sql);
+        // Audited: static template; the only interpolation is a `?,?,?` run sized
+        // from the chunk length. Every value is bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for id in ids {
             q = q.bind(*id);
         }

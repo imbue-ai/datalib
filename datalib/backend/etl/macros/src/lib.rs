@@ -129,12 +129,12 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 q: ::sqlx::query::Query<
                     'q,
                     ::sqlx::Sqlite,
-                    ::sqlx::sqlite::SqliteArguments<'q>,
+                    ::sqlx::sqlite::SqliteArguments,
                 >,
             ) -> ::sqlx::query::Query<
                 'q,
                 ::sqlx::Sqlite,
-                ::sqlx::sqlite::SqliteArguments<'q>,
+                ::sqlx::sqlite::SqliteArguments,
             > {
                 q.bind(&self.#id_and_payload_ident.id)
                     #(.bind(#promoted_binds))*
@@ -552,8 +552,8 @@ fn expand_raw_table(input: DeriveInput) -> syn::Result<TokenStream2> {
 
                 fn bind_into<'q>(
                     &'q self,
-                    q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>>,
-                ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>> {
+                    q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments>,
+                ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments> {
                     q.bind(&self.#wp.id)
                         #(.bind(#promoted_binds))*
                         .bind(&self.#wp.payload)
@@ -636,8 +636,8 @@ fn expand_raw_table(input: DeriveInput) -> syn::Result<TokenStream2> {
 
                 fn bind_into<'q>(
                     &'q self,
-                    q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>>,
-                ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>> {
+                    q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments>,
+                ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments> {
                     q.bind(#pk_bind)
                         #(.bind(#typed_binds))*
                 }
@@ -826,12 +826,12 @@ fn expand_cas_edge_row(input: DeriveInput) -> syn::Result<TokenStream2> {
                 q: ::sqlx::query::Query<
                     'q,
                     ::sqlx::Sqlite,
-                    ::sqlx::sqlite::SqliteArguments<'q>,
+                    ::sqlx::sqlite::SqliteArguments,
                 >,
             ) -> ::sqlx::query::Query<
                 'q,
                 ::sqlx::Sqlite,
-                ::sqlx::sqlite::SqliteArguments<'q>,
+                ::sqlx::sqlite::SqliteArguments,
             > {
                 q.bind(&self.#id_ident)
                     .bind(&self.#owning_ident)
