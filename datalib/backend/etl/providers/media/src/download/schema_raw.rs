@@ -333,8 +333,8 @@ impl BulkUpsertable for MediaItemRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.blake3)
             .bind(self.size)
             .bind(self.media_class.as_str())
@@ -396,8 +396,8 @@ impl BulkUpsertable for MediaAudioRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.blake3)
             .bind(self.title.as_deref())
             .bind(self.artist.as_deref())
@@ -477,8 +477,8 @@ impl BulkUpsertable for MediaVisualRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.blake3)
             .bind(self.width)
             .bind(self.height)
@@ -537,8 +537,8 @@ impl BulkUpsertable for MediaFileRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.blake3)
             .bind(self.mtime_ns)
@@ -577,8 +577,8 @@ impl BulkUpsertable for MediaPlaylistRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.blake3)
             .bind(&self.format)
@@ -636,8 +636,8 @@ impl BulkUpsertable for MediaPlaylistEntryRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id)
             .bind(&self.playlist_id)
             .bind(self.position)
@@ -669,8 +669,8 @@ impl BulkUpsertable for MediaScanMetaRow {
 
     fn bind_into<'q>(
         &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q: Query<'q, Sqlite, SqliteArguments>,
+    ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.id).bind(&self.abs_root).bind(&self.scanned_at)
     }
 }

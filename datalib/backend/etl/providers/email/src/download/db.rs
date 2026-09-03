@@ -77,7 +77,9 @@ impl RawDb {
         let mut tx = self.pool.begin().await.context("begin reset tx")?;
         for table in JOIN_TABLES {
             let sql = format!("DELETE FROM {table}");
-            sqlx::query(&sql)
+            // Audited: `table` iterates a `&'static str` const array of our own table
+            // names; no runtime data reaches the statement.
+            sqlx::query(sqlx::AssertSqlSafe(sql))
                 .execute(&mut *tx)
                 .await
                 .with_context(|| format!("truncate {table}"))?;

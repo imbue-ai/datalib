@@ -90,7 +90,9 @@ impl RawDb {
     pub async fn reset(&self) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin truncate tx")?;
         for table in DATA_TABLES {
-            sqlx::query(&format!("DELETE FROM {table}"))
+            // Audited: `table` iterates a `&'static str` const array of our own
+            // table names; no runtime data reaches the statement.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                 .execute(&mut *tx)
                 .await
                 .with_context(|| format!("truncate {table}"))?;

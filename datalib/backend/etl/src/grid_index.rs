@@ -408,7 +408,8 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
         let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
             continue;
         };
-        sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+        // Audited: `table` is parsed out of our own static index DDL.
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
             .execute(pool)
             .await
             .with_context(|| format!("drop {table} for index rebuild"))?;
@@ -1766,7 +1767,8 @@ mod schema_reconcile_tests {
     }
 
     async fn count(pool: &SqlitePool, table: &str) -> i64 {
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+        // Test helper; `table` is a literal at every callsite.
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
             .fetch_one(pool)
             .await
             .unwrap()
@@ -1782,7 +1784,7 @@ mod schema_reconcile_tests {
             .unwrap();
         sqlx::query(MARKDOWNS_DDL).execute(pool).await.unwrap();
         for (_table, ddl) in EDGES_DDL {
-            sqlx::query(ddl).execute(pool).await.unwrap();
+            sqlx::query(*ddl).execute(pool).await.unwrap();
         }
         sqlx::query(
             "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \

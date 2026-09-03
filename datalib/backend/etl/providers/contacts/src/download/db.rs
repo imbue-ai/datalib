@@ -325,9 +325,10 @@ mod tests {
         let db = RawDb::open(&path).await.unwrap();
         for t in DATA_TABLES {
             let bk = format!("{t}_bookkeeping");
-            let row = sqlx::query(&format!(
+            // Test: `bk` derives from the `DATA_TABLES` const.
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name = '{bk}'"
-            ))
+            )))
             .fetch_optional(db.pool())
             .await
             .unwrap();

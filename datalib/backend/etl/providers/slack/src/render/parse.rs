@@ -402,7 +402,9 @@ async fn load_messages_for_threads(
               WHERE payload IS NOT NULL AND thread_root_uuid IN ({placeholders})
               ORDER BY thread_root_uuid, ts"
         );
-        let mut q = sqlx::query(&sql);
+        // Audited: static template; the only interpolation is a `?,?,?` run sized
+        // from the chunk length. Every value is bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for u in chunk {
             q = q.bind(u);
         }

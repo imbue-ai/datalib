@@ -257,6 +257,20 @@ Full DDL in `doltlite_raw::SYNC_RUNS_DDL`. Append-only. One row per
 sync invocation. Stamp via `start_run()` / `finish_run()` so a crash
 mid-sync still leaves a row with status='running'.
 
+### 9. Dynamic SQL needs `AssertSqlSafe` and a reason
+
+sqlx 0.9 only accepts `&'static str` as a query string. Anything built
+at runtime — a `?,?,?` run sized from a chunk, a `{table}` interpolated
+as an identifier — has to be wrapped in `sqlx::AssertSqlSafe(...)`,
+which is an assertion *you* are making, not a check sqlx performs.
+
+Wrap it with a comment saying why it is safe, the way the existing
+sites do. Two patterns cover almost everything here: placeholders
+built from a count with every value bound, and table/column names that
+are `&'static str` at every callsite. If yours is neither — you are
+interpolating something that came from upstream data — quote it
+(`lightroom`'s `plan::quote_ident`) or bind it instead.
+
 ---
 
 ## Shared utilities — use them

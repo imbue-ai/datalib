@@ -273,11 +273,13 @@ async fn replace_table(
     rows: &[(String, String)],
 ) -> Result<()> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
-    sqlx::query(&ddl)
+    // Audited: `wire_payload_table_ddl` renders DDL from `table`, which is a
+    // `&'static str` at every callsite; rows are bound below.
+    sqlx::query(sqlx::AssertSqlSafe(ddl))
         .execute(&mut **tx)
         .await
         .with_context(|| format!("create table {table}"))?;
-    sqlx::query(&format!("DELETE FROM {table}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
         .execute(&mut **tx)
         .await
         .with_context(|| format!("clear table {table}"))?;
@@ -290,7 +292,7 @@ async fn replace_table(
             }
             sql.push_str("(?, jsonb(?))");
         }
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for (id, payload) in chunk {
             q = q.bind(id.clone()).bind(payload.clone());
         }

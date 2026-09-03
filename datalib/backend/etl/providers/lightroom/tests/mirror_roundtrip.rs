@@ -116,7 +116,8 @@ impl Fixture {
     async fn edit_catalog(&self, stmts: &[&str]) -> Result<()> {
         let pool = mirror::open_sqlite(&self.catalog, false).await?;
         for s in stmts {
-            sqlx::query(s)
+            // Test: `stmts` are literal catalog edits written by the test itself.
+            sqlx::query(sqlx::AssertSqlSafe(*s))
                 .execute(&pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("{s}: {e}"))?;
@@ -140,7 +141,7 @@ fn fixture_catalog() -> PathBuf {
 }
 
 async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
-    sqlx::query(sql)
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -148,7 +149,7 @@ async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
 }
 
 async fn opt_string(pool: &SqlitePool, sql: &str) -> Option<String> {
-    sqlx::query(sql)
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_optional(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -163,7 +164,7 @@ async fn commit_count(pool: &SqlitePool) -> i64 {
 async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String> {
     let sql =
         format!("SELECT diff_type FROM dolt_diff_{table} WHERE to_commit = ? OR from_commit = ?");
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(commit)
         .bind(commit)
         .fetch_all(pool)
@@ -179,19 +180,23 @@ async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String>
 
 /// Column names present on a mirror table.
 async fn mirror_columns(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(&format!("PRAGMA table_xinfo(\"{table}\")"))
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA table_xinfo(\"{table}\")"
+    )))
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     rows.iter().map(|r| r.get::<String, _>("name")).collect()
 }
 
 /// A table's primary-key columns, in key order.
 async fn mirror_pk(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(&format!("PRAGMA table_xinfo(\"{table}\")"))
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA table_xinfo(\"{table}\")"
+    )))
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     let mut keyed: Vec<(i64, String)> = rows
         .iter()
         .map(|r| (r.get::<i64, _>("pk"), r.get::<String, _>("name")))
