@@ -614,6 +614,20 @@ describe("search (unified API)", () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
+  test("search() forwards candidateLimit to structured search", async () => {
+    const results = await store.search({
+      queries: [
+        { type: "lex", query: "authentication" },
+        { type: "lex", query: "meeting" },
+      ],
+      limit: 5,
+      candidateLimit: 1,
+      rerank: false,
+    });
+
+    expect(results).toHaveLength(1);
+  });
+
   // Tests below use search({ query: ... }) which triggers LLM query expansion
   describe.skipIf(!!process.env.CI)("with LLM query expansion", () => {
     test("search() with query and rerank:false returns results", async () => {
@@ -624,7 +638,7 @@ describe("search (unified API)", () => {
       expect(results[0]).toHaveProperty("title");
       expect(results[0]).toHaveProperty("bestChunk");
       expect(results[0]).toHaveProperty("docid");
-    });
+    }, 90000);
 
     test("search() with intent and rerank:false returns results", async () => {
       const results = await store.search({
@@ -633,7 +647,7 @@ describe("search (unified API)", () => {
         rerank: false,
       });
       expect(results.length).toBeGreaterThan(0);
-    });
+    }, 60000);
 
     test("search() with collection filter", async () => {
       const results = await store.search({
@@ -746,6 +760,20 @@ describe("get and multiGet", () => {
     }
   });
 
+  test("multiGet retrieves a document by docid", async () => {
+    const doc = await store.get("qmd://docs/readme.md");
+    if (!("error" in doc)) {
+      const { docs, errors } = await store.multiGet(`#${doc.docid}`, { includeBody: true });
+      expect(errors).toHaveLength(0);
+      expect(docs).toHaveLength(1);
+      expect(docs[0]!.doc.docid).toBe(doc.docid);
+      expect(docs[0]!.skipped).toBe(false);
+      if (!docs[0]!.skipped) {
+        expect(docs[0]!.doc.body).toContain("getting started guide");
+      }
+    }
+  });
+
   test("multiGet retrieves multiple documents", async () => {
     const { docs, errors } = await store.multiGet("qmd://docs/*.md");
     expect(docs.length).toBeGreaterThan(0);
@@ -821,6 +849,7 @@ describe("update", () => {
     expect(result.updated).toBe(0);
     expect(result.unchanged).toBe(0);
     expect(result.removed).toBe(0);
+    expect(result.skipped).toBe(0);
     expect(typeof result.needsEmbedding).toBe("number");
 
     await store.close();
@@ -976,6 +1005,92 @@ describe("embed", () => {
       expect(fakeLlm.embedBatchCalls.map(call => call.length)).toEqual([1, 1, 1]);
       expect(result.docsProcessed).toBe(3);
       expect(result.chunksEmbedded).toBe(3);
+    } finally {
+      setDefaultLlamaCpp(null);
+      await store.close();
+    }
+  });
+
+  test("store.embed scopes pending documents to the requested collection", async () => {
+    const store = await createStore({
+      dbPath: freshDbPath(),
+      config: {
+        collections: {
+          docs: { path: docsDir, pattern: "**/*.md" },
+          notes: { path: notesDir, pattern: "**/*.md" },
+        },
+      },
+    });
+
+    const fakeLlm = createFakeEmbedLlm();
+    setDefaultLlamaCpp(createFakeTokenizer() as any);
+    store.internal.llm = fakeLlm as any;
+
+    try {
+      await store.update();
+      const result = await store.embed({ collection: "docs" });
+
+      const vectorCounts = store.internal.db.prepare(`
+        SELECT d.collection, COUNT(DISTINCT v.hash) AS count
+        FROM documents d
+        LEFT JOIN content_vectors v ON v.hash = d.hash AND v.seq = 0
+        WHERE d.active = 1
+        GROUP BY d.collection
+        ORDER BY d.collection
+      `).all() as Array<{ collection: string; count: number }>;
+
+      expect(result.docsProcessed).toBe(3);
+      expect(result.chunksEmbedded).toBe(3);
+      expect(vectorCounts).toEqual([
+        { collection: "docs", count: 3 },
+        { collection: "notes", count: 0 },
+      ]);
+    } finally {
+      setDefaultLlamaCpp(null);
+      await store.close();
+    }
+  });
+
+  test("store.embed with force only clears the requested collection", async () => {
+    const store = await createStore({
+      dbPath: freshDbPath(),
+      config: {
+        collections: {
+          docs: { path: docsDir, pattern: "**/*.md" },
+          notes: { path: notesDir, pattern: "**/*.md" },
+        },
+      },
+    });
+
+    const fakeLlm = createFakeEmbedLlm();
+    setDefaultLlamaCpp(createFakeTokenizer() as any);
+    store.internal.llm = fakeLlm as any;
+
+    const vectorCounts = () => store.internal.db.prepare(`
+      SELECT d.collection, COUNT(DISTINCT v.hash) AS count
+      FROM documents d
+      LEFT JOIN content_vectors v ON v.hash = d.hash AND v.seq = 0
+      WHERE d.active = 1
+      GROUP BY d.collection
+      ORDER BY d.collection
+    `).all() as Array<{ collection: string; count: number }>;
+
+    try {
+      await store.update();
+      await store.embed();
+      expect(vectorCounts()).toEqual([
+        { collection: "docs", count: 3 },
+        { collection: "notes", count: 3 },
+      ]);
+
+      const result = await store.embed({ force: true, collection: "docs" });
+
+      expect(result.docsProcessed).toBe(3);
+      expect(result.chunksEmbedded).toBe(3);
+      expect(vectorCounts()).toEqual([
+        { collection: "docs", count: 3 },
+        { collection: "notes", count: 3 },
+      ]);
     } finally {
       setDefaultLlamaCpp(null);
       await store.close();

@@ -4,7 +4,24 @@ An on-device search engine for everything you need to remember. Index your markd
 
 QMD combines BM25 full-text search, vector semantic search, and LLM re-ranking—all running locally via node-llama-cpp with GGUF models.
 
-![QMD Architecture](assets/qmd-architecture.png)
+```mermaid
+flowchart LR
+  Q[User Query] --> X[Query Expansion]
+  Q --> FTS[BM25 Search]
+  Q --> VS[Vector Search]
+  X --> HYDE[HyDE]
+  X --> VEC[Vec dense sentences]
+  X --> LEX[Lex BM25 keywords]
+  HYDE --> VS
+  VEC --> VS
+  LEX --> FTS
+  VS --> RRF[Reciprocal Rank Fusion]
+  FTS --> RRF
+  RRF --> RR[LLM Reranker]
+  RR --> OUT[Final ranked results]
+```
+
+Typed expansions are routed exclusively: `lex` → BM25/FTS, `vec` and `hyde` → vector search. The original query is sent to both backends, then fused with RRF and reranked.
 
 You can read more about QMD's progress in the [CHANGELOG](CHANGELOG.md).
 
@@ -120,6 +137,7 @@ By default, QMD's MCP server uses stdio (launched as a subprocess by each client
 # Foreground (Ctrl-C to stop)
 qmd mcp --http                    # localhost:8181
 qmd mcp --http --port 8080        # custom port
+qmd mcp --http --host 0.0.0.0     # bind all interfaces (e.g. container probes)
 
 # Background daemon
 qmd mcp --http --daemon           # start, writes PID to ~/.cache/qmd/mcp.pid
@@ -127,13 +145,65 @@ qmd mcp stop                      # stop via PID file
 qmd status                        # shows "MCP: running (PID ...)" when active
 ```
 
+The server binds to `localhost` by default. Pass `--host` (or set the `QMD_HOST`
+environment variable) to override — `--host 0.0.0.0` is useful when the server
+runs in a container and a liveness probe connects from a non-loopback address.
+
 The HTTP server exposes two endpoints:
 - `POST /mcp` — MCP Streamable HTTP (JSON responses, stateless)
+- `POST /query` (alias `/search`) — structured search without the MCP protocol
 - `GET /health` — liveness check with uptime
+
+
+##### Origin and Host validation
+
+Every request is screened before routing: a request carrying an `Origin` header
+that does not name a loopback address is rejected with `403`, as is a `Host`
+header naming something other than the address the server is bound to. This is
+what stops a web page you visit from reading your index through DNS rebinding —
+loopback binding alone does not, since the browser makes the request from your
+own machine.
+
+Requests without an `Origin` header — curl, MCP clients, editors — are
+unaffected, which covers every normal local client.
+
+| Variable | Effect |
+|----------|--------|
+| `QMD_ALLOWED_ORIGINS` | Comma-separated origins to accept in addition to loopback, e.g. `https://notes.internal`. Set to `*` to disable the check entirely. |
+| `QMD_ALLOWED_HOSTS` | Comma-separated `Host` values to accept in addition to loopback and the bind address. |
+
+`--host 0.0.0.0` cannot know which `Host` values are legitimate, so it skips the
+host check and warns at startup. Set `QMD_ALLOWED_HOSTS` to re-enable it, and
+remember the endpoints are unauthenticated — put your own auth in front of a
+server that is reachable off-host.
 
 LLM models stay loaded in VRAM across requests. Embedding/reranking contexts are disposed after 5 min idle and transparently recreated on the next request (~1s penalty, models remain loaded).
 
 Point any MCP client at `http://localhost:8181/mcp` to connect.
+
+#### MCP Tool Parameters
+
+| Tool | Parameter | Type | Notes |
+|------|-----------|------|-------|
+| `query` | `searches` | array | Typed sub-queries (`lex`/`vec`/`hyde`), 1–10. **Required.** First gets 2x weight. |
+| `query` | `collections` | string[] | Filter by collection names (OR). **Array only** — singular `collection` is silently ignored. |
+| `query` | `intent` | string | Disambiguation context (does not search on its own) |
+| `query` | `limit` | number | Max results (default 10) |
+| `query` | `minScore` | number | Minimum relevance 0–1 (default 0) |
+| `query` | `candidateLimit` | number | Max candidates to rerank (default 40) |
+| `query` | `rerank` | boolean | Run LLM reranking (default **true**); set false for RRF-only |
+| `get` | `file` | string | Path, docid (`#abc123`), or `path:from:count` (e.g. `#abc123:120:40`) |
+| `get` | `fromLine` | number | Start line (1-indexed); overrides the `:from` suffix |
+| `get` | `maxLines` | number | Limit returned lines |
+| `get` | `lineNumbers` | boolean | Prefix lines with numbers (default **true**) |
+| `multi_get` | `pattern` | string | Glob pattern or comma-separated list |
+| `multi_get` | `maxBytes` | number | Skip files larger than N (default 10240) |
+| `multi_get` | `maxLines` | number | Limit lines per file |
+| `multi_get` | `lineNumbers` | boolean | Prefix lines with numbers (default **true**) |
+
+Unknown parameters are silently ignored (not rejected) — double-check names if
+results seem unscoped. The HTTP `/query` and `/search` endpoints return
+`qmd://collection/path` URIs in the `file` field, matching the CLI and MCP output.
 
 ### SDK / Library Usage
 
@@ -358,7 +428,7 @@ Utility exports:
 import {
   extractSnippet,              // Extract a relevant snippet from text
   addLineNumbers,              // Add line numbers to text
-  DEFAULT_MULTI_GET_MAX_BYTES, // Default max file size for multiGet (10KB)
+  DEFAULT_MULTI_GET_MAX_BYTES, // Default max file size for multiGet (64KB)
   Maintenance,                 // Database maintenance operations
 } from '@tobilu/qmd'
 ```
@@ -543,6 +613,9 @@ qmd collection add . --name myproject
 # Create a collection with explicit path and custom glob mask
 qmd collection add ~/Documents/notes --name notes --mask "**/*.md"
 
+# Comma-separated masks are a union (brace form `{a,b}` also works)
+qmd collection add ~/notes --name notes --mask "sources/**/*.md,CO - *.md"
+
 # List all collections
 qmd collection list
 
@@ -555,6 +628,17 @@ qmd collection rename myproject my-project
 # List files in a collection
 qmd ls notes
 qmd ls notes/subfolder
+
+# Show collection details (path, glob mask, include status, context count)
+qmd collection show notes
+
+# Include or exclude a collection from default (unscoped) queries
+qmd collection include notes
+qmd collection exclude notes
+
+# Run a command before every `qmd update` (e.g. git pull); empty arg clears it
+qmd collection update-cmd notes 'git pull --rebase'
+qmd collection update-cmd notes
 ```
 
 ### Generate Vector Embeddings
@@ -571,6 +655,10 @@ qmd embed --chunk-strategy auto
 
 # Also works with query for consistent chunk selection
 qmd query "auth flow" --chunk-strategy auto
+
+# Memory control for large corpora / constrained systems
+qmd embed --max-docs-per-batch 50   # cap docs per embedding batch
+qmd embed --max-batch-mb 64         # cap batch size in MB
 ```
 
 **AST-aware chunking** (`--chunk-strategy auto`) uses tree-sitter to chunk code
@@ -609,6 +697,132 @@ qmd context list
 qmd context rm qmd://notes/old
 ```
 
+### Configuring `index.yml`
+
+The `collection` and `context` commands above all read and write a single YAML
+config file — you can also edit it directly. Everything QMD knows about your
+collections (paths, masks, exclusions, per-collection update hooks, contexts, and
+optional model overrides) lives here. A fully-commented starter template ships as
+[`example-index.yml`](example-index.yml) in this repo.
+
+**Location:** `~/.config/qmd/index.yml` by default. The directory honors
+`XDG_CONFIG_HOME` (→ `$XDG_CONFIG_HOME/qmd/index.yml`) and `QMD_CONFIG_DIR`. A
+named index uses `{name}.yml` — `qmd --index work …` reads/writes `work.yml`.
+A **project-local** index created with `qmd init` lives at `.qmd/index.yml`
+(`.qmd/index.yaml` is also accepted) alongside a project-local `index.sqlite`,
+so config and index stay inside the project instead of `~/.config` / `~/.cache`.
+
+```yaml
+# ~/.config/qmd/index.yml
+
+# Context applied to every collection (system-message style). Optional.
+global_context: "Knowledge base for my projects"
+
+# Terminal hyperlink template for search results. Optional.
+# Overridden by the QMD_EDITOR_URI env var. See "Editor Links" below.
+editor_uri: "vscode://file{path}:{line}:{col}"
+
+# Override the default GGUF models per role. Optional — omit to use the
+# built-in defaults. `qmd init` writes this block pre-filled with the
+# resolved defaults. See "Model Configuration" for the default URIs.
+models:
+  embed: "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf"
+  rerank: "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf"
+  generate: "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf"
+
+# One entry per collection. The key is the collection name.
+collections:
+  notes:
+    path: /Users/me/notes        # absolute path to index (required)
+    pattern: "**/*.md"           # glob mask (default: **/*.md)
+    ignore:                      # glob patterns to exclude from indexing
+      - "Archive/**"
+      - "**/drafts/**"
+    update: "git pull --rebase"  # bash command run before each `qmd update`
+    includeByDefault: true       # include in unscoped queries (default: true)
+    context:                     # path prefix → description; longest match wins
+      "/": "Personal notes and ideas"
+      "/work": "Work-related notes"
+```
+
+| Key | Scope | Purpose |
+|-----|-------|---------|
+| `global_context` | top-level | Context prepended for every collection. Set via `qmd context add /`. |
+| `editor_uri` (alias `editor_uri_template`) | top-level | Hyperlink template for clickable result paths; `QMD_EDITOR_URI` overrides. |
+| `models.embed` / `.rerank` / `.generate` | top-level | HuggingFace GGUF URIs (`hf:<user>/<repo>/<file>`) overriding the built-in defaults per role. |
+| `collections.<name>.path` | per-collection | Absolute directory to index. |
+| `collections.<name>.pattern` | per-collection | Glob mask. Set via `qmd collection add --mask`. Default `**/*.md`. Comma-separated lists and brace groups (`{a,b}`) are a union of patterns. |
+| `collections.<name>.ignore` | per-collection | Glob patterns excluded from indexing — useful to stop nested collections double-indexing. **YAML-only — no CLI command sets this.** Additive with QMD's built-in exclusions (`node_modules`, `.git`, `.cache`, `vendor`, `dist`, `build`), which you cannot un-ignore. |
+| `collections.<name>.update` | per-collection | Bash command run before `qmd update` re-indexes this collection. Set via `qmd collection update-cmd`. |
+| `collections.<name>.includeByDefault` | per-collection | Whether unscoped queries search it. Toggle with `qmd collection include`/`exclude`. Default `true`. |
+| `collections.<name>.context` | per-collection | Path-prefix → description map; the most specific (longest) matching prefix wins. Set via `qmd context add`. |
+
+> **Note:** Editing `index.yml` changes which directories and models QMD *uses*,
+> but does not re-index on its own. Run `qmd update` after changing `path`,
+> `pattern`, or `ignore`, and `qmd embed` after changing `models.embed`.
+
+#### Automatic update commands
+
+A collection's `update` field is QMD's built-in refresh hook: when you run
+`qmd update`, each collection's `update` command runs **first**, then the
+collection is re-indexed. This keeps a collection in sync with an upstream source
+(a git remote, a sync script) without wrapping `qmd` yourself.
+
+```yaml
+collections:
+  wiki:
+    path: ~/reference/wiki
+    update: "git pull --ff-only"
+```
+
+    $ qmd update
+    [1/3] wiki (**/*.md)
+        Running update command: git pull --ff-only
+        Already up to date.
+    Collection: ~/reference/wiki (**/*.md)
+    Indexed: 0 new, 2 updated, 340 unchanged, 0 removed
+
+The command runs via `bash -c` in the collection's own directory (its `path`), not
+your current working directory. If it exits non-zero, `qmd update` prints the
+failure and **aborts the entire run** — collections after the failing one are not
+re-indexed. Set or clear it from the CLI instead of editing YAML by hand:
+
+```sh
+qmd collection update-cmd wiki 'git pull --ff-only'   # set
+qmd collection update-cmd wiki                         # clear
+```
+
+##### Checked-in `.qmd` config is not trusted by default
+
+A project-local `.qmd/index.yml` travels with a `git clone`, and QMD adopts it
+automatically for any command run inside the tree. Three fields in that file can
+reach outside the project, and QMD will not use them unattended:
+
+- `update` commands — somebody else's shell script, run by `qmd update`
+- `collections.*.path` pointing **outside** the project directory
+- `models.embed` / `models.rerank` / `models.generate` other than the built-in
+  defaults (any `hf:` repo or local GGUF path)
+
+In-project collection paths (for example `./docs`) still index. On a terminal
+`qmd update` (and `qmd embed` / `qmd pull` / `qmd query`) lists the gated
+fields and asks. Approving records the approval in `~/.config/qmd/trusted.json`.
+With no terminal to ask — agents, CI, MCP — those fields are **skipped** and
+in-project indexing continues.
+
+Approvals cover the exact gated set you saw. Editing a command, pointing a
+collection outside the project, or changing a custom model URI asks again.
+
+```sh
+qmd trust           # review and approve this project's gated fields
+qmd trust list      # show every approved project config
+qmd trust revoke    # drop the approval for this project
+```
+
+Set `QMD_TRUST_LOCAL_CONFIG=1` (or `QMD_TRUST_UPDATE_HOOKS=1`) for CI that
+should allow them unattended. Your own `~/.config/qmd/*.yml` — including
+anything `qmd collection update-cmd` or `qmd collection add` writes — is
+never gated.
+
 ### Search Commands
 
 ```
@@ -632,6 +846,9 @@ qmd vsearch "how to login"
 qmd query "user authentication"
 ```
 
+Two aliases exist for the semantic/hybrid modes: `vector-search` (→ `vsearch`)
+and `deep-search` (→ `query`).
+
 ### Options
 
 ```sh
@@ -644,23 +861,47 @@ qmd query "user authentication"
 --line-numbers     # Add line numbers to output
 --explain          # Include retrieval score traces (query, JSON/CLI output)
 --index <name>     # Use named index
+--intent "<text>"  # Disambiguation context (e.g. "web page load times")
+--no-rerank        # Skip LLM reranking (RRF scores only; faster on CPU)
+-C, --candidate-limit <n>  # Max candidates to rerank (default: 40)
+--full-path        # Emit on-disk filesystem paths instead of qmd:// URIs
+                   # (a result whose file has moved or been deleted since
+                   #  indexing keeps its qmd:// URI + docid, and a notice is
+                   #  printed to stderr — run `qmd update` to refresh)
 
 # Output formats (for search and multi-get)
---files            # Output: docid,score,filepath,context
---json             # JSON output with snippets
---csv              # CSV output
---md               # Markdown output
---xml              # XML output
+--format <kind>    # cli (default) | json | csv | md | xml | files
+                   # (--json, --csv, --md, --xml, --files are legacy aliases)
 
 # Get options
-qmd get <file>[:line]  # Get document, optionally starting at line
--l <num>               # Maximum lines to return
---from <num>           # Start from line number
+qmd get <file>[:from[:count]]  # Get document; optional start line and count
+-l <num>                       # Maximum lines to return
+--from <num>                   # Start line (overrides the :from suffix)
+--no-line-numbers              # Disable line numbering (on by default)
 
 # Multi-get options
 -l <num>           # Maximum lines per file
---max-bytes <num>  # Skip files larger than N bytes (default: 10KB)
+--max-bytes <num>  # Skip files larger than N bytes (default: 64KB)
 ```
+
+### Collection Filtering
+
+The `-c`/`--collection` flag filters results by collection **name** (as shown by
+`qmd collection list`). Collections are a global registry — you can search any
+collection from any directory:
+
+```sh
+qmd search "auth" -c notes           # single collection
+qmd search "auth" -c notes -c docs   # multiple collections (OR)
+```
+
+With no `-c` flag, all default-included collections are searched. Collections
+marked excluded (`qmd collection exclude <name>`) are skipped unless named
+explicitly with `-c`.
+
+> **Note:** With multiple `-c` flags, results come from a global top-K pool and are
+> then filtered. If one collection dominates the rankings, matches from smaller
+> collections may not appear at the default limit — raise `-n` or use `--all`.
 
 ### Output Format
 
@@ -739,17 +980,48 @@ qmd query --json --explain "quarterly reports"
 qmd --index work search "quarterly reports"
 ```
 
+The `--explain` flag attaches a score breakdown to each result: the FTS/vector
+backend scores plus the RRF fusion math (rank, weight, top-rank bonus) and every
+sub-query's contribution. Abbreviated:
+
+```json
+{
+  "docid": "#6c90f0",
+  "score": 0.89,
+  "file": "qmd://qmd/README.md",
+  "explain": {
+    "ftsScores": [0.892, 0.907],
+    "vectorScores": [0.540, 0.484],
+    "rrf": {
+      "rank": 1,
+      "weight": 0.75,
+      "baseScore": 0.123,
+      "topRankBonus": 0.05,
+      "totalScore": 0.173,
+      "contributions": [
+        { "source": "fts", "queryType": "original", "query": "reranking",
+          "rank": 1, "weight": 2, "backendScore": 0.892, "rrfContribution": 0.0328 }
+      ]
+    }
+  }
+}
+```
+
 ### Index Maintenance
 
 ```sh
 # Show index status and collections with contexts
 qmd status
 
-# Re-index all collections
+# Re-index all collections. If a collection has a configured update command
+# (e.g. `git pull`), it runs first — set one with `qmd collection update-cmd`.
 qmd update
 
-# Re-index with git pull first (for remote repos)
-qmd update --pull
+# Diagnose the install (runtime, sqlite-vec, embedding fingerprints, GPU probe)
+qmd doctor
+
+# Initialize a project-local index in the current directory
+qmd init
 
 # Get document by filepath (with fuzzy matching suggestions)
 qmd get notes/meeting.md
@@ -759,6 +1031,13 @@ qmd get "#abc123"
 
 # Get document starting at line 50, max 100 lines
 qmd get notes/meeting.md:50 -l 100
+
+# Read 40 lines starting at line 120 via the :from:count suffix (works with docids)
+qmd get notes/meeting.md:120:40
+qmd get "#abc123:120:40"
+
+# get / multi-get are line-numbered by default; disable with --no-line-numbers
+qmd get notes/meeting.md --no-line-numbers
 
 # Get multiple documents by glob pattern
 qmd multi-get "journals/2025-05*.md"
@@ -775,6 +1054,75 @@ qmd multi-get "docs/*.md" --json
 # Clean up cache and orphaned data
 qmd cleanup
 ```
+
+### Benchmarking
+
+Measure search quality across all four backends with `qmd bench` and a fixture file
+of queries with known-relevant documents.
+
+**From a git checkout**, an example fixture and its test corpus ship in the repo:
+
+```sh
+# One-time setup (indexes the repo's test corpus into its own collection)
+qmd collection add test/eval-docs --name eval-docs
+qmd embed -c eval-docs
+
+# Run the benchmark (table output)
+qmd bench src/bench/fixtures/example.json
+
+# JSON output for programmatic analysis
+qmd bench src/bench/fixtures/example.json --json
+```
+
+> The example fixture (`src/bench/fixtures/example.json`) and its test corpus
+> (`test/eval-docs/`) exist only in a git checkout — they are **not** part of the
+> published npm package. If you installed via `npm`/`npx`, write your own fixture
+> (see below) against a collection you have already indexed:
+>
+> ```sh
+> qmd bench my-fixture.json -c my-collection
+> ```
+
+Each query runs against four backends, reporting precision@k, recall, MRR, and F1:
+
+| Backend | What it tests | LLM required |
+|---------|---------------|--------------|
+| `bm25` | Keyword search only (FTS5) | No |
+| `vector` | Semantic similarity only | Embedding model |
+| `hybrid` | BM25 + vector fusion (no reranking) | Embedding model |
+| `full` | Full pipeline with LLM reranking | All three models |
+
+**Score interpretation:** `1.00` = perfect (all expected docs in top results),
+`0.00` = complete miss. The example fixture typically shows bm25 ~0.50, vector
+~0.70, and hybrid/full ~1.00 — a concrete demonstration of why hybrid search beats
+either backend alone.
+
+**Custom fixtures** are JSON:
+
+```json
+{
+  "description": "My benchmark",
+  "version": 1,
+  "collection": "my-collection",
+  "queries": [
+    {
+      "id": "find-auth",
+      "query": "authentication flow",
+      "type": "semantic",
+      "expected_files": ["docs/auth-design.md"],
+      "expected_in_top_k": 3
+    }
+  ]
+}
+```
+
+`expected_files` are collection-relative paths as shown by `qmd ls`. The `type`
+field (`exact`, `semantic`, `topical`, `cross-domain`, `alias`) labels queries for
+grouping — it does not change search behavior.
+
+> **Heads-up:** if the fixture's collection isn't indexed, bench currently runs to
+> completion and reports all zeros with no warning. Verify setup with
+> `qmd ls <collection>` first.
 
 ## Data Storage
 
@@ -797,6 +1145,11 @@ llm_cache       -- Cached LLM responses (query expansion, rerank scores)
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `XDG_CACHE_HOME` | `~/.cache` | Cache directory location |
+| `XDG_CONFIG_HOME` | `~/.config` | Config directory location (where `index.yml` lives) |
+| `QMD_CONFIG_DIR` | unset | Override the config directory outright (takes precedence over `XDG_CONFIG_HOME`) |
+| `QMD_LLAMA_GPU` | `auto` | Force llama.cpp GPU backend (`metal`, `vulkan`, `cuda`) or disable GPU with `false` |
+| `QMD_FORCE_CPU` | unset | Set to `1`/`true` to force CPU mode before any CUDA/Vulkan/Metal probing. Equivalent CLI flag: `--no-gpu`. |
+| `QMD_EMBED_PARALLELISM` | automatic | Override embedding/reranking context parallelism (1-8). Windows CUDA defaults to `1` because parallel CUDA contexts can crash with `ggml-cuda.cu:98`; use Vulkan or raise this only if your driver is stable. |
 
 ## How It Works
 
@@ -913,13 +1266,17 @@ Query ──► LLM Expansion ──► [Original, Variant 1, Variant 2]
 
 ## Model Configuration
 
-Models are configured in `src/llm.ts` as HuggingFace URIs:
+The default models are defined in `src/llm.ts` as HuggingFace URIs:
 
 ```typescript
 const DEFAULT_EMBED_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
 const DEFAULT_RERANK_MODEL = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
 const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf";
 ```
+
+Override them per-role without touching source via the `models:` block in
+`index.yml` (see [Configuring `index.yml`](#configuring-indexyml)) or the
+`QMD_EMBED_MODEL` env var. Re-run `qmd embed` after changing the embedding model.
 
 ### EmbeddingGemma Prompt Format
 

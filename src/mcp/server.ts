@@ -4,19 +4,16 @@
  * Exposes QMD search and document retrieval as MCP tools and resources.
  * Documents are accessible via qmd:// URIs.
  *
- * Follows MCP spec 2025-06-18 for proper response types.
+ * Speaks MCP spec 2026-07-28 (stateless, no initialize handshake) and dual-speaks
+ * 2025-era clients via the official SDK entries (`serveStdio` / `createMcpHandler`).
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "url";
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebStandardStreamableHTTPServerTransport }
-  from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpHandler, McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import { existsSync } from "fs";
 import {
@@ -30,6 +27,8 @@ import {
   type IndexStatus,
 } from "../index.js";
 import { getConfigPath } from "../collections.js";
+import { enableProductionMode } from "../store.js";
+import { checkRequestOrigin, resolveOriginGuard } from "./origin-guard.js";
 
 // =============================================================================
 // Types for structured content
@@ -41,6 +40,7 @@ type SearchResultItem = {
   title: string;
   score: number;
   context: string | null;
+  line: number;   // Absolute line in source markdown
   snippet: string;
 };
 
@@ -100,12 +100,12 @@ function getPackageVersion(): string {
 
 /**
  * Build dynamic server instructions from actual index state.
- * Injected into the LLM's system prompt via MCP initialize response —
- * gives the LLM immediate context about what's searchable without a tool call.
+ * Injected into the LLM's system prompt via MCP initialize (2025-era) and
+ * server/discover (2026-07-28) — gives the LLM immediate context about what's
+ * searchable without a tool call.
  */
 async function buildInstructions(store: QMDStore): Promise<string> {
   const status = await store.getStatus();
-  const contexts = await store.listContexts();
   const globalCtx = await store.getGlobalContext();
   const lines: string[] = [];
 
@@ -114,15 +114,13 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   if (globalCtx) lines.push(`Context: ${globalCtx}`);
 
   // --- What's searchable? ---
+  // Emit names only — the per-collection doc counts and descriptions can run to ~1.5 KB
+  // across a dozen collections, and the same info is available on demand via the `status` tool.
   if (status.collections.length > 0) {
     lines.push("");
-    lines.push("Collections (scope with `collection` parameter):");
-    for (const col of status.collections) {
-      // Find root context for this collection
-      const rootCtx = contexts.find(c => c.collection === col.name && (c.path === "" || c.path === "/"));
-      const desc = rootCtx ? ` — ${rootCtx.context}` : "";
-      lines.push(`  - "${col.name}" (${col.documents} docs)${desc}`);
-    }
+    const names = status.collections.map(c => c.name).join(", ");
+    lines.push(`Collections (scope with \`collections\` parameter): ${names}`);
+    lines.push("Call the `status` tool for collection descriptions, paths, and per-collection doc counts.");
   }
 
   // --- Capability gaps ---
@@ -152,8 +150,8 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   // --- Retrieval workflow ---
   lines.push("");
   lines.push("Retrieval:");
-  lines.push("  - `get` — single document by path or docid (#abc123). Supports line offset (`file.md:100`).");
-  lines.push("  - `multi_get` — batch retrieve by glob (`journals/2025-05*.md`) or comma-separated list.");
+  lines.push("  - `get` — single document by path or docid (#abc123). Supports a line-range suffix: `file.md:100` (from line 100) or `file.md:100:40` (40 lines from line 100).");
+  lines.push("  - `multi_get` — batch retrieve by glob (`journals/2025-05*.md`), comma-separated list, or docids (#abc123).");
 
   // --- Non-obvious things that prevent mistakes ---
   lines.push("");
@@ -169,10 +167,22 @@ async function buildInstructions(store: QMDStore): Promise<string> {
  * Create an MCP server with all QMD tools, resources, and prompts registered.
  * Shared by both stdio and HTTP transports.
  */
-async function createMcpServer(store: QMDStore): Promise<McpServer> {
+async function createMcpServer(store: QMDStore, inflight?: InflightGate): Promise<McpServer> {
+  // Wraps request handlers so a stdio EOF shutdown can wait for in-flight
+  // work to settle before disposing the store/llm underneath it.
+  const track = inflight?.track ?? (<T,>(fn: T): T => fn);
   const server = new McpServer(
     { name: "qmd", version: getPackageVersion() },
-    { instructions: await buildInstructions(store) },
+    {
+      instructions: await buildInstructions(store),
+      // tools/list is static for the process lifetime; resources/read stays
+      // uncacheable because the index can change under us.
+      cacheHints: {
+        "tools/list": { ttlMs: 60_000, cacheScope: "private" },
+        "server/discover": { ttlMs: 60_000, cacheScope: "private" },
+        "resources/read": { ttlMs: 0, cacheScope: "private" },
+      },
+    },
   );
 
   // Pre-fetch default collection names for search tools
@@ -191,7 +201,7 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
       description: "A markdown document from your QMD knowledge base. Use search tools to discover documents.",
       mimeType: "text/markdown",
     },
-    async (uri, { path }) => {
+    track(async (uri, { path }) => {
       // Decode URL-encoded path (MCP clients send encoded URIs)
       const pathStr = Array.isArray(path) ? path.join('/') : (path || '');
       const decodedPath = decodeURIComponent(pathStr);
@@ -200,7 +210,10 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
       const result = await store.get(decodedPath, { includeBody: true });
 
       if ("error" in result) {
-        return { contents: [{ uri: uri.href, text: `Document not found: ${decodedPath}` }] };
+        const text = result.error === "excluded_by_ignore"
+          ? `Document excluded by ignore rule: ${decodedPath}\nCollection: ${result.collection}\nMatched path: ${result.path}\nIgnore rule: ${result.rule}`
+          : `Document not found: ${decodedPath}`;
+        return { contents: [{ uri: uri.href, text }] };
       }
 
       let text = addLineNumbers(result.body || "");  // Default to line numbers
@@ -217,7 +230,7 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
           text,
         }],
       };
-    }
+    })
   );
 
   // ---------------------------------------------------------------------------
@@ -240,6 +253,8 @@ async function createMcpServer(store: QMDStore): Promise<McpServer> {
     {
       title: "Query",
       description: `Search the knowledge base using a query document — one or more typed sub-queries combined for best recall.
+
+Each result includes a \`line\` field with the absolute 1-indexed line of the best match in the source markdown. To read more context around a hit, call \`get(file, fromLine = max(1, line - 20), maxLines = 80, lineNumbers = true)\`.
 
 ## Query Types
 
@@ -267,11 +282,12 @@ Combine types for best results. First sub-query gets 2× weight — put your str
 
 | Goal | Approach |
 |------|----------|
+| General search (recommended) | Pass \`query\` — auto-expanded into typed variants, fused, reranked |
 | Know exact term/name | \`lex\` only |
 | Concept search | \`vec\` only |
 | Best recall | \`lex\` + \`vec\` |
 | Complex/nuanced | \`lex\` + \`vec\` + \`hyde\` |
-| Unknown vocabulary | Use a standalone natural-language query (no typed lines) so the server can auto-expand it |
+| Unknown vocabulary | Pass \`query\` with natural language so the server auto-expands it |
 
 ## Examples
 
@@ -297,9 +313,14 @@ Intent-aware lex (C++ performance, not sports):
 ]
 \`\`\``,
       annotations: { readOnlyHint: true, openWorldHint: false },
-      inputSchema: {
-        searches: z.array(subSearchSchema).min(1).max(10).describe(
-          "Typed sub-queries to execute (lex/vec/hyde). First gets 2x weight."
+      inputSchema: z.object({
+        query: z.string().optional().describe(
+          "Plain-text query, auto-expanded by the SDK into lex/vec/hyde variants, fused via " +
+          "RRF and reranked. Recommended default for most searches. Mutually exclusive with 'searches'."
+        ),
+        searches: z.array(subSearchSchema).max(10).optional().describe(
+          "Typed sub-queries to execute (lex/vec/hyde). First gets 2x weight. Use for precise " +
+          "control over retrieval strategy. Mutually exclusive with 'query'."
         ),
         limit: z.number().optional().default(10).describe("Max results (default: 10)"),
         minScore: z.number().optional().default(0).describe("Min relevance 0-1 (default: 0)"),
@@ -313,40 +334,58 @@ Intent-aware lex (C++ performance, not sports):
         rerank: z.boolean().optional().default(true).describe(
           "Rerank results using LLM (default: true). Set to false for faster results on CPU-only machines."
         ),
-      },
+      }),
     },
-    async ({ searches, limit, minScore, candidateLimit, collections, intent, rerank }) => {
-      // Map to internal format
-      const queries: ExpandedQuery[] = searches.map(s => ({
-        type: s.type,
-        query: s.query,
-      }));
+    track(async ({ query, searches, limit, minScore, candidateLimit, collections, intent, rerank }) => {
+      // Require exactly one of `query` (plain text, auto-expanded) or `searches` (typed sub-queries).
+      if (!query && (!searches || searches.length === 0)) {
+        return {
+          content: [{ type: "text" as const, text: "Error: provide either 'query' (plain text) or 'searches' (typed sub-queries)" }],
+          isError: true,
+        };
+      }
+      if (query && searches && searches.length > 0) {
+        return {
+          content: [{ type: "text" as const, text: "Error: 'query' and 'searches' are mutually exclusive; provide only one" }],
+          isError: true,
+        };
+      }
 
       // Use default collections if none specified
       const effectiveCollections = collections ?? defaultCollectionNames;
 
+      // Plain `query` is auto-expanded by the SDK (expand → fuse → rerank);
+      // `searches` runs the caller's typed sub-queries directly.
+      const searchOptions = query
+        ? { query }
+        : { queries: (searches ?? []).map(s => ({ type: s.type, query: s.query })) };
+
       const results = await store.search({
-        queries,
+        ...searchOptions,
         collections: effectiveCollections.length > 0 ? effectiveCollections : undefined,
         limit,
         minScore,
+        candidateLimit,
         rerank,
         intent,
       });
 
-      // Use first lex or vec query for snippet extraction
-      const primaryQuery = searches.find(s => s.type === 'lex')?.query
-        || searches.find(s => s.type === 'vec')?.query
-        || searches[0]?.query || "";
+      // Use the plain query, or the first lex/vec sub-query, for snippet extraction
+      const primaryQuery = query
+        || searches?.find(s => s.type === 'lex')?.query
+        || searches?.find(s => s.type === 'vec')?.query
+        || searches?.[0]?.query
+        || "";
 
       const filtered: SearchResultItem[] = results.map(r => {
-        const { line, snippet } = extractSnippet(r.bestChunk, primaryQuery, 300, undefined, undefined, intent);
+        const { line, snippet } = extractSnippet(r.body, primaryQuery, 300, r.bestChunkPos, r.bestChunk.length, intent);
         return {
           docid: `#${r.docid}`,
           file: r.displayPath,
           title: r.title,
           score: Math.round(r.score * 100) / 100,
           context: r.context,
+          line,
           snippet: addLineNumbers(snippet, line),
         };
       });
@@ -355,7 +394,7 @@ Intent-aware lex (C++ performance, not sports):
         content: [{ type: "text", text: formatSearchSummary(filtered, primaryQuery) }],
         structuredContent: { results: filtered },
       };
-    }
+    })
   );
 
   // ---------------------------------------------------------------------------
@@ -368,28 +407,40 @@ Intent-aware lex (C++ performance, not sports):
       title: "Get Document",
       description: "Retrieve the full content of a document by its file path or docid. Use paths or docids (#abc123) from search results. Suggests similar files if not found.",
       annotations: { readOnlyHint: true, openWorldHint: false },
-      inputSchema: {
-        file: z.string().describe("File path or docid from search results (e.g., 'pages/meeting.md', '#abc123', or 'pages/meeting.md:100' to start at line 100)"),
+      inputSchema: z.object({
+        file: z.string().describe("File path or docid from search results. Supports a line-range suffix: 'pages/meeting.md:100' starts at line 100; 'pages/meeting.md:100:40' (or '#abc123:100:40') reads 40 lines from line 100."),
         fromLine: z.number().optional().describe("Start from this line number (1-indexed)"),
         maxLines: z.number().optional().describe("Maximum number of lines to return"),
-        lineNumbers: z.boolean().optional().default(false).describe("Add line numbers to output (format: 'N: content')"),
-      },
+        lineNumbers: z.boolean().optional().default(true).describe("Add line numbers to output (format: 'N: content'). On by default; set false for raw content."),
+      }),
     },
-    async ({ file, fromLine, maxLines, lineNumbers }) => {
-      // Support :line suffix in `file` (e.g. "foo.md:120") when fromLine isn't provided
+    track(async ({ file, fromLine, maxLines, lineNumbers }) => {
+      // Support :line and :from:count suffixes in `file` (e.g. "foo.md:120" or
+      // "foo.md:120:40"). Explicit fromLine/maxLines args take precedence.
       let parsedFromLine = fromLine;
+      let parsedMaxLines = maxLines;
       let lookup = file;
-      const colonMatch = lookup.match(/:(\d+)$/);
-      if (colonMatch && colonMatch[1] && parsedFromLine === undefined) {
-        parsedFromLine = parseInt(colonMatch[1], 10);
-        lookup = lookup.slice(0, -colonMatch[0].length);
+      const rangeMatch = lookup.match(/:(\d+):(\d+)$/);
+      if (rangeMatch) {
+        if (parsedFromLine === undefined) parsedFromLine = parseInt(rangeMatch[1]!, 10);
+        if (parsedMaxLines === undefined) parsedMaxLines = parseInt(rangeMatch[2]!, 10);
+        lookup = lookup.slice(0, -rangeMatch[0].length);
+      } else {
+        const colonMatch = lookup.match(/:(\d+)$/);
+        if (colonMatch && colonMatch[1] && parsedFromLine === undefined) {
+          parsedFromLine = parseInt(colonMatch[1], 10);
+          lookup = lookup.slice(0, -colonMatch[0].length);
+        }
       }
+      if (parsedFromLine !== undefined) parsedFromLine = Math.max(1, parsedFromLine);
 
       const result = await store.get(lookup, { includeBody: false });
 
       if ("error" in result) {
-        let msg = `Document not found: ${file}`;
-        if (result.similarFiles.length > 0) {
+        let msg = result.error === "excluded_by_ignore"
+          ? `Document excluded by ignore rule: ${file}\nCollection: ${result.collection}\nMatched path: ${result.path}\nIgnore rule: ${result.rule}`
+          : `Document not found: ${file}`;
+        if (result.error === "not_found" && result.similarFiles.length > 0) {
           msg += `\n\nDid you mean one of these?\n${result.similarFiles.map(s => `  - ${s}`).join('\n')}`;
         }
         return {
@@ -398,7 +449,7 @@ Intent-aware lex (C++ performance, not sports):
         };
       }
 
-      const body = await store.getDocumentBody(result.filepath, { fromLine: parsedFromLine, maxLines }) ?? "";
+      const body = await store.getDocumentBody(result.filepath, { fromLine: parsedFromLine, maxLines: parsedMaxLines }) ?? "";
       let text = body;
       if (lineNumbers) {
         const startLine = parsedFromLine || 1;
@@ -420,7 +471,7 @@ Intent-aware lex (C++ performance, not sports):
           },
         }],
       };
-    }
+    })
   );
 
   // ---------------------------------------------------------------------------
@@ -431,16 +482,16 @@ Intent-aware lex (C++ performance, not sports):
     "multi_get",
     {
       title: "Multi-Get Documents",
-      description: "Retrieve multiple documents by glob pattern (e.g., 'journals/2025-05*.md') or comma-separated list. Skips files larger than maxBytes.",
+      description: "Retrieve multiple documents by glob pattern (e.g., 'journals/2025-05*.md'), comma-separated list, or docids. Skips files larger than maxBytes.",
       annotations: { readOnlyHint: true, openWorldHint: false },
-      inputSchema: {
-        pattern: z.string().describe("Glob pattern or comma-separated list of file paths"),
+      inputSchema: z.object({
+        pattern: z.string().describe("Glob pattern, docid, or comma-separated list of file paths/docids"),
         maxLines: z.number().optional().describe("Maximum lines per file"),
-        maxBytes: z.number().optional().default(10240).describe("Skip files larger than this (default: 10240 = 10KB)"),
-        lineNumbers: z.boolean().optional().default(false).describe("Add line numbers to output (format: 'N: content')"),
-      },
+        maxBytes: z.number().optional().default(DEFAULT_MULTI_GET_MAX_BYTES).describe("Skip files larger than this (default: 65536 = 64KB)"),
+        lineNumbers: z.boolean().optional().default(true).describe("Add line numbers to output (format: 'N: content'). On by default; set false for raw content."),
+      }),
     },
-    async ({ pattern, maxLines, maxBytes, lineNumbers }) => {
+    track(async ({ pattern, maxLines, maxBytes, lineNumbers }) => {
       const { docs, errors } = await store.multiGet(pattern, { includeBody: true, maxBytes: maxBytes || DEFAULT_MULTI_GET_MAX_BYTES });
 
       if (docs.length === 0 && errors.length === 0) {
@@ -493,7 +544,7 @@ Intent-aware lex (C++ performance, not sports):
       }
 
       return { content };
-    }
+    })
   );
 
   // ---------------------------------------------------------------------------
@@ -506,9 +557,9 @@ Intent-aware lex (C++ performance, not sports):
       title: "Index Status",
       description: "Show the status of the QMD index: collections, document counts, and health information.",
       annotations: { readOnlyHint: true, openWorldHint: false },
-      inputSchema: {},
+      inputSchema: z.object({}),
     },
-    async () => {
+    track(async () => {
       const status: StatusResult = await store.getStatus();
 
       const summary = [
@@ -527,7 +578,7 @@ Intent-aware lex (C++ performance, not sports):
         content: [{ type: "text", text: summary.join('\n') }],
         structuredContent: status,
       };
-    }
+    })
   );
 
   return server;
@@ -537,15 +588,243 @@ Intent-aware lex (C++ performance, not sports):
 // Transport: stdio (default)
 // =============================================================================
 
-export async function startMcpServer(): Promise<void> {
+export type McpStartupOptions = {
+  dbPath?: string;
+};
+
+/**
+ * Counts running request handlers so shutdown can wait for them to settle
+ * before tearing down their llm/store dependencies. The SDK aborts in-flight
+ * request controllers on close, but qmd's handlers finish their current
+ * store/llm work rather than observing the signal mid-operation.
+ */
+export type InflightGate = {
+  /** Wraps a handler so the gate counts it while it runs. */
+  track<T extends (...args: never[]) => unknown>(fn: T): T;
+  /** Resolves once no tracked handler runs, or after timeoutMs. Returns whether idle was reached. */
+  waitForIdle(timeoutMs: number): Promise<boolean>;
+};
+
+export function createInflightGate(): InflightGate {
+  // `active` is a running-handler counter, not a closed admission barrier.
+  // The barrier comes from the caller's ordering: registerStdioEofShutdown
+  // runs closeServer() (which stops the transport from dispatching new
+  // requests) BEFORE waitForIdle(), so by the time we wait, the only handlers
+  // that can still be running are ones already dispatched — there is no source
+  // of late admissions to guard against under the stdio transport.
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    track(fn) {
+      const wrapped = async (...args: never[]) => {
+        active += 1;
+        try {
+          return await fn(...args);
+        } finally {
+          active -= 1;
+          if (active === 0) {
+            while (waiters.length > 0) waiters.shift()!();
+          }
+        }
+      };
+      return wrapped as typeof fn;
+    },
+    waitForIdle(timeoutMs: number): Promise<boolean> {
+      if (active === 0) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        const onIdle = () => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+        const timer = setTimeout(() => {
+          const i = waiters.indexOf(onIdle);
+          if (i >= 0) waiters.splice(i, 1);
+          resolve(false);
+        }, timeoutMs);
+        timer.unref?.();
+        waiters.push(onIdle);
+      });
+    },
+  };
+}
+
+/** Minimal stdin surface consumed by registerStdioEofShutdown, injectable for tests. */
+export type StdioShutdownStdin = {
+  once(event: "end" | "close", listener: () => void): unknown;
+  off(event: "end" | "close", listener: () => void): unknown;
+  readableEnded?: boolean;
+  destroyed?: boolean;
+};
+
+export type StdioShutdownOptions = {
+  /** Closes the MCP server and its transport. */
+  closeServer: () => Promise<void>;
+  /** Closes the SQLite store (owns disposing the per-store llama.cpp instance). */
+  closeStore: () => void | Promise<void>;
+  /**
+   * Optional extra llama.cpp teardown, run before closeStore. The MCP store
+   * disposes its own per-store LlamaCpp inside closeStore, so this is left
+   * unset there; it exists for callers that own a separate instance. If
+   * omitted, the step is skipped (do NOT default it to the global
+   * disposeDefaultLlamaCpp — that would tear down an unrelated instance in an
+   * embedded process).
+   */
+  disposeLlm?: () => Promise<void>;
+  /** Waits for in-flight handlers to settle (see InflightGate.waitForIdle). */
+  waitForIdle?: (timeoutMs: number) => Promise<boolean>;
+  /** Deadline for the in-flight wait. Defaults to 5000 ms. */
+  idleTimeoutMs?: number;
+  /** Defaults to process.stdin. */
+  stdin?: StdioShutdownStdin;
+  /** Defaults to assigning process.exitCode. */
+  setExitCode?: (code: number) => void;
+  /** Defaults to reading process.exitCode. */
+  getExitCode?: () => number | undefined;
+  /** Defaults to process.stderr. */
+  stderr?: { write(chunk: string): unknown; on?(event: "error", listener: (err: unknown) => void): unknown };
+};
+
+/**
+ * Shut the stdio MCP server down when stdin reaches EOF (#751).
+ *
+ * The SDK's StdioServerTransport subscribes to stdin "data"/"error" only and
+ * never notices "end"/"close". When the parent MCP client dies, nothing tears
+ * the process down: the warm llama.cpp model's native handles keep the event
+ * loop alive, so the server reparents to PID 1, leaks RAM, and keeps the
+ * SQLite index open. stdin EOF means the client is gone, so this treats it as
+ * a disconnect: no new requests are accepted and nobody is left to read a
+ * response — but handlers that are already running get a bounded window to
+ * settle (waitForIdle) before their llm/store dependencies are torn down.
+ *
+ * Teardown order matters. Close the transport first so no further requests
+ * are dispatched, wait for in-flight handlers, then close the store last —
+ * which disposes the store's own llama.cpp instance and then the database, so
+ * the dispose path cannot hit an already-closed DB. (disposeLlm is an optional
+ * extra step for callers that own a separate instance; the MCP store does
+ * not.) Failures are logged best-effort (the parent's death may have closed
+ * stderr too) and do not stop the remaining steps. The function sets process.exitCode
+ * instead of calling process.exit() so `beforeExit` still fires and
+ * node-llama-cpp's auto-dispose runs before libc's static destructors —
+ * process.exit() during native-addon unload has caused exit-time crashes
+ * before (#59, #129; same rationale as finishSuccessfulCliCommand in the CLI).
+ *
+ * Returns the idempotent shutdown function: every invocation (manual, "end",
+ * "close", or already-ended stdin) shares one promise, and the promise never
+ * rejects.
+ */
+export function registerStdioEofShutdown(options: StdioShutdownOptions): () => Promise<void> {
+  const stdin = options.stdin ?? process.stdin;
+  const stderr = options.stderr ?? process.stderr;
+  const setExitCode = options.setExitCode ?? ((code: number) => { process.exitCode = code; });
+  const getExitCode = options.getExitCode ?? (() => (typeof process.exitCode === "number" ? process.exitCode : undefined));
+  let shutdownPromise: Promise<void> | null = null;
+
+  // If the parent died, its stderr pipe may be gone: writes can throw
+  // synchronously or emit an async stream error. Logging must never take the
+  // teardown down with it.
+  stderr.on?.("error", () => {});
+  const safeWrite = (chunk: string): void => {
+    try {
+      stderr.write(chunk);
+    } catch {
+      // stderr went away with the parent
+    }
+  };
+
+  const performShutdown = async (): Promise<void> => {
+    try {
+      stdin.off("end", onStdinEof);
+      stdin.off("close", onStdinEof);
+    } catch {
+      // an exotic stdin may throw on off(); shutdown continues regardless
+    }
+
+    // Same stderr breadcrumb style as the HTTP transport's SIGTERM/SIGINT
+    // handlers; also gives tests an observable signal that the EOF path ran.
+    safeWrite("Shutting down (stdin closed)...\n");
+
+    let failed = false;
+    const step = async (name: string, run: () => void | Promise<void>): Promise<void> => {
+      try {
+        await run();
+      } catch (error) {
+        failed = true;
+        safeWrite(
+          `QMD Warning: ${name} failed during stdio shutdown (${error instanceof Error ? error.message : String(error)}); continuing shutdown.\n`
+        );
+      }
+    };
+
+    await step("server.close()", options.closeServer);
+    if (options.waitForIdle) {
+      await step("in-flight drain", async () => {
+        const idle = await options.waitForIdle!(options.idleTimeoutMs ?? 5000);
+        if (!idle) {
+          safeWrite("QMD Warning: in-flight request did not settle before the shutdown deadline; continuing shutdown.\n");
+        }
+      });
+    }
+    if (options.disposeLlm) {
+      await step("llama disposal", options.disposeLlm);
+    }
+    await step("store.close()", options.closeStore);
+
+    try {
+      const prior = getExitCode();
+      if (failed) {
+        setExitCode(1);
+      } else if (prior === undefined || prior === 0) {
+        setExitCode(0);
+      }
+      // else: keep an earlier nonzero status instead of masking it
+    } catch {
+      // injected setExitCode/getExitCode must not break the shutdown promise
+    }
+  };
+
+  const shutdown = (): Promise<void> => (shutdownPromise ??= performShutdown());
+  const onStdinEof = (): void => { void shutdown().catch(() => {}); };
+
+  stdin.once("end", onStdinEof);
+  stdin.once("close", onStdinEof);
+
+  // The parent can die between spawn and listener registration; check the
+  // stream flags after subscribing so an already-ended stdin still shuts down.
+  if (stdin.readableEnded || stdin.destroyed) {
+    onStdinEof();
+  }
+
+  return shutdown;
+}
+
+export async function startMcpServer(options: McpStartupOptions = {}): Promise<void> {
+  // Opt into production mode when the MCP server is actually started, not
+  // when this module is merely imported for its exports. Importing the module
+  // at the top level flipped the global production flag and broke test
+  // isolation for downstream suites that expect the default (development)
+  // database path behaviour.
+  enableProductionMode();
   const configPath = getConfigPath();
   const store = await createStore({
-    dbPath: getDefaultDbPath(),
+    dbPath: options.dbPath ?? getDefaultDbPath(),
     ...(existsSync(configPath) ? { configPath } : {}),
   });
-  const server = await createMcpServer(store);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const inflight = createInflightGate();
+  // serveStdio dual-speaks 2026-07-28 and 2025-era clients on one connection
+  // (opening exchange pins the era). A hand-wired StdioServerTransport would
+  // stay 2025-only even on SDK 2.x.
+  const handle = serveStdio(() => createMcpServer(store, inflight));
+
+  // Follow the parent's lifecycle: when stdin reaches EOF the client is gone
+  // and the server must exit instead of orphaning to PID 1 (#751). No
+  // disposeLlm here — store.close() disposes this store's own LlamaCpp
+  // instance, so passing the global disposeDefaultLlamaCpp would only risk
+  // tearing down an unrelated instance in an embedded process.
+  registerStdioEofShutdown({
+    closeServer: () => handle.close(),
+    waitForIdle: (timeoutMs) => inflight.waitForIdle(timeoutMs),
+    closeStore: () => store.close(),
+  });
 }
 
 // =============================================================================
@@ -559,43 +838,42 @@ export type HttpServerHandle = {
 };
 
 /**
- * Start MCP server over Streamable HTTP (JSON responses, no SSE).
- * Binds to localhost only. Returns a handle for shutdown and port discovery.
+ * Start MCP server over Streamable HTTP (JSON responses by default).
+ * Binds to `options.host` (default "localhost", overridable via the QMD_HOST
+ * env var) — set "0.0.0.0" to accept connections from other hosts, e.g. a
+ * container liveness probe. Returns a handle for shutdown and port discovery.
+ *
+ * HTTP is sessionless (MCP 2026-07-28): there is no `Mcp-Session-Id`, no
+ * initialize handshake, and no idle-session TTL. 2025-era clients are still
+ * served per-request via the SDK's stateless legacy fallback (initialize
+ * works as a standalone call; subsequent 2025 methods need a modern envelope
+ * or a stdio connection). The previous session reaper (#816) is gone because
+ * there are no sessions to reap.
  */
-export async function startMcpHttpServer(port: number, options?: { quiet?: boolean }): Promise<HttpServerHandle> {
+export async function startMcpHttpServer(
+  port: number,
+  options: ({ quiet?: boolean; host?: string; allowedOrigins?: string[]; allowedHosts?: string[] } & McpStartupOptions) = {},
+): Promise<HttpServerHandle> {
+  // See startMcpServer() for the rationale — flip production mode here so the
+  // HTTP transport resolves the real database path, without leaking state into
+  // callers that only import this module for its exports (e.g. tests).
+  enableProductionMode();
   const configPath = getConfigPath();
   const store = await createStore({
-    dbPath: getDefaultDbPath(),
+    dbPath: options.dbPath ?? getDefaultDbPath(),
     ...(existsSync(configPath) ? { configPath } : {}),
   });
 
   // Pre-fetch default collection names for REST endpoint
   const defaultCollectionNames = await store.getDefaultCollectionNames();
 
-  // Session map: each client gets its own McpServer + Transport pair (MCP spec requirement).
-  // The store is shared — it's stateless SQLite, safe for concurrent access.
-  const sessions = new Map<string, WebStandardStreamableHTTPServerTransport>();
-
-  async function createSession(): Promise<WebStandardStreamableHTTPServerTransport> {
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      enableJsonResponse: true,
-      onsessioninitialized: (sessionId: string) => {
-        sessions.set(sessionId, transport);
-        log(`${ts()} New session ${sessionId} (${sessions.size} active)`);
-      },
-    });
-    const server = await createMcpServer(store);
-    await server.connect(transport);
-
-    transport.onclose = () => {
-      if (transport.sessionId) {
-        sessions.delete(transport.sessionId);
-      }
-    };
-
-    return transport;
-  }
+  // Official 2026-07-28 HTTP entry: one factory, per-request instance, JSON
+  // responses (matches the previous enableJsonResponse: true). Dual-speaks
+  // 2025-era traffic statelessly by default (`legacy: "stateless"`).
+  const mcpHandler = createMcpHandler(
+    () => createMcpServer(store),
+    { responseMode: "json" },
+  );
 
   const startTime = Date.now();
   const quiet = options?.quiet ?? false;
@@ -605,9 +883,21 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
     return new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
   }
 
+  type JsonRpcLikeBody = {
+    method?: unknown;
+    params?: {
+      name?: unknown;
+      arguments?: Record<string, unknown>;
+    };
+  };
+  type RestSearchInput = {
+    type?: unknown;
+    query?: unknown;
+  };
+
   /** Extract a human-readable label from a JSON-RPC body */
-  function describeRequest(body: any): string {
-    const method = body?.method ?? "unknown";
+  function describeRequest(body: JsonRpcLikeBody): string {
+    const method = typeof body.method === "string" ? body.method : "unknown";
     if (method === "tools/call") {
       const tool = body.params?.name ?? "?";
       const args = body.params?.arguments;
@@ -616,6 +906,7 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
         const q = String(args.query).slice(0, 80);
         return `tools/call ${tool} "${q}"`;
       }
+      if (args?.file) return `tools/call ${tool} ${args.file}`;
       if (args?.path) return `tools/call ${tool} ${args.path}`;
       if (args?.pattern) return `tools/call ${tool} ${args.pattern}`;
       return `tools/call ${tool}`;
@@ -627,6 +918,17 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
     if (!quiet) console.error(msg);
   }
 
+  function nodeHeadersToWeb(nodeReq: IncomingMessage): Headers {
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(nodeReq.headers)) {
+      if (typeof v === "string") headers.set(k, v);
+      else if (Array.isArray(v)) {
+        for (const item of v) headers.append(k, item);
+      }
+    }
+    return headers;
+  }
+
   // Helper to collect request body
   async function collectBody(req: IncomingMessage): Promise<string> {
     const chunks: Buffer[] = [];
@@ -634,11 +936,40 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
     return Buffer.concat(chunks).toString();
   }
 
+  const host = options.host ?? process.env.QMD_HOST ?? "localhost";
+  const originGuard = resolveOriginGuard({
+    host,
+    ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
+    ...(options.allowedHosts ? { allowedHosts: options.allowedHosts } : {}),
+  });
+
   const httpServer = createServer(async (nodeReq: IncomingMessage, nodeRes: ServerResponse) => {
     const reqStart = Date.now();
-    const pathname = nodeReq.url || "/";
+    const pathname = (nodeReq.url || "/").split("?")[0];
 
     try {
+      // DNS-rebinding screen, ahead of routing so REST /query /search are
+      // covered too — they bypass the MCP transport entirely (#881).
+      const origin = nodeReq.headers.origin;
+      const hostHeader = nodeReq.headers.host;
+      const verdict = checkRequestOrigin(
+        {
+          origin: typeof origin === "string" ? origin : undefined,
+          host: typeof hostHeader === "string" ? hostHeader : undefined,
+        },
+        originGuard,
+      );
+      if (!verdict.ok) {
+        nodeRes.writeHead(403, { "Content-Type": "application/json" });
+        nodeRes.end(JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32003, message: `Forbidden: ${verdict.reason}` },
+          id: null,
+        }));
+        log(`${ts()} ${nodeReq.method} ${pathname} 403 — ${verdict.reason}`);
+        return;
+      }
+
       if (pathname === "/health" && nodeReq.method === "GET") {
         const body = JSON.stringify({ status: "ok", uptime: Math.floor((Date.now() - startTime) / 1000) });
         nodeRes.writeHead(200, { "Content-Type": "application/json" });
@@ -651,7 +982,7 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
       // REST endpoint: POST /query (alias: /search) — structured search without MCP protocol
       if ((pathname === "/query" || pathname === "/search") && nodeReq.method === "POST") {
         const rawBody = await collectBody(nodeReq);
-        const params = JSON.parse(rawBody);
+        const params = JSON.parse(rawBody) as Record<string, unknown>;
 
         // Validate required fields
         if (!params.searches || !Array.isArray(params.searches)) {
@@ -661,35 +992,39 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
         }
 
         // Map to internal format
-        const queries: ExpandedQuery[] = params.searches.map((s: any) => ({
+        const searches = params.searches as RestSearchInput[];
+        const queries: ExpandedQuery[] = searches.map((s) => ({
           type: s.type as 'lex' | 'vec' | 'hyde',
           query: String(s.query || ""),
         }));
 
         // Use default collections if none specified
-        const effectiveCollections = params.collections ?? defaultCollectionNames;
+        const effectiveCollections = Array.isArray(params.collections) ? params.collections.map(String) : defaultCollectionNames;
 
         const results = await store.search({
           queries,
           collections: effectiveCollections.length > 0 ? effectiveCollections : undefined,
-          limit: params.limit ?? 10,
-          minScore: params.minScore ?? 0,
-          intent: params.intent,
+          limit: typeof params.limit === "number" ? params.limit : 10,
+          minScore: typeof params.minScore === "number" ? params.minScore : 0,
+          candidateLimit: typeof params.candidateLimit === "number" ? params.candidateLimit : undefined,
+          intent: typeof params.intent === "string" ? params.intent : undefined,
+          rerank: typeof params.rerank === "boolean" ? params.rerank : undefined,
         });
 
         // Use first lex or vec query for snippet extraction
-        const primaryQuery = params.searches.find((s: any) => s.type === 'lex')?.query
-          || params.searches.find((s: any) => s.type === 'vec')?.query
-          || params.searches[0]?.query || "";
+        const primaryQuery = searches.find((s) => s.type === 'lex')?.query
+          || searches.find((s) => s.type === 'vec')?.query
+          || searches[0]?.query || "";
 
         const formatted = results.map(r => {
-          const { line, snippet } = extractSnippet(r.bestChunk, primaryQuery, 300);
+          const { line, snippet } = extractSnippet(r.body, String(primaryQuery), 300, r.bestChunkPos, r.bestChunk.length, typeof params.intent === "string" ? params.intent : undefined);
           return {
             docid: `#${r.docid}`,
-            file: r.displayPath,
+            file: `qmd://${encodeQmdPath(r.displayPath)}`,
             title: r.title,
             score: Math.round(r.score * 100) / 100,
             context: r.context,
+            line,
             snippet: addLineNumbers(snippet, line),
           };
         });
@@ -700,87 +1035,36 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
         return;
       }
 
-      if (pathname === "/mcp" && nodeReq.method === "POST") {
-        const rawBody = await collectBody(nodeReq);
-        const body = JSON.parse(rawBody);
-        const label = describeRequest(body);
-        const url = `http://localhost:${port}${pathname}`;
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(nodeReq.headers)) {
-          if (typeof v === "string") headers[k] = v;
-        }
-
-        // Route to existing session or create new one on initialize
-        const sessionId = headers["mcp-session-id"];
-        let transport: WebStandardStreamableHTTPServerTransport;
-
-        if (sessionId) {
-          const existing = sessions.get(sessionId);
-          if (!existing) {
-            nodeRes.writeHead(404, { "Content-Type": "application/json" });
-            nodeRes.end(JSON.stringify({
-              jsonrpc: "2.0",
-              error: { code: -32001, message: "Session not found" },
-              id: body?.id ?? null,
-            }));
-            return;
-          }
-          transport = existing;
-        } else if (isInitializeRequest(body)) {
-          transport = await createSession();
-        } else {
-          nodeRes.writeHead(400, { "Content-Type": "application/json" });
-          nodeRes.end(JSON.stringify({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: "Bad Request: Missing session ID" },
-            id: body?.id ?? null,
-          }));
-          return;
-        }
-
-        const request = new Request(url, { method: "POST", headers, body: rawBody });
-        const response = await transport.handleRequest(request, { parsedBody: body });
-
-        nodeRes.writeHead(response.status, Object.fromEntries(response.headers));
-        nodeRes.end(Buffer.from(await response.arrayBuffer()));
-        log(`${ts()} POST /mcp ${label} (${Date.now() - reqStart}ms)`);
-        return;
-      }
-
       if (pathname === "/mcp") {
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(nodeReq.headers)) {
-          if (typeof v === "string") headers[k] = v;
+        const rawBody = nodeReq.method !== "GET" && nodeReq.method !== "HEAD"
+          ? await collectBody(nodeReq)
+          : undefined;
+        let parsedBody: unknown;
+        if (rawBody) {
+          try {
+            parsedBody = JSON.parse(rawBody);
+          } catch {
+            parsedBody = undefined;
+          }
         }
+        const label = parsedBody && typeof parsedBody === "object" && parsedBody !== null
+          ? describeRequest(parsedBody as JsonRpcLikeBody)
+          : (nodeReq.method || "GET");
+        const hostHeader = typeof nodeReq.headers.host === "string" ? nodeReq.headers.host : `localhost:${port}`;
+        const url = `http://${hostHeader}${pathname}`;
+        const request = new Request(url, {
+          method: nodeReq.method || "GET",
+          headers: nodeHeadersToWeb(nodeReq),
+          ...(rawBody !== undefined ? { body: rawBody } : {}),
+        });
+        const response = await mcpHandler.fetch(
+          request,
+          parsedBody !== undefined ? { parsedBody } : undefined,
+        );
 
-        // GET/DELETE must have a valid session
-        const sessionId = headers["mcp-session-id"];
-        if (!sessionId) {
-          nodeRes.writeHead(400, { "Content-Type": "application/json" });
-          nodeRes.end(JSON.stringify({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: "Bad Request: Missing session ID" },
-            id: null,
-          }));
-          return;
-        }
-        const transport = sessions.get(sessionId);
-        if (!transport) {
-          nodeRes.writeHead(404, { "Content-Type": "application/json" });
-          nodeRes.end(JSON.stringify({
-            jsonrpc: "2.0",
-            error: { code: -32001, message: "Session not found" },
-            id: null,
-          }));
-          return;
-        }
-
-        const url = `http://localhost:${port}${pathname}`;
-        const rawBody = nodeReq.method !== "GET" && nodeReq.method !== "HEAD" ? await collectBody(nodeReq) : undefined;
-        const request = new Request(url, { method: nodeReq.method || "GET", headers, ...(rawBody ? { body: rawBody } : {}) });
-        const response = await transport.handleRequest(request);
         nodeRes.writeHead(response.status, Object.fromEntries(response.headers));
         nodeRes.end(Buffer.from(await response.arrayBuffer()));
+        log(`${ts()} ${nodeReq.method} /mcp ${label} (${Date.now() - reqStart}ms)`);
         return;
       }
 
@@ -795,7 +1079,7 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
 
   await new Promise<void>((resolve, reject) => {
     httpServer.on("error", reject);
-    httpServer.listen(port, "localhost", () => resolve());
+    httpServer.listen(port, host, () => resolve());
   });
 
   const actualPort = (httpServer.address() as import("net").AddressInfo).port;
@@ -804,10 +1088,7 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
   const stop = async () => {
     if (stopping) return;
     stopping = true;
-    for (const transport of sessions.values()) {
-      await transport.close();
-    }
-    sessions.clear();
+    await mcpHandler.close();
     httpServer.close();
     await store.close();
   };
@@ -823,7 +1104,12 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
     process.exit(0);
   });
 
-  log(`QMD MCP server listening on http://localhost:${actualPort}/mcp`);
+  log(`QMD MCP server listening on http://${host}:${actualPort}/mcp`);
+  if (originGuard.disabled) {
+    log("Warning: QMD_ALLOWED_ORIGINS=* — DNS-rebinding protection is off. Only do this behind your own authenticating proxy.");
+  } else if (!originGuard.enforceHost) {
+    log(`Warning: bound to ${host} with no QMD_ALLOWED_HOSTS — Host validation is off and the index is readable by anyone who can reach this port.`);
+  }
   return { httpServer, port: actualPort, stop };
 }
 

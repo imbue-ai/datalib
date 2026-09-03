@@ -2,6 +2,661 @@
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-08-16
+
+### Security
+
+- `qmd update` no longer runs a project-local `.qmd/index.yml`'s `update:`
+  commands without approval (#886). That file arrives with a `git clone` and is
+  adopted automatically for any command run inside the tree, so cloning a
+  repository and running `qmd update` executed shell commands chosen by whoever
+  wrote it. On a terminal QMD now lists the commands and asks; with nobody to
+  ask it skips them and keeps indexing. Approvals are recorded per config file
+  and per command set in `<config dir>/trusted.json`, so editing a command — or
+  a `git pull` that rewrites one — asks again. New `qmd trust`,
+  `qmd trust list` and `qmd trust revoke` manage approvals, and
+  `QMD_TRUST_UPDATE_HOOKS=1` opts unattended runs back in. Commands in your own
+  `~/.config/qmd/*.yml`, including anything `qmd collection update-cmd` writes,
+  are unaffected.
+
+- The same project-local trust gate now covers collection `path` values that
+  resolve outside the project and non-default `models.embed` / `models.rerank`
+  / `models.generate` URIs (#889). In-project paths still index unattended;
+  out-of-project directories are skipped until `qmd trust`, and custom model
+  URIs are not loaded or downloaded. `QMD_TRUST_LOCAL_CONFIG=1` opts unattended
+  runs back in (and `QMD_TRUST_UPDATE_HOOKS=1` still does). `qmd collection
+  add` records trust as it writes, the same way `update-cmd` does.
+
+- Indexing no longer follows file symlinks or glob `../` / absolute patterns
+  out of the collection directory. `fast-glob` already skipped symlinked
+  directories, but a file symlink (or a mask like `../**/*.md`) still resolved
+  via `realpath` and ingested the target. `qmd://` filesystem resolution uses
+  the same containment check, so `qmd://collection/../../../etc/passwd` no
+  longer produces a path outside the collection.
+
+- `qmd mcp --http` now validates the `Origin` and `Host` headers on every
+  request and answers `403` when they name anything but a loopback address
+  (#881). Binding to localhost is no defence against the user's own browser:
+  a page can re-point its hostname at `127.0.0.1` (DNS rebinding) and read
+  the indexed corpus through `POST /query` or `POST /mcp`. Requests with no
+  `Origin` (curl, MCP clients, editors) are unaffected. Extend the allowlists
+  with `QMD_ALLOWED_ORIGINS` / `QMD_ALLOWED_HOSTS`, or set
+  `QMD_ALLOWED_ORIGINS=*` behind your own authenticating proxy. A wildcard
+  bind (`--host 0.0.0.0`) skips the host check and warns at startup.
+
+### Changed
+
+- Dependencies: `node-llama-cpp` 3.18.1 → **3.20.0** (llama.cpp b8390 → b10361, 2026-08-11). Also safe patch/minors: `picomatch` 4.0.4 → 4.0.5, `web-tree-sitter` 0.26.8 → 0.26.12, `tsx` 4.21.0 → 4.23.12, `vitest` 3.2.4 → 3.2.7. No zod/vitest major; `@modelcontextprotocol/server` stays 2.0.0 (no 2.x patch). `flake.nix` FOD hashes are not updated here.
+- `generate` and query expansion now await `LlamaContextSequence.dispose()` before disposing the parent context. node-llama-cpp 3.20 made sequence dispose async; the library's context-onDispose path does not wait.
+
+- MCP server now speaks protocol revision **2026-07-28** via the official
+  TypeScript SDK 2.x (`@modelcontextprotocol/server`). HTTP is sessionless
+  (no `Mcp-Session-Id`, no initialize handshake, no idle-session TTL / #816
+  reaper). Clients send version and capabilities in `_meta`; `server/discover`
+  is implemented; Streamable HTTP POST requires `Mcp-Method` / `Mcp-Name`
+  (mismatch → `-32020`); `tools/list` is deterministic and carries `ttlMs` /
+  `cacheScope`. 2025-era stdio clients still work (`serveStdio` dual-speak);
+  2025-era HTTP `initialize` is answered per-request without minting a
+  session. Existing tools (`query` / `get` / `multi_get` / `status`), stdio
+  EOF shutdown, and named-index daemon PIDs are unchanged. No release.
+
+- `qmd pull` (and implicit model downloads in `embed`/`query`) no longer print
+  node-llama-cpp's download progress bar. The bar redraws every few kilobytes
+  and flooded agent transcripts with thousands of tokens (#776). Pass
+  `qmd pull --progress` to show it on an interactive terminal.
+- `--full-path` no longer degrades silently when a result cannot be resolved on
+  disk (#785). A fallback there means the file moved or was deleted since the
+  last index, so `search`, `query`, `get` and `multi-get` now print a notice to
+  stderr naming how many results fell back and suggesting `qmd update`; stdout
+  stays machine-readable.
+- `search`/`query` now decide per result whether to show the docid under
+  `--full-path`, matching `multi-get` and `get`: a result that resolved shows
+  its on-disk path and no docid, one that did not keeps its `qmd://` URI *and*
+  its docid, so it is still addressable. Previously the docid was dropped for
+  every row whenever the flag was set, leaving unresolved rows with neither a
+  usable path nor an identifier.
+- `search --format csv` always emits the `docid` column, empty for rows that
+  resolved to an on-disk path. Under `--full-path` the header previously
+  dropped the column entirely — which also disagreed with the empty-result
+  header, always printed with `docid`. Column positions are now stable across
+  runs and formats.
+
+### Fixed
+
+- Concurrent first-open of a cold index no longer fails with
+  `table documents_fts already exists` on Bun/macOS. FTS5
+  `CREATE VIRTUAL TABLE IF NOT EXISTS` is not atomic across WAL
+  connections: two processes can both see a missing table on their
+  schema snapshot and the loser throws. Table create and legacy-schema
+  repair now use the same `BEGIN IMMEDIATE` + double-check as the FTS
+  sync triggers, and treat a concurrent "already exists" as success
+  when the table is present.
+
+- Nix flake `qmd-node-modules` FOD hashes updated for x86_64-linux and
+  aarch64-darwin after the MCP SDK 2.0 bump. `nix build` / Nix GHA was
+  failing with a fixed-output hash mismatch.
+
+- CJK FTS rebuild no longer skips leftover `fts5(name, body, content='documents')`
+  tables when `fts_cjk_normalized_version` is already stamped, and schema
+  repair now checks live FTS columns (`PRAGMA table_info`) as well as
+  `sqlite_master.sql`. The MCP HTTP test helper still seeds that legacy
+  table; `startMcpHttpServer` / `createStore` on it must not throw
+  `no such column: T.name` (#792 regression).
+
+- `qmd collection add --glob` is no longer silently ignored. parseArgs ran
+  with `strict: false`, so OpenClaw's `--glob memory.md` (and any other
+  `--glob`) fell through, the default `**/*.md` was used, and a second
+  collection on the same path collided as a duplicate instead of indexing
+  the requested mask (#536). `--glob` is now an alias for `--mask`.
+
+- The `bin/qmd` trampoline now execs `process.execPath` instead of
+  re-resolving `node` from PATH. Native addons (`better-sqlite3`) are
+  compiled for the Node that installed qmd; a version manager (nvm, fnm,
+  mise) selecting a different major in the working directory used to spawn
+  that other binary and fail with `NODE_MODULE_VERSION` / `ERR_DLOPEN_FAILED`
+  (#577 leftover; #319). `bun bin/qmd` still resolves `node` from PATH so
+  Node-ABI addons are not loaded into bun.
+
+- `qmd update` / `qmd collection add` no longer swallow unreadable files
+  silently (#460). `readFileSync` failures (ETIMEDOUT on APFS compressed
+  files, EAGAIN, EACCES, …) still skip the file so the rest of the collection
+  indexes, but the CLI now warns with the path and error code and reports
+  the skip count. The SDK `update()` result includes `skipped`.
+
+- The architecture diagram no longer draws Vec expansions into BM25 search
+  (#680). `lex` expansions are FTS-only; `vec` and `hyde` expansions are
+  vector-only. The original query still goes to both backends.
+
+- `qmd bench` no longer runs to a wall of 0.00 when the fixture collection is
+  missing or empty (#716). It errors up front with the same "Collection not
+  found" / index hint as `qmd search -c`, and if every backend still scores
+  zero it warns on stderr to check `qmd ls`.
+
+- `qmd cleanup` now reclaims the content and FTS space left behind after a
+  wrong-directory `qmd update`. Deactivating files (the next update in the
+  right directory) only tombstoned the `documents` rows; cleanup deleted those
+  rows and vacuumed, but never dropped the unreferenced `content` hashes and
+  never ran FTS5 `optimize`, so `documents_fts_data` kept the old bodies
+  (#550). Cleanup now deletes inactive docs, then orphaned content, then
+  compact FTS, then vacuum. `--dry-run` reports the content hashes too.
+
+- Concurrent `query` calls with `rerank: true` on a cold MCP server no longer
+  race `ensureRerankContexts()`. Embed already serialized context creation;
+  rerank did not, so two overlapping first queries both saw an empty pool,
+  both created ranking contexts, and the inactivity timer disposed the loser
+  (`Object is disposed`, #682). Callers now await the in-flight create.
+
+- Embedding-context pool size no longer assumes every GGUF costs 150 MB of
+  VRAM (the nomic-embed figure). Larger models such as Qwen3-Embedding-0.6B
+  are ~1190 MB per 2048-token context; opening 8 of those exhausted an 8 GB
+  card so `qmd query` failed with `Failed to create any rerank context` even
+  though the reranker itself was fine. The pool is now sized from the weight
+  file, and 1 GB is reserved for the reranker (#799). Default
+  embeddinggemma/nomic throughput is unchanged. `QMD_EMBED_PARALLELISM` still
+  overrides.
+
+- Multi-collection `-c A -c B` (and SDK/MCP `collections: [A, B]`) no longer
+  searches globally then post-filters. A large unrelated collection could fill
+  the FTS/ANN top-k so the requested collections vanished, yielding false-empty
+  results even though each collection matched on its own. `searchFTS` /
+  `searchVec` now search each requested collection, then merge by score
+  (#775). Single-collection exact-scan (#791, #803) is unchanged.
+
+- Query expansion no longer consumes caller `intent`, and a cached expansion
+  whose sub-queries all miss is dropped instead of replaying forever (#818).
+  Intent still steers reranking and snippet/chunk selection; it just no longer
+  enters the expansion prompt or cache key, where the model copied meta-language
+  ("so I can compare spend settings") into lex/vec terms that matched nothing.
+
+- Files whose names differ only in the characters the legacy slug collapsed to
+  `-` (spaces, underscores) no longer evict each other from the index (#717).
+  The handalized-path migration now skips any row whose path is still owned by
+  a file in the current scan, so it only adopts genuinely stale pre-2.6 rows.
+  `qmd get` and `qmd ls <prefix>` also match `_` and `%` in paths literally
+  instead of as SQL `LIKE` wildcards, so `qmd get 2026_06_16.md` no longer
+  returns a sibling `2026-06-16.md`.
+
+- CLI `multi-get` and SDK/MCP `multi_get` now share one comma-list resolver.
+  Collection-prefixed paths (`qmd/docs/SYNTAX.md`) work in both transports,
+  unanchored `LIKE '%name'` no longer silently fetches a different document
+  for a filename fragment (`NTAX.md` ≠ `SYNTAX.md`), and ambiguous names
+  across collections error with the candidate list instead of `LIMIT 1` (#759).
+
+- The Nix flake wrapper now seeds the same pre-import env as `bin/qmd`.
+  Nix installs exec `bun src/cli/qmd.ts` directly, so they previously skipped
+  the launcher: `qmd mcp` could leak llama/ggml native logs onto JSON-RPC
+  stdio, and Darwin CLI exits dumped a ggml Metal residency-set stack trace
+  after an otherwise successful query. The wrapper now quiets those logs for
+  `mcp` and sets `GGML_METAL_NO_RESIDENCY=1` on Darwin unless
+  `QMD_METAL_KEEP_RESIDENCY=1` (#723).
+
+- Rerank context creation no longer swallows the real failure. A VRAM OOM or
+  corrupt model previously produced only `Reranker unavailable — skipping
+  reranking` (and a dead identical retry whose comment claimed it disabled
+  flash attention, which ranking contexts never supported). The warning now
+  includes the underlying message so the two cases are distinguishable (#782).
+
+- The Nix flake package now ships `skills/` next to `src/` in `$out/lib/qmd/`.
+  `findPackageRoot()` walks up from the wrapped `src/cli/qmd.ts` looking for a
+  sibling `skills/` directory; without it, `qmd skill show` and `qmd skills list`
+  always failed with "QMD skill not found" on Nix-installed binaries (#722).
+
+- `/release` step 1 no longer points at a missing script. `skills/release/scripts/release-context.sh`
+  now exists: it silently installs git hooks and prints version info, working-tree
+  status, commits and files since the last tag, `[Unreleased]`, and the previous
+  changelog entry. The skill's process list also drops the duplicate step 7 and
+  checks dependency updates before cutting the release (#796).
+
+- `store.searchVec()` (and SDK `searchVector()`) now embed the query with the
+  store's pinned embed model instead of the global `QMD_EMBED_MODEL`. A store
+  created with a non-default `models.embed` previously failed with
+  `Dimension mismatch ... Expected N ... received M` and loaded the wrong
+  (often much larger) model at query time. Hybrid/precomputed/session search
+  paths were unaffected and stay unchanged (#690).
+
+- `qmd collection add --mask "a.md,*.txt"` now indexes the union of each
+  pattern. The comma-separated form was documented and commonly guessed, but
+  the joined string was passed to fast-glob as one literal glob, so it
+  matched zero files with no error. Brace form `{a.md,*.txt}` is unchanged.
+  The same split applies on `qmd update` for stored comma-list masks (#557).
+
+- NixOS / immutable-root installs no longer crash `qmd embed` with EACCES
+  when node-llama-cpp tries to compile llama.cpp into a read-only
+  `node_modules`. The flake wrapper puts Nix's glibc and libstdc++ on
+  `LD_LIBRARY_PATH` so prebuilt binaries can `dlopen` them, and
+  `getLlama()` uses `build: "never"` when the llama directory is not
+  writable (#574).
+
+- CJK FTS rebuild no longer raises "database is busy" when flushing insert
+  batches. The streaming `.iterate()` cursor stayed open across
+  `BEGIN` on the same connection; the scan now uses keyset-paginated
+  `LIMIT` batches so each SELECT finalizes before the insert transaction
+  starts (#797).
+
+- Quoted FTS phrases containing dotted tokens (e.g. `"1.0.21"`) now match the
+  indexed document. The porter unicode61 tokenizer stores dotted strings as
+  adjacent parts, but phrase sanitization stripped the dots into a single
+  token (`1021`) that could never hit. Dotted tokens inside quotes are split
+  into adjacent phrase terms, matching the bare-term rewrite from #563 (#757).
+
+- `scripts/build.mjs` no longer passes `shell: true` to `spawnSync` on Windows.
+  With the default Node install path (`C:\Program Files\nodejs\node.exe`),
+  `cmd.exe` split the unquoted `process.execPath` at the space, the `tsc`
+  spawn failed, and `prepare` could still report success with no `dist/` —
+  leaving `bin/qmd` at "not built". The helper always receives a real binary
+  path plus an args array, so no shell is needed. A spawn error now prints
+  the missing binary path instead of failing silently. (#681)
+
+- Case-sensitive collections no longer collapse distinct document identities that
+  differ only by path casing. The implicit `COLLATE NOCASE` legacy migration was
+  unsafe for filesystems that contain both `README.md` and `readme.md`; case-only
+  legacy migrations must now be explicit and operator-reviewed (#801).
+
+- `cleanupOrphanedVectors` now runs its orphan count and both DELETEs in a
+  single immediate transaction. An interruption between the two DELETEs
+  (crash, `SQLITE_BUSY`) could desync `vectors_vec` from `content_vectors`,
+  leaving stale metadata rows that make a later reactivation of the same
+  content hash look already-embedded — so `qmd embed` skips it and the
+  document becomes silently unsearchable by vector, with no orphan left to
+  clean up (#766).
+
+- `qmd embed` no longer splits a UTF-16 surrogate pair (emoji, etc.) across a
+  chunk boundary. A chunk ending or starting mid-pair produced an unpaired
+  surrogate in the chunk text, which some remote embedding APIs reject as
+  invalid JSON — permanently failing that chunk on every retry, since the
+  boundary calculation is deterministic. This covers both the character-based
+  chunker and `chunkDocumentByTokens`'s recursive re-splitting for
+  astral-plane-dense content, which could previously drive the char budget
+  low enough to reproduce the same split (#777).
+
+- `insertContext` looks up `store_collections` by name. #754 retargeted the
+  query from the dropped `collections` table but left `WHERE id = ?`, and
+  `store_collections` has `name TEXT PRIMARY KEY` with no `id` column — the
+  call threw `no such column: id`. Matches `deleteContext` /
+  `updateStoreContext` (#853).
+
+- `qmd collection add` with no path argument now errors with usage instead of
+  silently indexing the current working directory (#684). Pass `.` to index
+  CWD, matching the documented examples.
+
+- `qmd status` reports orphaned embedding chunks, `qmd update` hints when they
+  exceed 10% of vectors, and `qmd cleanup --dry-run` previews what would be
+  removed. Incremental update still does not auto-prune vectors (a transient
+  empty mount would otherwise force a full re-embed) (#768).
+
+- `qmd --index <name> mcp --http --daemon` now scopes PID/log files per index
+  (`mcp-<name>.pid`) and passes the resolved database path to the child, so a
+  named-index daemon no longer collides with the default `mcp.pid` or opens
+  the default store (#772).
+
+- Opening a store no longer throws `SQLiteError: no such column: T.name` when
+  `documents_fts` is still the legacy `fts5(name, body, content='documents')`
+  schema. `CREATE VIRTUAL TABLE IF NOT EXISTS` left that table in place, and
+  the CJK FTS rebuild's `DELETE FROM documents_fts` compiled against
+  `documents.name`, which does not exist (#792).
+
+- Rerank cache keys now include the resolved `models.rerank` URI, so swapping
+  the configured reranker no longer serves the previous model's cached scores
+  (#764).
+
+- `vsearch -c <collection>` no longer returns empty results for small
+  collections crowded out of the global ANN candidate pool. `searchVec` now
+  exact-scans the collection's vectors with `vec_distance_cosine` when the
+  set is within 20k rows (ANN + post-filter cannot see collections that never
+  enter global top-k, and sqlite-vec caps `k` at 4096 so a larger multiplier
+  alone is not enough). Larger collections still use capped ANN over-fetch
+  (#791, #803).
+
+- `multi-get --format files` now emits the docid as its own CSV field
+  (`#docid,path,...`) instead of prepending it into the path field with a
+  space (`#docid path,...`), matching `search --format files` and keeping
+  naive comma-splitting usable (#760).
+
+- `qmd embed` now takes an exclusive process lock (`.qmd-embed.lock` next to
+  the index DB) so concurrent invocations no longer race on `vectors_vec`
+  and fail with `UNIQUE constraint failed: vectors_vec.hash_seq`. A second
+  embed exits early with `Another embed process is already running. Skipping.`
+  Stale locks from crashed processes are recovered via PID identity checks
+  (#825).
+
+- windows prepare fix #778 keeps dist build #824
+
+- `qmd mcp` (stdio) now shuts down gracefully when stdin reaches EOF instead
+  of orphaning to PID 1 when the parent MCP client dies (#751): the server
+  closes its transport, gives in-flight request handlers a bounded window to
+  settle, closes the store (which disposes its llama.cpp instance), and lets
+  the process drain via `process.exitCode` (no forced `process.exit()`, which
+  has caused exit-time native crashes before).
+
+- `qmd --version` no longer reports an unrelated repository's commit (#787).
+  The commit was discovered at runtime with `git -C <installDir> rev-parse`,
+  and `git -C` walks *up*, so any install nested inside another checkout
+  reported that checkout's HEAD — a global npm install under a git-managed
+  prefix such as Homebrew's `/opt/homebrew` claimed Homebrew's commit as
+  qmd's. Identical tarballs reported different "commits" depending only on
+  where they were installed, which is why one issue can collect three distinct
+  hashes for the same published build. `scripts/build.mjs` now stamps the
+  commit it built from into `dist/cli/build-info.json` (suffixed `-dirty` when
+  built from a modified tree), and the runtime prefers that. Source checkouts
+  still resolve their own HEAD, but only after confirming the enclosing
+  repository is qmd's; anything else reports no commit rather than a
+  misleading one. The lookup also no longer interpolates the install path into
+  a shell string, so a path containing a space stops silently dropping the
+  commit, and `--version` from a build runs no subprocess at all.
+
+- `qmd doctor` no longer false-positives `.etag` HTTP sidecars (written by
+  `qmd pull` next to each download) as invalid GGUF models. The model-cache
+  check now only inspects real `.gguf` files, so a sidecar that happens to
+  sort before the blob no longer poisons the report. #812
+
+- `qmd mcp stop` and `qmd mcp --http --daemon` now verify that a pidfile PID still belongs to a qmd process before signalling it or refusing to start. Recycled PIDs (common after reboot) are treated as stale: the pidfile is unlinked instead of SIGTERM'ing an unrelated process or blocking daemon start with a false "Already running" error (#806).
+
+- `qmd collection add` now rejects missing paths and regular files before
+  creating collection configuration or index state. The error reports both the
+  received and resolved path so malformed shell arguments can be corrected.
+
+- Claude Code plugin: scope the plugin `source` to `./skills` so installs
+  copy just the skills (~50 KB) instead of the entire repository. Previously a
+  canonical install materialized ~230 MB / 9,000+ items into
+  `~/.claude/plugins/cache/` — including a full npm dependency install
+  triggered by the repo-root `package.json`. Both skills (`qmd` and `release`)
+  still ship, unchanged. (#790)
+
+- Claude Code plugin: releases now bump the plugin version in
+  `.claude-plugin/marketplace.json` in lockstep with `package.json`. The
+  plugin cache is keyed on this version, and it had been stuck at `0.1.0`
+  since February — so installed plugins never received skill updates
+  (users who installed in February are still being served that snapshot
+  today, despite the qmd skill nearly tripling in size since). Also bumps
+  the plugin to `2.6.3` as a one-time catch-up so existing installs pick
+  up the current skill on their next `claude plugin update`. (#789)
+
+### Changed
+
+- `--full-path` no longer degrades silently when a result cannot be resolved on
+  disk (#785). A fallback there means the file moved or was deleted since the
+  last index, so `search`, `query`, `get` and `multi-get` now print a notice to
+  stderr naming how many results fell back and suggesting `qmd update`; stdout
+  stays machine-readable.
+- `search`/`query` now decide per result whether to show the docid under
+  `--full-path`, matching `multi-get` and `get`: a result that resolved shows
+  its on-disk path and no docid, one that did not keeps its `qmd://` URI *and*
+  its docid, so it is still addressable. Previously the docid was dropped for
+  every row whenever the flag was set, leaving unresolved rows with neither a
+  usable path nor an identifier.
+- `search --format csv` always emits the `docid` column, empty for rows that
+  resolved to an on-disk path. Under `--full-path` the header previously
+  dropped the column entirely — which also disagreed with the empty-result
+  header, always printed with `docid`. Column positions are now stable across
+  runs and formats.
+
+## [2.6.3] - 2026-06-24
+
+### Added
+
+- `qmd embed --timeout <minutes>` overrides the embed session's max duration
+  (previously hardcoded to 30 minutes). Use a larger value to let a big index
+  finish in one run, or `--timeout 0` to remove the cap entirely. When the cap is
+  reached, remaining document batches are skipped as before, so re-running
+  `qmd embed` continues where it left off.
+
+### Documentation
+
+- README: added a "Configuring `index.yml`" section documenting the full config
+  schema — `global_context`, `editor_uri`, the `models.embed`/`rerank`/`generate`
+  overrides, and per-collection `path`/`pattern`/`ignore`/`update`/
+  `includeByDefault`/`context` — with file-location rules (`XDG_CONFIG_HOME`,
+  `QMD_CONFIG_DIR`, named `{name}.yml`, project-local `.qmd/index.yml`). Every key
+  is verified against `src/collections.ts` and its consumers. Documents behavior
+  that previously existed only in code, where the absence of docs led contributors
+  to repeatedly re-submit already-shipped model-resolution fixes (#502, #559, #564)
+  and to request config that already works (#645, #678). Added
+  `XDG_CONFIG_HOME`/`QMD_CONFIG_DIR` to the environment-variable table and noted
+  the `index.yml` `models:` / `QMD_EMBED_MODEL` override path in the Model
+  Configuration section.
+- README: expanded the per-collection `update` field into an "Automatic update
+  commands" subsection — the feature the maintainer publicly called under-documented
+  — covering execution via `bash -c` in the collection's directory, the run-then-
+  reindex order, the non-zero-exit abort behavior, and the `qmd collection
+  update-cmd` set/clear shortcut. The `ignore` key now states it is YAML-only (no
+  CLI command) and additive with the un-overridable built-in exclusions.
+- `example-index.yml`: overhauled from three near-identical collections into a
+  fully-commented starter template where each collection demonstrates a distinct
+  feature (hierarchical context, auto-`update`, `ignore` patterns, non-markdown
+  globs, `includeByDefault: false`, and an all-fields example), plus commented
+  `editor_uri`/`models` stubs. README now links to it. Model URIs are intentionally
+  left as placeholders so the template can't drift from the defaults.
+- README: documented collection filtering (`-c` semantics), the `collection
+  show`/`include`/`exclude`/`update-cmd` subcommands, the `--intent`/`--no-rerank`/
+  `-C`/`--full-path` search flags, the `--format <kind>` output selector (with the
+  legacy `--json`/`--csv`/`--md`/`--xml`/`--files` booleans noted as aliases),
+  `vector-search`/`deep-search` aliases, embed
+  memory flags (`--max-docs-per-batch`/`--max-batch-mb`), a sample `--explain`
+  score trace, the `qmd doctor`/`qmd init` commands, the `get` `:from:count`
+  suffix and `--no-line-numbers`, an MCP tool parameter reference, and a
+  Benchmarking section for `qmd bench`.
+- docs/SYNTAX.md: removed the non-existent `q` MCP parameter example (the `query`
+  tool and REST endpoint accept only the `searches` array) and added a Scoping
+  section.
+- README: removed the misleading `qmd update --pull` example. The `--pull` flag is
+  parsed but never consumed (`updateCollections()` ignores it); the real mechanism
+  for running `git pull` before re-indexing is a per-collection `update` command,
+  set via `qmd collection update-cmd`.
+
+### Fixed
+
+- MCP server instructions now tell agents to scope with the plural `collections`
+  parameter (matching the schema). The previous singular `collection` hint led
+  agents to pass a parameter that Zod silently strips, producing unscoped results.
+  The `get` instruction line also now documents the full `file.md:from:count`
+  range suffix instead of only the single-line `file.md:100` offset.
+
+- Filesystem paths with special characters (`#`, `&`, spaces, `[]`, `()`, etc.)
+  now round-trip correctly through index → search → get. Previously
+  `reindexCollection` called `handelize()` on relative paths before storing
+  them, turning `# Meeting - 234232 3432 __ 5.md` into
+  `Meeting-234232-3432-5.md` and making `qmd get <actual-path>`,
+  `qmd get --full-path`, and `qmd ls` return dead or garbled paths. Paths are
+  now stored verbatim. Existing indexes auto-migrate on the next `qmd update`.
+
+- FTS5 search now correctly matches dotted version strings like `2026.4.10`. The
+  `porter unicode61` tokenizer splits on dots (storing `2026`, `4`, `10` as
+  separate tokens), but the query sanitizer was stripping dots and producing
+  `2026410` which never matched. Dotted terms are now split and ANDed together
+  so version-string searches work as expected (#563).
+- HTTP REST endpoints `/query` and `/search` now return `qmd://collection/path`
+  URIs in the `file` field, matching the output format used by the CLI and MCP
+  resource URIs. Previously the raw `displayPath` (`collection/path`) was
+  returned without the scheme prefix (#576).
+- The embed session `maxDuration` is now env-configurable via
+  `QMD_EMBED_MAX_DURATION_MS` (default: 30 min). This prevents large-corpus
+  embeddings from being aborted by the hardcoded 30-minute ceiling (#673).
+- `qmd query`, `qmd update`, and other commands no longer fail with
+  `SQLiteError: database is locked` when multiple processes run against the
+  same index in parallel (e.g. an `update` racing a long `embed`, the
+  first-open schema migration racing a routine command, or an agent fanning
+  out searches). `openDatabase` now sets `PRAGMA busy_timeout = 120000` on
+  every connection, so a writer that loses the race queues at batch
+  boundaries instead of throwing immediately. WAL handles read/write
+  concurrency but does not serialise concurrent writers, and `bun:sqlite`
+  and `better-sqlite3` both default the timeout to 0, so the loser
+  previously failed on the first DDL statement in `initializeDatabase`.
+  Override the default with `QMD_SQLITE_BUSY_TIMEOUT` (milliseconds; `0`
+  restores fail-fast). Two more crashes on the same concurrent-open
+  path are fixed: `trigger documents_ai already exists` (the FTS sync
+  triggers were dropped and recreated as separate statements on every
+  open, so two processes interleaved between the `DROP` and the
+  `CREATE`; `busy_timeout` serialises individual statements but not the
+  pair) and `database is locked` while migrating a cold database to WAL
+  (the `journal_mode` switch needs a brief exclusive lock and does not
+  invoke the busy handler). FTS trigger setup is now gated behind
+  `PRAGMA user_version` inside one `IMMEDIATE` transaction, and the WAL
+  migration retries within the busy-timeout budget.
+
+## [2.5.3] - 2026-05-28
+
+### Features
+
+- `qmd get` now accepts a `:from:count` suffix on a path or docid (e.g.
+  `qmd get "#abc123:120:40"` reads 40 lines starting at line 120). Explicit
+  `--from`/`-l` flags still override the suffix. The MCP `get` tool accepts the
+  same suffix.
+- `qmd get` and `qmd multi-get` are now **line-numbered by default** and print
+  the document's `#docid` and `qmd://` path in the output header. Disable line
+  numbers with `--no-line-numbers`. The MCP `get`/`multi_get` tools default
+  `lineNumbers` to `true` to match.
+- `qmd multi-get` now includes the `#docid` in every output format
+  (`--md`, `--json`, `--csv`, `--xml`, `--files`, and the default CLI view),
+  consistent with `qmd search`.
+- `qmd get` and `qmd multi-get` accept `--full-path`, which replaces the
+  `qmd://` path + `#docid` with the document's on-disk filesystem path (handy for
+  piping into `Read`/`Edit`/an editor). Falls back to the canonical `qmd://` +
+  docid header when the file no longer exists on disk.
+- `qmd search` / `qmd query` now show a clearer hit identifier: the default CLI
+  view (and the new `**file:**` line in `--md` output) always prints the full
+  `qmd://collection/path` URI so you can pipe it straight back into `qmd get`.
+- `qmd search` / `qmd query` accept `--full-path` with the same semantics as
+  `qmd get`: the result label becomes the file's on-disk path — `./`-prefixed
+  relative path when the file lives in a subfolder of `$PWD`, absolute realpath
+  otherwise — and the per-result `#docid` is dropped because the path is the
+  identifier. The leading `./` is intentional so the output is unambiguously a
+  filesystem path. Applies to all output formats.
+- `qmd get` and `qmd multi-get` now also use the `./`-prefixed convention when
+  `--full-path` renders a path under `$PWD`, matching `search`/`query`.
+- New `--format <kind>` flag selects the output format (`cli` | `json` | `csv` |
+  `md` | `xml` | `files`) for `search`, `query`, and `multi-get`. The legacy
+  boolean aliases (`--json`/`--csv`/`--md`/`--xml`/`--files`) still work but are
+  no longer in `--help`; prefer `--format`.
+
+### Fixes
+
+- Launcher: source-mode runner selection now prefers Node + tsx over Bun when
+  both `package-lock.json` and `bun.lock` are present in the package root,
+  mirroring the dist-mode "npm priority" rule. Fixes pnpm-global installs that
+  copy the entire working tree (including `.git` and `bun.lock`) into the
+  install dir and previously routed through Bun, causing ABI mismatches with
+  the Node-built `better-sqlite3` / `sqlite-vec` native modules.
+- Darwin Metal: llama-using commands (`query`, `vsearch`, `embed`) no longer
+  dump a multi-kB GGML/Metal backtrace at process exit even when output
+  succeeded. The libggml-metal static `ggml_metal_device` destructor asserts
+  `[rsets->data count] == 0` during `__cxa_finalize_ranges`, but the
+  buffer-free path never calls the symmetric `ggml_metal_device_rsets_rm`
+  to remove released rsets from the device collection (upstream
+  ggml-org/llama.cpp#22593, one-line fix open as PR #22595). The assertion
+  only fires when `process.exit()` skips Node's `beforeExit` hook, which is
+  what node-llama-cpp uses to auto-dispose Metal contexts. Primary fix:
+  `finishSuccessfulCliCommand` now sets `process.exitCode = 0` and returns
+  instead of calling `process.exit(0)`, so `beforeExit` fires and the native
+  binding cleans up before libc's static destructor runs. Defense-in-depth:
+  the launcher (`bin/qmd`) and the npm test driver (`scripts/test-all.mjs`
+  + the `test:bun` / `test:unit` package.json scripts) also set
+  `GGML_METAL_NO_RESIDENCY=1` on darwin before spawning node/bun, covering
+  error paths and tests that still terminate via `process.exit()`. The env
+  var must be set before node/bun start — libggml-metal reads it via libc
+  `getenv` at module-load time, and Bun does not propagate `process.env`
+  mutations to libc `setenv` — so it lives in the launcher rather than in
+  test-preload. Residency sets give no measurable speedup for QMD's
+  short-lived CLI workflow (benchmarked on M3 Pro). Opt back in with
+  `QMD_METAL_KEEP_RESIDENCY=1` for long-lived qmd processes (e.g. the MCP
+  daemon may benefit on hot reload) or to triage the upstream fix.
+  `qmd doctor` reports the mitigation state. Minimal reproduction:
+  `scripts/repro-metal-rsets-crash.mjs`.
+
+### Docs
+
+- qmd skill: emphasize reading line ranges with `get`'s built-in
+  `:from:count` suffix / `--from`/`-l` flags instead of piping through
+  `sed`/`head`/`tail`; cite the docid and line numbers now present in retrieval
+  output; and author structured `intent:`/`lex:`/`vec:`/`hyde:` queries yourself
+  rather than relying on built-in query expansion.
+
+## [2.5.2] - 2026-05-22
+
+### Fixes
+
+- Launcher: Rewrite `bin/qmd` as a Node-based shebang polyglot to fix global npm installation execution failures on Windows (#668 / #452), while supporting seamless fallback to Bun in Node-less environments.
+
+## [2.5.1] - 2026-05-20
+
+### Changes
+
+- Release: publish from GitHub Actions via npm Trusted Publishing/OIDC instead of a long-lived `NPM_TOKEN` secret.
+
+## [2.5.0] - 2026-05-19
+
+### Changes
+
+- Dependencies: update core SQLite/config/chunking packages (`better-sqlite3`, `yaml`, `web-tree-sitter`, `tree-sitter-go`, and `tree-sitter-python`) while keeping incompatible `zod`, `tsx`, and `vitest` majors pinned.
+- Agent skills: add `qmd skills list|get|path` to serve version-matched runtime skill instructions from the installed CLI, and make `qmd skill install` write a stable discovery stub so installed agent skills do not go stale after QMD upgrades.
+- CLI: add `qmd doctor` for index/runtime diagnostics, including SQLite/sqlite-vec versions, embedding fingerprint freshness, mixed-fingerprint detection, safe legacy fingerprint adoption, and content-hash sampling.
+
+### Fixes
+
+- Launcher: prefer runnable TypeScript source in git checkouts even when ignored `dist/` artifacts exist, while packaged installs continue to run `dist/`.
+- GPU: keep node-llama-cpp's documented `gpu: "auto"` initialization as the primary path, then perform no-build packaged CUDA/Vulkan/Metal probes only if auto falls back to CPU.
+- CLI: move GPU/CPU runtime diagnostics out of `qmd status`; use `qmd doctor` for device probing and related environment guidance.
+- CLI: point unexpected command/setup failures toward `qmd doctor` so diagnostics are the default next step when QMD behaves incorrectly.
+- Doctor: explicitly warn when `content_vectors` contains multiple non-empty embedding fingerprint names, with the per-fingerprint document/chunk breakdown.
+- Embed: make the TTY progress line label byte-based input progress explicitly, show embedded chunks as a count, and shorten the displayed model name.
+- Embed: retain per-chunk failure details, retry failed chunks after later successful embeds and again when no other chunks remain, clear recovered errors, and cap retries to avoid endless loops.
+- Tests: expand the container smoke harness to cover npm-global, npx-style, and Bun-global install scenarios, always checking auto and `QMD_FORCE_CPU=1` doctor modes, with opt-in tiny `qmd embed` and GPU probe runs for supported container runtimes.
+- Embedding: fingerprint vector metadata using the active embedding model and formatting/chunking parameters so stale vectors are treated as pending after search semantics change. Legacy `content_vectors` columns are migrated lazily on first vector-health/write use to preserve fast QMD startup.
+
+- Skill: expand the packaged QMD skill with retrieval-first workflows, structured query examples, wiki/source collection guidance, and safe fallbacks when model-backed search is unavailable.
+- Tests: make `bun run test` execute the local unit suite under both Node/Vitest and Bun (`test:node` + `test:bun`) so runtime-specific regressions are caught before CI.
+- Model config: centralize embedding/rerank/generation model resolution so `qmd embed`, `status`, `query`, `vsearch`, `pull`, SDK vector search, and `bench` use the same active `.qmd/index.yaml` model hints and environment fallbacks.
+- GPU/status: `qmd status` now uses the same embedding model identity as `qmd embed` when computing pending embeddings, so URI-backed embeddings are not incorrectly reported as pending under the legacy `embeddinggemma` alias.
+- GPU status: `qmd status` now always shows GPU mode/configuration without unsafe native probing, and CPU-fallback warnings point to `QMD_STATUS_DEVICE_PROBE=1 qmd status` for an actual backend probe. The no-GPU warning is emitted once per process instead of once per LLM instance during benchmarks.
+- GPU: add `QMD_FORCE_CPU=1` / `--no-gpu` to bypass CUDA/Vulkan/Metal probing entirely, and route native llama.cpp stdout noise to stderr so JSON output stays parseable during search/query commands.
+- Snippet line numbers: `qmd_query` (MCP), HTTP `/query`, and `qmd query`
+  (CLI JSON output and snippet headers) now return absolute source-file
+  line numbers instead of chunk-local ones, so the `line` field can be
+  passed back to `qmd_get` as `fromLine` without a separate lookup.
+  Snippet selection remains scoped to the best matching chunk
+  (preserves #149).
+- CLI: `qmd query --full` now emits the full document body in all output
+  formats (json, csv, md, xml), restoring the documented behavior of the
+  flag. Previously it returned only the best matching chunk (~3.6KB max
+  per result). Output payload for `--full` queries is now proportional
+  to total document size.
+- macOS Metal: `qmd query --json` now flushes successful JSON output and uses a safe immediate-exit path on Darwin to avoid ggml Metal finalizer aborts; other commands still dispose LLM contexts/models before the llama runtime. #368
+- Embedding: require complete chunk coverage before treating a document as
+  embedded, remove partial vectors when chunk/session failures leave a
+  document incomplete, and keep `qmd status` pending counts honest after
+  interrupted long embed runs. #637 #378
+- Embedding: `qmd embed -c <collection>` now scopes pending-doc selection
+  to the requested collection instead of embedding global pending work.
+  Scoped `--force` clears only collection-owned vectors, preserves shared
+  hashes referenced by sibling collections, and drops `vectors_vec` only
+  when the scoped clear empties all vectors.
+- Hybrid search: weight RRF lists by query type so original FTS and original vector evidence get the intended 2x boost, instead of accidentally boosting the first lexical expansion. #591
+- MCP: seed llama.cpp/GGML quiet env vars before launching `qmd mcp` so native logs cannot pollute stdio JSON-RPC framing. #593
+- CLI: remove CommonJS `require()` calls from ESM index path normalization so `qmd --index <path>` no longer crashes with `ERR_AMBIGUOUS_MODULE_SYNTAX` on Node 22+. #634
+- Windows CUDA: serialize llama.cpp embedding/reranking contexts by default to avoid intermittent `ggml-cuda.cu:98` crashes in `qmd query`; set `QMD_EMBED_PARALLELISM` to opt back into parallel contexts if your driver is stable. #519
+- MCP: make `qmd mcp --index <name>` use the selected index for both foreground and daemon HTTP servers instead of falling back to the default store. #343
+- Embedding: respect `QMD_EMBED_MODEL` consistently for vector indexing and vector-backed search, with default-model fallback when unset.
+- Config: use one home-directory resolver for YAML config and the default SQLite cache path, avoiding Windows CLI/MCP split-brain when `HOME` is unset.
+- GPU: respect explicit `QMD_LLAMA_GPU=metal|vulkan|cuda` backend overrides instead of always using auto GPU selection. #529
+- Fix: preserve original filename case in `handelize()`. The previous
+  `.toLowerCase()` call made indexed paths unreachable on case-sensitive
+  filesystems (Linux). `qmd update` automatically migrates legacy
+  lowercase paths without re-embedding.
+- CLI: make `qmd status` skip native `node-llama-cpp` device probing by
+  default so status stays safe on machines with broken or unsupported GPU
+  drivers. Set `QMD_STATUS_DEVICE_PROBE=1` to opt in.
+- CLI: lazy-load `node-llama-cpp` so lightweight commands such as
+  `qmd status` do not import native ML dependencies or trigger llama.cpp
+  builds on ARM/no-GPU machines. #491
+- Store: keep content rows referenced by inactive documents during orphan
+  cleanup so `qmd update` preserves soft-deleted tombstones for removed
+  files. #585
+- Packaging: install AST grammar WASM packages as required dependencies so
+  Bun global installs include TypeScript/TSX/JavaScript grammars, and add a
+  `smoke:package-grammars` verification command. #595
+- Launcher: add wrapper smoke coverage for scoped package, npm/npx,
+  Homebrew/Linuxbrew, Bun global symlink layouts, and `$BUN_INSTALL`
+  false-positive runtime selection regressions. #351 #353 #354 #356 #358 #359
+
 ## [2.1.0] - 2026-04-05
 
 Code files now chunk at function and class boundaries via tree-sitter,
