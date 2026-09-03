@@ -99,13 +99,15 @@ struct Cli {
     #[arg(long, global = true)]
     now: Option<String>,
     /// Download only: wipe every entity table (and its bookkeeping
-    /// sidecar) before fetching, re-downloading every entity row.
-    /// `blob_refs` is preserved — see `--refetch-blobs`. Falls back
-    /// to `$DATALIB_DAG_RESET_AND_REDOWNLOAD=1`.
+    /// sidecar) before fetching, re-downloading every entity row. The
+    /// provider's CAS edge table is preserved, so already-fetched
+    /// attachment bytes are not re-pulled — see `--refetch-blobs`.
+    /// Falls back to `$DATALIB_DAG_RESET_AND_REDOWNLOAD=1`.
     #[arg(long, global = true)]
     reset_and_redownload: bool,
-    /// Download only: wipe `blob_refs` so every attachment re-fetches
-    /// on the wire (the CAS itself is never truncated). Falls back to
+    /// Download only: clear the `blake3` column on the provider's CAS
+    /// edge table so every attachment re-fetches on the wire (the CAS
+    /// itself is never truncated). Falls back to
     /// `$DATALIB_DAG_REFETCH_BLOBS=1`.
     #[arg(long, global = true)]
     refetch_blobs: bool,

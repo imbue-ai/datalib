@@ -243,7 +243,7 @@ A long chain of incremental syncs can in principle silently drop data (an upstre
 
 The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS, and `--reset-and-redownload` is the "invalidate entity data, keep the cache" path.
 
-`cas_objects` has no reset path either way. Bytes are byte-stable; the only legitimate way to remove them is `blob_cas::gc_orphans()`.
+`cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. A `blob_cas::gc_orphans()` sweep existed once and was removed, uncalled, in `7f588ba1`; three docs went on recommending it for months. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
 ## Time and ordering discipline
 

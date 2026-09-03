@@ -28,6 +28,15 @@ are relative to the repo root.
   NDJSON progress/outcome protocol, failure classification, and
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
+- [`docs/dev/arbitrary_data_pipelines.md`](docs/dev/arbitrary_data_pipelines.md)
+  — *proposal*: making datalib usable as a general data-processing
+  toolchain, audited against the `data-pipeline-builder` skill in
+  `imbue-ai/default-workspace-template#534`. §2 inventories what the
+  five file-backed providers already share (`fswalk`,
+  `file_checkpoint`, `input_path`, the content-vs-path identity
+  split) — read it before concluding datalib only mirrors web APIs,
+  and read §3 before claiming it can ingest arbitrary records, which
+  it can't yet.
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete,
   commented steps-format config, including the recipe for running
   `datalib-dag` from a bazel build.

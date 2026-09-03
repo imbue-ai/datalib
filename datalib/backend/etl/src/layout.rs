@@ -7,8 +7,9 @@
 //! <data_root>/<stanza>/rendered_md/…   (render — markdown + sidecars)
 //! ```
 //!
-//! Cross-stanza aggregates (`backend_index/db.doltlite_db`, `qmd/`) live
-//! under `<data_root>/system/`, not under any one stanza.
+//! Cross-stanza aggregates (`unified_index/grid/db.doltlite_db`,
+//! `unified_index/qmd/`) live at the data root, not under any one
+//! stanza — see `datalib_core::layout` for the canonical names.
 //!
 //! Path components below `rendered_md/` are UUID/canonical-id derived, never
 //! slug/title derived, so an upstream rename re-renders in place instead of

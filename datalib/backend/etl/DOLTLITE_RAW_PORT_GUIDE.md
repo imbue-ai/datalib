@@ -213,11 +213,22 @@ you write a custom SELECT that returns `payload`, wrap it manually.
 
 Bytes live in a **sibling CAS file** — `blobs.doltlite_db`, alongside
 `entities.doltlite_db` in the source's `raw/<name>/` directory — not in
-the entity db. The CAS holds a single `cas_objects` table keyed
-by blake3 hash. The entity db carries `blob_refs` (PK = upstream-stable
-id, fallback `{owning_id}:{slot}`) with a nullable `blake3` column
-pointing into the CAS. See `datalib_etl::blob_cas` for the full
-shape; full DDL in the `BLOB_REFS_DDL` / `CAS_OBJECTS_DDL` constants.
+the entity db. The CAS holds a single `cas_objects` table keyed by
+blake3 hash (`CAS_OBJECTS_DDL`). The entity db carries the provider's
+own **CAS edge table** — `<provider>_attachments`, four columns
+(synth PK `{owning}#{ref}`, owning FK, ref id, nullable `blake3`),
+declared as a single `#[derive(CasEdgeRow)]` struct in your
+`schema_raw.rs`. The derive emits the DDL, the two indices, the
+synth-PK recipe, and the `BulkUpsertable` impl.
+
+> The legacy shared `blob_refs` table and its `RefStub` /
+> `pre_seed_blob_stub` / `store_bytes` / `attach_hash` / `ref_has_hash`
+> / `gc_orphans` API were retired in `7f588ba1`. Nothing in the tree
+> exposes them; don't reach for them in a new provider. (Notion still
+> has same-named `store_blob` / `blob_exists` / `record_blob_error`
+> methods, but they are *notion-local*: one blob per transaction,
+> built directly on `BlobCas::put` + `bulk_upsert_in_tx` rather than
+> on the bucketed accumulator below. Copy the accumulator, not them.)
 
 Open the CAS alongside the entity db in `RawDb::open`:
 
@@ -226,17 +237,22 @@ let pool = dr::open(db_path, DDL).await?;
 let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
 ```
 
-Trust-our-copy refetch policy: skip if `blake3 IS NOT NULL`. Handled
-by `blob_cas::ref_has_hash()` (exposed as `db.blob_exists()` in your
-provider's RawDb).
+Trust-our-copy refetch policy: skip if the edge row's `blake3 IS NOT
+NULL`. Load the whole `(ref_id → blake3)` map once at fetch entry with
+`blob_cas::load_blake3_index(pool, table, ref_id_column)` so the
+per-file check is a HashMap hit rather than a SQL round trip queued
+behind multi-MB CAS commits on the single-connection pool.
 
-Write path: one call covers both pre-seed-then-fetch and
-fetch-and-store. Build a `RefStub` with the upstream metadata and
-either call `db.pre_seed_blob_stub` (no bytes yet) or `db.store_blob`
-(post-download). `store_blob` does both the CAS `put` and the
-`blob_refs` `attach_hash` in two steps; cross-file atomicity isn't
-guaranteed, but the `gc_orphans` sweep reconciles any orphan CAS
-rows. Failed fetches go through `db.record_blob_error`.
+Write path, three shared pieces, no per-provider SQL:
+`blob_cas::CasEdgeAccumulator` walks one bucket (`add_fetched` /
+`add_known` / `add_failed`, deduping by `(owning, ref)`), then
+`blob_cas::flush_cas_edges` performs the canonical end-of-bucket
+flush — CAS `put_many`, `bulk_upsert_in_tx` of the edge rows, and a
+`last_error` stamp on the bookkeeping sidecar for each failed pair —
+and commits. Cross-file atomicity between the CAS and the entity db
+is still not guaranteed, and there is no GC sweep to reconcile an
+orphaned `cas_objects` row; the bytes are content-addressed and
+harmless, just unreferenced.
 
 Read path: parse builds per-bucket
 [`BlobBundle`](../etl/src/blob_cas.rs)s — one bag of `(ref_id → bytes

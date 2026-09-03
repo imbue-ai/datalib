@@ -22,17 +22,32 @@ raw data) and a `<name>.render` step (raw → markdown +
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.doltlite_db
 ├── <name>/rendered_md/             # per-source markdown tree + sidecars
-└── system/
-    ├── backend_index/db.doltlite_db  # the grid_rows SQL index — query this
-    ├── qmd/index.sqlite              # semantic search index
-    └── state/dag_state.json          # scheduler state (per-step versions)
+├── unified_index/                  # derived; carries a CACHEDIR.TAG
+│   ├── grid/db.doltlite_db         # the grid_rows SQL index — query this
+│   └── qmd/index.sqlite            # semantic search index
+└── system/                         # the server's own state
+    ├── dag_state.json              # scheduler state (per-step versions)
+    ├── api-token                   # this process's bearer token
+    ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
+    ├── jobs.doltlite_db            # sync job queue + history
+    └── usage.doltlite_db           # bytes-on-disk timeseries
 ```
 
-Five binaries ship in a release: `datalib-dag` (the sync runner),
+The split is by writer: `unified_index/` is produced by the pipeline
+and fully derived, `system/` is the server's own state. Canonical
+definition — the constants both sides read — is
+[`datalib/backend/core/src/layout.rs`](/datalib/backend/core/src/layout.rs).
+
+Seven binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
-server + web UI), `latchkey-curl-impersonate` (Cloudflare-safe HTTP
-for downloaders), and `datalib-migrate-config` (one-shot conversion of
-a pre-TOML `config.yaml`; see below). End-to-end setup walkthrough:
+server + web UI), `datalib-applet` (the applet host, spawned on demand
+by the http gateway), `latchkey-curl-dispatch` +
+`latchkey-curl-impersonate` (Cloudflare-safe HTTP for downloaders),
+and `datalib-migrate-config` (one-shot conversion of a pre-TOML
+`config.yaml`; see below). The authoritative list is the `:dist`
+filegroup in
+[`datalib/backend/BUILD.bazel`](/datalib/backend/BUILD.bazel).
+End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
 ## Configuring sources
@@ -111,6 +126,12 @@ Pick the surface that fits the question:
   doltlite -readonly unified_index/grid/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
+
+  The CLI is **not** in the release tarball — it ships in the docker
+  image, and `bazelisk build //third-party/doltlite:doltlite` builds it
+  from a checkout. From a plain `install.sh` install, read the index
+  through `datalib-http`'s endpoints below instead. Stock `sqlite3`
+  cannot open these files.
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).

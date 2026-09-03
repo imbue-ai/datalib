@@ -25,20 +25,22 @@ pub struct DownloadControl {
     /// per-row content, and preserving them across resets is useful
     /// for debugging.
     ///
-    /// `blob_refs` is NOT truncated either: the per-source CAS
-    /// retains the bytes across this reset, and `blob_refs.blake3`
-    /// is the cache index that lets the next download skip
-    /// re-fetching. Use [`Self::refetch_blobs`] to invalidate the
-    /// blob cache index when you actually want the bytes re-pulled.
+    /// The per-provider CAS edge table (`<provider>_attachments`) is
+    /// NOT truncated either: the per-source CAS retains the bytes
+    /// across this reset, and the edge row's `blake3` is the cache
+    /// index that lets the next download skip re-fetching. Use
+    /// [`Self::refetch_blobs`] to invalidate that cache index when
+    /// you actually want the bytes re-pulled.
     pub reset_and_redownload: bool,
 
-    /// When true, the provider's `download::fetch` wipes the
-    /// `blob_refs` table (and its bookkeeping sidecar) before
-    /// fetching, so every attachment is re-fetched on the wire even
-    /// when its bytes are already in the sibling CAS file. The CAS
-    /// itself is never truncated — re-fetched bytes hash to the same
-    /// blake3 and `INSERT OR IGNORE` is a no-op, so this costs
-    /// network IO but not disk.
+    /// When true, the provider's `download::fetch` clears the
+    /// `blake3` column on its CAS edge table before fetching, so
+    /// every attachment is re-fetched on the wire even when its bytes
+    /// are already in the sibling CAS file. The edge rows themselves
+    /// stay — their `(owning, ref)` metadata is upstream-driven and
+    /// unchanged — and the CAS is never truncated: re-fetched bytes
+    /// hash to the same blake3 and `INSERT OR IGNORE` is a no-op, so
+    /// this costs network IO but not disk.
     ///
     /// Orthogonal to [`Self::reset_and_redownload`]: pass both for a
     /// full reset; pass `reset_and_redownload` alone for the common

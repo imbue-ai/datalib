@@ -309,9 +309,12 @@ system clean. A single GC pass should reclaim the source's raw store,
 its blob CAS contribution, its `<name>/rendered_md/` tree, and its
 `grid_rows` rows — without disturbing other sources that share the CAS.
 
-**Open**: today we have `blob_cas::gc_orphans()` for the blob side, but
-no top-level "uninstall this source" path. If a user removes Slack
-from their config, what is the expected sequence of operations?
+**Open**: there is no GC at all today — not for the blob side either.
+`blob_cas::gc_orphans()` was removed uncalled in `7f588ba1` and this
+paragraph kept citing it as if it shipped. So the question is wider
+than it looked: if a user removes Slack from their config, what is the
+expected sequence of operations, and what reclaims the CAS bytes no
+edge table points at any more?
 
 
 ### Multi-account / multi-instance within a provider type
