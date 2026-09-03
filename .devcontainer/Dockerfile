@@ -148,12 +148,14 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # mismatch means the bazel-linked Playwright looks for a browser
 # revision that isn't on disk. Bump both together.
 #
-# NOTE: CI still excludes e2e_test from the gate — see the FIXME in
-# `.github/workflows/test.yml`. Both halves of that FIXME's precondition
-# (rsync, and now both browsers) are satisfied *in this file*; what is
-# still outstanding is a published image built from it, which happens on
-# the next `v*` tag. Dropping the exclusion before then would point CI
-# at a `:latest` that has no WebKit.
+# NOTE: `//datalib/ui:e2e_test` is a CI merge gate again, and this layer
+# is what lets it launch a browser there. Two caveats worth knowing if
+# you touch it: CI cannot see this cache via `$HOME` (GitHub forces
+# `HOME=/github/home` for container steps), so `test.yml` passes
+# `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` to
+# reach it; and the qmd GGUFs the same suite needs are NOT here, because
+# this image is published against the `-slim` prod base — `test.yml`
+# pulls those separately behind an `actions/cache`.
 ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/*
