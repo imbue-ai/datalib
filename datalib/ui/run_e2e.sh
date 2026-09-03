@@ -234,10 +234,10 @@ fi
 # and the `npx -y @tobilu/qmd@<v>` fallback is never reached.
 #
 # Why it matters here specifically: npm keys the npx cache on the package
-# spec alone (`~/.npm/_npx/<hash-of-@tobilu/qmd@2.5.3>`), with no Node
+# spec alone (`~/.npm/_npx/<hash-of-@tobilu/qmd@<version>>`), with no Node
 # version in the key, so every Node on the machine shares one directory —
-# but the better-sqlite3 binding installed into it is built for a single
-# ABI. This test inherits the developer's PATH while every other Bazel
+# and back when this raced, the better-sqlite3 binding installed into it
+# was built for a single ABI. This test inherits the developer's PATH while every other Bazel
 # action uses the pinned PATH from `.bazelrc`, so the two raced to
 # populate that directory and whichever lost died with
 # "NODE_MODULE_VERSION 147 ... requires 127". Pinning the Node removes

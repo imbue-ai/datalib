@@ -22,12 +22,12 @@ test("the grid populates with rows from the fixture", async ({
   // Grid surfaces them.
   await page.goto("/");
   const firstRow = page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .first();
   await expect(firstRow).toBeVisible({ timeout: 10_000 });
 
   const rowCount = await page
-    .locator('.ag-center-cols-container [role="row"]')
+    .locator('.ag-grid-scrolling-rows [role="row"]')
     .count();
   expect(rowCount).toBeGreaterThan(0);
 

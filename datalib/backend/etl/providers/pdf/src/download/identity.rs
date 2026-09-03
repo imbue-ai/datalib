@@ -190,9 +190,14 @@ fn first_rdf_item(inner: &str) -> Option<String> {
 fn text_of(o: &Object) -> Option<String> {
     let raw = o.as_str().ok()?;
     if raw.len() >= 2 && raw[0] == 0xFE && raw[1] == 0xFF {
+        // `as_chunks::<2>().0` over `chunks_exact(2)`: same pairs, and
+        // it hands the closure a `&[u8; 2]`, so `from_be_bytes` needs no
+        // indexing. Rust 1.98's clippy asks for it.
         let units: Vec<u16> = raw[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_be_bytes(*c))
             .collect();
         let s = String::from_utf16_lossy(&units);
         let s = s.trim();

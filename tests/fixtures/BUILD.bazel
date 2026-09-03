@@ -268,7 +268,7 @@ py_test(
 #     CACHEABLE, though — bazel keys an action on its inputs, never on
 #     whether its outputs are reproducible, so serving a previously
 #     computed index for identical inputs is sound. See the `tags` note.
-QMD_VERSION = "2.5.3"
+QMD_VERSION = "2.8.3"
 
 genrule(
     name = "ingested_tng_qmd",

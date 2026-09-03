@@ -35,7 +35,7 @@ pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
 /// History note: the runner used to carry its own same-named constant,
 /// which a version bump missed (2.1.0 vs 2.5.3 for six weeks) — hence
 /// one shared constant here rather than a per-module default.
-pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
+pub const DEFAULT_QMD_VERSION: &str = "2.8.3";
 
 use std::path::{Path, PathBuf};
 

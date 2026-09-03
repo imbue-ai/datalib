@@ -4,7 +4,7 @@
   "private": true,
   "//": "Bazel-managed replacement for `npx -y @tobilu/qmd@<v>`. One dependency, pinned to DEFAULT_QMD_VERSION in datalib/backend/unified_index/src/qmd/mod.rs; //tools:qmd_version_pins_test keeps the two in step. npm_translate_lock turns the lockfile below into integrity-checked Bazel fetches, which is what `npx -y` never gave us.",
   "dependencies": {
-    "@tobilu/qmd": "2.5.3"
+    "@tobilu/qmd": "2.8.3"
   },
   "pnpm": {
     "//": "EMPTY ON PURPOSE. `npx -y` runs every package's install scripts; here none may run. better-sqlite3 is the only package in this tree that would want one (prebuild-install, which downloads an unpinned .node from a GitHub release) and we supply that binary ourselves from a sha256-pinned http_file instead \u2014 see //third-party/qmd/runtime:BUILD.bazel. node-llama-cpp's platform binaries and the tree-sitter grammars need no hook at all: the former are integrity-pinned optional deps in the lockfile, the latter ship prebuilt .node files inside their own tarballs and resolve them at require-time via node-gyp-build.",
