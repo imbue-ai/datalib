@@ -190,26 +190,28 @@ jobs:
       - name: bazel test //...
         run: |
           libdir="${{ steps.env.outputs.libclang-path }}"
-          # FIXME(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
-          # e2e suite from the CI gate. It needs three things from the
-          # image: `rsync`, a Chromium browser cache, and a WebKit one —
-          # the suite's `webkit` project re-runs the grid specs in the
-          # engine the desktop app's WKWebView matches, and a browser
-          # without its apt-installed shared libraries cannot launch.
+          # The Playwright e2e suite runs here. It was excluded for most
+          # of this file's life, because it needs three things from the
+          # image — `rsync`, a Chromium browser cache, and a WebKit one
+          # (the `webkit` project re-runs the grid specs in the engine
+          # the desktop app's WKWebView matches, and a browser without
+          # its apt-installed shared libraries cannot launch) — and
+          # `:latest` is whatever the last release built. WebKit landed
+          # in `.devcontainer/Dockerfile` five days after v0.29.0, so no
+          # published image had it until v0.30.1.
           #
-          # All three are now in `.devcontainer/Dockerfile`. What is left
-          # is a *published* image built from it, which happens on the
-          # next `v*` tag: `:latest` is whatever the last release built,
-          # so dropping this pattern earlier would point CI at an image
-          # with no WebKit. Once that image exists, DROP the negative
-          # pattern to re-enable the suite as a merge gate.
+          # v0.30.1's devcontainer-publish is the first one that does:
+          # `npx -y playwright@1.62.1 install --with-deps chromium
+          # webkit` ran fresh in that build, and both browsers landed in
+          # /root/.cache/ms-playwright. So the exclusion is gone and UI
+          # regressions gate merges again rather than waiting for
+          # whoever runs `bazel test //...` locally. That is not
+          # hypothetical: the AG Grid 36 bump in #252 broke 39 specs and
+          # the empty-`dist` bug broke 60, and CI saw neither.
           #
-          # (Local `bazel test //...` is unaffected and still runs it,
-          # both engines.) When the pattern comes off, the suite's
-          # Playwright report — video and trace per test — rides along
-          # as this job's `outputs.zip`, with no second invocation
-          # needed; see datalib/ui/tests/e2e/README-artifacts.md. The
-          # `--` keeps the leading `-` from being read as a flag.
+          # The suite's Playwright report — video and trace per test —
+          # rides along as this job's `outputs.zip` with no second
+          # invocation; see datalib/ui/tests/e2e/README-artifacts.md.
           #
           # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
           # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
@@ -251,7 +253,7 @@ jobs:
             --host_action_env=LIBCLANG_PATH="${libdir}" \
             --sandbox_add_mount_pair=/root/.cache/qmd/models \
             --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
-            -- //... -//datalib/ui:e2e_test
+            //...
 
   # PR-time gate for the fully-static musl release leg. The musl dist
   # build only otherwise runs at tag time (release.yml), and this repo

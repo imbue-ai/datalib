@@ -197,6 +197,15 @@ sh_test(
     data = _E2E_DATA,
     env = _E2E_ENV,
     deps = _E2E_DEPS,
+    # An sh_test defaults to size=medium, i.e. a 300s timeout, and this
+    # suite has outgrown it: 66 specs across two engines, with a qmd
+    # daemon warm-up in front. Measured at 206s on an idle laptop after
+    # the AG Grid 36 / Vite 8 bump, and it TIMED OUT at 300s on the same
+    # machine while a bazel build was competing for cores. 300s is not a
+    # budget, it is a coin flip, and a flaky merge gate teaches people to
+    # re-run rather than to read. `long` (900s) is ~4x the observed
+    # runtime; it bounds a genuine hang without failing a slow run.
+    timeout = "long",
     # Needs network (Playwright fetches any missing browser binary —
     # chromium and webkit) and the host's pnpm / node / Playwright
     # cache, hence `no-sandbox` + `requires-network`. Do NOT re-add the `external` tag: this is a
@@ -215,9 +224,15 @@ sh_test(
     env_inherit = [
         "PATH",
         "HOME",
-        # Which browser engines run_e2e.sh provisions; unset means both.
-        # CI narrows it to chromium, whose OS libraries are the only
-        # ones the Linux image bakes.
+        # Which browser engines run_e2e.sh provisions; unset means both
+        # (`chromium webkit`, see run_e2e.sh). Nothing in .github/ sets
+        # it — an earlier version of this comment claimed CI narrowed it
+        # to chromium "whose OS libraries are the only ones the Linux
+        # image bakes", which was never true of the workflow and is no
+        # longer true of the image either: v0.30.1's devcontainer bakes
+        # both engines via `playwright install --with-deps chromium
+        # webkit`. CI therefore runs both, which is the point of the
+        # webkit project.
         "E2E_BROWSERS",
     ],
 )
