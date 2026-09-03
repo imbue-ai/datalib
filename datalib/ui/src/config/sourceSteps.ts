@@ -329,11 +329,67 @@ export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
   return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
 }
 
+export type FieldValues = Record<string, unknown>;
+
+/// The option a stored value corresponds to, or the value unchanged.
+///
+/// The backends parse these strings case-insensitively, so a config
+/// holding `"Month"` means the `month` option and should show as it —
+/// but a value that matches nothing is left alone rather than snapped
+/// to the default, so editing an unrelated field can't quietly rewrite
+/// a knob the wizard doesn't recognize. The form then shows it as
+/// "(not a known value)".
+function matchOption(options: { value: string }[], value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const hit = options.find((o) => o.value === value.toLowerCase());
+  return hit ? hit.value : value;
+}
+
+/// The form's starting values for one descriptor: what the config
+/// already says, else the descriptor's default, else empty.
+///
+/// `step` present means *editing* that step; absent means *creating*.
+/// That distinction is load-bearing for one case — see the `int` arm
+/// of `Field` in catalog.ts. An `int` default is a policy this wizard
+/// imposes where the backend has none (`blob_size_limit_bytes` absent
+/// means "no limit"), so it seeds only on create; applying it on edit
+/// would cap a deliberately-uncapped source the next time someone
+/// opened the form to change something else. `bool` and `select`
+/// defaults mirror the backend's own, so they seed either way.
+///
+/// Lives here rather than in the component because it is the mirror of
+/// `paramsToml` — descriptor + config → form values, where that one is
+/// descriptor + form values → config — and because a rule this quiet
+/// needs to be testable without mounting anything.
+export function seedFieldValues(entry: CatalogEntry, step?: ConfiguredStep): FieldValues {
+  const next: FieldValues = {};
+  for (const field of entry.fields ?? []) {
+    const existing = step ? getParam(step.params, field.target) : undefined;
+    if (existing !== undefined) {
+      next[field.target] =
+        field.kind === "string_list"
+          ? ((existing as string[]) ?? [])
+          : field.kind === "select"
+            ? matchOption(field.options, existing)
+            : existing;
+    } else if (field.kind === "int" && field.default !== undefined && !step) {
+      next[field.target] = field.default;
+    } else if (field.kind === "bool") {
+      next[field.target] = field.default ?? false;
+    } else if (field.kind === "select") {
+      next[field.target] = field.default;
+    } else if (field.kind === "string_list") {
+      next[field.target] = [];
+    } else {
+      next[field.target] = "";
+    }
+  }
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------
-
-export type FieldValues = Record<string, unknown>;
 
 /// Render the download step's `[steps.params.…]` body from form values.
 /// Emitted as sub-table headers, so it must come last within its step —
