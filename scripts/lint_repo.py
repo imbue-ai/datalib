@@ -289,7 +289,75 @@ def main() -> int:
     root = _repo_root()
     rc = _check_no_sandbox(root)
     rc |= _check_python_coverage(root)
+    rc |= _check_module_lock_committed(root)
     return rc
+
+
+# --- Check 3: MODULE.bazel.lock is committed -------------------------
+#
+# `.bazelrc` explains why local bazel runs `--lockfile_mode=update`
+# (CI-only `error` would fail a dev's build before they could
+# regenerate). The cost of that choice is that bazel repairs the lock
+# *silently*: a green local `bazelisk test //...` proves nothing about
+# whether the file on disk is the file in the commit.
+#
+# That gap has a specific bite. Resolving a merge that touches both
+# `Cargo.lock` and `MODULE.bazel.lock` — take one side for the generated
+# file, commit, run the gate — leaves bazel's repair as an uncommitted
+# change *after* the merge commit, where nothing looks at it. CI then
+# aborts during module resolution and never runs a test, so the failure
+# arrives as "no test targets were found" rather than anything about
+# lockfiles.
+#
+# This closes it from the other end. `bazel run //:lint_repo` is itself
+# a bazel invocation, so module resolution has already rewritten the
+# lock by the time this function runs — meaning a dirty file here means
+# "bazel just repaired it, commit the result".
+#
+# No-op in CI: the job runs this against a fresh checkout (and with
+# `--config=ci`, which aborts earlier anyway), so the file cannot be
+# dirty there. This is purely a local guard.
+LOCK = "MODULE.bazel.lock"
+
+
+def _check_module_lock_committed(root: Path) -> int:
+    proc = subprocess.run(
+        ["git", "status", "--porcelain", "--", LOCK],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        # Don't turn a git problem into a lint failure — `_git_ls_files`
+        # already fails loudly if git cannot read the repo at all.
+        print(
+            f"WARNING: could not check {LOCK} (git exit "
+            f"{proc.returncode}): {proc.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 0
+
+    if not proc.stdout.strip():
+        print(f"OK: {LOCK} matches the commit.")
+        return 0
+
+    print(
+        f"ERROR: {LOCK} has uncommitted changes.\n\n"
+        "  Bazel re-resolved the module graph and rewrote it (the local\n"
+        "  `--lockfile_mode=update` default). CI runs `--lockfile_mode=error`\n"
+        "  and will abort during module resolution -- before any test -- if\n"
+        "  this file does not match its inputs.\n\n"
+        "  Commit it:\n\n"
+        f"      git add {LOCK} && git commit -m 'regenerate {LOCK}'\n\n"
+        "  Expected after any dependency change, and after any merge that\n"
+        "  touches both this file and datalib/backend/Cargo.lock. If a\n"
+        "  version bump was involved, re-run the gate once more: the\n"
+        "  crate_universe extension also rewrites Cargo.lock on the first\n"
+        "  pass, which invalidates the hash it just recorded (see .bazelrc).",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _check_no_sandbox(root: Path) -> int:
