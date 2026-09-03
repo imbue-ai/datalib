@@ -214,26 +214,35 @@ jobs:
           # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
           # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
           # into the sandbox. The PROD image bakes them at
-          # `/root/.cache/qmd/models`; the devcontainer CI pulls is built
-          # on the `-slim` prod variant, where that path exists but is
-          # empty, so on the rare run where this genrule misses the remote
-          # cache qmd downloads the models into it instead. Both flags
-          # below stay load-bearing either way: they are what make the
-          # path reachable from inside the sandbox at all.
+          # `/root/.cache/qmd/models`, but the devcontainer image CI runs
+          # in is built on the `-slim` prod variant (release.yml passes
+          # `--build-arg PROD_IMAGE_TAG=${version}-slim`), where that path
+          # exists and is EMPTY. So on a run where this genrule misses the
+          # remote cache, qmd downloads the models rather than finding
+          # them. That is the deliberate trade: 2.2 GB of image pulled on
+          # every run, against ~2 GB downloaded on the rare cold genrule.
           #
-          # GitHub Actions overrides HOME=/github/home for
-          # container steps, so `.bazelrc`'s `$(HOME)/.cache/qmd/models`
-          # mount + build_qmd_index.py's `~/.cache/qmd/models` both point
-          # at an EMPTY /github/home path — and qmd re-downloads ~2GB on
-          # every run (incl. reruns). Point both at the baked /root cache:
-          #   * --sandbox_add_mount_pair makes the baked dir visible in the
-          #     genrule sandbox (additive to the .bazelrc $(HOME) mount,
-          #     which stays correct for local dev).
-          #   * CLAUDE_MIRROR_HOST_HOME makes build_qmd_index.py resolve its
-          #     models dir to /root/.cache/qmd/models (the script reads it
-          #     in place of $HOME).
-          # qmd then finds the baked models + their `.etag` sidecars and
-          # skips the download (etag matches the unchanged HF release).
+          # An earlier version of this comment ended by claiming "qmd then
+          # finds the baked models + their `.etag` sidecars and skips the
+          # download". That is true of a LOCAL devcontainer, which
+          # `devcontainer.json` builds against the full prod image; it has
+          # never been true here. Read the genrule's own output before
+          # believing either story — it prints a line per model saying
+          # which it did.
+          #
+          # The two flags below are still load-bearing, for a different
+          # reason than "find the baked models". GitHub Actions overrides
+          # HOME=/github/home for container steps, so `.bazelrc`'s
+          # `$(HOME)/.cache/qmd/models` mount and build_qmd_index.py's
+          # `~/.cache/qmd/models` would otherwise resolve to two different
+          # places, and the models dir would not be reachable from inside
+          # the genrule sandbox at all:
+          #   * --sandbox_add_mount_pair makes /root/.cache/qmd/models
+          #     visible in the genrule sandbox (additive to the .bazelrc
+          #     $(HOME) mount, which stays correct for local dev).
+          #   * CLAUDE_MIRROR_HOST_HOME makes build_qmd_index.py resolve
+          #     its models dir to the same path (the script reads it in
+          #     place of $HOME).
           # Standing CI accommodation — not a republish bridge: the image
           # bakes as root and GH always sets HOME=/github/home.
           bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
