@@ -20,7 +20,7 @@ primitive inherits its defects and cannot see them, so a surface is
 ready to offer only once the code behind it has a problem sink, a
 published lossiness table, and a check against source. The one
 exception is the DAG runner, which schedules processes and carries none
-of our parsing behaviour — that can ship first.
+of our render behaviour — that can ship first.
 
 **Both are proposals. Nothing in either is built.** Treat every "we
 should" as unbuilt and every "we do" as a claim to verify against the

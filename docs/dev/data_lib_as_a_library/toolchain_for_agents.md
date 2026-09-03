@@ -10,13 +10,14 @@
 
 ## 0. Why this one comes second
 
-The obvious move on reading #534 is to say "we have most of that
-already, here are our primitives." That would be a mistake in a
-specific way: **an agent that adopts a primitive inherits its
-defects, and cannot see them.** Our render paths carry 424 unaudited
-silent-fallback sites; a record that will not parse fails a whole step
-and poisons its downstream subtree; nothing anywhere counts a value we
-dropped. Handing that to someone whose own skill *does* count dropped
+The obvious move on reading
+`imbue-ai/default-workspace-template#534` is to say "we have most of
+that already, here are our primitives." That would be a mistake in a
+specific way: **an agent that adopts a primitive inherits its defects,
+and cannot see them.** Our render paths carry 424 unaudited
+silent-fallback sites; a record render cannot deserialize fails the
+whole render step and poisons its downstream subtree; nothing anywhere
+counts a value we dropped. Handing that to someone whose own skill *does* count dropped
 values would be trading down, and they would find out later and
 downstream of us.
 
@@ -24,7 +25,7 @@ So the sequencing is: audit and retrofit (the companion doc), then
 ship. Concretely, a surface below is ready to offer when the code
 behind it has a problem sink, a published lossiness table, and a spot
 check against source. **The one exception is Surface A**, which is
-pure scheduling and carries none of our parsing behaviour — it can go
+pure scheduling and carries none of our render behaviour — it can go
 first, and probably should.
 
 The rest of this doc assumes that ordering and describes the
@@ -100,10 +101,11 @@ sandbox?" is answered, and the answer is yes.
 
 ## 2. What's missing
 
-**a. No caller-configured parse.** This is the one gap. Every one of
-the crates in §1 has the scan, the identity split, the cursor and the
-render path — and a **hardcoded** parse step. `pdf` knows PDFs,
-`perseus` knows TEI, `google_takeout` knows Takeout's dozen sub-shapes.
+**a. No caller-configured projection.** This is the one gap. Every one
+of the crates in §1 has the scan, the identity split, the cursor and
+the render path — and a **hardcoded** projection inside that render
+path. `pdf` knows PDFs, `perseus` knows TEI, `google_takeout` knows
+Takeout's dozen sub-shapes.
 Nothing says: *here is a tree of JSON / JSONL / CSV / Markdown, here is
 which field is the id, the title, the body, the timestamp, the author,
 the labels, the outbound links.* Adding one today means a Rust crate
@@ -143,7 +145,8 @@ pyo3 wheel is a dependency; a subprocess is not.
 ### Surface A — `datalib-dag` as a harness for any pipeline
 
 **Ships today; needs packaging, not capability. Not gated on the
-audit** — it schedules processes and knows nothing about parsing.
+audit** — it schedules processes and knows nothing about how any of
+them read data.
 
 ```toml
 [[steps]]
@@ -168,11 +171,19 @@ and multi-step composition. Four things to package it:
    around "I have data and a problem," not "run a sync."
 4. Ship the `doltlite` CLI in `:dist` (§2d).
 
-### Surface B — a `docs` provider: configured parse over a file tree
+### Surface B — a `docs` provider: configured projection over a file tree
 
 **Gated on the audit**, because this is the surface that would hand our
-parsing behaviour to someone else. It is `pdf` with the extractor
+render behaviour to someone else. It is `pdf` with the extractor
 replaced by a declarative projection; everything else in §1 is reused.
+
+The split across the two steps follows our existing layering rather
+than the skill's single `parse`: **download** walks the tree and stores
+each record's bytes verbatim, so it owns `glob` / `record` / `identity`
+/ `version`; **render** deserializes and projects, so it owns `map`.
+That is not bookkeeping — it is what makes a projection bug a
+re-render instead of a re-walk, and it is the reason the config below
+has params on both steps.
 
 ```toml
 [[steps]]
@@ -187,7 +198,12 @@ record   = "."             # one record per file; "$.issues[*]" to fan out
 identity = "$.id"          # falls back to blake3(bytes) when absent
 version  = ["$.updatedAt", "@mtime"]
 
-[steps.params.map]
+[[steps]]
+id = "tickets.render"
+command = "datalib-step render docs"
+inputs  = ["tickets/raw"]
+outputs = ["tickets/rendered_md"]
+[steps.params.map]         # → the unified grid_rows core
 title   = "$.title"
 text    = ["$.description", "$.body"]   # first present wins
 when_ts = "$.updatedAt"

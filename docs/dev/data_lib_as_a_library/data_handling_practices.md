@@ -20,14 +20,27 @@
 
 ## 1. Where this came from, and the honest scorecard
 
-PR #534 adds a skill that walks an agent through building an ingestion
-tool in about ten minutes and ~600 lines of stdlib Python. Read its
+`imbue-ai/default-workspace-template#534` adds a skill that walks an
+agent through building an ingestion tool in about ten minutes and ~600
+lines of stdlib Python. Read its
 SKILL.md next to our ingestion doc and the **storage core** converges,
 independently and closely: upstream identity as the primary key with no
 surrogates, `ON CONFLICT (id) DO UPDATE` with every column from
 `excluded` as the only write shape, chunked multi-row writes in one
 transaction, a raw layer preserved verbatim with everything downstream
 derived from it.
+
+**A note on vocabulary, because the mapping is not one-to-one.** The
+skill has a single pure `parse(record) -> row` step. We have no stage
+by that name. Our equivalent work happens in **render**: download
+stores the upstream payload verbatim (decoding a binary wire format
+where one exists, but never normalizing), and render deserializes that
+stored payload, projects it into `GridRow`s, and writes the markdown
+and the sidecar. So when this doc says a record "fails to parse," the
+thing that actually happened is that **render could not deserialize or
+project it** — and the fix is a re-render, never a re-fetch. Where a
+sentence below describes the skill, it keeps the skill's word; where it
+describes us, it says render.
 
 The **data-quality surface does not converge**, and there we are behind.
 The pattern is consistent and has an obvious cause: datalib grew from
@@ -55,10 +68,10 @@ own prose:
 | G2 | A stated field-nulling policy — "any rule that turns a non-null source value into null is a judgment call" | No such concept, so no way to count them |
 | G3 | The **judgment-call table**: every lossy rule listed with the number of records it affected | No analogue anywhere |
 | G4 | A **systematic-breakage exit**: stop when a run drops more than some fraction of what it read | Nearest is a consecutive-failure budget on *fetch*. See [§"Detecting upstream shape drift"](../data_architecture_ingestion_practices.md#detecting-upstream-shape-drift), recorded as an open question after `endpoint_shapes` was deleted |
-| G5 | A **spot check sharing no code with the parser**: N random exported rows compared against their raw records | Insta goldens, which assert output matches *what it matched last time* |
+| G5 | A **spot check sharing no code with the code under test** (their `parse`; our render projection): N random exported rows compared against their raw records | Insta goldens, which assert output matches *what it matched last time* |
 | G6 | **Order-independence** asserted as a property, falling out of a `max((version, batch))` merge | Last-complete-write-wins, plus `--reset-and-redownload` for completeness only |
 | G7 | **Retention**: bound the store, the ledger and the log inside the load itself | No pruning anywhere in the ingestion path; no CAS GC either |
-| G8 | Profiling the data before writing the parser | Nothing |
+| G8 | Profiling the data before writing the projection | Nothing |
 
 One of these is load-bearing beyond its own row. **G5 is the only gap
 whose absence hides the others.** A golden cannot tell you a field has
@@ -90,9 +103,9 @@ point of the sink is that one pass over the log tells you what to fix.
 
 **P2 — Malformed-but-isolated is a third failure category.**
 [`step_protocol.md`](../step_protocol.md) currently draws one line,
-absent vs malformed, and classifies a row that will not parse as a
-`data` failure — which fails the step and poisons its whole downstream
-subtree, including the shared `grid_index` fan-in that depends on
+absent vs malformed, and classifies a record render cannot deserialize
+as a `data` failure — which fails the render step and poisons its whole
+downstream subtree, including the shared `grid_index` fan-in that depends on
 *every* source. That is right for "the store will not open" and wrong
 for "one of forty thousand Slack messages has a field we did not
 expect." Three categories, not two:
@@ -250,7 +263,7 @@ These are additions to the existing recipe in
 §"Adding new sources is meant to be easy"](../data_architecture_ingestion_practices.md#adding-new-sources-is-meant-to-be-easy),
 not a replacement for it. That list stays; this is what it grows.
 
-**Before writing the parser**, when nobody on the team has read the
+**Before writing the projection**, when nobody on the team has read the
 corpus (a bulk export, a new provider's API, a file format): write one
 throwaway script, at most ~60 lines, run once over the *smallest*
 sample, and print — per identity candidate, distinct values vs records
@@ -262,12 +275,14 @@ Paste the output verbatim into the provider's `DOWNLOAD.md`. This is
 G8, scoped to where it pays: not a tool, a habit, and only when the
 corpus is unread.
 
-**When writing the parser:** a table-driven test with one row per
+**When writing the projection** (the pure function in the provider's
+`render/parse.rs` / `render/schema_translate.rs`)**:** a table-driven
+test with one row per
 oddity class the profile turned up — a list where a string is
 declared, a bare string where a list is, an int where a string is, an
 unparseable date, a timestamp that parses but is absurd, a missing
 optional, a type the contract does not cover — written *before* the
-parser, so each row is one line to add.
+projection, so each row is one line to add.
 
 **When writing the render path:** every drop and null through
 `problem()` (P1); no fallback without a one-line comment saying what it
@@ -289,8 +304,8 @@ that written down (P7)?
   single-purpose tool, wrong for a twenty-provider framework whose
   whole value is shared machinery.
 - **"Store the projection, not raw records."** We deliberately do the
-  opposite at the raw layer so a parser bug is a re-render rather than
-  a re-fetch. The skill's rule is correct for its input model — raw
+  opposite at the raw layer so a projection bug is a re-render rather
+  than a re-fetch. The skill's rule is correct for its input model — raw
   batches sitting on local disk, where re-parsing is free — and wrong
   for an API we cannot re-pull. See
   [§7 of the toolchain doc](toolchain_for_agents.md), which proposes
