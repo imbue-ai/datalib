@@ -58,6 +58,7 @@ import {
   type DagRun,
   type DagStep,
   type DagStepProgress,
+  type Diagnostic,
   type SyncJob,
   type SyncJobState,
   type SyncTask,
@@ -123,6 +124,24 @@ const configPath = ref("");
 // worth showing.
 const parseError = ref<string | null>(null);
 const configError = ref<string | null>(null);
+/// What the loader dropped from this config and why, from
+/// `GET /api/config`. Keyed onto rows by entry id below: an entry that
+/// was dropped is still *in the file*, so it still has a row here — it
+/// just isn't in the pipeline, and this is what says so.
+const configDiagnostics = ref<Diagnostic[]>([]);
+
+/// The reason this entry is not in the pipeline, or null if it is.
+///
+/// `warning` diagnostics are deliberately not returned: they don't drop
+/// anything, so a row carrying one still runs and still deserves the
+/// runner's own status.
+function droppedReason(id: string): Diagnostic | null {
+  return (
+    configDiagnostics.value.find(
+      (d) => d.entry?.id === id && d.severity !== "warning",
+    ) ?? null
+  );
+}
 // What the backend's own loader made of the same file. Held so the
 // empty state can cross-check itself against it — see
 // `emptyTableDiagnosis`.
@@ -267,6 +286,10 @@ type Row = {
   typeLabel: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
+  /// The loader's reason this entry is not in the pipeline, or null if
+  /// it is. An entry that was dropped still has a row — it is still in
+  /// the file, and the file is what the user edits.
+  dropped: Diagnostic | null;
   /// Null when the action applies to this row; otherwise the reason it
   /// doesn't, which becomes the disabled button's tooltip.
   runBlocked: string | null;
@@ -360,7 +383,7 @@ function finishedThisRun(id: string): boolean {
 /// dependencies.
 const holdRank = statusFloor();
 
-function stepStatus(id: string): StatusView {
+function stepStatus(id: string, dropped: Diagnostic | null): StatusView {
   const claim = claimedBy.value.get(id);
   const run = effectiveRun(dagRun.value, liveJob.value);
   const view = statusOf({
@@ -369,6 +392,7 @@ function stepStatus(id: string): StatusView {
     run,
     claim,
     waitingOn: waitingOn(sources.value, id, finishedThisRun),
+    dropped,
   });
   // Keyed on the claiming job, which exists from the enqueue frame —
   // before the runner has minted a run id of its own. When the job
@@ -380,7 +404,8 @@ function stepStatus(id: string): StatusView {
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
     const entry = s.type ? catalogFor(s.type) : undefined;
-    const run = s.kind === "applet" ? null : stepStatus(s.id);
+    const dropped = droppedReason(s.id);
+    const run = s.kind === "applet" ? null : stepStatus(s.id, dropped);
     // A step writes exactly one tree, and it is the step's id.
     const trees =
       s.kind === "applet"
@@ -398,15 +423,25 @@ const rows = computed<Row[]>(() =>
     // Naming the sources that would carry it is the useful half of
     // saying no.
     const seeds = s.kind === "step" ? sourcesFeedingIn(sources.value, s.id) : [];
+    // A dropped entry outranks every other reason a step action is
+    // unavailable, because it is the reason: the step is not in the
+    // graph, so `--sync` would refuse it and the button could only ever
+    // queue a job that fails on startup. Not for an applet's Run,
+    // though — an applet is never scheduled whatever the config says,
+    // and that is the more useful thing for its button to say.
+    const droppedWhy = dropped
+      ? `Not in the pipeline: ${dropped.message}${dropped.help ? ` — ${dropped.help}` : ""}`
+      : null;
     const runBlocked =
       s.kind === "applet"
         ? "Applets aren't scheduled — the server starts one when something asks for it."
-        : s.inputs.length === 0
-          ? null
-          : seeds.length === 1
-            ? `A sync starts at a source step. Run ${seeds[0]} — this runs with it.`
-            : `A sync starts at a source step. This one runs whenever any of its ` +
-              `sources does: ${seeds.join(", ") || "none it can reach"}.`;
+        : (droppedWhy ??
+          (s.inputs.length === 0
+            ? null
+            : seeds.length === 1
+              ? `A sync starts at a source step. Run ${seeds[0]} — this runs with it.`
+              : `A sync starts at a source step. This one runs whenever any of its ` +
+                `sources does: ${seeds.join(", ") || "none it can reach"}.`));
 
     // Edit: the wizard's forms describe provider steps. Everything else
     // is hand-written config, and the honest answer is to say so.
@@ -440,6 +475,10 @@ const rows = computed<Row[]>(() =>
     } else if (renderSiblingOf(s.id)) {
       renderBlocked = "This already has a render step.";
     }
+    // Wiring a render step onto an entry that isn't in the pipeline
+    // would just add a second broken row. `editBlocked` deliberately
+    // gets no such override: editing is how the entry gets fixed.
+    renderBlocked = droppedWhy ?? renderBlocked;
 
     const revealBlocked =
       s.kind === "applet"
@@ -455,7 +494,14 @@ const rows = computed<Row[]>(() =>
     const appletErr = appletErrors.value[s.id];
     const status: StatusView =
       s.kind === "applet"
-        ? appletErr
+        ? dropped
+          ? {
+              key: "config_rejected",
+              label: "Not loaded",
+              at: null,
+              detail: droppedWhy,
+            }
+          : appletErr
           ? { key: "failed", label: "Failed to start", at: null, detail: appletErr }
           : { key: "succeeded", label: "Up", at: null, detail: "The gateway has this applet up." }
         : run!;
@@ -463,6 +509,7 @@ const rows = computed<Row[]>(() =>
     return {
       id: s.id,
       kind: s.kind,
+      dropped,
       phase: s.phase,
       kindLabel: s.kind === "applet" ? "Applet" : PHASE_LABEL[s.phase],
       type: s.type,
@@ -1186,7 +1233,12 @@ async function loadConfig() {
     let cfg = await fetchConfig();
     if (!cfg.exists) cfg = await fetchConfigScaffold();
     configPath.value = cfg.path;
+    // `parsed_ok` false means the file is not a config at all — in
+    // which case `App.vue`'s gate is showing instead of this view, and
+    // this is belt and braces. Ordinary per-entry problems are not
+    // errors of the whole config and live in `configDiagnostics`.
     configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
+    configDiagnostics.value = cfg.diagnostics;
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
     // A reload must never overwrite what someone is typing into the
@@ -1208,6 +1260,9 @@ async function loadConfig() {
     loadError.value = (e as Error).message;
   }
 }
+
+/// The rows the loader dropped, for the banner above the table.
+const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 
 /// Repaint the columns whose content is a `cellRenderer` over state
 /// that lives outside the row's identity.
@@ -1835,6 +1890,28 @@ onUnmounted(() => {
       </span>
       <button class="m2-btn" @click="configOpen = true">Show the config</button>
     </div>
+    <!-- Entries the loader dropped. Not a whole-config error: the rest
+         of the pipeline is running, which is why this is a note above a
+         working table rather than a screen in front of it. The per-row
+         Status column carries each reason; this says how many and where
+         to look, because a dropped row is easy to scroll past. -->
+    <div v-else-if="droppedRows.length" class="m2-msg bad m2-invalid">
+      <b>
+        {{ droppedRows.length }}
+        {{ droppedRows.length === 1 ? "entry isn’t" : "entries aren’t" }} in the pipeline.
+      </b>
+      <span class="m2-invalid-why">
+        The rest of this config loaded and still syncs. These are in the file and were not
+        loaded — each one’s Status cell says why. Open <b>Advanced</b> below to fix them, or
+        run <code>datalib-dag --check {{ configPath }}</code>.
+      </span>
+      <ul class="m2-dropped">
+        <li v-for="r in droppedRows" :key="r.id">
+          <code>{{ r.id }}</code> — {{ r.dropped?.message }}
+        </li>
+      </ul>
+      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+    </div>
     <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
@@ -2079,6 +2156,13 @@ onUnmounted(() => {
   max-width: 90ch;
 }
 .m2-invalid > span { color: var(--datalib-fg); }
+.m2-dropped {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--datalib-fg);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
 .m2-invalid-why { color: var(--datalib-muted) !important; font-size: 12.5px; line-height: 1.55; }
 
 .m2-grid {

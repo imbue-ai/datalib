@@ -92,8 +92,39 @@ curl -X PUT "<origin>/api/config" \
 ```
 
 The PUT validates with the real config loader before writing anything:
-an invalid config returns `{ok: false, error}` and leaves the file on
-disk untouched — fix and re-PUT. Only a valid config ever lands.
+an invalid config returns `{ok: false, error, diagnostics}` and leaves
+the file on disk untouched — fix and re-PUT. Only a valid config ever
+lands, so a successful PUT means the whole file is good.
+
+**Read `diagnostics`, not just `error`.** It is the full list, one entry
+per problem, each with `severity`, `message`, `help`, and a `line` —
+so one round-trip tells you everything wrong with the file instead of
+one problem per attempt. `error` is only the first of them.
+
+To check text without saving it, `POST /api/config/check` with the same
+body; it returns the same shape and writes nothing.
+
+From a terminal, `datalib-dag --check <data_root>/config.toml` prints
+the same diagnostics as `file:line:col: severity: message`, with the
+offending line and a `help:` line under each. Exit 0 clean, 1 if the
+file is not a config at all, 2 if some entries were dropped.
+
+### A file already on disk is treated more leniently than your PUT
+
+Worth knowing, because the two doors deliberately disagree. The loader
+that *reads* `config.toml` keeps whatever loads: an entry it cannot use
+is dropped, named in `diagnostics`, and everything else still runs.
+That exists so one stray key cannot cost the user their whole app.
+
+The PUT does not do that — it refuses anything with a problem. So if
+`GET /api/config` shows a non-empty `diagnostics` with `parsed_ok:
+true`, you are looking at a file someone hand-edited into a partly
+broken state; the app is running on the rest of it, and your PUT will
+not be accepted until you fix the entries it names.
+
+`app_ready` on `GET /api/config` is the separate question of whether the
+app can serve anything at all: false when the file is not a config, or
+when it declares no `unified_index` applet. The UI blocks on it.
 
 The config is always TOML — the server reads and writes no other
 format. If `GET /api/config` comes back with `exists: false` and a

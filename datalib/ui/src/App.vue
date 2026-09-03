@@ -1,46 +1,96 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterView, RouterLink } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
+import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
+import { subscribeLive } from "@/live";
 
-// First-run gate. A data root with no `config.toml` has no
-// `unified_index` applet — that applet is declared *in* the config —
-// so every view in the app fails, and the grid failed loudest:
-// `502 {"error":"no applet \"unified_index\""}` as a new user's first
-// impression. While the root is uninitialized we show the onboarding
-// screen instead of the routed view, and the tabs with it: none of them
-// can do anything yet.
+// The gate in front of the whole app, for the two states where showing
+// the app would be a lie.
 //
-// `null` while the check is in flight — render nothing rather than
-// flash a view that is about to be replaced. A failed check (backend
-// blip, offline) falls through to the app: the gate exists to explain
-// an empty folder, not to become a second way for the app not to load.
-const firstRunConfig = ref<ConfigResponse | null>(null);
+// Both come from one fact: `config.toml` declares the `unified_index`
+// applet, and that applet *is* the grid, the search and the document
+// view. Without a usable one, every view answers
+// `502 {"error":"no applet \"unified_index\""}` — which was, literally,
+// a new user's first impression (#199) and what a single stray config
+// key did to a working install (#209).
+//
+//   * **No config at all** → the onboarding screen, which explains what
+//     initializing will write before writing it.
+//   * **A config the server can't run on** → the config-error screen.
+//     `app_ready` is the backend's answer, false when the file is not a
+//     config or when it declares no usable `unified_index` applet.
+//
+// A config with a merely *broken step* is neither of those. It loads,
+// the app works, and that step's diagnostic belongs on its row in the
+// Pipeline table. That distinction is the point of the graded loader:
+// before it, one bad key landed you on a blocking screen.
+//
+// ## The gate is live, in both directions
+//
+// A config does not only break at startup. An agent editing the root, a
+// text editor, a `git checkout` — any of them can break or fix the file
+// while the app is open, and `watch.rs` reports every one of them as
+// `config_changed`. So this re-checks on that event, and the direction
+// that is easy to forget is the *second* one: a config that gets fixed
+// has to drop the gate on its own, with no reload. `resync` covers the
+// case where the stream itself dropped and we missed the frame.
+//
+// `null` while the first check is in flight — render nothing rather
+// than flash a view that is about to be replaced. A failed check
+// (backend blip, offline) falls through to the app: the gate exists to
+// explain a broken root, not to become a third way for the app not to
+// load.
+const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 
-async function checkConfig() {
+const gate = computed<"first-run" | "config-error" | null>(() => {
+  const c = config.value;
+  if (!c) return null;
+  if (!c.exists) return "first-run";
+  return c.app_ready ? null : "config-error";
+});
+
+async function refresh() {
   try {
-    const cfg = await fetchConfig();
-    firstRunConfig.value = cfg.exists ? null : cfg;
+    config.value = await fetchConfig();
   } catch {
-    firstRunConfig.value = null;
+    config.value = null;
   } finally {
     checked.value = true;
   }
 }
 
-onMounted(checkConfig);
+// Initializing just wrote the config, so drop the gate on the click
+// rather than on the round trip after it — `refresh` then replaces this
+// guess with the truth, and `config_changed` would have anyway.
+function onInitialized() {
+  if (config.value) config.value = { ...config.value, exists: true, app_ready: true };
+  void refresh();
+}
+
+let stop: (() => void) | null = null;
+onMounted(() => {
+  void refresh();
+  stop = subscribeLive({
+    root: (e) => {
+      if (e.kind === "config_changed") void refresh();
+    },
+    resync: () => void refresh(),
+  });
+});
+onUnmounted(() => stop?.());
 </script>
 
 <template>
   <main class="datalib-shell" data-feedback-root>
     <header class="datalib-header">
       <h1>datalib</h1>
-      <nav v-if="!firstRunConfig" class="datalib-tabs" aria-label="Navigation">
+      <nav v-if="!gate" class="datalib-tabs" aria-label="Navigation">
         <RouterLink class="datalib-tab" to="/">Explore</RouterLink>
         <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink>
         <RouterLink class="datalib-tab" to="/sources2">Manager2</RouterLink>
@@ -52,10 +102,11 @@ onMounted(checkConfig);
     </header>
 
     <FirstRunView
-      v-if="firstRunConfig"
-      :config="firstRunConfig"
-      @initialized="firstRunConfig = null"
+      v-if="gate === 'first-run' && config"
+      :config="config"
+      @initialized="onInitialized"
     />
+    <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
     <RouterView v-else-if="checked" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
