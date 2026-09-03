@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_slack_config::SlackRenderConfig;
 use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
@@ -24,6 +25,7 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
     let raw_path = config.common.raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
     let event_tape_enabled = config.common.event_tape_enabled();
+    let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
         procs.push(Box::new(SlackDownload {
@@ -32,6 +34,7 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
             sync,
             blob_size_limit_bytes,
             event_tape_enabled,
+            latchkey,
         }));
     }
     Ok(procs)
@@ -57,6 +60,9 @@ struct SlackDownload {
     sync: SlackApiSync,
     blob_size_limit_bytes: Option<u64>,
     event_tape_enabled: bool,
+    /// Which latchkey identity to authenticate as, forwarded whole from
+    /// the source's `latchkey_settings:` block.
+    latchkey: LatchkeySettings,
 }
 
 #[async_trait]
@@ -98,6 +104,7 @@ impl DataProcessor for SlackDownload {
             dms: self.sync.dms,
             dm_users: self.sync.dm_users.clone(),
             blob_size_limit_bytes: self.blob_size_limit_bytes,
+            latchkey: self.latchkey.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
         })

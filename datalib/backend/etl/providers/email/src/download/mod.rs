@@ -36,6 +36,7 @@ use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::http::LatchkeySettings;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -163,6 +164,9 @@ const EMAIL_GET_PROPERTIES: &[&str] = &[
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block.
+    pub latchkey: LatchkeySettings,
     /// Either an explicit `.doltlite_db` file or the per-source directory;
     /// the shared `db_path_for` helper places the entity db inside as
     /// `entities.doltlite_db` (the dir is created if needed). Ignored
@@ -265,7 +269,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(5));
     opts.progress.set_message("email: session");
 
-    let session = Session::discover(&opts.hostname)
+    let session = Session::discover(&opts.hostname, &opts.latchkey)
         .await
         .with_context(|| format!("discover JMAP session at {}", opts.hostname))?;
     opts.progress.inc(1);
@@ -1032,11 +1036,14 @@ async fn sync_blobs(
 
     // Build a download task from an owned (blob_id, owning_id). The
     // `downloadUrl` is substituted here (borrowing `session`) so the
-    // spawned future owns only `String`s and is `Send + 'static`.
+    // spawned future owns only `String`s and is `Send + 'static` — which
+    // is also why the latchkey settings are cloned per task rather than
+    // borrowed from `opts`.
     let spawn_one = |set: &mut JoinSet<EmlFetchOutcome>, blob_id: String, owning_id: String| {
         let url = session.download_url_for(account_id, &blob_id, "message.eml", "message/rfc822");
+        let latchkey = opts.latchkey.clone();
         set.spawn(async move {
-            let result = api::download_bytes(&url, BLOB_TIMEOUT).await;
+            let result = api::download_bytes(&url, BLOB_TIMEOUT, &latchkey).await;
             (blob_id, owning_id, result)
         });
     };

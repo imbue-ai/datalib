@@ -42,7 +42,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-use crate::latchkey::latchkey_tokio_command;
+/// Re-exported so providers can name the settings they forward without
+/// taking a direct dependency on the schema crate — they all already
+/// depend on this one.
+pub use datalib_source_common::LatchkeySettings;
 
 /// HTTP method. We only model the methods any provider currently issues;
 /// extend as needed.
@@ -96,18 +99,17 @@ pub struct HttpRequest {
     /// flag is behavior-only and is NOT part of [`fixture_key`], so a
     /// synthesizer's fixtures match whether or not the bypass is set.
     pub bypass_latchkey: bool,
-    /// Which stored latchkey account to use, for a service that holds
-    /// more than one (`latchkey --account <acct> curl …`). Latchkey keys
-    /// credentials by (service, account) and *requires* the flag once a
-    /// service has two — which is the normal case for Gmail, where work
-    /// and personal accounts live under the same `google-gmail` service.
+    /// The source's latchkey knobs, forwarded whole from its config's
+    /// `latchkey_settings:` block (see
+    /// [`datalib_source_common::LatchkeySettings`]) — today just which
+    /// stored account to run as, but providers pass the struct rather
+    /// than the field so a new knob reaches all of them at once.
     ///
-    /// `None` means "the only one", which is what every provider that
-    /// predates this field wants. Like [`bypass_latchkey`] it is NOT part
-    /// of [`fixture_key`]: which identity fetched a response doesn't
-    /// change the response's shape, and folding it in would make one
-    /// user's fixtures unusable by another.
-    pub latchkey_account: Option<String>,
+    /// Like [`HttpRequest::bypass_latchkey`] it is NOT part of
+    /// [`fixture_key`]: which identity fetched a response doesn't change
+    /// the response's shape, and folding it in would make one user's
+    /// fixtures unusable by another.
+    pub latchkey: LatchkeySettings,
 }
 
 impl HttpRequest {
@@ -120,7 +122,7 @@ impl HttpRequest {
             body: None,
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
-            latchkey_account: None,
+            latchkey: LatchkeySettings::default(),
         }
     }
 
@@ -135,7 +137,7 @@ impl HttpRequest {
             body: Some(body),
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
-            latchkey_account: None,
+            latchkey: LatchkeySettings::default(),
         }
     }
 
@@ -156,10 +158,10 @@ impl HttpRequest {
         self
     }
 
-    /// Use a specific stored latchkey account. See
-    /// [`HttpRequest::latchkey_account`].
-    pub fn account(mut self, account: Option<impl Into<String>>) -> Self {
-        self.latchkey_account = account.map(Into::into);
+    /// Forward the source's latchkey settings onto this request. See
+    /// [`HttpRequest::latchkey`].
+    pub fn latchkey(mut self, settings: LatchkeySettings) -> Self {
+        self.latchkey = settings;
         self
     }
 }
@@ -508,14 +510,10 @@ mod live {
         let mut cmd = if req.bypass_latchkey {
             tokio::process::Command::new("curl")
         } else {
-            let mut c = latchkey_tokio_command();
-            // `--account` is a latchkey *global* option, so it goes before
-            // the subcommand, not after.
-            if let Some(account) = &req.latchkey_account {
-                c.arg("--account").arg(account);
-            }
-            c.arg("curl");
-            c
+            // `latchkey [--account <acct>] curl` — the account selector is a
+            // latchkey *global* option and so must precede the subcommand;
+            // `latchkey_curl_command` is the one place that knows that.
+            crate::latchkey::latchkey_curl_command(&req.latchkey)
         };
         cmd.arg("-sS");
         // -D - dumps the response header block to stdout so we can

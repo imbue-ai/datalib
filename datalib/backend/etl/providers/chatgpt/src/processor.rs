@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_chatgpt_config::ChatgptRenderConfig;
 use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
@@ -20,12 +21,14 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
+    let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
         procs.push(Box::new(ChatgptDownload {
             id: format!("chatgpt/{name}/download"),
             raw_path,
             sync,
+            latchkey: latchkey_settings,
         }));
     }
     Ok(procs)
@@ -49,6 +52,9 @@ struct ChatgptDownload {
     id: String,
     raw_path: PathBuf,
     sync: ChatgptApiSync,
+    /// Which latchkey identity to authenticate as, forwarded whole from
+    /// the source's `latchkey_settings:` block.
+    latchkey: LatchkeySettings,
 }
 
 #[async_trait]
@@ -64,6 +70,7 @@ impl DataProcessor for ChatgptDownload {
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
+            latchkey: self.latchkey.clone(),
             max_pages: self.sync.max_pages.map(|v| v as usize),
             limit: self.sync.limit.map(|v| v as usize),
             sleep_between: Duration::ZERO,

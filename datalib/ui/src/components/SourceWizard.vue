@@ -45,8 +45,8 @@ import {
   fieldIsActive,
   fieldPhaseOf,
   fieldsFor,
-  getParam,
   renderIdFor,
+  seedFieldValues,
   slugify,
   suggestId,
   type ConfiguredStep,
@@ -200,19 +200,6 @@ const flat = computed(() => groups.value.flatMap((g) => g.entries));
 const cursor = ref(0);
 watch(query, () => (cursor.value = 0));
 
-/// The option a stored value corresponds to, or the value unchanged.
-///
-/// The backends parse these strings case-insensitively, so a config
-/// holding `"Month"` means the `month` option and should show as it —
-/// but a value that matches nothing is left alone rather than snapped
-/// to the default, so editing an unrelated field can't quietly rewrite
-/// a knob the wizard doesn't recognize. `selectOptions` then shows it.
-function matchOption(options: { value: string }[], value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  const hit = options.find((o) => o.value === value.toLowerCase());
-  return hit ? hit.value : value;
-}
-
 /// A dropdown's options, plus the current value when it isn't one of
 /// them — so a hand-edited config renders as what it says instead of as
 /// a blank select, and saving round-trips it.
@@ -225,27 +212,7 @@ function selectOptions(f: Field & { kind: "select" }): { value: string; label: s
 }
 
 function seedValues(entry: CatalogEntry, step?: ConfiguredStep) {
-  const next: FieldValues = {};
-  for (const field of entry.fields ?? []) {
-    const existing = step ? getParam(step.params, field.target) : undefined;
-    if (existing !== undefined) {
-      next[field.target] =
-        field.kind === "string_list"
-          ? (existing as string[]) ?? []
-          : field.kind === "select"
-            ? matchOption(field.options, existing)
-            : existing;
-    } else if (field.kind === "bool") {
-      next[field.target] = field.default ?? false;
-    } else if (field.kind === "select") {
-      next[field.target] = field.default;
-    } else if (field.kind === "string_list") {
-      next[field.target] = [];
-    } else {
-      next[field.target] = "";
-    }
-  }
-  values.value = next;
+  values.value = seedFieldValues(entry, step);
 }
 
 if (props.editing) seedValues(props.editing.entry, props.editing.step);

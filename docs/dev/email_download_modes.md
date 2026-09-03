@@ -102,13 +102,33 @@ The config is an empty table:
 [steps.params.gmail_api]
 ```
 
-Add `account = "you@gmail.com"` only when `google-gmail` holds more than
-one credential — latchkey keys by (service, account) and requires the
-flag once there are two, which is the normal case for work + personal.
-That is what `HttpRequest::latchkey_account` exists for. It is
+Which Google account this source mirrors is **not** a Gmail knob — it is
+a latchkey one, and it lives in the source-level block every
+latchkey-backed provider shares:
+
+```toml
+[steps.params.latchkey_settings]
+account = "you@gmail.com"
+```
+
+Name it only when `google-gmail` holds more than one credential —
+latchkey keys by `(service, account)` and requires the selector once
+there are two, which is the normal case for work + personal. Omitting it
+means "the only stored account"; it is deliberately *not* a
+pick-the-first fallback, so with two stored and none named latchkey
+fails the request as ambiguous rather than mirroring the wrong mailbox.
+
+The setting reaches the wire as `HttpRequest::latchkey`. It is
 deliberately **not** part of `fixture_key`: which identity fetched a
 response doesn't change the response's shape, and folding it in would
 make one user's playback fixtures unusable by another.
+
+> The knob used to be `gmail_api.account`. It moved because the JMAP
+> mode needs it too (Fastmail is just as capable of holding two
+> accounts), and because the account is latchkey's namespace rather than
+> any one provider's. A config still using the old location fails at
+> load time with the replacement spelled out — it is not silently
+> ignored.
 
 ### Sync
 

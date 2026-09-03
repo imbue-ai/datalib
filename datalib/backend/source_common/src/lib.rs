@@ -7,6 +7,11 @@
 //! ([`DownloadParams`]). Depends on nothing but `serde`, so any config crate can
 //! compose [`SourceCommon`] without pulling ETL or orchestrator code.
 //!
+//! [`LatchkeySettings`] sits here for the same reason but is deliberately *not*
+//! part of [`SourceCommon`]: only the providers that authenticate through the
+//! `latchkey` CLI compose it, so the block is rejected on a local-only source
+//! rather than accepted and ignored.
+//!
 //! All cross-node derivation (folding [`Defaults`] into each source, resolving
 //! paths from `data_root`) happens once, eagerly, in the orchestrator's
 //! `normalize()` via [`SourceCommon::fold_defaults`] and
@@ -139,6 +144,62 @@ impl SourceCommon {
     }
 }
 
+/// Per-source latchkey knobs, for a source whose downloader authenticates
+/// through the `latchkey` CLI.
+///
+/// Composed as `latchkey_settings:` by exactly those providers' config
+/// crates and by **no** others, which is the whole point of it being a
+/// separate block rather than a field on [`SourceCommon`]: a
+/// `latchkey_settings` key on a local-only source (`pdf`, `media`,
+/// `signal_backup`, …) hits that config's `deny_unknown_fields` and fails
+/// at load time, instead of being accepted and silently ignored.
+///
+/// Providers forward the whole struct — not the individual fields — down to
+/// their HTTP layer (`HttpRequest::latchkey`), so a knob added here reaches
+/// every latchkey provider without touching any of them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatchkeySettings {
+    /// Which stored latchkey account this source mirrors
+    /// (`latchkey --account <acct> curl …`).
+    ///
+    /// Latchkey keys credentials by `(service, account)` and *requires* the
+    /// flag once a service holds two — the normal case once work and personal
+    /// identities are both signed in to the same service. The name is
+    /// latchkey's own (whatever `latchkey auth list` shows for the service),
+    /// not the provider's; the unnamed default account is `""` there, but
+    /// address it by omitting this field rather than by writing an empty
+    /// string.
+    ///
+    /// `None` means "the only stored account", which is what every source
+    /// that predates this block wants. It is deliberately not a
+    /// pick-the-first fallback: with two accounts stored and none named,
+    /// latchkey fails the request as ambiguous, which is the loud outcome we
+    /// want over silently mirroring the wrong identity.
+    #[serde(default)]
+    pub account: Option<String>,
+}
+
+impl LatchkeySettings {
+    /// Reject values that would reach latchkey as nonsense. Call from the
+    /// composing config's `validate()`.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.account.as_ref().is_some_and(|a| a.trim().is_empty()) {
+            return Err(
+                "`latchkey_settings.account` names a stored latchkey account; omit it entirely \
+                 to use the only one (`latchkey auth list` shows what is stored)"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// The account to pass to `latchkey --account`, if one was configured.
+    pub fn account(&self) -> Option<&str> {
+        self.account.as_deref()
+    }
+}
+
 /// The slim per-source envelope for the **render** wave. Render's only
 /// shared tunables are where the raw store lives ([`Self::raw_path`])
 /// and — for file-tree-backed sources like perseus that render straight
@@ -214,6 +275,47 @@ fn expand_tilde(s: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Omitting the block is the "only stored account" case and must stay
+    /// the zero-config default -- every source that predates it relies on
+    /// deserializing from nothing at all.
+    #[test]
+    fn latchkey_settings_default_to_no_account() {
+        let s: LatchkeySettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.account(), None);
+        assert!(s.validate().is_ok());
+        assert_eq!(LatchkeySettings::default().account(), None);
+    }
+
+    /// The unnamed default account is addressed by *omitting* the field.
+    /// An empty string would reach latchkey as `--account ""`, which is a
+    /// different (and almost never intended) request.
+    #[test]
+    fn latchkey_settings_reject_a_blank_account() {
+        for blank in ["", " ", "\t"] {
+            let s = LatchkeySettings {
+                account: Some(blank.to_string()),
+            };
+            let err = s
+                .validate()
+                .expect_err("a blank account must not reach latchkey");
+            assert!(err.contains("latchkey_settings.account"), "{err}");
+        }
+    }
+
+    /// A typo inside the block is a config error, not a silently ignored
+    /// key -- otherwise `acount = "..."` would mirror the wrong identity.
+    #[test]
+    fn latchkey_settings_reject_an_unknown_key() {
+        assert!(serde_json::from_str::<LatchkeySettings>(r#"{"acount": "me"}"#).is_err());
+    }
+
+    #[test]
+    fn latchkey_settings_round_trip_a_named_account() {
+        let s: LatchkeySettings = serde_json::from_str(r#"{"account": "thad@imbue.com"}"#).unwrap();
+        assert_eq!(s.account(), Some("thad@imbue.com"));
+        assert!(s.validate().is_ok());
+    }
 
     #[test]
     fn fold_defaults_source_wins_then_global_then_builtin() {

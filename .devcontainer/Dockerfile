@@ -31,7 +31,7 @@
 # commit and `release.yml` publishing the new tag, where this points at
 # an image that does not exist yet. That is the same window the rest of
 # the version bump lives in; `release.yml` closes it minutes later.
-ARG PROD_IMAGE_TAG=0.29.0
+ARG PROD_IMAGE_TAG=0.30.0
 FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}
 
 # Reset the prod image's ENTRYPOINT. Prod wraps everything in

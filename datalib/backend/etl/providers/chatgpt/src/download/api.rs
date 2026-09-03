@@ -16,7 +16,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
 
 pub const BASE: &str = "https://chatgpt.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -36,6 +36,9 @@ pub enum ChatGPTError {
 pub struct ChatGPTClient {
     pub requests: u64,
     pub network_seconds: f64,
+    /// The source's latchkey settings, forwarded onto every request this
+    /// client issues (see `HttpRequest::latchkey`).
+    latchkey: LatchkeySettings,
 }
 
 impl Default for ChatGPTClient {
@@ -43,6 +46,7 @@ impl Default for ChatGPTClient {
         Self {
             requests: 0,
             network_seconds: 0.0,
+            latchkey: LatchkeySettings::default(),
         }
     }
 }
@@ -52,11 +56,28 @@ impl ChatGPTClient {
         Self::default()
     }
 
+    /// Build a client that authenticates as the source's configured
+    /// latchkey identity. Every request it issues carries the settings.
+    pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
+        Self {
+            latchkey,
+            ..Self::default()
+        }
+    }
+
+    /// The identity this client authenticates as, for the one fetch that
+    /// builds its `latchkey curl` invocation by hand rather than going
+    /// through `HttpRequest` (the signed-CDN attachment GET).
+    pub fn latchkey(&self) -> &LatchkeySettings {
+        &self.latchkey
+    }
+
     #[instrument(skip(self), fields(path = path))]
     pub async fn get(&mut self, path: &str) -> Result<Value, ChatGPTError> {
         let url = format!("{BASE}{path}");
         let req = HttpRequest::get("chatgpt", &url)
             .header("Accept", "application/json")
+            .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
         // 429 retry — `Retry-After`, exponential backoff, and the give-up
         // bound — is handled centrally in the shared chokepoint. When it

@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::http::HttpResponse;
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::NotionRenderConfig;
 use datalib_etl_notion_config::{NotionApiSync, NotionConfig};
@@ -27,6 +28,7 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let playback_root = ctx.playback_root;
+    let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
         procs.push(Box::new(NotionDownload {
@@ -34,6 +36,7 @@ pub fn plan_download(
             raw_path,
             sync,
             playback_root,
+            latchkey,
         }));
     }
     Ok(procs)
@@ -57,6 +60,9 @@ struct NotionDownload {
     raw_path: PathBuf,
     sync: NotionApiSync,
     playback_root: Option<PathBuf>,
+    /// Which latchkey identity to authenticate as, forwarded whole from
+    /// the source's `latchkey_settings:` block.
+    latchkey: LatchkeySettings,
 }
 
 #[async_trait]
@@ -87,6 +93,7 @@ impl DataProcessor for NotionDownload {
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
+            latchkey: self.latchkey.clone(),
             subtree_pages: seeds,
             inbox: self.sync.inbox.as_ref().is_some_and(|i| i.enabled),
             inbox_mirror_referenced: self

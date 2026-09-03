@@ -12,7 +12,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
 
 pub const BASE: &str = "https://claude.ai/api";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -29,6 +29,9 @@ pub enum ClaudeError {
 pub struct ClaudeClient {
     pub requests: u64,
     pub network_seconds: f64,
+    /// The source's latchkey settings, forwarded onto every request this
+    /// client issues (see `HttpRequest::latchkey`).
+    latchkey: LatchkeySettings,
 }
 
 impl Default for ClaudeClient {
@@ -36,6 +39,7 @@ impl Default for ClaudeClient {
         Self {
             requests: 0,
             network_seconds: 0.0,
+            latchkey: LatchkeySettings::default(),
         }
     }
 }
@@ -45,11 +49,21 @@ impl ClaudeClient {
         Self::default()
     }
 
+    /// Build a client that authenticates as the source's configured
+    /// latchkey identity. Every request it issues carries the settings.
+    pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
+        Self {
+            latchkey,
+            ..Self::default()
+        }
+    }
+
     #[instrument(skip(self), fields(path = path))]
     pub async fn get(&mut self, path: &str) -> Result<Value, ClaudeError> {
         let url = format!("{BASE}{path}");
         let req = HttpRequest::get("anthropic", &url)
             .header("Accept", "application/json")
+            .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
         let resp = latchkey_curl(&req).await.map_err(map_transport_error)?;
         self.network_seconds += (resp.duration_ms as f64) / 1000.0;

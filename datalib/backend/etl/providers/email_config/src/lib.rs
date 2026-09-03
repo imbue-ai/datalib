@@ -14,7 +14,7 @@
 //! `ingest-config` oneof lands (Program A step 3), [`EmailConfig`] becomes the
 //! variant payload directly — same type, no reparse.
 
-use datalib_source_common::{RenderCommon, SourceCommon};
+use datalib_source_common::{LatchkeySettings, RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The full config for a `type: email` source: the shared `common:` envelope
@@ -38,6 +38,11 @@ pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
     #[serde(default)]
     pub common: SourceCommon,
+    /// Which latchkey identity this source mirrors. Composed only by the
+    /// providers that authenticate through the `latchkey` CLI, and
+    /// forwarded whole to the download client — see [`LatchkeySettings`].
+    #[serde(default)]
+    pub latchkey_settings: LatchkeySettings,
     /// JMAP sync knobs. `Some` selects the JMAP live-server download path.
     #[serde(default)]
     pub sync: Option<EmailSync>,
@@ -140,6 +145,9 @@ impl EmailConfig {
     /// at most one download mode is selected and that each one's own
     /// fields hang together.
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.latchkey_settings
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         match self.live_mode()? {
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
@@ -220,10 +228,12 @@ pub enum EmailOutlink {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
-    /// Which stored latchkey account to use, when `google-gmail` holds
-    /// more than one (work + personal is the normal case). latchkey
-    /// *requires* this once a service has two credentials. Omit when
-    /// there is only one.
+    /// **Retired** — moved to the source-level `latchkey_settings.account`,
+    /// which every latchkey-backed provider now shares (and which the JMAP
+    /// mode needs too, so it could not stay under `gmail_api`). Still
+    /// parsed so a config written against the old location fails at load
+    /// time with the fix rather than being silently ignored; see
+    /// [`EmailGmailApi::validate`].
     #[serde(default)]
     pub account: Option<String>,
     /// Gmail `userId` path segment. `me` (the default) is the
@@ -303,10 +313,12 @@ impl EmailGmailApi {
                  of {DEFAULT_QUOTA_UNITS_PER_MINUTE})"
             );
         }
-        if self.account.as_ref().is_some_and(|a| a.trim().is_empty()) {
+        if let Some(account) = &self.account {
             anyhow::bail!(
-                "email `gmail_api.account` names a stored latchkey account; omit it entirely \
-                 if `google-gmail` holds only one"
+                "email `gmail_api.account` has moved to `latchkey_settings.account`, which \
+                 every latchkey-backed source shares. Replace it with a sibling of \
+                 `gmail_api`:\n\n    [steps.params.latchkey_settings]\n    account = \
+                 {account:?}\n"
             );
         }
         Ok(())
@@ -378,15 +390,50 @@ mod tests {
     #[test]
     fn parses_a_gmail_api_step_params_payload() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "gmail_api": { "account": "thad@imbue.com", "message_budget": 5000 },
+            "latchkey_settings": { "account": "thad@imbue.com" },
+            "gmail_api": { "message_budget": 5000 },
         }))
         .unwrap();
         cfg.validate().unwrap();
+        assert_eq!(
+            cfg.latchkey_settings.account(),
+            Some("thad@imbue.com"),
+            "the account is a source-level latchkey setting, not a gmail knob",
+        );
         let Some(EmailLiveMode::GmailApi(g)) = cfg.live_mode().unwrap() else {
             panic!("expected gmail_api mode");
         };
-        assert_eq!(g.account.as_deref(), Some("thad@imbue.com"));
         assert_eq!(g.message_budget, Some(5000));
+    }
+
+    /// The account used to live under `gmail_api`. A config written against
+    /// that location must fail with the fix rather than mirror the wrong
+    /// identity (or, once `google-gmail` holds two accounts, fail deep in a
+    /// download with latchkey's own ambiguity error).
+    #[test]
+    fn rejects_the_retired_gmail_api_account_location() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail_api": { "account": "thad@imbue.com" },
+        }))
+        .unwrap();
+        let err = cfg
+            .validate()
+            .expect_err("the retired location must not be silently ignored")
+            .to_string();
+        assert!(err.contains("latchkey_settings.account"), "{err}");
+        assert!(err.contains("thad@imbue.com"), "{err}");
+    }
+
+    /// An empty account is never what anyone means: latchkey's unnamed
+    /// default account is addressed by omitting the field.
+    #[test]
+    fn rejects_an_empty_latchkey_account() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "latchkey_settings": { "account": "  " },
+            "gmail_api": {},
+        }))
+        .unwrap();
+        assert!(cfg.validate().is_err());
     }
 
     #[test]

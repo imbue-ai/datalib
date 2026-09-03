@@ -2,7 +2,7 @@
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator and `http`
 //! can name `NotionConfig` without linking the provider.
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The notion-owned slice of a `notion_api` source. `sync:` present → live
@@ -14,6 +14,11 @@ pub struct NotionConfig {
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
+    /// Which latchkey identity this source mirrors. Composed only by the
+    /// providers that authenticate through the `latchkey` CLI, and
+    /// forwarded whole to the download client — see [`LatchkeySettings`].
+    #[serde(default)]
+    pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
     pub sync: Option<NotionApiSync>,
 }
@@ -23,6 +28,9 @@ impl NotionConfig {
     /// when `sync:` is present it must enable the inbox or list at least one
     /// subtree page, else there is nothing to seed the BFS with.
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.latchkey_settings
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         if let Some(sync) = &self.sync {
             let inbox_on = sync.inbox.as_ref().is_some_and(|i| i.enabled);
             let subtrees_on = sync.subtrees.as_ref().is_some_and(|t| !t.pages.is_empty());
@@ -106,6 +114,7 @@ mod tests {
     fn sync_with_inbox_enabled_validates() {
         let cfg = NotionConfig {
             common: Default::default(),
+            latchkey_settings: Default::default(),
             sync: Some(NotionApiSync {
                 inbox: Some(NotionInbox {
                     enabled: true,
@@ -125,6 +134,7 @@ mod tests {
     fn sync_with_subtree_pages_validates() {
         let cfg = NotionConfig {
             common: Default::default(),
+            latchkey_settings: Default::default(),
             sync: Some(NotionApiSync {
                 subtrees: Some(NotionSubtrees {
                     pages: vec!["abc123".into()],
@@ -140,6 +150,7 @@ mod tests {
     fn sync_without_inbox_or_subtrees_is_rejected() {
         let cfg = NotionConfig {
             common: Default::default(),
+            latchkey_settings: Default::default(),
             sync: Some(NotionApiSync::default()),
         };
         let err = cfg.validate().unwrap_err();
@@ -152,6 +163,7 @@ mod tests {
     fn sync_with_inbox_disabled_and_empty_subtrees_is_rejected() {
         let cfg = NotionConfig {
             common: Default::default(),
+            latchkey_settings: Default::default(),
             sync: Some(NotionApiSync {
                 inbox: Some(NotionInbox {
                     enabled: false,
