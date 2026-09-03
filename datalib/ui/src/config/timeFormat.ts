@@ -39,8 +39,8 @@ export function formatStamp(iso: string | null): string {
 /// Order two stamps by the instant they name.
 ///
 /// A timestamp column that *displays* "5 minutes ago" must not sort on
-/// that text — alphabetically "10 seconds ago" precedes "2 hours ago"
-/// precedes "just now", which is three kinds of wrong at once. AG Grid
+/// that text — alphabetically "10 minutes ago" precedes "2 hours ago"
+/// precedes "seconds ago", which is three kinds of wrong at once. AG Grid
 /// sorts on the row's value rather than what a `cellRenderer` painted,
 /// so the text is never the key; this is about the value.
 ///
@@ -85,6 +85,8 @@ const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["day", 86_400_000],
   ["hour", 3_600_000],
   ["minute", 60_000],
+  // Reachable only for a stamp in the future — everything under a
+  // minute in the past is "seconds ago" before the loop is entered.
   ["second", 1000],
 ];
 
@@ -96,11 +98,20 @@ export function formatRelative(iso: string | null, now: number): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return iso;
   const delta = now - t;
-  // Under a second, "0 seconds ago" is worse than saying so plainly.
-  // This also catches a stamp a moment in the *future*, which ordinary
+  // The whole sub-minute band is one word-shaped answer rather than a
+  // number, because it is the only band that changes *while you are
+  // reading it*. A counter ticking 3, 4, 5 in a table cell reads as
+  // news and pulls the eye back to a row that has nothing more to say;
+  // "seconds ago" carries the same fact — this just ran — and then
+  // holds still. The hover has the instant for anyone who wants it.
+  //
+  // This also swallows the sub-second case ("0 seconds ago" was never
+  // the reading) and a stamp a moment in the *future*, which ordinary
   // clock skew between the machine that ran the sync and the machine
-  // reading this page produces all the time.
-  if (Math.abs(delta) < 1000) return "just now";
+  // reading this page produces all the time. Skew beyond a second
+  // still falls through to "in 30 seconds" below: at that size it is a
+  // real disagreement, and saying so is more use than hiding it.
+  if (delta >= -1000 && delta < 60_000) return "seconds ago";
   for (const [unit, ms] of RELATIVE_UNITS) {
     if (Math.abs(delta) >= ms) {
       // Negated because `RelativeTimeFormat` counts forward: -5 minutes
@@ -110,5 +121,5 @@ export function formatRelative(iso: string | null, now: number): string {
       return RELATIVE_FMT.format(-Math.round(delta / ms), unit);
     }
   }
-  return "just now";
+  return "seconds ago";
 }

@@ -229,7 +229,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
-    await expect(cell).toHaveText(/(just now|\d+ seconds? ago)/);
+    await expect(cell).toHaveText("seconds ago");
     const stamp = await stampOf(page, "pdfs/raw");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
