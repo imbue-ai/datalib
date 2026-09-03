@@ -31,7 +31,7 @@ test("the Pipeline table paints at full height", async ({ page }) => {
   // Rows are bound. This stayed true throughout the bug, so it is the
   // precondition — not the check.
   await expect(
-    page.locator('.ag-center-cols-container [role="row"]'),
+    page.locator('.ag-grid-scrolling-rows [role="row"]'),
   ).not.toHaveCount(0, { timeout: 10_000 });
 
   // The check: the grid occupies real space on screen.

@@ -31,7 +31,7 @@
 # commit and `release.yml` publishing the new tag, where this points at
 # an image that does not exist yet. That is the same window the rest of
 # the version bump lives in; `release.yml` closes it minutes later.
-ARG PROD_IMAGE_TAG=0.29.0
+ARG PROD_IMAGE_TAG=0.30.0
 FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}
 
 # Reset the prod image's ENTRYPOINT. Prod wraps everything in
@@ -110,7 +110,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # bun — not needed for the bazel build, but qmd's own dev workflow
 # uses it (`bun install`, `bun src/cli/qmd.ts <cmd>`) so working
 # inside `third-party/qmd/` doesn't need extra setup.
-ARG BUN_VERSION=1.1.45
+ARG BUN_VERSION=1.4.0
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && mv /root/.bun/bin/bun /usr/local/bin/bun \
     && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
@@ -154,7 +154,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # still outstanding is a published image built from it, which happens on
 # the next `v*` tag. Dropping the exclusion before then would point CI
 # at a `:latest` that has no WebKit.
-ARG PLAYWRIGHT_VERSION=1.59.1
+ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/*
 
@@ -167,7 +167,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 
 # bazelisk reads `.bazelversion` and downloads the matching bazel, so
 # we only pin bazelisk here.
-ARG BAZELISK_VERSION=1.22.0
+ARG BAZELISK_VERSION=1.29.0
 ARG TARGETARCH
 RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
             amd64) echo amd64 ;; \

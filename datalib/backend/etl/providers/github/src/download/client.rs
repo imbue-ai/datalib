@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use datalib_etl::http::{
     default_retryability, latchkey_curl_classified, HttpError, HttpRequest, HttpResponse,
-    Retryability,
+    LatchkeySettings, Retryability,
 };
 
 pub const BASE: &str = "https://api.github.com";
@@ -53,6 +53,9 @@ pub enum GitHubError {
 pub struct GitHubClient {
     requests: AtomicU64,
     network_ms: AtomicU64,
+    /// The source's latchkey settings, forwarded onto every request this
+    /// client issues (see `HttpRequest::latchkey`).
+    latchkey: LatchkeySettings,
 }
 
 impl Default for GitHubClient {
@@ -60,6 +63,7 @@ impl Default for GitHubClient {
         Self {
             requests: AtomicU64::new(0),
             network_ms: AtomicU64::new(0),
+            latchkey: LatchkeySettings::default(),
         }
     }
 }
@@ -69,12 +73,23 @@ impl GitHubClient {
         Self::default()
     }
 
+    /// Build a client that authenticates as the source's configured
+    /// latchkey identity. Every request it issues carries the settings.
+    pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
+        Self {
+            latchkey,
+            ..Self::default()
+        }
+    }
+
     pub fn request_count(&self) -> u64 {
         self.requests.load(Ordering::Relaxed)
     }
 
     async fn request_once(&self, url: &str) -> Result<HttpResponse, GitHubError> {
-        let req = HttpRequest::get("github", url).timeout(LATCHKEY_TIMEOUT);
+        let req = HttpRequest::get("github", url)
+            .latchkey(self.latchkey.clone())
+            .timeout(LATCHKEY_TIMEOUT);
         // Rate-limit (429 + primary-limit 403) and 5xx retry — including the
         // `Retry-After` / `x-ratelimit-reset` waits — is handled centrally in
         // the shared chokepoint via `github_retryability`. A `GaveUp` here is

@@ -45,7 +45,7 @@ const NODE_REL: &str = "node/bin/node";
 /// `datalib/tauri/stage-runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.7.0";
+pub const LATCHKEY_VERSION: &str = "3.8.0";
 
 /// The latchkey invocation to show in user-facing instructions and
 /// error messages: the app-bundled launcher when present (the
@@ -129,12 +129,19 @@ pub fn npx_command(pkg_spec: &str) -> Command {
 /// A private npm cache for [`npx_command`], scoped by Node's ABI.
 ///
 /// npm keys the npx package directory on the **package spec alone** —
-/// `<cache>/_npx/<hash of "@tobilu/qmd@2.5.3">` — with no Node version
+/// `<cache>/_npx/<hash of "@tobilu/qmd@2.8.3">` — with no Node version
 /// anywhere in it. So by default every Node on a machine shares one
-/// installed tree, while a native module inside that tree is built for
-/// exactly one `NODE_MODULE_VERSION`: qmd's `better-sqlite3` ships as a
-/// `node-v<abi>` prebuilt (see the `better_sqlite3_prebuilt_*` archives
-/// in `MODULE.bazel`).
+/// installed tree, while a native module inside that tree may be built
+/// for exactly one `NODE_MODULE_VERSION`.
+///
+/// The original offender was named: qmd's `better-sqlite3` 12 shipped a
+/// `node-v<abi>` prebuilt. qmd 2.8.3 moved to better-sqlite3 13, whose
+/// bindings live in the tarball and are chosen by platform, and the
+/// tree-sitter grammars and node-llama-cpp resolve per-platform too — so
+/// as of that bump there is no *known* ABI-bound module left in the
+/// tree. The scoping stays anyway: it costs one re-install per ABI once,
+/// it is not re-audited on every qmd bump, and the failure it prevents
+/// surfaces as a `require()` abort deep inside a genrule.
 ///
 /// Two Nodes therefore poison each other. Whichever installs first wins
 /// the directory, and the other dies in `require()` with "compiled

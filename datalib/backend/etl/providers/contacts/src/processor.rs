@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use datalib_etl_carddav_config::CarddavRenderConfig;
@@ -32,6 +33,7 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
+    let latchkey = config.latchkey_settings.clone();
     let mode = match config.sync {
         Some(sync) => DownloadMode::Server(sync),
         None => DownloadMode::File {
@@ -43,6 +45,7 @@ pub fn plan_download(
         id: format!("carddav/{name}/download"),
         raw_path,
         mode,
+        latchkey,
     })])
 }
 
@@ -76,6 +79,10 @@ pub struct CarddavDownload {
     id: String,
     raw_path: PathBuf,
     mode: DownloadMode,
+    /// Which latchkey identity to authenticate as, forwarded whole from
+    /// the source's `latchkey_settings:` block. Unused by the file-backed
+    /// `.vcf` mode, which makes no requests.
+    latchkey: LatchkeySettings,
 }
 
 #[async_trait]
@@ -98,6 +105,7 @@ impl DataProcessor for CarddavDownload {
                     db: Some(db),
                     server_url: sync.server_url.clone(),
                     addressbooks: sync.addressbooks.clone(),
+                    latchkey: self.latchkey.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })

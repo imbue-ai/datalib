@@ -68,7 +68,7 @@ def main() -> int:
     for label, args in _INVOCATIONS:
         print(f"[python] {label} ({len(files)} files)", flush=True)
         cmd = [str(ruff), *args, "--config", pyproject, *files]
-        if subprocess.run(cmd).returncode != 0:
+        if subprocess.run(cmd, check=False).returncode != 0:
             failed.append(label)
 
     if failed:

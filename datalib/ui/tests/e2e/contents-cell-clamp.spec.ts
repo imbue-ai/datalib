@@ -50,7 +50,7 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
 
   await page.goto("/");
   await expect(
-    page.locator('.ag-center-cols-container [role="row"]').first(),
+    page.locator('.ag-grid-scrolling-rows [role="row"]').first(),
   ).toBeVisible({ timeout: 10_000 });
 
   // Scroll the long-snippet row into view. The grid virtualizes both

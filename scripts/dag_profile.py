@@ -40,6 +40,7 @@ this wants pairing with progress-flatline detection.
 
 from __future__ import annotations
 
+import itertools
 import json
 import sys
 from collections import defaultdict
@@ -138,7 +139,7 @@ def main(argv: list[str]) -> int:
     # Gap between consecutive events anywhere in the stream. Attributed to
     # the step that was last heard from, which is the one to suspect.
     gaps: list[tuple[float, datetime, str, str]] = []
-    for (t0, e0), (t1, _e1) in zip(events, events[1:]):
+    for (t0, e0), (t1, _e1) in itertools.pairwise(events):
         gap = (t1 - t0).total_seconds()
         if gap >= stall_threshold:
             gaps.append((gap, t0, e0.get("step") or "-", e0["event"]))

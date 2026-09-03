@@ -43,7 +43,7 @@ rust_library(
     # desktop app's version. Must match [workspace.package].version in
     # datalib/backend/Cargo.toml; the
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.29.0",
+    version = "0.30.0",
     # The rust-embed proc macro reads `$DATALIB_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,

@@ -17,7 +17,7 @@ import { test, expect } from "@playwright/test";
 // scroll, the row at DOM-position-0 can shift mid-test, so a click and
 // the subsequent class-assertion may end up looking at different rows.
 async function pinFirstRowId(page: import("@playwright/test").Page) {
-  const first = page.locator('.ag-center-cols-container [role="row"]').first();
+  const first = page.locator('.ag-grid-scrolling-rows [role="row"]').first();
   await expect(first).toBeVisible({ timeout: 10_000 });
   const id = await first.getAttribute("row-id");
   expect(id, "first data row must have a row-id attribute").toBeTruthy();
@@ -31,7 +31,7 @@ test.describe("URL reflects app state", () => {
     await page.goto("/");
     const rowId = await pinFirstRowId(page);
     const target = page.locator(
-      `.ag-center-cols-container [role="row"][row-id="${rowId}"]`,
+      `.ag-grid-scrolling-rows [role="row"][row-id="${rowId}"]`,
     );
 
     const beforePath = await page.evaluate(() => location.pathname);
@@ -57,7 +57,7 @@ test.describe("URL reflects app state", () => {
     await page.goto("/");
     const rowId = await pinFirstRowId(page);
     const target = page.locator(
-      `.ag-center-cols-container [role="row"][row-id="${rowId}"]`,
+      `.ag-grid-scrolling-rows [role="row"][row-id="${rowId}"]`,
     );
     await target.click();
     await expect(target).toHaveClass(/ag-row-selected/);
@@ -71,7 +71,7 @@ test.describe("URL reflects app state", () => {
     // a duplicate document column.
     await page.reload();
     const restoredRow = page
-      .locator('.ag-center-cols-container [role="row"].ag-row-selected')
+      .locator('.ag-grid-scrolling-rows [role="row"].ag-row-selected')
       .first();
     await expect(restoredRow).toBeVisible({ timeout: 10_000 });
     await expect(restoredRow).toHaveAttribute("row-id", rowId);

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use datalib_etl_email_config::EmailRenderConfig;
@@ -43,6 +44,7 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
+    let latchkey = config.latchkey_settings.clone();
 
     // Live-server modes are declared explicitly and are mutually
     // exclusive (`live_mode` enforces that); the file-backed mbox mode is
@@ -80,6 +82,7 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
             raw_path,
             mode,
             blob_size_limit_bytes,
+            latchkey,
             only_extract_labels: config.only_extract_labels.clone(),
         }));
     }
@@ -129,6 +132,11 @@ pub struct EmailDownload {
     raw_path: PathBuf,
     mode: ExtractMode,
     blob_size_limit_bytes: Option<u64>,
+    /// Which latchkey identity to authenticate as, forwarded whole from
+    /// the source's `latchkey_settings:` block. Both live modes use it
+    /// (JMAP's `fastmail`, Gmail's `google-gmail`); the mbox mode makes
+    /// no requests and ignores it.
+    latchkey: LatchkeySettings,
     /// Full mailbox label paths to limit extraction to (empty = every
     /// mailbox). Applies to both JMAP and mbox modes.
     only_extract_labels: Vec<String>,
@@ -154,6 +162,7 @@ impl DataProcessor for EmailDownload {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     hostname: sync.hostname.clone(),
+                    latchkey: self.latchkey.clone(),
                     account_id: sync.account_id.clone(),
                     full_resync: sync.full_resync,
                     only_mailbox_labels: self.only_extract_labels.clone(),
@@ -179,6 +188,7 @@ impl DataProcessor for EmailDownload {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     config: gmail.clone(),
+                    latchkey: self.latchkey.clone(),
                     only_labels: self.only_extract_labels.clone(),
                     blob_size_limit_bytes: self.blob_size_limit_bytes,
                     progress: ctx.progress.clone(),

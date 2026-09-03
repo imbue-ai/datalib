@@ -49,7 +49,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.29.0"
+version = "0.30.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
@@ -70,7 +70,7 @@ thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = "0.8"
-tower-http = { version = "0.6.8", features = ["cors", "fs"] }
+tower-http = { version = "0.7.1", features = ["cors", "fs"] }
 # sqlx is the SQLite client driving DoltRepo against a single file at
 # `<data_root>/<dolt.db_filename>`. The file is a *doltlite* file with
 # the full version-control superpowers (`SELECT dolt_commit(...)` etc.);
@@ -155,9 +155,9 @@ async-trait = "0.1"
 # (see //tools/prost_toolchain), so we don't depend on `prost-build`
 # here — only the runtime. `protoc-gen-prost` is pulled in via the
 # toolchain wiring, not as a direct crate dep.
-prost = "0.13"
-prost-types = "0.13"
-protoc-gen-prost = "0.4"
+prost = "0.14"
+prost-types = "0.14"
+protoc-gen-prost = "0.5"
 # Crypto + compression for the Signal backup container. Versions
 # chosen to satisfy the 7-day burn-in policy as of 2026-06-08.
 hkdf = "0.12"

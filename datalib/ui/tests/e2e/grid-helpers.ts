@@ -1,3 +1,16 @@
+// AG Grid 36 renamed the DOM this file selects on, and the rename is not
+// cosmetic: v35 split body rows horizontally into
+// `.ag-center-cols-container` plus a pinned container per side, and v36
+// dropped that split entirely — rows are one element per vertical
+// section (`<ag-row-container name="scrolling">`, class
+// `.ag-grid-scrolling-rows`) with pinned cells held in place by sticky
+// positioning instead. `.ag-body-viewport` likewise became
+// `.ag-grid-viewport`, which is the element carrying `overflow: auto`.
+//
+// Both old classes are simply absent from v36, so every selector using
+// them matched nothing and 39 e2e tests failed while the grid itself
+// rendered fine.
+
 import { expect, type Locator, type Page } from "@playwright/test";
 
 // Scroll a (possibly virtualized-away) row into view via the grid api
@@ -54,7 +67,7 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
       async () => {
         await nudge();
         return page
-          .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
+          .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
           .count();
       },
       {
@@ -72,7 +85,7 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
 export async function clickRowByUuid(page: Page, uuid: string) {
   const rowIndex = await scrollRowIntoView(page, uuid);
   await page
-    .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
+    .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
     .click();
 }
 
@@ -83,7 +96,7 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
   const rowIndex = await scrollRowIntoView(page, uuid);
   await page
-    .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
+    .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
     .click({ button: "right" });
   await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
 }

@@ -15,9 +15,9 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::events;
 use datalib_etl::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
-    HttpResponse, Retryability, IMPERSONATE_MARKER_HEADER,
+    HttpResponse, LatchkeySettings, Retryability, IMPERSONATE_MARKER_HEADER,
 };
-use datalib_etl::latchkey::latchkey_tokio_command;
+use datalib_etl::latchkey::latchkey_curl_command;
 
 use super::db::RawDb;
 use super::schema_raw::{slack_message_uuid, SlackAttachmentRow};
@@ -82,9 +82,12 @@ pub(crate) fn build_url(method: &str, params: &BTreeMap<String, String>) -> Stri
 async fn call_slack_once(
     method: &str,
     params: &BTreeMap<String, String>,
+    latchkey: &LatchkeySettings,
 ) -> Result<Value, SlackError> {
     let url = build_url(method, params);
-    let req = HttpRequest::get("slack", &url).timeout(LATCHKEY_TIMEOUT);
+    let req = HttpRequest::get("slack", &url)
+        .latchkey(latchkey.clone())
+        .timeout(LATCHKEY_TIMEOUT);
     // Rate-limit (429 + the HTTP-200 `ratelimited` body) and transient
     // retry is handled centrally in the shared chokepoint via
     // `slack_retryability`; a terminal error here (incl. `GaveUp` after the
@@ -129,9 +132,10 @@ async fn call_slack_once(
 pub async fn call_slack(
     method: &str,
     params: &BTreeMap<String, String>,
+    latchkey: &LatchkeySettings,
 ) -> Result<SlackCall, SlackError> {
     let t0 = std::time::Instant::now();
-    let response = call_slack_once(method, params).await?;
+    let response = call_slack_once(method, params, latchkey).await?;
     let duration_ms = t0.elapsed().as_millis() as u64;
     let bytes = response.to_string().len() as u64;
     events::item_fetched(&format!("slack.api/{}", method), bytes, duration_ms);
@@ -177,6 +181,7 @@ pub async fn download_files_for_messages(
     attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut HashMap<String, String>,
     blob_size_limit_bytes: Option<u64>,
+    latchkey: &LatchkeySettings,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in [
@@ -205,6 +210,7 @@ pub async fn download_files_for_messages(
                 attach,
                 blake3_by_file,
                 blob_size_limit_bytes,
+                latchkey,
             )
             .await?;
             *counts.entry(outcome.to_string()).or_insert(0) += 1;
@@ -231,6 +237,7 @@ async fn download_one_file(
     attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut HashMap<String, String>,
     blob_size_limit_bytes: Option<u64>,
+    latchkey: &LatchkeySettings,
 ) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
         Some(s) => s,
@@ -290,11 +297,12 @@ async fn download_one_file(
     let mime = file_obj.get("mimetype").and_then(|v| v.as_str());
 
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
-    let mut cmd = latchkey_tokio_command();
     // Slack file hosts (files.slack.com) are CF-fronted; mark the request so
-    // the dispatch curl routes it to the impersonating curl.
-    cmd.arg("curl")
-        .arg("-fSL")
+    // the dispatch curl routes it to the impersonating curl. The helper
+    // supplies `[--account <acct>] curl`, so this fetch runs as the same
+    // identity as the API calls that discovered the file.
+    let mut cmd = latchkey_curl_command(latchkey);
+    cmd.arg("-fSL")
         .arg("-H")
         .arg(IMPERSONATE_MARKER_HEADER)
         .arg("-o")

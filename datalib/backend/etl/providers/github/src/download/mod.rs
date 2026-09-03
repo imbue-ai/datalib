@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::http::LatchkeySettings;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -42,6 +43,10 @@ pub const DEFAULT_SCOPES: &[&str] = &["author:@me", "commenter:@me", "mentions:@
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block. Default = the only stored
+    /// account for the service.
+    pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
     /// created if needed). Ignored for opening when `db` is `Some`.
@@ -72,6 +77,7 @@ pub struct FetchOptions {
 impl Default for FetchOptions {
     fn default() -> Self {
         Self {
+            latchkey: LatchkeySettings::default(),
             db_path: PathBuf::new(),
             db: None,
             scopes: DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect(),
@@ -288,7 +294,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
 
-    let client = GitHubClient::new();
+    let client = GitHubClient::with_latchkey(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
     // Whether discovery actually covered every scope this run. Only then
     // has the run satisfied `refresh_window_days`; see `scope_config`.

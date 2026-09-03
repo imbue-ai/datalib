@@ -156,6 +156,7 @@ def _git_ls_files(root: Path, pattern: str) -> list[str]:
         cwd=root,
         capture_output=True,
         text=True,
+        check=False,
     )
     if proc.returncode != 0:
         raise SystemExit(
