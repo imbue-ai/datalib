@@ -375,24 +375,18 @@ pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 /// routing this way reaches nothing a direct request could not, with the same
 /// credentials it would have used.
 ///
-/// minds sets this to the marker's header name
-/// (`X-Imbue-Latchkey-Desktop-Proxy`, see [`DESKTOP_PROXY_HEADER_NAME`]) for
-/// remote workspaces and to the empty string for local ones, whose gateway
-/// already runs on the user's machine. An empty value adds no header, so
-/// nothing here has to know which kind of workspace it is in; outside minds the
-/// variable is unset and this is inert.
+/// minds sets this to the marker's header name (the one the dispatch curl
+/// matches on) for remote workspaces and to the empty string for local ones,
+/// whose gateway already runs on the user's machine. The value is used as-is:
+/// an empty one adds no header, so nothing here has to know which kind of
+/// workspace it is in, and outside minds the variable is unset and this is
+/// inert.
 ///
 /// It is namespaced `MINDS_` rather than `LATCHKEY_`: a workspace's env names
 /// each var after the tool that *reads* it, and latchkey never reads this one
 /// (it only forwards the resulting header). minds is the authority that
 /// decides the value, since it follows from workspace topology.
 pub const DESKTOP_PROXY_HEADER_ENV: &str = "MINDS_DESKTOP_PROXY_HEADER";
-
-/// The header name minds is expected to put in [`DESKTOP_PROXY_HEADER_ENV`].
-/// The dispatch curl matches this exact name, so the two have to agree; the
-/// env var exists so a workspace can switch the marker off (empty value), not
-/// so it can rename it.
-pub const DESKTOP_PROXY_HEADER_NAME: &str = "X-Imbue-Latchkey-Desktop-Proxy";
 
 /// The `-H` argument marking a request for desktop egress, when this request
 /// should leave from the user's machine; `None` otherwise.
@@ -809,11 +803,17 @@ mod tests {
     }
 
     #[test]
-    fn desktop_proxy_header_marks_impersonating_providers_when_minds_names_one() {
-        with_desktop_proxy_header(Some(DESKTOP_PROXY_HEADER_NAME), || {
+    fn desktop_proxy_header_marks_impersonating_providers_with_whatever_name_minds_gives() {
+        with_desktop_proxy_header(Some("X-Imbue-Latchkey-Desktop-Proxy"), || {
             assert_eq!(
                 maybe_desktop_proxy_header("slack", false).as_deref(),
                 Some("X-Imbue-Latchkey-Desktop-Proxy: 1"),
+            );
+        });
+        with_desktop_proxy_header(Some("X-Some-Other-Marker"), || {
+            assert_eq!(
+                maybe_desktop_proxy_header("slack", false).as_deref(),
+                Some("X-Some-Other-Marker: 1"),
             );
         });
     }
@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn desktop_proxy_header_is_scoped_to_impersonating_latchkey_requests() {
-        with_desktop_proxy_header(Some(DESKTOP_PROXY_HEADER_NAME), || {
+        with_desktop_proxy_header(Some("X-Imbue-Latchkey-Desktop-Proxy"), || {
             // A provider that does not need impersonation does not need the
             // user's IP either, and pays no extra hop for it.
             assert_eq!(maybe_desktop_proxy_header("linear", false), None);
