@@ -530,7 +530,7 @@ impl AppletRegistry {
             // truth is "your config.toml has a syntax error" sends
             // people looking in exactly the wrong place.
             None => {
-                return Err(match config_load_error(&self.data_root) {
+                return Err(match config_load_error(&self.data_root, id) {
                     Some(why) => format!(
                         "applet {id:?} is unavailable because {} could not be loaded: {why}",
                         datalib_dag::config::root_config_path(&self.data_root).display()
@@ -630,21 +630,39 @@ fn reconcile(
     errors
 }
 
-/// Why the data root's config cannot be loaded, or `None` when it loads
-/// — or simply isn't there yet, which is the normal state of a fresh
-/// root rather than an error.
+/// Why the applet a request asked for is not in the list, when the
+/// config is the reason — `None` when the config is fine, or simply
+/// isn't there yet, which is the normal state of a fresh root rather
+/// than an error.
+///
+/// Two shapes qualify, and they are different sentences. The file may
+/// not be a config at all, in which case no applet exists. Or the file
+/// loaded and *this applet's entry* was dropped, which is the case the
+/// graded loader introduced: everything else works, and the one thing
+/// the caller wanted does not.
 ///
 /// Only called on a failure path, so re-reading the file here costs
 /// nothing worth caching and keeps the reason next to the request that
 /// needs it.
-fn config_load_error(data_root: &Path) -> Option<String> {
+fn config_load_error(data_root: &Path, id: &str) -> Option<String> {
     let path = datalib_dag::config::root_config_path(data_root);
     if !path.exists() {
         return None;
     }
-    datalib_dag::config::load(&path)
-        .err()
-        .map(|e| format!("{e:#}"))
+    let (checked, _) = datalib_dag::config::load_graded(&path).ok()?;
+    if let Some(d) = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.id() == Some(id) && d.severity.drops_the_entry())
+    {
+        return Some(d.describe());
+    }
+    checked.is_fatal().then(|| {
+        checked
+            .diagnostics
+            .first()
+            .map_or_else(String::new, |d| d.describe())
+    })
 }
 
 /// Read and validate the applet list out of a data root's config.
@@ -653,29 +671,38 @@ fn load_entries(
     binary_dir: Option<PathBuf>,
 ) -> (Vec<AppletEntry>, Option<PathBuf>) {
     let cfg_path = datalib_dag::config::root_config_path(data_root);
-    match datalib_dag::config::load(&cfg_path) {
-        Ok((cfg, _)) => {
+    match datalib_dag::config::load_graded(&cfg_path) {
+        Ok((checked, _)) => {
             // Resolve `binary_dir` exactly the way the DAG runner does,
             // so `command = "datalib-applet slack"` finds the same binary
             // whether a step or an applet names it.
-            let dir = datalib_dag::config::resolve_binary_dir(&cfg, binary_dir.as_deref());
-            match datalib_dag::config::validate_applets(&cfg) {
-                Ok(()) => (cfg.applets, dir),
-                Err(e) => {
-                    eprintln!("applets: config rejected, none will load: {e:#}");
-                    (Vec::new(), dir)
-                }
+            let dir = datalib_dag::config::resolve_binary_dir(&checked.cfg, binary_dir.as_deref());
+            // `checked.cfg.applets` is already only the entries that
+            // loaded. This used to be all-or-nothing — one bad applet
+            // entry logged "config rejected, none will load" and the
+            // whole app went dark, which is 00633dd5 and the reason
+            // #209 exists. A dropped entry now costs its own applet.
+            //
+            // Still said out loud: an applet that is silently absent is
+            // how the original mystery started, and `config_load_error`
+            // says it again on the request that trips over it.
+            // Only the applet ones: a broken *step* is the runner's to
+            // report, and echoing it here would put it in the log twice
+            // under a heading that has nothing to do with it.
+            for d in checked.diagnostics.iter().filter(|d| {
+                d.entry.as_ref().map(|e| e.kind) == Some(datalib_dag::EntryKind::Applet)
+                    || d.severity == datalib_dag::Severity::Fatal
+            }) {
+                eprintln!("applets: {}", d.describe());
             }
+            (checked.cfg.applets, dir)
         }
         // No config yet is the normal state of a fresh data root; it is
-        // not an error and must not stop the server. A config that
-        // exists but doesn't load is a different thing entirely, and
-        // silently yielding no applets is how that became a mystery —
-        // say it once here, and `config_load_error` says it again on
-        // the request that trips over it.
+        // not an error and must not stop the server. A file we cannot
+        // even read is a different thing entirely.
         Err(e) => {
-            if datalib_dag::config::root_config_path(data_root).exists() {
-                eprintln!("applets: config could not be loaded, none will start: {e:#}");
+            if cfg_path.exists() {
+                eprintln!("applets: config could not be read, none will start: {e:#}");
             }
             (Vec::new(), binary_dir)
         }
