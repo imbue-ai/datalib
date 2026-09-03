@@ -12,7 +12,7 @@
 //!
 //! Routing, in order:
 //!   * If the request carries the marker header
-//!     `X-Imbue-Latchkey-Desktop-Proxy`, it is rewritten to go through
+//!     `X-Imbue-Desktop-Proxy`, it is rewritten to go through
 //!     the latchkey gateway on the user's own computer (reached over a
 //!     tunnel whose URL the gateway that runs us already has in its
 //!     environment, see [`DESKTOP_PROXY_GATEWAY_URL_ENV`]) and handed to
@@ -65,7 +65,7 @@ const MARKER_HEADER_NAME: &str = "X-Imbue-Impersonate";
 /// this name to remote workspaces as `MINDS_DESKTOP_PROXY_HEADER`, which
 /// `http.rs` attaches as-is; this is the one place the name is spelled
 /// out. Matched by name like [`MARKER_HEADER_NAME`], for the same reason.
-const DESKTOP_PROXY_MARKER_HEADER_NAME: &str = "X-Imbue-Latchkey-Desktop-Proxy";
+const DESKTOP_PROXY_MARKER_HEADER_NAME: &str = "X-Imbue-Desktop-Proxy";
 
 /// Env var holding the base URL of the latchkey gateway on the user's
 /// computer, as reachable from this machine (in minds, a reverse tunnel
@@ -464,7 +464,7 @@ mod tests {
             "-H",
             "X-Imbue-Impersonate: 1",
             "-H",
-            "X-Imbue-Latchkey-Desktop-Proxy: 1",
+            "X-Imbue-Desktop-Proxy: 1",
             "-H",
             "Authorization: Bearer injected-on-the-vps",
             "--data-binary",
@@ -498,10 +498,10 @@ mod tests {
     #[test]
     fn desktop_proxy_marker_is_matched_by_name_whatever_its_value() {
         for marker in [
-            "X-Imbue-Latchkey-Desktop-Proxy: 1",
-            "x-imbue-latchkey-desktop-proxy: 1",
-            "X-Imbue-Latchkey-Desktop-Proxy:",
-            "X-Imbue-Latchkey-Desktop-Proxy;",
+            "X-Imbue-Desktop-Proxy: 1",
+            "x-imbue-desktop-proxy: 1",
+            "X-Imbue-Desktop-Proxy:",
+            "X-Imbue-Desktop-Proxy;",
         ] {
             let tokens = argv(&["-H", marker, "https://example.com/"]);
             assert_eq!(
@@ -514,7 +514,7 @@ mod tests {
         let tokens = argv(&[
             "-H",
             "X-Echo: -H",
-            "X-Imbue-Latchkey-Desktop-Proxy: 1",
+            "X-Imbue-Desktop-Proxy: 1",
             "https://example.com/",
         ]);
         assert_eq!(choose_route(&tokens), Route::SystemCurl);
@@ -553,11 +553,7 @@ mod tests {
     #[test]
     fn desktop_proxy_rewrite_sends_no_password_header_when_none_is_configured() {
         let rewritten = rewrite_for_desktop_proxy(
-            &argv(&[
-                "-H",
-                "X-Imbue-Latchkey-Desktop-Proxy: 1",
-                "https://example.com/x",
-            ]),
+            &argv(&["-H", "X-Imbue-Desktop-Proxy: 1", "https://example.com/x"]),
             &test_gateway(None),
         )
         .expect("rewrite succeeds");
@@ -582,7 +578,7 @@ mod tests {
             "http://a.example.com/a/../b",
         ] {
             let rewritten = rewrite_for_desktop_proxy(
-                &argv(&["-H", "X-Imbue-Latchkey-Desktop-Proxy: 1", url]),
+                &argv(&["-H", "X-Imbue-Desktop-Proxy: 1", url]),
                 &test_gateway(None),
             )
             .expect("rewrite succeeds");
@@ -602,7 +598,7 @@ mod tests {
                 "-H",
                 "X-Echo: -H",
                 "-H",
-                "X-Imbue-Latchkey-Desktop-Proxy: 1",
+                "X-Imbue-Desktop-Proxy: 1",
                 "https://example.com/x",
             ]),
             &test_gateway(None),
@@ -624,17 +620,9 @@ mod tests {
     fn desktop_proxy_rewrite_refuses_an_invocation_that_does_not_end_in_a_url() {
         for tokens in [
             argv(&[]),
-            argv(&["-H", "X-Imbue-Latchkey-Desktop-Proxy: 1"]),
-            argv(&[
-                "https://example.com/x",
-                "-H",
-                "X-Imbue-Latchkey-Desktop-Proxy: 1",
-            ]),
-            argv(&[
-                "-H",
-                "X-Imbue-Latchkey-Desktop-Proxy: 1",
-                "ftp://example.com/x",
-            ]),
+            argv(&["-H", "X-Imbue-Desktop-Proxy: 1"]),
+            argv(&["https://example.com/x", "-H", "X-Imbue-Desktop-Proxy: 1"]),
+            argv(&["-H", "X-Imbue-Desktop-Proxy: 1", "ftp://example.com/x"]),
         ] {
             let result = rewrite_for_desktop_proxy(&tokens, &test_gateway(None));
             assert!(result.is_err(), "unexpectedly rewrote {tokens:?}");

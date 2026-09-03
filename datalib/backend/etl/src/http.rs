@@ -804,10 +804,10 @@ mod tests {
 
     #[test]
     fn desktop_proxy_header_marks_impersonating_providers_with_whatever_name_minds_gives() {
-        with_desktop_proxy_header(Some("X-Imbue-Latchkey-Desktop-Proxy"), || {
+        with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
             assert_eq!(
                 maybe_desktop_proxy_header("slack", false).as_deref(),
-                Some("X-Imbue-Latchkey-Desktop-Proxy: 1"),
+                Some("X-Imbue-Desktop-Proxy: 1"),
             );
         });
         with_desktop_proxy_header(Some("X-Some-Other-Marker"), || {
@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn desktop_proxy_header_is_scoped_to_impersonating_latchkey_requests() {
-        with_desktop_proxy_header(Some("X-Imbue-Latchkey-Desktop-Proxy"), || {
+        with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
             // A provider that does not need impersonation does not need the
             // user's IP either, and pays no extra hop for it.
             assert_eq!(maybe_desktop_proxy_header("linear", false), None);
