@@ -61,11 +61,10 @@ use std::process::Command;
 const MARKER_HEADER_NAME: &str = "X-Imbue-Impersonate";
 
 /// Name of the private marker header asking for the request to leave from
-/// the user's own computer rather than from this machine — the value
-/// minds publishes to workspaces as `MINDS_DESKTOP_PROXY_HEADER` (see
-/// `DESKTOP_PROXY_HEADER_NAME` in `../http.rs`, which must agree with
-/// this). Matched by name like [`MARKER_HEADER_NAME`], for the same
-/// reason.
+/// the user's own computer rather than from this machine. minds publishes
+/// this name to remote workspaces as `MINDS_DESKTOP_PROXY_HEADER`, which
+/// `http.rs` attaches as-is; this is the one place the name is spelled
+/// out. Matched by name like [`MARKER_HEADER_NAME`], for the same reason.
 const DESKTOP_PROXY_MARKER_HEADER_NAME: &str = "X-Imbue-Latchkey-Desktop-Proxy";
 
 /// Env var holding the base URL of the latchkey gateway on the user's
