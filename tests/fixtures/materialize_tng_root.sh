@@ -18,7 +18,10 @@
 #
 # Requires python3 on PATH. The qmd model cache at ~/.cache/qmd/models
 # must already contain the required GGUF files — this script refuses to
-# trigger a download (silent multi-minute stall).
+# trigger a download (silent multi-minute stall). Set
+# `CLAUDE_MIRROR_HOST_HOME` to look for that cache under a different
+# home; CI needs it, because GitHub forces `HOME=/github/home` while the
+# image bakes the models under `/root`.
 
 set -eo pipefail
 
@@ -84,7 +87,18 @@ EOF
 # download silently is a multi-minute stall that masquerades as a hang.
 # Path matches qmd's own default so a standalone `qmd` populates the
 # same cache the build reads from.
-SHARED_MODELS="${HOME:-.}/.cache/qmd/models"
+#
+# `CLAUDE_MIRROR_HOST_HOME` wins over `$HOME` when set, the same way
+# `tests/fixtures/build_qmd_index.py` reads it. That is not a local
+# convenience — it is what makes this script usable in CI at all.
+# GitHub Actions forces `HOME=/github/home` for every container step,
+# while the devcontainer image bakes its caches under `/root`, so
+# `$HOME` here points at an empty directory that nothing will ever
+# populate. Without the override the two consumers of this script
+# disagree: the qmd genrule (which already reads this variable) finds
+# the models and the e2e suite does not.
+QMD_CACHE_HOME="${CLAUDE_MIRROR_HOST_HOME:-${HOME:-.}}"
+SHARED_MODELS="$QMD_CACHE_HOME/.cache/qmd/models"
 REQUIRED_MODELS=(
   "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
   "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf"

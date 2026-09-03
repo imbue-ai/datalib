@@ -209,15 +209,35 @@ sh_test(
         "no-sandbox",
         "requires-network",
     ],
+    # `long` = 900s. NOT decoration: an `sh_test` with no `size` or
+    # `timeout` is `medium`, i.e. **300 seconds**, and this suite does
+    # not fit in that. It runs ~69 tests from 26 spec files across two
+    # browser engines behind nine backend processes, and the `warmup`
+    # project alone — qmd's cold model load, paid once for the whole
+    # suite — grew to 1.2-1.5 min in qmd 2.8.3.
+    #
+    # Measured wall clock: ~40-70s warm, and 193-202s per run over
+    # `--runs_per_test=5` (avg 198s) on a 10-core laptop. A single
+    # uncached run right after the AG Grid 36 / Vite 8 bump took 207s,
+    # and it has been seen to blow the 300s ceiling outright with a
+    # bazel build competing for cores. 300s is not a budget, it is a
+    # coin flip — and a flaky merge gate teaches people to re-run
+    # rather than to read. 900s is ~4x the observed runtime: tight
+    # enough to bound a genuine hang, loose enough not to fail a slow
+    # runner. There is no cost to the larger budget — bazel enforces
+    # the ceiling, it does not wait for it.
+    timeout = "long",
     # Inherit the user's PATH and HOME so the script can find pnpm / node
     # and reuse ~/Library/Caches/ms-playwright (the browser cache) /
     # ~/.local/share/pnpm. Bazel scrubs the test env otherwise.
     env_inherit = [
         "PATH",
         "HOME",
-        # Which browser engines run_e2e.sh provisions; unset means both.
-        # CI narrows it to chromium, whose OS libraries are the only
-        # ones the Linux image bakes.
+        # Which browser engines run_e2e.sh provisions; unset means both,
+        # which is what every caller uses today — CI included, now that
+        # the Linux image bakes WebKit's OS libraries alongside
+        # Chromium's. Kept as an escape hatch for an environment that
+        # can only run one engine.
         "E2E_BROWSERS",
     ],
 )
