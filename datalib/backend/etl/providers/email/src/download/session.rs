@@ -11,7 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use datalib_etl::http::{latchkey_curl, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
 
 /// JMAP capability URIs we list in every `using:` array. Mail is the
 /// only capability we currently exercise; the core uri is required by
@@ -33,6 +33,11 @@ pub struct Session {
     /// `accounts[<id>]` for every account the session reports — keyed
     /// by JMAP account id.
     pub accounts: Vec<(String, Value)>,
+    /// Which latchkey identity discovered this session, carried so every
+    /// later call on it authenticates as the same one. JMAP's own
+    /// `accounts` above are the *server's* notion of an account and are
+    /// unrelated to latchkey's.
+    pub latchkey: LatchkeySettings,
 }
 
 impl Session {
@@ -45,13 +50,15 @@ impl Session {
     /// `latchkey_curl` issues `curl -sS` without `-L`, so we walk
     /// redirect hops here instead of expecting the transport to follow
     /// them silently.
-    pub async fn discover(hostname: &str) -> Result<Self> {
+    pub async fn discover(hostname: &str, latchkey: &LatchkeySettings) -> Result<Self> {
         let mut url = format!("https://{hostname}/.well-known/jmap");
         // Bounded loop: real-world JMAP discovery is at most one hop;
         // cap at 5 to defend against a misconfigured server pointing at
         // itself.
         for _ in 0..5 {
-            let req = HttpRequest::get("jmap", &url).timeout(Duration::from_secs(30));
+            let req = HttpRequest::get("jmap", &url)
+                .latchkey(latchkey.clone())
+                .timeout(Duration::from_secs(30));
             let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;
             if (300..400).contains(&resp.status) {
                 let loc = resp.header("location").ok_or_else(|| {
@@ -72,7 +79,12 @@ impl Session {
             }
             let raw: Value =
                 serde_json::from_slice(&resp.body).context("parse JMAP session JSON")?;
-            return Self::from_value(raw);
+            // `from_value` is shape-parsing only (the tests build a session
+            // straight from a literal), so the identity is stamped here — at
+            // the one place that actually made a request.
+            let mut session = Self::from_value(raw)?;
+            session.latchkey = latchkey.clone();
+            return Ok(session);
         }
         Err(anyhow!("JMAP session discovery: too many redirects starting at https://{hostname}/.well-known/jmap"))
     }
@@ -119,6 +131,7 @@ impl Session {
             event_source_url,
             primary_mail_account,
             accounts,
+            latchkey: LatchkeySettings::default(),
         })
     }
 

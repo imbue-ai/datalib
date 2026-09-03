@@ -319,13 +319,23 @@ command = "datalib-step download email"
 # instead of doubling them.
 only_extract_labels = []
 
+# Which stored latchkey identity this source mirrors. Every source whose
+# downloader authenticates through latchkey takes this block, and only
+# those do -- it is a latchkey namespace, not a provider one, so the name
+# is whatever `latchkey auth list` shows for the service.
+#
+# Omit it entirely when the service holds one account. Name it once it
+# holds two (work + personal Gmail is the usual case): latchkey keys
+# credentials by (service, account) and refuses an ambiguous request
+# rather than picking one.
+#
+# [steps.params.latchkey_settings]
+# account = "you@gmail.com"
+
 [steps.params.gmail_api]
 # Everything here is optional; an empty `[steps.params.gmail_api]` table
 # is a complete, working configuration.
 #
-# account = "you@gmail.com"     # required only if `google-gmail` holds
-#                               # more than one credential (work +
-#                               # personal); latchkey demands it then.
 # full_resync = false
 # request_concurrency = 8
 # Google's per-user ceiling is 6000 quota units/minute and messages.get

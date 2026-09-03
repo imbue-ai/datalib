@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_anthropic_config::AnthropicRenderConfig;
 use datalib_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
@@ -23,12 +24,14 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
+    let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
         procs.push(Box::new(AnthropicDownload {
             id: format!("anthropic/{name}/download"),
             raw_path,
             sync,
+            latchkey: latchkey_settings,
         }));
     }
     Ok(procs)
@@ -53,6 +56,9 @@ struct AnthropicDownload {
     id: String,
     raw_path: PathBuf,
     sync: ClaudeApiSync,
+    /// Which latchkey identity to authenticate as, forwarded whole from
+    /// the source's `latchkey_settings:` block.
+    latchkey: LatchkeySettings,
 }
 
 #[async_trait]
@@ -68,6 +74,7 @@ impl DataProcessor for AnthropicDownload {
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
+            latchkey: self.latchkey.clone(),
             // users.json is expected alongside the raw store (playback seeds it).
             export_dir: Some(self.raw_path.clone()),
             overlap: self

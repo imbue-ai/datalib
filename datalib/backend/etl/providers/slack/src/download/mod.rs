@@ -39,6 +39,7 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
 use datalib_etl::events;
+use datalib_etl::http::LatchkeySettings;
 use datalib_etl::scope_config;
 pub use db::{
     block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
@@ -69,8 +70,12 @@ fn empty_params() -> BTreeMap<String, String> {
     BTreeMap::new()
 }
 
-async fn call(method: &str, params: &BTreeMap<String, String>) -> Result<Value> {
-    let SlackCall { response, .. } = call_slack(method, params)
+async fn call(
+    method: &str,
+    params: &BTreeMap<String, String>,
+    latchkey: &LatchkeySettings,
+) -> Result<Value> {
+    let SlackCall { response, .. } = call_slack(method, params, latchkey)
         .await
         .map_err(|e: SlackError| anyhow::anyhow!("{}", e))?;
     Ok(response)
@@ -84,10 +89,11 @@ async fn call(method: &str, params: &BTreeMap<String, String>) -> Result<Value> 
 async fn fetch_self(
     db: &RawDb,
     progress: &datalib_etl::progress::Progress,
+    latchkey: &LatchkeySettings,
 ) -> Result<(String, Option<String>)> {
     progress.set_message("auth.test");
     let t0 = std::time::Instant::now();
-    let resp = call(M_AUTH_TEST, &empty_params()).await?;
+    let resp = call(M_AUTH_TEST, &empty_params(), latchkey).await?;
     db.upsert_workspace(&resp).await?;
     let team_id = resp
         .get("team_id")
@@ -125,6 +131,7 @@ async fn fetch_channels(
     include_archived: bool,
     dms: bool,
     progress: &datalib_etl::progress::Progress,
+    latchkey: &LatchkeySettings,
 ) -> Result<Vec<FetchTarget>> {
     // `dms` is part of the key, not just the request: turning DMs on
     // asks for a strictly wider `types`, and a sweep recorded under the
@@ -168,7 +175,7 @@ async fn fetch_channels(
         if let Some(c) = &cursor {
             p.insert("cursor".to_string(), c.clone());
         }
-        let resp = call(M_CHANNELS, &p).await?;
+        let resp = call(M_CHANNELS, &p, latchkey).await?;
         if let Some(arr) = resp.get("channels").and_then(|v| v.as_array()) {
             db.upsert_channels(arr).await?;
             total += arr.len();
@@ -194,7 +201,11 @@ async fn fetch_channels(
 }
 
 #[instrument(skip_all)]
-async fn fetch_users(db: &RawDb, progress: &datalib_etl::progress::Progress) -> Result<usize> {
+async fn fetch_users(
+    db: &RawDb,
+    progress: &datalib_etl::progress::Progress,
+    latchkey: &LatchkeySettings,
+) -> Result<usize> {
     let sweep_key = "users";
     if let Some(age) = db.manifest_sweep_age(sweep_key).await? {
         if age < MANIFEST_TTL {
@@ -225,7 +236,7 @@ async fn fetch_users(db: &RawDb, progress: &datalib_etl::progress::Progress) -> 
         if let Some(c) = &cursor {
             p.insert("cursor".to_string(), c.clone());
         }
-        let resp = call(M_USERS, &p).await?;
+        let resp = call(M_USERS, &p, latchkey).await?;
         if let Some(arr) = resp.get("members").and_then(|v| v.as_array()) {
             db.upsert_users(arr).await?;
             count += arr.len();
@@ -580,6 +591,7 @@ async fn export_channel(
     totals: &mut ChannelTotals,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
     progress: &datalib_etl::progress::Progress,
+    latchkey: &LatchkeySettings,
 ) -> Result<()> {
     // Per-channel attachment accumulator: every (message, file)
     // reference is appended, the BlobBundle carries one byte set per
@@ -637,6 +649,7 @@ async fn export_channel(
         blake3_by_file,
         progress,
         &mut collected,
+        latchkey,
     )
     .await?;
 
@@ -668,6 +681,7 @@ async fn export_channel(
                     blake3_by_file,
                     progress,
                     &mut collected,
+                    latchkey,
                 )
                 .await?;
             }
@@ -706,6 +720,7 @@ async fn export_channel(
                     blake3_by_file,
                     progress,
                     &mut collected,
+                    latchkey,
                 )
                 .await?;
             }
@@ -755,6 +770,7 @@ async fn export_channel(
             totals,
             &mut attach,
             blake3_by_file,
+            latchkey,
         )
         .await?;
         let fetched = totals.replies.saturating_sub(before) as u64;
@@ -803,6 +819,7 @@ async fn list_history(
     blake3_by_file: &mut std::collections::HashMap<String, String>,
     progress: &datalib_etl::progress::Progress,
     collected: &mut Vec<Value>,
+    latchkey: &LatchkeySettings,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
@@ -823,7 +840,7 @@ async fn list_history(
         if let Some(c) = &cursor {
             params.insert("cursor".to_string(), c.clone());
         }
-        let resp = call(M_HISTORY, &params).await?;
+        let resp = call(M_HISTORY, &params, latchkey).await?;
         let messages: Vec<Value> = resp
             .get("messages")
             .and_then(|v| v.as_array())
@@ -862,6 +879,7 @@ async fn list_history(
                 attach,
                 blake3_by_file,
                 blob_size_limit_bytes,
+                latchkey,
             )
             .await?;
             for (k, v) in counts {
@@ -899,6 +917,7 @@ async fn paginate_replies(
     totals: &mut ChannelTotals,
     attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
+    latchkey: &LatchkeySettings,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
@@ -912,7 +931,7 @@ async fn paginate_replies(
         if let Some(c) = &cursor {
             p.insert("cursor".to_string(), c.clone());
         }
-        let resp = call(M_REPLIES, &p).await?;
+        let resp = call(M_REPLIES, &p, latchkey).await?;
         let msgs: Vec<Value> = resp
             .get("messages")
             .and_then(|v| v.as_array())
@@ -943,6 +962,7 @@ async fn paginate_replies(
                 attach,
                 blake3_by_file,
                 blob_size_limit_bytes,
+                latchkey,
             )
             .await?;
             for (k, v) in counts {
@@ -1009,6 +1029,9 @@ fn reply_message_input(
 // ---------------------------------------------------------------------------
 
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block.
+    pub latchkey: LatchkeySettings,
     pub db_path: PathBuf,
     pub db: Option<RawDb>,
     pub channels: Option<Vec<String>>,
@@ -1033,6 +1056,7 @@ impl Default for FetchOptions {
         Self {
             db_path: PathBuf::new(),
             db: None,
+            latchkey: LatchkeySettings::default(),
             channels: None,
             since: DEFAULT_SINCE.to_string(),
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
@@ -1133,17 +1157,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let setup = opts.progress.child("setup");
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
-        let (team_id, self_user_id) = fetch_self(&db, &setup).await?;
+        let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
         // Users before channels: a DM is identified by its counterpart,
         // so both the `dm_users` allowlist and the DM progress labels
         // need the user directory to already be mirrored.
-        fetch_users(&db, &setup).await?;
+        fetch_users(&db, &setup, &opts.latchkey).await?;
         let listed = fetch_channels(
             &db,
             opts.members_only,
             opts.channels.is_some(),
             opts.dms,
             &setup,
+            &opts.latchkey,
         )
         .await?;
         setup.finish(&format!(
@@ -1218,6 +1243,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &mut totals,
                 &mut blake3_by_file,
                 &inner,
+                &opts.latchkey,
             )
             .instrument(span)
             .await;

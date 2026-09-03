@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::{latchkey_curl, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -28,6 +28,9 @@ pub use unofficial::{NotionUnofficialClient, NotionUnofficialError};
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
+    /// Which latchkey identity the download authenticates as, from the
+    /// source's `latchkey_settings:` block.
+    pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
     /// created if needed). Ignored for opening when `db` is `Some`.
@@ -67,6 +70,7 @@ impl Default for FetchOptions {
         FetchOptions {
             db_path: PathBuf::new(),
             db: None,
+            latchkey: LatchkeySettings::default(),
             subtree_pages: Vec::new(),
             inbox: false,
             inbox_mirror_referenced: true,
@@ -696,7 +700,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
 
-    let official = NotionOfficialClient::new();
+    let official = NotionOfficialClient::with_latchkey(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
     let mut visited: HashSet<String> = HashSet::new();
     let mut queued: HashSet<String> = HashSet::new();
@@ -785,7 +789,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         if opts.inbox {
             let span = tracing::info_span!("notion_inbox_pass");
             let _enter = span.enter();
-            let uo = NotionUnofficialClient::new();
+            let uo = NotionUnofficialClient::with_latchkey(opts.latchkey.clone());
             uo.load_user_content().await?;
             let spaces_resp = uo.get_spaces().await?;
             let space_ids: Vec<String> = if let Some(s) = opts.space.as_deref() {

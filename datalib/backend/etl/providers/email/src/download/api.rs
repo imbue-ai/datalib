@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
 
 use super::session::{Session, CAP_CORE, CAP_MAIL};
 
@@ -33,7 +33,9 @@ pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value>
         "methodCalls": [[method, args, CALL_ID]],
     });
     let body = serde_json::to_vec(&envelope).context("serialize JMAP envelope")?;
-    let req = HttpRequest::post_json("jmap", &session.api_url, body).timeout(REQUEST_TIMEOUT);
+    let req = HttpRequest::post_json("jmap", &session.api_url, body)
+        .latchkey(session.latchkey.clone())
+        .timeout(REQUEST_TIMEOUT);
     let resp = latchkey_curl(&req).await.map_err(map_http_err)?;
     if !(200..300).contains(&resp.status) {
         return Err(anyhow!(
@@ -75,8 +77,14 @@ fn map_http_err(e: HttpError) -> anyhow::Error {
 /// GET an arbitrary URL (e.g. `session.downloadUrl` after substitution)
 /// and return the body bytes. Errors carry the HTTP status so callers
 /// can record a transport-level failure on the bookkeeping sidecar.
-pub async fn download_bytes(url: &str, timeout: Duration) -> Result<(Vec<u8>, Option<String>)> {
-    let req = HttpRequest::get("jmap", url).timeout(timeout);
+pub async fn download_bytes(
+    url: &str,
+    timeout: Duration,
+    latchkey: &LatchkeySettings,
+) -> Result<(Vec<u8>, Option<String>)> {
+    let req = HttpRequest::get("jmap", url)
+        .latchkey(latchkey.clone())
+        .timeout(timeout);
     let resp = latchkey_curl(&req).await.map_err(map_http_err)?;
     if !(200..300).contains(&resp.status) {
         return Err(anyhow!("JMAP download {url} → HTTP {}", resp.status,));

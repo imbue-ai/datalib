@@ -1,7 +1,7 @@
 //! Provider-owned config schema for the `chatgpt_api` source (Program A goal
 //! #1). Schema-only (serde + anyhow).
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -10,12 +10,20 @@ pub struct ChatgptConfig {
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
+    /// Which latchkey identity this source mirrors. Composed only by the
+    /// providers that authenticate through the `latchkey` CLI, and
+    /// forwarded whole to the download client — see [`LatchkeySettings`].
+    #[serde(default)]
+    pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
     pub sync: Option<ChatgptApiSync>,
 }
 
 impl ChatgptConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.latchkey_settings
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         Ok(())
     }
 }
