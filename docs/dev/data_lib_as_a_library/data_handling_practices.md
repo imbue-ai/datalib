@@ -83,7 +83,7 @@ is self-concealing" — and our provider goldens are exactly that shape.
 ## 2. The practices
 
 **The rules themselves now live in
-[`docs/dev/data_architecture_render.md` §4](../data_architecture_render.md#4-data-quality-rules)**,
+[`docs/dev/data_architecture_parse_and_render.md` §4](../data_architecture_parse_and_render.md#4-data-quality-rules)**,
 because that is where they belong: they are durable architecture for
 the render stage, not a project plan. They were written up here first
 only because render had no architecture document to put them in — which

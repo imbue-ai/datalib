@@ -58,13 +58,14 @@ are relative to the repo root.
   (how to build a new provider). The two split along a
   principles/practitioner line in `dab2c3d9`; both are scoped to
   **download**.
-- [`docs/dev/data_architecture_render.md`](docs/dev/data_architecture_render.md)
-  — the **render** stage, the third sibling: the projection from raw
-  payload to `GridRow` + markdown, the data-quality rules (§4 —
-  adopted in principle, *not implemented*), and render's
-  incrementality. Read it before adding a renderer or changing a
-  projection. Its §1 says why there are three of these and §6 lists
-  the render material still sitting in the two ingestion docs.
+- [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md)
+  — the **parse and render** stage, the third sibling: deserializing a
+  stored payload, projecting it to `GridRow` + markdown, the
+  data-quality rules (§4 — adopted in principle, *not implemented*),
+  incrementality, and the `GridRow.when_ts` policy. Read it before
+  adding a renderer or changing a projection. There is no "parse
+  step": a record that "fails to parse" is one **render** could not
+  deserialize, and the fix is always a re-render, never a re-fetch.
 - [`datalib/backend/etl/providers/media/DOWNLOAD.md`](datalib/backend/etl/providers/media/DOWNLOAD.md)
   — the `media` source: local music/photos/video/playlists. Read it
   before touching anything about **`payload_blake3`**, the

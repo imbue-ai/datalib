@@ -8,7 +8,7 @@ add a provider, how the schema is allowed to evolve, the downstream contract
 download has to honor, and the open questions we haven't resolved yet.
 
 For the stage *after* download, see
-[`data_architecture_render.md`](data_architecture_render.md).
+[`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md).
 
 ## Testing with TNG fixtures
 
@@ -189,110 +189,12 @@ Two halves to this:
     time, not silently at download time.** No automated drift detector
     exists today; see [Detecting upstream shape drift](#detecting-upstream-shape-drift).
 
-## Render and downstream stages
+## Render and downstream stages, and shared schemas
 
-> The render stage now has its own document,
-> [`data_architecture_render.md`](data_architecture_render.md) — the
-> projection model, the data-quality rules, and the incrementality
-> mechanisms. This section is the sidecar contract, and is one of the
-> pieces that doc's §6 proposes moving there.
-
-After download, we run transformations for display and indexing —
-render to markdown with YAML frontmatter, index the markdown with qmd,
-derive `grid_rows` for the UI.
-
-The cross-provider contract is the **sidecar**: for every rendered
-document, Render emits two co-located files —
-
-  - `<id>.md` — human-readable, with YAML frontmatter.
-  - `<id>.grid_rows.json` — the
-    [`Sidecar`](../../datalib/backend/index_lib/src/lib.rs):
-
-    ```jsonc
-    {
-      "header": {
-        "document_uuid": "…",       // primary key for the document
-        "source_fingerprint": "…",  // hash of upstream payload
-        "render_version": 1         // renderer-side schema stamp
-      },
-      "rows": [GridRow, …]
-    }
-    ```
-
-Grid index reads the sidecar tree — **it never re-parses markdown**.
-The markdown is for humans; the JSON sidecar is the machine-readable
-projection.
-
-This part of the pipeline aspires to the same properties as download:
-
-  - **Monitorable**: same `obs` flags, same progress-bar contract.
-  - **Incremental**: the sidecar `source_fingerprint` short-circuits
-    re-render. Grid index reads `(qmd_path, source_fingerprint)` from
-    `markdowns_loaded` and skips unchanged sidecars.
-  - **Resumable in the steady state**: a render pass that gets
-    re-run after producing N of M sidecars will skip those N via the
-    fingerprint check and continue from where it stopped. We do not,
-    however, guarantee crash-mid-write atomicity per file; a partial
-    `.md` left by a SIGKILL during a write may have a fingerprint that
-    no longer matches the file body and will be regenerated next run.
-    That's good enough for our use case but is not a separately
-    engineered property.
-
-Less attention has been paid to render-side observability and to
-making partial-progress visible to the user than to the same on
-download; this is an area where the implementation trails the
-principle.
-
-## Shared schemas across similar sources
-
-When several sources are shaped similarly enough (a matter of taste,
-but largely driven by schema and UI overlap), they should be massaged
-into a **shared canonical schema** so the rest of the pipeline (search,
-display, threading, attachments, exports) shares code paths and stays
-consistent.
-
-Where unification actually happens **today**: the `GridRow` projection
-(the hand-written struct at
-[`datalib/backend/schema/src/grid_rows.rs`](../../datalib/backend/schema/src/grid_rows.rs),
-whose DDL is derived via `#[derive(PortableTable)]` — see
-[`grid_rows.md`](grid_rows.md)).
-Every searchable entity from every provider collapses into rows of one
-schema with `provider` + `kind` discriminators. The grid backend
-reads it with a single query and renders it without knowing which
-provider produced any given row.
-
-Unification should **never** happen in the raw store: Slack, Beeper,
-Signal, Anthropic, and ChatGPT each have their own raw tables, in their
-own doltlite DBs (`slack_messages`, `beeper_messages`, …). Once we
-*render*, though, we aspire to share as much as possible — projecting
-raw data into unified schemas where appropriate, then sending that
-unified data through common code paths for interpretation, rendering,
-and indexing.
-
-Examples where schema and data handling should be unified:
-
-  1. **Chat (human)** — Slack, Beeper, Signal. "Messages in
-     channels/DMs between humans with attachments and threading."
-     Unified at `GridRow`; per-provider raw + render.
-  2. **Chat (LLM)** — Claude, ChatGPT, Gemini (planned). Same chat
-     shape but with assistant turns, thinking, and tool-use surfaced.
-     Unified at `GridRow` via `kind = 'User Input' | 'LLM Response' |
-     'LLM Thinking' | 'Tool Call'`.
-  3. **Code review threads** — GitHub PR discussions, GitLab MR
-     discussions. Threaded inline comments on diffs. Unified at
-     `GridRow`; `git_sha` and `external_id` columns are specifically
-     there to serve this family.
-  4. **Document-comment threads** — Notion. Very similar in shape to
-     (3); may eventually share more than just `GridRow` projection.
-  5. **Time-series sensor data** — yolink today; Garmin fitness and
-     IQ Air air quality planned. Per-device samples over time with a
-     small fixed set of value channels. Not yet projected to
-     `GridRow`; this family hasn't picked its shared schema yet.
-
-A new provider that fits a family should at minimum project to the
-family's `GridRow` shape rather than inventing a new `kind` taxonomy.
-A provider that doesn't fit may motivate a new family; opening one
-should be deliberate.
+Both moved to
+[`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md)
+— the sidecar contract and the aspired-to properties of the render
+stage in its §2 and §5, the `GridRow` family taxonomy in its §3.
 
 ## Unresolved questions
 
@@ -389,15 +291,8 @@ domains / known channel patterns is the obvious low-cost mitigation.
 
 ### Render-side partial-progress visibility
 
-**Desired principle**: a long-running render pass — first run after
-a big initial download, or a `RENDER_VERSION` bump that invalidates
-every sidecar — must be as monitorable and as stoppable-resumable as
-download is. The user sees "rendered 12,347 / 89,201" with an ETA;
-^C-then-rerun resumes from 12,347 not 0.
-
-**Open**: the fingerprint-skip *does* give resumability in the steady
-state (see [Render and downstream stages](#render-and-downstream-stages)), but render-side progress reporting is less developed
-than download-side. Worth measuring.
+Moved to
+[`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#5-incrementality-and-progress).
 
 ### The fixtures → playback → doltlite chain
 
