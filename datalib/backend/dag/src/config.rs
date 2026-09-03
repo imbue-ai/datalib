@@ -948,9 +948,14 @@ struct Entries {
     cfg: DagConfig,
     specs: Vec<StepSpec>,
     /// step id → byte range of the `[[steps]]` header declaring it.
-    /// Only for surviving steps; a step that was dropped already has a
-    /// located diagnostic of its own.
+    /// Includes dropped steps: a graph diagnostic naming one still
+    /// wants somewhere to point.
     spans: BTreeMap<String, std::ops::Range<usize>>,
+    /// The ids of the steps this pass threw out. Handed to graph
+    /// assembly so that a step whose input names one of them is told
+    /// its input was *dropped*, rather than that it never existed —
+    /// different sentences, and different entries to go and fix.
+    dropped: BTreeSet<String>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -971,6 +976,7 @@ fn entries_of(text: &str) -> Entries {
                 cfg: DagConfig::empty(),
                 specs: Vec::new(),
                 spans: BTreeMap::new(),
+                dropped: BTreeSet::new(),
                 diagnostics: vec![d],
             };
         }
@@ -1055,6 +1061,18 @@ fn entries_of(text: &str) -> Entries {
         specs.push(spec);
     }
 
+    // Every step id the file declares that is not in the surviving set.
+    // Read off the diagnostics rather than tracked as they are dropped,
+    // so a rule added above cannot forget to report here.
+    let kept: BTreeSet<&str> = steps.iter().map(|e| e.id.as_str()).collect();
+    let dropped: BTreeSet<String> = diags
+        .iter()
+        .filter(|d| d.severity.drops_the_entry())
+        .filter_map(|d| d.id())
+        .filter(|id| !kept.contains(id))
+        .map(str::to_string)
+        .collect();
+
     Entries {
         cfg: DagConfig {
             data_root: raw.data_root,
@@ -1064,6 +1082,7 @@ fn entries_of(text: &str) -> Entries {
         },
         specs,
         spans,
+        dropped,
         diagnostics: diags,
     }
 }
@@ -1146,7 +1165,8 @@ impl ConfigCheck {
 /// caller enforces alone is a rule a hand-edit silently breaks.
 pub fn check_text(text: &str) -> ConfigCheck {
     let mut entries = entries_of(text);
-    let (graph, mut graph_diags) = Graph::build_graded(std::mem::take(&mut entries.specs));
+    let (graph, mut graph_diags) =
+        Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
 
     // Graph assembly drops more than the entry pass could see — a step
     // whose input names nothing, a ring — so the surviving *config* is
@@ -1928,6 +1948,45 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
                 .contains("slack/rendered_md"),
             "the help must name the entry that actually needs fixing: {cascaded:?}"
         );
+    }
+
+    /// The commonest cascade of all, and the one that decides whether
+    /// the message sends you to the right line: a render step whose
+    /// fetch step was rejected for a bad key.
+    ///
+    /// The fetch step never reaches graph assembly — the entry pass
+    /// dropped it — so without being told what that pass threw out,
+    /// the graph would report "names no declared step" and send the
+    /// user looking for a step that is right there in the file.
+    #[test]
+    fn a_step_whose_input_was_rejected_is_told_where_the_fix_is() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "slack/raw"
+command = "a"
+title = "Work Slack"
+
+[[steps]]
+id = "slack/rendered_md"
+command = "b"
+inputs = ["slack/raw"]
+"#,
+        );
+        assert!(ids(&check).is_empty());
+        let d = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("slack/rendered_md"))
+            .unwrap();
+        assert_eq!(d.severity, Severity::Blocked);
+        assert!(
+            d.message.contains("was itself dropped"),
+            "the input exists in the file — saying it was never declared sends the \
+             reader to the wrong entry: {d:?}"
+        );
+        assert!(!d.message.contains("names no declared step"), "{d:?}");
+        assert!(d.help.as_deref().unwrap().contains("slack/raw"), "{d:?}");
     }
 
     /// A cycle blocks the ring; the rest of the config still runs. What

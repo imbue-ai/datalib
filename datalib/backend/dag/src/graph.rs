@@ -81,7 +81,7 @@ impl Graph {
     /// that build specs by hand and want a bad one to be a loud failure
     /// rather than a silently smaller graph.
     pub fn build(steps: Vec<StepSpec>) -> Result<Graph> {
-        let (graph, diags) = Self::build_graded(steps);
+        let (graph, diags) = Self::build_graded(steps, &BTreeSet::new());
         if let Some(d) = diags.first() {
             bail!("{}", d.describe());
         }
@@ -109,7 +109,18 @@ impl Graph {
     /// [`Severity::Blocked`], not `Rejected`: nothing is wrong with it,
     /// and sending the user to its line would send them to the wrong
     /// line. The message names the entry that actually needs the edit.
-    pub fn build_graded(steps: Vec<StepSpec>) -> (Graph, Vec<Diagnostic>) {
+    ///
+    /// `dropped_earlier` is what the *config* pass already threw out
+    /// before these specs were built. Without it this pass cannot tell
+    /// "you named a step that does not exist" from "the step you named
+    /// is broken" for the commonest case of all — a render step whose
+    /// fetch step was rejected for a bad key — and would send the user
+    /// to fix the wrong entry. Callers building specs by hand pass an
+    /// empty set; [`crate::config::check_text`] passes the real one.
+    pub fn build_graded(
+        steps: Vec<StepSpec>,
+        dropped_earlier: &BTreeSet<String>,
+    ) -> (Graph, Vec<Diagnostic>) {
         let mut diags = Vec::new();
 
         // Ids first: everything below indexes by id, so duplicates have
@@ -145,7 +156,7 @@ impl Graph {
         // instead of "the thing you named does not exist". They send
         // the reader to different lines, so the difference is the whole
         // point of tracking it.
-        let mut dropped: BTreeSet<String> = BTreeSet::new();
+        let mut dropped: BTreeSet<String> = dropped_earlier.clone();
         loop {
             let live: BTreeSet<&str> = kept.iter().map(|s| s.id.as_str()).collect();
             let mut doomed: Option<(usize, Diagnostic)> = None;
