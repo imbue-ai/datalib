@@ -516,120 +516,26 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_qmd")
 
-# The upstream better-sqlite3 package, fetched independently of the qmd
-# lockfile so the replacement below isn't circular (a package cannot be
-# built out of the very repo whose contents it replaces). `integrity` is
-# the exact sha512 the lockfile records, so this is the same tarball
-# `npm_translate_lock` would have fetched, verified the same way.
-http_archive(
-    name = "better_sqlite3_src",
-    urls = ["https://registry.npmjs.org/better-sqlite3/-/better-sqlite3-12.10.0.tgz"],
-    integrity = "sha512-CyzaZRQKyHkB2ZInfTTl2nvT33EbDpjkLEbE8/Zck3Ll6O0qqvuGdrJ45HgtH+HykRg88ITY3AdreBGN70aBSQ==",
-    strip_prefix = "package",
-    build_file_content = """load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
-load("@aspect_rules_js//npm:defs.bzl", "npm_package")
-
-# Land the pinned prebuilt exactly where the `bindings` package looks.
-copy_file(
-    name = "binding",
-    src = "@@//third-party/qmd/runtime:better_sqlite3_binding",
-    out = "build/Release/better_sqlite3.node",
-)
-
-# Upstream contents + that binary, as a drop-in replacement for the
-# lockfile's better-sqlite3. Registered via `npm.npm_replace_package`
-# below, which is what lets the whole tree declare
-# `onlyBuiltDependencies: []`: with the binary already in the package,
-# nothing needs a postinstall to go fetch one.
-npm_package(
-    name = "pkg",
-    srcs = glob(["**"], exclude = ["BUILD.bazel"]) + [":binding"],
-    package = "better-sqlite3",
-    version = "12.10.0",
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-npm.npm_replace_package(
-    package = "better-sqlite3@12.10.0",
-    replacement = "@better_sqlite3_src//:pkg",
-)
-
-# --- better-sqlite3 prebuilt native bindings -------------------------
+# better-sqlite3 needs no special handling here, and that is new as of
+# qmd 2.8.3. Until then it was the ONE package in the qmd tree the
+# lockfile could not deliver: 12.x published a tarball with `src/` +
+# `binding.gyp` and no `.node`, and got its binary from a
+# `prebuild-install` postinstall that downloaded a GitHub release asset
+# appearing in no lockfile and carrying no integrity hash. Closing that
+# hole cost an `npm_replace_package`, a re-packaged `better_sqlite3_src`,
+# four sha256-pinned `better_sqlite3_prebuilt_*` archives, and a
+# `node_abi_test` to catch the day a rules_nodejs bump silently
+# invalidated the `node-v<abi>` in their URLs.
 #
-# The ONE package in the qmd tree that the lockfile alone cannot deliver.
-# Its published tarball ships `src/` + `binding.gyp` and no `.node`; the
-# binary normally arrives from a `prebuild-install` postinstall, which
-# downloads a GitHub release asset that appears in no lockfile and
-# carries no integrity hash. That single fetch was the entire remaining
-# unpinned surface of `npx -y @tobilu/qmd`.
+# better-sqlite3 13 ships `prebuilds/<os>-<arch>.node` inside the npm
+# tarball for all eight platforms (including linuxmusl) and declares no
+# install script at all, so the lockfile's sha512 now covers the native
+# binary like everything else. All of the above is deleted, and the Node
+# ABI stops being a pin we have to track: prebuildify-style bindings are
+# selected by platform at require-time, not by NODE_MODULE_VERSION.
 #
-# Pinning it here closes that hole and is what lets
-# `third-party/qmd/runtime/package.json` declare `onlyBuiltDependencies:
-# []` — with the binary supplied, no package in the tree needs to run an
-# install script at all. Every other native dep is already covered by the
-# lockfile: node-llama-cpp's platform binaries are integrity-pinned
-# optional deps, and the tree-sitter grammars ship `prebuilds/*.node`
-# inside their own tarballs (verified: `prebuilds/darwin-arm64/…` et al
-# are present in the linked tree).
-#
-# `node-v127` is Node's ABI version (NODE_MODULE_VERSION), not a package
-# version — it must match the Node that rules_js resolves, currently
-# v22.22.0. If rules_nodejs moves to a Node with a different ABI these
-# pins stop matching and `require()` fails loudly at qmd startup rather
-# than silently degrading; bump to the matching `node-v<abi>` assets from
-# the same release. `//third-party/qmd/runtime:node_abi_test` asserts the
-# two agree so the breakage is caught at test time instead.
-
-http_archive(
-    name = "better_sqlite3_prebuilt_darwin_arm64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-darwin-arm64.tar.gz"],
-    sha256 = "35533f9ada82cb3f33760c1dc2f128f77c2b34ec2b2ede722824cb64cd50a46a",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-http_archive(
-    name = "better_sqlite3_prebuilt_darwin_x64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-darwin-x64.tar.gz"],
-    sha256 = "8d2ef0eb7f880f88882f0a7a7362a15e2d210a077681f0672d0dfc8b919bd91b",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-http_archive(
-    name = "better_sqlite3_prebuilt_linux_x64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-linux-x64.tar.gz"],
-    sha256 = "899dcec7d0e4e2ec35db783a9155b878ae15754512585de7352bbd33cb1d6c48",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
-http_archive(
-    name = "better_sqlite3_prebuilt_linux_arm64",
-    urls = ["https://github.com/WiseLibs/better-sqlite3/releases/download/v12.10.0/better-sqlite3-v12.10.0-node-v127-linux-arm64.tar.gz"],
-    sha256 = "efb625877ea517be6003c14dbabdb748d0ac172ab50bc4e5af08c2cb272b70c6",
-    build_file_content = """filegroup(
-    name = "node_binding",
-    srcs = ["build/Release/better_sqlite3.node"],
-    visibility = ["//visibility:public"],
-)
-""",
-)
-
+# `onlyBuiltDependencies: []` in third-party/qmd/runtime/package.json is
+# unchanged and still means what it said.
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for
 # refreshing the lockfile after editing datalib/ui/package.json.

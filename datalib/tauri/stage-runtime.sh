@@ -236,9 +236,12 @@ if [[ -d "$latchkey_tree/node_modules/playwright" || -d "$latchkey_tree/node_mod
     printf '%s' "latchkey@$latchkey_version" >"$latchkey_tree/.staged"
 fi
 
-# qmd: install scripts must run — better-sqlite3 fetches its prebuilt
-# binding and the tree-sitter grammars compile via node-gyp.
-# node-llama-cpp's platform binary arrives as a prebuilt optional dep.
+# qmd: install scripts are left enabled here. As of qmd 2.8.3 nothing in
+# the tree is known to need one — better-sqlite3 13 ships its bindings in
+# the tarball, the tree-sitter grammars ship `prebuilds/<os>-<arch>/`, and
+# node-llama-cpp's platform binary arrives as a prebuilt optional dep —
+# but this path is a real `npm install` against the registry, not the
+# Bazel lockfile, so it is not the place to assert that.
 stage_tree qmd "$qmd_version" "@tobilu/qmd@$qmd_version" \
     "node_modules/@tobilu/qmd/dist/cli/qmd.js"
 

@@ -149,7 +149,7 @@ RUN arch="$(dpkg --print-architecture)" \
 # fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
 # aggressive cleanup pulls node out from under us) and the marginal
 # disk-size savings don't matter against the model layer.
-ARG QMD_VERSION=2.5.3
+ARG QMD_VERSION=2.8.3
 # `QMD_PREFETCH_MODELS=false` skips `qmd pull`, which is what makes the
 # `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of a 6.45 GB
 # image. Prod keeps them (default `true`): a first sync would otherwise
