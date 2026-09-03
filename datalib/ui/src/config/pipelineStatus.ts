@@ -1,7 +1,8 @@
 // What a pipeline row's Status column says, and why.
 //
-// Pure functions over three inputs — the config's steps, the job queue,
-// and the runner's per-step record — so the whole state machine is
+// Pure functions over four inputs — the config's steps, the job queue,
+// the runner's per-step record, and the loader's diagnostics — so the
+// whole state machine is
 // testable without a grid, a browser, or a running sync. Manager2View
 // does the drawing; everything about *which* state a row is in lives
 // here.
@@ -10,7 +11,7 @@
 // file; see `stepStatus`.
 
 import type { ConfiguredStep } from "@/config/sourceSteps";
-import type { DagRun, DagStep, DagStepProgress, SyncJob, SyncTask } from "@/api";
+import type { DagRun, DagStep, DagStepProgress, Diagnostic, SyncJob, SyncTask } from "@/api";
 import { formatStamp } from "@/config/timeFormat";
 
 /// What the pushed task board contributes to a row.
@@ -178,13 +179,24 @@ export function effectiveRun(
 
 /// How far through a run each status is.
 ///
-/// A total order over the whole vocabulary, and total on purpose: an
-/// unranked status would silently opt out of the floor below, which is
-/// the one place a gap would go unnoticed. Every terminal state shares
-/// the top rank — they are different outcomes of the same progress.
+/// A total order over the *run* vocabulary, and total on purpose: an
+/// unranked run status would silently opt out of the floor below, which
+/// is the one place a gap would go unnoticed. Every terminal state
+/// shares the top rank — they are different outcomes of the same
+/// progress.
 ///
 /// "Never run" sits *below* Queued: it is the absence of history, so
 /// seeing it after a sync was queued really is going backwards.
+///
+/// **`config_rejected` and `config_blocked` are deliberately absent,
+/// and must stay absent.** They are not points in a run — they say the
+/// entry is not in the pipeline at all, which is news that has to be
+/// able to arrive *mid-run* and move a row backwards from `Succeeded`.
+/// Ranking them would let the floor pin a row at a status describing a
+/// config that no longer exists, which is the precise shape of the bug
+/// this whole change is about. `statusFloor` passes an unranked status
+/// through and forgets the row, which is what we want here: the next
+/// status after a config edit starts from nothing.
 export const STATUS_RANK: Record<string, number> = {
   never_run: -1,
   queued: 0,
@@ -260,6 +272,12 @@ export type StatusView = {
 /// `skipped_up_to_date` is the runner's word; "Up to date" is what it
 /// means to someone looking at a table.
 export const STATUS_LABEL: Record<string, string> = {
+  // The two the config loader produces. A row in either is in the
+  // config file and *not* in the pipeline, which is why neither
+  // borrows a word from the runner's vocabulary: "Failed" would claim
+  // it ran, and "Blocked" already means an upstream step failed.
+  config_rejected: "Not loaded",
+  config_blocked: "Can\u2019t run",
   running: "Running",
   queued: "Queued",
   succeeded: "Succeeded",
@@ -449,8 +467,24 @@ export function stepStatus(args: {
   /// in the queued branch, where it turns "Queued" into a sentence that
   /// says what the row is behind.
   waitingOn?: string[];
+  /// The loader's reason this entry is not in the pipeline, if it
+  /// isn't. Outranks every other source — see below.
+  dropped?: Diagnostic | null;
 }): StatusView {
   const { step, run, claim } = args;
+
+  // A step the config loader dropped is not going to run, whatever the
+  // runner's record still remembers about the last time it did. This
+  // has to outrank everything else: a row still reading "Up to date"
+  // from last week, for an entry that is no longer in the graph, is
+  // exactly the failure #209 is about — the table looks healthy and the
+  // data silently stops moving. `at` is null for the same reason, since
+  // the timestamp would describe a run this config never took part in.
+  if (args.dropped) {
+    const d = args.dropped;
+    const key = d.severity === "blocked" ? "config_blocked" : "config_rejected";
+    return view(key, null, d.help ? `${d.message} \u2014 ${d.help}` : d.message);
+  }
   const last = step?.last_run ?? null;
   const runInFlight = run && !run.finished_at ? run : null;
   // Only a run still in flight says anything about now. A closed

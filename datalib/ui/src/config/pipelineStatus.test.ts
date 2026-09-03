@@ -687,11 +687,108 @@ describe("the floor under a row's status within one run", () => {
     expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
   });
 
-  it("ranks every status the column can draw", () => {
-    // Total on purpose: an unranked status silently opts out of the
-    // floor, which is the one gap that would go unnoticed.
+  /// Two statuses in the column are *not* points in a run, and must
+  /// stay outside the ranking. Asserted absent rather than skipped:
+  /// giving one a rank would let the floor pin a row at a status that
+  /// describes a config which no longer exists.
+  const CONFIG_STATUSES = ["config_rejected", "config_blocked"];
+
+  it("ranks every run status, and deliberately ranks neither config status", () => {
+    // Total over the run vocabulary on purpose: an unranked run status
+    // silently opts out of the floor, which is the one gap that would
+    // go unnoticed.
     for (const key of Object.keys(STATUS_LABEL)) {
+      if (CONFIG_STATUSES.includes(key)) {
+        expect(STATUS_RANK[key], `${key} must stay unranked`).toBeUndefined();
+        continue;
+      }
       expect(STATUS_RANK[key], `${key} has no rank`).toBeDefined();
     }
+  });
+
+  /// The floor exists to stop a status going backwards *within a run*.
+  /// A config edit is the case where going backwards is the truth:
+  /// the entry left the pipeline, so last run's `Succeeded` is no
+  /// longer a fact about it. This is the whole reason the config
+  /// statuses are unranked.
+  it("lets a dropped entry override a status it already showed", () => {
+    const hold = statusFloor();
+    hold("a/raw", "job-1", view("succeeded"));
+    const dropped = view("config_rejected");
+    expect(hold("a/raw", "job-1", dropped).key).toBe("config_rejected");
+    // …and the row's memory is cleared with it, so fixing the config
+    // does not leave it pinned at the dropped state either.
+    expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
+  });
+});
+
+describe("an entry the config loader dropped", () => {
+  const diag = (severity: "rejected" | "blocked", message: string, help?: string) => ({
+    severity,
+    entry: { kind: "step" as const, index: null, id: "slack/raw" },
+    message,
+    help: help ?? null,
+    span: null,
+    line: 7,
+    column: 1,
+  });
+
+  /// The failure #209 is about: a row that reads "Up to date" from a
+  /// run taken under a config that no longer loads this step. The
+  /// table looks healthy and the data has silently stopped moving.
+  it("outranks whatever the runner's record still remembers", () => {
+    const step: DagStep = {
+      id: "slack/raw",
+      current_state: null,
+      last_run: {
+        run_id: "r1",
+        started_at: "2026-09-01T10:00:00+00:00",
+        finished_at: "2026-09-01T10:01:00+00:00",
+        status: "succeeded",
+        error: null,
+        attempts: 1,
+      },
+      progress: null,
+    } as unknown as DagStep;
+
+    const healthy = stepStatus({ id: "slack/raw", step, run: null, claim: undefined });
+    expect(healthy.key).toBe("succeeded");
+
+    const now = stepStatus({
+      id: "slack/raw",
+      step,
+      run: null,
+      claim: undefined,
+      dropped: diag("rejected", "unknown field `title`"),
+    });
+    expect(now.key).toBe("config_rejected");
+    expect(now.detail).toContain("title");
+    // No timestamp: it would describe a run this config never took
+    // part in, and the "Last synced" column reads `at`.
+    expect(now.at).toBeNull();
+  });
+
+  /// `blocked` and `rejected` drop the entry alike and say different
+  /// things — the fix for one is at this entry, for the other it is
+  /// somewhere else, and the row has to carry that distinction.
+  it("distinguishes a broken entry from one broken by another", () => {
+    const blocked = stepStatus({
+      id: "slack/raw",
+      step: undefined,
+      run: null,
+      claim: undefined,
+      dropped: diag("blocked", "input \"slack/x\" names no declared step", "fix that entry"),
+    });
+    expect(blocked.key).toBe("config_blocked");
+    expect(blocked.detail).toContain("fix that entry");
+  });
+
+  /// A warning drops nothing, so a row carrying one still runs and
+  /// still deserves the runner's own status. Manager2 filters these
+  /// out before they get here; this pins that they would be harmless
+  /// even if it didn't.
+  it("is not triggered by a status the loader still ran", () => {
+    const v = stepStatus({ id: "slack/raw", step: undefined, run: null, claim: undefined });
+    expect(v.key).toBe("never_run");
   });
 });

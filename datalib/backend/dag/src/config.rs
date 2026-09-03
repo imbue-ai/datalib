@@ -74,12 +74,14 @@
 //! the separate `datalib-migrate-config` program — which is where every
 //! legacy schema and the last YAML parser live.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
+use crate::diagnostics::{Diagnostic, EntryRef, Severity};
+use crate::graph::Graph;
 use crate::step::{StepRun, StepSpec};
 
 #[derive(Debug, Deserialize)]
@@ -153,7 +155,7 @@ impl AppletEntry {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepEntry {
     pub id: String,
@@ -231,18 +233,69 @@ pub fn root_config_path(data_root: &Path) -> PathBuf {
 /// The canonical config filename.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
-/// Parse config text. Errors carry TOML's own line/column, which is
-/// what the UI surfaces in its editor.
+/// Parse config text, strictly: any problem at all is an error.
+///
+/// The strict view of [`parse_graded`]. Two callers want exactly this
+/// — `datalib-migrate-config`, which must not emit a config with a
+/// known problem in it, and `PUT /api/config`, which refuses to write
+/// one. The error is the first diagnostic, with its line; call
+/// `parse_graded` when you want all of them, which is what anything
+/// reporting to a human should do.
 pub fn parse(text: &str) -> Result<DagConfig> {
-    toml::from_str(text).map_err(Into::into)
+    let (cfg, diagnostics) = parse_graded(text);
+    if let Some(d) = diagnostics.first() {
+        bail!("{}", d.describe());
+    }
+    Ok(cfg)
 }
 
-/// Load + resolve a config file. `data_root` defaults to the config
-/// file's directory and gets `~` expanded.
+/// Whether this text is TOML that could be a config at all.
+///
+/// The file-level question, and only that: it has no opinion on
+/// whether the config the file spells is *valid*, which is
+/// [`check_text`]'s job. `datalib-migrate-config` asks it to notice a
+/// config that has already been converted, and that guard has to hold
+/// for a converted config with a problem in it too — otherwise the
+/// second run of the migrator falls through to the YAML parser and
+/// produces exactly the baffling error the guard exists to prevent.
+pub fn is_toml(text: &str) -> bool {
+    !parse_graded(text)
+        .1
+        .iter()
+        .any(|d| d.severity == Severity::Fatal)
+}
+
+/// Load + resolve a config file, strictly. `data_root` defaults to the
+/// config file's directory and gets `~` expanded.
+///
+/// The strict view of [`load_graded`], and the same trade: one error
+/// instead of every problem. Prefer `load_graded` anywhere the result
+/// reaches a person.
 pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let cfg = parse(&text).with_context(|| format!("parse {}", path.display()))?;
-    let data_root = match &cfg.data_root {
+    let root = data_root_of(path, &cfg);
+    Ok((cfg, root))
+}
+
+/// Read and check a config file, keeping whatever loads.
+///
+/// Only I/O failures are `Err`: a file that cannot be read has no
+/// diagnostics to give. Everything the file itself gets wrong comes
+/// back in [`ConfigCheck::diagnostics`], including the case where it
+/// is not a config at all.
+pub fn load_graded(path: &Path) -> Result<(ConfigCheck, PathBuf)> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let checked = check_text(&text);
+    let root = data_root_of(path, &checked.cfg);
+    Ok((checked, root))
+}
+
+/// Where this config's artifacts live: its own `data_root`, else the
+/// directory the config file sits in — which is what makes a data root
+/// holding its own config self-contained.
+fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
+    match &cfg.data_root {
         Some(p) => expand_tilde(p),
         None => {
             let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -251,8 +304,7 @@ pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."))
         }
-    };
-    Ok((cfg, data_root))
+    }
 }
 
 /// The one reserved top-level directory: the runner's and the server's
@@ -288,105 +340,38 @@ fn valid_id_segment(seg: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
-/// Validate the `[[steps]]` array as a whole — the checks that need to
-/// see every entry, not just one.
+/// Validate the `[[steps]]` array as a whole, strictly — the checks
+/// that need to see every entry, not just one.
 ///
-/// Called from [`to_specs`], which is the single chokepoint every entry
-/// point already goes through: the `datalib-dag` binary, and
-/// `datalib-http`'s config load *and* its `PUT /api/config` validation.
-/// Putting this here rather than in the UI is deliberate — the config
-/// file is the source of truth, so a rule the UI enforces alone is a
-/// rule a hand-edit silently breaks.
-///
-///   * **Ids are well-formed.** An id is the tree the step writes, so
-///     it has to be a usable relative path: non-empty segments from the
-///     portable filename character set, no `.`/`..`, no leading `-`.
-///   * **Ids are unique.** They key the persisted scheduler state
-///     (`DagState.steps`, a map), so two entries sharing an id get one
-///     bookkeeping slot between them and clobber each other's
-///     up-to-date bookkeeping in turn — while both still run, against
-///     the same tree. Since a step's id *is* its output tree, this is
-///     also the single-writer rule. TOML cannot enforce it for us,
-///     since `[[steps]]` is an array.
-///   * **Nothing writes under `system/`.** See [`SYSTEM_DIR`].
-///
-/// Inputs are checked in [`crate::Graph::build`], which is where the
-/// full set of ids is indexed.
+/// The strict view of [`accept_steps`], which is where the rules
+/// actually live and which is documented with them. Kept because
+/// [`to_specs`] and its callers want the first problem as an `Err`.
 pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
-    let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
-    for e in &cfg.steps {
-        let id = e.id.as_str();
-        if id.is_empty() || !id.split('/').all(valid_id_segment) {
-            bail!(
-                "step {id:?}: an id is the directory the step writes, so every `/`-separated \
-                 segment must be a portable filename — letters, digits, `.`, `_`, `-`, not \
-                 starting with `-`, and never `.` or `..`."
-            );
-        }
-        if seen.insert(id, ()).is_some() {
-            bail!(
-                "step {id:?}: duplicate id. A step's id is both its bookkeeping key and the \
-                 tree it writes, so two steps sharing one would overwrite each other's state \
-                 and each other's output. Give each step a distinct id."
-            );
-        }
-        if id == SYSTEM_DIR || id.starts_with(&format!("{SYSTEM_DIR}/")) {
-            bail!(
-                "step {id:?}: writes under {SYSTEM_DIR:?}, which is reserved for the runner's \
-                 and the server's own state."
-            );
-        }
+    let (_, diags) = accept_steps(
+        candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
+        None,
+    );
+    if let Some(d) = diags.first() {
+        bail!("{}", d.describe());
     }
     Ok(())
 }
 
-/// Turn config entries into scheduler specs: split each `command` and
-/// append the declared `params`/`inputs`/`outputs` as `--flag JSON`
-/// pairs (each only when present).
+/// Turn config entries into scheduler specs, strictly.
+///
+/// The strict view of [`accept_steps`]. Note what this does *not* do:
+/// it resolves nothing between steps, so an `inputs` entry naming no
+/// declared step passes here and is caught by [`crate::Graph::build`],
+/// which is the first place the full set of ids exists.
 pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
-    validate_steps(cfg)?;
-    let mut specs = Vec::with_capacity(cfg.steps.len());
-    for e in &cfg.steps {
-        let mut argv = shlex::split(&e.command).with_context(|| {
-            format!(
-                "step {:?}: command {:?} has unbalanced quoting",
-                e.id, e.command
-            )
-        })?;
-        if argv.is_empty() {
-            bail!("step {:?}: empty command", e.id);
-        }
-        if let Some(params) = &e.params {
-            let json = serde_json::to_string(&params_to_json(params, &e.id)?)
-                .with_context(|| format!("step {:?}: params → JSON", e.id))?;
-            argv.push("--params".to_string());
-            argv.push(json);
-        }
-        if !e.inputs.is_empty() {
-            argv.push("--inputs".to_string());
-            argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
-        }
-        // The step protocol is unchanged: a child still receives
-        // `--outputs`, now with the single tree its id names. Steps
-        // written against the old contract keep working without
-        // knowing the config stopped declaring it.
-        argv.push("--outputs".to_string());
-        argv.push(serde_json::to_string(&[&e.id]).expect("string vec → JSON"));
-        let mut spec = StepSpec::new(
-            &e.id,
-            StepRun::Subprocess {
-                argv,
-                env: e.env.clone(),
-            },
-        );
-        spec.code_version = e.code_version.clone();
-        for i in &e.inputs {
-            spec.inputs
-                .push(crate::ArtifactPath::parse(i).with_context(|| format!("step {:?}", e.id))?);
-        }
-        specs.push(spec);
+    let (accepted, diags) = accept_steps(
+        candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
+        None,
+    );
+    if let Some(d) = diags.first() {
+        bail!("{}", d.describe());
     }
-    Ok(specs)
+    Ok(accepted.into_iter().map(|(_, spec)| spec).collect())
 }
 
 /// A step's `params` subtree as the JSON the child gets on `--params`.
@@ -481,44 +466,17 @@ fn expand_tilde(p: &Path) -> PathBuf {
 /// taking the user's own work with it.
 pub const RESERVED_APPLET_ID: &str = "user";
 
-/// Check the applet list before anything tries to use it.
+/// Check the applet list before anything tries to use it, strictly.
 ///
-/// Three rules, all load-bearing rather than stylistic:
-///
-///   * **Ids are JavaScript identifiers.** An applet id is injected
-///     into card-source scope as a bare name (`slack_work.channels()`),
-///     and card source is evaluated by `new Function`, so an id like
-///     `slack.work` or `2fa` would be a syntax error at the point a
-///     card renders — far from the config that caused it. Reject it
-///     here, where the message can name the file.
-///   * **Ids are unique.** They are the proxy prefix and the namespace;
-///     two entries claiming one id would make `/applet/<id>/` ambiguous.
-///     TOML cannot enforce this for us since `[[applets]]` is an array.
-///   * **`user` is reserved.** See [`RESERVED_APPLET_ID`].
+/// The strict view of [`accept_applets`], where the rules and the
+/// reason for each of them live.
 pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
-    let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
-    for a in &cfg.applets {
-        if !is_js_identifier(&a.id) {
-            bail!(
-                "applet {:?}: id must be a JavaScript identifier (letters, digits, _ or $, \
-                 not starting with a digit) because it is injected into card source as a \
-                 bare name",
-                a.id
-            );
-        }
-        if a.id == RESERVED_APPLET_ID {
-            bail!(
-                "applet id {RESERVED_APPLET_ID:?} is reserved: it names the namespace for \
-                 components the user (or an agent) authors, which the app owns and never \
-                 overwrites. Pick another id."
-            );
-        }
-        if seen.insert(a.id.as_str(), ()).is_some() {
-            bail!("applet {:?}: duplicate id", a.id);
-        }
-        if a.command.trim().is_empty() {
-            bail!("applet {:?}: empty command", a.id);
-        }
+    let (_, diags) = accept_applets(
+        candidates(&cfg.applets, EntryRef::applet, |a| Some(a.id.clone())),
+        None,
+    );
+    if let Some(d) = diags.first() {
+        bail!("{}", d.describe());
     }
     Ok(())
 }
@@ -581,6 +539,676 @@ fn is_js_identifier(s: &str) -> bool {
             | "yield"
             | "await"
     )
+}
+
+// ---------------------------------------------------------------------------
+// The graded loader
+// ---------------------------------------------------------------------------
+//
+// Everything above this line is the strict door: first problem wins and
+// the caller gets an `Err`. Everything below is the graded one, which
+// keeps what loads and reports the rest. Both run the same rules — the
+// strict functions are thin wrappers, so there is no second spelling of
+// what a valid config is. See `crate::diagnostics` for what the
+// severities mean and why there are four of them.
+
+/// The file's own shape, with the entries left opaque.
+///
+/// This split is what makes a graded load possible. Deserializing
+/// straight into [`DagConfig`] makes serde's first objection — an
+/// unknown key three steps down — the whole file's error, because
+/// serde has no way to say "skip that one and keep going". Taking the
+/// entries as `toml::Value` first, and deserializing each on its own,
+/// turns that objection back into what it is: one entry's problem.
+///
+/// `deny_unknown_fields` stays here and stays fatal, because at *this*
+/// level it means something different: an unknown top-level key is a
+/// statement about the file, and there is no smaller thing to drop.
+///
+/// `Spanned` wraps the entries and not their fields. The location a
+/// reader wants is the `[[steps]]` header the entry begins at; a
+/// per-field span would only ever point somewhere that header already
+/// leads, at the cost of `Spanned` infecting every field of
+/// [`StepEntry`].
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawConfig {
+    #[serde(default)]
+    data_root: Option<PathBuf>,
+    #[serde(default)]
+    binary_dir: Option<PathBuf>,
+    #[serde(default)]
+    steps: Vec<toml::Spanned<toml::Value>>,
+    #[serde(default)]
+    applets: Vec<toml::Spanned<toml::Value>>,
+}
+
+/// One entry on its way in: where it sits in the file, and what it
+/// deserialized to.
+///
+/// Generic over the entry type so steps and applets share the
+/// bookkeeping. The *rules* are not shared, because they are not the
+/// same rules — an applet owns no artifacts, so nothing about trees,
+/// nesting or `system/` applies to it.
+struct Candidate<T> {
+    entry: T,
+    reference: EntryRef,
+    /// Byte range of the entry's header. `None` when the caller came
+    /// in through the strict, text-less door ([`to_specs`]), which
+    /// holds a `DagConfig` and no file to point into.
+    span: Option<std::ops::Range<usize>>,
+}
+
+impl<T> Candidate<T> {
+    /// A diagnostic about this entry, located when we have a location.
+    ///
+    /// `key` narrows the location from the entry's header to the one
+    /// key the complaint is about — which is where a reader is looking
+    /// and where the UI editor should put its highlight. Pass `None`
+    /// when the entry as a whole is the problem.
+    fn diag(
+        &self,
+        severity: Severity,
+        text: Option<&str>,
+        key: Option<&str>,
+        message: impl Into<String>,
+    ) -> Diagnostic {
+        let d = Diagnostic::new(severity, message).at_entry(self.reference.clone());
+        match (text, &self.span) {
+            (Some(t), Some(sp)) => {
+                let at = match key {
+                    Some(k) => key_span(t, sp.clone(), k),
+                    None => sp.clone(),
+                };
+                d.at_span(t, at)
+            }
+            _ => d,
+        }
+    }
+}
+
+/// Wrap already-deserialized entries as candidates with no spans — the
+/// adapter that lets the strict, `DagConfig`-shaped callers run the
+/// very same rules as the graded one.
+fn candidates<T: Clone>(
+    entries: &[T],
+    make_ref: fn(usize, Option<String>) -> EntryRef,
+    id_of: fn(&T) -> Option<String>,
+) -> Vec<Candidate<T>> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| Candidate {
+            reference: make_ref(i, id_of(e)),
+            entry: e.clone(),
+            span: None,
+        })
+        .collect()
+}
+
+/// Every step rule that can be decided from the `[[steps]]` array
+/// alone, applied entry by entry, dropping what fails and saying why.
+///
+///   * **Ids are well-formed.** An id is the tree the step writes, so
+///     it has to be a usable relative path: non-empty segments from the
+///     portable filename character set, no `.`/`..`, no leading `-`.
+///   * **Ids are unique.** They key the persisted scheduler state
+///     (`DagState.steps`, a map), so two entries sharing an id get one
+///     bookkeeping slot between them and clobber each other's
+///     up-to-date bookkeeping in turn — while both still run, against
+///     the same tree. TOML cannot enforce it for us, since `[[steps]]`
+///     is an array.
+///   * **No id is nested inside another.** `unified_index` and
+///     `unified_index/grid` are two steps writing one tree, which is
+///     the same violation as a duplicate — and it was silently accepted
+///     until #209, because uniqueness was checked as string equality
+///     while a step's id is a *path*. This is the load-bearing one:
+///     two writers under one tree is two writers on one
+///     `.doltlite_db`, whose working set is shared across processes,
+///     so they commit each other's in-flight rows. Corruption with no
+///     failed step and no log line.
+///   * **Nothing writes under `system/`.** See [`SYSTEM_DIR`].
+///   * **The command is runnable** — it splits shell-style and is not
+///     empty — **and `params` can be JSON**, since that is how the
+///     child receives them.
+///
+/// Later entries lose to earlier ones, so a config's first spelling of
+/// an id survives and the diagnostic names both.
+///
+/// Inputs are deliberately *not* checked here: an input names another
+/// step, and [`crate::Graph::build_graded`] is the first place the full
+/// set of surviving ids exists.
+fn accept_steps(
+    candidates: Vec<Candidate<StepEntry>>,
+    text: Option<&str>,
+) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
+    let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
+    let mut diags = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for c in candidates {
+        let id = c.entry.id.clone();
+        if id.is_empty() || !id.split('/').all(valid_id_segment) {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "id {id:?} is not a usable directory name. An id is the directory the \
+                     step writes, so every `/`-separated segment must be a portable \
+                     filename — letters, digits, `.`, `_`, `-`, not starting with `-`, and \
+                     never `.` or `..`."
+                ),
+            ));
+            continue;
+        }
+        if id == SYSTEM_DIR || id.starts_with(&format!("{SYSTEM_DIR}/")) {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "id {id:?} writes under {SYSTEM_DIR:?}, which is reserved for the \
+                     runner's and the server's own state."
+                ),
+            ));
+            continue;
+        }
+        if seen.contains(&id) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("id"),
+                    format!(
+                        "duplicate id {id:?}. A step's id is both its bookkeeping key and the \
+                         tree it writes, so two steps sharing one would overwrite each \
+                         other's state and each other's output."
+                    ),
+                )
+                .with_help("the earlier entry keeps this id; give this one a distinct one"),
+            );
+            continue;
+        }
+        // Containment, which the string equality above cannot see.
+        // Checked both ways: this id may sit inside an accepted one, or
+        // an accepted one may sit inside this id. Either is two steps
+        // writing one tree.
+        if let Some(other) = seen.iter().find(|other| nests_with(other, &id)) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("id"),
+                    format!(
+                        "id {id:?} is nested with step {other:?}: one of these trees contains \
+                         the other, so both steps write the same files. A step's id *is* the \
+                         tree it writes, and every tree has exactly one writer."
+                    ),
+                )
+                .with_help(
+                    "move one of them out from under the other — sibling ids like \
+                     `name/raw` and `name/rendered_md` are the usual shape",
+                ),
+            );
+            continue;
+        }
+
+        let spec = match spec_of(&c.entry) {
+            Ok(spec) => spec,
+            Err(e) => {
+                diags.push(c.diag(Severity::Rejected, text, Some("command"), format!("{e:#}")));
+                continue;
+            }
+        };
+        seen.insert(id);
+        accepted.push((c.entry, spec));
+    }
+    (accepted, diags)
+}
+
+/// Whether two step ids name trees where one contains the other.
+///
+/// Equal ids answer `false`: that is a duplicate, a different rule with
+/// a different message, and it is checked first.
+fn nests_with(a: &str, b: &str) -> bool {
+    a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
+}
+
+/// One entry's `command`/`params`/`inputs` as the spec the scheduler
+/// runs: split the command shell-style and append the declared
+/// params/inputs/outputs as `--flag JSON` pairs (each only when
+/// present).
+fn spec_of(e: &StepEntry) -> Result<StepSpec> {
+    let mut argv = shlex::split(&e.command)
+        .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
+    if argv.is_empty() {
+        bail!("empty command");
+    }
+    if let Some(params) = &e.params {
+        let json =
+            serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?;
+        argv.push("--params".to_string());
+        argv.push(json);
+    }
+    if !e.inputs.is_empty() {
+        argv.push("--inputs".to_string());
+        argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
+    }
+    // The step protocol is unchanged: a child still receives
+    // `--outputs`, now with the single tree its id names. Steps written
+    // against the old contract keep working without knowing the config
+    // stopped declaring it.
+    argv.push("--outputs".to_string());
+    argv.push(serde_json::to_string(&[&e.id]).expect("string vec → JSON"));
+
+    let mut spec = StepSpec::new(
+        &e.id,
+        StepRun::Subprocess {
+            argv,
+            env: e.env.clone(),
+        },
+    );
+    spec.code_version = e.code_version.clone();
+    for i in &e.inputs {
+        spec.inputs.push(crate::ArtifactPath::parse(i)?);
+    }
+    Ok(spec)
+}
+
+/// The applet rules, applied entry by entry. Three, all load-bearing
+/// rather than stylistic:
+///
+///   * **Ids are JavaScript identifiers.** An applet id is injected
+///     into card-source scope as a bare name (`slack_work.channels()`),
+///     and card source is evaluated by `new Function`, so an id like
+///     `slack.work` or `2fa` would be a syntax error at the point a
+///     card renders — far from the config that caused it.
+///   * **Ids are unique.** They are the proxy prefix and the namespace;
+///     two entries claiming one id would make `/applet/<id>/`
+///     ambiguous. TOML cannot enforce this for us since `[[applets]]`
+///     is an array.
+///   * **`user` is reserved.** See [`RESERVED_APPLET_ID`].
+///
+/// Nothing here looks at step ids: an applet writes no artifacts, so
+/// the two namespaces cannot collide. The scaffold depends on that —
+/// its `unified_index` applet sits beside its `unified_index/grid`
+/// step.
+fn accept_applets(
+    candidates: Vec<Candidate<AppletEntry>>,
+    text: Option<&str>,
+) -> (Vec<AppletEntry>, Vec<Diagnostic>) {
+    let mut accepted = Vec::with_capacity(candidates.len());
+    let mut diags = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for c in candidates {
+        let id = c.entry.id.clone();
+        if !is_js_identifier(&id) {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "id {id:?} must be a JavaScript identifier (letters, digits, _ or $, not \
+                     starting with a digit) because it is injected into card source as a \
+                     bare name"
+                ),
+            ));
+            continue;
+        }
+        if id == RESERVED_APPLET_ID {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "id {RESERVED_APPLET_ID:?} is reserved: it names the namespace for \
+                     components the user (or an agent) authors, which the app owns and \
+                     never overwrites. Pick another id."
+                ),
+            ));
+            continue;
+        }
+        if !seen.insert(id.clone()) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("id"),
+                    format!("duplicate id {id:?}"),
+                )
+                .with_help("the earlier entry keeps this id; give this one another"),
+            );
+            continue;
+        }
+        if c.entry.command.trim().is_empty() {
+            diags.push(c.diag(Severity::Rejected, text, Some("command"), "empty command"));
+            continue;
+        }
+        accepted.push(c.entry);
+    }
+    (accepted, diags)
+}
+
+/// The key serde is complaining about: the first backticked word in
+/// its message (`unknown field \`title\`, expected one of …`).
+fn complained_about(message: &str) -> Option<&str> {
+    message.split('`').nth(1)
+}
+
+/// Narrow a diagnostic about an entry to the one key it is about.
+///
+/// `toml::Value::try_into` reports no span — the value came from a
+/// tree, not from text — so all we start with is the entry's
+/// `[[steps]]` header. That is never *wrong*, just coarse: it puts the
+/// caret a few lines above the actual mistake, and puts the UI
+/// editor's highlight there too.
+///
+/// The message does name the key (serde's "unknown field `title`"), and
+/// the key is almost always written plainly inside the entry, so look
+/// for it. The search stops at the next table header, which keeps it
+/// out of a following `[steps.params]` — where an arbitrary key is
+/// legal and finding one would be a lie.
+///
+/// Falls back to the header span whenever anything about that doesn't
+/// hold, so this can improve a location and never invent one.
+fn key_span(text: &str, header: std::ops::Range<usize>, key: &str) -> std::ops::Range<usize> {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return header;
+    }
+    let mut at = header.end;
+    for line in text[header.end..].split_inclusive('\n') {
+        let line_start = at;
+        at += line.len();
+        let trimmed = line.trim_start();
+        // A table header ends this entry's body. Stopping here keeps
+        // the search out of a following `[steps.params]`, where an
+        // arbitrary key is legal and a match would be a lie.
+        if trimmed.starts_with('[') {
+            break;
+        }
+        let Some(after) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        // `title = …`, not `titlebar = …`.
+        if after.trim_start().starts_with('=') {
+            let indent = line.len() - trimmed.len();
+            let pos = line_start + indent;
+            return pos..pos + key.len();
+        }
+    }
+    header
+}
+
+/// What the entry-level pass produced: the config that survived, the
+/// specs to graph, where each surviving step sits in the file, and one
+/// diagnostic per entry that did not make it.
+struct Entries {
+    cfg: DagConfig,
+    specs: Vec<StepSpec>,
+    /// step id → byte range of the `[[steps]]` header declaring it.
+    /// Includes dropped steps: a graph diagnostic naming one still
+    /// wants somewhere to point.
+    spans: BTreeMap<String, std::ops::Range<usize>>,
+    /// The ids of the steps this pass threw out. Handed to graph
+    /// assembly so that a step whose input names one of them is told
+    /// its input was *dropped*, rather than that it never existed —
+    /// different sentences, and different entries to go and fix.
+    dropped: BTreeSet<String>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Deserialize every entry on its own and apply every rule that does
+/// not need the graph.
+fn entries_of(text: &str) -> Entries {
+    let raw: RawConfig = match toml::from_str(text) {
+        Ok(r) => r,
+        Err(e) => {
+            let mut d = Diagnostic::fatal(e.message().trim().to_string()).with_help(
+                "this file is not a config — nothing in it could be read. Fix the syntax and \
+                 the rest will be checked.",
+            );
+            if let Some(span) = e.span() {
+                d = d.at_span(text, span);
+            }
+            return Entries {
+                cfg: DagConfig::empty(),
+                specs: Vec::new(),
+                spans: BTreeMap::new(),
+                dropped: BTreeSet::new(),
+                diagnostics: vec![d],
+            };
+        }
+    };
+
+    let mut diags = Vec::new();
+    let mut spans: BTreeMap<String, std::ops::Range<usize>> = BTreeMap::new();
+
+    // Each entry deserialized on its own, so one bad key costs one
+    // entry. The id is read straight off the raw value rather than
+    // taken from the deserialized entry, because a *rejected* entry
+    // still has to be nameable — and the key that failed is usually not
+    // the id.
+    let mut step_candidates = Vec::with_capacity(raw.steps.len());
+    for (i, spanned) in raw.steps.into_iter().enumerate() {
+        let span = spanned.span();
+        let value = spanned.into_inner();
+        let id = value.get("id").and_then(|v| v.as_str()).map(str::to_string);
+        if let Some(id) = &id {
+            // First spelling wins, matching which entry `accept_steps`
+            // keeps when two claim one id.
+            spans.entry(id.clone()).or_insert_with(|| span.clone());
+        }
+        let reference = EntryRef::step(i, id);
+        match value.try_into::<StepEntry>() {
+            Ok(entry) => step_candidates.push(Candidate {
+                entry,
+                reference,
+                span: Some(span),
+            }),
+            Err(e) => {
+                let message = e.message().trim().to_string();
+                let at = match complained_about(&message) {
+                    Some(key) => key_span(text, span, key),
+                    None => span,
+                };
+                diags.push(
+                    Diagnostic::new(Severity::Rejected, message)
+                        .at_entry(reference)
+                        .at_span(text, at),
+                )
+            }
+        }
+    }
+
+    let mut applet_candidates = Vec::with_capacity(raw.applets.len());
+    for (i, spanned) in raw.applets.into_iter().enumerate() {
+        let span = spanned.span();
+        let value = spanned.into_inner();
+        let id = value.get("id").and_then(|v| v.as_str()).map(str::to_string);
+        let reference = EntryRef::applet(i, id);
+        match value.try_into::<AppletEntry>() {
+            Ok(entry) => applet_candidates.push(Candidate {
+                entry,
+                reference,
+                span: Some(span),
+            }),
+            Err(e) => {
+                let message = e.message().trim().to_string();
+                let at = match complained_about(&message) {
+                    Some(key) => key_span(text, span, key),
+                    None => span,
+                };
+                diags.push(
+                    Diagnostic::new(Severity::Rejected, message)
+                        .at_entry(reference)
+                        .at_span(text, at),
+                )
+            }
+        }
+    }
+
+    let (accepted, step_diags) = accept_steps(step_candidates, Some(text));
+    let (applets, applet_diags) = accept_applets(applet_candidates, Some(text));
+    diags.extend(step_diags);
+    diags.extend(applet_diags);
+
+    let mut steps = Vec::with_capacity(accepted.len());
+    let mut specs = Vec::with_capacity(accepted.len());
+    for (entry, spec) in accepted {
+        steps.push(entry);
+        specs.push(spec);
+    }
+
+    // Every step id the file declares that is not in the surviving set.
+    // Read off the diagnostics rather than tracked as they are dropped,
+    // so a rule added above cannot forget to report here.
+    let kept: BTreeSet<&str> = steps.iter().map(|e| e.id.as_str()).collect();
+    let dropped: BTreeSet<String> = diags
+        .iter()
+        .filter(|d| d.severity.drops_the_entry())
+        .filter_map(|d| d.id())
+        .filter(|id| !kept.contains(id))
+        .map(str::to_string)
+        .collect();
+
+    Entries {
+        cfg: DagConfig {
+            data_root: raw.data_root,
+            binary_dir: raw.binary_dir,
+            steps,
+            applets,
+        },
+        specs,
+        spans,
+        dropped,
+        diagnostics: diags,
+    }
+}
+
+/// Parse config text, keeping every entry that loads.
+///
+/// Stops at the file level only: malformed TOML, or a top-level key we
+/// do not know, leaves nothing to salvage and comes back as a single
+/// [`Severity::Fatal`] diagnostic with an empty config. Anything
+/// smaller costs its own entry and nothing else.
+///
+/// Does not build the graph, so `inputs` are unresolved here. Callers
+/// that want the whole answer want [`check_text`].
+pub fn parse_graded(text: &str) -> (DagConfig, Vec<Diagnostic>) {
+    let e = entries_of(text);
+    (e.cfg, e.diagnostics)
+}
+
+/// Everything the loader can say about one config text.
+pub struct ConfigCheck {
+    /// The exact bytes checked. Diagnostics carry byte spans into it,
+    /// so rendering one needs it — keeping it here means no caller has
+    /// to remember to carry the two together.
+    pub text: String,
+    /// The entries that survived — exactly the steps in `graph`, plus
+    /// the applets that loaded. A valid config: a caller may use it
+    /// without looking at the diagnostics at all.
+    pub cfg: DagConfig,
+    /// The graph built from `cfg`, ready to run. Empty when the file is
+    /// not a config.
+    pub graph: Graph,
+    /// One per problem, in file order — the order someone fixing them
+    /// reads. Sort by [`Severity`] for worst-first; its `Ord` is blast
+    /// radius.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl ConfigCheck {
+    /// Nothing loaded: the file is not a config. The one state that
+    /// should stop the whole app.
+    pub fn is_fatal(&self) -> bool {
+        self.worst() == Some(Severity::Fatal)
+    }
+
+    /// Everything in the file loaded.
+    pub fn is_clean(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+
+    /// The largest blast radius in the file, if any.
+    pub fn worst(&self) -> Option<Severity> {
+        self.diagnostics.iter().map(|d| d.severity).max()
+    }
+
+    /// How many entries did not reach the graph.
+    pub fn dropped(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity.drops_the_entry())
+            .count()
+    }
+
+    /// Every diagnostic rendered for a terminal, newline-separated.
+    pub fn render(&self, path: &Path) -> String {
+        self.diagnostics
+            .iter()
+            .map(|d| d.render(path, &self.text))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// The whole chokepoint: config text in, the graph that will actually
+/// run out, plus one diagnostic per entry that will not.
+///
+/// This is what every entry point should call — the `datalib-dag`
+/// binary, `datalib-http`'s config load, and its `PUT /api/config`
+/// validation. One function rather than a rule in each caller is
+/// deliberate: the config file is the source of truth, so a rule one
+/// caller enforces alone is a rule a hand-edit silently breaks.
+pub fn check_text(text: &str) -> ConfigCheck {
+    let mut entries = entries_of(text);
+    let (graph, mut graph_diags) =
+        Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
+
+    // Graph assembly drops more than the entry pass could see — a step
+    // whose input names nothing, a ring — so the surviving *config* is
+    // narrowed to what the graph kept. Leaving the entries in would
+    // give `cfg` and `graph` two different answers to "what survived",
+    // and every caller would have to know which one it meant.
+    entries
+        .cfg
+        .steps
+        .retain(|s| graph.by_id.contains_key(&s.id));
+
+    // Graph diagnostics know a step id but not where it sits in the
+    // file — the graph is built from specs, which carry no spans. Lend
+    // them the location here, where both are in hand, rather than
+    // threading the text through graph assembly.
+    for d in &mut graph_diags {
+        if let Some(span) = d.id().and_then(|id| entries.spans.get(id)).cloned() {
+            d.set_span(text, span);
+        }
+    }
+    entries.diagnostics.extend(graph_diags);
+
+    ConfigCheck {
+        text: text.to_string(),
+        cfg: entries.cfg,
+        graph,
+        diagnostics: entries.diagnostics,
+    }
+}
+
+impl DagConfig {
+    /// A config with nothing in it — what a fatal diagnostic leaves
+    /// behind. Deliberately not `Default`: "empty" here is a failure
+    /// state and should read as one at the call site.
+    fn empty() -> Self {
+        DagConfig {
+            data_root: None,
+            binary_dir: None,
+            steps: Vec::new(),
+            applets: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -969,8 +1597,11 @@ mod tests {
 mod applet_tests {
     use super::*;
 
+    /// Deserialization only — deliberately not [`parse`], which now
+    /// validates too. These tests are about `validate_applets`, so the
+    /// config has to be constructible while still breaking its rules.
     fn cfg(text: &str) -> DagConfig {
-        parse(text).expect("parse")
+        toml::from_str(text).expect("deserialize")
     }
 
     #[test]
@@ -1081,5 +1712,478 @@ tree = "b/rendered_md"
 "#);
         validate_applets(&c).expect("distinct ids, same command");
         assert_eq!(c.applets.len(), 2);
+    }
+}
+
+// --- The graded loader -----------------------------------------------------
+
+#[cfg(test)]
+mod graded_tests {
+    use super::*;
+
+    fn sev_of(diags: &[Diagnostic], id: &str) -> Option<Severity> {
+        diags
+            .iter()
+            .find(|d| d.id() == Some(id))
+            .map(|d| d.severity)
+    }
+
+    fn ids(check: &ConfigCheck) -> Vec<&str> {
+        let mut v: Vec<&str> = check.cfg.steps.iter().map(|s| s.id.as_str()).collect();
+        v.sort();
+        v
+    }
+
+    /// The headline of #209: one stray key in one step used to cost the
+    /// grid, search, the document view and every applet. It now costs
+    /// that step.
+    #[test]
+    fn one_bad_step_costs_only_that_step() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "slack/raw"
+command = "datalib-step download slack_api"
+title = "Work Slack"
+
+[[steps]]
+id = "pdfs/raw"
+command = "datalib-step download pdf"
+
+[[steps]]
+id = "unified_index/grid"
+command = "datalib-step grid_index"
+inputs = ["pdfs/raw"]
+
+[[applets]]
+id = "unified_index"
+command = "datalib-applet unified_index"
+"#,
+        );
+        // The broken step is gone and named; everything else loaded.
+        assert_eq!(ids(&check), vec!["pdfs/raw", "unified_index/grid"]);
+        assert_eq!(check.cfg.applets.len(), 1, "the applet must survive");
+        assert_eq!(
+            sev_of(&check.diagnostics, "slack/raw"),
+            Some(Severity::Rejected)
+        );
+        assert!(!check.is_fatal());
+        assert_eq!(check.dropped(), 1);
+
+        // …and the message names the key, which is what makes it
+        // fixable without reading the schema.
+        let d = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("slack/raw"))
+            .unwrap();
+        assert!(d.message.contains("title"), "{}", d.message);
+        assert_eq!(
+            d.line,
+            Some(5),
+            "the `title =` line itself, not the entry header"
+        );
+    }
+
+    /// Nested ids were **silently accepted** before #209: uniqueness was
+    /// string equality, and a step's id is a path. Two steps writing
+    /// under one tree is two writers on one `.doltlite_db`, whose
+    /// working set is shared across processes — so they commit each
+    /// other's in-flight rows, with no failed step and no log line.
+    ///
+    /// Checked both ways round, because the file can declare them in
+    /// either order.
+    #[test]
+    fn nested_ids_are_two_writers_on_one_tree() {
+        for (first, second) in [
+            ("unified_index", "unified_index/grid"),
+            ("unified_index/grid", "unified_index"),
+        ] {
+            let check = check_text(&format!(
+                "[[steps]]\nid = \"{first}\"\ncommand = \"a\"\n\n\
+                 [[steps]]\nid = \"{second}\"\ncommand = \"b\"\n"
+            ));
+            assert_eq!(
+                ids(&check),
+                vec![first],
+                "the later of {first:?} / {second:?} must be dropped"
+            );
+            let d = check
+                .diagnostics
+                .iter()
+                .find(|d| d.id() == Some(second))
+                .unwrap_or_else(|| panic!("no diagnostic for {second:?}: {:?}", check.diagnostics));
+            assert_eq!(d.severity, Severity::Rejected);
+            // Both ids, so the reader can see the pair that collides.
+            assert!(d.message.contains(first), "{}", d.message);
+            assert!(d.message.contains(second), "{}", d.message);
+        }
+    }
+
+    /// Siblings are the whole layout and must stay legal — a download
+    /// and a render step under one stem write two different trees.
+    #[test]
+    fn siblings_under_one_stem_are_not_nested() {
+        let check = check_text(
+            "[[steps]]\nid = \"slack/raw\"\ncommand = \"a\"\n\n\
+             [[steps]]\nid = \"slack/rendered_md\"\ncommand = \"b\"\ninputs = [\"slack/raw\"]\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+    }
+
+    /// An applet id and a step id are separate namespaces, and the
+    /// scaffold depends on it: `unified_index` the applet sits beside
+    /// `unified_index/grid` the step. A containment check that spanned
+    /// both would reject every default config.
+    #[test]
+    fn the_scaffold_shape_loads_clean() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "unified_index/grid"
+command = "datalib-step grid_index"
+
+[[steps]]
+id = "unified_index/qmd"
+command = "datalib-step qmd_index"
+
+[[applets]]
+id = "unified_index"
+command = "datalib-applet unified_index"
+"#,
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert_eq!(check.graph.steps.len(), 2);
+    }
+
+    /// Malformed TOML is the one shape with nothing to salvage.
+    #[test]
+    fn malformed_toml_is_fatal_and_nothing_loads() {
+        let check = check_text("[[steps]]\nid = = \n");
+        assert!(check.is_fatal());
+        assert!(check.cfg.steps.is_empty());
+        assert!(check.graph.steps.is_empty());
+        assert_eq!(check.diagnostics.len(), 1, "one fatal, not a pile");
+        assert_eq!(check.diagnostics[0].line, Some(2));
+    }
+
+    /// An unknown key at the *top* level is a statement about the file,
+    /// not about an entry — there is no smaller thing to drop, so it
+    /// stays fatal.
+    #[test]
+    fn an_unknown_top_level_key_is_fatal() {
+        let check = check_text("stpes = 1\n[[steps]]\nid = \"a\"\ncommand = \"x\"\n");
+        assert!(check.is_fatal(), "{:?}", check.diagnostics);
+        assert!(
+            check.diagnostics[0].message.contains("data_root"),
+            "the message should list the keys that are allowed: {}",
+            check.diagnostics[0].message
+        );
+    }
+
+    /// The issue's "input names no declared step" row: that step is
+    /// blocked, its dependents with it, and everything else runs.
+    #[test]
+    fn a_dangling_input_blocks_its_step_and_its_dependents() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "pdfs/raw"
+command = "a"
+
+[[steps]]
+id = "slack/rendered_md"
+command = "b"
+inputs = ["slack/raw"]
+
+[[steps]]
+id = "unified_index/grid"
+command = "c"
+inputs = ["slack/rendered_md", "pdfs/raw"]
+"#,
+        );
+        assert_eq!(ids(&check), vec!["pdfs/raw"]);
+        assert_eq!(
+            sev_of(&check.diagnostics, "slack/rendered_md"),
+            Some(Severity::Blocked)
+        );
+        assert_eq!(
+            sev_of(&check.diagnostics, "unified_index/grid"),
+            Some(Severity::Blocked)
+        );
+
+        // The step that named a missing id is told what does exist…
+        let dangling = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("slack/rendered_md"))
+            .unwrap();
+        assert!(
+            dangling.message.contains("names no declared step"),
+            "{dangling:?}"
+        );
+        let help = dangling.help.as_deref().unwrap_or_default();
+        assert!(
+            help.contains("pdfs/raw"),
+            "should list the declared steps: {help}"
+        );
+        assert!(help.contains("input_path"), "{help}");
+
+        // …and the one that merely hangs off it is told the fix is
+        // elsewhere, so nobody goes editing the wrong entry.
+        let cascaded = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("unified_index/grid"))
+            .unwrap();
+        assert!(
+            cascaded.message.contains("was itself dropped"),
+            "{cascaded:?}"
+        );
+        assert!(
+            cascaded
+                .help
+                .as_deref()
+                .unwrap()
+                .contains("slack/rendered_md"),
+            "the help must name the entry that actually needs fixing: {cascaded:?}"
+        );
+    }
+
+    /// The commonest cascade of all, and the one that decides whether
+    /// the message sends you to the right line: a render step whose
+    /// fetch step was rejected for a bad key.
+    ///
+    /// The fetch step never reaches graph assembly — the entry pass
+    /// dropped it — so without being told what that pass threw out,
+    /// the graph would report "names no declared step" and send the
+    /// user looking for a step that is right there in the file.
+    #[test]
+    fn a_step_whose_input_was_rejected_is_told_where_the_fix_is() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "slack/raw"
+command = "a"
+title = "Work Slack"
+
+[[steps]]
+id = "slack/rendered_md"
+command = "b"
+inputs = ["slack/raw"]
+"#,
+        );
+        assert!(ids(&check).is_empty());
+        let d = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("slack/rendered_md"))
+            .unwrap();
+        assert_eq!(d.severity, Severity::Blocked);
+        assert!(
+            d.message.contains("was itself dropped"),
+            "the input exists in the file — saying it was never declared sends the \
+             reader to the wrong entry: {d:?}"
+        );
+        assert!(!d.message.contains("names no declared step"), "{d:?}");
+        assert!(d.help.as_deref().unwrap().contains("slack/raw"), "{d:?}");
+    }
+
+    /// A cycle blocks the ring; the rest of the config still runs. What
+    /// merely *hangs off* the ring is told so, rather than being
+    /// accused of being in it.
+    #[test]
+    fn a_cycle_blocks_the_ring_and_what_hangs_off_it() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "fine/raw"
+command = "ok"
+
+[[steps]]
+id = "a"
+command = "x"
+inputs = ["b"]
+
+[[steps]]
+id = "b"
+command = "y"
+inputs = ["a"]
+
+[[steps]]
+id = "downstream"
+command = "z"
+inputs = ["a"]
+"#,
+        );
+        assert_eq!(ids(&check), vec!["fine/raw"]);
+        for id in ["a", "b", "downstream"] {
+            assert_eq!(
+                sev_of(&check.diagnostics, id),
+                Some(Severity::Blocked),
+                "{id}"
+            );
+        }
+        let ring = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("a"))
+            .unwrap();
+        assert!(
+            ring.message.contains("is in a dependency cycle"),
+            "{ring:?}"
+        );
+        let tail = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("downstream"))
+            .unwrap();
+        assert!(
+            tail.message.contains("downstream of a dependency cycle"),
+            "a step below a cycle is not in it: {tail:?}"
+        );
+    }
+
+    /// Diagnostics raised during graph assembly know a step id but not
+    /// where it sits in the file. The loader lends them the location,
+    /// or the UI has nothing to jump to.
+    #[test]
+    fn graph_diagnostics_get_a_line_from_the_loader() {
+        let check = check_text(
+            "[[steps]]\nid = \"ok/raw\"\ncommand = \"a\"\n\n\
+             [[steps]]\nid = \"bad/rendered_md\"\ncommand = \"b\"\ninputs = [\"nope\"]\n",
+        );
+        let d = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("bad/rendered_md"))
+            .unwrap();
+        assert_eq!(d.line, Some(5), "the second [[steps]] header");
+        assert!(d.span.is_some(), "the UI editor selects the span");
+    }
+
+    /// Two entries claiming one id: the first keeps it, so a config's
+    /// meaning does not depend on which duplicate the loader happened
+    /// to visit last.
+    #[test]
+    fn the_first_of_two_duplicate_ids_wins() {
+        let check = check_text(
+            "[[steps]]\nid = \"x/raw\"\ncommand = \"first\"\n\n\
+             [[steps]]\nid = \"x/raw\"\ncommand = \"second\"\n",
+        );
+        assert_eq!(check.cfg.steps.len(), 1);
+        assert!(check.cfg.steps[0].command.contains("first"));
+        assert_eq!(
+            check.diagnostics[0].line,
+            Some(6),
+            "the `id =` line of the later entry — the loser, and the line to edit"
+        );
+    }
+
+    /// A file with no problems produces no diagnostics at all — the
+    /// state every other assertion here is measured against.
+    #[test]
+    fn a_good_config_says_nothing() {
+        let check = check_text(
+            "[[steps]]\nid = \"a/raw\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"a/rendered_md\"\ncommand = \"y\"\ninputs = [\"a/raw\"]\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert_eq!(check.worst(), None);
+        assert_eq!(check.dropped(), 0);
+        assert_eq!(check.graph.topo.len(), 2);
+    }
+
+    /// A bad applet costs the applet, not the pipeline — and the other
+    /// way round. They are declared in one file and that is the only
+    /// thing they share.
+    #[test]
+    fn a_bad_applet_and_a_bad_step_do_not_touch_each_other() {
+        let check = check_text(
+            r#"
+[[steps]]
+id = "good/raw"
+command = "a"
+
+[[steps]]
+id = "system/sneaky"
+command = "b"
+
+[[applets]]
+id = "unified_index"
+command = "datalib-applet unified_index"
+
+[[applets]]
+id = "2fa"
+command = "x"
+"#,
+        );
+        assert_eq!(ids(&check), vec!["good/raw"]);
+        assert_eq!(check.cfg.applets.len(), 1);
+        assert_eq!(check.cfg.applets[0].id, "unified_index");
+        assert_eq!(
+            sev_of(&check.diagnostics, "system/sneaky"),
+            Some(Severity::Rejected)
+        );
+        assert_eq!(sev_of(&check.diagnostics, "2fa"), Some(Severity::Rejected));
+    }
+
+    /// `is_toml` answers the file-level question only. A config with a
+    /// real problem in it is still a TOML config, which is what keeps
+    /// `datalib-migrate-config` from re-converting one.
+    #[test]
+    fn is_toml_ignores_everything_but_the_syntax() {
+        assert!(is_toml("[[steps]]\nid = \"a\"\ncommand = \"x\"\n"));
+        assert!(
+            is_toml(
+                "[[steps]]\nid = \"a\"\ncommand = \"x\"\n[[steps]]\nid = \"a\"\ncommand = \"y\"\n"
+            ),
+            "a duplicate id is a problem, not a reason to call this YAML"
+        );
+        assert!(!is_toml("sources:\n  - name: slack\n"));
+    }
+
+    /// A diagnostic points at the key it is about, not at the entry it
+    /// is in — which is where a reader looks and where the UI editor
+    /// puts its highlight. `toml::Value::try_into` reports no span at
+    /// all, so this is found rather than given, and the fallback is
+    /// the entry header.
+    #[test]
+    fn a_diagnostic_points_at_the_offending_key() {
+        let text = "[[steps]]\nid = \"a/raw\"\ncommand = \"x\"\ntitle = \"nope\"\n";
+        let check = check_text(text);
+        let d = &check.diagnostics[0];
+        let (start, end) = d.span.unwrap();
+        assert_eq!(&text[start..end], "title");
+        assert_eq!(d.line, Some(4));
+
+        // A key inside `params` is legal, so a same-named key there is
+        // never what a complaint is about. The search stops at the
+        // sub-table header rather than reaching in.
+        let with_params =
+            "[[steps]]\nid = \"a/raw\"\ncommand = \"x\"\nbogus = 1\n[steps.params]\nbogus = 2\n";
+        let d2 = &check_text(with_params).diagnostics[0];
+        assert_eq!(
+            d2.line,
+            Some(4),
+            "the entry's own key, not the one in params"
+        );
+    }
+
+    /// The strict door and the graded one enforce one rule set: what
+    /// `parse` rejects is exactly what produces a diagnostic.
+    #[test]
+    fn strict_parse_rejects_exactly_what_the_graded_loader_reports() {
+        for text in [
+            "[[steps]]\nid = \"a\"\ncommand = \"x\"\ntitle = 1\n",
+            "[[steps]]\nid = \"a\"\ncommand = \"x\"\n[[steps]]\nid = \"a\"\ncommand = \"y\"\n",
+            "[[steps]]\nid = \"system\"\ncommand = \"x\"\n",
+            "[[applets]]\nid = \"user\"\ncommand = \"x\"\n",
+            "nope = 1\n",
+        ] {
+            let (_, diags) = parse_graded(text);
+            assert!(!diags.is_empty(), "graded accepted {text:?}");
+            assert!(parse(text).is_err(), "strict accepted {text:?}");
+        }
     }
 }

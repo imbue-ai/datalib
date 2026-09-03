@@ -103,19 +103,19 @@ log "pins: node=$NODE_VERSION latchkey=$latchkey_version qmd=$qmd_version"
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
         node_platform="darwin-arm64"
-        node_sha256="ef28d8fab2c0e4314522d4bb1b7173270aa3937e93b92cb7de79c112ac1fa953"
+        node_sha256="61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6"
         ;;
     Darwin-x86_64)
         node_platform="darwin-x64"
-        node_sha256="b8da981b8a0b1241b70249204916da76c63573ddf5814dbd2d1e41069105cb81"
+        node_sha256="58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026"
         ;;
     Linux-aarch64 | Linux-arm64)
         node_platform="linux-arm64"
-        node_sha256="543fa39e57d4c07855939459a323f4deb9a79dd1bb45e6e99458b0f2de10db8d"
+        node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30"
         ;;
     Linux-x86_64)
         node_platform="linux-x64"
-        node_sha256="7a8cb04b4a1df4eaf432125324b81b29a088e73570a23259a8de1c65d07fc129"
+        node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a"
         ;;
     *) fail "unsupported platform: $(uname -s)-$(uname -m)" ;;
 esac

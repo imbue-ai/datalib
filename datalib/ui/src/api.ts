@@ -332,6 +332,39 @@ export function fetchChat(
 // `datalib-migrate-config` program; `legacy_yaml_path` below exists
 // only so the UI can say so instead of showing an empty setup screen.
 
+// One thing wrong with the config, and how much of it that costs.
+// Mirrors `datalib_dag::diagnostics` — see that module for why there
+// are four severities and not two. In short:
+//
+//   fatal    — the file is not a config; nothing loaded, the app is
+//              blocked (this is what `app_ready: false` reports).
+//   rejected — this entry is unusable and was dropped; everything else
+//              loaded and still runs.
+//   blocked  — this entry is fine and cannot run anyway, because what
+//              it names is missing or was itself dropped. The fix is at
+//              another entry, and `help` says which.
+//   warning  — valid, probably a mistake. Nothing was dropped.
+export type Severity = "fatal" | "rejected" | "blocked" | "warning";
+
+export type Diagnostic = {
+  severity: Severity;
+  // Which `[[steps]]` / `[[applets]]` entry, when it is about one.
+  // `id` is null when the id itself is what's broken; `index` is null
+  // for problems raised after loading, where the array position has
+  // already shifted and the id is the identity.
+  entry: { kind: "step" | "applet"; index: number | null; id: string | null } | null;
+  message: string;
+  // What to do about it — kept separate so it can be rendered as
+  // secondary text rather than glued onto the message.
+  help: string | null;
+  // Byte range in the config text, for selecting the offending key in
+  // the editor. Points at the key itself where the loader could find
+  // it, else at the entry's `[[steps]]` header.
+  span: [number, number] | null;
+  line: number | null;
+  column: number | null;
+};
+
 export type ConfigResponse = {
   // Absolute path of `<root>/config.toml`.
   path: string;
@@ -339,10 +372,21 @@ export type ConfigResponse = {
   exists: boolean;
   // Raw config text ("" when missing).
   text: string;
-  // Whether the current bytes parse + validate.
+  // Whether the file is a config at all — i.e. nothing `fatal`.
+  // Deliberately not "has no problems": a config with a rejected step
+  // still loads and the app still runs on it. Ask `diagnostics`.
   parsed_ok: boolean;
-  // Loader error when parsed_ok is false.
+  // The fatal diagnostic's message when parsed_ok is false.
   error: string | null;
+  // Everything wrong with the file. Empty for a clean config.
+  diagnostics: Diagnostic[];
+  // Whether the app can serve its own views at all. False when the
+  // file is not a config, or when it loads without a usable
+  // `unified_index` applet — that applet serves the grid, search and
+  // the document view, so without it every view is a 502. A root with
+  // no config is `exists: false` and the first-run screen's business,
+  // not this flag's.
+  app_ready: boolean;
   source_count: number;
   // How to invoke the latchkey CLI on this install: the app-bundled
   // launcher's absolute path when running from the packaged app, else
@@ -360,10 +404,35 @@ export type ConfigResponse = {
 };
 
 export type SaveConfigResponse = {
+  // Whether the text is acceptable — and, for a save, whether it was
+  // written. True only for a config with no problems at all: the PUT
+  // door is stricter than the loader on purpose, so that "saved" keeps
+  // meaning "saved clean".
   ok: boolean;
+  // The first diagnostic, for a caller that wants one line.
   error: string | null;
+  // All of them, so an editor can show every problem at once instead
+  // of one save per typo.
+  diagnostics: Diagnostic[];
   source_count: number;
 };
+
+// Ask what the server makes of some config text without saving it —
+// the editor's linter. Same verdict `saveConfig` would give, and the
+// same shape, minus the write.
+export async function checkConfig(
+  text: string,
+  signal?: AbortSignal,
+): Promise<SaveConfigResponse> {
+  const r = await fetch("/api/config/check", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+  if (!r.ok) throw new Error(`config check failed: ${r.status}`);
+  return (await r.json()) as SaveConfigResponse;
+}
 
 export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config", signal);

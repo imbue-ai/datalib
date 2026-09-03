@@ -180,6 +180,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/accounts", get(accounts))
         .route("/api/feedback", post(submit_feedback))
         .route("/api/config", get(get_config).put(put_config))
+        .route("/api/config/check", post(check_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         .route("/api/dag", get(get_dag))
@@ -734,43 +735,46 @@ pub struct JobsAllParams {
 // `datalib-migrate-config` program; all this side does is notice the
 // stray `config.yaml` and say so (`legacy_yaml_path`).
 
-/// Parse + validate the DAG config at `path` the same way the runner
-/// does (`config::load` → `to_specs` → `Graph::build`, so cycle /
-/// ownership / bad-command errors are caught, not just TOML syntax),
-/// and derive the source step ids.
+/// Check the DAG config at `path` exactly as the runner does
+/// (`config::load_graded` → the same rules, the same graph), keeping
+/// whatever loads.
 ///
-/// A source is any step with no declared `inputs` — a fringe step,
-/// which is exactly what the runner's `--sync` can target (its real
-/// input is outside the DAG: a remote service, a user-staged tree).
-/// Nothing about the step's command matters here; the derivation is
-/// fully generic.
-fn load_dag_config(
-    path: &std::path::Path,
-) -> anyhow::Result<(datalib_dag::config::DagConfig, Vec<String>)> {
-    let (cfg, _root) = datalib_dag::config::load(path)?;
-    let sources = check_dag_config(&cfg)?;
-    Ok((cfg, sources))
+/// Only an unreadable file is an `Err`. Everything the config itself
+/// gets wrong is a diagnostic on the returned [`ConfigCheck`], because
+/// that is the whole point of #209: a broken step costs that step, not
+/// the app.
+fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config::ConfigCheck> {
+    let (checked, _root) = datalib_dag::config::load_graded(path)?;
+    Ok(checked)
 }
 
-/// [`load_dag_config`] against text that isn't on disk yet — the
-/// about-to-be-saved config in `put_config`.
-fn validate_config_text(text: &str) -> anyhow::Result<Vec<String>> {
-    check_dag_config(&datalib_dag::config::parse(text)?)
+/// The source step ids of a checked config: the steps with no declared
+/// `inputs`, which is exactly what the runner's `--sync` can target
+/// (their real input is outside the DAG — a remote service, a
+/// user-staged tree). Nothing about the step's command matters here;
+/// the derivation is fully generic.
+///
+/// Taken from the built graph rather than from `cfg.steps` so the list
+/// is what `--sync` will actually accept — a step the loader dropped
+/// is not syncable, and offering it would be offering a button that
+/// cannot work.
+fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
+    checked
+        .graph
+        .fringe_ids()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
-/// Run the runner's own validation over a parsed config and return its
-/// source step ids. Nothing is executed here.
+/// The applet id that serves the grid, search and the document view.
 ///
-/// Taken from the built graph rather than re-derived from `cfg.steps`,
-/// so this list is exactly what `--sync` accepts. The graph adds
-/// `staged:<path>` source steps for inputs the config leaves unwritten;
-/// re-deriving from the config would silently omit them and a staged
-/// source could never be synced from the UI.
-fn check_dag_config(cfg: &datalib_dag::config::DagConfig) -> anyhow::Result<Vec<String>> {
-    let specs = datalib_dag::config::to_specs(cfg)?;
-    let graph = datalib_dag::Graph::build(specs)?;
-    Ok(graph.fringe_ids().into_iter().map(str::to_string).collect())
-}
+/// Named here because its absence is not an ordinary missing applet:
+/// every view in the app depends on it, so a config that loads without
+/// it leaves a running server with nothing to show. `GET /api/config`
+/// reports that as `app_ready: false` and the UI blocks on it, rather
+/// than letting each view discover its own 502.
+const UNIFIED_INDEX_APPLET: &str = "unified_index";
 
 /// How many of those fringe steps are *data sources* — which is a
 /// different question from "what can `--sync` target", and the one the
@@ -802,10 +806,29 @@ pub struct ConfigResponse {
     pub exists: bool,
     /// Raw config text (empty string when the file doesn't exist).
     pub text: String,
-    /// Whether the current bytes parse + validate as a `DagConfig`.
+    /// Whether the file is a config at all — i.e. no diagnostic is
+    /// `fatal`. Deliberately *not* "has no problems": a config with a
+    /// rejected step still loads and the app still runs on it, which
+    /// is the whole point of #209. Ask `diagnostics` for problems.
     pub parsed_ok: bool,
-    /// Loader error message when `parsed_ok` is false.
+    /// The fatal diagnostic's message when `parsed_ok` is false, for
+    /// callers that want one line rather than the list.
     pub error: Option<String>,
+    /// Everything wrong with the file, worst first: what was dropped,
+    /// why, and where. Empty for a clean config. This is what the UI
+    /// renders — inline in the editor by `span`, and per-row in the
+    /// pipeline table by the entry's `id`.
+    pub diagnostics: Vec<datalib_dag::Diagnostic>,
+    /// Whether the app can serve its own views at all.
+    ///
+    /// False in two cases, which the UI shows one screen for because
+    /// they have one consequence: the file is not a config, or it
+    /// declares no usable `unified_index` applet. That applet serves
+    /// the grid, search and the document view, so without it every
+    /// view is a 502 — the mystery this whole graded loader exists to
+    /// end. A root with no config at all is `exists: false` and the
+    /// first-run screen's business, not this flag's.
+    pub app_ready: bool,
     /// Number of data sources the user has configured (0 when the
     /// config is missing or invalid). See [`configured_source_count`]
     /// for why this is not simply the fringe's length.
@@ -871,9 +894,22 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
     let legacy = legacy_yaml_hint(&s.root);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let (parsed_ok, error, source_count) = match load_dag_config(&path) {
-        Ok((_cfg, sources)) => (true, None, configured_source_count(&sources)),
-        Err(e) => (false, Some(format!("{e:#}")), 0),
+    // An unreadable file is the only thing that leaves us with nothing
+    // to say; a *bad* one has diagnostics, which is the interesting
+    // case and the one the UI acts on.
+    let checked = load_dag_config(&path).ok();
+    let (parsed_ok, error, source_count, diagnostics, app_ready) = match &checked {
+        Some(c) => (
+            !c.is_fatal(),
+            c.diagnostics
+                .iter()
+                .find(|d| d.severity == datalib_dag::Severity::Fatal)
+                .map(|d| d.describe()),
+            configured_source_count(&source_ids(c)),
+            c.diagnostics.clone(),
+            !c.is_fatal() && c.cfg.applets.iter().any(|a| a.id == UNIFIED_INDEX_APPLET),
+        ),
+        None => (false, None, 0, Vec::new(), false),
     };
     Json(ConfigResponse {
         exists: path.exists(),
@@ -881,6 +917,8 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         text,
         parsed_ok,
         error,
+        diagnostics,
+        app_ready,
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         legacy_yaml_path: legacy.clone().map(|(p, _)| p),
@@ -893,40 +931,78 @@ pub struct PutConfigRequest {
     pub text: String,
 }
 
+/// What `PUT /api/config` did, and what `POST /api/config/check` would
+/// do — one type, because they answer the same question and only one of
+/// them also writes.
 #[derive(Debug, Serialize)]
-pub struct PutConfigResponse {
+pub struct ConfigCheckResponse {
+    /// Whether this text is acceptable — and, for the PUT, whether it
+    /// was written. True only for a config with *no* problems at all;
+    /// see `put_config` for why this door is stricter than the loader.
     pub ok: bool,
+    /// The first diagnostic, for a caller that wants one line.
     pub error: Option<String>,
+    /// Every problem, so an editor can show them all at once instead of
+    /// one save per typo.
+    pub diagnostics: Vec<datalib_dag::Diagnostic>,
     pub source_count: usize,
+}
+
+/// `POST /api/config/check` — say what is wrong with some config text,
+/// writing nothing.
+///
+/// The editor's linter: it can ask on every pause without saving, and
+/// get back every problem with a span to underline. Without it the only
+/// way to find out was to save, which is a poor thing to have to do to
+/// a config you know is half-written.
+async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
+    Json(config_verdict(&req.text))
+}
+
+/// The verdict on some config text: what the loader makes of it, in the
+/// shape both config-writing endpoints answer in.
+fn config_verdict(text: &str) -> ConfigCheckResponse {
+    let checked = datalib_dag::config::check_text(text);
+    ConfigCheckResponse {
+        ok: checked.is_clean(),
+        error: checked.diagnostics.first().map(|d| d.describe()),
+        source_count: configured_source_count(&source_ids(&checked)),
+        diagnostics: checked.diagnostics,
+    }
 }
 
 /// `PUT /api/config` — validate then atomically write
 /// `<root>/config.toml`.
 ///
-/// We validate with the real loader first (so cycle / ownership /
-/// bad-command errors are caught, not just syntax), then write via a
-/// sibling `.tmp` + `rename` so a rejected — or half-written — config
-/// never clobbers the existing one. Validation failures return
-/// `200 {ok:false, error}` (the UI shows it inline); only genuine I/O
-/// failures are 5xx.
+/// **This door is stricter than the loader, deliberately.** The loader
+/// tolerates a config with a broken entry because it has to: the file
+/// is already on disk, a hand-edit put it there, and refusing to load
+/// it would cost the user their whole app (#209). A PUT is a different
+/// situation — the caller is holding the text and can fix it now — so
+/// the old guarantee is kept: only a config with no problems at all is
+/// ever written. `docs/agent_user.md` and the agent config guide both
+/// promise that, and an agent relies on it to know its edit landed
+/// clean.
+///
+/// Every diagnostic comes back, not just the first, so a caller fixing
+/// a config needs one round-trip rather than one per mistake.
+///
+/// Writes via a sibling `.tmp` + `rename`, so a rejected — or
+/// half-written — config never clobbers the existing one. Validation
+/// failures return `200 {ok:false, …}` (the UI shows them inline); only
+/// genuine I/O failures are 5xx.
 async fn put_config(
     State(s): State<AppState>,
     Json(req): Json<PutConfigRequest>,
-) -> Result<Json<PutConfigResponse>, StatusCode> {
+) -> Result<Json<ConfigCheckResponse>, StatusCode> {
     let path = s.config_path();
 
     // Validate the submitted text before it touches the filesystem, so
     // a rejected config never gets written even transiently.
-    let sources = match validate_config_text(&req.text) {
-        Ok(sources) => sources,
-        Err(e) => {
-            return Ok(Json(PutConfigResponse {
-                ok: false,
-                error: Some(format!("{e:#}")),
-                source_count: 0,
-            }))
-        }
-    };
+    let verdict = config_verdict(&req.text);
+    if !verdict.ok {
+        return Ok(Json(verdict));
+    }
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -944,11 +1020,7 @@ async fn put_config(
         eprintln!("put_config: rename {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    Ok(Json(PutConfigResponse {
-        ok: true,
-        error: None,
-        source_count: configured_source_count(&sources),
-    }))
+    Ok(Json(verdict))
 }
 
 /// What `POST /api/config/init` did.
@@ -1052,6 +1124,12 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         text: scaffold_toml(),
         parsed_ok: true,
         error: None,
+        // The scaffold is a constant this binary ships, and
+        // `scaffold_is_valid` pins that it loads clean — so there is
+        // nothing to report and nothing to block on. This endpoint
+        // hands the UI *proposed* text, not the state of the root.
+        diagnostics: Vec::new(),
+        app_ready: true,
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         legacy_yaml_path: legacy.clone().map(|(p, _)| p),
@@ -1315,11 +1393,17 @@ command = \"datalib-applet unified_index\"
 /// when the file is missing or fails to parse, mirroring the previous
 /// behavior.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
-    let sources = match load_dag_config(&s.config_path()) {
-        Ok((_cfg, sources)) => sources,
-        Err(_) => return Json(Vec::new()),
+    let Ok(checked) = load_dag_config(&s.config_path()) else {
+        return Json(Vec::new());
     };
-    Json(sources.into_iter().map(|id| SourceInfo { id }).collect())
+    // Only the steps that survived: a step the loader dropped cannot be
+    // synced, and listing it would offer a button that cannot work.
+    Json(
+        source_ids(&checked)
+            .into_iter()
+            .map(|id| SourceInfo { id })
+            .collect(),
+    )
 }
 
 /// Query for [`pipeline_storage`].
@@ -1565,19 +1649,44 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
 mod tests {
     use super::*;
 
+    /// The fringe of a checked config text, for the tests below.
+    fn fringe_of(text: &str) -> Vec<String> {
+        let checked = datalib_dag::config::check_text(text);
+        assert!(
+            checked.is_clean(),
+            "expected a clean config, got {:?}",
+            checked.diagnostics
+        );
+        source_ids(&checked)
+    }
+
     /// Whatever the scaffold emits has to survive the round trip the
     /// user is about to put it through: parse as TOML, then pass the
-    /// runner's own validation.
+    /// runner's own validation, with nothing at all to report.
     #[test]
     fn scaffold_is_valid_toml() {
         let text = scaffold_toml();
-        let sources = validate_config_text(&text)
-            .unwrap_or_else(|e| panic!("scaffold rejected: {e:#}\n---\n{text}"));
+        let checked = datalib_dag::config::check_text(&text);
+        assert!(
+            checked.is_clean(),
+            "scaffold rejected: {}\n---\n{text}",
+            checked.render(std::path::Path::new("scaffold"))
+        );
         // The fan-ins have no inputs to name yet, so on a scaffolded
         // root they *are* the fringe. They are what `--sync` can target
         // until the first source is added — and running them against
         // nothing is a no-op, not an error.
-        assert_eq!(sources, ["unified_index/grid", "unified_index/qmd"]);
+        assert_eq!(
+            source_ids(&checked),
+            ["unified_index/grid", "unified_index/qmd"]
+        );
+        // And it declares the applet without which the app has no
+        // views at all — the thing `app_ready` reports on.
+        assert!(checked
+            .cfg
+            .applets
+            .iter()
+            .any(|a| a.id == UNIFIED_INDEX_APPLET));
     }
 
     /// A scaffolded root has no *sources*, even though its two index
@@ -1586,7 +1695,7 @@ mod tests {
     /// the confusion `POST /api/config/init` exists to end.
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
-        let fringe = validate_config_text(&scaffold_toml()).unwrap();
+        let fringe = fringe_of(&scaffold_toml());
         assert_eq!(fringe, ["unified_index/grid", "unified_index/qmd"]);
         assert_eq!(configured_source_count(&fringe), 0);
     }
@@ -1599,8 +1708,7 @@ mod tests {
             "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\n",
             scaffold_toml()
         );
-        let fringe = validate_config_text(&text).unwrap();
-        assert_eq!(configured_source_count(&fringe), 1);
+        assert_eq!(configured_source_count(&fringe_of(&text)), 1);
     }
 
     /// TOML is the only format the server accepts; a legacy config
@@ -1608,11 +1716,50 @@ mod tests {
     #[test]
     fn only_toml_is_accepted() {
         assert_eq!(
-            validate_config_text("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n").unwrap(),
+            fringe_of("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n"),
             ["x/raw"]
         );
-        assert!(validate_config_text("steps:\n  - id: x\n    command: s\n").is_err());
-        assert!(validate_config_text("sources:\n  - name: x\n").is_err());
+        for legacy in [
+            "steps:\n  - id: x\n    command: s\n",
+            "sources:\n  - name: x\n",
+        ] {
+            let v = config_verdict(legacy);
+            assert!(!v.ok, "{legacy:?} should be rejected");
+            assert_eq!(
+                v.diagnostics[0].severity,
+                datalib_dag::Severity::Fatal,
+                "YAML is not a config at all, not a config with a bad entry"
+            );
+        }
+    }
+
+    /// The PUT door stays stricter than the loader: a config with one
+    /// rejected entry *loads* — that is the whole of #209 — and is
+    /// still refused a write, because the caller is holding the text
+    /// and can fix it now. `docs/agent_user.md` promises that only a
+    /// clean config ever lands.
+    #[test]
+    fn put_refuses_what_the_loader_would_tolerate() {
+        let text = format!(
+            "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\ntitle = \"Work\"\n",
+            scaffold_toml()
+        );
+        // The loader keeps everything but the bad step…
+        let checked = datalib_dag::config::check_text(&text);
+        assert!(!checked.is_fatal());
+        assert_eq!(checked.dropped(), 1);
+        assert!(checked
+            .cfg
+            .applets
+            .iter()
+            .any(|a| a.id == UNIFIED_INDEX_APPLET));
+
+        // …and the PUT refuses it anyway, naming every problem so the
+        // caller needs one round-trip rather than one per mistake.
+        let v = config_verdict(&text);
+        assert!(!v.ok);
+        assert_eq!(v.diagnostics.len(), 1);
+        assert!(v.error.unwrap().contains("title"));
     }
 
     /// The migrator hint is a signpost, not a fallback: it appears only
