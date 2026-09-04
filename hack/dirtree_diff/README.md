@@ -297,6 +297,9 @@ summary would mean either an index on `kind` or splitting directory rows
 into their own table, in the same spirit as the existing
 `files` / `file_stats` split.
 
+Splitting directory rows into their own table is filed as
+[#276](https://github.com/imbue-ai/datalib/issues/276).
+
 Keying on path components instead (parent id + name) would turn that
 100 000-row diff into a single changed row. It would also cost the
 property the prolly diff currently leans on — a full-path PK means the
