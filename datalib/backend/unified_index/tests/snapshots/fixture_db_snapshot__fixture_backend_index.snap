@@ -649,6 +649,20 @@ expression: snapshot
       "updated_at": "2364-03-02T18:00:00+00:00"
     },
     {
+      "created_at": null,
+      "kind": "document",
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "md_path": "anthropic-api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "provider": "anthropic",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.6",
+      "row_set_hash": "f1b677551dc747ff458f4f3c392bc20b07179abfbe8e32e1aa9df1a09b54e417",
+      "source_fingerprint": "a46accb0a9a925f36e1edc5984eacfa6881e417cc9d194ec6be12e9bcd182b03",
+      "source_name": "anthropic-api",
+      "title": "Stellar Cartography",
+      "updated_at": null
+    },
+    {
       "created_at": "2369-05-28T15:16:40+00:00",
       "kind": "thread",
       "markdown_uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
@@ -794,7 +808,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_loaded=56 markdowns_skipped=0 rows_inserted=188"
+      "message": "datalib-step grid_index: markdowns_loaded=57 markdowns_skipped=0 rows_inserted=192"
     }
   ],
   "grid_rows": [
@@ -2101,7 +2115,7 @@ expression: snapshot
       "upstream_id": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf",
       "upstream_scope": null,
       "uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
-      "when_ts": ""
+      "when_ts": null
     },
     {
       "account": "00000001-1701-4d00-8000-000000000001",
@@ -2855,7 +2869,7 @@ expression: snapshot
       "upstream_id": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf#1",
       "upstream_scope": null,
       "uuid": "5c88d55d-f88f-5a0b-9c2d-8a90667c3a38",
-      "when_ts": ""
+      "when_ts": null
     },
     {
       "account": null,
@@ -4569,6 +4583,35 @@ expression: snapshot
       "when_ts": "2369-05-28T15:21:43+00:00"
     },
     {
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "author": "charting-conventions.md",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "git_sha": null,
+      "kind": "Project Knowledge",
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": 2,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": "Stellar Cartography",
+      "provider": "anthropic",
+      "qmd_path": "anthropic-api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": null,
+      "text_len": 237,
+      "text_sha": "sha256:fc1fd52f7a242b48c2e12e02e8374c3571a311c9ed191f7f44b41c9b63f04f45",
+      "upstream_entity_kind": "project_document",
+      "upstream_id": "7d000003-1701-4d00-8000-0000000007d3",
+      "upstream_scope": null,
+      "uuid": "a578fdb9-110f-5f34-a37f-6022428c045a",
+      "when_ts": null
+    },
+    {
       "account": null,
       "author": "jlpicard",
       "channel": null,
@@ -5004,6 +5047,35 @@ expression: snapshot
       "when_ts": "2369-05-28T15:11:40+00:00"
     },
     {
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "author": "Description",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "git_sha": null,
+      "kind": "Project Description",
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": "Stellar Cartography",
+      "provider": "anthropic",
+      "qmd_path": "anthropic-api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": null,
+      "text_len": 155,
+      "text_sha": "sha256:b984eabd176331367cc2b95893cd231571077c401b3303d08575d5bb951912e7",
+      "upstream_entity_kind": "project_description",
+      "upstream_id": "70000002-1701-4d00-8000-000000000702",
+      "upstream_scope": null,
+      "uuid": "b9d4253f-bf81-5da9-a5d0-e646184d7374",
+      "when_ts": null
+    },
+    {
       "account": "user-FAKE0DATAANDROID0POSITRONIC1",
       "author": null,
       "channel": "Sonnet on a Cat Named Spot",
@@ -5352,6 +5424,35 @@ expression: snapshot
       "when_ts": "2364-03-03T19:00:00+00:00"
     },
     {
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "author": "Custom instructions",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "git_sha": null,
+      "kind": "Project Instructions",
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": "Stellar Cartography",
+      "provider": "anthropic",
+      "qmd_path": "anthropic-api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": null,
+      "text_len": 137,
+      "text_sha": "sha256:cc38a209629f80ff7739c97a983e547e4b06a8fefc9a62c802703711a62974f7",
+      "upstream_entity_kind": "project_instructions",
+      "upstream_id": "70000002-1701-4d00-8000-000000000702",
+      "upstream_scope": null,
+      "uuid": "cbfc4f66-5f5c-5037-aee2-3125b2829672",
+      "when_ts": null
+    },
+    {
       "account": null,
       "author": "Worf",
       "channel": "Worf",
@@ -5553,6 +5654,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "d4c49836-ece7-5327-be26-3880137db503",
       "when_ts": "2024-03-20T13:58:30.000+00:00"
+    },
+    {
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "author": null,
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "git_sha": null,
+      "kind": "Project",
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": "Stellar Cartography",
+      "provider": "anthropic",
+      "qmd_path": "anthropic-api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": "https://claude.ai/project/70000002-1701-4d00-8000-000000000702",
+      "text_len": 531,
+      "text_sha": "sha256:2430f8f4484a1fdd7c3a3db20e5e686f6f16ee9a1ec99342d4a3c46bad883b23",
+      "upstream_entity_kind": "project",
+      "upstream_id": "70000002-1701-4d00-8000-000000000702",
+      "upstream_scope": null,
+      "uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "when_ts": null
     },
     {
       "account": "googlechat",
@@ -6252,8 +6382,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 56,
+    "documents_count": 57,
     "dolt_log_count": 2,
-    "grid_rows_count": 188
+    "grid_rows_count": 192
   }
 }

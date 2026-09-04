@@ -44,11 +44,18 @@ fn build_export(root: &Path) -> Result<()> {
     // comments: one on the user's own ugcPost (merges into its Shares
     // thread by URN), one on someone else's post (its body isn't in the
     // export → a comment-only thread).
+    // The third row is the undated case, and it is real: the live
+    // manual-e2e corpus contains a comment whose `Date` the export left
+    // blank, on a post that isn't in Shares. Before `when_ts` learned to
+    // be null it rendered as `1970-01-01 00:00:00 UTC` in the transcript
+    // and sorted to the top of the grid as a genuine-looking 1970 row.
+    // No checked-in fixture had an undated record, so nothing caught it.
     fs::write(
         root.join("Comments_17529409.csv"),
         "Date,Link,Message\n\
          2026-05-08 09:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,Replying to my own post thread.\n\
-         2026-04-30 15:32:07,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681,\"Great point, Jean-Luc!\"\n",
+         2026-04-30 15:32:07,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681,\"Great point, Jean-Luc!\"\n\
+         ,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567999,The export left this comment's Date blank.\n",
     )?;
 
     // The user's own posts. The first shares a URN with a comment above
@@ -132,7 +139,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // Member-id suffix stripped: table is `comments`, not
         // `comments_17529409`.
-        assert_eq!(rows(&db, "comments").await.len(), 2, "comments rows");
+        assert_eq!(rows(&db, "comments").await.len(), 3, "comments rows");
         assert!(
             rows(&db, "comments_17529409").await.is_empty(),
             "no member-id-suffixed table"
@@ -205,8 +212,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             .context("render_posts")?;
         }
         // Two shares (two URNs) + a comment that merges into the first +
-        // a comment on an external post = 3 threads.
-        assert_eq!(post_docs.len(), 3, "three post threads");
+        // a comment on an external post + the undated comment = 4 threads.
+        assert_eq!(post_docs.len(), 4, "four post threads");
 
         // Thread A: the user's ugcPost, with their follow-up comment
         // merged into the same thread by shared URN.
@@ -259,6 +266,50 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             md_c.to_lowercase()
                 .contains("not included in the linkedin export"),
             "missing-original note: {md_c}"
+        );
+
+        // Thread D: the undated comment. Every row it produces — the
+        // chat-level row, the placeholder for the missing original, and
+        // the comment itself — must carry NO timestamp.
+        //
+        // This is the regression the fixtures could not previously
+        // catch. `when_ts` used to be `1970-01-01T00:00:00+00:00` here,
+        // which is worse than null in three specific ways: it sorts into
+        // a real position in the grid, it is indistinguishable from a
+        // genuine 1970 record, and it matches `before:` / `after:`
+        // queries it should not. See
+        // `docs/dev/data_architecture_parse_and_render.md` §6.
+        let undated_urn =
+            "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567999";
+        let thread_d = post_docs
+            .iter()
+            .find(|d| {
+                d.rows
+                    .iter()
+                    .any(|r| r.source_url.as_deref() == Some(undated_urn))
+            })
+            .expect("undated comment thread rendered");
+        assert!(
+            thread_d.rows.iter().all(|r| r.when_ts.is_none()),
+            "a comment with a blank Date must leave when_ts null on every row it \
+             produces, never a fabricated epoch: {:?}",
+            thread_d
+                .rows
+                .iter()
+                .map(|r| (r.kind.clone(), r.when_ts.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(thread_d.rows.len(), 3, "chat row + placeholder + comment");
+        // ...and the markdown says so in words rather than printing a
+        // date that isn't real.
+        let md_d = fs::read_to_string(&thread_d.md_path)?;
+        assert!(
+            md_d.contains("(no timestamp)"),
+            "undated items say so in the transcript: {md_d}"
+        );
+        assert!(
+            !md_d.contains("1970-01-01"),
+            "no fabricated epoch anywhere in the rendered page: {md_d}"
         );
 
         // ── connections → contacts ───────────────────────────────

@@ -280,3 +280,52 @@ Medical emergencies route directly to Sickbay (Crusher).
 
 
 </div>
+
+
+=== anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md ===
+---
+title: "Claude Project · Stellar Cartography (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: d5bfab57-fc56-5769-ba07-09e1cd28bd8f
+markdown_uuid: d5bfab57-fc56-5769-ba07-09e1cd28bd8f
+period: all
+display: "Stellar Cartography"
+account: 00000002-1701-4d00-8000-000000000002
+project: Stellar Cartography
+external_id: 70000002-1701-4d00-8000-000000000702
+item_count: 3
+source_fingerprint: a46accb0a9a925f36e1edc5984eacfa6881e417cc9d194ec6be12e9bcd182b03
+---
+
+<h1 class="page-title" data-page-title-uuid="d5bfab57-fc56-5769-ba07-09e1cd28bd8f">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-b9d4253f-bf81-5da9-a5d0-e646184d7374" data-section-uuid="b9d4253f-bf81-5da9-a5d0-e646184d7374" class="msg msg--anthropic">
+
+## (no timestamp) — Description
+
+Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.
+
+</div>
+
+<div id="m-cbfc4f66-5f5c-5037-aee2-3125b2829672" data-section-uuid="cbfc4f66-5f5c-5037-aee2-3125b2829672" class="msg msg--anthropic">
+
+## (no timestamp) — Custom instructions
+
+Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.
+
+</div>
+
+<div id="m-a578fdb9-110f-5f34-a37f-6022428c045a" data-section-uuid="a578fdb9-110f-5f34-a37f-6022428c045a" class="msg msg--anthropic">
+
+## (no timestamp) — charting-conventions.md
+
+# Charting conventions
+
+Bearings are given from the ship's current heading, not from galactic north.
+
+- Sector designations use the Federation catalogue number, never the local name.
+- An extrapolated position is written in parentheses.
+
+
+</div>
