@@ -98,4 +98,36 @@ async fn renders_tng_fixture() {
         sbundle.push('\n');
     }
     insta::assert_snapshot!("tng_sidecar_tree", sbundle);
+
+    // The `stellar_cartography` project carries no `created_at` /
+    // `updated_at` — a real shape, found in the live manual-e2e corpus,
+    // where a Claude project row rendered `when_ts` as
+    // `1970-01-01T00:00:00+00:00`. Until this fixture landed, no
+    // checked-in record anywhere was undated, so the goldens agreed
+    // with the bug and could not have caught it.
+    //
+    // Asserted explicitly rather than left to the snapshot above,
+    // because a golden only says "this matches what it matched last
+    // time" — someone re-baking it would carry a regression straight
+    // through. See `docs/dev/data_architecture_parse_and_render.md` §6
+    // and R5 in §4.
+    // Found by the upstream project uuid in the row bodies, not by path:
+    // the directory is named for the `markdown_uuid` the renderer mints,
+    // not for the id upstream gave us.
+    let undated = sidecars
+        .values()
+        .find(|body| body.contains("70000002-1701-4d00-8000-000000000702"))
+        .expect("the undated project rendered a sidecar");
+    let v: serde_json::Value = serde_json::from_str(undated).expect("sidecar parses");
+    let rows = v["rows"].as_array().expect("rows array");
+    assert!(!rows.is_empty(), "the undated project produced rows");
+    for r in rows {
+        assert!(
+            r["when_ts"].is_null(),
+            "a project with no created_at/updated_at must leave when_ts null, \
+             never a fabricated epoch — got {} on kind={}",
+            r["when_ts"],
+            r["kind"]
+        );
+    }
 }

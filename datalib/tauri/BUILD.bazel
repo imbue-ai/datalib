@@ -1,10 +1,5 @@
+load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@rules_rust//rust:defs.bzl", "rust_test")
-
-# NODE_VERSION in this script is read by //tools:version_pins_test.
-# (It used to be exported from //datalib, because this directory had no
-# BUILD file of its own; adding `launcher_test` below made it a package
-# and moved the label here.)
-exports_files(["stage-runtime.sh"])
 
 # The Tauri shell itself is NOT built by Bazel — it is a standalone
 # cargo workspace, deliberately, so crate_universe never has to resolve
@@ -31,4 +26,22 @@ rust_test(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
     ],
+)
+
+# The Node runtime that ships inside the .app, copied out of the
+# rules_nodejs toolchain repo so it lands at a predictable
+# `bazel-bin/datalib/tauri/` path — the same convention
+# `tauri.conf.json`'s beforeBuildCommand already uses for the seven
+# backend binaries it stages.
+#
+# The copy is what buys the predictable path: `@nodejs_host//:node_bin`
+# lives in an external repo whose bzlmod-mangled name has no stable
+# string form, and whose files resolve against the output base rather
+# than bazel-bin. `stage-runtime.sh` is a plain shell script outside
+# Bazel, so it needs a path it can write down.
+copy_file(
+    name = "bundled_node",
+    src = "@nodejs_host//:node_bin",
+    out = "bundled_node_bin",
+    is_executable = True,
 )

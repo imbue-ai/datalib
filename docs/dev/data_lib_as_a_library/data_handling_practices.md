@@ -204,6 +204,16 @@ date. Not issues-only: the value is being able to see the whole surface
 at once, and an issue tracker cannot show you that. File issues for the
 *fixes*, link them from the table.
 
+**First run: [`render_audit_2026_09_03.md`](render_audit_2026_09_03.md)**
+— passes A–D against the tree, with the per-provider table, the R1 sink
+designed as a per-source doltlite `render_problems` store, and ten
+named timestamp fabrications. It grew past a table, so it lives in its
+own file rather than inline here. Two corrections to this doc came out
+of it: Pass B's 424 sites should be **461** (the walk missed the three
+providers that render from `src/render.rs` rather than a `src/render/`
+directory), and R7's `rendered_md/` pruning gap is now half closed by
+`discard_tree_from_an_older_renderer`.
+
 ## 4. Retrofit
 
 **Order.** Pass A first, and land the harness before triaging anything,

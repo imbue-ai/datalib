@@ -76,7 +76,20 @@ async function warmApplets(urls: string[], token: string): Promise<void> {
 }
 
 export default async function globalSetup(): Promise<void> {
-  assertOnlyKnownSpecsWriteTheConfig(new URL(".", import.meta.url).pathname);
+  // `decodeURIComponent`, because a file: URL percent-encodes: a checkout
+  // whose path contains a space arrives as `%20` and `readdirSync` fails
+  // with ENOENT. Only bites when cwd is the workspace — i.e. under
+  // `bazel run`, which is how the snapshot-update workflow is invoked, so
+  // `bazel test` never saw it.
+  //
+  // `fileURLToPath` from `node:url` is the more standard spelling and is
+  // what `playwright.config.ts` uses; it is avoided here because this
+  // file's tsconfig deliberately carries no `@types/node` (see
+  // `node-fs.d.ts`), and one decode is not worth a second ambient module
+  // declaration.
+  assertOnlyKnownSpecsWriteTheConfig(
+    decodeURIComponent(new URL(".", import.meta.url).pathname),
+  );
   const sandboxes = JSON.parse(process.env.FW_E2E_SANDBOXES ?? "[]") as {
     url: string;
   }[];

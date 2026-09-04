@@ -219,7 +219,9 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
                 reactor_display,
                 source_ref: None,
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
-                date_ms: timestamp.unwrap_or(0),
+                // A NULL `timestamp` column is "we don't know when",
+                // which is a null `when_ts` — not 1970.
+                date_ms: timestamp,
             });
     }
 
@@ -258,8 +260,15 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
                 &mut media_by_msg,
                 &mut reactions_by_parent,
             );
-            let ts = r.get::<Option<i64>, _>("timestamp").unwrap_or(0);
-            let period_key = period.key_for_ms(ts);
+            let period_key = match r.get::<Option<i64>, _>("timestamp") {
+                Some(ts) => period.key_for_ms(ts),
+                // An undated message still has to be filed somewhere;
+                // `key_for_undated` documents why that is the epoch
+                // bucket and not a new `"undated"` key. Its `when_ts`
+                // is null regardless — bucketing and `when_ts` answer
+                // different questions.
+                None => period.key_for_undated(),
+            };
             chats[new_idx]
                 .items_by_period
                 .entry(period_key)
@@ -278,8 +287,13 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             &mut media_by_msg,
             &mut reactions_by_parent,
         );
-        let ts = r.get::<Option<i64>, _>("timestamp").unwrap_or(0);
-        let period_key = period.key_for_ms(ts);
+        let period_key = match r.get::<Option<i64>, _>("timestamp") {
+            Some(ts) => period.key_for_ms(ts),
+            // See the sibling call above: an undated message keeps
+            // filing under the epoch bucket, and carries a null
+            // `when_ts`.
+            None => period.key_for_undated(),
+        };
         chats[idx]
             .items_by_period
             .entry(period_key)
@@ -428,7 +442,10 @@ fn build_item(
         message_uuid: whatsapp_message_uuid(source_name, chat_jid, key_id, from_me),
         author_id,
         author_display,
-        date_ms: timestamp.unwrap_or(0),
+        // A NULL `timestamp` column is "we don't know when", which is a
+        // null `when_ts` — not 1970. See
+        // `docs/dev/data_architecture_parse_and_render.md` §6.
+        date_ms: timestamp,
         text: text_data,
         kind,
         attachments,

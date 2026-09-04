@@ -38,7 +38,7 @@ use datalib_etl_chat_common::types::{
 };
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
-use super::{slack_link, Message, ParsedSlack};
+use super::{slack_link, ts_to_ms, Message, ParsedSlack};
 
 /// Bump when the on-disk render layout changes in a way that must
 /// invalidate stale docs. v3: render via chat-common.
@@ -48,7 +48,11 @@ use super::{slack_link, Message, ParsedSlack};
 ///     output directory. A v3 tree cannot be updated in place; the
 ///     render step discards it wholesale. See
 ///     `DataProcessor::render_version`.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: a `ts` we cannot parse is a null `when_ts` instead of a
+///     real-looking `1970-01-01T00:00:00` — see
+///     `docs/dev/data_architecture_parse_and_render.md` §6. Any document
+///     holding such a row renders differently, so stale docs must go.
+pub const RENDER_VERSION: u32 = 5;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -264,19 +268,6 @@ fn thread_title(root_text: &str, user_labels: &BTreeMap<String, String>) -> Stri
         .unwrap_or("(empty thread)")
         .to_string();
     first.chars().take(80).collect()
-}
-
-/// Slack `ts` ("secs.frac", UTC) → unix milliseconds.
-fn ts_to_ms(ts: &str) -> i64 {
-    let (secs_str, frac_str) = ts.split_once('.').unwrap_or((ts, ""));
-    let secs: i64 = secs_str.parse().unwrap_or(0);
-    let mut frac = frac_str.to_string();
-    while frac.len() < 3 {
-        frac.push('0');
-    }
-    frac.truncate(3);
-    let millis: i64 = frac.parse().unwrap_or(0);
-    secs * 1000 + millis
 }
 
 // ---------------------------------------------------------------------------

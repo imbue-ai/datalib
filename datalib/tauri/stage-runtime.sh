@@ -18,19 +18,32 @@
 #   binaries/latchkey      user-facing launcher (latchkey-wrapper.sh):
 #                          bundled node + tree + LATCHKEY_CURL shim
 #
-# Package versions are NOT pinned in this file: they're grepped out of
-# the Rust sources that spawn the tools (single source of truth, can't
-# drift):
-#   * latchkey  — LATCHKEY_VERSION in backend/core/src/node_runtime.rs
-#                 (the ONE canonical latchkey pin; etl re-exports it)
-#   * qmd       — DEFAULT_QMD_VERSION in backend/unified_index/src/qmd/mod.rs
-#                 (the ONE canonical qmd pin; indexer re-exports it,
-#                 //tools:version_pins_test guards the rest)
+# Everything staged here comes out of Bazel. That is the whole design:
+# this script downloads nothing and resolves nothing. It used to do
+# both — curl a Node tarball from nodejs.org against four
+# hand-maintained sha256s, then run `npm install` against the live
+# registry with no lockfile and no integrity checking — and then
+# codesign the result with our Developer ID and notarize it. Three
+# Bazel targets replace all of that:
 #
-# Build-host requirements: curl, tar, and (for qmd's native deps —
-# better-sqlite3, tree-sitter grammars) a C/C++ toolchain + python3.
-# npm itself comes from the downloaded Node dist, so the host needs no
-# Node install. Native modules are built for the HOST platform — cross
+#   //datalib/tauri:bundled_node             the rules_nodejs toolchain's
+#                                            Node, NODE_VERSION in MODULE.bazel
+#   //third-party/qmd/runtime:qmd_tree       lockfile-pinned, sha512 per tarball
+#   //third-party/latchkey/runtime:latchkey_tree            likewise
+#
+# The version pins are still grepped out of the Rust sources that spawn
+# the tools, because they name the staged DIRECTORIES and the resolver
+# looks those up by the Rust constant:
+#   * latchkey  — LATCHKEY_VERSION in backend/core/src/node_runtime.rs
+#   * qmd       — DEFAULT_QMD_VERSION in backend/unified_index/src/qmd/mod.rs
+# `//tools:version_pins_test` holds each equal to the package.json that
+# its Bazel tree is built from, so a pin that moves in one place fails
+# the build rather than staging a directory nothing will look in.
+#
+# Build-host requirements: bazelisk and rsync. No Node, no npm, no C
+# toolchain — the native modules arrive prebuilt inside their npm
+# tarballs, which is what made this possible (see the better-sqlite3 13
+# note in MODULE.bazel). Trees are staged for the HOST platform; cross
 # builds are not supported (same restriction as the rest of the tauri
 # build).
 #
@@ -40,40 +53,18 @@
 # `node` additionally keeps the JIT entitlements extracted from the
 # upstream-signed binary — V8 won't start under the hardened runtime
 # without them.
-#
-# Idempotent: each component is stamped and re-staged only when its
-# pinned version changes. Delete runtime/ to force a full re-stage.
 
 set -euo pipefail
-
-# Node LTS to bundle. qmd needs >=22, latchkey >=20.
-#
-# The sha256 of every dist we fetch is pinned in the platform `case`
-# below and verified before extraction. This is not a normal build
-# dependency: `node` is codesigned with the Developer ID further down
-# and ships inside Datalib.app, so an unverified download would go out to
-# users under our signature, notarized (issue #141).
-#
-# Pinned digests rather than a fetched SHASUMS256.txt on purpose — that
-# file comes from the same origin as the tarball, so it adds nothing
-# against a compromised origin. Same discipline as
-# `hack/doltlite_fork_bug/run.sh`.
-#
-# Bumping NODE_VERSION means re-pinning ALL FOUR digests. Get them with:
-#   curl -fsSL https://nodejs.org/dist/<version>/SHASUMS256.txt \
-#     | grep -E '(darwin-(arm64|x64)|linux-(arm64|x64))\.tar\.gz$'
-NODE_VERSION="v22.23.2"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 backend_dir="$script_dir/../backend"
 runtime_dir="$script_dir/runtime"
-cache_dir="$script_dir/.runtime-cache"
 
 log() { printf '>>> stage-runtime: %s\n' "$*" >&2; }
 fail() { printf 'stage-runtime: error: %s\n' "$*" >&2; exit 1; }
 
-command -v curl >/dev/null 2>&1 || fail "curl not found on PATH"
-command -v tar >/dev/null 2>&1 || fail "tar not found on PATH"
+command -v bazelisk >/dev/null 2>&1 || fail "bazelisk not found on PATH"
+command -v rsync >/dev/null 2>&1 || fail "rsync not found on PATH"
 
 # ---------------------------------------------------------------------------
 # Version pins, grepped from the Rust sources (see header).
@@ -91,159 +82,77 @@ latchkey_version="$(extract_pin "$backend_dir/core/src/node_runtime.rs" \
 qmd_version="$(extract_pin "$backend_dir/unified_index/src/qmd/mod.rs" \
     '^pub const DEFAULT_QMD_VERSION:')"
 
-log "pins: node=$NODE_VERSION latchkey=$latchkey_version qmd=$qmd_version"
+log "pins: latchkey=$latchkey_version qmd=$qmd_version"
 
 # ---------------------------------------------------------------------------
-# Platform → Node dist name.
+# Build the three Bazel targets and locate their outputs.
 # ---------------------------------------------------------------------------
 
-# Platform -> (dist name, sha256 of that dist's tarball for
-# $NODE_VERSION). A `case` rather than an associative array so this keeps
-# working under the bash 3.2 that macOS still ships.
-case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64)
-        node_platform="darwin-arm64"
-        node_sha256="61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6"
-        ;;
-    Darwin-x86_64)
-        node_platform="darwin-x64"
-        node_sha256="58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026"
-        ;;
-    Linux-aarch64 | Linux-arm64)
-        node_platform="linux-arm64"
-        node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30"
-        ;;
-    Linux-x86_64)
-        node_platform="linux-x64"
-        node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a"
-        ;;
-    *) fail "unsupported platform: $(uname -s)-$(uname -m)" ;;
-esac
+log "building runtime targets"
+bazelisk build \
+    //datalib/tauri:bundled_node \
+    //third-party/qmd/runtime:qmd_tree \
+    //third-party/latchkey/runtime:latchkey_tree >&2
 
-# sha256 of a file, via whichever tool this host has. macOS ships
-# `shasum`; most Linux images ship `sha256sum`; CI images vary.
-sha256_of() {
-    if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" | awk '{print $1}'
-    elif command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        fail "neither shasum nor sha256sum found; cannot verify downloads"
-    fi
+bin="$(bazelisk info bazel-bin)"
+
+# ---------------------------------------------------------------------------
+# Stage.
+# ---------------------------------------------------------------------------
+
+# rsync rather than cp: `-a` keeps the pnpm store's relative symlinks as
+# symlinks (dereferencing them would triple the bundle — every package
+# would be copied once per dependent), `--delete` clears whatever a
+# previous stage left behind, and `--chmod` makes the copy writable
+# since Bazel's outputs are read-only and codesign has to rewrite them.
+stage_tree() { # kind, version, source node_modules dir
+    local dest="$runtime_dir/$1/$2/node_modules"
+    log "staging $1@$2"
+    mkdir -p "$dest"
+    rsync -a --delete --chmod=Du+wx,Fu+w "$3/" "$dest/"
 }
 
-# ---------------------------------------------------------------------------
-# Node dist: download once into the cache, keep npm there for installs,
-# ship only bin/node.
-# ---------------------------------------------------------------------------
-
-node_dist="node-$NODE_VERSION-$node_platform"
-node_dist_dir="$cache_dir/$node_dist"
-if [[ ! -x "$node_dist_dir/bin/node" ]]; then
-    mkdir -p "$cache_dir"
-    tarball="$cache_dir/$node_dist.tar.gz"
-    log "downloading $node_dist"
-    curl -fsSL -o "$tarball" "https://nodejs.org/dist/$NODE_VERSION/$node_dist.tar.gz"
-
-    # Fail closed, and BEFORE extracting: this binary gets codesigned and
-    # shipped. Leave the tarball in place on mismatch so it can be
-    # inspected rather than silently re-downloaded on the next run.
-    got_sha256="$(sha256_of "$tarball")"
-    if [[ "$got_sha256" != "$node_sha256" ]]; then
-        fail "$(printf 'sha256 mismatch for %s\n  want: %s\n  got:  %s\nLeft at %s. Do NOT stage or sign this. If nodejs.org re-rolled the release in place, verify against SHASUMS256.txt and update the pin in this script.' \
-            "$node_dist.tar.gz" "$node_sha256" "$got_sha256" "$tarball")"
-    fi
-    log "verified $node_dist.tar.gz (sha256 $node_sha256)"
-
-    tar -xzf "$tarball" -C "$cache_dir"
-    rm -f "$tarball"
-    [[ -x "$node_dist_dir/bin/node" ]] || fail "node dist extraction failed"
-fi
-node_bin="$node_dist_dir/bin/node"
-npm_cli="$node_dist_dir/lib/node_modules/npm/bin/npm-cli.js"
-[[ -f "$npm_cli" ]] || fail "npm not found in node dist at $npm_cli"
-
-node_stamp="$runtime_dir/node/VERSION"
-if [[ ! -f "$node_stamp" || "$(cat "$node_stamp")" != "$NODE_VERSION-$node_platform" ]]; then
-    log "staging node $NODE_VERSION ($node_platform)"
-    rm -rf "$runtime_dir/node"
-    mkdir -p "$runtime_dir/node/bin"
-    cp -f "$node_bin" "$runtime_dir/node/bin/node"
-    chmod 755 "$runtime_dir/node/bin/node"
-    printf '%s' "$NODE_VERSION-$node_platform" >"$node_stamp"
-else
-    log "node $NODE_VERSION already staged"
-fi
-
-# ---------------------------------------------------------------------------
-# npm package trees.
-# ---------------------------------------------------------------------------
-
-# npm_install <tree_dir> <pkg_spec> [extra npm-install flags...]
-npm_install() {
-    local tree="$1" spec="$2"
-    shift 2
-    rm -rf "$tree"
-    mkdir -p "$tree"
-    printf '{"private": true}\n' >"$tree/package.json"
-    # PATH: postinstall scripts (node-gyp, prebuild-install) must find
-    # the staging node, not whatever the host has.
-    # --omit=peer: npm 7+ auto-installs peer deps; the only one in
-    # these trees is qmd's `typescript` (~23MB), which its CLI never
-    # imports at runtime (dev-time tsx/typechecking convenience).
-    (cd "$tree" && PATH="$(dirname "$node_bin"):$PATH" \
-        "$node_bin" "$npm_cli" install \
-        --omit=dev --omit=peer --no-save --no-package-lock --no-audit --no-fund \
-        --loglevel=error "$@" "$spec")
+# Drop a package we deliberately do not ship, and any symlink left
+# pointing into it. Both current entries preserve what the pre-Bazel
+# `npm install` already did — they are not new policy:
+#
+#   * typescript is qmd's only peer dependency, ~23 MB, and its CLI
+#     never imports it at runtime (dev-time tsx/typechecking). The old
+#     script dropped it with `npm install --omit=peer`.
+#   * playwright (with playwright-core, ~17 MB of a 28 MB tree) backs
+#     latchkey's browser-login flows, which datalib never invokes;
+#     latchkey degrades gracefully when the import fails, the same way
+#     its own bun-compiled release binaries do. The old script deleted
+#     it by hand after installing it.
+#
+# The dangling-symlink sweep is the part worth keeping: pnpm's layout
+# reaches a package through several links, and a link pointing at
+# nothing is both a broken `require` and something to explain to
+# codesign.
+prune_pkg() { # dest root, store glob
+    find "$1/.aspect_rules_js" -maxdepth 1 -name "$2" -exec rm -rf {} + 2>/dev/null || true
+    find "$1" -type l ! -exec test -e {} \; -exec rm -f {} + 2>/dev/null || true
 }
 
-stage_tree() { # kind, version, pkg_spec, entry_rel, extra flags...
-    local kind="$1" version="$2" spec="$3" entry_rel="$4"
-    shift 4
-    local tree="$runtime_dir/$kind/$version"
-    local stamp="$tree/.staged"
-    if [[ -f "$stamp" && "$(cat "$stamp")" == "$spec" ]]; then
-        log "$spec already staged"
-        return
-    fi
-    log "staging $spec"
-    npm_install "$tree" "$spec" "$@"
-    [[ -f "$tree/$entry_rel" ]] || fail "$spec staged but entry $entry_rel is missing"
-    printf '%s' "$spec" >"$stamp"
-}
+log "staging node"
+mkdir -p "$runtime_dir/node/bin"
+rsync -a --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
 
-# latchkey: --ignore-scripts skips playwright's browser download (and
-# nothing in the tree needs an install script — @napi-rs/keyring ships
-# prebuilt platform packages). Playwright itself is pruned below: the
-# only latchkey features that need it are browser-login flows
-# (`latchkey auth browser`), which datalib never invokes, and
-# latchkey degrades gracefully when the import fails (same behavior as
-# its own bun-compiled release binaries, which mark playwright
-# external).
-stage_tree latchkey "$latchkey_version" "latchkey@$latchkey_version" \
-    "node_modules/latchkey/dist/src/cli.js" --ignore-scripts
-latchkey_tree="$runtime_dir/latchkey/$latchkey_version"
-if [[ -d "$latchkey_tree/node_modules/playwright" || -d "$latchkey_tree/node_modules/playwright-core" ]]; then
-    log "pruning playwright from latchkey tree"
-    rm -rf "$latchkey_tree/node_modules/playwright" \
-        "$latchkey_tree/node_modules/playwright-core" \
-        "$latchkey_tree/node_modules/@playwright" \
-        "$latchkey_tree/node_modules/chromium-bidi" \
-        "$latchkey_tree/node_modules/electron"
-    rm -f "$latchkey_tree/node_modules/.bin/playwright" \
-        "$latchkey_tree/node_modules/.bin/playwright-core"
-    # Re-stamp: the prune is part of the staged state.
-    printf '%s' "latchkey@$latchkey_version" >"$latchkey_tree/.staged"
-fi
+stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
+prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
 
-# qmd: install scripts are left enabled here. As of qmd 2.8.3 nothing in
-# the tree is known to need one — better-sqlite3 13 ships its bindings in
-# the tarball, the tree-sitter grammars ship `prebuilds/<os>-<arch>/`, and
-# node-llama-cpp's platform binary arrives as a prebuilt optional dep —
-# but this path is a real `npm install` against the registry, not the
-# Bazel lockfile, so it is not the place to assert that.
-stage_tree qmd "$qmd_version" "@tobilu/qmd@$qmd_version" \
-    "node_modules/@tobilu/qmd/dist/cli/qmd.js"
+stage_tree latchkey "$latchkey_version" "$bin/third-party/latchkey/runtime/node_modules"
+prune_pkg "$runtime_dir/latchkey/$latchkey_version/node_modules" 'playwright*'
+
+# Assert the two entry points the Rust resolver will look for actually
+# resolve. Without this the staging can be subtly wrong — a moved entry,
+# a prune that took too much — and the only symptom is the packaged app
+# silently falling back to `npx` on a machine that may have no Node.
+for entry in \
+    "$runtime_dir/qmd/$qmd_version/node_modules/@tobilu/qmd/dist/cli/qmd.js" \
+    "$runtime_dir/latchkey/$latchkey_version/node_modules/latchkey/dist/src/cli.js"; do
+    [[ -f "$entry" ]] || fail "staged entry missing: $entry"
+done
 
 # Drop trees whose version is no longer pinned (left behind by a bump),
 # so incremental build machines don't ship dead weight.
@@ -272,11 +181,11 @@ log "installed latchkey wrapper at binaries/latchkey"
 # Codesigning (macOS release builds only).
 # ---------------------------------------------------------------------------
 
-if [[ "$node_platform" == darwin-* && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     log "codesigning runtime (identity: $APPLE_SIGNING_IDENTITY)"
     # Preserve the JIT entitlements the upstream node binary is signed
     # with — V8 aborts under the hardened runtime without them.
-    entitlements="$cache_dir/node-entitlements.plist"
+    entitlements="$(mktemp -t node-entitlements.XXXXXX)"
     if codesign -d --entitlements - --xml "$runtime_dir/node/bin/node" \
         >"$entitlements" 2>/dev/null && [[ -s "$entitlements" ]]; then
         codesign --force --options runtime --timestamp \
@@ -286,8 +195,11 @@ if [[ "$node_platform" == darwin-* && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
         codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" "$runtime_dir/node/bin/node"
     fi
+    rm -f "$entitlements"
     # Every native library in the trees must be signed for notarization.
     # *.so: node-llama-cpp names its Mach-O dylibs libggml-*.so.
+    # `-type f` so the pnpm store's symlinks are signed once, through
+    # the real file, rather than once per link.
     find "$runtime_dir/latchkey" "$runtime_dir/qmd" \
         \( -name '*.node' -o -name '*.dylib' -o -name '*.so' \) -type f -print0 |
         while IFS= read -r -d '' lib; do

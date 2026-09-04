@@ -23,6 +23,7 @@ rust_library(
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:csv",
@@ -41,7 +42,6 @@ rust_test(
     crate = ":datalib_etl_linkedin",
     edition = "2021",
     deps = [
-        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:tempfile",
     ],
 )

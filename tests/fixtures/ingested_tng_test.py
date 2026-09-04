@@ -539,15 +539,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "grid_rows providers after a full run",
         )
 
-        # PDFs specifically: 3 renderable documents, 4 pages between
-        # them (the scanned blueprint is recorded but not rendered, and
-        # the corrupt file is skipped). Every page row must carry a
-        # `qmd_path`, since that column is what lets a qmd hit resolve
-        # back to a grid row — a page indexed without one is findable
-        # by search but unreachable from the UI.
+        # PDFs specifically: 4 renderable documents, 5 pages between
+        # them (the scanned blueprints are recorded but not rendered,
+        # and the corrupt file is skipped). The mixed hull survey is one
+        # of the four and contributes one page, not two — its image-only
+        # second page becomes a note in the markdown rather than a row.
+        # Every page row must carry a `qmd_path`, since that column is
+        # what lets a qmd hit resolve back to a grid row — a page indexed
+        # without one is findable by search but unreachable from the UI.
         self.assertEqual(
             self._pdf_shape(),
-            {"PDF Document": 3, "PDF Page": 4},
+            {"PDF Document": 4, "PDF Page": 5},
             "pdf grid_rows shape",
         )
         self.assertEqual(

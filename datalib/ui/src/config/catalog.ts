@@ -9,12 +9,23 @@
 // the shapes below are deliberately the shapes that endpoint should
 // return, so the swap is a fetch and a type import.
 //
-// Five types carry descriptors: `slack_api` and `claude_api` for the
-// credentialed path, and `lightroom` / `signal_backup` /
-// `whatsapp_backup` for the on-disk one. Every other type is listed so
-// the picker shows the real breadth of what datalib supports, but is
-// marked `wizard: false` — picking one sends you to the config editor
-// rather than pretending a form exists.
+// Seven descriptors carry a form: `slack_api`, `claude_api` and the two
+// `email` variants (Gmail, Fastmail) for the credentialed path, and
+// `lightroom` / `signal_backup` / `whatsapp_backup` / `pdf` / `media`
+// for the on-disk one. Every other type is listed so the picker shows
+// the real breadth of what datalib supports, but is marked
+// `wizard: false` — picking one sends you to the config editor rather
+// than pretending a form exists.
+//
+// ### One step type, more than one entry
+//
+// Gmail and Fastmail are both `datalib-step download email`. They are
+// *not* one form: they authenticate against different latchkey
+// services, select their download mode with different params, and want
+// different words on screen. So `email` has three entries here, and the
+// thing that separates them is `variantKey` — the params path whose
+// presence says which one an existing step is. `type` stops being a
+// unique key at that point; `entryKey` is the unique one.
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`sync.channels` → `[steps.params.sync] channels`).
@@ -42,7 +53,20 @@ type FieldBase = {
 };
 
 export type Field =
-  | ({ kind: "text" } & FieldBase & { placeholder?: string; required?: boolean })
+  | ({ kind: "text" } & FieldBase & {
+      placeholder?: string;
+      required?: boolean;
+      /// Renders as the latchkey-account control rather than a bare
+      /// text box: a dropdown of the accounts latchkey has stored for
+      /// the entry's `credentialService`, a "Connect via latchkey"
+      /// button, and — still — somewhere to type.
+      ///
+      /// Typing matters. latchkey may hold an account this server
+      /// can't enumerate (no keyring access, latchkey not installed),
+      /// and a dropdown that came back empty must not be the only way
+      /// in. The value written is the account string either way.
+      latchkey?: boolean;
+    })
   /// A path on the machine running the backend.
   ///
   /// **A path field must offer a native OS picker** — the rule, and
@@ -96,7 +120,26 @@ export type Field =
   /// opened the form to change something unrelated. Absent stays
   /// absent; only a value already in the config is shown back.
   | ({ kind: "int" } & FieldBase & { default?: number })
-  | ({ kind: "string_list" } & FieldBase & { placeholder?: string });
+  | ({ kind: "string_list" } & FieldBase & {
+      placeholder?: string;
+      /// Offer a checklist built from `POST /api/probe`, alongside the
+      /// comma-separated box. Names *which* of the probe's lists:
+      ///
+      ///   `labels`     everything the account has. What a **download**
+      ///                filter may name — for Gmail that includes
+      ///                `Starred` and `Unread`, which the service
+      ///                resolves server-side.
+      ///   `mailboxes`  only the entries emails are actually filed in.
+      ///                What a **render** filter may name: it matches
+      ///                stored mailbox paths, so offering `Starred`
+      ///                there would offer a filter that silently
+      ///                matches nothing.
+      ///
+      /// The typed box stays either way — a probe needs credentials
+      /// that may not exist yet, and a form should not be unusable
+      /// until a network call succeeds.
+      probe?: "labels" | "mailboxes";
+    });
 
 export type CatalogEntry = {
   /// The `datalib-step download|render <type>` word.
@@ -117,10 +160,50 @@ export type CatalogEntry = {
   /// declare no render step (`lightroom`, `fsindex`). Defaults to true.
   renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials.
-  /// Used only for the credential UI: at request time latchkey picks
-  /// the service by matching the URL, not by this string.
+  ///
+  /// The wizard uses it to list stored accounts and to run
+  /// `latchkey auth browser <service>`. At *request* time latchkey
+  /// picks the service by matching the URL rather than by this string,
+  /// so a wrong value here misleads the setup screen without breaking
+  /// a sync — which is exactly the kind of wrong that survives.
   credentialService?: string;
+  /// Dotted params path whose presence identifies this entry among the
+  /// several that share one `type`. Undefined on a type with only one
+  /// entry, which is nearly all of them.
+  ///
+  /// Order matters: [`catalogForStep`] takes the first entry whose key
+  /// is present, so a more specific key must come first in `CATALOG`.
+  variantKey?: string;
+  /// Params this entry always writes, with no field to edit them.
+  ///
+  /// Two jobs, both about identity rather than preference:
+  ///
+  ///   * **selecting a mode.** An `email` step is a Gmail step because
+  ///     it has a `gmail_api` table, and a JMAP step because it has a
+  ///     `sync.hostname`. Neither is something to ask about — the
+  ///     person picked "Gmail" off the tile grid already.
+  ///   * **following from the choice.** A Gmail source's webmail
+  ///     outlinks are Gmail's. There is no second answer.
+  ///
+  /// A preset is written on every save and is counted as *known* by
+  /// `paramsAreRepresentable`, so a step carrying one stays editable.
+  /// If a value is a real choice, make it a field — a preset the user
+  /// can't see is a value they can't change without the config editor.
+  preset?: Preset[];
+  /// Offer "Test connection", and populate any `probe:` field from
+  /// what comes back. Requires a `datalib-step probe <type>` on the
+  /// backend side; see `datalib/backend/datalib_step/src/probe.rs`.
+  canProbe?: boolean;
   fields?: Field[];
+};
+
+/// A fixed params value, written without being asked about. See
+/// [`CatalogEntry.preset`].
+export type Preset = {
+  target: string;
+  value: string | number | boolean;
+  /// Which step it lands on. Defaults to `download`, like a field.
+  phase?: FieldPhase;
 };
 
 /// Fields shared by the two wizard-capable sources. Kept inline per
@@ -261,7 +344,173 @@ export const CATALOG: CatalogEntry[] = [
   { type: "github_api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", wizard: false, credentialService: "github" },
   { type: "gitlab_api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", wizard: false, credentialService: "gitlab" },
   { type: "notion_api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", wizard: false, credentialService: "notion" },
-  { type: "email", label: "Email", blurb: "Mirror mail over JMAP, the Gmail API, or a Takeout mbox.", keywords: ["email", "mail", "gmail", "fastmail", "jmap", "imap", "mbox"], kind: "api", icon: "email", defaultName: "email", wizard: false, credentialService: "fastmail" },
+
+  // ── the two `email` variants ──────────────────────────────────────
+  //
+  // Same step type, same raw schema, same render path: a mailbox
+  // mirrored from Gmail and one mirrored over JMAP dedupe against each
+  // other rather than doubling (docs/dev/email_download_modes.md).
+  // What differs is how you reach the account, and that is all these
+  // two entries encode.
+  //
+  // Gmail must come before the JMAP entry: `variantKey` matching takes
+  // the first hit, and a Gmail step has no `sync` table to confuse it
+  // — but a future entry keyed on something broader would.
+  {
+    type: "email",
+    variantKey: "gmail_api",
+    label: "Gmail",
+    blurb: "Mirror a Gmail account through Google's API.",
+    keywords: ["gmail", "google", "email", "mail", "inbox", "labels"],
+    kind: "api",
+    icon: "email",
+    defaultName: "gmail",
+    wizard: true,
+    canProbe: true,
+    credentialService: "google-gmail",
+    preset: [
+      // The presence of a `gmail_api` table is what selects this mode,
+      // and a table needs a key. `user_id` is the one to spend: `me`
+      // is both Gmail's meaning of "the authenticated user" and the
+      // backend's own default, so writing it changes nothing except
+      // making the mode explicit in the file.
+      { target: "gmail_api.user_id", value: "me" },
+      { target: "outlink_format", value: "gmail", phase: "render" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Google account",
+        placeholder: "you@example.com",
+        help:
+          "Which stored Google login to mirror. Leave it empty if latchkey holds only one — " +
+          "it is required only when the google-gmail service has more than one account, " +
+          "and naming the wrong one mirrors the wrong mailbox.",
+      },
+      {
+        kind: "string_list",
+        probe: "labels",
+        target: "only_extract_labels",
+        label: "Download only these labels",
+        placeholder: "Inbox, Work/Projects",
+        help:
+          "Exact label paths — a nested label must be listed in full, and listing a parent " +
+          "does not include its children. Empty downloads the whole account, which is the " +
+          "point of a mirror; narrow it for a first run against a large mailbox. Widening " +
+          "it later backfills the labels you added.",
+      },
+      {
+        kind: "int",
+        target: "gmail_api.message_budget",
+        label: "Stop after this many messages each run",
+        help:
+          "Gmail's quota allows about 300 messages a minute, so a 100k-message account is " +
+          "roughly six hours of downloading. A budget makes that a series of runs that each " +
+          "finish successfully and resume where they stopped, instead of one long run that " +
+          "fails and poisons everything downstream. Leave empty for no limit.",
+      },
+      {
+        kind: "int",
+        target: "common.blob_size_limit_bytes",
+        label: "Skip attachments larger than (bytes)",
+        help:
+          "Attachments are most of a mailbox's bytes and almost none of its text. Leave " +
+          "empty for no limit.",
+      },
+      {
+        kind: "string_list",
+        probe: "mailboxes",
+        phase: "render",
+        target: "only_render_labels",
+        label: "Render only these labels",
+        placeholder: "Inbox, Work/Projects",
+        help:
+          "A second, narrower filter applied when markdown is written — so a whole account " +
+          "can be downloaded once and only part of it turned into searchable pages. Empty " +
+          "renders everything downloaded. Changing it re-renders; it never re-downloads.",
+      },
+    ],
+  },
+  {
+    type: "email",
+    variantKey: "sync",
+    label: "Fastmail",
+    blurb: "Mirror a Fastmail mailbox over JMAP.",
+    keywords: ["fastmail", "jmap", "email", "mail", "inbox", "folders"],
+    kind: "api",
+    icon: "email",
+    defaultName: "fastmail",
+    wizard: true,
+    canProbe: true,
+    credentialService: "fastmail",
+    preset: [
+      // The JMAP server. A preset rather than a field because this
+      // entry *is* Fastmail — a different host is a different service
+      // and wants its own entry (the downloader hardcodes nothing:
+      // everything after discovery comes off the session document).
+      { target: "sync.hostname", value: "api.fastmail.com" },
+      { target: "outlink_format", value: "fastmail", phase: "render" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Fastmail account",
+        placeholder: "you@fastmail.com",
+        help:
+          "Which stored Fastmail login to mirror. Leave it empty if latchkey holds only one.",
+      },
+      {
+        kind: "string_list",
+        probe: "labels",
+        target: "only_extract_labels",
+        label: "Download only these folders",
+        placeholder: "Inbox, travel/portugal",
+        help:
+          "Exact folder paths, parent first — `travel/portugal` is the folder inside " +
+          "`travel`, and listing `travel` alone does not include it. Empty downloads the " +
+          "whole mailbox.",
+      },
+      {
+        kind: "int",
+        target: "common.blob_size_limit_bytes",
+        label: "Skip attachments larger than (bytes)",
+        help:
+          "Attachments are most of a mailbox's bytes and almost none of its text. Leave " +
+          "empty for no limit.",
+      },
+      {
+        kind: "int",
+        target: "sync.blob_download_concurrency",
+        label: "Message downloads in flight",
+        help:
+          "JMAP has no bulk download — each message body is its own request — so this is " +
+          "the only lever on how fast a first backfill goes. Leave empty for the default; " +
+          "1 makes it strictly one at a time.",
+      },
+      {
+        kind: "string_list",
+        probe: "mailboxes",
+        phase: "render",
+        target: "only_render_labels",
+        label: "Render only these folders",
+        placeholder: "Inbox, travel/portugal",
+        help:
+          "A second, narrower filter applied when markdown is written — so a whole mailbox " +
+          "can be downloaded once and only part of it turned into searchable pages. Empty " +
+          "renders everything downloaded. Changing it re-renders; it never re-downloads.",
+      },
+    ],
+  },
+  // The catch-all `email` entry, and deliberately last: it has no
+  // `variantKey`, so it is what an email step matches when neither of
+  // the two above does — an mbox source, or a JMAP server that is not
+  // Fastmail. No form, because the thing it stands for is "some other
+  // way of getting mail", which is not one form.
+  { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", wizard: false },
   { type: "carddav", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", wizard: false },
   { type: "yolink", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", wizard: false },
 
@@ -507,8 +756,57 @@ export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {
   local: "On this computer",
 };
 
+/// A stable, unique key for an entry — what a `v-for` keys on and what
+/// the picker's cursor compares.
+///
+/// `type` alone stopped being unique when `email` grew a Gmail entry and
+/// a Fastmail entry beside its catch-all. Rather than inventing a
+/// second id to keep in step with the type, the key *is* the pair that
+/// already distinguishes them.
+export function entryKey(entry: CatalogEntry): string {
+  return entry.variantKey ? `${entry.type}:${entry.variantKey}` : entry.type;
+}
+
+/// The first entry for a step type, ignoring variants.
+///
+/// Right for a caller that only has a type string and wants a label —
+/// but wrong for anything that will *write* a step, since the variants
+/// of one type write different params. Those callers want
+/// [`catalogForStep`].
 export function catalogFor(type: string): CatalogEntry | undefined {
   return CATALOG.find((e) => e.type === type);
+}
+
+/// The entry describing a step that already exists: its type, narrowed
+/// by which variant its params say it is.
+///
+/// Among the entries for one type, the first whose `variantKey` is
+/// present in the params wins; an entry with no `variantKey` matches
+/// anything and so acts as the fallback. That ordering is why the
+/// catch-all `email` entry sits last in `CATALOG`.
+export function catalogForStep(
+  type: string | null,
+  params: Record<string, unknown>,
+): CatalogEntry | undefined {
+  if (!type) return undefined;
+  const candidates = CATALOG.filter((e) => e.type === type);
+  return (
+    candidates.find((e) => e.variantKey !== undefined && hasPath(params, e.variantKey)) ??
+    candidates.find((e) => e.variantKey === undefined)
+  );
+}
+
+/// Does a dotted path exist in a params tree? Presence, not truthiness:
+/// `gmail_api = {}` selects the Gmail mode, and an empty table is a
+/// perfectly ordinary way to write it by hand.
+function hasPath(params: Record<string, unknown>, path: string): boolean {
+  let cur: unknown = params;
+  for (const seg of path.split(".")) {
+    if (cur === null || typeof cur !== "object" || Array.isArray(cur)) return false;
+    if (!(seg in (cur as Record<string, unknown>))) return false;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return true;
 }
 
 /// Substring match over label, type and keywords. Deliberately not

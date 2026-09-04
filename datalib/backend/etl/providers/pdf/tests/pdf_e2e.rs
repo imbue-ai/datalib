@@ -116,13 +116,14 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     let h = Harness::new();
     let s = h.scan().await?;
 
-    // 7 .pdf files in the tree; readme.txt must not be among them.
-    assert_eq!(s.pdfs_seen, 7, "walker should find exactly the .pdf files");
+    // 8 .pdf files in the tree; readme.txt must not be among them.
+    assert_eq!(s.pdfs_seen, 8, "walker should find exactly the .pdf files");
 
     // captains_log.pdf and archive/captains_log_copy.pdf are byte-identical,
-    // so the 7 paths collapse to 6 distinct contents — minus the corrupt
-    // one, which fails to identify. 5 real documents, 3 of them
-    // convertible (neither scanned blueprint is).
+    // so the 8 paths collapse to 7 distinct contents — minus the corrupt
+    // one, which fails to identify. 6 real documents, 4 of them
+    // convertible (neither scanned blueprint is; the mixed hull survey
+    // is, for its one text page).
     let db = h.db().await;
     let n_docs: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents")
         .fetch_one(db.pool())
@@ -147,14 +148,95 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     .get("c");
     assert_eq!(dupes, 2, "both copies should resolve to the same document");
 
-    // The image-only pages are recorded, not silently dropped. Two of
-    // them now: the blueprint and its retitled twin.
-    assert_eq!(s.needs_ocr, 2, "both scanned blueprints must be recorded");
-    let scanned: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents WHERE needs_ocr = 1")
+    // The image-only pages are recorded, not silently dropped. Three
+    // documents carry one: the blueprint, its retitled twin, and the
+    // mixed hull survey — whose *other* page still renders.
+    assert_eq!(
+        s.needs_ocr, 3,
+        "every document with an unreadable page must be on the OCR work list"
+    );
+    let flagged: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents WHERE needs_ocr = 1")
         .fetch_one(db.pool())
         .await?
         .get("c");
-    assert_eq!(scanned, 2);
+    assert_eq!(flagged, 3);
+    Ok(())
+}
+
+/// Regression for #173: a `Mixed` document — some pages readable, some
+/// not — must render the pages that are.
+///
+/// The rule used to be `needs_ocr = 0`, and a Mixed document always has
+/// a non-empty `pages_needing_ocr` (that is what makes it Mixed), so no
+/// Mixed document ever rendered. On the fixture corpus that cost one
+/// page; on a 200-page report with three scanned inserts it costs 197.
+/// The corpus had no Mixed document at all, which is why nothing caught
+/// it — hence `engineering/hull_survey.pdf`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
+    let h = Harness::new();
+    h.scan().await?;
+    let db = h.db().await;
+
+    // The premise: this fixture really is the Mixed case, and really is
+    // on the OCR work list. Without these the test below could pass on
+    // a document that simply had nothing to skip.
+    let r = sqlx::query(
+        "SELECT d.pdf_type, d.needs_ocr, d.page_count, d.ocr_page_count,
+                d.has_encoding_issues
+           FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
+          WHERE p.id = 'engineering/hull_survey.pdf'",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    assert_eq!(r.get::<String, _>("pdf_type"), "mixed");
+    assert_eq!(r.get::<i64, _>("needs_ocr"), 1, "page 2 needs OCR");
+    assert_eq!(r.get::<i64, _>("page_count"), 2);
+    assert_eq!(r.get::<i64, _>("ocr_page_count"), 1);
+    // Detect-only cannot see garbled *text*, only garbled fonts, and
+    // this document has neither. If this ever flips true the render gate
+    // suppresses the document and the assertions below stop meaning what
+    // they say.
+    assert_eq!(r.get::<i64, _>("has_encoding_issues"), 0);
+
+    let (_, emitted) = h.render(&HashMap::new()).await?;
+    let survey = emitted
+        .iter()
+        .find(|m| {
+            m.rows
+                .iter()
+                .any(|x| x.conversation_name.as_deref() == Some("Hull Integrity Survey"))
+        })
+        .expect("the mixed document must render");
+
+    // Page 1 converted and carries a grid row.
+    let page_rows: Vec<_> = survey
+        .rows
+        .iter()
+        .filter(|x| x.kind == "PDF Page")
+        .collect();
+    assert_eq!(page_rows.len(), 1, "only page 1 has text");
+    assert_eq!(page_rows[0].message_index, Some(1));
+    assert!(page_rows[0].text.contains("Ablative plating"));
+
+    // Page 2 is in the markdown as a note, not as a hole. The note gets
+    // no section anchor, because there is nothing to navigate to.
+    let body = std::fs::read_to_string(&survey.md_path)?;
+    assert!(body.contains("Ablative plating"), "page 1 body missing");
+    assert!(
+        body.contains(&datalib_etl_pdf::render::convert::note_for_page(2)),
+        "page 2 must leave a note; got:\n{body}"
+    );
+    assert!(
+        !body.contains(&format!(
+            r#"data-section-uuid="{}""#,
+            datalib_etl_pdf::render::grid_rows::page_uuid(
+                &survey.rows[0].upstream_id.clone().unwrap(),
+                2
+            )
+        )),
+        "an unreadable page must not get a section anchor"
+    );
     Ok(())
 }
 
@@ -370,17 +452,19 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     h.scan().await?;
     let (s, emitted) = h.render(&HashMap::new()).await?;
 
-    // Exactly the three renderable documents, and 4 pages between
+    // Exactly the four renderable documents, and 5 pages between
     // them. Pinned rather than bounded: every page here is embedded by
     // the qmd indexer on every full fixture build, so growth should be
-    // a deliberate edit, not a silent drift.
-    assert_eq!(s.converted, 3, "three renderable documents");
+    // a deliberate edit, not a silent drift. The mixed survey's second
+    // page is deliberately not among them — it converts to a note in
+    // the markdown, which costs no row and no embedding.
+    assert_eq!(s.converted, 4, "four renderable documents");
     assert_eq!(s.failed, 0);
     let total_pages: usize = emitted
         .iter()
         .map(|m| m.rows.iter().filter(|r| r.kind == "PDF Page").count())
         .sum();
-    assert_eq!(total_pages, 4, "the corpus is budgeted at 4 rendered pages");
+    assert_eq!(total_pages, 5, "the corpus is budgeted at 5 rendered pages");
 
     // The load-bearing invariant, checked across every document: each
     // page row's uuid must appear as a section anchor in its markdown,

@@ -1,9 +1,16 @@
 //! The `pdf` render side: convert each identified document to markdown
 //! and emit it with its `grid_rows` sidecar.
 //!
-//! Only documents the download step marked convertible are read here
-//! (`needs_ocr = 0`). Scanned documents already have rows in
-//! `pdf_documents`; they simply produce no markdown yet.
+//! Only documents with at least one readable page are read here — see
+//! `RawDb::convertible_documents` for the rule. A document nothing can
+//! be read from (a scan, or one whose fonts decode to mojibake) already
+//! has a row in `pdf_documents`; it simply produces no markdown yet.
+//!
+//! Within a document that does render, a page we could not read still
+//! appears in the markdown, as the note `convert::note_for_page` writes.
+//! It gets no `grid_rows` row and no section anchor — there is nothing
+//! to navigate to — so page rows are a subset of the pages in the file,
+//! not a bijection.
 
 pub mod convert;
 pub mod grid_rows;
@@ -202,6 +209,16 @@ fn render_one(
 
     let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
     for p in &pages {
+        if p.non_textual {
+            // A page we could not read. It goes in the markdown so the
+            // gap is visible to whoever opens the document, but carries
+            // no section wrapper and no grid row: there is no content to
+            // navigate to, and the note is the same sentence on every
+            // such page in every document. See `convert::note_for_page`.
+            body.push_str(&p.text);
+            body.push_str("\n\n");
+            continue;
+        }
         // Per-page section wrapper. The `data-section-uuid` must be
         // byte-equal to the page grid row's `uuid` or row→preview
         // navigation silently fails (see `etl::section` docs).

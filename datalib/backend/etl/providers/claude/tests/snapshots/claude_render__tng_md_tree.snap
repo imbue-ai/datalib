@@ -1,120 +1,25 @@
 ---
-source: datalib/backend/etl/providers/claude/tests/claude_render.rs
+source: datalib/backend/etl/providers/anthropic/tests/anthropic_render.rs
 expression: bundle
 ---
-=== claude_export/rendered_md/1c72c68f-86f5-577e-93a8-53e634460711/all.md ===
----
-title: "Tricorder Image Diagnostic (all)"
-provider: claude
-source_label: "Claude"
-chat_uuid: 1c72c68f-86f5-577e-93a8-53e634460711
-markdown_uuid: 1c72c68f-86f5-577e-93a8-53e634460711
-period: all
-display: "Tricorder Image Diagnostic"
-account: 00000003-1701-4d00-8000-000000000003
-external_id: c0000004-1701-4d00-8000-00000000c004
-item_count: 2
-source_fingerprint: 025f7c3de212cdd68446ac9dd02610d6e154c2ec9e2cc2237b6bbe159b4e4ef6
----
-
-<h1 class="page-title" data-page-title-uuid="1c72c68f-86f5-577e-93a8-53e634460711">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
-
-<div id="m-177b2d24-eea2-5f3b-b898-0ad84bbd7d50" data-section-uuid="177b2d24-eea2-5f3b-b898-0ad84bbd7d50" class="msg msg--claude">
-
-## 2369-04-15 08:30:00 UTC — Human
-
-What's wrong with this medical-tricorder readout?
-
-🖼 *[tricorder-readout.png (not yet fetched)]*
-
-</div>
-
-<div id="m-0bdf2176-0b10-5cc3-b955-0a31599f6495" data-section-uuid="0bdf2176-0b10-5cc3-b955-0a31599f6495" class="msg msg--claude">
-
-## 2369-04-15 08:30:45 UTC — claude-opus-4-7
-
-The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
-
-</div>
-
-
-=== claude_export/rendered_md/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md ===
----
-title: "Claude Project · Bridge Operations (all)"
-provider: claude
-source_label: "Claude"
-chat_uuid: bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0
-markdown_uuid: bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0
-period: all
-display: "Bridge Operations"
-account: 00000001-1701-4d00-8000-000000000001
-project: Bridge Operations
-external_id: 70000001-1701-4d00-8000-000000000701
-item_count: 4
-source_fingerprint: 5f041dc5f2cb2f540d6490f902bab4d4f67291d461051540c35e144d0d01d14c
----
-
-<h1 class="page-title" data-page-title-uuid="bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
-
-<div id="m-97a4b942-55cc-5277-bb12-ffd97e43dc5c" data-section-uuid="97a4b942-55cc-5277-bb12-ffd97e43dc5c" class="msg msg--claude">
-
-## 2364-03-01 09:00:00 UTC — Description
-
-Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.
-
-</div>
-
-<div id="m-9a048a2e-8f15-5fd1-b686-aba2e9cad97e" data-section-uuid="9a048a2e-8f15-5fd1-b686-aba2e9cad97e" class="msg msg--claude">
-
-## 2364-03-01 09:00:00 UTC — Custom instructions
-
-Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.
-
-</div>
-
-<div id="m-92b18eb4-757f-5418-87da-f7e5e179b6b1" data-section-uuid="92b18eb4-757f-5418-87da-f7e5e179b6b1" class="msg msg--claude">
-
-## 2364-03-01 09:05:00 UTC — hailing-frequencies.md
-
-# Hailing frequencies
-
-Open on subspace band 3 unless the target is cloaked.
-
-- Klingon vessels: lead with rank, then ship name.
-- Romulan vessels: do not open first.
-
-
-</div>
-
-<div id="m-d734b686-97ce-5e76-9ae0-02fbb6dfe60b" data-section-uuid="d734b686-97ce-5e76-9ae0-02fbb6dfe60b" class="msg msg--claude">
-
-## 2364-03-02 11:30:00 UTC — escalation-ladder.txt
-
-Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
-Medical emergencies route directly to Sickbay (Crusher).
-
-
-</div>
-
-
-=== claude_export/rendered_md/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md ===
+=== anthropic_api/rendered_md/4f6192ca-a4c2-5ef6-bd64-377fdf35435d/all.md ===
 ---
 title: "Borg Encryption Signature Lookup (all)"
-provider: claude
+provider: anthropic
 source_label: "Claude"
-chat_uuid: ecb57e3b-24ce-546b-9201-61bf610b0783
-markdown_uuid: ecb57e3b-24ce-546b-9201-61bf610b0783
+chat_uuid: 4f6192ca-a4c2-5ef6-bd64-377fdf35435d
+markdown_uuid: 4f6192ca-a4c2-5ef6-bd64-377fdf35435d
 period: all
 display: "Borg Encryption Signature Lookup"
 account: 00000001-1701-4d00-8000-000000000001
 external_id: c0000005-1701-4d00-8000-00000000c005
 item_count: 6
-source_fingerprint: 3b4e10471b8fbfdd235e00c356eb75d2b412b735c1081c0560839e5142f220fb
+source_fingerprint: 18944340932d5dd7815d528190ad9249a203c4a18f15d91883eeb37e7474e2dc
 ---
 
-<h1 class="page-title" data-page-title-uuid="ecb57e3b-24ce-546b-9201-61bf610b0783">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="4f6192ca-a4c2-5ef6-bd64-377fdf35435d">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-5af2bc5c-dc8f-5f8b-9ffe-3b8959ef4b6d" data-section-uuid="5af2bc5c-dc8f-5f8b-9ffe-3b8959ef4b6d" class="msg msg--claude">
+<div id="m-2efbbe54-0eda-58c9-9b48-a4a3a99a2753" data-section-uuid="2efbbe54-0eda-58c9-9b48-a4a3a99a2753" class="msg msg--anthropic">
 
 ## 2369-04-16 09:00:00 UTC — Human
 
@@ -122,7 +27,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 </div>
 
-<div id="m-9dc4d9e5-8760-5b4b-8356-513ddde8a81c" data-section-uuid="9dc4d9e5-8760-5b4b-8356-513ddde8a81c" class="msg msg--claude">
+<div id="m-6781c690-594e-529c-a13d-dd41053ef966" data-section-uuid="6781c690-594e-529c-a13d-dd41053ef966" class="msg msg--anthropic">
 
 ## 2369-04-16 09:00:10 UTC — claude-opus-4-7
 
@@ -138,7 +43,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 </div>
 
-<div id="m-acf0598d-da86-50cb-83c0-81c168a3aaf6" data-section-uuid="acf0598d-da86-50cb-83c0-81c168a3aaf6" class="msg msg--claude">
+<div id="m-784b5443-d672-51af-bebf-4627418e526c" data-section-uuid="784b5443-d672-51af-bebf-4627418e526c" class="msg msg--anthropic">
 
 ## 2369-04-16 09:00:30 UTC — claude-opus-4-7
 
@@ -155,7 +60,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 </div>
 
-<div id="m-fd099005-053a-540e-a4fa-26c872b932bf" data-section-uuid="fd099005-053a-540e-a4fa-26c872b932bf" class="msg msg--claude">
+<div id="m-40abff32-9a15-58d7-a598-82d5d869be80" data-section-uuid="40abff32-9a15-58d7-a598-82d5d869be80" class="msg msg--anthropic">
 
 ## 2369-04-16 09:01:30 UTC — claude-opus-4-7
 
@@ -163,7 +68,7 @@ Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.
 
 </div>
 
-<div id="m-8e186a5a-3834-5ae1-ad1d-00a786a6f02d" data-section-uuid="8e186a5a-3834-5ae1-ad1d-00a786a6f02d" class="msg msg--claude">
+<div id="m-eba51e2f-fa30-520f-9603-f6e49fbcdb1f" data-section-uuid="eba51e2f-fa30-520f-9603-f6e49fbcdb1f" class="msg msg--anthropic">
 
 ## 2369-04-16 09:01:30 UTC — claude-opus-4-7
 
@@ -176,7 +81,7 @@ ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 
 </div>
 
-<div id="m-455f3019-2de0-5b4c-ad87-68e8f1003e6b" data-section-uuid="455f3019-2de0-5b4c-ad87-68e8f1003e6b" class="msg msg--claude">
+<div id="m-255ba5a6-9440-56fc-a870-fac457450581" data-section-uuid="255ba5a6-9440-56fc-a870-fac457450581" class="msg msg--anthropic">
 
 ## 2369-04-16 09:01:30 UTC — claude-opus-4-7
 
@@ -189,25 +94,25 @@ Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulatio
 </div>
 
 
-=== claude_export/rendered_md/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md ===
+=== anthropic_api/rendered_md/8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9/all.md ===
 ---
 title: "Klingon Diplomatic Greeting Drafting (all)"
-provider: claude
+provider: anthropic
 source_label: "Claude"
-chat_uuid: f6cad624-37b7-5673-af29-80ba9aac61a5
-markdown_uuid: f6cad624-37b7-5673-af29-80ba9aac61a5
+chat_uuid: 8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9
+markdown_uuid: 8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
 account: 00000001-1701-4d00-8000-000000000001
 project: Bridge Operations
 external_id: c0000003-1701-4d00-8000-00000000c003
 item_count: 6
-source_fingerprint: 4ae9dd1bfb0d6d76c5f45a1d5909d6f83c71f143ecfd548a1b6383d7dd8f16fd
+source_fingerprint: 8980ac74717f73bc28a2ebbdea5606dbda0b4eb6f760a861d85f6875791c560b
 ---
 
-<h1 class="page-title" data-page-title-uuid="f6cad624-37b7-5673-af29-80ba9aac61a5">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-ec2d712e-ffd8-5f3e-bfb1-291c371a8a18" data-section-uuid="ec2d712e-ffd8-5f3e-bfb1-291c371a8a18" class="msg msg--claude">
+<div id="m-22cd627c-1f43-5b20-9658-2255ada1a772" data-section-uuid="22cd627c-1f43-5b20-9658-2255ada1a772" class="msg msg--anthropic">
 
 ## 2369-04-14 10:00:00 UTC — Human
 
@@ -215,7 +120,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-fba21d7b-ee94-5388-a431-83ab86883e1d" data-section-uuid="fba21d7b-ee94-5388-a431-83ab86883e1d" class="msg msg--claude">
+<div id="m-7290e876-b1eb-5623-86c8-bb4bea24cac3" data-section-uuid="7290e876-b1eb-5623-86c8-bb4bea24cac3" class="msg msg--anthropic">
 
 ## 2369-04-14 10:00:30 UTC — claude-opus-4-7
 
@@ -227,7 +132,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-627106cd-9749-58b6-b3c3-081b7c5bd325" data-section-uuid="627106cd-9749-58b6-b3c3-081b7c5bd325" class="msg msg--claude">
+<div id="m-6b86443a-0129-5587-b18b-feab02f63649" data-section-uuid="6b86443a-0129-5587-b18b-feab02f63649" class="msg msg--anthropic">
 
 ## 2369-04-14 10:00:32 UTC — claude-opus-4-7
 
@@ -242,7 +147,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-db076984-1c8c-5f9c-95f3-49aff0ea4480" data-section-uuid="db076984-1c8c-5f9c-95f3-49aff0ea4480" class="msg msg--claude">
+<div id="m-93d73572-6935-59a9-afc9-54856edaa0fd" data-section-uuid="93d73572-6935-59a9-afc9-54856edaa0fd" class="msg msg--anthropic">
 
 ## 2369-04-14 10:01:00 UTC — claude-opus-4-7
 
@@ -250,7 +155,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 </div>
 
-<div id="m-1657d974-f93f-5c85-92bb-789909cf6e41" data-section-uuid="1657d974-f93f-5c85-92bb-789909cf6e41" class="msg msg--claude">
+<div id="m-1e42b243-788e-5f46-b131-8286079d3711" data-section-uuid="1e42b243-788e-5f46-b131-8286079d3711" class="msg msg--anthropic">
 
 ## 2369-04-14 10:01:00 UTC — claude-opus-4-7
 
@@ -273,10 +178,154 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 </div>
 
-<div id="m-66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" data-section-uuid="66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" class="msg msg--claude">
+<div id="m-40df2839-ba53-5296-ad0c-cc394a2756a4" data-section-uuid="40df2839-ba53-5296-ad0c-cc394a2756a4" class="msg msg--anthropic">
 
 ## 2369-04-14 10:02:00 UTC — Human
 
 Perfect. Make it so.
+
+</div>
+
+
+=== anthropic_api/rendered_md/a291f856-67f6-5905-a4f8-1292e655ae76/all.md ===
+---
+title: "Tricorder Image Diagnostic (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: a291f856-67f6-5905-a4f8-1292e655ae76
+markdown_uuid: a291f856-67f6-5905-a4f8-1292e655ae76
+period: all
+display: "Tricorder Image Diagnostic"
+account: 00000003-1701-4d00-8000-000000000003
+external_id: c0000004-1701-4d00-8000-00000000c004
+item_count: 2
+source_fingerprint: b7cde548b6c749445e364ec8401ef25ab04854870d67e3c5ba950d5cc0e24b8f
+---
+
+<h1 class="page-title" data-page-title-uuid="a291f856-67f6-5905-a4f8-1292e655ae76">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-903380da-6452-5f3f-b61b-57f4f470913a" data-section-uuid="903380da-6452-5f3f-b61b-57f4f470913a" class="msg msg--anthropic">
+
+## 2369-04-15 08:30:00 UTC — Human
+
+What's wrong with this medical-tricorder readout?
+
+🖼 *[tricorder-readout.png (not yet fetched)]*
+
+</div>
+
+<div id="m-8fce1929-4160-50f0-9f81-7dfd3ab512e6" data-section-uuid="8fce1929-4160-50f0-9f81-7dfd3ab512e6" class="msg msg--anthropic">
+
+## 2369-04-15 08:30:45 UTC — claude-opus-4-7
+
+The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
+
+</div>
+
+
+=== anthropic_api/rendered_md/b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d/all.md ===
+---
+title: "Claude Project · Bridge Operations (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d
+markdown_uuid: b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d
+period: all
+display: "Bridge Operations"
+account: 00000001-1701-4d00-8000-000000000001
+project: Bridge Operations
+external_id: 70000001-1701-4d00-8000-000000000701
+item_count: 4
+source_fingerprint: 088bc2eb36f0b667bce839b8596246f385025dbd45f680527ad1d950ab9a3aff
+---
+
+<h1 class="page-title" data-page-title-uuid="b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-a9ea471a-12c8-5d3d-994f-c90e4d328cf6" data-section-uuid="a9ea471a-12c8-5d3d-994f-c90e4d328cf6" class="msg msg--anthropic">
+
+## 2364-03-01 09:00:00 UTC — Description
+
+Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.
+
+</div>
+
+<div id="m-66b1ca22-47dd-59cf-903a-0cbc7eeae035" data-section-uuid="66b1ca22-47dd-59cf-903a-0cbc7eeae035" class="msg msg--anthropic">
+
+## 2364-03-01 09:00:00 UTC — Custom instructions
+
+Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.
+
+</div>
+
+<div id="m-20874e2e-199e-576a-a5c2-7b884fe254bb" data-section-uuid="20874e2e-199e-576a-a5c2-7b884fe254bb" class="msg msg--anthropic">
+
+## 2364-03-01 09:05:00 UTC — hailing-frequencies.md
+
+# Hailing frequencies
+
+Open on subspace band 3 unless the target is cloaked.
+
+- Klingon vessels: lead with rank, then ship name.
+- Romulan vessels: do not open first.
+
+
+</div>
+
+<div id="m-32e3bbf8-fb15-5acc-8a91-fd13dc26f2df" data-section-uuid="32e3bbf8-fb15-5acc-8a91-fd13dc26f2df" class="msg msg--anthropic">
+
+## 2364-03-02 11:30:00 UTC — escalation-ladder.txt
+
+Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
+Medical emergencies route directly to Sickbay (Crusher).
+
+
+</div>
+
+
+=== anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md ===
+---
+title: "Claude Project · Stellar Cartography (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: d5bfab57-fc56-5769-ba07-09e1cd28bd8f
+markdown_uuid: d5bfab57-fc56-5769-ba07-09e1cd28bd8f
+period: all
+display: "Stellar Cartography"
+account: 00000002-1701-4d00-8000-000000000002
+project: Stellar Cartography
+external_id: 70000002-1701-4d00-8000-000000000702
+item_count: 3
+source_fingerprint: a46accb0a9a925f36e1edc5984eacfa6881e417cc9d194ec6be12e9bcd182b03
+---
+
+<h1 class="page-title" data-page-title-uuid="d5bfab57-fc56-5769-ba07-09e1cd28bd8f">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-b9d4253f-bf81-5da9-a5d0-e646184d7374" data-section-uuid="b9d4253f-bf81-5da9-a5d0-e646184d7374" class="msg msg--anthropic">
+
+## (no timestamp) — Description
+
+Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.
+
+</div>
+
+<div id="m-cbfc4f66-5f5c-5037-aee2-3125b2829672" data-section-uuid="cbfc4f66-5f5c-5037-aee2-3125b2829672" class="msg msg--anthropic">
+
+## (no timestamp) — Custom instructions
+
+Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.
+
+</div>
+
+<div id="m-a578fdb9-110f-5f34-a37f-6022428c045a" data-section-uuid="a578fdb9-110f-5f34-a37f-6022428c045a" class="msg msg--anthropic">
+
+## (no timestamp) — charting-conventions.md
+
+# Charting conventions
+
+Bearings are given from the ship's current heading, not from galactic north.
+
+- Sector designations use the Federation catalogue number, never the local name.
+- An extrapolated position is written in parentheses.
+
 
 </div>

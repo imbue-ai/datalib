@@ -64,13 +64,49 @@ use std::path::Path;
 ///   1 — initial.
 ///   2 — `grid_rows.source_url` became a `file://` URL instead of a
 ///       root-relative path.
-pub const RENDER_VERSION: u32 = 2;
+///   3 — mixed documents render at all (#173), and the pages that carry
+///       no text now leave a note in the markdown instead of vanishing.
+pub const RENDER_VERSION: u32 = 3;
 
 /// One page of converted text.
 pub struct Page {
     /// 1-indexed page number as reported by the converter.
     pub number: u32,
     pub text: String,
+    /// True when this page produced no text and `text` is the
+    /// placeholder note rather than content from the document. Such a
+    /// page goes into the markdown so the gap is visible to a reader,
+    /// but gets no `grid_rows` entry — see [`note_for_page`].
+    pub non_textual: bool,
+}
+
+impl Page {
+    /// A page whose text came out of the document.
+    fn textual(number: u32, text: String) -> Self {
+        Self {
+            number,
+            text,
+            non_textual: false,
+        }
+    }
+}
+
+/// What we write in place of a page we could not read.
+///
+/// A scanned insert in an otherwise-readable report used to disappear
+/// without trace: the page simply was not in the output, so a reader
+/// went from page 2 to page 4 with nothing to say why. The count is in
+/// `pdf_documents.ocr_page_count`, but nobody reading the document sees
+/// that. This is the same information where it is actually needed.
+///
+/// Deliberately not a `grid_rows` row. The text is boilerplate — one
+/// identical sentence per unreadable page — so rows would add nothing to
+/// the grid while costing a qmd embedding each, and a scan-heavy corpus
+/// has a lot of them.
+pub fn note_for_page(number: u32) -> String {
+    format!(
+        "*Page {number} — no extractable text (image-only or scanned; OCR is not available yet).*"
+    )
 }
 
 /// Convert one PDF and split the result into pages.
@@ -97,10 +133,61 @@ pub fn convert(path: &Path) -> Result<Vec<Page>> {
     let raw = res
         .markdown
         .with_context(|| format!("no markdown produced for {}", path.display()))?;
-    let mut pages = split_pages(&collapse_cjk_spacing(&raw));
+    let md_text = collapse_cjk_spacing(&raw);
+    let mut pages = split_pages(&md_text);
     strip_repeated_chrome(&mut pages);
     pages.retain(|p| !p.text.trim().is_empty());
+    note_unreadable_pages(&mut pages, res.page_count, saw_page_markers(&md_text));
     Ok(pages)
+}
+
+/// Whether the converter told us which page anything came from.
+///
+/// Without a single `<!-- Page N -->` marker, [`split_pages`] calls the
+/// whole output page 1 as a fallback — a number it invented, not one the
+/// document reported. [`note_unreadable_pages`] must not extrapolate
+/// from an invented number.
+fn saw_page_markers(md: &str) -> bool {
+    md.lines().any(|l| parse_page_marker(l).is_some())
+}
+
+/// Fill the gaps in `pages` with [`note_for_page`] placeholders, so a
+/// converted document covers pages 1..=`page_count` continuously.
+///
+/// The converter emits a `<!-- Page N -->` marker only when page N has
+/// at least one text line, so a page number missing from `pages` is
+/// exactly a page it found no text on. Three guards keep that inference
+/// honest, because being wrong here means telling a reader that a page
+/// they can see text on is blank:
+///
+/// * `saw_markers` must be true. With no marker anywhere, [`split_pages`]
+///   numbered the whole output page 1 by fallback, so the numbering is
+///   ours rather than the document's and says nothing about pages 2..N.
+/// * Nothing is filled for an empty conversion. A document we extracted
+///   no text at all from does not reach the render step, and turning one
+///   into a file made entirely of notes would be a worse answer than the
+///   gap it replaces.
+/// * Nothing is filled when a page number exceeds `page_count`. The
+///   markers and the page census then disagree, and the census is the
+///   one we would be extrapolating from.
+fn note_unreadable_pages(pages: &mut Vec<Page>, page_count: u32, saw_markers: bool) {
+    if !saw_markers || pages.is_empty() || page_count == 0 {
+        return;
+    }
+    if pages.iter().any(|p| p.number > page_count) {
+        return;
+    }
+    let have: std::collections::HashSet<u32> = pages.iter().map(|p| p.number).collect();
+    for n in 1..=page_count {
+        if !have.contains(&n) {
+            pages.push(Page {
+                number: n,
+                text: note_for_page(n),
+                non_textual: true,
+            });
+        }
+    }
+    pages.sort_by_key(|p| p.number);
 }
 
 /// Remove running heads and feet: the first and/or last line of a page
@@ -211,10 +298,7 @@ pub fn split_pages(md: &str) -> Vec<Page> {
     for line in md.lines() {
         if let Some(n) = parse_page_marker(line) {
             if !current.trim().is_empty() {
-                pages.push(Page {
-                    number,
-                    text: current.trim().to_string(),
-                });
+                pages.push(Page::textual(number, current.trim().to_string()));
             }
             current.clear();
             number = n;
@@ -224,10 +308,7 @@ pub fn split_pages(md: &str) -> Vec<Page> {
         current.push('\n');
     }
     if !current.trim().is_empty() {
-        pages.push(Page {
-            number,
-            text: current.trim().to_string(),
-        });
+        pages.push(Page::textual(number, current.trim().to_string()));
     }
     pages
 }
@@ -366,10 +447,7 @@ mod tests {
         texts
             .iter()
             .enumerate()
-            .map(|(i, t)| Page {
-                number: i as u32 + 1,
-                text: (*t).to_string(),
-            })
+            .map(|(i, t)| Page::textual(i as u32 + 1, (*t).to_string()))
             .collect()
     }
 
@@ -445,6 +523,72 @@ mod tests {
         let mut p = pages(&["running head", "running head"]);
         strip_repeated_chrome(&mut p);
         assert!(p.iter().all(|x| x.text.is_empty()));
+    }
+
+    #[test]
+    fn an_unreadable_page_gets_a_note_rather_than_disappearing() {
+        // The Mixed shape: text on 1 and 3, an image-only insert on 2.
+        let mut p = pages(&["alpha", "gamma"]);
+        p[1].number = 3;
+        note_unreadable_pages(&mut p, 3, true);
+        assert_eq!(
+            p.iter().map(|x| x.number).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(p[1].non_textual);
+        assert!(p[1].text.contains("Page 2"), "{}", p[1].text);
+        // The pages that did convert are untouched and still count as
+        // real text, which is what gives them grid rows.
+        assert!(!p[0].non_textual && !p[2].non_textual);
+        assert_eq!(p[0].text, "alpha");
+        assert_eq!(p[2].text, "gamma");
+    }
+
+    #[test]
+    fn a_trailing_run_of_unreadable_pages_is_noted_too() {
+        // Nothing tells us page 4 exists except the census, which is
+        // why `note_unreadable_pages` takes it rather than inferring
+        // the count from the highest marker.
+        let mut p = pages(&["alpha"]);
+        note_unreadable_pages(&mut p, 4, true);
+        assert_eq!(p.len(), 4);
+        assert!(p[1..].iter().all(|x| x.non_textual));
+    }
+
+    #[test]
+    fn a_fully_readable_document_gains_no_notes() {
+        let mut p = pages(&["alpha", "beta"]);
+        note_unreadable_pages(&mut p, 2, true);
+        assert_eq!(p.len(), 2);
+        assert!(p.iter().all(|x| !x.non_textual));
+    }
+
+    #[test]
+    fn nothing_is_invented_when_the_numbering_cannot_be_trusted() {
+        // No markers at all: `split_pages` calls the whole document page
+        // 1, so a census of 5 would otherwise produce four notes
+        // claiming pages we never looked at are blank.
+        let md = "no markers here\n";
+        assert!(!saw_page_markers(md));
+        let mut p = split_pages(md);
+        note_unreadable_pages(&mut p, 5, saw_page_markers(md));
+        assert_eq!(
+            p.len(),
+            1,
+            "a bare page-1 fallback must not be extrapolated"
+        );
+
+        // A marker past the end of the census — the two disagree, so we
+        // trust neither.
+        let mut q = split_pages("<!-- Page 7 -->\nseven\n");
+        note_unreadable_pages(&mut q, 3, true);
+        assert_eq!(q.len(), 1);
+
+        // And an empty conversion stays empty rather than becoming a
+        // document made entirely of notes.
+        let mut empty: Vec<Page> = Vec::new();
+        note_unreadable_pages(&mut empty, 9, true);
+        assert!(empty.is_empty());
     }
 
     #[test]

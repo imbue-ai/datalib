@@ -199,13 +199,43 @@ impl PdfKind {
             PdfKind::Mixed => "mixed",
         }
     }
+}
 
-    /// Whether this classification yields text worth rendering without
-    /// an OCR engine. `Mixed` counts: the text pages still convert, and
-    /// the untouched pages are visible in `ocr_page_count`.
-    pub fn is_convertible_without_ocr(self) -> bool {
-        matches!(self, PdfKind::TextBased | PdfKind::Mixed)
-    }
+/// Whether a document has anything worth converting today.
+///
+/// **This is a per-document question, and the classification cannot
+/// answer it.** There used to be a `PdfKind::is_convertible_without_ocr`
+/// that said `TextBased | Mixed`, while the actual gate skipped any
+/// document with a non-empty `pages_needing_ocr` — which every `Mixed`
+/// document has by definition. The two disagreed, the gate won, and no
+/// `Mixed` document ever rendered: a 200-page report with three scanned
+/// inserts lost all 197 readable pages. Its unit test could not fail,
+/// because it asserted the predicate rather than the behavior. See
+/// issue #173.
+///
+/// The rule now reads the page census instead of the label:
+///
+/// * `page_count > ocr_page_count` — at least one page carries text we
+///   can extract. That is the whole condition for having something to
+///   render; the pages we skipped stay visible in `ocr_page_count`, and
+///   the render step notes each one in the markdown.
+/// * `!has_encoding_issues` — mojibake is worse than a gap. Text from a
+///   broken font encoding *looks* like text, so it would be indexed and
+///   searched as if it meant something. An absent page is honest; a
+///   garbled one is not.
+///
+/// This mirrors the `WHERE` clause in
+/// [`super::db::RawDb::convertible_documents`], which is what actually
+/// selects, and `db.rs`'s `renders_only_documents_with_readable_pages`
+/// asserts the two agree row for row. Test the query, not this: the
+/// query is what ships, and a predicate that only agrees with itself is
+/// how #173 stayed green.
+pub fn document_is_renderable(
+    page_count: i64,
+    ocr_page_count: i64,
+    has_encoding_issues: bool,
+) -> bool {
+    !has_encoding_issues && page_count > ocr_page_count
 }
 
 /// One row in [`PDF_DOCUMENTS_DDL`].
@@ -385,11 +415,23 @@ mod tests {
     }
 
     #[test]
-    fn only_text_and_mixed_convert_without_ocr() {
-        assert!(PdfKind::TextBased.is_convertible_without_ocr());
-        assert!(PdfKind::Mixed.is_convertible_without_ocr());
-        assert!(!PdfKind::Scanned.is_convertible_without_ocr());
-        assert!(!PdfKind::ImageBased.is_convertible_without_ocr());
+    fn a_document_renders_when_any_page_carries_text() {
+        // The #173 case: three scanned inserts in a 200-page report
+        // must not cost the other 197 pages.
+        assert!(document_is_renderable(200, 3, false));
+        // ...and the degenerate ends still behave.
+        assert!(document_is_renderable(1, 0, false));
+        assert!(!document_is_renderable(4, 4, false), "fully scanned");
+        assert!(!document_is_renderable(0, 0, false), "no pages at all");
+    }
+
+    #[test]
+    fn encoding_issues_suppress_a_document_that_would_otherwise_render() {
+        // Mojibake reads as text to everything downstream, so it would
+        // be indexed and searched as if it meant something. A gap is
+        // recoverable; a poisoned index is not.
+        assert!(!document_is_renderable(200, 3, true));
+        assert!(!document_is_renderable(1, 0, true));
     }
 
     #[test]

@@ -56,7 +56,11 @@ use super::parse::{
 ///     output directory, so a tree written by v4 cannot be updated in
 ///     place. The render step discards it wholesale; see
 ///     `DataProcessor::render_version`.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: an item with no timestamp — and no parent stamp to inherit from
+///     — gets a null `when_ts` instead of a real-looking
+///     `1970-01-01T00:00:00`. See
+///     `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -236,13 +240,17 @@ fn build_chat(
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     let mut last_ms = conv.created_at.as_deref().and_then(iso_to_ms);
     for m in &msgs {
+        // Own stamp, else the previous item's + 1ms (§6's sanctioned
+        // inheritance, which keeps ordering stable across re-runs),
+        // else nothing — a conversation whose own `created_at` is
+        // missing and whose first message has none either genuinely has
+        // no time to report, and `None` says so.
         let msg_ms = m
             .created_at
             .as_deref()
             .and_then(iso_to_ms)
-            .or_else(|| last_ms.map(|p| p + 1))
-            .unwrap_or(0);
-        last_ms = Some(msg_ms);
+            .or_else(|| last_ms.map(|p| p + 1));
+        last_ms = msg_ms.or(last_ms);
 
         let sender = m.sender.as_deref().unwrap_or("unknown");
         let kind_label = kind_for_sender(sender);
@@ -312,12 +320,15 @@ fn build_chat(
             }
             let raw_obj = b.raw_json.as_object().cloned().unwrap_or_default();
             let block_id = block_identity(&m.message_uuid, b.block_index, btype, &raw_obj);
+            // A block inherits its message's stamp, offset by its
+            // index so blocks keep their order. `None` only when the
+            // message had none either.
             let block_ms = b
                 .start_timestamp
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .and_then(iso_to_ms)
-                .unwrap_or_else(|| msg_ms + (b.block_index as i64) + 1);
+                .or_else(|| msg_ms.map(|ms| ms + (b.block_index as i64) + 1));
             let block_author = filter_nonempty(model.clone()).unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
@@ -426,12 +437,13 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
     // the page is stable across runs; docs use their own `created_at`
     // where they have one. `+1` / `+2` keeps the description and the
     // instructions in that order under chat-common's sort.
+    // `None` when the project carries neither stamp: the synthesized
+    // sections below then have no time to report, and say so.
     let base_ms = project
         .created_at
         .as_deref()
         .and_then(iso_to_ms)
-        .or_else(|| project.updated_at.as_deref().and_then(iso_to_ms))
-        .unwrap_or(0);
+        .or_else(|| project.updated_at.as_deref().and_then(iso_to_ms));
 
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     if let Some(text) = project.description.clone().and_then(filter_nonempty) {
@@ -439,7 +451,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
             ids::project_description(&project_uuid),
             "Description",
             "Project Description",
-            base_ms + 1,
+            base_ms.map(|b| b + 1),
             text,
         ));
     }
@@ -448,7 +460,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
             ids::project_instructions(&project_uuid),
             "Custom instructions",
             "Project Instructions",
-            base_ms + 2,
+            base_ms.map(|b| b + 2),
             text,
         ));
     }
@@ -462,7 +474,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
             .created_at
             .as_deref()
             .and_then(iso_to_ms)
-            .unwrap_or(base_ms + 3 + i as i64);
+            .or_else(|| base_ms.map(|b| b + 3 + i as i64));
         // Knowledge docs are arbitrary user text — often markdown, and
         // fencing them would break that. Emitted verbatim, the same way
         // a chat message body is; the section header carries the file
@@ -550,7 +562,7 @@ fn project_item(
     id: ids::Identity,
     author_display: &str,
     kind_label: &str,
-    date_ms: i64,
+    date_ms: Option<i64>,
     text: String,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
@@ -589,12 +601,24 @@ fn filter_nonempty(s: String) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
+/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
+/// is the right value for `when_ts`, but nothing records that upstream
+/// sent something we could not read — half of R1. See the note on
+/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
-/// unparseable (callers fall back to a bumped previous time).
+/// unparseable (callers fall back to a bumped previous time, and to
+/// `None` when there is no previous time either).
+///
+/// Goes through `datalib-time` rather than calling `chrono` directly:
+/// timestamps are a cross-source concept, so exactly one crate decides
+/// how a string becomes an instant (rule P3 in
+/// `docs/dev/data_architecture_parse_and_render.md`). Anthropic stamps
+/// every timestamp with an explicit offset, so `parse_strict` is the
+/// right member of that family.
 fn iso_to_ms(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s)
+    datalib_time::parse_strict(s)
         .ok()
-        .map(|dt| dt.timestamp_millis())
+        .map(|t| t.to_unix_millis())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -861,6 +885,24 @@ fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod project_doc_tests {
     use super::*;
+
+    /// The parse helper must answer `None` for anything it cannot read,
+    /// so the caller falls through to inheriting the previous item's
+    /// stamp and — when there is none — to a null `when_ts`.
+    #[test]
+    fn iso_to_ms_refuses_to_invent_a_timestamp() {
+        assert_eq!(
+            iso_to_ms("2026-04-14T09:15:00-07:00"),
+            Some(1_776_183_300_000)
+        );
+        for bad in ["", "not a date", "2026-04-14", "2026-04-14T09:15:00"] {
+            assert_eq!(
+                iso_to_ms(bad),
+                None,
+                "iso_to_ms({bad:?}) fabricated a stamp"
+            );
+        }
+    }
 
     #[test]
     fn short_docs_are_untouched() {

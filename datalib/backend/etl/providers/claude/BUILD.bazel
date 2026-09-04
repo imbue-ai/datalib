@@ -179,6 +179,7 @@ rust_test(
         ":datalib_etl_claude",
         "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

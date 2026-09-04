@@ -12,4 +12,5 @@ export const CONFIG_MUTATING = [
   "grid-source-name",
   "sources-view",
   "wizard-select",
+  "wizard-email",
 ] as const;

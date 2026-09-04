@@ -12,7 +12,7 @@ confusion while this document was being written:
 
 - **parse** — deserialize a stored payload into the provider's typed
   in-memory representation. Pure, no I/O, lives in
-  `render/parse.rs` / `render/schema_translate.rs`.
+  `render/parse.rs`.
 - **render** — turn that representation into the artifacts:
   `<id>.md` for humans and `<id>.grid_rows.json` for the index.
 
@@ -23,10 +23,18 @@ isn't one, and a record that "fails to parse" is a record **render**
 could not deserialize — which matters because the fix is always a
 re-render and never a re-fetch.
 
-Like its siblings this is aspirational as much as descriptive. §4 in
-particular is a set of rules we do **not** follow today; the audit and
-retrofit plan is
-[`data_lib_as_a_library/data_handling_practices.md`](data_lib_as_a_library/data_handling_practices.md).
+Like its siblings this is aspirational as much as descriptive, and it
+tries to say which is which at each point. §4 in particular is a set of
+rules we do **not** follow today; the audit and retrofit plan is
+[`data_lib_as_a_library/data_handling_practices.md`](data_lib_as_a_library/data_handling_practices.md),
+and what the tree actually does today is measured in the
+[render audit](data_lib_as_a_library/render_audit_2026_09_03.md).
+§3's **U-rules are mostly descriptive** — they name a pattern already
+built in four places — while its **P-rules are mixed**, and P1 and P3
+are both currently violated. §2's
+["Where this is heading"](#where-this-is-heading-the-artifact-becomes-a-database)
+is pure aspiration: it describes replacing the sidecar tree with
+doltlite tables, and none of it exists.
 
 ## 1. Why there are three of these
 
@@ -60,7 +68,7 @@ sidecar contract (§2), and the `GridRow` family taxonomy (§3).
 | --- | --- | --- |
 | [`data_architecture_ingestion.md`](data_architecture_ingestion.md) | download | principles, at-rest shape, operational properties |
 | [`data_architecture_ingestion_practices.md`](data_architecture_ingestion_practices.md) | download | testing, adding a provider, schema evolution, open questions |
-| **this file** | parse + render | the stage contract, the projection, data-quality rules, incrementality, timestamps |
+| **this file** | parse + render | the stage contract (and where it is heading), the projection, the parse contract and the unification/fidelity rules, data-quality rules, incrementality, timestamps |
 | [`grid_rows.md`](grid_rows.md) / [`edges.md`](edges.md) | — | the tables render writes into |
 | [`entity_ids.md`](entity_ids.md) | — | the `uuid` recipe every projection must follow |
 
@@ -94,7 +102,7 @@ document, Render emits two co-located files —
     ```jsonc
     {
       "header": {
-        "document_uuid": "…",       // primary key for the document
+        "markdown_uuid": "…",       // primary key for the rendered .md
         "source_fingerprint": "…",  // hash of upstream payload
         "render_version": 1         // renderer-side schema stamp
       },
@@ -110,8 +118,11 @@ This part of the pipeline aspires to the same properties as download:
 
   - **Monitorable**: same `obs` flags, same progress-bar contract.
   - **Incremental**: the sidecar `source_fingerprint` short-circuits
-    re-render. Grid index reads `(qmd_path, source_fingerprint)` from
-    `markdowns_loaded` and skips unchanged sidecars.
+    re-render. Grid index reads `(markdown_uuid, source_fingerprint)`
+    from the `markdowns` table and skips unchanged sidecars.
+    (There is no `markdowns_loaded` table — an earlier one by that name
+    was folded into `documents`; the surviving `markdowns_loaded` is a
+    counter on `GridIndexSummary`.)
   - **Resumable in the steady state**: a render pass that gets
     re-run after producing N of M sidecars will skip those N via the
     fingerprint check and continue from where it stopped. We do not,
@@ -126,16 +137,114 @@ making partial-progress visible to the user than to the same on
 download; this is an area where the implementation trails the
 principle.
 
+### Where this is heading: the artifact becomes a database
+
+**Status: aspiration. Nothing below is built**, and it is recorded here
+rather than in a proposal file because it changes *this* contract — the
+sidecar is defined immediately above, and anyone reading that definition
+should know it is expected to be temporary.
+
+The intent is to move render's output out of the file tree and into
+doltlite, in two steps that look similar and cost very different
+amounts.
+
+**Step 1 — the sidecar becomes a table.** Instead of one
+`<id>.grid_rows.json` per document, each source writes its projected
+rows into a per-source doltlite database, already columnar and already
+in the shape the unified index concatenates. The grid index then reads
+tables rather than walking a tree of JSON.
+
+The argument is that **the sidecar tree is a hand-rolled version of what
+doltlite already does for us one stage earlier.** Download → raw store
+gets "what changed since my cursor" from `dolt_diff`. Render → sidecar
+tree re-implements the same question with fingerprints and full tree
+walks, and most of the render driver's complexity is the cost of that
+re-implementation:
+
+- **Two full tree walks per run.** `scan_sidecars` reads every sidecar
+  header to rebuild the `markdown_uuid → fingerprint` map, and
+  `grid_index` then walks the same tree again. One `dolt_diff` against a
+  stored commit answers both.
+- **A whole class of failure that a table does not have.** A sidecar can
+  be unreadable or unparseable; a row cannot. The audit found both
+  responses to that class in the tree and neither is good — the render
+  driver silently skips a malformed sidecar (losing its skip), and the
+  index loader aborts its entire transaction.
+- **No atomicity.** §2 above admits this outright: a SIGKILL mid-write
+  leaves a `.md` whose fingerprint does not match its body. A commit
+  fixes that by construction.
+- **Deletion is expressible.** The two known gaps — orphaned documents
+  after a render-param change (§5), and the whole-tree `rm -rf` in
+  `discard_tree_from_an_older_renderer` when a renderer re-keys its
+  documents — are both "you cannot update a file tree in place when
+  identity moves." `DELETE … WHERE` is the answer to both.
+- **The step's output version comes free.** A doltlite artifact versions
+  as its commit hash, so the runner never content-hashes anything.
+  `rendered_tree_version` exists today only to avoid that hashing, and
+  [#225](pipeline_dag_architecture.md) is what happens when the
+  avoidance is missed: forty seconds of hashing, every run, to version a
+  step that had already been skipped.
+
+It also simplifies [§4](#4-data-quality-rules)'s problem sink rather
+than complicating it. If render's rows already live in a per-source
+doltlite database with a single writer, the problem table belongs in
+**that same database** — so a document's rows and the record of what was
+dropped or nulled getting them there commit in one transaction, and can
+never disagree about which run they came from.
+
+Note this supersedes the reasoning in
+[`data_architecture_ingestion.md`](data_architecture_ingestion.md),
+which says the sidecar `source_fingerprint` compare stays. Under this
+design it does not: it is replaced by the same cursor pattern
+everywhere else already uses.
+
+Step 1 is close to free, and that is worth saying plainly: **nothing
+outside our own code reads a `.grid_rows.json`.** It is a machine
+format with exactly one producer and one consumer.
+
+**Step 2 — the markdown moves too.** Longer-term, the rendered `.md`
+lives in a doltlite table rather than as a file on disk.
+
+This one is genuinely gated, and on something specific: **qmd consumes a
+markdown tree.** The semantic index shells out to `@tobilu/qmd` over
+`rendered_md/`, so the tree cannot simply stop existing — it would have
+to be materialized for the indexer, or qmd's role would have to be taken
+over by something that reads from the database (a direction
+[`multimodal_retrieval.md`](multimodal_retrieval.md) already proposes for
+other reasons). Two smaller things point the same way: attachment blobs
+are materialized into each page's `blobs/` directory today, and the
+markdown is deliberately human-readable and greppable on disk, which is
+a property someone will miss.
+
+The storage argument cuts both ways and should not be oversold.
+`multimodal_retrieval.md` §4 measured a real data root and found the
+same text stored **five** times. Putting markdown in doltlite makes that
+six unless the file tree actually goes away — so the win is conditional
+on finishing the move, not on starting it.
+
+**What does not change in either step.** The *contract* is unaffected:
+render still emits a human artifact and a separate machine-readable
+projection, the projection is still never recovered by parsing the
+markdown, and the index still reads the projection. Only the medium
+changes. If you find yourself proposing that the grid index parse
+markdown because it is now conveniently in the same database, that is
+the same mistake ["QMDs are write-only"](/AGENTS.md) warns about, wearing
+a new hat.
+
 ## 3. The projection
 
 Three shapes, in order:
 
 1. **The stored payload** — JSONB, wire-fidelity, whatever upstream
    sent. Owned by download, described in `schema_raw.rs`.
-2. **The typed POD** — the provider's normalized in-memory
-   representation, in `render/schema_translate.rs` (aspirational,
-   landing per provider). Where a shape is shared across providers the
-   canonical type lives in a shared crate.
+2. **The typed POD** — the provider's own typed in-memory
+   representation, in `render/parse.rs`. Where a shape is shared
+   across providers the canonical type lives in a shared crate:
+   `chat-common`'s `Normalized*` types for the two chat families,
+   `contact-common`'s for contacts. (Earlier drafts of this doc, and
+   `data_architecture_ingestion.md`, call this file
+   `schema_translate.rs`. No provider has ever had one — the layer
+   landed under the two names above.)
 3. **The rows** — `GridRow` + `EdgeRow`, emitted through
    `datalib_index_lib::emit_sidecar`.
 
@@ -207,6 +316,173 @@ A new provider that fits a family should at minimum project to the
 family's `GridRow` shape rather than inventing a new `kind` taxonomy.
 A provider that doesn't fit may motivate a new family; opening one
 should be deliberate.
+
+### What parse owes the rest of the pipeline
+
+Parse is the smaller half of the projection and the easier one to get
+wrong quietly, because its output is consumed only by our own render
+code — there is no schema check between them, and a field that comes
+out subtly wrong looks exactly like a field that came out right.
+
+Five rules. P1–P3 are contract; P4 and P5 are about where work belongs.
+
+**P1 — Parse is total.** A record that will not deserialize is *that
+record's* problem, not the step's. Parse reports what it could not read
+and keeps going; only a systemically wrong input (§4's R2 third
+category) may fail the step. Concretely this means the parse of a
+collection returns the records it got **and** the problems it hit, not
+one or the other — see R1's sink.
+
+**P2 — Declare the type you expect, and what happens when it isn't
+that.** Every field parse reads has a declared coercion. A value the
+declaration does not cover is nulled and reported, never passed through
+untyped and never guessed at. "This field is a string, except the three
+times upstream sent a list" is a thing to record, not a thing to
+paper over.
+
+**P3 — A value with cross-source meaning is parsed by a shared crate,
+never by a provider.** This is the rule that makes unification possible
+at all, and it is the one most worth stating, because breaking it is
+invisible: a provider that hand-rolls its own timestamp parser produces
+values that *look* fine and are quietly incomparable with every other
+provider's.
+
+If a concept means the same thing across sources, exactly one crate
+owns reading and writing it, and every provider calls that crate:
+
+| concept | the one owner |
+| --- | --- |
+| timestamps | [`datalib-time`](../../datalib/backend/time/src/lib.rs) — `parse_strict`, `parse_with_assumed_utc`, `parse_custom_strftime`, `bump_micros` |
+| entity identity | [`datalib-id`](../../datalib/backend/id/src/lib.rs) — the five-component v5 recipe in [`entity_ids.md`](entity_ids.md) |
+| the chat shape | `chat-common`'s `Normalized*` types |
+| the contact shape | `contact-common`'s |
+
+The list is short because the set of genuinely cross-source concepts is
+small. It should grow deliberately: the test for admitting one is
+whether two providers disagreeing about it would produce a *wrong
+answer* rather than merely an inconsistent-looking one.
+
+This rule is currently violated for timestamps — six of the twelve
+render modules parse them with raw `chrono` instead, and that is where
+every fabricated-epoch bug in the tree lives. See the
+[render audit](data_lib_as_a_library/render_audit_2026_09_03.md) §04.
+
+**P4 — Parse reads the raw store and nothing else.** The stage contract
+from §2, restated here because parse is where the temptation appears:
+a file-backed provider's `input_path` is *download's* input, not
+parse's, and reaching for it makes the projection unreproducible
+offline.
+
+**P5 — Parse produces the provider's shape; render produces the shared
+one.** The seam matters. `render/parse.rs` deserializes into types that
+look like *that provider's* data, with its own vocabulary and its own
+optionality. Projecting onto a shared schema is render's job. Keeping
+the two apart is what lets a provider's oddities stay in one file
+instead of leaking into a type eight providers depend on — and it is
+why the unification rules below are all about render.
+
+### Unification and fidelity, and how the tension resolves
+
+Unification is a stated goal of this project: one `grid_rows` schema,
+one query behind the grid, `before:` and `after:` meaning the same
+thing whether the row came from Slack or GitHub or Notion. Without it
+there is no union grid — only twenty per-provider views.
+
+But every unification is a **claim that two things from different
+sources are the same kind of thing**, and that claim is lossy at the
+edges and sometimes simply wrong. A Slack `ts` and a Notion
+`last_edited_time` are both "when," but one is when a human pressed
+enter and the other is when anything on a page last moved. Collapsing
+them into one sortable column is useful and is not free.
+
+The tension does not resolve by choosing. It resolves by **layering**,
+and the layering is already the architecture:
+
+- **The raw store is where fidelity lives.** Wire-faithful, never
+  unified (§3 above says this about the raw store, and
+  [the ingestion doc](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)
+  argues it in full).
+- **The projection is where unification lives.** And because the raw
+  store is complete and re-rendering is cheap, *the projection can
+  afford to be aggressive* — a unification that turns out to be wrong
+  costs a re-render, not a re-fetch. That is the same affordability
+  argument §2 makes for §4's rules, applied to schema design.
+
+So the question at any given field is never "unify or preserve." It is
+**"can the consumer tell?"** — because the raw store means nothing is
+truly lost, and the only real harm is a unified value sitting in a
+column a consumer reads as if it were what upstream said.
+
+Five rules follow.
+
+**U1 — Unify the frame, keep the value.** Normalize *representation*
+freely; normalize *information* almost never. Timestamps are the worked
+example and the one to reason from: we unify the format completely —
+ISO-8601, explicit offset, one column, one parser — and refuse to unify
+the value, because [§6](#6-timestamps) keeps the source's own UTC
+offset rather than normalizing to UTC. Format unification costs
+nothing and buys everything; value normalization is where information
+goes to die.
+
+**U2 — When a value must be unified to be comparable, derive it
+*beside* the faithful one, never over it.** This is the load-bearing
+rule, and the tree already follows it in four places:
+
+| faithful column | unified companion | what the unification buys |
+| --- | --- | --- |
+| `when_ts` — source offset preserved verbatim | `when_ts_utc` + `when_offset`, derived at load by `split_when_ts` | one zone and one width, so lexical order *is* chronological order |
+| `upstream_id` + `upstream_entity_kind` + `upstream_scope` — the provider's own identity, byte-exact | `uuid` — our v5 over the five-component recipe | one id space across every provider; stable across re-render |
+| `upstream_entity_kind` — the upstream's own word, which "may not [be reworded], because `uuid` derives from it" | `kind` — the grid's display label, which "may be reworded freely" | one Kind column the UI can filter on |
+| `blake3` — the whole file | `payload_blake3` — the metadata-excluding digest | "same audio, different tags" becomes a query |
+
+Read that table as one idea stated four times. A consumer that wants
+comparison reads the derived column; a consumer that wants to know what
+upstream actually said reads the faithful one; and **nobody has to make
+that choice on everyone else's behalf.** It is [R6](#r6--findings-are-for-the-consumer-not-fixes-for-the-projection)
+expressed as schema rather than as advice.
+
+The failure this prevents is specific: overwriting the faithful column
+is irreversible *from the index*, and while the raw store can still
+answer, every consumer downstream of the index has silently lost the
+distinction and cannot tell that it did.
+
+**U3 — Stamp the recipe beside a derived value when more than one
+recipe is possible.** `media` does this and explains why in one
+sentence: two payload hashes "are only comparable under one recipe, so
+the recipe is stored beside the digest" — hence `payload_scheme`
+(`mp3.frames.v1`), and any change to what a recipe excludes bumps its
+version. `upstream_scope` is the same move for identity: the exact
+string a `uuid` was minted under, kept so the id can be regenerated and
+checked.
+
+The rule has a real limit, and knowing it stops the pattern from
+becoming ritual: `when_ts_utc` carries no scheme column and should not,
+because there is only ever one way to render an instant in UTC. Stamp
+the recipe when a *choice* was made, not merely when a derivation
+happened.
+
+**U4 — Collapsing a taxonomy is allowed; losing the upstream term is
+not.** Render may map a provider's twenty event types onto three
+buckets when three is what the layout needs — `chat-common`'s
+`ItemKind` (Text / Attachment / System) does exactly that, and it is
+the right call for a renderer that has to lay something out. What makes
+it safe is that the upstream's own word survives in
+`upstream_entity_kind`. Collapse for the consumer; keep the original
+for the record.
+
+**U5 — Unify at render, never at parse, and never in the raw store.**
+Where the seams are: the raw store keeps each provider's tables
+separate and faithful; parse produces the provider's own shape (P5);
+render projects onto the shared one. A provider that finds itself
+unifying inside `parse.rs` is usually about to teach a shared type
+something only it knows.
+
+**When not to unify at all.** A shape that does not fit an existing
+family should not be forced into it — that is what the family list
+above means by "opening one should be deliberate." The tell is a
+provider inventing `kind` values that mean something different from
+every other member's, or needing a column no sibling would ever set.
+Two families are cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
@@ -326,7 +602,19 @@ limits are never secret.
 Partly blocked: doltlite never actually deletes, so a bound on anything
 in a `.doltlite_db` reclaims no disk today (see
 [Removing a source](data_architecture_ingestion_practices.md#removing-a-source)).
-The *stating* half is not blocked. Render's known instance is already
+The *stating* half is not blocked.
+
+**A reclaim mechanism is deliberately deferred** (decided 2026-09-04),
+and the reasoning has an expiry date attached so it can be revisited
+rather than inherited. Derived intermediates are cheap to reclaim by
+hand — delete the store and rebuild it, which costs a re-render and
+never a re-fetch — and while the schemas are still changing often
+enough that intermediates get deleted and rebuilt anyway, a built
+mechanism would automate something the churn already does. The
+condition to watch is the schema settling: once a derived store starts
+living a long time, this needs building. The raw store is a separate
+question and is *not* covered by that argument, because it is the copy
+we cannot re-fetch. Render's known instance is already
 recorded: nothing prunes `rendered_md/`, so a re-render under new
 params leaves documents that changed identity beside the new ones, and
 they stay in the grid index.
