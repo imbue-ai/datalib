@@ -66,7 +66,7 @@ Every friction point traces back to its origin as a personal-notes tool:
 
 Forking was rejected: datalib consumes QMD as a pinned npm package
 (`DEFAULT_QMD_VERSION` in
-[`unified_index/src/qmd/mod.rs`](../../datalib/backend/unified_index/src/qmd/mod.rs)),
+[`runtime/src/qmd.rs`](../../datalib/backend/runtime/src/qmd.rs)),
 so a fork forces datalib onto that fork, and the files needing permanent
 ownership (`store.ts` search SQL, the indexing path) are exactly the ones
 churning upstream.

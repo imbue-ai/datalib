@@ -3,15 +3,21 @@
 TNG fixture's rendered markdown tree and emits an overlay tar containing the
 resulting SQLite index.
 
-The output is an *overlay* on top of `qmd.tar`: it shares the same `qmd/`
+The INPUT is `qmd_md.tar` — markdown only — and not the full `qmd.tar`.
+Bazel keys this action on the content of its inputs, and the embedder
+reads nothing but `*.md`, so anything else in the archive is a byte that
+can invalidate a ~90s embed without changing its output. See
+`tar_qmd.py` for which files were doing exactly that.
+
+The OUTPUT is an *overlay* on top of `qmd.tar`: it shares the same `qmd/`
 staging prefix so the two tars layer cleanly. Extracting both with
 `tar -x --strip-components=1` into a directory yields a complete root data
 directory — markdown trees under `<root>/<stanza>/rendered_md/...` plus the
 qmd index at `<root>/unified_index/qmd/index.sqlite`.
 
 Why a script:
-  1. The ingested fixture is a tar (`qmd.tar`) — we have to extract it to a
-     real directory before qmd's `collection add` can walk it.
+  1. The ingested fixture is a tar (`qmd_md.tar`) — we have to extract it to
+     a real directory before qmd's `collection add` can walk it.
   2. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. The
      indexer binary pins XDG_CACHE_HOME at the data root, so we pull
      `qmd/` back out as a tar overlay.
@@ -30,7 +36,7 @@ Why a script:
 
 Args (positional):
     1: path to the qmd_indexer rust_binary
-    2: path to qmd.tar (the rendered markdown archive)
+    2: path to qmd_md.tar (the rendered markdown, and nothing else)
     3: output path for qmd-index.tar (Bazel-supplied overlay tar)
     4: qmd npm package version to pin (e.g. "2.1.0")
     5: path to the Node binary (@nodejs_host//:node_bin)
@@ -123,7 +129,7 @@ def main() -> int:
     work.mkdir(parents=True)
     models_dir = _stage_models(work, embed_model)
 
-    # The tar is rooted at "qmd/<provider>/..." (see build_ingested.py); strip
+    # The tar is rooted at "qmd/<provider>/..." (see tar_qmd.py); strip
     # that leading dir so `root` is the rendered markdown tree directly.
     with tarfile.open(qmd_tar_path, "r") as tf:
         for member in tf.getmembers():

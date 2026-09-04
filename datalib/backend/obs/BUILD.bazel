@@ -2,6 +2,13 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# Editing this crate re-embeds the qmd index on CI. `qmd_indexer_bin`
+# links exactly this crate and //datalib/backend/runtime, and it is a
+# bazel `tools=` input to //tests/fixtures:ingested_tng_qmd — which keys
+# on its tools' digests. So any change here, comments included, re-runs a
+# ~90s CPU-only embed of the whole fixture corpus. Not a reason to avoid
+# editing it; a reason to know the bill. See src/lib.rs.
+#
 # Shared observability init for every datalib Rust binary: stderr
 # fmt layer (pretty or JSON), an `IndicatifWriter` that coordinates
 # log emission with a shared `MultiProgress` (exposed via

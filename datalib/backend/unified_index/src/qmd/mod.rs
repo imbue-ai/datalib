@@ -25,50 +25,14 @@ pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
 pub use mapping::{GridIndex, GridRowRef, QmdHit, QueryMode};
 pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
 
-/// The ONE canonical qmd version pin. Every spawn site — the indexer
-/// (which re-exports this), the search runner, and the daemon — runs
-/// exactly this version, and `//tools:version_pins_test` asserts
-/// the fixture/Docker pins agree. `datalib/tauri/stage-runtime.sh`
-/// greps this constant to decide which qmd tree to bundle — keep the
-/// `DEFAULT_QMD_VERSION` name and string-literal shape.
-///
-/// History note: the runner used to carry its own same-named constant,
-/// which a version bump missed (2.1.0 vs 2.5.3 for six weeks) — hence
-/// one shared constant here rather than a per-module default.
-pub const DEFAULT_QMD_VERSION: &str = "2.8.3";
-
-use std::path::{Path, PathBuf};
-
-/// Canonical sub-path of the qmd index, relative to `<root>`. qmd writes
-/// here when invoked with `XDG_CACHE_HOME=<root>/unified_index` (see
-/// [`qmd_cache_home`]).
-pub const QMD_INDEX_REL: &str = "unified_index/qmd/index.sqlite";
-
-/// Resolve the qmd index file path under a data root.
-pub fn qmd_index_path(root: &Path) -> PathBuf {
-    datalib_core::layout::qmd_dir(root).join("index.sqlite")
-}
-
-/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data
-/// root: `<root>/unified_index`, so qmd writes its `qmd/index.sqlite`
-/// beside the grid index rather than under the server's own `system/`.
-pub fn qmd_cache_home(root: &Path) -> PathBuf {
-    datalib_core::layout::unified_index_dir(root)
-}
-
-/// Entry script of the `@tobilu/qmd` package inside a staged runtime
-/// tree — what the package's `bin/qmd` launcher execs (see
-/// `third-party/qmd/bin/qmd`), so running it via node directly is
-/// equivalent to `npx -y @tobilu/qmd@<v>`.
-const QMD_ENTRY_REL: &str = "node_modules/@tobilu/qmd/dist/cli/qmd.js";
-
-/// `Command` invoking the qmd CLI at exactly `version`: the app-bundled
-/// Node runtime when that version is staged (see
-/// [`datalib_core::node_runtime`]), else `npx -y @tobilu/qmd@<version>`. Every
-/// qmd shell-out (indexer, runner, daemon) must go through this so the
-/// bundled/npx choice stays in one place.
-pub fn qmd_command(version: &str) -> std::process::Command {
-    datalib_core::node_runtime::bundled_command("qmd", version, QMD_ENTRY_REL).unwrap_or_else(
-        || datalib_core::node_runtime::npx_command(&format!("@tobilu/qmd@{version}")),
-    )
-}
+/// The qmd version pin and the `Command` builder that spawns it moved
+/// down into `datalib_runtime` — a crate with no dependencies — so that
+/// `qmd_indexer_bin` can reach them without linking this crate. Bazel
+/// keys the fixture's embedding action on that binary's digest, so
+/// everything it links is a crate whose next edit costs a ~90s CPU-only
+/// embed on CI. Re-exported here so the runner, the daemon and every
+/// existing `datalib_unified_index::qmd::…` call site are unchanged, and
+/// so there is still exactly one definition of each.
+pub use datalib_runtime::qmd::{
+    qmd_cache_home, qmd_command, qmd_index_path, DEFAULT_QMD_VERSION, QMD_INDEX_REL,
+};
