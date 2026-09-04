@@ -190,28 +190,54 @@ jobs:
       - name: bazel test //...
         run: |
           libdir="${{ steps.env.outputs.libclang-path }}"
-          # The Playwright e2e suite runs here. It was excluded for most
-          # of this file's life, because it needs three things from the
-          # image — `rsync`, a Chromium browser cache, and a WebKit one
-          # (the `webkit` project re-runs the grid specs in the engine
-          # the desktop app's WKWebView matches, and a browser without
-          # its apt-installed shared libraries cannot launch) — and
-          # `:latest` is whatever the last release built. WebKit landed
-          # in `.devcontainer/Dockerfile` five days after v0.29.0, so no
-          # published image had it until v0.30.1.
+          # FIXME(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
+          # suite from the CI gate. What it costs is not hypothetical —
+          # the AG Grid 36 bump in #252 broke 39 specs and its silent
+          # empty-`dist` bug broke 60, and CI was green through both.
           #
-          # v0.30.1's devcontainer-publish is the first one that does:
-          # `npx -y playwright@1.62.1 install --with-deps chromium
-          # webkit` ran fresh in that build, and both browsers landed in
-          # /root/.cache/ms-playwright. So the exclusion is gone and UI
-          # regressions gate merges again rather than waiting for
-          # whoever runs `bazel test //...` locally. That is not
-          # hypothetical: the AG Grid 36 bump in #252 broke 39 specs and
-          # the empty-`dist` bug broke 60, and CI saw neither.
+          # An earlier version of this comment listed THREE preconditions
+          # (rsync, a Chromium cache, a WebKit cache) and said to drop
+          # the pattern once a published image had them. As of v0.30.1 it
+          # does — `npx -y playwright@1.62.1 install --with-deps chromium
+          # webkit` ran fresh in that devcontainer build and both landed
+          # in /root/.cache/ms-playwright. The pattern was dropped on
+          # that basis and CI went red in 14.6s, because THE LIST WAS
+          # INCOMPLETE. Do not trust it again without re-deriving it.
           #
-          # The suite's Playwright report — video and trace per test —
-          # rides along as this job's `outputs.zip` with no second
-          # invocation; see datalib/ui/tests/e2e/README-artifacts.md.
+          # The fourth precondition is ~1.6 GB of qmd models:
+          #
+          #     ERROR: missing qmd models in /github/home/.cache/qmd/models
+          #       - hf_ggml-org_embeddinggemma-300M-Q8_0.gguf
+          #       - hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf
+          #
+          # Two separate reasons it fails, and BOTH need fixing:
+          #
+          #   1. `tests/fixtures/materialize_tng_root.sh` resolves them as
+          #      `${HOME}/.cache/qmd/models`. GH forces HOME=/github/home
+          #      for container steps, so it looks in an empty directory.
+          #      It does not honor CLAUDE_MIRROR_HOST_HOME, which is
+          #      exactly what build_qmd_index.py uses to solve this.
+          #   2. Even /root/.cache/qmd/models is empty: the devcontainer
+          #      inherits the `-slim` prod variant, built
+          #      `--build-arg QMD_PREFETCH_MODELS=false`. Its own build
+          #      log says so — "QMD_PREFETCH_MODELS=false - skipping the
+          #      model prefetch".
+          #
+          # So re-enabling needs a model-cache story, not just a browser
+          # one. The cheapest shape found: cache them at
+          # /root/.cache/qmd/models — where the two flags below ALREADY
+          # point — and teach materialize_tng_root.sh to honor
+          # CLAUDE_MIRROR_HOST_HOME. That serves the e2e suite and would
+          # also remove the ~2.1 GB HuggingFace pull the genrule pays on
+          # every cold run. Baking them into the image instead costs
+          # ~2.2 GB on every CI job, for a cache that is empty by design.
+          #
+          # (Local `bazel test //...` is unaffected and still runs the
+          # suite, both engines.) When the pattern does come off, the
+          # Playwright report — video and trace per test — rides along as
+          # this job's `outputs.zip` with no second invocation; see
+          # datalib/ui/tests/e2e/README-artifacts.md. The `--` keeps the
+          # leading `-` from being read as a flag.
           #
           # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
           # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
@@ -253,7 +279,7 @@ jobs:
             --host_action_env=LIBCLANG_PATH="${libdir}" \
             --sandbox_add_mount_pair=/root/.cache/qmd/models \
             --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
-            //...
+            -- //... -//datalib/ui:e2e_test
 
   # PR-time gate for the fully-static musl release leg. The musl dist
   # build only otherwise runs at tag time (release.yml), and this repo

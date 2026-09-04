@@ -226,13 +226,13 @@ sh_test(
         "HOME",
         # Which browser engines run_e2e.sh provisions; unset means both
         # (`chromium webkit`, see run_e2e.sh). Nothing in .github/ sets
-        # it — an earlier version of this comment claimed CI narrowed it
+        # it. An earlier version of this comment claimed CI narrowed it
         # to chromium "whose OS libraries are the only ones the Linux
-        # image bakes", which was never true of the workflow and is no
-        # longer true of the image either: v0.30.1's devcontainer bakes
-        # both engines via `playwright install --with-deps chromium
-        # webkit`. CI therefore runs both, which is the point of the
-        # webkit project.
+        # image bakes" — neither half was true: no workflow has ever set
+        # the variable, and as of v0.30.1 the devcontainer bakes both via
+        # `playwright install --with-deps chromium webkit`. Moot for now
+        # either way, since test.yml still excludes this target (see the
+        # FIXME there); it matters the day that comes off.
         "E2E_BROWSERS",
     ],
 )
