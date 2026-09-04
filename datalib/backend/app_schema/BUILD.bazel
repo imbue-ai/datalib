@@ -17,8 +17,13 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        # For the `BulkUpsertable` impl `PortableTable` now generates:
+        # the trait lives in `datalib_schema::bulk` and the impl binds
+        # through sqlx.
+        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
     ],
 )
 

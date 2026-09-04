@@ -948,6 +948,11 @@ pub fn derive_portable_table(input: TokenStream) -> TokenStream {
 struct PortableColumn {
     name: String,
     decl: String,
+    /// How this column's value is bound in the generated
+    /// `BulkUpsertable::bind_into`. A struct field binds itself; a
+    /// `#[derived]` column has no field to bind, so it calls a
+    /// `derived_<column>()` method the struct must provide by hand.
+    bind: TokenStream2,
 }
 
 fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
@@ -957,7 +962,8 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut columns: Vec<PortableColumn> = Vec::new();
     for f in &fields {
-        let name = f.ident.as_ref().expect("named field").to_string();
+        let ident = f.ident.as_ref().expect("named field");
+        let name = ident.to_string();
         let sql = parse_col_attr(f)?;
         // Nullability follows the Rust type: Option<T> → nullable.
         let decl = if is_option(&f.ty) {
@@ -965,13 +971,42 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             format!("{name} {sql} NOT NULL")
         };
-        columns.push(PortableColumn { name, decl });
+        // Same three shapes `PromotedKind::bind_expr` uses on the raw
+        // side: a borrow for owned text, `as_deref` for optional text,
+        // and a copy for scalars. Anything else is rejected rather than
+        // guessed at — a silently mis-bound column is exactly the class
+        // of bug generating this is meant to remove.
+        let bind = match classify(&f.ty) {
+            Some(PromotedKind::TextNotNull) => quote! { &self.#ident },
+            Some(PromotedKind::TextNullable) => quote! { self.#ident.as_deref() },
+            Some(
+                PromotedKind::IntegerNotNull
+                | PromotedKind::IntegerNullable
+                | PromotedKind::RealNotNull
+                | PromotedKind::RealNullable,
+            ) => quote! { self.#ident },
+            None => {
+                return Err(syn::Error::new_spanned(
+                    &f.ty,
+                    "PortableTable can only bind String, i64, f64 or Option of those; \
+                     add support to `classify` rather than binding this column by hand",
+                ))
+            }
+        };
+        columns.push(PortableColumn { name, decl, bind });
         // Load-time-derived columns trail their host field, always
         // nullable (they are absent from the struct).
         for (dname, dsql) in parse_derived_attrs(f)? {
+            // No field to bind, so the struct supplies the value
+            // through a method named for the column. A missing one is a
+            // compile error, which is the point: adding a derived
+            // column without saying how to compute it should not
+            // silently write NULL.
+            let hook = Ident::new(&format!("derived_{dname}"), proc_macro2::Span::call_site());
             columns.push(PortableColumn {
                 decl: format!("{dname} {dsql}"),
                 name: dname,
+                bind: quote! { self.#hook() },
             });
         }
     }
@@ -989,7 +1024,64 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         .map(|c| LitStr::new(&c.name, proc_macro2::Span::call_site()))
         .collect();
 
+    // The write path. TYPED_COLUMNS and the bind order below are built
+    // from one list, so they cannot disagree — which is the failure the
+    // trait's docs warn about ("Mismatch → mis-binding at runtime") and
+    // the reason to generate this rather than hand-write it.
+    //
+    // Skipped for a composite primary key. `BulkUpsertable` keys on one
+    // column by contract — `ID_COLUMN` is the `ON CONFLICT(<id>)` target
+    // and `id()` returns one `&str` — and `disk_usage` is legitimately
+    // keyed on `(path, measured_at)`. Such a table still gets its DDL
+    // and column metadata; it just keeps writing itself. Generating a
+    // single-column impl for it would have to invent which half is the
+    // key.
+    let composite_pk = primary_key.contains(',');
+    let write_path = if composite_pk {
+        quote! {}
+    } else {
+        let pk_ident = Ident::new(primary_key.trim(), proc_macro2::Span::call_site());
+        let pk_lit = LitStr::new(primary_key.trim(), proc_macro2::Span::call_site());
+        let typed: Vec<&PortableColumn> = columns
+            .iter()
+            .filter(|c| c.name != primary_key.trim())
+            .collect();
+        let typed_col_lits: Vec<LitStr> = typed
+            .iter()
+            .map(|c| LitStr::new(&c.name, proc_macro2::Span::call_site()))
+            .collect();
+        let typed_binds: Vec<TokenStream2> = typed.iter().map(|c| c.bind.clone()).collect();
+        quote! {
+        /// Generated write path, so the render schema binds its columns
+        /// the same way the raw stores do. `datalib_etl::bulk`'s helpers
+        /// take any `BulkUpsertable`.
+        impl ::datalib_schema::bulk::BulkUpsertable for #struct_name {
+            const TABLE: &'static str = #table_lit;
+            const ID_COLUMN: &'static str = #pk_lit;
+            const TYPED_COLUMNS: &'static [&'static str] = &[#(#typed_col_lits),*];
+            /// Presentation tables carry no JSONB wire payload; every
+            /// column is typed.
+            const PAYLOAD_COLUMN: ::std::option::Option<&'static str> =
+                ::std::option::Option::None;
+
+            fn id(&self) -> &str {
+                &self.#pk_ident
+            }
+
+            fn bind_into<'q>(
+                &'q self,
+                q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments>,
+            ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments> {
+                q.bind(&self.#pk_ident)
+                    #(.bind(#typed_binds))*
+            }
+        }
+        }
+    };
+
     Ok(quote! {
+        #write_path
+
         /// `(table_name, Rust struct name)` for the table this schema defines.
         pub const TABLES: &[(&str, &str)] = &[(#table_lit, #struct_name_lit)];
 

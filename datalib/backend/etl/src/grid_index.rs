@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::bulk::BulkUpsertable;
 use anyhow::{Context, Result};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
@@ -1063,57 +1064,29 @@ async fn insert_grid_row(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     row: &GridRow,
 ) -> Result<()> {
-    // `when_ts_utc` / `when_offset` are derived here, not emitted by
-    // producers (see grid_rows.schema.json `x-derived`). Splitting the
-    // producer's offset-bearing `when_ts` gives the grid a single-zone,
-    // fixed-width column to sort/filter on (so ordering matches true
-    // chronological order) plus the original offset for local rendering.
-    // Unparseable / null `when_ts` leaves both columns NULL.
-    let (when_ts_utc, when_offset) =
-        match row.when_ts.as_deref().and_then(datalib_time::split_when_ts) {
-            Some((utc, offset)) => (Some(utc), Some(offset)),
-            None => (None, None),
-        };
-    let res = sqlx::query(
-        "INSERT INTO grid_rows \
-         (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, author, account, \
-          project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
-          message_index, entire_chat, text, \
-          slack_link, qmd_path, source_url, git_sha, upstream_id, upstream_entity_kind, \
-          upstream_scope, notion_page_uuid, notion_block_uuid, \
-          markdown_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&row.uuid)
-    .bind(&row.provider)
-    .bind(&row.kind)
-    .bind(&row.source_label)
-    .bind(&row.when_ts)
-    .bind(&when_ts_utc)
-    .bind(&when_offset)
-    .bind(&row.author)
-    .bind(&row.account)
-    .bind(&row.project)
-    .bind(&row.org_uuid)
-    .bind(&row.org_name)
-    .bind(&row.channel)
-    .bind(&row.conversation_name)
-    .bind(&row.conversation_uuid)
-    .bind(row.message_index)
-    .bind(&row.entire_chat)
-    .bind(&row.text)
-    .bind(&row.slack_link)
-    .bind(&row.qmd_path)
-    .bind(&row.source_url)
-    .bind(&row.git_sha)
-    .bind(&row.upstream_id)
-    .bind(&row.upstream_entity_kind)
-    .bind(&row.upstream_scope)
-    .bind(&row.notion_page_uuid)
-    .bind(&row.notion_block_uuid)
-    .bind(&row.markdown_uuid)
-    .execute(&mut **conn)
-    .await;
+    // `when_ts_utc` / `when_offset` used to be split out here. They are
+    // `#[derived]` columns on `GridRow` now, computed by
+    // `GridRow::derived_when_ts_utc` / `derived_when_offset` and bound
+    // by the generated impl — so the derivation sits beside the column
+    // declaration that documents it, and any other writer of this table
+    // gets it too instead of having to remember.
+    // Columns and binds come from `GridRow`'s generated
+    // `BulkUpsertable` impl, so this INSERT cannot drift from the DDL
+    // the same struct derives. It used to be 28 hand-written column
+    // names and 28 hand-written `.bind()` calls whose only guarantee of
+    // agreeing with each other, or with the schema, was review.
+    //
+    // A plain INSERT, not the bulk upsert: a `PRIMARY KEY (uuid)`
+    // collision here is a finding, not an update — see the error arm
+    // below, which names the document that already claimed the id.
+    // `ON CONFLICT DO UPDATE` would silently overwrite it.
+    let sql = crate::bulk::insert_sql::<GridRow>();
+    // Audited: every part of `sql` comes from `GridRow`'s associated
+    // consts, never from row data; all values are bound by `bind_into`.
+    let res = row
+        .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(&mut **conn)
+        .await;
 
     if let Err(e) = res {
         // Almost always `PRIMARY KEY (uuid)`. The bare sqlx error names

@@ -43,6 +43,46 @@ impl std::fmt::Display for GridRowError {
 impl std::error::Error for GridRowError {}
 
 impl GridRow {
+    /// `when_ts_utc` — the same instant normalized to UTC, fixed
+    /// microsecond width, `Z` suffix.
+    ///
+    /// Derived rather than stored on the struct because producers never
+    /// set it: a single zone and a single width make lexical order match
+    /// true chronological order, which a column of mixed local-offset
+    /// `when_ts` strings does not — `2026-01-01T09:00:00+00:00` sorts
+    /// before `2026-01-01T10:00:00-08:00` as text and is nine hours
+    /// earlier in fact. This is the column the grid sorts and
+    /// `before:`/`after:`-filters on.
+    ///
+    /// An absent or unparseable `when_ts` leaves it NULL — never a
+    /// fabricated value, per
+    /// `docs/dev/data_architecture_parse_and_render.md` §6.
+    ///
+    /// Lives here, next to the column declaration that documents it,
+    /// rather than in the index writer that used to compute it inline:
+    /// the derivation is part of the schema, and the `PortableTable`
+    /// derive calls this by name.
+    pub fn derived_when_ts_utc(&self) -> Option<String> {
+        self.when_ts
+            .as_deref()
+            .and_then(datalib_time::split_when_ts)
+            .map(|(utc, _offset)| utc)
+    }
+
+    /// `when_offset` — the original UTC offset (`+05:30`, `-07:00`),
+    /// preserved so the UI can re-render the instant in the wall-clock
+    /// zone it was recorded in. NULL whenever
+    /// [`Self::derived_when_ts_utc`] is NULL; the two are derived from
+    /// one parse and are always both present or both absent.
+    pub fn derived_when_offset(&self) -> Option<String> {
+        self.when_ts
+            .as_deref()
+            .and_then(datalib_time::split_when_ts)
+            .map(|(_utc, offset)| offset)
+    }
+}
+
+impl GridRow {
     /// Start building a [`GridRow`]. Set only the columns you need — the
     /// ~17 optional ones default to `None` — then call
     /// [`GridRowBuilder::build`]. This is the supported construction path;

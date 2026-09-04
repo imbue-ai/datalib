@@ -146,6 +146,47 @@ where
 /// through this re-export.
 pub use datalib_schema::bulk::BulkUpsertable;
 
+/// SQL for a plain single-row `INSERT` built from a
+/// [`BulkUpsertable`]'s generated column list — **no `ON CONFLICT`**.
+///
+/// The bulk helper below upserts, which is right for raw entity tables
+/// (the newest upstream state is by definition the truth). It is wrong
+/// where a primary-key collision is a *finding* rather than an update:
+/// two sources minting the same `grid_rows.uuid` is a correctness
+/// emergency, and `grid_index` deliberately lets that error surface so
+/// it can name the other document. Upserting there would silently
+/// overwrite one row with the other.
+///
+/// So this exists to give that path the generated column list and binds
+/// without also giving it upsert semantics. Pair it with
+/// [`BulkUpsertable::bind_into`]:
+///
+/// ```ignore
+/// let sql = insert_sql::<GridRow>();
+/// let q = row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)));
+/// ```
+pub fn insert_sql<T: BulkUpsertable>() -> String {
+    let mut cols = String::from(T::ID_COLUMN);
+    for c in T::TYPED_COLUMNS {
+        cols.push_str(", ");
+        cols.push_str(c);
+    }
+    let n = 1 + T::TYPED_COLUMNS.len();
+    let mut placeholders = String::with_capacity(n * 3);
+    for i in 0..n {
+        if i > 0 {
+            placeholders.push_str(", ");
+        }
+        placeholders.push('?');
+    }
+    format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        T::TABLE,
+        cols,
+        placeholders
+    )
+}
+
 /// Generic bulk-UPSERT for any [`BulkUpsertable`] row type. The one
 /// entity-table write path every provider should use.
 ///

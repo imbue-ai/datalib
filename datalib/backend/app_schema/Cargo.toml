@@ -10,5 +10,8 @@ path = "src/lib.rs"
 
 [dependencies]
 datalib-etl-macros = { path = "../etl/macros" }
+# For the generated `BulkUpsertable` impl (trait + sqlx binds).
+datalib-schema = { path = "../schema" }
+sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
