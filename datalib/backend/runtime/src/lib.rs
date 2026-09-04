@@ -23,6 +23,20 @@
 //! `datalib_unified_index::qmd` re-exports [`qmd`], so every existing
 //! call site still resolves and each constant still has exactly one
 //! definition.
+//!
+//! # Editing this crate re-embeds the qmd index on CI
+//!
+//! The flip side of being what `qmd_indexer_bin` links: **any** change
+//! here, comments included, changes this crate's digest, changes that
+//! binary, and re-runs a ~90s CPU-only embed of the whole fixture corpus
+//! (61-611s on CI, depending on what else is competing for the runner's
+//! 4 vCPUs). Not a reason to avoid editing it; a reason to know the
+//! bill, and to not be surprised by a slow CI run on a PR that only
+//! touched a path join. `datalib_obs` — the only other crate that binary
+//! links — carries the same note.
+//!
+//! Keep the dependency list empty. Anything added here is inherited by
+//! the indexer and widens the set of crates that pay that ~90s.
 
 pub mod layout;
 pub mod node_runtime;

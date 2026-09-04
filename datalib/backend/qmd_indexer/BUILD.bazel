@@ -8,14 +8,26 @@ rust_library(
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
-    # SHORT ON PURPOSE. `:qmd_indexer_bin` is a `tools=` input to
+    # DELIBERATELY AS SMALL AS IT CAN BE, and please keep it that way.
+    #
+    # `:qmd_indexer_bin` is a bazel `tools=` input to
     # //tests/fixtures:ingested_tng_qmd, and bazel keys an action on its
-    # tools' digests — so this list is exactly the set of crates whose
-    # next edit re-runs a ~90s CPU-only embed on CI. It used to name
-    # datalib_core (160 rdeps) and datalib_unified_index to reach three
-    # constants and a Command builder; those now live in the
-    # dependency-free datalib_runtime. Add to `datalib_runtime` (or
-    # re-export through it) before adding a crate here.
+    # tools' digests. So this list is not just "what the code needs" —
+    # transitively, it IS the set of crates whose next edit re-runs a
+    # ~90s CPU-only embed of the whole fixture corpus on CI (61-611s,
+    # depending on what else is competing for the runner's 4 vCPUs).
+    # Every entry here, and everything it pulls in, is a standing tax on
+    # unrelated PRs.
+    #
+    # It used to name datalib_core (160 rdeps, 85 test targets) and
+    # datalib_unified_index — to reach a version constant, two path joins
+    # and a Command builder. Those now live in datalib_runtime, which has
+    # no dependencies at all. Both crates named below carry a matching
+    # note saying that editing them costs a re-embed.
+    #
+    # Before adding a crate here: put the helper in `datalib_runtime` (or
+    # re-export it through there) instead. Adding a dep is the move that
+    # quietly undoes all of this.
     deps = [
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
