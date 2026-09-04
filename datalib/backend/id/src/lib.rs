@@ -13,7 +13,7 @@
 //!
 //! Before this crate, providers split four ways with no shared rule:
 //!
-//! * **Foreign string verbatim** — anthropic, chatgpt and notion used
+//! * **Foreign string verbatim** — claude, chatgpt and notion used
 //!   the upstream's own id as our primary key. 12% of the fixture's
 //!   `grid_rows.uuid` values were consequently not UUIDs at all
 //!   (`tu-{tool_use_id}`, `th-{msg_uuid}-{idx}`, ChatGPT's
@@ -165,7 +165,7 @@ impl Scope<'_> {
 
 /// Mint the id for one entity.
 ///
-/// * `provider` — the `grid_rows.provider` tag (`"anthropic"`,
+/// * `provider` — the `grid_rows.provider` tag (`"claude"`,
 ///   `"slack"`, …). Namespaces every id by provider, so two providers
 ///   can never collide however similar their natural keys look.
 /// * `scope` — see [`Scope`].
@@ -328,12 +328,12 @@ mod tests {
         // literally named `M-0`.
         assert_ne!(
             entity_id(
-                "anthropic",
+                "claude",
                 Scope::ProviderGlobal,
                 "thinking_block",
                 "M\u{1f}0"
             ),
-            entity_id("anthropic", Scope::ProviderGlobal, "thinking_block", "M-0"),
+            entity_id("claude", Scope::ProviderGlobal, "thinking_block", "M-0"),
         );
     }
 
@@ -388,13 +388,8 @@ mod tests {
         let key = composite_key(&["msg-1", "toolu_9"]);
         assert_eq!(key, "msg-1#toolu_9");
         assert_eq!(
-            entity_id_str("anthropic", Scope::ProviderGlobal, "tool_use", &key),
-            entity_id_str(
-                "anthropic",
-                Scope::ProviderGlobal,
-                "tool_use",
-                "msg-1#toolu_9"
-            ),
+            entity_id_str("claude", Scope::ProviderGlobal, "tool_use", &key),
+            entity_id_str("claude", Scope::ProviderGlobal, "tool_use", "msg-1#toolu_9"),
         );
     }
 

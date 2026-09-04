@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// The signal-owned slice of a `signal_backup` source. `sync:` present →
 /// managed (the download path: decrypt the newest snapshot under
-/// `snapshot_dir`); absent → render-only over an already-ingested raw
-/// store.
+/// `snapshot_dir`); absent → no download wave, and render reads
+/// whatever an earlier run already ingested.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SignalConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

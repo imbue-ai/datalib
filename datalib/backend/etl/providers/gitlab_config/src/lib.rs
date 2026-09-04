@@ -6,8 +6,8 @@ use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The gitlab-owned slice of a `gitlab_api` source. `sync:` present → live
-/// mirror (the download path); absent → render-only over an already-on-disk
-/// raw store.
+/// mirror (the download path); absent → no download wave, and render
+/// reads whatever an earlier run already mirrored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitlabConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

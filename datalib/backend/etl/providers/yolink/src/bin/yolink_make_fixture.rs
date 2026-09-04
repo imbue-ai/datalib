@@ -9,10 +9,13 @@
 //! fetches signed-URL CSVs by shelling out to `curl` (see
 //! `download/mod.rs`), which is neither hermetic nor routed through the
 //! HTTP transport that `datalib-step synthesize` records playback tapes
-//! for. So the fixture pipeline seeds the raw store directly and runs
-//! the source render-only — its config carries no `sync:`, which makes
-//! `plan_download` contribute no processors (download-only vs.
-//! render-only is structural here, not a flag).
+//! for. So the fixture pipeline seeds the raw store directly and emits
+//! no yolink download step at all.
+//!
+//! That is a limitation of the fixture harness, not a property of the
+//! source: yolink has a real doltlite downloader, and a configured
+//! yolink source runs both waves like any other. See
+//! `tests/fixtures/run_sync_pipeline.py`'s `PRESEEDED_RAW`.
 //!
 //! Checking in a `.doltlite_db` instead was the other option, and it's
 //! worse: an opaque binary blob in git, coupled to the on-disk chunk

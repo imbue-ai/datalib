@@ -125,8 +125,8 @@ pub fn parse(input: &Path, period: Period) -> Result<ParsedBeeper> {
     if !db_path.is_file() {
         // Empty mirror is a valid configuration (download step
         // skipped or produced no rows). Surface it as a fresh
-        // ParsedBeeper rather than a hard error so a render-only
-        // run with no data doesn't blow up the whole sync.
+        // ParsedBeeper rather than a hard error so a render with no
+        // data doesn't blow up the whole sync.
         return Ok(ParsedBeeper::default());
     }
     // Bridge from sync-Rust into the async sqlx API by borrowing

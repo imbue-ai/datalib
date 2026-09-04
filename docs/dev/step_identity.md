@@ -159,18 +159,24 @@ from a hash, so the consumer re-runs and can drop stale output) and was
 rewritten against a declared producer whose tree the user deletes.
 
 **No behavior change for any shipped shape.** An earlier draft of this
-section claimed render-only sources became input-less and so started
-running every sync. They already were: `claude-export` in
-`all_sources.toml` has declared no `inputs` since before this change,
-with a comment saying exactly that ("With no `inputs` this is a fringe
-step … so it runs every sync"). The `inputs = ["<path>"]` shape the
-staged-source machinery served was used by nothing that ships.
+section claimed input-less render steps started running every sync.
+They already were: `claude-export` in `all_sources.toml` had declared
+no `inputs` since before this change, with a comment saying exactly
+that ("With no `inputs` this is a fringe step … so it runs every
+sync"). The `inputs = ["<path>"]` shape the staged-source machinery
+served was used by nothing that ships.
 
-The one config that did use it was the TNG fixture, which gave
-render-only `yolink` an `inputs = ["yolink/raw"]` naming a tree nothing
-writes — so the runner synthesized a source step to hash a directory
-that never existed. That is now `inputs` omitted, matching what
-`all_sources.toml` documents. The fixture got more correct, not less.
+(As of #207 `claude-export` is no longer that example: it ingests its
+export into a raw store, so it is an ordinary `raw` → `rendered_md`
+pair like every other file-backed source. The point above still holds
+for the change this document describes; it just no longer has a
+shipped illustration.)
+
+The one config that did use the staged shape was the TNG fixture, which
+gave `yolink` — whose raw store the harness pre-seeds — an `inputs =
+["yolink/raw"]` naming a tree nothing writes, so the runner synthesized
+a source step to hash a directory that never existed. That is now
+`inputs` omitted. The fixture got more correct, not less.
 
 ## Migration
 

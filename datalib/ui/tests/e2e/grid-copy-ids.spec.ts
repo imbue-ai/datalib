@@ -12,7 +12,7 @@ import { contextMenuRowByUuid, stubClipboard } from "./grid-helpers";
 // which is why this is two menu items rather than one action that
 // returns whichever exists.
 //
-// The regression this pins is specific. Before `datalib_id`, anthropic,
+// The regression this pins is specific. Before `datalib_id`, claude,
 // chatgpt and notion passed the upstream id straight through as their
 // primary key, so "Copy UUID(s)" happened to yield a native id for
 // those three and ours for the other thirteen. Nothing in the code

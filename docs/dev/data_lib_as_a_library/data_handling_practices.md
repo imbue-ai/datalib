@@ -159,7 +159,7 @@ Measured on this tree, test modules stripped, render code only:
 ```
 TOTAL 424   unwrap_or(=283  unwrap_or_default=79  else{continue}=46  .ok()=16
 
-  notion 110    chatgpt 52    slack 49    email 45    anthropic 37
+  notion 110    chatgpt 52    slack 49    email 45    claude 37
   perseus 30    github 29     gitlab 23   beeper 16   whatsapp 12
   yolink 9      signal 5      contacts 4  pdf 3
 ```
@@ -232,7 +232,7 @@ that is where the surface is.
    ones it deliberately skips.
 
 **Do not do all twenty at once.** One provider end-to-end first — I
-would pick `anthropic`, which the practices doc already names as the
+would pick `claude`, which the practices doc already names as the
 template for API-backed sources and which is small enough to finish —
 then use what it taught us to fix the shape before touching notion.
 

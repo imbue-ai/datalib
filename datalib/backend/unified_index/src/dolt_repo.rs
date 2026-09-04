@@ -431,8 +431,8 @@ mod tests {
             "slack"
         );
         assert_eq!(
-            source_name_from_qmd_path("anthropic-api/rendered_md/x/all.md"),
-            "anthropic-api"
+            source_name_from_qmd_path("claude-api/rendered_md/x/all.md"),
+            "claude-api"
         );
         // Sharded renders nest deeper; the stanza is still segment one.
         assert_eq!(

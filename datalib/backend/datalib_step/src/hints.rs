@@ -144,7 +144,7 @@ See datalib/backend/etl/providers/chatgpt/DOWNLOAD.md for details."
         }
         "claude_api" => {
             "\
-anthropic sessionKey expired or missing.
+Claude sessionKey expired or missing.
 
   1. One-time: make sure the claude-ai service is registered
      (`{LK} services info claude-ai` errors if it isn't):
@@ -156,7 +156,7 @@ anthropic sessionKey expired or missing.
   4. Smoke-test:
        {LK} curl -s https://claude.ai/api/organizations | head -c 200
 
-See datalib/backend/etl/providers/anthropic/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/claude/DOWNLOAD.md for details."
         }
         "slack_api" => {
             "\

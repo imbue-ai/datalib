@@ -78,7 +78,7 @@ TARGET="//datalib/backend/dag:manual_e2e_live_sync_golden"
 #
 # This is worth automating rather than documenting. The 403 reads exactly
 # like throttling, which sent us chasing a non-existent rate limit for an
-# afternoon (and, two months earlier, got the anthropic source disabled in
+# afternoon (and, two months earlier, got the claude source disabled in
 # the golden config for the same wrong reason).
 if [[ -z "${LATCHKEY_CURL:-}" ]]; then
   IMPERSONATE_TARGET="//datalib/backend/etl:latchkey_curl_impersonate"

@@ -102,8 +102,8 @@ rust_test(
 
 # Spec → doltlite raw store, for the fixture pipeline. YoLink's
 # downloader shells out to `curl` for signed-URL CSVs, so it has no
-# playback path; the fixture seeds the raw store directly and runs the
-# source render-only. Same role `signal_make_fixture` plays for signal.
+# playback path; the fixture seeds the raw store directly and emits no
+# download step. Same role `signal_make_fixture` plays for signal.
 rust_binary(
     name = "yolink_make_fixture",
     srcs = ["src/bin/yolink_make_fixture.rs"],

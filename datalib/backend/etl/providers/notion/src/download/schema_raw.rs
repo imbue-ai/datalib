@@ -46,7 +46,7 @@ use datalib_etl_macros::CasEdgeRow;
 /// touching blobs or bookkeeping. Also drives [`full_ddl`] when it
 /// asks the shared layer for paired `<table>_bookkeeping` DDLs.
 /// `notion_image_attachments` is the CAS-edge table; like every other
-/// provider's attachment edge (anthropic's `anthropic_attachments`,
+/// provider's attachment edge (claude's `claude_attachments`,
 /// chatgpt's `chatgpt_attachments`, …) it belongs here so it gets a
 /// paired `_bookkeeping` sidecar — `store_blob`/`record_blob_error` write
 /// to it via `bulk_upsert_in_tx`, which stamps that sidecar — and so a

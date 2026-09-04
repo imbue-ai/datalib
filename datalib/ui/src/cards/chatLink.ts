@@ -5,7 +5,7 @@
 // and `<a>` traversal without re-deriving them.
 
 // Accepts the three internal-link shapes our renderers emit:
-//   /chat/<uuid>       — bare path (older anthropic / chatgpt / etc.)
+//   /chat/<uuid>       — bare path (older claude / chatgpt / etc.)
 //   #/chat/<uuid>      — bare hash (vue-router hash form)
 //   /#/chat/<uuid>     — hash-prefixed absolute URL (perseus); a plain
 //                        `<a href>` of this form would normally navigate

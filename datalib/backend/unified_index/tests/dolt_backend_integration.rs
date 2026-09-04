@@ -95,7 +95,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
          message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid) \
-         VALUES ('c-1','anthropic','Chat','Claude','2026-04-01T10:00:00+00:00', \
+         VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00', \
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
                  'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1')",
@@ -107,7 +107,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
          message_index, entire_chat, text, slack_link, markdown_uuid) \
-         VALUES ('m-1','anthropic','User Input','Claude','2026-04-01T10:01:00+00:00', \
+         VALUES ('m-1','claude','User Input','Claude','2026-04-01T10:01:00+00:00', \
                  '2026-04-01T10:01:00.000000Z','+00:00', \
                  'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1')",
     )
@@ -117,7 +117,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, md_path, \
          row_set_hash, renderer_version) \
-         VALUES ('c-1','test','anthropic','chat','chats/c-1.md','deadbeef','test-v1')",
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','deadbeef','test-v1')",
     )
     .execute(repo.index_pool())
     .await

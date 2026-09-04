@@ -83,7 +83,7 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    // Log how long the dolt_diff scan took (matches chatgpt/anthropic).
+    // Log how long the dolt_diff scan took (matches chatgpt/claude).
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_name,

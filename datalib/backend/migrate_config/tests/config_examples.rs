@@ -85,7 +85,7 @@ fn validate_render_params(file: &str, id: &str, ty: &str, params: &toml::Value) 
     }
     match ty {
         "claude_api" | "claude_export" => {
-            check!(datalib_etl_anthropic_config::AnthropicRenderConfig)
+            check!(datalib_etl_claude_config::ClaudeRenderConfig)
         }
         "email" => check!(datalib_etl_email_config::EmailRenderConfig),
         "beeper" => check!(datalib_etl_beeper_config::BeeperRenderConfig),

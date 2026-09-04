@@ -50,7 +50,7 @@ pub const KIND_REACTION: &str = "reaction";
 
 /// An entity's identity: the id we mint, and the upstream natural key
 /// it was minted from. Paired so `grid_rows.upstream_id` and
-/// `uuid` cannot drift — see `anthropic::render::ids::Identity`.
+/// `uuid` cannot drift — see `claude::render::ids::Identity`.
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub uuid: String,

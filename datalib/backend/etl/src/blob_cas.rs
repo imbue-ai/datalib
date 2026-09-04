@@ -805,7 +805,7 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
 /// CAS commits on a single-connection doltlite pool.
 ///
 /// `table` is the per-provider edge table (`chatgpt_attachments`,
-/// `anthropic_attachments`, `slack_attachments`); `ref_id_column` is
+/// `claude_attachments`, `slack_attachments`); `ref_id_column` is
 /// the column carrying the upstream id (`file_id`, `file_uuid`).
 /// Many edge rows can share the same `ref_id` (different owning
 /// rows); the HashMap collapses duplicates and keeps the first
@@ -826,7 +826,7 @@ pub async fn load_blake3_index(
     );
     // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `table` and
     // `ref_id_column` are interpolated as bare identifiers, so they must stay
-    // literals. All three callers pass `&'static str` (anthropic/slack/chatgpt
+    // literals. All three callers pass `&'static str` (claude/slack/chatgpt
     // attachment tables); do not pass user input here.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
@@ -1031,7 +1031,7 @@ impl Default for CasEdgeAccumulator {
 // ─────────────────────────────────────────────────────────────────────
 
 /// End-of-bucket CAS-edge flush. The shape every per-provider CAS
-/// edge table (chatgpt_attachments, anthropic_attachments,
+/// edge table (chatgpt_attachments, claude_attachments,
 /// slack_attachments, chat_item_attachments) used to hand-roll
 /// individually:
 ///

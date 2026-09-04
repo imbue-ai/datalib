@@ -8,7 +8,7 @@
 //!
 //! [`Scope::ProviderGlobal`]. OpenAI's `conversation_id` and
 //! `message_id` are unique across the service, so no further scoping
-//! is needed — and unlike anthropic's `org_uuid`, there is no optional
+//! is needed — and unlike claude's `org_uuid`, there is no optional
 //! account field here that could tempt a scope which sometimes exists
 //! and sometimes doesn't (`conv.account_id` is itself `Option`, so
 //! using it would re-key rows the first time an ingest saw it).
@@ -31,7 +31,7 @@ pub const KIND_CONVERSATION: &str = "conversation";
 pub const KIND_MESSAGE: &str = "message";
 
 /// An entity's identity: the id we mint, and the upstream natural key
-/// it was minted from. See `anthropic::render::ids::Identity` — the
+/// it was minted from. See `claude::render::ids::Identity` — the
 /// pairing exists so `upstream_id` and `uuid` cannot drift apart.
 #[derive(Debug, Clone)]
 pub struct Identity {
@@ -81,7 +81,7 @@ mod tests {
     }
 
     /// `upstream_id` must regenerate `uuid`; see the equivalent
-    /// test in the anthropic ids module.
+    /// test in the claude ids module.
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for got in [conversation("c1"), message("m1")] {

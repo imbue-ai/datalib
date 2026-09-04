@@ -6,8 +6,8 @@ use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The github-owned slice of a `github_api` source. `sync:` present → managed
-/// (the download path); absent → render-only over an already-on-disk API
-/// capture.
+/// (the download path); absent → no download wave, and render reads
+/// whatever an earlier run already mirrored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GithubConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

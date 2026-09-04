@@ -1,0 +1,135 @@
+//! Claude synth → playback → download round-trip.
+//!
+//! Builds a JSON snapshot, synthesizes playback fixtures, runs
+//! `download::fetch` against a fresh doltlite db, and asserts the
+//! rehydrated conversations match the input. With the doltlite port
+//! we store the **raw** API payload in `conversations.payload`, so
+//! comparisons happen against the raw response shape rather than the
+//! normalized export shape.
+
+use std::collections::HashMap;
+use std::fs;
+use std::time::Duration;
+
+use datalib_etl::http::PLAYBACK_ENV;
+use datalib_etl::synthesize::Synthesizer;
+use datalib_etl_claude::download::{db::block_on_load_all, db::db_path_for, fetch, FetchOptions};
+use datalib_etl_claude::synthesize::ClaudeSynth;
+use serde_json::{json, Value};
+use tempfile::tempdir;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_synth_playback_extract_roundtrip() {
+    let d = tempdir().unwrap();
+    let api = d.path().join("input_snapshot");
+    let playback = d.path().join("playback");
+    let out_db = d.path().join("out_snapshot.doltlite_db");
+    fs::create_dir_all(&api).unwrap();
+
+    // Pre-normalized conversation: account set, _source set, no chat_messages
+    // so normalize is a no-op. The synth serves these back directly, so
+    // when download refetches them via playback, we get the same body.
+    let convs = json!([
+        {
+            "uuid": "c1",
+            "name": "First",
+            "updated_at": "2025-01-02T00:00:00Z",
+            "organization_uuid": "org-a",
+            "account": {"uuid": "acct-1"},
+            "chat_messages": [],
+            "_source": {"via": "claude.ai/api", "org_uuid": "org-a"},
+        },
+        {
+            "uuid": "c2",
+            "name": "Second",
+            "updated_at": "2025-01-01T00:00:00Z",
+            "organization_uuid": "org-b",
+            "account": {"uuid": "acct-1"},
+            "chat_messages": [],
+            "_source": {"via": "claude.ai/api", "org_uuid": "org-b"},
+        },
+    ]);
+    fs::write(
+        api.join("conversations.json"),
+        serde_json::to_vec_pretty(&convs).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        api.join("users.json"),
+        serde_json::to_vec_pretty(&json!([{"uuid": "acct-1"}])).unwrap(),
+    )
+    .unwrap();
+
+    let report = ClaudeSynth::new(&api).synthesize(&playback).unwrap();
+    // /organizations + 2 chat listings + 2 details + 2 project listings
+    // (one per org, empty — the downloader asks unconditionally).
+    assert_eq!(report.fixtures_written, 7);
+
+    std::env::set_var(PLAYBACK_ENV, &playback);
+
+    let summary = fetch(FetchOptions {
+        db_path: out_db.clone(),
+        // Point export_dir at our input snapshot so users.json gets
+        // ingested before the listing pass needs account_uuid.
+        export_dir: Some(api.clone()),
+        overlap: 0,
+        sleep_between: Duration::ZERO,
+        conv_uuids: Vec::new(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.fetched, 2);
+    assert_eq!(summary.total, 2);
+
+    let raw = block_on_load_all(&db_path_for(&out_db)).expect("load db");
+    let by_id: HashMap<String, Value> = raw
+        .conversations
+        .into_iter()
+        .map(|c| (c.id, c.payload))
+        .collect();
+    let want_arr: Vec<Value> = convs.as_array().cloned().unwrap();
+    let by_uuid_want: HashMap<String, &Value> = want_arr
+        .iter()
+        .map(|c| (c["uuid"].as_str().unwrap().to_string(), c))
+        .collect();
+    assert_eq!(by_id.len(), by_uuid_want.len());
+    for (uuid, got) in &by_id {
+        let w = by_uuid_want.get(uuid).expect("uuid missing from input");
+        assert_eq!(got, *w, "{uuid} mismatch");
+    }
+
+    // `since` scoping against a fresh db: c2 (updated 2025-01-01)
+    // predates the cutoff, so only c1 is fetched.
+    let since_db = d.path().join("out_since.doltlite_db");
+    let summary = fetch(FetchOptions {
+        db_path: since_db.clone(),
+        export_dir: Some(api.clone()),
+        since: Some("2025-01-02".to_string()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.fetched, 1);
+    assert_eq!(summary.out_of_scope, 1);
+    assert_eq!(summary.total, 1);
+    let raw = block_on_load_all(&db_path_for(&since_db)).expect("load since db");
+    assert_eq!(raw.conversations.len(), 1);
+    assert_eq!(raw.conversations[0].id, "c1");
+
+    // Moving `since` further back backfills the newly-in-scope c2 as
+    // missing while the already-fetched c1 classifies up to date.
+    let summary = fetch(FetchOptions {
+        db_path: since_db.clone(),
+        export_dir: Some(api.clone()),
+        since: Some("2024-12-01".to_string()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.fetched, 1);
+    assert_eq!(summary.skipped, 1);
+    assert_eq!(summary.out_of_scope, 0);
+    let raw = block_on_load_all(&db_path_for(&since_db)).expect("load since db");
+    assert_eq!(raw.conversations.len(), 2);
+}

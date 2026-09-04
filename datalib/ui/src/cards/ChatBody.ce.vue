@@ -158,7 +158,7 @@ function injectCopyUuidButtons() {
     if (!uuid) continue;
     // Prefer the explicit `.msg-meta` div (slack). Otherwise use the first
     // <p><em>…</em></p> emitted as the markdown italic meta line
-    // (github/gitlab/anthropic/openai). Block sections rarely have
+    // (github/gitlab/claude/openai). Block sections rarely have
     // either — they fall through to a header-position button.
     let host: HTMLElement | null = el.querySelector(":scope > .msg-meta");
     if (!host) {
@@ -413,7 +413,7 @@ onMounted(() => {
   border-left: 3px solid transparent;
   margin: 0.5rem 0;
 }
-.chat-body .msg--anthropic {
+.chat-body .msg--claude {
   border-left-color: var(--datalib-accent, #6366f1);
 }
 .chat-body .msg--openai {
