@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Directory tree diff</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1d21; --muted: #6b7280; --line: #e3e6ea;
+  --panel: #f7f8fa; --hover: #eef1f5; --flash: #fff3bf;
+  --moved: #b45309; --moved-bg: #fef3c7;
+  --removed: #b91c1c; --removed-bg: #fee2e2;
+  --kept: #a16207; --kept-bg: #fef9c3;
+  --added: #15803d; --added-bg: #dcfce7;
+  --copy: #0f766e; --copy-bg: #ccfbf1;
+  --modified: #1d4ed8; --modified-bg: #dbeafe;
+  --dup: #7c3aed; --dup-bg: #ede9fe;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171a; --fg: #e6e8eb; --muted: #9aa3ad; --line: #2b3036;
+    --panel: #1a1e22; --hover: #232830; --flash: #4d4320;
+    --moved: #fbbf24; --moved-bg: #3b2f0b;
+    --removed: #f87171; --removed-bg: #401b1b;
+    --kept: #fcd34d; --kept-bg: #3a3110;
+    --added: #4ade80; --added-bg: #12331f;
+    --copy: #5eead4; --copy-bg: #0d3330;
+    --modified: #93c5fd; --modified-bg: #16264a;
+    --dup: #c4b5fd; --dup-bg: #2c2150;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+header { padding: 14px 18px 10px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0 0 8px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  padding: 2px 9px; border-radius: 999px; font-size: 11.5px;
+  font-weight: 600; border: 1px solid transparent; white-space: nowrap;
+}
+.chip.n { background: var(--panel); color: var(--muted); border-color: var(--line); }
+.chip.moved { background: var(--moved-bg); color: var(--moved); }
+.chip.removed { background: var(--removed-bg); color: var(--removed); }
+.chip.kept { background: var(--kept-bg); color: var(--kept); }
+.chip.added { background: var(--added-bg); color: var(--added); }
+.chip.copy { background: var(--copy-bg); color: var(--copy); }
+.chip.modified { background: var(--modified-bg); color: var(--modified); }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+input[type=search] {
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); min-width: 240px; font: inherit;
+}
+label { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font-size: 12px; }
+button {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+}
+button:hover { background: var(--hover); }
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+section { background: var(--bg); min-width: 0; }
+.pane-head {
+  position: sticky; top: 0; z-index: 2; background: var(--panel);
+  padding: 8px 14px; border-bottom: 1px solid var(--line);
+}
+.pane-title { font-weight: 650; font-size: 12.5px; }
+.pane-sub {
+  color: var(--muted); font-size: 11px; margin-top: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.tree { padding: 8px 6px 40vh; overflow-x: auto; }
+.row {
+  display: flex; align-items: baseline; gap: 6px; padding: 1px 8px;
+  border-radius: 5px; cursor: default; white-space: nowrap;
+}
+.row:hover { background: var(--hover); }
+.row.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { from { background: var(--flash); } to { background: transparent; } }
+.tw { width: 12px; flex: none; color: var(--muted); cursor: pointer; user-select: none; }
+.tw.leaf { visibility: hidden; }
+.icon { flex: none; opacity: .65; }
+.name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.badge {
+  font-size: 10.5px; font-weight: 700; padding: 0 6px; border-radius: 4px;
+  flex: none; letter-spacing: .02em;
+}
+.note {
+  font-size: 11px; color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; min-width: 0;
+}
+.note .jump { color: inherit; text-decoration: underline dotted; cursor: pointer; }
+.note .jump:hover { color: var(--fg); }
+.size { font-size: 10.5px; color: var(--muted); flex: none; padding-left: 4px; }
+.kids { margin-left: 13px; border-left: 1px solid var(--line); padding-left: 3px; }
+.hidden { display: none; }
+.st-moved_out .name, .st-moved_in .name { color: var(--moved); }
+.st-moved_out .badge, .st-moved_in .badge { background: var(--moved-bg); color: var(--moved); }
+.st-removed .name { color: var(--removed); text-decoration: line-through; text-decoration-thickness: 1px; }
+.st-removed .badge { background: var(--removed-bg); color: var(--removed); }
+.st-removed_but_copy_remains .name { color: var(--kept); text-decoration: line-through; text-decoration-thickness: 1px; }
+.st-removed_but_copy_remains .badge { background: var(--kept-bg); color: var(--kept); }
+.st-added .name { color: var(--added); }
+.st-added .badge { background: var(--added-bg); color: var(--added); }
+.st-added_from_copy .name { color: var(--copy); }
+.st-added_from_copy .badge { background: var(--copy-bg); color: var(--copy); }
+.st-modified .name { color: var(--modified); }
+.st-modified .badge { background: var(--modified-bg); color: var(--modified); }
+.st-structure .name, .st-unchanged .name { color: var(--muted); }
+.badge.dup { background: var(--dup-bg); color: var(--dup); }
+.row.is-dup .name { text-decoration: underline; text-decoration-style: wavy;
+  text-decoration-color: var(--dup); text-underline-offset: 3px; }
+.empty { padding: 24px 16px; color: var(--muted); }
+footer { padding: 10px 18px 24px; color: var(--muted); font-size: 11.5px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Directory tree diff</h1>
+  <div class="chips" id="chips"></div>
+  <div class="controls">
+    <input type="search" id="q" placeholder="filter paths…" autocomplete="off">
+    <label><input type="checkbox" id="onlyChanged"> only changed</label>
+    <button id="expandAll">expand all</button>
+    <button id="collapseAll">collapse all</button>
+  </div>
+</header>
+<main>
+  <section><div class="pane-head"><div class="pane-title">left</div><div class="pane-sub" id="lsub"></div></div><div class="tree" id="ltree"></div></section>
+  <section><div class="pane-head"><div class="pane-title">right</div><div class="pane-sub" id="rsub"></div></div><div class="tree" id="rtree"></div></section>
+</main>
+<footer id="foot"></footer>
+
+<script id="data" type="application/json">__DIRTREE_DIFF_DATA__</script>
+<script>
+const DATA = JSON.parse(document.getElementById("data").textContent);
+
+const BADGE = {
+  moved_out: "moved →", moved_in: "← moved", removed: "deleted",
+  removed_but_copy_remains: "gone (copy remains)", added: "new",
+  added_from_copy: "copy", modified: "changed",
+};
+const CHANGED = new Set(Object.keys(BADGE));
+
+// ---- build a tree from the flat, path-sorted node list ----
+function buildTree(nodes) {
+  const root = { name: "", path: "", kids: new Map(), node: null };
+  for (const n of nodes) {
+    const parts = n.p.split("/");
+    let cur = root;
+    for (let i = 0; i < parts.length; i++) {
+      const seg = parts[i];
+      let next = cur.kids.get(seg);
+      if (!next) {
+        next = { name: seg, path: parts.slice(0, i + 1).join("/"), kids: new Map(), node: null };
+        cur.kids.set(seg, next);
+      }
+      cur = next;
+    }
+    cur.node = n;
+  }
+  markChanged(root);
+  return root;
+}
+
+// A directory is "interesting" when anything beneath it changed. Drives
+// both the default expansion and the "only changed" filter.
+function markChanged(t) {
+  let below = false;
+  for (const kid of t.kids.values()) if (markChanged(kid)) below = true;
+  const self = !!(t.node && (CHANGED.has(t.node.st) || t.node.dup));
+  t.hasChange = self || below;   // drives the "only changed" filter
+  t.expand = below;              // drives the default expansion
+  return t.hasChange;
+}
+
+function fmtSize(bytes) {
+  if (bytes === 0) return "";
+  const u = ["B", "K", "M", "G", "T"];
+  let i = 0, v = bytes;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)) + u[i];
+}
+
+const rowIndex = { left: new Map(), right: new Map() };
+
+function renderTree(tree, side, host) {
+  host.textContent = "";
+  const kids = [...tree.kids.values()];
+  if (!kids.length) { host.innerHTML = '<div class="empty">nothing to show</div>'; return; }
+  for (const kid of kids) host.appendChild(renderNode(kid, side));
+}
+
+function renderNode(t, side) {
+  const wrap = document.createElement("div");
+  const n = t.node || { p: t.path, k: "dir", s: 0, st: "structure" };
+  const row = document.createElement("div");
+  row.className = "row st-" + n.st;
+  row.dataset.path = t.path;
+  row.dataset.status = n.st;
+  row.dataset.changed = CHANGED.has(n.st) || n.dup ? "1" : "";
+
+  const kids = [...t.kids.values()];
+  const tw = document.createElement("span");
+  tw.className = "tw" + (kids.length ? "" : " leaf");
+  tw.textContent = "▾";
+  row.appendChild(tw);
+
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.textContent = n.k === "dir" ? "📁" : (n.k === "symlink" ? "🔗" : "📄");
+  row.appendChild(icon);
+
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = t.name;
+  row.appendChild(name);
+
+  if (BADGE[n.st]) {
+    const b = document.createElement("span");
+    b.className = "badge";
+    // The rollup count rides on the status badge rather than getting
+    // its own, so a node that is both a copy and an in-tree duplicate
+    // shows two badges instead of four.
+    b.textContent = BADGE[n.st] + (n.roll ? "  +" + n.roll + " inside" : "");
+    if (n.roll) b.title = n.roll + " entries below this one made the same journey";
+    row.appendChild(b);
+  }
+  if (n.dup) {
+    row.classList.add("is-dup");
+    const b = document.createElement("span");
+    b.className = "badge dup";
+    b.textContent = "dup \u00d7" + n.dup.n + (n.dup.roll ? " (+" + n.dup.roll + " inside)" : "");
+    b.title = fmtSize(n.dup.waste) + " reclaimable if the extra copies went away";
+    row.appendChild(b);
+  }
+  if (n.note || n.peer) {
+    const note = document.createElement("span");
+    note.className = "note";
+    const other = side === "left" ? "right" : "left";
+    const text = n.note || "";
+    const at = n.peer ? text.lastIndexOf(n.peer) : -1;
+    if (at >= 0) {
+      // The note names the counterpart: linkify that mention in place.
+      note.appendChild(document.createTextNode(text.slice(0, at)));
+      note.appendChild(jumpLink(n.peer, other, n.peer));
+      note.appendChild(document.createTextNode(text.slice(at + n.peer.length)));
+    } else {
+      // The note does not name it, so the jump gets its own affordance
+      // rather than being glued onto the end of the sentence.
+      if (text) note.appendChild(document.createTextNode(text + " "));
+      if (n.peer) note.appendChild(jumpLink("\u2194", other, n.peer));
+    }
+    note.title = text;
+    row.appendChild(note);
+  }
+  if (n.dup) {
+    const d = document.createElement("span");
+    d.title = "same bytes in this tree at " + n.dup.peers.join(", ") +
+      " \u2014 " + fmtSize(n.dup.waste) + " reclaimable";
+    d.className = "note";
+    d.appendChild(document.createTextNode("same bytes in this tree at "));
+    n.dup.peers.forEach((peer, i) => {
+      if (i) d.appendChild(document.createTextNode(", "));
+      // Same side: a duplicate is a fact about ONE tree.
+      d.appendChild(jumpLink(peer, side, peer));
+    });
+    row.appendChild(d);
+  }
+  const size = document.createElement("span");
+  size.className = "size";
+  size.textContent = fmtSize(n.s);
+  row.appendChild(size);
+
+  rowIndex[side].set(t.path, row);
+  wrap.appendChild(row);
+
+  if (kids.length) {
+    const box = document.createElement("div");
+    box.className = "kids";
+    for (const kid of kids) box.appendChild(renderNode(kid, side));
+    // Collapse subtrees with nothing changed in them; keep the rest open.
+    if (!t.expand) box.classList.add("hidden");
+    tw.textContent = t.expand ? "▾" : "▸";
+    tw.onclick = () => {
+      const now = box.classList.toggle("hidden");
+      tw.textContent = now ? "▸" : "▾";
+    };
+    wrap.appendChild(box);
+  }
+  return wrap;
+}
+
+function jumpLink(label, side, path) {
+  const a = document.createElement("span");
+  a.className = "jump";
+  a.textContent = label;
+  a.title = "jump to " + path + " on the " + side;
+  a.onclick = () => jumpTo(side, path);
+  return a;
+}
+
+function jumpTo(side, path) {
+  const row = rowIndex[side].get(path);
+  if (!row) return;
+  // Open every collapsed ancestor before scrolling, or the target is
+  // inside a display:none subtree and scrollIntoView does nothing.
+  let el = row.parentElement;
+  while (el) {
+    if (el.classList && el.classList.contains("kids") && el.classList.contains("hidden")) {
+      el.classList.remove("hidden");
+      const tw = el.previousElementSibling && el.previousElementSibling.querySelector(".tw");
+      if (tw) tw.textContent = "▾";
+    }
+    el = el.parentElement;
+  }
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.remove("flash");
+  void row.offsetWidth;
+  row.classList.add("flash");
+}
+
+// ---- filtering ----
+function applyFilter() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const only = document.getElementById("onlyChanged").checked;
+  for (const side of ["left", "right"]) {
+    for (const [path, row] of rowIndex[side]) {
+      const matchQ = !q || path.toLowerCase().includes(q);
+      const matchC = !only || row.dataset.changed === "1";
+      const wrap = row.parentElement;
+      const self = matchQ && matchC;
+      // A container stays visible when any descendant survives, so the
+      // path down to a match is never broken.
+      const kidsBox = wrap.querySelector(":scope > .kids");
+      const kidVisible = kidsBox && [...kidsBox.children].some((c) => !c.classList.contains("hidden"));
+      wrap.classList.toggle("hidden", !(self || kidVisible));
+    }
+  }
+}
+
+function setAll(open) {
+  for (const side of ["left", "right"]) {
+    for (const row of rowIndex[side].values()) {
+      const box = row.parentElement.querySelector(":scope > .kids");
+      if (!box) continue;
+      box.classList.toggle("hidden", !open);
+      const tw = row.querySelector(".tw");
+      if (tw) tw.textContent = open ? "▾" : "▸";
+    }
+  }
+}
+
+// ---- boot ----
+const S = DATA.summary;
+const chips = [
+  ["moved", S.moves + " moved" + (S.rolled_up ? " (+" + S.rolled_up + " inside)" : "")],
+  ["modified", S.modified + " changed"],
+  ["added", S.added + " new"],
+  ["copy", S.added_from_copy + " copies"],
+  ["removed", S.removed + " deleted"],
+  ["kept", S.removed_but_copy_remains + " gone but copy remains"],
+];
+document.getElementById("chips").innerHTML =
+  chips.map(([c, t]) => '<span class="chip ' + c + '">' + t + "</span>").join("") +
+  '<span class="chip n">' + (S.unified ? "unified via file:// fetch" : "same file, two refs") + "</span>" +
+  '<span class="chip n">' + (S.full_tree ? "full tree" : "changed paths only") + "</span>" +
+  (S.copy_detection ? "" : '<span class="chip n">copy detection off</span>') +
+  '<span class="chip n">' +
+    (S.dup_threshold > 0
+      ? "in-tree duplicates \u2265 " + fmtSize(S.dup_threshold)
+      : "in-tree duplicate scan off") +
+  "</span>";
+
+for (const [side, subId, treeId] of [["left", "lsub", "ltree"], ["right", "rsub", "rtree"]]) {
+  const d = DATA[side];
+  document.getElementById(subId).textContent =
+    d.db + "  @" + d.ref + "  " + d.commit.slice(0, 12) +
+    (d.dup_groups.length
+      ? "   ·   " + d.dup_groups.length + " duplicated within this tree, " +
+        fmtSize(d.dup_wasted) + " reclaimable"
+      : "");
+  renderTree(buildTree(d.nodes), side, document.getElementById(treeId));
+}
+
+document.getElementById("q").addEventListener("input", applyFilter);
+document.getElementById("onlyChanged").addEventListener("change", applyFilter);
+document.getElementById("expandAll").onclick = () => setAll(true);
+document.getElementById("collapseAll").onclick = () => setAll(false);
+document.getElementById("foot").textContent =
+  "Moves are found by matching blake3 digests across the removed/added rows of a doltlite prolly-tree diff. " +
+  "A directory keeps its digest when it moves, because fsindex hashes a directory over its children — so a whole " +
+  "subtree move collapses to one row.";
+</script>
+</body>
+</html>

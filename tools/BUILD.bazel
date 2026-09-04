@@ -93,3 +93,20 @@ py_test(
     ],
     main = "check_version_pins.py",
 )
+
+# The shipped-binary list lives in two places that must agree:
+# `replace_prefixes` on `//datalib/backend:bin`, and the hand-written
+# `cp` block in release.yml's stage step. Both carry a "keep in sync"
+# comment and nothing enforced it — `datalib-dirtree-diff` was added to
+# one and not the other, which would have shipped a release tarball
+# missing a binary with no failure anywhere.
+py_test(
+    name = "dist_names_test",
+    size = "small",
+    srcs = ["check_dist_names.py"],
+    data = [
+        "//.github/workflows:release.yml",
+        "//datalib/backend:BUILD.bazel",
+    ],
+    main = "check_dist_names.py",
+)

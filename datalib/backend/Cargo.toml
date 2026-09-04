@@ -8,6 +8,7 @@ members = [
     "core",
     "runtime",
     "dag",
+    "dirtree_diff",
     "http",
     "obs",
     "time",
