@@ -99,6 +99,14 @@
 //! [`open`] therefore pins `max_connections(1)`. All other code
 //! that opens a `SqlitePool` against a `.doltlite_db` file MUST
 //! do the same. If you find a callsite that doesn't, fix it.
+//!
+//! Pinning the count is only half of it: [`open`] also disables
+//! `idle_timeout` and `max_lifetime`. Those defaults (10 and 30
+//! minutes) would have the pool retire the very connection whose
+//! session state we just argued is load-bearing, and its replacement
+//! starts on `main` with a clean working set. That is why
+//! `fsindex --branch` needs both settings — see
+//! `providers/fsindex/src/download/db.rs::checkout_branch`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -549,8 +557,21 @@ async fn open_inner(
     // enough that a transient slowness manifested as a hard timeout
     // and 0-row sync. 5min is "obviously something else is wrong"
     // territory.
+    // No connection recycling. sqlx 0.9 defaults to
+    // `idle_timeout: 10min` / `max_lifetime: 30min`, which for a normal
+    // client is housekeeping — a recycled connection is equivalent to
+    // the one it replaced. Here it is not: doltlite's HEAD pointer,
+    // working set and *active branch* are per-connection, and a fresh
+    // connection starts on `main`. Letting the pool retire our single
+    // connection therefore silently discards that state mid-run, and
+    // the failure is the quiet kind — an fsindex scan running on a
+    // non-`main` branch would simply start writing to `main` after 30
+    // minutes and report success. Multi-million-entry scans are this
+    // provider's design target, so that window is reachable.
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .acquire_timeout(Duration::from_secs(300))
         .connect_with(opts)
         .await
@@ -2688,5 +2709,83 @@ mod tests {
 
             pool.close().await;
         }
+    }
+
+    /// `open` must leave its single connection alone for the life of
+    /// the pool.
+    ///
+    /// doltlite's active branch, HEAD pointer and working set are all
+    /// per-connection, and a replacement connection starts on `main`.
+    /// sqlx's stock `idle_timeout` / `max_lifetime` would retire our
+    /// connection out from under that state after 10 / 30 minutes —
+    /// long enough that nothing short of a real multi-million-entry
+    /// scan would ever notice, and the symptom would be rows quietly
+    /// landing on the wrong branch rather than an error.
+    #[tokio::test]
+    async fn open_disables_connection_recycling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = open(&tmp.path().join("recycle.doltlite_db"), &[])
+            .await
+            .unwrap();
+        let opts = pool.options();
+        assert_eq!(
+            opts.get_max_connections(),
+            1,
+            "doltlite session state is per-connection; the pool must hold exactly one"
+        );
+        assert_eq!(
+            opts.get_idle_timeout(),
+            None,
+            "an idle timeout would retire the connection carrying the active branch"
+        );
+        assert_eq!(
+            opts.get_max_lifetime(),
+            None,
+            "a max lifetime would retire the connection carrying the active branch"
+        );
+        pool.close().await;
+    }
+
+    /// The fact the setting above defends against: a *different*
+    /// connection to the same file does not inherit the active branch.
+    ///
+    /// Recorded as a test rather than a comment because it is the whole
+    /// reason `checkout_branch` cannot be treated as a property of the
+    /// file.
+    #[tokio::test]
+    async fn a_fresh_connection_starts_on_main() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("branch.doltlite_db");
+
+        let first = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        sqlx::query("SELECT dolt_checkout('-b', ?)")
+            .bind("elsewhere")
+            .execute(&first)
+            .await
+            .unwrap();
+        let active: String = sqlx::query_scalar("SELECT active_branch()")
+            .fetch_one(&first)
+            .await
+            .unwrap();
+        assert_eq!(active, "elsewhere");
+        first.close().await;
+
+        let second = open(&path, &[]).await.unwrap();
+        let active: String = sqlx::query_scalar("SELECT active_branch()")
+            .fetch_one(&second)
+            .await
+            .unwrap();
+        assert_eq!(
+            active, "main",
+            "a new connection inherited the previous one's branch; if doltlite \
+             ever makes the active branch a property of the file, the \
+             recycling guard in `open` can be revisited"
+        );
+        second.close().await;
     }
 }

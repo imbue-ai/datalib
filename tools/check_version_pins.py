@@ -78,10 +78,10 @@ FAMILIES: list[Family] = [
             "constants and missed the other, so search ran qmd 2.1.0 "
             "against a 2.5.3-built index for six weeks."
         ),
-        canonical="datalib/backend/unified_index/src/qmd/mod.rs",
+        canonical="datalib/backend/runtime/src/qmd.rs",
         sites=[
             (
-                "datalib/backend/unified_index/src/qmd/mod.rs",
+                "datalib/backend/runtime/src/qmd.rs",
                 r'^pub const DEFAULT_QMD_VERSION: &str = "([^"]+)"',
             ),
             ("tests/fixtures/BUILD.bazel", r'^QMD_VERSION = "([^"]+)"'),
@@ -104,10 +104,10 @@ FAMILIES: list[Family] = [
             "image warms a version the runtime never invokes, and the "
             "container silently fetches a different latchkey at run time."
         ),
-        canonical="datalib/backend/core/src/node_runtime.rs",
+        canonical="datalib/backend/runtime/src/node_runtime.rs",
         sites=[
             (
-                "datalib/backend/core/src/node_runtime.rs",
+                "datalib/backend/runtime/src/node_runtime.rs",
                 r'^pub const LATCHKEY_VERSION: &str = "([^"]+)"',
             ),
             ("datalib/docker/Dockerfile", r"^ARG LATCHKEY_VERSION=(\S+)"),

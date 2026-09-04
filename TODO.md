@@ -24,7 +24,7 @@
   `markdowns.md_sha256` column in `docs/dev/qmd_index_ui.md` becomes a
   blake3 column we may already be able to derive.
   **Not actionable while we consume `@tobilu/qmd` from the registry**
-  (`DEFAULT_QMD_VERSION` in `unified_index/src/qmd/mod.rs`): the digest is
+  (`DEFAULT_QMD_VERSION` in `runtime/src/qmd.rs`): the digest is
   theirs, changing it orphans every existing index, and the vendored tree
   under `third-party/qmd/` is reference-only. This is a note for whoever
   does the Rust re-implementation AGENTS.md §"Vendored upstream" already

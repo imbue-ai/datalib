@@ -1,10 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files([
-    "Cargo.toml",
-    # Canonical version constant, read by //tools:version_pins_test.
-    "src/node_runtime.rs",  # LATCHKEY_VERSION
-])
+exports_files(["Cargo.toml"])
 
 rust_library(
     name = "datalib_core",
@@ -18,6 +14,7 @@ rust_library(
     deps = [
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

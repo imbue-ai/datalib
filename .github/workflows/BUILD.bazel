@@ -1,0 +1,6 @@
+# `release.yml` is read by `//tools:dist_names_test`, which checks that
+# the binaries it stages into the release tarball match the ones
+# `//datalib/backend:bin` renames. Exported so the test can take it as a
+# data dep and fail with "does not exist" if it ever moves, rather than
+# silently checking nothing.
+exports_files(["release.yml"])

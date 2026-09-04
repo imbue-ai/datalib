@@ -19,6 +19,22 @@
 //! explicitly by callers (e.g. per-source bars
 //! attached to [`shared_multi`]).
 //!
+//! # Editing this crate re-embeds the qmd index on CI
+//!
+//! `qmd_indexer_bin` links this crate (for `status_line!` and
+//! [`shared_multi`]) and `datalib_runtime`, and nothing else first-party.
+//! That binary is a bazel `tools=` input to
+//! `//tests/fixtures:ingested_tng_qmd`, and bazel keys an action on its
+//! tools' digests — so **any** change here, comments included, changes
+//! this crate's digest, changes that binary, and re-runs a ~90s CPU-only
+//! embed of the whole fixture corpus (61-611s on CI, depending on what
+//! else is competing for the runner's 4 vCPUs).
+//!
+//! That is not a reason to avoid editing this crate. It is a reason to
+//! know the bill, and to not be surprised by a slow CI run on a PR that
+//! only touched logging. `//datalib/backend/runtime` carries the same
+//! note for the same reason.
+//!
 //! Drop-in usage from a CLI:
 //!
 //! ```ignore

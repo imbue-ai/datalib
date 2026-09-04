@@ -12,6 +12,7 @@ path = "src/lib.rs"
 app-schema = { path = "../app_schema" }
 datalib-schema = { path = "../schema" }
 datalib-obs = { path = "../obs" }
+datalib-runtime = { path = "../runtime" }
 datalib-time = { path = "../time" }
 serde = { workspace = true }
 serde_json = { workspace = true }

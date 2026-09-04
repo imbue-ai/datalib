@@ -2,9 +2,18 @@
 //! rendered conversation markdown tree at a given root.
 //!
 //! QMD (https://github.com/tobi/qmd) is an npm package. We invoke it via
-//! [`datalib_unified_index::qmd::qmd_command`] — the app-bundled Node runtime
+//! [`datalib_runtime::qmd::qmd_command`] — the app-bundled Node runtime
 //! when staged, else `npx -y @tobilu/qmd@<version>` — so callers don't
 //! need a global install.
+//!
+//! This crate links `datalib_runtime` (no dependencies) and
+//! `datalib_obs`, and deliberately not `datalib_core` or
+//! `datalib_unified_index`. `qmd_indexer_bin` is a `tools=` input to
+//! `//tests/fixtures:ingested_tng_qmd`, and bazel keys an action on its
+//! tools' digests — so whatever this binary links is the set of crates
+//! whose next edit re-runs a ~90s CPU-only embed on CI. Keep the
+//! dependency list short on purpose; reach for a re-export in
+//! `datalib_runtime` before adding one.
 //!
 //! QMD stores its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. We pin
 //! it inside the data root by setting `XDG_CACHE_HOME=<root>/system`, so
@@ -29,10 +38,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use datalib_obs::status_line;
 
-/// Re-export of the ONE canonical qmd pin (`datalib_unified_index::qmd`) —
-/// a re-export rather than a literal so this crate *cannot* drift from
-/// the search runner/daemon the way two same-named constants once did.
-pub use datalib_unified_index::qmd::DEFAULT_QMD_VERSION;
+/// Re-export of the ONE canonical qmd pin (`datalib_runtime::qmd`) — a
+/// re-export rather than a literal so this crate *cannot* drift from the
+/// search runner/daemon the way two same-named constants once did.
+pub use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
 
 pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
 /// Only index per-stanza rendered markdown — `<root>/<stanza>/rendered_md/**`.
@@ -149,7 +158,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // qmd writes `<XDG_CACHE_HOME>/qmd/index.sqlite`; point it at `<root>/system`
     // so the index lands at `<root>/unified_index/qmd/`. The collection-add scan root
     // below stays `<root>` so qmd still sees every stanza's `rendered_md/`.
-    let cache_home = datalib_unified_index::qmd::qmd_cache_home(&root);
+    let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
     let qmd_dir = cache_home.join("qmd");
     std::fs::create_dir_all(&qmd_dir)
         .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
@@ -170,7 +179,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     status_line!(
         "[qmd-indexer] qmd package = @tobilu/qmd@{} ({})",
         opts.qmd_version,
-        if datalib_core::node_runtime::is_bundled(&datalib_unified_index::qmd::qmd_command(
+        if datalib_runtime::node_runtime::is_bundled(&datalib_runtime::qmd::qmd_command(
             &opts.qmd_version
         )) {
             "bundled runtime"
@@ -299,7 +308,7 @@ pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
 }
 
 fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
-    let mut cmd = datalib_unified_index::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
     cmd.arg("status");
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
@@ -309,7 +318,7 @@ fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
     cmd.env("NO_COLOR", "1");
     status_line!(
         "[qmd-indexer] $ {}",
-        datalib_core::node_runtime::display_command(&cmd)
+        datalib_runtime::node_runtime::display_command(&cmd)
     );
     let out = cmd
         .output()
@@ -338,14 +347,14 @@ fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
 /// then sees `first_run == true`, re-runs `collection add`, and aborts.
 /// Swallowing "already exists" makes the step re-entrant.
 fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
-    let mut cmd = datalib_unified_index::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
     cmd.args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     cmd.env("NO_COLOR", "1");
     status_line!(
         "[qmd-indexer] $ {}",
-        datalib_core::node_runtime::display_command(&cmd)
+        datalib_runtime::node_runtime::display_command(&cmd)
     );
     // Capture output so we can inspect it for the benign "already exists"
     // case; on the happy path qmd is quiet here anyway.
@@ -369,16 +378,16 @@ fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Res
 
 fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
     // Resolution (bundled runtime vs npx, `$NPX_BIN` override) lives in
-    // `datalib_unified_index::qmd::qmd_command`. Bazel actions don't get
+    // `datalib_runtime::qmd::qmd_command`. Bazel actions don't get
     // `$NPX_BIN` forwarded (would bust action cache keys) and instead
     // rely on `PATH` (pinned in `.bazelrc`).
-    let mut cmd = datalib_unified_index::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
     cmd.args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     status_line!(
         "[qmd-indexer] $ {}",
-        datalib_core::node_runtime::display_command(&cmd)
+        datalib_runtime::node_runtime::display_command(&cmd)
     );
     // `.status()` lets the child inherit our stdout/stderr, so qmd's own
     // output lands on the same terminal as the orchestrator's live
