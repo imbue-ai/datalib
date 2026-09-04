@@ -14,7 +14,7 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000100.000100
 item_count: 3
-source_fingerprint: b93df0b0b6b68fdf1e0a47c37e716b6a3ba9e08a51244fe611d2e4e6e5e34acd
+source_fingerprint: 407842378ccf5b59047cfd1a4eedfa6cc8fa70facf471df77f3e1541ab45998b
 ---
 
 <h1 class="page-title" data-page-title-uuid="0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -60,7 +60,7 @@ display: "@William T. Riker"
 account: T_NCC1701D
 external_id: D_RIKER#12604000901.000901
 item_count: 1
-source_fingerprint: 985a37a2caf38a9d4ae6d3c825c4fd17b726763651a12e958c2996f8e0794126
+source_fingerprint: 37607ec2a006ff4f8c31277dfacd8670a446e1a6d9f4849d5ff48cd598a89993
 ---
 
 <h1 class="page-title" data-page-title-uuid="1803e003-56a7-5c12-9024-5265850e9eaa">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -86,7 +86,7 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000800.000800
 item_count: 1
-source_fingerprint: 451cf7fa2ea758c7b3dd8c6fdbf019f40e104e11d9193aff8ced2d97b366e474
+source_fingerprint: 4a2b5a46d47fd00304fe5a277d3d64dae07baa122b191273a32c314752746295
 ---
 
 <h1 class="page-title" data-page-title-uuid="56f6c1d9-495c-5104-8a26-be13bc28718e">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -112,7 +112,7 @@ display: "@William T. Riker, Worf"
 account: T_NCC1701D
 external_id: G_AWAYTEAM#12604000904.000904
 item_count: 1
-source_fingerprint: b153a5a9e29a9ad208e38b1ce807b837810a64db304803cb5d4a2f47254fd32c
+source_fingerprint: 4b1375346d62077011c06cbffde418935d128738b191ce46462907ebbd9a37ad
 ---
 
 <h1 class="page-title" data-page-title-uuid="658ccd8e-50ad-527c-8cc3-401cf8b315db">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -138,7 +138,7 @@ display: "#engineering"
 account: T_NCC1701D
 external_id: C_ENG#12604000500.000500
 item_count: 1
-source_fingerprint: 94dd88066b2d1336b17e6c793c6ad0def567d56d1a2e6b06459c2bddf8bc64d7
+source_fingerprint: b8556d8690717b51069aae183396dccc2f0a0bc7f698a18c4a0da2d8389b955c
 ---
 
 <h1 class="page-title" data-page-title-uuid="68000dc2-0cb1-5eb4-ba26-89498049dfa8">#engineering: Warp core efficiency at 99.7%. (all) <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -164,7 +164,7 @@ display: "@William T. Riker"
 account: T_NCC1701D
 external_id: D_RIKER#12604000900.000900
 item_count: 1
-source_fingerprint: ccc427e893b9afbb7c75ac7b5f09a6ae59bebf6693475cd4e614e0ee2eeaf5c0
+source_fingerprint: 4c2c6794591c9d6e2c1246dba5709e49d5b158e8825f8a36d3fcde1063fee751
 ---
 
 <h1 class="page-title" data-page-title-uuid="777b8f58-706d-549a-82b8-699fc856030e">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -190,7 +190,7 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000400.000400
 item_count: 1
-source_fingerprint: 42c66f2fe4d99fb5c76a7735ee3c394d2d6212d601df9c97df6559d990d1b9d6
+source_fingerprint: e5d9258b3d06d5ae5d0590d53bd6949bc2318aaf58022bec10509879f90bd7ca
 ---
 
 <h1 class="page-title" data-page-title-uuid="aa7f900b-31b9-5603-995a-5ed36db03478">#bridge: I recommend raising shields, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -216,7 +216,7 @@ display: "@William T. Riker, Worf"
 account: T_NCC1701D
 external_id: G_AWAYTEAM#12604000903.000903
 item_count: 1
-source_fingerprint: f642b9b68d22aace3080ef093eba4b9bb08eca85cb5d8b825023fcd8c4be8b9c
+source_fingerprint: 7f5331ccbb52d1740dde9ab558b6594b5c711a3ab71f888a22f92d19d9293eab
 ---
 
 <h1 class="page-title" data-page-title-uuid="b168a24b-fddb-55c2-88fe-523dec59fd5c">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -242,7 +242,7 @@ display: "#ten-forward"
 account: T_NCC1701D
 external_id: C_TENFWD#12604000600.000600
 item_count: 2
-source_fingerprint: ba26983db0ad1f253afb620164edc090b4152367f49ed4807bfaff839dc80f39
+source_fingerprint: 309e2493c4caab1550d90cad9c82cb477b6a8059db153cbc9f0abfe352b95e27
 ---
 
 <h1 class="page-title" data-page-title-uuid="dcda988e-79b9-5b19-b3d7-7325524c86dd">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -278,7 +278,7 @@ display: "@Lt. Cmdr. Data"
 account: T_NCC1701D
 external_id: D_DATA#12604000902.000902
 item_count: 1
-source_fingerprint: 9bd8cf93ea75c8472298c197d38d98fd309f1f50b93e39b20be6ebf101f64135
+source_fingerprint: 123dc38e249fe50f3ffae73f22c2b026ac07c9851318ddc44226b98186128e84
 ---
 
 <h1 class="page-title" data-page-title-uuid="e5c54890-5a44-5a3d-9efe-e28b37b48edf">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -306,7 +306,7 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000700.000700
 item_count: 1
-source_fingerprint: 5b7ffa995fafe8d3296ae0ba71420e1a284988a38528cf4c385717b612ac7ebe
+source_fingerprint: 45b98923cf7fa636baa283ac0e4c024d2a790801c5cdfb7d406e43687c6af9dc
 ---
 
 <h1 class="page-title" data-page-title-uuid="efd7f060-7cc7-508b-811f-afbb133a9ff6">#bridge: New combadge prototypes — thoughts? (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>

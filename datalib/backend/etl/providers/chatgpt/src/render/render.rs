@@ -42,7 +42,11 @@ use super::parse::{
 ///     directory, so a tree written by v4 cannot be updated in place.
 ///     The render step discards it wholesale; see
 ///     `DataProcessor::render_version`.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a message with no `create_time` — and no previous item's stamp to
+///     inherit from — gets a null `when_ts` instead of a real-looking
+///     `1970-01-01T00:00:00`. See
+///     `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -137,13 +141,17 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
     // inherits the previous item's time + 1ms so ordering stays stable.
     let mut last_ms = conv.create_time.as_deref().and_then(iso_to_ms);
     for m in &path {
+        // Own stamp, else the previous item's + 1ms (§6's sanctioned
+        // inheritance), else nothing: a conversation with no
+        // `create_time` of its own whose messages carry none either
+        // genuinely has no time to report, and `None` says so rather
+        // than filing the whole thread under 1970.
         let ms = m
             .create_time
             .as_deref()
             .and_then(iso_to_ms)
-            .or_else(|| last_ms.map(|p| p + 1))
-            .unwrap_or(0);
-        last_ms = Some(ms);
+            .or_else(|| last_ms.map(|p| p + 1));
+        last_ms = ms.or(last_ms);
 
         let kind_label = kind_for_role_and_type(m.role.as_deref(), m.content_type.as_deref());
         let author_display = match kind_label {
@@ -324,7 +332,35 @@ fn capitalize(s: &str) -> String {
 /// offsets; returns `None` on anything unparseable (callers fall back to
 /// the bumped previous time).
 fn iso_to_ms(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s)
+    // Through `datalib-time`, not `chrono` directly: timestamps are a
+    // cross-source concept and exactly one crate decides how a string
+    // becomes an instant (rule P3 in
+    // `docs/dev/data_architecture_parse_and_render.md`). The export
+    // stamps an explicit offset, so `parse_strict` is the right member.
+    datalib_time::parse_strict(s)
         .ok()
-        .map(|dt| dt.timestamp_millis())
+        .map(|t| t.to_unix_millis())
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    /// The parse helper must answer `None` for anything it cannot read,
+    /// so the caller falls through to inheriting the previous item's
+    /// stamp and — when there is none — to a null `when_ts`.
+    #[test]
+    fn iso_to_ms_refuses_to_invent_a_timestamp() {
+        assert_eq!(
+            iso_to_ms("2026-04-14T09:15:00-07:00"),
+            Some(1_776_183_300_000)
+        );
+        for bad in ["", "not a date", "2026-04-14", "2026-04-14T09:15:00"] {
+            assert_eq!(
+                iso_to_ms(bad),
+                None,
+                "iso_to_ms({bad:?}) fabricated a stamp"
+            );
+        }
+    }
 }

@@ -90,6 +90,35 @@ impl Period {
         "all"
     }
 
+    /// The `period_key` an item with **no timestamp** files under.
+    ///
+    /// Bucketing and `when_ts` answer different questions, and the
+    /// answers deliberately diverge for an undated item. `when_ts` is
+    /// data: it says when the thing happened, and for an undated item
+    /// the only honest value is null (see
+    /// `docs/dev/data_architecture_parse_and_render.md` §6). A
+    /// `period_key` is not data — it is a filing decision, the name of
+    /// the `.md` file the item is written into, and every item has to be
+    /// filed *somewhere* or it disappears from the rendered tree.
+    ///
+    /// So undated items keep filing under the epoch bucket, exactly
+    /// where they have always gone. The alternative — a distinct
+    /// `"undated"` key — is more expressive and costs more than it is
+    /// worth: `period_key` is an input to every provider's
+    /// `markdown_uuid` recipe, so a new key mints a **new document
+    /// identity**, retiring the uuid the old page had. That uuid is what
+    /// filed feedback, `entire_chat` links and the grid's row selection
+    /// point at. Changing where a row *files* is not worth breaking what
+    /// points at it, when the only thing actually wrong was the
+    /// timestamp — and that is now null.
+    ///
+    /// Call this instead of `key_for_ms(0)` so the decision is legible
+    /// at the callsite rather than looking like an `unwrap_or(0)` that
+    /// nobody thought about.
+    pub fn key_for_undated(self) -> String {
+        self.key_for_ms(0)
+    }
+
     /// Compute the period_key for a unix-epoch millisecond timestamp.
     /// Mirrors `strftime_fmt` for Rust-side bucketing — produces the
     /// same `2024-03` / `2024-03-15` / `2024` keys SQL would produce.
@@ -156,6 +185,16 @@ mod tests {
         // Pre-1970 timestamp shouldn't panic.
         let k = Period::Month.key_for_ms(-1_000);
         assert!(k.starts_with("1969") || k == "1970-01");
+    }
+
+    #[test]
+    fn key_for_undated_matches_the_epoch_bucket() {
+        // Pinned deliberately: these keys are inputs to every provider's
+        // `markdown_uuid`, so changing them silently re-keys documents.
+        assert_eq!(Period::Month.key_for_undated(), "1970-01");
+        assert_eq!(Period::Day.key_for_undated(), "1970-01-01");
+        assert_eq!(Period::Year.key_for_undated(), "1970");
+        assert_eq!(Period::All.key_for_undated(), "all");
     }
 
     #[test]

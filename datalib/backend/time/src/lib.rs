@@ -13,10 +13,24 @@
 //!    generated" field.
 //! 2. **We never fabricate values.** [`parse_strict`] requires the
 //!    upstream string to carry an explicit offset.
-//!    [`parse_with_assumed_utc`] is the **single function in the whole
-//!    repo** where "assume UTC because upstream gave us no offset" is
-//!    legal — and it should be used sparingly, only when we've audited
-//!    the upstream and confirmed naive-means-UTC.
+//!    [`parse_with_assumed_utc`] and its custom-format sibling
+//!    [`parse_custom_strftime_assumed_utc`] are the **only two
+//!    functions in the whole repo** where "assume UTC because upstream
+//!    gave us no offset" is legal — and they should be used sparingly,
+//!    only when we've audited the upstream and confirmed
+//!    naive-means-UTC. A provider that reaches for
+//!    `NaiveDateTime::parse_from_str(..).and_utc()` locally is making
+//!    that same assumption where nobody can see it.
+//!
+//!    Every parse helper here returns a `Result`, and every caller is
+//!    expected to let the failure become a *null* — a `when_ts` of
+//!    `None`, a `date_ms` of `None`. An `unwrap_or(0)` on the way out
+//!    of one of these functions puts a real-looking
+//!    `1970-01-01T00:00:00+00:00` into the grid, where it sorts into a
+//!    real position and answers `before:` / `after:` queries it should
+//!    not. See
+//!    [`docs/dev/data_architecture_parse_and_render.md`](/docs/dev/data_architecture_parse_and_render.md)
+//!    §6.
 //!
 //! See [`docs/dev/archived/data_architecture_plan.md`](/docs/dev/archived/data_architecture_plan.md)
 //! §P0.5 for the architectural backstory, and
@@ -89,6 +103,18 @@ impl IsoOffsetTimestamp {
     /// Render as RFC 3339 with millisecond-precision and explicit offset.
     pub fn to_rfc3339_millis(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::Millis, false)
+    }
+
+    /// The same instant as Unix epoch milliseconds — the inverse of
+    /// [`Self::from_unix_millis`].
+    ///
+    /// Exists so a caller that needs an integer timestamp (chat-common's
+    /// `date_ms`, a sort key, a period bucket) can get one *after*
+    /// parsing through this crate, instead of reaching for
+    /// `chrono::DateTime::parse_from_rfc3339(..).timestamp_millis()` and
+    /// re-deciding the parse rules locally.
+    pub fn to_unix_millis(&self) -> i64 {
+        self.0.timestamp_millis()
     }
 
     /// Borrow the underlying `chrono` type. Use sparingly — preferring
@@ -213,6 +239,47 @@ pub fn parse_custom_strftime(
             input: s.to_string(),
             source,
         })
+}
+
+/// Parse a timestamp in an arbitrary `chrono` strftime format that
+/// carries **no offset**, assuming UTC.
+///
+/// The custom-format sibling of [`parse_with_assumed_utc`], and it
+/// inherits that function's restriction: "assume UTC" is only legal for
+/// an upstream feed we have audited and confirmed naive-means-UTC. Use
+/// [`parse_custom_strftime`] whenever the format *can* carry an offset.
+///
+/// It exists because some exports state their zone as a **literal word**
+/// rather than a numeric offset — Google Chat's
+/// `"Tuesday, February 11, 2025 at 11:33:35 AM UTC"` and LinkedIn's
+/// `"2026-06-16 22:11:33 UTC"` both do. chrono cannot turn the trailing
+/// `UTC` into a `FixedOffset` (`%Z` parses a zone *name* and then
+/// discards it), so the choice is between this function and every
+/// provider re-hand-rolling `NaiveDateTime::parse_from_str(..).and_utc()`
+/// — which is exactly the bypass this crate exists to stop. The audit
+/// here is the literal word in the source string.
+///
+/// The format must **not** contain an offset spec: if the input can
+/// carry a real offset, nothing should be assumed and
+/// [`parse_custom_strftime`] is the right call.
+pub fn parse_custom_strftime_assumed_utc(
+    s: &str,
+    fmt: &str,
+) -> Result<IsoOffsetTimestamp, TimestampParseError> {
+    debug_assert!(
+        !(fmt.contains("%z") || fmt.contains("%:z") || fmt.contains("%#z")),
+        "parse_custom_strftime_assumed_utc format {fmt:?} has an offset spec — an input that \
+         carries a real offset must be parsed with parse_custom_strftime, not assumed UTC",
+    );
+    let naive = chrono::NaiveDateTime::parse_from_str(s, fmt).map_err(|source| {
+        TimestampParseError::Invalid {
+            input: s.to_string(),
+            source,
+        }
+    })?;
+    Ok(IsoOffsetTimestamp(
+        Utc.from_utc_datetime(&naive).fixed_offset(),
+    ))
 }
 
 /// Parse a bare `YYYY-MM-DD` date as **midnight UTC** of that day.
@@ -487,6 +554,44 @@ mod tests {
     fn parse_custom_strftime_yolink_shape() {
         let t = parse_custom_strftime("2026/06/10 14:23:00-0700", "%Y/%m/%d %H:%M:%S%z").unwrap();
         assert_eq!(t.to_rfc3339_secs(), "2026-06-10T14:23:00-07:00");
+    }
+
+    #[test]
+    fn parse_custom_strftime_assumed_utc_google_chat_and_linkedin_shapes() {
+        // Google Chat's export states its zone as the literal word "UTC".
+        let t = parse_custom_strftime_assumed_utc(
+            "Tuesday, February 11, 2025 at 11:33:35 AM UTC",
+            "%A, %B %d, %Y at %I:%M:%S %p UTC",
+        )
+        .unwrap();
+        assert_eq!(t.to_rfc3339_secs(), "2025-02-11T11:33:35+00:00");
+        // LinkedIn's, with the trailing " UTC" already trimmed off.
+        let t =
+            parse_custom_strftime_assumed_utc("2026-06-16 22:11:33", "%Y-%m-%d %H:%M:%S").unwrap();
+        assert_eq!(t.to_rfc3339_secs(), "2026-06-16T22:11:33+00:00");
+        // Unparseable input is an error, never a fabricated stamp.
+        assert!(parse_custom_strftime_assumed_utc("", "%Y-%m-%d %H:%M:%S").is_err());
+        assert!(
+            parse_custom_strftime_assumed_utc("not a date", "%Y-%m-%d %H:%M:%S").is_err(),
+            "a shape we don't recognize must not resolve to the epoch",
+        );
+    }
+
+    #[test]
+    fn to_unix_millis_round_trips() {
+        let t = parse_strict("2026-06-10T14:23:00-07:00").unwrap();
+        assert_eq!(
+            IsoOffsetTimestamp::from_unix_millis(t.to_unix_millis())
+                .unwrap()
+                .to_unix_millis(),
+            t.to_unix_millis(),
+        );
+        assert_eq!(
+            parse_strict("1970-01-01T00:00:00Z")
+                .unwrap()
+                .to_unix_millis(),
+            0
+        );
     }
 
     #[test]

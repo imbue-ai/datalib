@@ -46,7 +46,12 @@ use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
 /// no-op (caught by `row-click-scroll-position.spec.ts`).
 ///
 /// v2 = period-bucketed (one .md per (chat, period_key) instead of one per chat).
-pub const RENDER_VERSION: u32 = 3;
+///
+/// v4 = a bucket with no items no longer gets a chat-level row stamped
+/// `1970-01-01T00:00:00`; its `when_ts` is null, as is that of any row
+/// whose `date_sent` is not a representable instant. See
+/// `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 4;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: &str = "signal";
@@ -210,11 +215,11 @@ fn render_one(
         }
     }
 
-    let when_ts = doc
-        .items
-        .last()
-        .map(|i| iso_ts(i.date_sent))
-        .unwrap_or_else(|| iso_ts(0));
+    // Latest real stamp in the bucket, or nothing. An empty bucket used
+    // to get `iso_ts(0)` — a chat-level row claiming 1970 — which is
+    // exactly the fabrication §6 forbids. `None` reaches `when_ts` as a
+    // null; `GridRow::builder()` already takes it.
+    let when_ts = doc.items.last().and_then(|i| iso_ts(i.date_sent));
 
     let md = render_markdown(
         doc,
@@ -241,7 +246,7 @@ fn render_one(
         &chat_uuid,
         &doc_title,
         &recipient_display,
-        &when_ts,
+        when_ts.clone(),
         &md_rel_path,
     )?);
 
@@ -261,7 +266,7 @@ fn render_one(
             &author,
             text,
             idx as i64,
-            &iso_ts(item.date_sent),
+            iso_ts(item.date_sent),
             &md_rel_path,
         )?);
         messages_rendered += 1;
@@ -362,7 +367,10 @@ fn render_markdown(
         }
         let msg_uuid = signal_message_uuid(source_name, chat_id, &item.author_id, item.date_sent);
         let author = author_display(parsed, item);
-        let ts = iso_ts(item.date_sent);
+        // Words, not a fabricated date, when `date_sent` isn't a
+        // representable instant — matching the null this row's
+        // `when_ts` carries.
+        let ts = iso_ts(item.date_sent).unwrap_or_else(|| "(no timestamp)".to_string());
         let body = item.text.as_deref().unwrap_or("");
         // Shared `section_attrs` produces the same `id="m-{uuid}"
         // data-section-uuid="{uuid}"` fragment every other provider
@@ -397,7 +405,7 @@ fn chat_grid_row(
     chat_uuid: &str,
     title: &str,
     recipient_display: &str,
-    when_ts: &str,
+    when_ts: Option<String>,
     qmd_rel: &str,
 ) -> Result<GridRow> {
     base_row(
@@ -407,7 +415,7 @@ fn chat_grid_row(
         Some(recipient_display.to_string()),
         chat_uuid.to_string(),
         None,
-        Some(when_ts.to_string()),
+        when_ts,
         title.to_string(),
         // Drive the Channel column off the bare chat name (the recipient
         // display), mirroring WhatsApp where channel == the chat's
@@ -429,7 +437,7 @@ fn message_grid_row(
     author: &str,
     text: &str,
     idx: i64,
-    when_ts: &str,
+    when_ts: Option<String>,
     qmd_rel: &str,
 ) -> Result<GridRow> {
     base_row(
@@ -439,7 +447,7 @@ fn message_grid_row(
         Some(author.to_string()),
         chat_uuid.to_string(),
         Some(idx),
-        Some(when_ts.to_string()),
+        when_ts,
         title.to_string(),
         // Channel == the chat name (recipient display), same value the
         // chat-level row carries, so every Signal row populates the
@@ -494,19 +502,41 @@ fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {
         .unwrap_or_else(|| format!("recipient_{}", item.author_id))
 }
 
-fn iso_ts(date_sent_ms: i64) -> String {
-    IsoOffsetTimestamp::from_unix_millis(date_sent_ms)
-        .map(|t| t.to_rfc3339_secs())
-        .unwrap_or_else(|| {
-            // Out-of-range epoch ms (chrono covers ±580B years) is
-            // unreachable in practice for Signal payloads. Preserve a
-            // sortable epoch as the visible-broken fallback — and warn
-            // loudly so the row gets noticed. See data_architecture_ingestion.md
-            // "no fabricated timestamps".
+/// `date_sent` (epoch ms) as a grid-ready `when_ts`, or `None` when it
+/// isn't a representable instant.
+///
+/// This used to fall back to the literal `"1970-01-01T00:00:00+00:00"`,
+/// on the reasoning that a sortable epoch is a "visible-broken"
+/// marker. It isn't visible at all: in the grid it is indistinguishable
+/// from a real 1970 message, it sorts into a real position, and it
+/// matches `before:` / `after:` queries it should not. Null is the
+/// honest answer and the one
+/// `docs/dev/data_architecture_parse_and_render.md` §6 requires.
+fn iso_ts(date_sent_ms: i64) -> Option<String> {
+    match IsoOffsetTimestamp::from_unix_millis(date_sent_ms) {
+        Some(t) => Some(t.to_rfc3339_secs()),
+        None => {
             tracing::warn!(
                 date_sent_ms,
-                "signal::iso_ts: date_sent_ms out of chrono range; fallback used"
+                "signal::iso_ts: date_sent_ms out of chrono range; when_ts left null"
             );
-            "1970-01-01T00:00:00+00:00".to_string()
-        })
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    /// `date_sent` values chrono cannot represent must produce no
+    /// timestamp. This used to be the literal string
+    /// `"1970-01-01T00:00:00+00:00"`, which in the grid is
+    /// indistinguishable from a real 1970 message.
+    #[test]
+    fn iso_ts_yields_none_for_unrepresentable_values() {
+        assert_eq!(iso_ts(0).as_deref(), Some("1970-01-01T00:00:00+00:00"));
+        assert_eq!(iso_ts(i64::MAX), None);
+        assert_eq!(iso_ts(i64::MIN), None);
+    }
 }

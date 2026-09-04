@@ -28,7 +28,10 @@ use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a row whose `date` field is missing or non-numeric gets a null
+///     `when_ts` instead of a real-looking `1970-01-01T00:00:00`. See
+///     `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 2;
 
 /// Projection for [`BlobBundle::load`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -223,7 +226,9 @@ fn item(v: &Value) -> NormalizedChatItem {
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| uuid5(&v.to_string()));
-    let date_ms = v.get("date").and_then(Value::as_i64).unwrap_or(0);
+    // Missing or non-numeric `date` is "we don't know when", which is a
+    // null `when_ts` — not the epoch.
+    let date_ms = v.get("date").and_then(Value::as_i64);
 
     match kind {
         "call" => {
@@ -346,10 +351,18 @@ fn fmt_duration(s: i64) -> String {
 }
 
 /// `YYYY-MM` (UTC) bucket key for a unix-millis timestamp.
-fn month_of(ms: i64) -> String {
+///
+/// An undated item still has to be filed somewhere or it vanishes from
+/// the rendered tree, so it keeps filing under the epoch bucket —
+/// exactly where it has always gone. That is a filing decision, not a
+/// claim about when the message happened; its `when_ts` is null. See
+/// [`datalib_etl::periodize::Period::key_for_undated`] for the full
+/// reasoning (chiefly: `period_key` feeds `markdown_uuid`, so a new key
+/// would retire the page's identity).
+fn month_of(ms: Option<i64>) -> String {
     use chrono::TimeZone;
     chrono::Utc
-        .timestamp_millis_opt(ms)
+        .timestamp_millis_opt(ms.unwrap_or(0))
         .single()
         .map(|d| d.format("%Y-%m").to_string())
         .unwrap_or_else(|| "unknown".to_string())
@@ -391,6 +404,25 @@ fn mime_for(name: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A row with no usable `date` must carry no timestamp — not the
+    /// epoch — while still landing in a bucket so it stays reachable.
+    #[test]
+    fn undated_row_has_no_timestamp_but_still_files() {
+        let messages = vec![
+            json!({"id":"nd1","kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","is_me":false,"body":"When?","attachments":[]}),
+            json!({"id":"nd2","kind":"sms","conversation_key":"+1410","conversation_display":"+1410","date":"not-a-number","is_me":true,"body":"Unclear","attachments":[]}),
+        ];
+        let chats = build_chats(&messages, &[]);
+        let items: Vec<_> = chats[0].buckets.iter().flat_map(|b| &b.items).collect();
+        assert_eq!(items.len(), 2, "undated rows are kept, not dropped");
+        for i in &items {
+            assert_eq!(i.date_ms, None, "{} fabricated a timestamp", i.message_uuid);
+        }
+        // Filed under the epoch bucket — a filing decision, not a claim
+        // about when they happened.
+        assert_eq!(chats[0].buckets[0].period_key, "1970-01");
+    }
 
     #[test]
     fn merges_calls_and_texts_into_one_conversation() {

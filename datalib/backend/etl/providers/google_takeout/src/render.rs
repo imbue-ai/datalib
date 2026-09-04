@@ -28,7 +28,10 @@ use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a `created_date` / `when` we cannot parse gets a null `when_ts`
+///     instead of a real-looking `1970-01-01T00:00:00`. See
+///     `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 2;
 
 /// Projection for [`BlobBundle::load`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -301,15 +304,30 @@ fn space_of_dir(dir: &str) -> String {
 }
 
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
-/// timestamp to unix millis. Recent exports use a narrow no-break space
-/// (U+202F) before AM/PM; normalize it first. Returns 0 on any
-/// unexpected shape.
-fn parse_date_ms(s: &str) -> i64 {
+/// timestamp to unix millis, or `None` on any shape we don't recognize.
+///
+/// Recent exports use a narrow no-break space (U+202F) before AM/PM;
+/// normalize it first.
+///
+/// **Assume-UTC is legal here and the audit is in the string.** The
+/// export states its zone as the literal trailing word `UTC` — chrono
+/// cannot turn that into an offset, so this is a naive parse plus a UTC
+/// assumption. That assumption is only permitted inside `datalib-time`
+/// (see its module docs), which is why this calls
+/// `parse_custom_strftime_assumed_utc` rather than doing
+/// `NaiveDateTime::parse_from_str(..).and_utc()` locally.
+///
+/// It used to return `0` on an unexpected shape, which put a real-looking
+/// 1970 stamp in the grid. `None` now reaches `when_ts` as a null.
+fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().replace(['\u{202f}', '\u{00a0}'], " ");
-    chrono::NaiveDateTime::parse_from_str(&s, "%A, %B %d, %Y at %I:%M:%S %p UTC")
-        .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%A, %B %e, %Y at %I:%M:%S %p UTC"))
-        .map(|dt| dt.and_utc().timestamp_millis())
-        .unwrap_or(0)
+    const FMTS: [&str; 2] = [
+        "%A, %B %d, %Y at %I:%M:%S %p UTC",
+        "%A, %B %e, %Y at %I:%M:%S %p UTC",
+    ];
+    FMTS.iter()
+        .find_map(|fmt| datalib_time::parse_custom_strftime_assumed_utc(&s, fmt).ok())
+        .map(|t| t.to_unix_millis())
 }
 
 // ── Google Voice ────────────────────────────────────────────────────
@@ -541,25 +559,38 @@ fn party_id(party: Option<&Value>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Unix millis from the canonical `when` (RFC3339), falling back to the
-/// raw value then 0.
-fn voice_date_ms(m: &Value) -> i64 {
+/// Unix millis from the canonical `when` (RFC 3339), falling back to the
+/// raw value, then to `None`.
+///
+/// `None` rather than `0`: a Voice row we cannot date has no timestamp,
+/// and §6 says that is a null `when_ts`, not the epoch. Parsed through
+/// `datalib-time` so the rule for reading an offsetted string lives in
+/// one crate (rule P3).
+fn voice_date_ms(m: &Value) -> Option<i64> {
     let ts = m
         .get("when")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .or_else(|| m.get("when_raw").and_then(Value::as_str))
         .unwrap_or("");
-    chrono::DateTime::parse_from_rfc3339(ts)
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0)
+    datalib_time::parse_strict(ts)
+        .ok()
+        .map(|t| t.to_unix_millis())
 }
 
 /// `YYYY-MM` (UTC) bucket key for a unix-millis timestamp.
-fn month_of(ms: i64) -> String {
+///
+/// An undated item still has to be filed somewhere or it vanishes from
+/// the rendered tree, so it keeps filing under the epoch bucket —
+/// exactly where it has always gone. That is a filing decision, not a
+/// claim about when it happened; its `when_ts` is null. See
+/// [`datalib_etl::periodize::Period::key_for_undated`] for the full
+/// reasoning (chiefly: `period_key` feeds `markdown_uuid`, so a new key
+/// would retire the page's identity).
+fn month_of(ms: Option<i64>) -> String {
     use chrono::TimeZone;
     chrono::Utc
-        .timestamp_millis_opt(ms)
+        .timestamp_millis_opt(ms.unwrap_or(0))
         .single()
         .map(|d| d.format("%Y-%m").to_string())
         .unwrap_or_else(|| "unknown".to_string())
@@ -650,8 +681,45 @@ mod tests {
     #[test]
     fn parse_date_ms_handles_narrow_no_break_space() {
         let feb = parse_date_ms("Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC");
-        assert!(feb > 0, "narrow no-break space must still parse");
+        assert!(
+            feb.is_some_and(|ms| ms > 0),
+            "narrow no-break space must still parse"
+        );
         assert_eq!(month_of(feb), "2025-02");
+    }
+
+    /// A shape we don't recognize must produce no timestamp, never the
+    /// epoch — the doc comment on `parse_date_ms` used to promise `0`,
+    /// and those rows sorted into the grid as real 1970 records.
+    #[test]
+    fn unparseable_dates_yield_none_not_the_epoch() {
+        for bad in [
+            "",
+            "not a date",
+            // Right words, wrong shape (no weekday, no "at").
+            "February 11, 2025 11:33:35 AM UTC",
+            // A zone we have not audited — refusing is the point.
+            "Tuesday, February 11, 2025 at 11:33:35 AM PST",
+        ] {
+            assert_eq!(
+                parse_date_ms(bad),
+                None,
+                "parse_date_ms({bad:?}) fabricated a stamp"
+            );
+        }
+        // …and an undated item still files, under the epoch bucket.
+        assert_eq!(month_of(None), "1970-01");
+    }
+
+    #[test]
+    fn voice_date_ms_yields_none_when_undated() {
+        assert_eq!(voice_date_ms(&json!({})), None);
+        assert_eq!(voice_date_ms(&json!({"when": ""})), None);
+        assert_eq!(voice_date_ms(&json!({"when": "yesterday"})), None);
+        assert_eq!(
+            voice_date_ms(&json!({"when": "2019-08-01T14:49:00.742-07:00"})),
+            Some(1_564_696_140_742),
+        );
     }
 
     #[test]

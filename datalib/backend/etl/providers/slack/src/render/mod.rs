@@ -22,7 +22,7 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-use chrono::{DateTime, TimeZone, Utc};
+use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 
 // UUIDv5 recipes for Slack message and thread ids live in
@@ -32,23 +32,52 @@ use serde_json::Value;
 pub use super::download::schema_raw::{slack_message_uuid, slack_thread_uuid};
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
 
-/// Render Slack `ts` (unix seconds + fractional, UTC) as ISO-8601
-/// with microsecond precision and `+00:00` offset.
-pub fn ts_to_iso(ts: &str) -> String {
+/// Parse a Slack `ts` — unix seconds with a fractional part, always UTC
+/// (`"1728499573.123456"`) — into an offsetted instant.
+///
+/// **The one place a Slack `ts` is interpreted.** There used to be two
+/// copies of this arithmetic, one here and one in `render/render.rs`,
+/// each with its own `unwrap_or(0)`s; a `ts` Slack never sent, or sent
+/// in a shape we didn't expect, came out of both as a real-looking
+/// `1970-01-01T00:00:00`. Now every unexpected shape is `None`, and
+/// `None` reaches the grid as a null `when_ts` — see
+/// `docs/dev/data_architecture_parse_and_render.md` §6.
+///
+/// The sub-second part is padded/truncated to microseconds because that
+/// is the precision Slack actually uses; a `ts` with no fractional part
+/// at all is still a valid instant (`.0`), but a *non-numeric* one is
+/// not, and is rejected rather than silently read as zero.
+///
+/// Note this does **not** touch row identity: `slack_message_uuid` /
+/// `slack_thread_uuid` are keyed on the raw `ts` string, never on the
+/// parsed value.
+pub fn parse_slack_ts(ts: &str) -> Option<IsoOffsetTimestamp> {
     let (secs_str, frac_str) = ts.split_once('.').unwrap_or((ts, ""));
-    let secs: i64 = secs_str.parse().unwrap_or(0);
-    let mut frac = frac_str.to_string();
-    if frac.len() < 6 {
-        frac.push_str(&"0".repeat(6 - frac.len()));
-    } else if frac.len() > 6 {
-        frac.truncate(6);
-    }
-    let micros: u32 = frac.parse().unwrap_or(0);
-    let dt: DateTime<Utc> = Utc
-        .timestamp_opt(secs, micros * 1_000)
-        .single()
-        .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
-    dt.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()
+    let secs: i64 = secs_str.parse().ok()?;
+    let micros: i64 = if frac_str.is_empty() {
+        0
+    } else {
+        let mut frac = frac_str.to_string();
+        if frac.len() < 6 {
+            frac.push_str(&"0".repeat(6 - frac.len()));
+        } else {
+            frac.truncate(6);
+        }
+        frac.parse().ok()?
+    };
+    let base = IsoOffsetTimestamp::from_unix_millis(secs.checked_mul(1000)?)?;
+    Some(base.bump_micros(micros))
+}
+
+/// Render Slack `ts` as ISO-8601 with microsecond precision and a
+/// `+00:00` offset, or `None` when the `ts` isn't one we can read.
+pub fn ts_to_iso(ts: &str) -> Option<String> {
+    parse_slack_ts(ts).map(|t| t.to_rfc3339_micros())
+}
+
+/// Slack `ts` → unix milliseconds, or `None` when unparseable.
+pub fn ts_to_ms(ts: &str) -> Option<i64> {
+    parse_slack_ts(ts).map(|t| t.to_unix_millis())
 }
 
 #[derive(Debug, Clone)]
@@ -141,7 +170,11 @@ pub struct Message {
     pub is_thread_root: bool,
     pub user_id: Option<String>,
     pub text: String,
-    pub ts_iso: String,
+    /// The parsed `ts` as ISO-8601, or `None` when `ts` isn't a shape
+    /// we can read. Used as the primary sort key; `None` sorts first,
+    /// which is where an unreadable `ts` used to land anyway when it
+    /// was silently read as the epoch.
+    pub ts_iso: Option<String>,
     /// Original Slack message JSON, preserved verbatim. The renderer
     /// reaches into this for `files`, `reactions`, and any future
     /// field we don't promote to a struct member.

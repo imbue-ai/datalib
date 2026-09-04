@@ -518,11 +518,17 @@ fn build_grid_rows(
 ) -> Result<Vec<GridRow>> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
-    let first_ts = doc
-        .items
-        .first()
-        .map(|i| iso_from_ms(i.date_ms))
-        .unwrap_or_else(|| iso_from_ms(0));
+    // The chat-level row is stamped with the earliest *real* timestamp
+    // in the bucket. `min()` over the items that have one rather than
+    // "the first item's", for two reasons: an undated item sorts to the
+    // front (`None < Some` in every provider's `sort_by_key`), so
+    // reading item 0 would hand a whole conversation a null; and a
+    // bucket with no dated item at all — including the empty bucket
+    // `render_markdown` renders as "_(no messages)_" — then correctly
+    // gets `None` instead of the 1970 stamp it used to get. Providers
+    // sort ascending, so for a fully-dated bucket this is the same value
+    // `items.first()` gave.
+    let first_ts = when_ts_from_ms(doc.items.iter().filter_map(|i| i.date_ms).min());
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
 
@@ -532,7 +538,7 @@ fn build_grid_rows(
             .provider(profile.provider)
             .kind(profile.chat_kind.clone())
             .source_label(profile.source_label.clone())
-            .when_ts(Some(first_ts))
+            .when_ts(first_ts)
             .account(chat.account.clone())
             .org_uuid(chat.org_uuid.clone())
             .org_name(chat.org_name.clone())
@@ -590,7 +596,7 @@ fn build_grid_rows(
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same `Scope::Upstream`.
                 .upstream_scope(chat.upstream_scope.clone())
-                .when_ts(Some(iso_from_ms(item.date_ms)))
+                .when_ts(when_ts_from_ms(item.date_ms))
                 .author(Some(item.author_display.clone()))
                 .account(chat.account.clone())
                 .org_uuid(chat.org_uuid.clone())
@@ -622,7 +628,7 @@ fn build_grid_rows(
                     .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
                     .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
                     .upstream_scope(chat.upstream_scope.clone())
-                    .when_ts(Some(iso_from_ms(r.date_ms)))
+                    .when_ts(when_ts_from_ms(r.date_ms))
                     .author(Some(r.reactor_display.clone()))
                     .account(chat.account.clone())
                     .org_uuid(chat.org_uuid.clone())
@@ -686,7 +692,18 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
         h.update(b"|");
         h.update(item.author_id.as_bytes());
         h.update(b"|");
-        h.update(item.date_ms.to_be_bytes());
+        // Tag the presence of a timestamp before its bytes, so "no
+        // timestamp" and "the epoch" hash differently. Without the tag
+        // an item that gains a real `0` stamp — or loses one and falls
+        // back to null — would keep its old fingerprint and never
+        // re-render.
+        match item.date_ms {
+            Some(ms) => {
+                h.update([1u8]);
+                h.update(ms.to_be_bytes());
+            }
+            None => h.update([0u8]),
+        }
         h.update(b"|");
         h.update(item.text.as_deref().unwrap_or("").as_bytes());
         if let Some(url) = &item.source_url {
@@ -730,16 +747,42 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
 // Format helpers
 // ─────────────────────────────────────────────────────────────────────
 
-fn iso_from_ms(ms: i64) -> String {
-    IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.to_rfc3339_secs())
-        .unwrap_or_else(|| {
-            tracing::warn!(ms, "iso_from_ms: epoch-ms out of chrono range");
-            "1970-01-01T00:00:00+00:00".to_string()
-        })
+/// A `GridRow.when_ts` from an item's optional epoch-ms stamp, or
+/// `None`.
+///
+/// Both ways of having no answer land on `None`, which is the whole
+/// point: an item upstream never stamped (`ms == None`) and an item
+/// whose stamp is not a representable instant are equally "we do not
+/// know when this happened," and §6 says that is a null column, never a
+/// stand-in value. `GridRow.when_ts` is already `Option<String>` and
+/// `split_when_ts` already leaves the index columns NULL, so `None`
+/// needs nothing else built to receive it.
+fn when_ts_from_ms(ms: Option<i64>) -> Option<String> {
+    let ms = ms?;
+    match IsoOffsetTimestamp::from_unix_millis(ms) {
+        Some(t) => Some(t.to_rfc3339_secs()),
+        None => {
+            tracing::warn!(
+                ms,
+                "when_ts_from_ms: epoch-ms out of chrono range; when_ts left null"
+            );
+            None
+        }
+    }
 }
 
-fn display_ts(ms: i64) -> String {
+/// Human-readable timestamp for the markdown body.
+///
+/// Three cases, deliberately spelled differently so a reader can tell
+/// them apart: a real instant renders normally; an item upstream never
+/// stamped says so in words; and a stamp that exists but is not a
+/// representable instant keeps its raw value on screen (`@{ms}ms`),
+/// because "we have a number and it is nonsense" is a different fact
+/// from "we have nothing" and the number is the only lead a reader has.
+fn display_ts(ms: Option<i64>) -> String {
+    let Some(ms) = ms else {
+        return "(no timestamp)".to_string();
+    };
     IsoOffsetTimestamp::from_unix_millis(ms)
         .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("@{ms}ms"))
@@ -783,7 +826,7 @@ mod tests {
                     message_uuid: "33333333-3333-3333-3333-333333333333".to_string(),
                     author_id: "1".to_string(),
                     author_display: "Picard".to_string(),
-                    date_ms: 12442118400000,
+                    date_ms: Some(12442118400000),
                     text: Some("Make it so.".to_string()),
                     kind: ItemKind::Text,
                     attachments: vec![],
@@ -791,7 +834,7 @@ mod tests {
                         reaction_uuid: "44444444-4444-4444-4444-444444444444".to_string(),
                         reactor_display: "Will Riker".to_string(),
                         emoji: "🫡".to_string(),
-                        date_ms: 12442118410000,
+                        date_ms: Some(12442118410000),
                         source_ref: None,
                     }],
                     system_note: None,
@@ -1031,6 +1074,109 @@ mod tests {
         assert_ne!(
             compute_fingerprint(1, &plain, &plain.buckets[0]),
             compute_fingerprint(1, &chat, &chat.buckets[0]),
+        );
+    }
+
+    fn test_profile() -> RenderProfile {
+        RenderProfile {
+            provider: "test",
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            render_version: 1,
+        }
+    }
+
+    /// The bug this whole `Option<i64>` change exists to remove: an item
+    /// upstream never stamped used to land in the grid as a real-looking
+    /// `1970-01-01T00:00:00+00:00`. It must be null instead.
+    #[test]
+    fn undated_item_gets_a_null_when_ts_not_the_epoch() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].date_ms = None;
+        chat.buckets[0].items[0].reactions[0].date_ms = None;
+
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
+        for r in &rows {
+            assert_eq!(
+                r.when_ts, None,
+                "{} row fabricated a timestamp: {:?}",
+                r.kind, r.when_ts
+            );
+        }
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.when_ts.as_deref().is_some_and(|t| t.starts_with("1970"))),
+            "no row may carry an epoch stand-in",
+        );
+    }
+
+    /// An empty bucket is reachable — `render_markdown` renders it as
+    /// "_(no messages)_" — and used to hand its chat-level row a 1970
+    /// stamp.
+    #[test]
+    fn empty_bucket_chat_row_has_no_timestamp() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items.clear();
+
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
+        assert_eq!(rows.len(), 1, "only the chat-level row");
+        assert_eq!(rows[0].when_ts, None);
+    }
+
+    /// A dated bucket is unaffected, and a bucket whose *first* item is
+    /// undated still takes the earliest real stamp rather than a null.
+    #[test]
+    fn chat_row_takes_the_earliest_real_timestamp() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        let dated = chat.buckets[0].items[0].clone();
+        let mut undated = dated.clone();
+        undated.message_uuid = "55555555-5555-5555-5555-555555555555".to_string();
+        undated.date_ms = None;
+        undated.reactions.clear();
+        // Undated first, the order every provider's `sort_by_key` gives
+        // (`None < Some`).
+        chat.buckets[0].items = vec![undated, dated];
+
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
+        assert_eq!(
+            rows[0].when_ts.as_deref(),
+            Some("2364-04-11T00:00:00+00:00"),
+            "chat row keeps the bucket's earliest real stamp",
+        );
+    }
+
+    #[test]
+    fn undated_item_renders_words_not_a_fake_date_in_markdown() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].date_ms = None;
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        assert!(md.contains("(no timestamp)"), "{md}");
+        assert!(!md.contains("1970"), "{md}");
+    }
+
+    /// `None` and `Some(0)` are different facts and must not collide in
+    /// the fingerprint, or an item that gains or loses a stamp never
+    /// re-renders.
+    #[test]
+    fn fingerprint_separates_no_timestamp_from_the_epoch() {
+        let mut undated = mk_chat();
+        undated.buckets[0].items[0].date_ms = None;
+        let mut epoch = mk_chat();
+        epoch.buckets[0].items[0].date_ms = Some(0);
+        assert_ne!(
+            compute_fingerprint(1, &undated, &undated.buckets[0]),
+            compute_fingerprint(1, &epoch, &epoch.buckets[0]),
         );
     }
 

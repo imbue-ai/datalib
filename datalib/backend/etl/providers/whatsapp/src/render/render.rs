@@ -40,7 +40,11 @@ use sqlx::Row;
 ///
 /// v1 = chat-common's unified block style + reactions inline +
 /// per-message `id="m-{uuid}"` anchors.
-pub const RENDER_VERSION: u32 = 3;
+///
+/// v4 = a message or reaction whose `timestamp` column is NULL gets a
+/// null `when_ts` instead of a real-looking `1970-01-01T00:00:00`. See
+/// `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 4;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
