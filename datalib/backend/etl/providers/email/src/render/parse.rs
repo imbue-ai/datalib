@@ -287,7 +287,7 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
 /// Per-bucket dolt_diff scan. Delegates to the shared
 /// [`datalib_etl::doltlite_raw::scan_buckets`] helper, which is
 /// the same primitive every other provider uses (slack / chatgpt /
-/// anthropic / signal). Bucket key shape is `"<account_id>|<thread_id>"`
+/// claude / signal). Bucket key shape is `"<account_id>|<thread_id>"`
 /// so it fits the helper's `HashSet<String>` API; we split it back
 /// into a `(String, String)` pair locally for the load step.
 ///

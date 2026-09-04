@@ -8,7 +8,7 @@
 //! YoLink-specific notes:
 //!
 //! - **Time-windowed sampling, not UPSERT-of-everything.** Unlike the
-//!   JSON-shape providers (anthropic, chatgpt, notion, …), YoLink's
+//!   JSON-shape providers (claude, chatgpt, notion, …), YoLink's
 //!   raw rows are individual sensor readings keyed by `(device, ts,
 //!   metric)`. Download walks forward-marching `(start_ms, end_ms)`
 //!   windows per device, curls a signed-URL CSV per window, and

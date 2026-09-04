@@ -17,7 +17,7 @@
 //!   `<span>`, beeper's per-reaction `<span>`).
 //! * [`msg_div_open`] / [`MSG_DIV_CLOSE`] — full `<div>` wrapper with
 //!   the standard `class="msg msg--{provider}"` tag. Use this when each
-//!   message renders as its own "card" block (chatgpt, anthropic, slack,
+//!   message renders as its own "card" block (chatgpt, claude, slack,
 //!   beeper messages).
 //!
 //! The `data-section-uuid` MUST be byte-equal to the matching

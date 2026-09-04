@@ -22,8 +22,8 @@ which is the standard insta-with-bazel idiom: insta resolves snapshot
 paths against the user's actual workspace, not the bazel sandbox.
 
 When the underlying `rust_test` uses additional `data` deps + `env` vars
-(e.g. //datalib/backend/etl/providers/anthropic:anthropic_render,
-which reaches its fixture tree through `ANTHROPIC_FIXTURE_DIR`), pass
+(e.g. //datalib/backend/etl/providers/claude:claude_render,
+which reaches its fixture tree through `CLAUDE_FIXTURE_DIR`), pass
 them via `extra_data` + `extra_env` so the `.update` target picks them
 up too — `rust_test`'s env doesn't propagate to a sibling sh_binary.
 """

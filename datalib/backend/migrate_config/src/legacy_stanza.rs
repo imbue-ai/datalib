@@ -28,10 +28,10 @@ use std::path::{Path, PathBuf};
 
 pub use datalib_source_common::{Defaults, DownloadParams, EventTapeConfig, SourceCommon};
 
-use datalib_etl_anthropic_config::{AnthropicConfig, ClaudeExportConfig};
 use datalib_etl_beeper_config::BeeperConfig;
 use datalib_etl_carddav_config::CarddavConfig;
 use datalib_etl_chatgpt_config::ChatgptConfig;
+use datalib_etl_claude_config::{ClaudeConfig, ClaudeExportConfig};
 use datalib_etl_email_config::EmailConfig;
 use datalib_etl_fsindex_config::FsindexConfig;
 use datalib_etl_github_config::GithubConfig;
@@ -144,7 +144,7 @@ impl SourceEntry {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceConfig {
     ClaudeExport(ClaudeExportConfig),
-    ClaudeApi(AnthropicConfig),
+    ClaudeApi(ClaudeConfig),
     ChatgptApi(ChatgptConfig),
     SlackApi(SlackConfig),
     GithubApi(GithubConfig),

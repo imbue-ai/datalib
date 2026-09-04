@@ -60,7 +60,7 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # tagged `manual`, never auto-run via `bazel test //...`. They
     # shell out to `latchkey`, which reads tokens from the host's
     # keychain / Secret Service — fundamentally non-hermetic.
-    "datalib/backend/etl/providers/anthropic:anthropic_live": (
+    "datalib/backend/etl/providers/claude:claude_live": (
         "manual live test, latchkey needs host keychain"
     ),
     "datalib/backend/etl/providers/chatgpt:chatgpt_live": (

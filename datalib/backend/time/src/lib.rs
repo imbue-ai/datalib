@@ -62,7 +62,7 @@ impl IsoOffsetTimestamp {
 
     /// Bump this timestamp forward by `n` microseconds. The canonical
     /// recipe for synthesizing sub-item stamps when upstream gave the
-    /// parent a time but didn't give one to each child (anthropic /
+    /// parent a time but didn't give one to each child (claude /
     /// chatgpt blocks within a message, etc.). Keeps within-parent
     /// ordering stable. `n` can be negative.
     pub fn bump_micros(&self, n: i64) -> Self {

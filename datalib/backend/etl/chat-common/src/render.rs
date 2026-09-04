@@ -55,8 +55,8 @@ pub struct RenderProfile {
     ///
     /// Per-profile rather than a chat-common constant because a
     /// provider can render more than one shape of top-level page
-    /// through this path: anthropic runs conversations and Claude
-    /// *Projects* through two profiles, and a project page is not a
+    /// through this path: the Claude provider runs conversations and
+    /// Claude *Projects* through two profiles, and a project page is not a
     /// conversation. Hardcoding `"conversation"` here stamped a
     /// backpointer on project rows that regenerated a different id —
     /// caught by `ingested_tng_test`'s round-trip check, invisible

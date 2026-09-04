@@ -57,7 +57,7 @@ pub fn run(
         // `claude_export` is deliberately absent: its download reads an
         // export off disk and makes no requests, so there is no HTTP to
         // play back.
-        "claude_api" => Box::new(datalib_etl_anthropic::synthesize::AnthropicSynth::new(
+        "claude_api" => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
             input.clone(),
         )),
         "chatgpt_api" => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(

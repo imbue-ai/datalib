@@ -232,7 +232,7 @@ The rationale: **if all we wanted was a copy of the upstream bytes, we'd just us
 
 Two rules follow:
 
-- **Normalize at render time, not download time.** A lesson learned on the anthropic port: we used to pre-normalize the API response (renaming fields, collapsing shapes, dropping subtrees) at fetch time. We don't anymore. Decoding a binary wire encoding to JSON of the **same** semantic content is **not normalization** — every field upstream sent us is still present, with the same values. Normalization means pre-shaping into our internal model (renaming, collapsing, projecting), which we defer to render.
+- **Normalize at render time, not download time.** A lesson learned on the claude port: we used to pre-normalize the API response (renaming fields, collapsing shapes, dropping subtrees) at fetch time. We don't anymore. Decoding a binary wire encoding to JSON of the **same** semantic content is **not normalization** — every field upstream sent us is still present, with the same values. Normalization means pre-shaping into our internal model (renaming, collapsing, projecting), which we defer to render.
 - **Don't pollute payloads with downloader-synthesized keys.** `_fetched_at`, `_listing_update_time` etc. are bookkeeping, not upstream data; promote them to real columns on the entity table (or its `_bookkeeping` sidecar), not into the JSON.
 
 Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or index into qmd can be recomputed from raw without re-touching the network. `RENDER_VERSION` (in each provider's `render/render.rs`) is the explicit lever for "force a rebake of all sidecars even when payloads are unchanged."
@@ -318,7 +318,7 @@ Sidecar `source_fingerprint` and the grid_index-step compare stay — they still
 Cursor / resume is the **download-side specialization** of the [Incremental update](#efficiently-incremental) pattern: "what was the last upstream identifier we successfully recorded?" answers "what's the inputs hash for the next walk?" Two patterns in the tree, picked by upstream API shape:
 
 - **Forward-walk + refresh window** (slack, github, gitlab): resume from `max(ts)` of previously-recorded items; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
-- **Listing diff** (anthropic, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `sync.since:` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
+- **Listing diff** (claude, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `sync.since:` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
 - **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
 
 No checkpoint files. The dedup index is the resume cursor.

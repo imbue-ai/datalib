@@ -111,7 +111,7 @@ pub fn plan(
         };
         // …and the shape for a provider serving more than one source
         // type, which needs a different entry point per type. Only
-        // anthropic does: `claude_api` walks the live API,
+        // claude does: `claude_api` walks the live API,
         // `claude_export` ingests an export off disk, and they share
         // one `plan_render`.
         ($cfgty:ty, $rcfgty:ty, $provider:ident, $dl:ident, $rn:ident, $tstr:expr) => {{
@@ -167,15 +167,15 @@ pub fn plan(
 
     Ok(match step_type {
         "claude_api" => arm!(
-            datalib_etl_anthropic_config::AnthropicConfig,
-            datalib_etl_anthropic_config::AnthropicRenderConfig,
-            datalib_etl_anthropic,
+            datalib_etl_claude_config::ClaudeConfig,
+            datalib_etl_claude_config::ClaudeRenderConfig,
+            datalib_etl_claude,
             "claude_api"
         ),
         "claude_export" => arm!(
-            datalib_etl_anthropic_config::ClaudeExportConfig,
-            datalib_etl_anthropic_config::ClaudeExportRenderConfig,
-            datalib_etl_anthropic,
+            datalib_etl_claude_config::ClaudeExportConfig,
+            datalib_etl_claude_config::ClaudeExportRenderConfig,
+            datalib_etl_claude,
             plan_export_download,
             plan_render,
             "claude_export"

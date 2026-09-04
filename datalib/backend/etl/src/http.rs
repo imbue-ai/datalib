@@ -7,7 +7,7 @@
 //! - In **Live** mode (default), runs the subprocess and parses the
 //!   full HTTP response — status line, every response header, and body
 //!   bytes. This is a strict superset of what individual providers used
-//!   to capture; in particular anthropic and notion used to only fetch
+//!   to capture; in particular claude and notion used to only fetch
 //!   the status code via `-w "%{http_code}"` and threw the response
 //!   headers away. They now get them for free.
 //!
@@ -328,7 +328,7 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 /// `notion_unofficial` is the provider tag the unofficial Notion client
 /// stamps on its requests (see providers/notion/src/download/unofficial.rs).
 const IMPERSONATE_PROVIDERS: &[&str] = &[
-    "anthropic",
+    "claude",
     "chatgpt",
     "slack",
     "github",

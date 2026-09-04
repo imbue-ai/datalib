@@ -2,7 +2,7 @@
 //!
 //! Every incremental downloader answers "what can I skip this run?" one
 //! of two ways. Either it re-fetches the upstream listing and filters it
-//! (anthropic, chatgpt) — in which case the config is consulted every
+//! (claude, chatgpt) — in which case the config is consulted every
 //! run and stays live — or it stores a bookmark and resumes from it
 //! (slack, github, gitlab, email, yolink). A bookmark is a *place*, not
 //! a *rule*: once it exists it answers "where do I start?" all by

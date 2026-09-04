@@ -88,7 +88,7 @@ filegroup(
         # the sample data is co-located with the code under test.
         "//datalib/backend/etl/providers/slack:tng_fixture",
         "//datalib/backend/etl/providers/chatgpt:tng_fixture",
-        "//datalib/backend/etl/providers/anthropic:tng_fixture",
+        "//datalib/backend/etl/providers/claude:tng_fixture",
         "//datalib/backend/etl/providers/beeper:tng_fixture",
         "//datalib/backend/etl/providers/contacts:tng_fixture",
         "//datalib/backend/etl/providers/email:tng_fixture",
@@ -149,7 +149,7 @@ genrule(
             "$(execpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
             "'2369-04-15T00:00:00+00:00'",
             "$(RULEDIR)/sync_workspace",
-            "datalib/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+            "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
             "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
             "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
             "tests/fixtures/github_api",
@@ -237,7 +237,7 @@ py_test(
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
         # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
-        "datalib/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+        "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
         "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
         # FIXME: move these into their provider specific directories.

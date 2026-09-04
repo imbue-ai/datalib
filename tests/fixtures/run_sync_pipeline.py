@@ -22,7 +22,7 @@ Args (positional):
     5:  --now stamp (ISO-8601)
     6:  data_root for the pipeline (rendered_md/, system/, raw/ land
         directly underneath; the DAG config + playback also stashed here)
-    7:  anthropic_api fixture dir (input)
+    7:  claude_export fixture dir (input)
     8:  chatgpt_api   fixture dir
     9:  slack_api     fixture dir
     10: github_api    fixture dir
@@ -235,7 +235,7 @@ def main() -> int:
     # file-backed ones). Raw doltlite stores always land at the
     # canonical `<data_root>/<name>/raw` regardless.
     sources: dict[str, tuple[str, Path, Path]] = {
-        "anthropic-api": ("claude_api", anth_fx, raw_root / "anthropic-api"),
+        "claude-api": ("claude_api", anth_fx, raw_root / "claude-api"),
         "chatgpt-api": ("chatgpt_api", cgpt_fx, raw_root / "chatgpt-api"),
         "slack": ("slack_api", slack_fx, raw_root / "slack"),
         "github": ("github_api", gh_fx, raw_root / "github"),
@@ -371,7 +371,7 @@ inputs = [{rendered}]"""
     # Anthropic extract reads users.json from `export_dir` (== input_path
     # in our wiring) — that file is a bulk-export artifact, not an HTTP
     # response, so seed it from the checked-in fixture tree.
-    anth_raw = raw_root / "anthropic-api"
+    anth_raw = raw_root / "claude-api"
     anth_raw.mkdir(parents=True, exist_ok=True)
     users_src = anth_fx / "users.json"
     if users_src.exists():

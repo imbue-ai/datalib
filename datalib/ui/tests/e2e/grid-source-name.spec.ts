@@ -82,10 +82,10 @@ test("the Source column shows the configured name, and source_name: filters by i
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await searchAndSettle(page, "source_name:anthropic-api type:all");
+  await searchAndSettle(page, "source_name:claude-api type:all");
   expect(
     await distinctSourceCells(page),
-  ).toEqual(["anthropic-api"]);
+  ).toEqual(["claude-api"]);
 
   // --- A name in the config changes the column's text --------------
   await writeConfig(
