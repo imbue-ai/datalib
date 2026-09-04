@@ -75,7 +75,11 @@ sh_binary(
 # JSON and emits two outputs:
 #
 #   * backend_index.doltlite_db -- the doltlite (SQLite-compatible) file the backend reads.
-#   * qmd.tar   -- the rendered conversation markdown tree.
+#   * qmd.tar    -- the rendered conversation tree (markdown, grid_rows
+#                   sidecars, render cursors, attachment blobs).
+#   * qmd_md.tar -- markdown alone, the sole input to :ingested_tng_qmd.
+#                   See tar_qmd.py for why the embedder gets its own
+#                   narrower archive.
 
 filegroup(
     name = "source_json",
@@ -120,6 +124,7 @@ genrule(
     outs = [
         "ingested/backend_index.doltlite_db",
         "ingested/qmd.tar",
+        "ingested/qmd_md.tar",
     ],
     tools = [
         "//datalib/backend/dag:datalib_dag_bin",
@@ -196,11 +201,14 @@ genrule(
         # It lives under the `unified_index/` tree the index steps own
         # (see core::layout).
         "cp $(RULEDIR)/sync_workspace/unified_index/grid/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
-        # Tar the rendered_md tree hermetically into qmd.tar.
+        # Tar the rendered_md tree hermetically: the whole tree into
+        # qmd.tar, and markdown alone into qmd_md.tar. See tar_qmd.py for
+        # why the embedding action gets its own narrower archive.
         " ".join([
             "python3 $(execpath tar_qmd.py)",
             "$(RULEDIR)/sync_workspace",
             "$(execpath ingested/qmd.tar)",
+            "$(execpath ingested/qmd_md.tar)",
         ]),
     ]),
     visibility = ["//visibility:public"],
@@ -269,8 +277,9 @@ py_test(
     ],
 )
 
-# Build a QMD (BM25 + embeddings) index over the rendered TNG markdown tree
-# and emit it as an overlay tar on top of `:ingested_tng`'s qmd.tar.
+# Build a QMD (BM25 + embeddings) index over the rendered TNG markdown
+# tree (`:ingested_tng`'s qmd_md.tar) and emit it as an overlay tar that
+# layers onto `:ingested_tng`'s qmd.tar.
 #
 # Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
 # so extracting both archives into the same directory (e.g. with
@@ -302,7 +311,14 @@ QMD_VERSION = "2.8.3"
 genrule(
     name = "ingested_tng_qmd",
     srcs = [
-        "ingested/qmd.tar",
+        # Markdown ONLY (`:ingested_tng`'s narrow archive), never the full
+        # `qmd.tar`. Bazel keys this action on the content of its inputs,
+        # so every byte in here that the embedder does not read is a byte
+        # that can invalidate a ~90s CPU-only embed for no reason — and
+        # `qmd.tar` carries two kinds that change on every single run
+        # (wall-clock render cursors, and a `source_url` holding the
+        # absolute bazel sandbox path). tar_qmd.py has the measurements.
+        "ingested/qmd_md.tar",
         # The embedding model `qmd embed` loads. See MODULE.bazel for why
         # it is fetched by bazel rather than by qmd, and why its filename
         # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
@@ -323,7 +339,7 @@ genrule(
     cmd = " ".join([
         "python3 $(execpath build_qmd_index.py)",
         "$(execpath //datalib/backend/qmd_indexer:qmd_indexer_bin)",
-        "$(execpath ingested/qmd.tar)",
+        "$(execpath ingested/qmd_md.tar)",
         "$(execpath ingested/qmd-index.tar)",
         QMD_VERSION,
         "$(execpath @nodejs_host//:node_bin)",
