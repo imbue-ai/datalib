@@ -406,6 +406,8 @@ jobs:
               cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
               cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
               cp bazel-bin/datalib/backend/applets/datalib_applet "${stage}/datalib-applet"
+              cp bazel-bin/datalib/backend/etl/providers/fsindex/fsindex "${stage}/datalib-fsindex"
+              cp bazel-bin/datalib/backend/dirtree_diff/dirtree_diff "${stage}/datalib-dirtree-diff"
               cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
               cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
               chmod +x "${stage}"/*

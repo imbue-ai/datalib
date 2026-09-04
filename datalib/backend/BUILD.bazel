@@ -2,6 +2,7 @@ load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files([
+    "BUILD.bazel",  # read by //tools:dist_names_test
     "Cargo.toml",
     "Cargo.lock",
     # Wired into `bazelisk build --config=clippy` via .bazelrc — see
@@ -74,6 +75,11 @@ filegroup(
         # invocable standalone against a data root's config.toml).
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
+        # The directory-tree scanner, standalone. The pipeline reaches
+        # it through `datalib-step download fsindex`, but it is also
+        # useful on its own — scanning a tree into a branch of a
+        # doltlite file is what `datalib-dirtree-diff` consumes.
+        "//datalib/backend/etl/providers/fsindex:fsindex",
         # Diffs two fsindex scans into one self-contained HTML page,
         # with moves detected from the directory tree-hashes. Standalone
         # — nothing else invokes it.
@@ -138,6 +144,7 @@ copy_to_directory(
     replace_prefixes = {
         "dag/datalib_dag_bin": "datalib-dag",
         "dirtree_diff/dirtree_diff": "datalib-dirtree-diff",
+        "etl/providers/fsindex/fsindex": "datalib-fsindex",
         "datalib_step/datalib_step": "datalib-step",
         "applets/datalib_applet": "datalib-applet",
         "http/datalib_http_bin": "datalib-http",

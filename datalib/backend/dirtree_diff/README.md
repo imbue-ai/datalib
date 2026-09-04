@@ -15,6 +15,43 @@ bazelisk build //datalib/backend/dirtree_diff:dirtree_diff
 ./demo.sh            # builds two trees, scans them, writes two pages
 ```
 
+## The short version: two trees, one database
+
+Scan each tree into its own branch of a single file, then diff the two
+branches. This is the arrangement the storage is designed for — the two
+scans share every identical subtree as the same content-addressed
+chunks, so the second one is nearly free.
+
+```sh
+# 1. scan the first tree into scans.doltlite_db, on branch `before`
+datalib-fsindex --db scans.doltlite_db --source-name before \
+    --root ./tree1 --branch before
+
+# 2. scan the second tree into the SAME file, on branch `after`
+datalib-fsindex --db scans.doltlite_db --source-name after \
+    --root ./tree2 --branch after
+
+# 3. diff the two branches — no unification step, they already share
+#    a chunk store
+datalib-dirtree-diff \
+    --left  scans.doltlite_db#before \
+    --right scans.doltlite_db#after \
+    -o diff.html
+```
+
+```
+wrote diff.html — 1 move(s) (+3 rolled up), 0 modified, 1 added,
+0 deleted, 0 deleted-with-copy-remaining
+```
+
+`docs/reports` moving to `archive/reports` is the one move; the three
+entries inside it are rolled up rather than repeated. Both scans live in
+one 9 KB file.
+
+Both binaries ship. From a source checkout they are
+`bazel-bin/datalib/backend/bin/datalib-fsindex` and
+`…/datalib-dirtree-diff` after `bazelisk build //datalib/backend:bin`.
+
 Ships as `datalib-dirtree-diff` — it is in `//datalib/backend:dist`, so
 a tagged release carries it like every other binary. sqlx links the same
 doltlite amalgamation the rest of the tree does, so there is no CLI to
