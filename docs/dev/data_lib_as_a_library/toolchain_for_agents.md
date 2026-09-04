@@ -91,6 +91,109 @@ index (hybrid BM25 + embeddings); a query language (`field:value`,
 and an applet host where a pipeline contributes its own cards and the
 endpoints behind them.
 
+### The incremental contract is a capability, not a protocol
+
+This is probably the strongest thing datalib has to offer someone
+building on it, and until now the doc mentioned it once, in passing, as
+a tradeoff.
+
+Every stage of the pipeline materializes into a doltlite file, and every
+such file answers one question natively: **"what changed since this
+hash?"** So a consumer — one the producer never heard of, a person at
+the CLI, an agent — attaches to any stage, remembers a single string,
+and gets correct incremental semantics. No registration, no
+subscription, no coordination with the producer, no schema for a change
+feed.
+
+Two properties do the work, and they are worth separating because only
+the first is the obvious one:
+
+- **The diff is proportional to the change, not to the data.** A prolly
+  tree is content-addressed with structural sharing, so two commits
+  share unchanged subtrees by identity and `dolt_diff` descends only
+  where hashes differ. This is what makes the cursor cheap rather than
+  merely correct — the alternative, a `WHERE updated_at > ?` scan or a
+  Rust-computed hash tree, costs O(data) every time. (The tree learned
+  this the expensive way; see
+  [dolt_diff supersedes per-bucket fingerprints](../data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).)
+- **The state and the change feed are the same object.** In a
+  table-plus-changelog architecture the two can disagree: a consumer
+  reads an event whose row isn't there yet, or finds a row no event
+  announced. Here `dolt_diff` and `SELECT` derive from one structure, so
+  that class of bug is not representable. A consumer holding a hash
+  holds a consistent view, full stop.
+
+**The worked example is already in the tree.** A conventional backup of
+an Adobe Lightroom catalog writes a complete new copy of a multi-gigabyte
+SQLite file every time, however little changed. The `lightroom` provider
+mirrors that same `.lrcat` into doltlite table by table and lets the
+prolly trees dedupe: run it again after a day of editing and only the
+rows that actually moved cost anything, while every prior state stays
+queryable through `dolt_log` / `dolt_diff_<table>`. Its module doc makes
+the argument in full, and the engine is deliberately not
+Lightroom-specific — any application whose format is a SQLite database
+is a config stanza, not new code.
+
+**Honest placement.** The mechanism is not new, and the pitch is
+stronger for saying so. Apache Hudi shipped incremental queries in 2017;
+Iceberg snapshots and Delta Lake's change data feed are the same
+contract — the consumer holds a snapshot id and asks for everything
+since. Datomic had as-of reads plus a transaction log in 2012. The
+prolly tree itself comes from Noms, which is where Dolt's storage layer
+originated.
+
+What is unusual is the **operating point**, on two axes:
+
+1. **Footprint.** Every system above assumes a cluster, a catalog,
+   object storage and a query engine. This is a single file, statically
+   linked into the binary — no server, no catalog, no daemon — running
+   on a laptop over one person's data. Warehouse-grade incrementality at
+   SQLite's operational cost is genuinely uncommon, and it is the
+   difference between "a platform team can offer this" and "a binary can
+   hand it to you."
+2. **Thoroughness.** Those systems typically use the versioned format
+   for warehouse tables and leave derived artifacts as plain files.
+   Here the intent is to use it for *every* intermediate — the raw
+   store, the render output, the problem log, and the DAG's own
+   content-versioning — so consumer cursors, step versions and audit
+   history are one mechanism rather than four. See
+   [`data_architecture_parse_and_render.md` §2](../data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database)
+   for the half of that which is still aspiration.
+
+And the benefit that gets undersold: this is normally pitched on
+**performance**, but here the **reliability** argument is at least as
+strong. A malformed file, a half-written artifact, an orphan left behind
+when identity moves — none of those are failure modes a table has. Whole
+categories of bug stop existing rather than getting fixed.
+
+#### What it depends on, and what it costs
+
+**It degrades quietly if writes are not surgical.** A stage that
+rewrites every row produces a diff the size of the table and the cursor
+buys nothing. That makes
+[`AGENTS.md`'s "give a bag an order before storing it"](/AGENTS.md)
+load-bearing for the architecture rather than a tidiness rule: an
+unchanged record that serializes differently from itself manufactures a
+diff out of nothing. Any new rule of that kind — canonical field order,
+stable float formatting, excluded volatile fields — is protecting this
+property, and should say so.
+
+**Nothing reclaims space.** doltlite never deletes, so every
+intermediate keeps its full history. That is exactly right for the raw
+store, which is the irreplaceable copy, and much harder to justify for
+*derived* intermediates, where it means unbounded growth on the
+artifacts we care least about preserving. Iceberg has snapshot expiry
+and Delta has `VACUUM`; we have nothing.
+
+**This is a deliberate deferral, not an oversight** (decided
+2026-09-04). The mitigation is cheap precisely because the data is
+derived — delete the intermediate and rebuild it, costing a re-render
+rather than a re-fetch — and while the schemas are still changing often
+enough that intermediates get deleted and rebuilt anyway, a built
+reclaim mechanism would be solving a problem the churn already solves.
+The condition to watch is the schema settling down: once intermediates
+start living a long time, the calculus flips and this needs building.
+
 ### And it already reaches agents
 
 Every tag publishes per-triple tarballs including fully static

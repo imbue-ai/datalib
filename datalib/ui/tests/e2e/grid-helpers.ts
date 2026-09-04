@@ -86,40 +86,37 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
   return rowIndex as number;
 }
 
-// Click a row the grid may recycle out from under us.
+// Scroll a row into view and act on it, retrying the *pair*.
 //
-// `scrollRowIntoView` leaves the row in the DOM, but "in the DOM now" is
-// not "in the DOM when the click lands". AG Grid recycles row elements
-// as the viewport settles, and a `click()` with no timeout of its own
-// inherits the whole 30s per-test budget waiting on a node that has
-// already detached — with nothing re-issuing `ensureNodeVisible` for the
-// duration of that wait. The poll above cannot help: it has already
-// returned.
+// `scrollRowIntoView` returning means the row was rendered **then**. AG
+// Grid can virtualize it away again before the action re-resolves the
+// locator, and once the node is gone only another nudge brings it back
+// — so retrying the action alone spins against a DOM that will never
+// contain it, and retrying without a per-attempt timeout never gets to
+// a second attempt at all. Playwright's default click timeout is the
+// whole 30s test budget, so the first click consumed it waiting for a
+// node that was already gone. Both halves are load-bearing; either one
+// alone leaves the race in place.
 //
-// That is exactly the CI failure on 2026-09-04 (run 33857724612, the
-// webkit run of `yolink-plots.spec.ts`): `locator.click: Test timeout of
-// 30000ms exceeded` waiting for a row the poll had just counted. A
-// re-run passed, which is the signature of a race rather than a broken
-// selector.
+// That is how this failed in CI (`yolink-plots`, webkit, run
+// 33857724612) while passing in isolation, where nothing competes for
+// the render.
 //
-// So each attempt gets a short timeout of its own and a failed one
-// re-nudges before the next. Worst case is the 15s poll plus 3 x 3s,
-// which still fits the 30s the playwright config allows per test —
-// raising that timeout instead would only have made the race rarer.
-async function clickRowByUuidWith(
+// `expect(...).toPass()` rather than a hand-rolled loop: it is what
+// Playwright provides for "do this until it takes", it bounds the whole
+// dance rather than multiplying per-attempt timeouts, and its failure
+// names the step instead of rethrowing the last error from a loop that
+// ran out.
+async function actOnRowByUuid(
   page: Page,
   uuid: string,
-  options: Parameters<Locator["click"]>[0],
-) {
-  const rowIndex = await scrollRowIntoView(page, uuid);
+  act: (row: Locator) => Promise<void>,
+): Promise<void> {
   await expect(async () => {
-    // Re-issued every attempt, and that is the whole fix: a click that
-    // waits on a detached node waits forever, because nothing else is
-    // asking the grid to bring that row back.
-    await nudgeRowIntoView(page, uuid);
-    await rowLocator(page, rowIndex).click({ ...options, timeout: 2_000 });
-  }, `row ${rowIndex} (uuid=${uuid}) never took a click`).toPass({
-    timeout: 10_000,
+    const rowIndex = await scrollRowIntoView(page, uuid);
+    await act(rowLocator(page, rowIndex));
+  }, `row uuid=${uuid} never took the action`).toPass({
+    timeout: 15_000,
     intervals: [100, 250, 500],
   });
 }
@@ -127,17 +124,15 @@ async function clickRowByUuidWith(
 // Scroll a (possibly virtualized-away) row into view, then click it.
 // Returns after the click; callers assert on the consequences.
 export async function clickRowByUuid(page: Page, uuid: string) {
-  await clickRowByUuidWith(page, uuid, {});
+  await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 3_000 }));
 }
 
 // Select a row and confirm the grid agrees that it is selected.
 //
 // A click can land — the row takes `ag-row-focus` — and still leave the
-// node unselected. The app restores its persisted view asynchronously
-// after load, and a restore that arrives *after* the click resets the
-// selection the click just made. Seen on webkit as `aria-selected=
-// "false"` with the focus class present, held for the whole 5s the
-// assertion allowed, so it is a lost selection rather than a slow one.
+// node unselected. Seen on webkit as `aria-selected="false"` with the
+// focus class present, held for the whole 5s the assertion allowed, so
+// it is a lost selection rather than a slow one.
 //
 // Clicking again is safe: the grid is `rowSelection: { mode: "multiRow",
 // enableClickSelection: true }`, where a plain click selects exactly the
@@ -167,7 +162,9 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
 // node to dispatch at — but opens the context menu instead of
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  await clickRowByUuidWith(page, uuid, { button: "right" });
+  await actOnRowByUuid(page, uuid, (row) =>
+    row.click({ button: "right", timeout: 3_000 }),
+  );
   await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
 }
 

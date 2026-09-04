@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use datalib_etl_slack::render::{parse, ts_to_iso};
+use datalib_etl_slack::render::{parse, ts_to_iso, ts_to_ms};
 
 fn fixture_root() -> PathBuf {
     if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {
@@ -16,9 +16,28 @@ fn fixture_root() -> PathBuf {
 
 #[test]
 fn ts_to_iso_round_trips_microseconds() {
-    let iso = ts_to_iso("12604000100.000100");
+    let iso = ts_to_iso("12604000100.000100").expect("a well-formed ts parses");
     assert!(iso.ends_with("+00:00"), "got {iso:?}");
     assert!(iso.contains(".000100"), "got {iso:?}");
+}
+
+/// A `ts` we cannot read must come back as `None`, never as the epoch.
+/// This is the assertion that would have caught the original bug: the
+/// old parser answered every one of these with
+/// `1970-01-01T00:00:00.000000+00:00`, which is indistinguishable in the
+/// grid from a real 1970 message.
+#[test]
+fn unparseable_ts_yields_none_not_the_epoch() {
+    for bad in ["", "not-a-ts", "abc.123", "1728499573.xyz", "  ", "."] {
+        assert_eq!(
+            ts_to_iso(bad),
+            None,
+            "ts_to_iso({bad:?}) fabricated a stamp"
+        );
+        assert_eq!(ts_to_ms(bad), None, "ts_to_ms({bad:?}) fabricated a stamp");
+    }
+    // A real ts still parses, and the two helpers agree on the instant.
+    assert_eq!(ts_to_ms("12604000100.000100"), Some(12_604_000_100_000));
 }
 
 #[test]

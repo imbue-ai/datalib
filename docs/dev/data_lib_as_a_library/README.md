@@ -15,6 +15,15 @@ second depends on the first.**
    and a JSON protocol rather than a crate, and how to check the result
    against a corpus we didn't design without overfitting to it.
 
+Plus one measurement, downstream of the first:
+
+3. [**`render_audit_2026_09_03.md`**](render_audit_2026_09_03.md) — doc
+   1's audit actually run against the tree. Unlike the other two it is
+   mostly *descriptive*: what the render code does today, measured, with
+   a file and line per claim. Its proposals are the design work the
+   findings forced, chiefly the R1 problem sink as a per-source doltlite
+   table. Start here if you want evidence rather than intent.
+
 The ordering is the argument, not a formality. An agent that adopts a
 primitive inherits its defects and cannot see them, so a surface is
 ready to offer only once the code behind it has a problem sink, a

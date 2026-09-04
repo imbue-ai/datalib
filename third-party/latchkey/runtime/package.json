@@ -1,0 +1,13 @@
+{
+  "name": "datalib-latchkey-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "//": "Bazel-managed replacement for the `npm install latchkey@<v>` that datalib/tauri/stage-runtime.sh used to run against the live registry. One dependency, pinned to LATCHKEY_VERSION in datalib/backend/core/src/node_runtime.rs; //tools:version_pins_test keeps the two in step. Sibling of //third-party/qmd/runtime — same reasoning, see that package.json.",
+  "dependencies": {
+    "latchkey": "3.8.0"
+  },
+  "pnpm": {
+    "//": "EMPTY ON PURPOSE, and load-bearing here in a way it is not for qmd. This tree is 7 packages, and one of them is `playwright`, whose postinstall downloads ~400 MB of browser binaries that appear in no lockfile. datalib never invokes the browser-login flows that would use them (`latchkey auth browser`), and latchkey degrades gracefully when the import fails — the same way its own bun-compiled release binaries do, which mark playwright external.",
+    "onlyBuiltDependencies": []
+  }
+}

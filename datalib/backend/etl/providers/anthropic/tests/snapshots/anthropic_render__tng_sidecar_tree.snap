@@ -6,8 +6,8 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "4f6192ca-a4c2-5ef6-bd64-377fdf35435d",
-    "source_fingerprint": "8eb2ac9c47941189f0f63e20540a14ced9b92ff7a590f8ce24039250c6d02e9b",
-    "render_version": 5
+    "source_fingerprint": "18944340932d5dd7815d528190ad9249a203c4a18f15d91883eeb37e7474e2dc",
+    "render_version": 6
   },
   "rows": [
     {
@@ -212,8 +212,8 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9",
-    "source_fingerprint": "e9e36832476d5b1abd5f427df4ca95b7cf2e5f7c19c48a3aadf9e3254058956d",
-    "render_version": 5
+    "source_fingerprint": "8980ac74717f73bc28a2ebbdea5606dbda0b4eb6f760a861d85f6875791c560b",
+    "render_version": 6
   },
   "rows": [
     {
@@ -418,8 +418,8 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "a291f856-67f6-5905-a4f8-1292e655ae76",
-    "source_fingerprint": "4c4451d7e806e172e8bce9625a85ca287ccc9e728d107498f32067d2a63c9851",
-    "render_version": 5
+    "source_fingerprint": "b7cde548b6c749445e364ec8401ef25ab04854870d67e3c5ba950d5cc0e24b8f",
+    "render_version": 6
   },
   "rows": [
     {
@@ -512,8 +512,8 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d",
-    "source_fingerprint": "1f1d9d5c44d6de4bb20c99dc91c3e417c2753a81aa9a05167a9a613c063aa04a",
-    "render_version": 5
+    "source_fingerprint": "088bc2eb36f0b667bce839b8596246f385025dbd45f680527ad1d950ab9a3aff",
+    "render_version": 6
   },
   "rows": [
     {
@@ -655,6 +655,128 @@ expression: sbundle
       "notion_page_uuid": null,
       "notion_block_uuid": null,
       "markdown_uuid": "b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d"
+    }
+  ]
+}
+=== anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.grid_rows.json ===
+{
+  "header": {
+    "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+    "source_fingerprint": "a46accb0a9a925f36e1edc5984eacfa6881e417cc9d194ec6be12e9bcd182b03",
+    "render_version": 6
+  },
+  "rows": [
+    {
+      "uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "provider": "anthropic",
+      "kind": "Project",
+      "source_label": "Claude",
+      "when_ts": null,
+      "author": null,
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "project": "Stellar Cartography",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": null,
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "text": "Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.\nAnswer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.\n# Charting conventions\n\nBearings are given from the ship's current heading, not from galactic north.\n\n- Sector designations use the Federation catalogue number, never the local name.\n- An extrapolated position is written in parentheses.\n",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "source_url": "https://claude.ai/project/70000002-1701-4d00-8000-000000000702",
+      "git_sha": null,
+      "upstream_id": "70000002-1701-4d00-8000-000000000702",
+      "upstream_entity_kind": "project",
+      "upstream_scope": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f"
+    },
+    {
+      "uuid": "b9d4253f-bf81-5da9-a5d0-e646184d7374",
+      "provider": "anthropic",
+      "kind": "Project Description",
+      "source_label": "Claude",
+      "when_ts": null,
+      "author": "Description",
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "project": "Stellar Cartography",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": 0,
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "text": "Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "upstream_id": "70000002-1701-4d00-8000-000000000702",
+      "upstream_entity_kind": "project_description",
+      "upstream_scope": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f"
+    },
+    {
+      "uuid": "cbfc4f66-5f5c-5037-aee2-3125b2829672",
+      "provider": "anthropic",
+      "kind": "Project Instructions",
+      "source_label": "Claude",
+      "when_ts": null,
+      "author": "Custom instructions",
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "project": "Stellar Cartography",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": 1,
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "text": "Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "upstream_id": "70000002-1701-4d00-8000-000000000702",
+      "upstream_entity_kind": "project_instructions",
+      "upstream_scope": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f"
+    },
+    {
+      "uuid": "a578fdb9-110f-5f34-a37f-6022428c045a",
+      "provider": "anthropic",
+      "kind": "Project Knowledge",
+      "source_label": "Claude",
+      "when_ts": null,
+      "author": "charting-conventions.md",
+      "account": "00000002-1701-4d00-8000-000000000002",
+      "project": "Stellar Cartography",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise",
+      "channel": "Stellar Cartography",
+      "conversation_name": "Stellar Cartography",
+      "conversation_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "message_index": 2,
+      "entire_chat": "/chat/d5bfab57-fc56-5769-ba07-09e1cd28bd8f",
+      "text": "# Charting conventions\n\nBearings are given from the ship's current heading, not from galactic north.\n\n- Sector designations use the Federation catalogue number, never the local name.\n- An extrapolated position is written in parentheses.\n",
+      "slack_link": null,
+      "qmd_path": "anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md",
+      "source_url": null,
+      "git_sha": null,
+      "upstream_id": "7d000003-1701-4d00-8000-0000000007d3",
+      "upstream_entity_kind": "project_document",
+      "upstream_scope": null,
+      "notion_page_uuid": null,
+      "notion_block_uuid": null,
+      "markdown_uuid": "d5bfab57-fc56-5769-ba07-09e1cd28bd8f"
     }
   ]
 }

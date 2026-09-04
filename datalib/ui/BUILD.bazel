@@ -171,6 +171,9 @@ _E2E_DATA = [
     "@nodejs_host//:node_bin",
     "//third-party/qmd/runtime:qmd_tree",
     "//third-party/qmd/runtime:package.json",
+    # The anchor `FW_E2E_QMD_DIR_RLOC` resolves; `qmd_tree` above is what
+    # actually materializes the 277-package store.
+    "//third-party/qmd/runtime:qmd_package_dir",
 ]
 
 # Runfiles paths of the two staging inputs above, handed to run_e2e.sh
@@ -179,6 +182,17 @@ _E2E_DATA = [
 _E2E_ENV = {
     "FW_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
     "FW_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
+    # The store's location has to be anchored on a GENERATED artifact,
+    # not derived from the source `package.json` above. In the runfiles
+    # tree that package.json is a symlink back into the source dir, so
+    # `dirname` of it lands in `third-party/qmd/runtime/` — where
+    # `node_modules/` does not exist, because pnpm materializes it under
+    # `bazel-bin/`. Under `bazel test` the resolution happened to stay
+    # inside the runfiles tree and the sibling was found; under
+    # `bazel run` it did not, and the documented
+    # `--update-snapshots` workflow failed with "qmd package store not
+    # in runfiles". `qmd_package_dir` exists precisely as this anchor.
+    "FW_E2E_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
 }
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
@@ -227,9 +241,21 @@ sh_test(
     # runner. There is no cost to the larger budget — bazel enforces
     # the ceiling, it does not wait for it.
     timeout = "long",
-    # Inherit the user's PATH and HOME so the script can find pnpm / node
-    # and reuse ~/Library/Caches/ms-playwright (the browser cache) /
-    # ~/.local/share/pnpm. Bazel scrubs the test env otherwise.
+    # Bazel scrubs the test env, so anything the suite still needs from
+    # the host has to be named here.
+    #
+    # HOME is down to ONE job: Playwright resolves its browser cache to
+    # `~/Library/Caches/ms-playwright`, and the browsers are not Bazel
+    # inputs. It used to have a second — the qmd GGUFs came from
+    # `~/.cache/qmd/models` — and #268 made those `http_file`s, so that
+    # reason is gone. Measured rather than assumed: with HOME dropped
+    # from this list and `--test_env=PLAYWRIGHT_BROWSERS_PATH=...`
+    # supplied, the suite passes. Whoever makes the browsers a Bazel
+    # input deletes this line and `requires-network` in one go.
+    #
+    # PATH is the `bazel run` half: that mode uses the source tree and
+    # needs the host's pnpm / node. Under `bazel test` both come from
+    # Bazel (`:node_modules`, `@nodejs_host`).
     env_inherit = [
         "PATH",
         "HOME",
