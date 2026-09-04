@@ -316,6 +316,34 @@ pub fn resolve_dag_bin() -> Option<PathBuf> {
     resolve_bin("DATALIB_DAG_BIN", &["datalib-dag", "datalib_dag_bin"])
 }
 
+/// Resolve the `datalib-step` binary itself.
+///
+/// The runner is handed a *directory* (`--binary-dir`) and resolves the
+/// step binary off the child PATH, which is right for spawning steps.
+/// The wizard's connection test needs the binary directly — it runs
+/// `datalib-step probe`, which is not a pipeline step and has no runner
+/// in front of it — so it looks in the same three places, most explicit
+/// first: `$DATALIB_STEP_BIN`, the resolved `--binary-dir`, then a
+/// sibling of this executable.
+pub fn resolve_step_bin() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("DATALIB_STEP_BIN") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+        eprintln!("worker: $DATALIB_STEP_BIN={} is not a file", p.display());
+    }
+    if let Some(dir) = resolve_binary_dir() {
+        for name in ["datalib-step", "datalib_step"] {
+            let cand = dir.join(name);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    resolve_bin("DATALIB_STEP_BIN", &["datalib-step", "datalib_step"])
+}
+
 /// Resolve the step-binary directory handed to the runner as
 /// `--binary-dir`: `$DATALIB_BINARY_DIR` (how `dev.sh` /
 /// `serve_dev.sh` wire a shim dir from Bazel runfiles), else this
