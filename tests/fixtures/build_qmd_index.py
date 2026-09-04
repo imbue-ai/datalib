@@ -22,6 +22,11 @@ Why a script:
      from Bazel-managed inputs instead (see `_stage_runtime`), which
      `datalib_core::node_runtime::bundled_command` picks up in preference
      to npx. Nothing here touches a registry.
+  4. The embedding model is a Bazel input as well, so this script stages
+     a models directory holding it (see `_stage_models`) instead of
+     pointing qmd at the host's shared `~/.cache/qmd/models`. That is
+     what makes the action work on a machine that has never run qmd —
+     every CI container — without downloading anything.
 
 Args (positional):
     1: path to the qmd_indexer rust_binary
@@ -31,6 +36,7 @@ Args (positional):
     5: path to the Node binary (@nodejs_host//:node_bin)
     6: path to the linked `@tobilu/qmd` package dir, used to locate the
        root of the pnpm store it lives in
+    7: path to the embedding GGUF (@qmd_model_embeddinggemma//file)
 """
 
 from __future__ import annotations
@@ -77,25 +83,45 @@ def _stage_runtime(
     return runtime
 
 
+def _stage_models(work: Path, embed_model: Path) -> Path:
+    """Build a qmd models dir holding the Bazel-supplied GGUF.
+
+    A symlink, not a copy: the file is ~318 MB and lives in a read-only
+    bazel output, which is exactly what we want to read it from.
+
+    The link's NAME is the contract. node-llama-cpp decides a model is
+    already present by looking for the filename it would itself have
+    downloaded to (`hf_<owner>_<file>` — `findMatchingFilesInDirectory`
+    in `resolveModelFile.js`), and when it doesn't find that name it
+    quietly downloads its own copy instead of failing. So the name comes
+    from `downloaded_file_path` in MODULE.bazel and is checked here
+    rather than trusted: a silent re-download is the failure mode this
+    whole arrangement exists to remove.
+    """
+    if not embed_model.name.startswith("hf_") or not embed_model.name.endswith(".gguf"):
+        raise SystemExit(
+            f"embedding model staged under an unexpected name: {embed_model.name}\n"
+            "node-llama-cpp will not recognize it as cached and will download "
+            "its own copy. Fix `downloaded_file_path` in MODULE.bazel."
+        )
+    models = work / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    (models / embed_model.name).symlink_to(embed_model.resolve())
+    return models
+
+
 def main() -> int:
     indexer, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
-    node_bin, qmd_pkg_dir = (Path(p) for p in sys.argv[5:7])
+    node_bin, qmd_pkg_dir, embed_model = (Path(p) for p in sys.argv[5:8])
     qmd_tar_path = Path(qmd_tar).resolve()
     out_tar_path = Path(out_tar).resolve()
     out_tar_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Capture the host user's $HOME *before* we scramble it for the
-    # subprocess, so the qmd embedding model lands in a shared, persistent
-    # cache instead of being re-downloaded into the sandbox each run.
-    host_home = Path(
-        os.environ.get("CLAUDE_MIRROR_HOST_HOME") or os.path.expanduser("~")
-    )
-    models_dir = host_home / ".cache" / "qmd" / "models"
 
     work = out_tar_path.parent / "qmd_work"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
+    models_dir = _stage_models(work, embed_model)
 
     # The tar is rooted at "qmd/<provider>/..." (see build_ingested.py); strip
     # that leading dir so `root` is the rendered markdown tree directly.
@@ -127,6 +153,12 @@ def main() -> int:
         qmd_version,
         "--models-dir",
         str(models_dir),
+        # `qmd pull` fetches the query-expansion and reranker models for
+        # interactive querying, which this fixture never does — and it
+        # would delete and re-download the model we just staged, because
+        # it treats a cached file whose HuggingFace etag it cannot
+        # confirm as stale. Skipping it is what keeps the action offline.
+        "--no-pull",
     ]
     r = subprocess.run(cmd, env=env, check=False)
     if r.returncode != 0:
