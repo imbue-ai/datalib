@@ -1,12 +1,15 @@
 # Design: the "New Data Source" wizard
 
-**Status: proposal, revised 2026-08-26 against main @ `f54e7e80`.
-Nothing here is built yet.** The first revision was written against a
-tree that has since moved a long way — `unified_index/`, the
-one-file-per-writer store split, the applet that took the grid routes
-out of `datalib-http`, and the removal of the download report. Claims
-below have been re-checked against that main; the ones that changed are
-called out where they sit.
+**Status: proposal, partly built.** Revised 2026-08-26 against main @
+`f54e7e80`; the credential and probe half landed 2026-09-04, in a
+shape close to but not identical with what is described below — see
+[What shipped](#what-shipped) for the differences that matter, and
+prefer it over the prose further down wherever the two disagree. The
+first revision was written against a tree that has since moved a long
+way — `unified_index/`, the one-file-per-writer store split, the applet
+that took the grid routes out of `datalib-http`, and the removal of the
+download report. Claims below have been re-checked against that main;
+the ones that changed are called out where they sit.
 Related: [#171](https://github.com/imbue-ai/datalib/issues/171)
 (`grid_rows` needs `source_name` before the sources grid can count rows
 per source). Per
@@ -19,6 +22,52 @@ flow that takes a user from "I want my Slack in here" to a saved,
 credential-verified `[[steps]]` pair. The **execution/observation**
 half (run one source, watch it closely) is sketched in the last section
 and designed separately.
+
+## What shipped
+
+Landed 2026-09-04, driven by wanting Gmail and Fastmail in the wizard.
+The shape below is the design's, with three deliberate simplifications;
+everything else in this document is still a proposal.
+
+**Endpoints** (`datalib/backend/http/src/connect.rs`):
+
+```
+GET  /api/latchkey/{service}               stored accounts + authOptions
+POST /api/latchkey/{service}/connect       start `latchkey auth browser` → {id}
+GET  /api/latchkey/connect/{id}/status     poll it → running | ok | failed
+POST /api/probe   {type, params}           → the provider's probe report
+```
+
+Differences from the design, and why:
+
+* **`POST /api/probe`, not `/api/sources/probe`.** It probes a
+  *provider*, not a configured source — there may be no source yet, and
+  that is the normal case.
+* **No `--op`.** `datalib-step probe <type>` takes the download params
+  and answers one question: what account is this, and what labels does
+  it have. The design's `list` / `inspect` / `auth` split is a
+  distinction nothing has needed yet; one op answers all three for
+  email (the account proves auth, the labels are the list). Add the
+  flag when a second op exists, not before.
+* **The browser login is polled, not streamed.** `connect` returns an
+  id and the UI polls, rather than holding an SSE open. Same states,
+  one fewer moving part; the flow's clock is a person reading a consent
+  screen.
+
+**Descriptors.** `ui/src/config/catalog.ts` grew three things the
+design calls for: a `text` field can be marked `latchkey: true` (it
+becomes the account control), a `string_list` can be marked
+`probe: "labels" | "mailboxes"` (it grows a checklist from the probe),
+and an entry can carry `preset` values it writes without asking. It
+also grew `variantKey`, which the design did not anticipate: Gmail and
+Fastmail are two descriptors over one step type (`email`), so `type`
+stopped being a unique key. `entryKey` is the unique one, and
+`catalogForStep` picks the variant from an existing step's params.
+
+**Not built**, and still described as proposals below: the served
+catalog (`GET /api/sources/catalog` — the table is still a TS file),
+`GET /api/fs/browse`, `latchkey auth set` from the UI (the `set`-mode
+token field), and probes for any provider other than email.
 
 ## The problem
 

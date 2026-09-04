@@ -27,15 +27,25 @@
 // creation, and read-only forever after.
 //
 
-// What this does NOT do yet, and the design says it eventually must:
-// no credential screen (needs the latchkey endpoints), no live channel
-// picker (needs `datalib-step probe`), and edit regenerates the step
-// rather than surgically editing values — which is why the caller only
-// offers Edit when `paramsAreRepresentable` said yes.
-import { computed, ref, watch } from "vue";
+// A descriptor with a `credentialService` also gets a **Connection**
+// block: which latchkey account to use, a button that runs latchkey's
+// browser login, and "Test connection", which calls the provider's own
+// probe (`datalib-step probe <type>`). What comes back is not just a
+// green tick — it names the account actually reached, and it fills
+// every `probe:` field's checklist. A label picker built from the live
+// account is the difference between a filter that works and a filter
+// that is a spelling test.
+//
+// What this does NOT do yet: no live *channel* picker for Slack (the
+// probe exists, but slack has no `datalib-step probe` arm), and edit
+// regenerates the step rather than surgically editing values — which is
+// why the caller only offers Edit when `paramsAreRepresentable` said
+// yes.
+import { computed, onUnmounted, ref, watch } from "vue";
 import {
   CATALOG,
   KIND_LABELS,
+  entryKey,
   filterCatalog,
   type CatalogEntry,
   type Field,
@@ -45,6 +55,7 @@ import {
   fieldIsActive,
   fieldPhaseOf,
   fieldsFor,
+  paramsObject,
   renderIdFor,
   seedFieldValues,
   slugify,
@@ -52,6 +63,14 @@ import {
   type ConfiguredStep,
   type FieldValues,
 } from "@/config/sourceSteps";
+import {
+  latchkeyService,
+  probeSource,
+  startLatchkeyConnect,
+  latchkeyConnectStatus,
+  type ProbeReport,
+  type StoredAccount,
+} from "@/api";
 import type { FieldPhase } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import { isDesktopApp, pickPath } from "@/desktop";
@@ -63,10 +82,25 @@ const props = defineProps<{
   /// too.
   takenIds: Set<string>;
   /// Present → edit that step instead of creating one.
-  editing?: { step: ConfiguredStep; entry: CatalogEntry } | null;
+  ///
+  /// `downloadParams` is the params of the step this one *reads*, set
+  /// only when editing a render step. A render step's own params carry
+  /// no credentials, so without it "Test connection" would have nothing
+  /// to authenticate with and the label picker nothing to list.
+  editing?: {
+    step: ConfiguredStep;
+    entry: CatalogEntry;
+    downloadParams?: Record<string, unknown>;
+  } | null;
   /// Present → create the render step that reads this fetch step,
   /// pre-filled from it. The chained half of "also render this?".
-  renderFor?: { fetchId: string; fetchName: string; entry: CatalogEntry } | null;
+  /// `downloadParams` as above.
+  renderFor?: {
+    fetchId: string;
+    fetchName: string;
+    entry: CatalogEntry;
+    downloadParams?: Record<string, unknown>;
+  } | null;
 }>();
 
 const emit = defineEmits<{
@@ -84,8 +118,14 @@ const emit = defineEmits<{
       inputs: string[];
       /// The fetch step just written, when the caller should now open a
       /// second dialog to render it — only for providers whose render
-      /// step has options. Null otherwise.
-      offerRenderFor: { fetchId: string; fetchName: string } | null;
+      /// step has options. Null otherwise. `downloadParams` is what was
+      /// just written for it, so the render dialog can probe the same
+      /// account without re-reading the config it has not saved yet.
+      offerRenderFor: {
+        fetchId: string;
+        fetchName: string;
+        downloadParams: Record<string, unknown>;
+      } | null;
       /// The render step to write alongside this one, when the user
       /// left the checkbox ticked and there was nothing to ask about.
       /// Null when a render step is not being created here.
@@ -148,6 +188,15 @@ const shownFields = computed(() =>
   chosen.value
     ? fieldsFor(chosen.value, phase.value).filter((f) => fieldIsActive(f, values.value))
     : [],
+);
+
+/// The fields the main form renders. The latchkey account is one of
+/// this descriptor's fields like any other — it lands on the same
+/// params target and is written by the same code — but it is *shown*
+/// inside the Connection block, next to the button that populates it.
+/// Rendering it twice is the bug this exists to prevent.
+const formFields = computed(() =>
+  shownFields.value.filter((f) => f !== (accountField.value as Field | undefined)),
 );
 
 /// Does this provider's render step have anything to configure? The
@@ -380,6 +429,202 @@ async function browse(f: Field) {
   // Canceled: leave the field exactly as it was, and say nothing.
 }
 
+// ---------------------------------------------------------------------
+// Connection: which latchkey account, and what it can reach
+// ---------------------------------------------------------------------
+
+/// The latchkey service this descriptor authenticates against, on the
+/// step that actually authenticates. A render step reads a directory,
+/// so it has no credentials of its own even for a credentialed source.
+const service = computed(() =>
+  phase.value === "download" ? (chosen.value?.credentialService ?? null) : null,
+);
+
+/// The one field, if any, that holds a latchkey account. There is at
+/// most one per descriptor: a step mirrors one identity.
+const accountField = computed(
+  () =>
+    shownFields.value.find((f) => f.kind === "text" && f.latchkey) as
+      | (Field & { kind: "text" })
+      | undefined,
+);
+
+const accounts = ref<StoredAccount[] | null>(null);
+const authOptions = ref<string[]>([]);
+/// Why the account list is empty, when latchkey could not be asked.
+/// Shown as a note, not an error — the field is still typable.
+const accountsError = ref<string | null>(null);
+
+async function loadAccounts() {
+  const name = service.value;
+  if (!name) return;
+  accounts.value = null;
+  accountsError.value = null;
+  try {
+    const info = await latchkeyService(name);
+    accounts.value = info.accounts;
+    authOptions.value = info.auth_options;
+    accountsError.value = info.error;
+  } catch (e) {
+    accounts.value = [];
+    accountsError.value = String(e);
+  }
+}
+
+/// Only offer the button when latchkey says this service can do a
+/// browser login. Offering it for a service that can't would produce a
+/// failure that reads like a bug in datalib.
+const canConnect = computed(() => authOptions.value.includes("browser"));
+
+const connect = ref<{ state: "idle" | "running" | "ok" | "failed"; message: string }>({
+  state: "idle",
+  message: "",
+});
+
+/// Set on unmount so an in-flight poll stops rather than writing into a
+/// dialog that is gone.
+let closed = false;
+onUnmounted(() => {
+  closed = true;
+});
+
+async function connectViaLatchkey() {
+  const name = service.value;
+  if (!name || connect.value.state === "running") return;
+  connect.value = { state: "running", message: "A browser window should open. Finish the login there." };
+  try {
+    const started = await startLatchkeyConnect(name, accountValue.value);
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      if (closed) return;
+      const status = await latchkeyConnectStatus(started.id);
+      if (status.status === "running") continue;
+      if (status.status === "ok") {
+        connect.value = { state: "ok", message: "Connected. The account list below is refreshed." };
+        // The point of connecting was to add an account; showing the
+        // stale list would hide the one just added.
+        await loadAccounts();
+      } else {
+        connect.value = { state: "failed", message: status.output || "The login did not complete." };
+      }
+      return;
+    }
+  } catch (e) {
+    connect.value = { state: "failed", message: String(e) };
+  }
+}
+
+/// The account currently in the form. Empty means "latchkey's unnamed
+/// default", which is addressed by writing no `account` at all — so
+/// empty is a real answer, not a missing one.
+const accountValue = computed(() =>
+  accountField.value ? String(values.value[accountField.value.target] ?? "").trim() : "",
+);
+
+// ---------------------------------------------------------------------
+// The probe
+// ---------------------------------------------------------------------
+
+const probe = ref<{
+  state: "idle" | "running" | "ok" | "failed";
+  message: string;
+  report: ProbeReport | null;
+}>({ state: "idle", message: "", report: null });
+
+/// The params a probe should authenticate with: this form's, when it is
+/// the download step, and the *producing* step's when it is a render
+/// step. Either way they are download-shaped — that is where the
+/// credentials and the mode live.
+const probeParams = computed<Record<string, unknown> | null>(() => {
+  if (!chosen.value) return null;
+  if (phase.value === "download") return paramsObject(chosen.value, values.value, "download");
+  return props.renderFor?.downloadParams ?? props.editing?.downloadParams ?? null;
+});
+
+/// Can "Test connection" be offered here at all?
+const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
+
+async function testConnection() {
+  const entry = chosen.value;
+  const params = probeParams.value;
+  if (!entry || !params || probe.value.state === "running") return;
+  probe.value = { state: "running", message: "", report: null };
+  try {
+    const report = await probeSource(entry.type, params);
+    probe.value = {
+      state: "ok",
+      message: "",
+      report,
+    };
+  } catch (e) {
+    probe.value = { state: "failed", message: String(e), report: null };
+  }
+}
+
+/// What a `probe:` field should offer, given what came back.
+///
+/// `mailboxes` narrows to the entries emails are actually filed in.
+/// The download filter takes anything the account has; the render
+/// filter matches stored mailbox paths, so offering `Starred` there
+/// would offer a filter that silently matches nothing. See
+/// `Field.probe` and `ProbeLabel.kind`.
+function probeOptions(field: Field): ProbeReport["labels"] {
+  const report = probe.value.report;
+  if (!report || field.kind !== "string_list" || !field.probe) return [];
+  return field.probe === "mailboxes"
+    ? report.labels.filter((l) => l.kind === "mailbox")
+    : report.labels;
+}
+
+function isChosenLabel(field: Field, path: string): boolean {
+  const v = values.value[field.target];
+  return Array.isArray(v) && (v as string[]).includes(path);
+}
+
+function toggleLabel(field: Field, path: string) {
+  const current = Array.isArray(values.value[field.target])
+    ? [...(values.value[field.target] as string[])]
+    : [];
+  const at = current.indexOf(path);
+  if (at < 0) current.push(path);
+  else current.splice(at, 1);
+  values.value[field.target] = current;
+}
+
+/// Chosen labels the probed account does not have.
+///
+/// Worth its own line because the failure it prevents is loud and
+/// late: Gmail's downloader *refuses* a run whose `only_extract_labels`
+/// names a label the account lacks (an empty label filter would mean
+/// "everything", so it cannot fall back), and the render-side filter
+/// fails the other way — it matches nothing and renders an empty tree.
+/// Both are much cheaper to find here.
+function unknownLabels(field: Field): string[] {
+  const options = probeOptions(field);
+  if (options.length === 0) return [];
+  const known = new Set(options.map((l) => l.path));
+  const v = values.value[field.target];
+  return Array.isArray(v) ? (v as string[]).filter((p) => !known.has(p)) : [];
+}
+
+/// A count is only shown when the provider reported one — Gmail
+/// charges a request per label for its counts, so it reports none.
+function labelCount(label: ProbeReport["labels"][number]): string {
+  return label.messages === null || label.messages === undefined
+    ? ""
+    : `${label.messages.toLocaleString()}`;
+}
+
+// Load the account list as soon as there is a service to load it for:
+// on open in edit/render mode, and on picking a tile in create mode.
+watch(
+  service,
+  (name) => {
+    if (name) void loadAccounts();
+  },
+  { immediate: true },
+);
+
 function submit() {
   if (!canSubmit.value || !chosen.value) return;
   const fetchName = name.value.trim() || stepId.value;
@@ -389,7 +634,14 @@ function submit() {
   // the step is written here alongside the fetch step.
   const offer =
     canOfferRender.value && renderHasOptions.value
-      ? { fetchId: stepId.value, fetchName }
+      ? {
+          fetchId: stepId.value,
+          fetchName,
+          // What was just written for the fetch step. The render
+          // dialog probes with it rather than re-reading a config that
+          // has not been saved yet.
+          downloadParams: paramsObject(chosen.value, values.value, "download"),
+        }
       : null;
   const alsoBody =
     canOfferRender.value && !renderHasOptions.value && alsoRender.value
@@ -451,9 +703,9 @@ function submit() {
           <div class="wiz-tiles">
             <button
               v-for="e in g.entries"
-              :key="e.type"
+              :key="entryKey(e)"
               class="wiz-tile"
-              :class="{ soon: !e.wizard, cursor: flat[cursor]?.type === e.type }"
+              :class="{ soon: !e.wizard, cursor: flat[cursor] === e }"
               :disabled="!e.wizard"
               :title="e.wizard ? e.blurb : 'No guided setup yet — add this one in the config editor.'"
               @click="choose(e)"
@@ -490,10 +742,115 @@ function submit() {
           It is written as <code>{{ stepId }}</code>, the sibling of the step it reads.
         </p>
 
-        <p v-if="chosen.credentialService && phase === 'download'" class="wiz-cred">
+        <!-- Connection. Only on the step that authenticates: a render
+             step reads a directory. -->
+        <section v-if="service" class="wiz-conn">
+          <h3 class="wiz-conn-head">Connection</h3>
+          <p class="wiz-help wiz-conn-intro">
+            Credentials are held by latchkey, under its
+            <code>{{ service }}</code> service — datalib never stores them itself.
+          </p>
+
+          <label v-if="accountField" class="wiz-field">
+            <span class="wiz-label">{{ accountField.label }}</span>
+            <span class="wiz-accountrow">
+              <!-- A dropdown *and* a box. latchkey may hold an account
+                   this server cannot enumerate, and a list that came
+                   back empty must not be the only way in. -->
+              <select
+                class="wiz-input wiz-select wiz-accountpick"
+                :value="accounts?.some((a) => a.account === accountValue) ? accountValue : '__other'"
+                @change="values[accountField.target] = ($event.target as HTMLSelectElement).value === '__other' ? '' : ($event.target as HTMLSelectElement).value"
+              >
+                <option value="__other">
+                  {{ accounts === null ? "Loading accounts…" : "Type an account…" }}
+                </option>
+                <option v-for="a in accounts ?? []" :key="a.account || '(default)'" :value="a.account">
+                  {{ a.account || "(latchkey’s default account)" }}
+                  {{ a.credential_status === "valid" ? "✓" : a.credential_status === "invalid" ? "— expired" : "" }}
+                </option>
+              </select>
+              <input
+                class="wiz-input"
+                :placeholder="accountField.placeholder"
+                :value="values[accountField.target] as string"
+                spellcheck="false"
+                @input="values[accountField.target] = ($event.target as HTMLInputElement).value"
+              />
+            </span>
+            <small v-if="accountField.help" class="wiz-help">{{ accountField.help }}</small>
+            <small v-if="accounts && accounts.length === 0 && !accountsError" class="wiz-help">
+              latchkey has no <code>{{ service }}</code> credential stored yet. Connect below.
+            </small>
+            <small v-if="accountsError" class="wiz-help">
+              Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the
+              account name — the sync uses latchkey directly and is unaffected by this.
+            </small>
+          </label>
+
+          <div class="wiz-conn-actions">
+            <button
+              v-if="canConnect"
+              type="button"
+              class="btn ghost"
+              :disabled="connect.state === 'running'"
+              @click="connectViaLatchkey"
+            >
+              {{ connect.state === "running" ? "Waiting for the browser…" : "Connect via latchkey" }}
+            </button>
+            <button
+              v-if="canProbe"
+              type="button"
+              class="btn ghost"
+              :disabled="probe.state === 'running'"
+              @click="testConnection"
+            >
+              {{ probe.state === "running" ? "Testing…" : "Test connection" }}
+            </button>
+          </div>
+
+          <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
+            {{ connect.message }}
+          </p>
+          <p v-if="probe.state === 'failed'" class="wiz-error wiz-conn-note">
+            {{ probe.message }}
+          </p>
+          <p v-else-if="probe.state === 'ok' && probe.report" class="wiz-help wiz-conn-note">
+            Reached
+            <b>{{ probe.report.account.address || probe.report.account.id }}</b
+            ><!-- A message estimate is only shown when the provider gave
+                  one for free: Gmail's profile carries it, JMAP's
+                  session does not. --><template
+              v-if="probe.report.account.message_estimate"
+            >
+              — about {{ probe.report.account.message_estimate.toLocaleString() }} messages,
+              {{ probe.report.labels.length }} labels.</template
+            ><template v-else> — {{ probe.report.labels.length }} labels.</template>
+            The pickers below are filled in from it.
+          </p>
+        </section>
+
+        <!-- A render step has no credentials of its own; say where its
+             connection came from rather than showing a second, empty
+             Connection block. -->
+        <p v-else-if="chosen.credentialService && canProbe" class="wiz-cred">
+          This step reads what <code>{{ renderFor?.fetchId ?? editing?.step.inputs[0] }}</code>
+          downloaded, so it needs no credentials of its own. “Test connection” below uses that
+          step’s account to list the folders you can filter on.
+          <button
+            type="button"
+            class="btn ghost wiz-inline-btn"
+            :disabled="probe.state === 'running'"
+            @click="testConnection"
+          >
+            {{ probe.state === "running" ? "Testing…" : "Test connection" }}
+          </button>
+          <span v-if="probe.state === 'failed'" class="wiz-error">{{ probe.message }}</span>
+        </p>
+        <p v-else-if="chosen.credentialService && phase === 'download'" class="wiz-cred">
           Credentials come from latchkey’s <code>{{ chosen.credentialService }}</code> service.
-          Connecting from here isn’t wired up yet — if a sync fails on auth, the job log carries
-          the exact command to run.
+          Connecting from here isn’t wired up for this source yet — if a sync fails on auth, the
+          job log carries the exact command to run.
         </p>
 
         <label class="wiz-field">
@@ -540,12 +897,12 @@ function submit() {
              inherited id would disable Save with no explanation. -->
         <p v-if="idError && mode !== 'create'" class="wiz-error wiz-fixed-id">{{ idError }}</p>
 
-        <p v-if="shownFields.length === 0 && mode !== 'create'" class="wiz-help wiz-nofields">
+        <p v-if="formFields.length === 0 && mode !== 'create'" class="wiz-help wiz-nofields">
           This step has no options — its id, its name and what it reads are its whole
           configuration.
         </p>
 
-        <label v-for="f in shownFields" :key="f.target" class="wiz-field">
+        <label v-for="f in formFields" :key="f.target" class="wiz-field">
           <span class="wiz-label">
             {{ f.label }}
             <em v-if="'required' in f && f.required" class="wiz-req">required</em>
@@ -602,14 +959,42 @@ function submit() {
               {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
             </button>
           </span>
-          <input
-            v-else-if="f.kind === 'string_list'"
-            class="wiz-input"
-            :placeholder="f.placeholder"
-            :value="listText(f)"
-            spellcheck="false"
-            @input="setListText(f, ($event.target as HTMLInputElement).value)"
-          />
+          <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
+            <input
+              class="wiz-input"
+              :placeholder="f.placeholder"
+              :value="listText(f)"
+              spellcheck="false"
+              @input="setListText(f, ($event.target as HTMLInputElement).value)"
+            />
+            <!-- The checklist is an *addition* to the box above, never
+                 a replacement: a probe needs credentials that may not
+                 exist yet, and this form has to stay usable before one
+                 has ever succeeded. Both edit the same array. -->
+            <span v-if="f.probe && probeOptions(f).length" class="wiz-labels">
+              <button
+                v-for="l in probeOptions(f)"
+                :key="l.path"
+                type="button"
+                class="wiz-labelchip"
+                :class="{ on: isChosenLabel(f, l.path) }"
+                @click="toggleLabel(f, l.path)"
+              >
+                <span class="wiz-labeltick">{{ isChosenLabel(f, l.path) ? "✓" : "" }}</span>
+                <span class="wiz-labelname">{{ l.path }}</span>
+                <span v-if="labelCount(l)" class="wiz-labelcount">{{ labelCount(l) }}</span>
+              </button>
+            </span>
+            <small v-if="f.probe && unknownLabels(f).length" class="wiz-error">
+              Not on this account: {{ unknownLabels(f).join(", ") }}. A download filter naming a
+              label the account doesn’t have fails the run; a render filter naming one renders
+              nothing.
+            </small>
+            <small v-else-if="f.probe && !probe.report" class="wiz-help">
+              Run “Test connection” to pick from this account’s real
+              {{ f.probe === "mailboxes" ? "folders" : "labels" }} instead of typing them.
+            </small>
+          </span>
           <input
             v-else
             class="wiz-input"
@@ -819,6 +1204,67 @@ function submit() {
 .wiz-pathrow .wiz-input { flex: 1; min-width: 0; }
 .wiz-browse { white-space: nowrap; }
 .wiz-foot-note { margin-right: auto; font-size: 12px; color: var(--datalib-muted); }
+
+/* The Connection block: latchkey account + the two buttons. Boxed
+   because it is about the *account*, not about one setting — the
+   fields below it are all things you type, and this is the one place
+   that talks to something outside. */
+.wiz-conn {
+  border: 1px solid var(--datalib-border);
+  border-radius: 6px;
+  padding: 12px 14px 4px;
+  margin-bottom: 16px;
+}
+.wiz-conn-head {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--datalib-muted);
+}
+.wiz-conn-intro { margin: 0 0 12px; }
+.wiz-conn-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.wiz-conn-note { margin: 0 0 10px; }
+.wiz-inline-btn { margin-left: 6px; padding: 3px 8px; font-size: 12px; }
+/* Dropdown over box, not side by side: an account is an email address
+   and both halves need the width. */
+.wiz-accountrow { display: flex; flex-direction: column; gap: 6px; }
+.wiz-accountpick { max-width: 100%; }
+
+.wiz-listfield { display: flex; flex-direction: column; gap: 6px; }
+/* Capped and scrollable: a real Gmail account has dozens of labels,
+   and the picker must not push the buttons off the dialog. */
+.wiz-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 5px;
+  background: var(--datalib-card-bg);
+}
+.wiz-labelchip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.wiz-labelchip:hover { background: var(--datalib-hover); }
+.wiz-labelchip.on { border-color: var(--datalib-accent); background: var(--datalib-hover); }
+/* Reserved even when empty, so ticking a chip doesn't reflow the row. */
+.wiz-labeltick { width: 8px; color: var(--datalib-accent); font-size: 11px; }
+.wiz-labelname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiz-labelcount { color: var(--datalib-muted); font-size: 10.5px; }
 
 .wiz-review { margin-top: 8px; }
 .wiz-review summary { cursor: pointer; font-size: 12.5px; color: var(--datalib-muted); }

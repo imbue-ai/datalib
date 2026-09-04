@@ -13,6 +13,8 @@
 //!   GET /api/search?q=…&limit=…  → grid_rows query against the managed Dolt repo
 //!   GET /api/columns             → grid column metadata
 //!   GET /api/chat/{uuid}         → conversation header (from grid_rows) + raw QMD body
+//!   GET /api/latchkey/{service}  → stored accounts for a latchkey service
+//!   POST /api/probe              → what an account can reach (see connect.rs)
 //!
 //! Dolt is the source of truth. **QMDs are write-only output** — the
 //! `/api/chat` endpoint serves the file body verbatim (sans frontmatter)
@@ -41,6 +43,7 @@ use tower_http::services::ServeDir;
 pub mod applets;
 pub mod auth;
 pub mod boot;
+pub mod connect;
 mod embed;
 pub mod frontend;
 pub mod lock;
@@ -183,6 +186,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config/check", post(check_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
+        // Credentials and connection testing for the Add-a-source
+        // wizard. See `connect.rs` — all three shell out, deliberately.
+        .route("/api/latchkey/{service}", get(connect::get_service))
+        .route(
+            "/api/latchkey/{service}/connect",
+            post(connect::start_connect),
+        )
+        .route(
+            "/api/latchkey/connect/{id}/status",
+            get(connect::connect_status),
+        )
+        .route("/api/probe", post(connect::probe))
         .route("/api/dag", get(get_dag))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))

@@ -15,6 +15,23 @@ changes when a mode is added. See
 [`data_architecture_ingestion.md`](data_architecture_ingestion.md) for
 the surrounding ingestion architecture.
 
+Two of the three have a wizard form: **Gmail** and **Fastmail** are
+separate entries in `ui/src/config/catalog.ts`, each writing the table
+that selects its mode. They are not one form with a mode dropdown —
+they authenticate against different latchkey services and want
+different words on screen — and the fact that they share a step type is
+what `variantKey` exists to handle (`docs/dev/source_wizard.md`,
+"What shipped"). The mbox mode has no form: it is a path, and the
+catch-all `email` entry sends you to the config editor.
+
+Both forms fill their label pickers from `datalib-step probe email`
+(`datalib/backend/etl/providers/email/src/probe.rs`), which reads the
+account's real labels — one `users.labels.list` or one `Mailbox/get` —
+and returns them spelled exactly the way `only_extract_labels` matches.
+That spelling is the whole point of the probe — Gmail hands us the same
+label under three different names depending on how we ask, and the
+table in `src/download/labels.rs` is where they are reconciled.
+
 ## 1. Why modes of one source, not separate source types
 
 The tree was already built for it, and not aspirationally:
