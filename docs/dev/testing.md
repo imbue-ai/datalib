@@ -87,22 +87,25 @@ image carrying it). Anyone acting on it would have dropped the
 exclusion and gotten a red gate, because the actual blockers were two
 things the note never mentioned.
 
-* **The qmd GGUFs are not in the image.** `materialize_tng_root.sh`
-  requires `~/.cache/qmd/models` to hold them and `exit 3`s if it does
-  not — deliberately, so a multi-GB HuggingFace download cannot
-  masquerade as a hang. The published devcontainer is built on the
-  `-slim` prod image (`QMD_PREFETCH_MODELS=false`), which creates that
-  directory empty. CI now fills it with a `qmd pull` behind an
-  `actions/cache` keyed on the repo's qmd pin.
+* **The qmd GGUFs are not in the image.** The published devcontainer is
+  built on the `-slim` prod image (`QMD_PREFETCH_MODELS=false`), which
+  creates `/root/.cache/qmd/models` empty, and
+  `materialize_tng_root.sh` used to require that directory to hold them
+  — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
+  could not masquerade as a hang. CI filled it with a `qmd pull` behind
+  an `actions/cache`. Both halves are gone now: the three GGUFs are
+  pinned in `MODULE.bazel` as `@qmd_model_*` and reach the materializer
+  (and the fixture's index genrule) as bazel inputs, and `.bazelrc`'s
+  `buildbuddy` config fetches them through BuildBuddy's remote
+  downloader rather than from HuggingFace.
 * **`HOME=/github/home`.** GitHub forces that for container steps, while
   the image bakes its caches under `/root`, so every lookup landed in an
-  empty directory. Two `--test_env` flags redirect the only two that
-  matter: `CLAUDE_MIRROR_HOST_HOME=/root` (read by
-  `materialize_tng_root.sh` in place of `$HOME`, the same variable
-  `build_qmd_index.py` already honored) and
-  `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` (without it,
-  `run_e2e.sh`'s `playwright install` re-downloads ~400 MB of chromium +
-  webkit every run instead of using the baked cache).
+  empty directory. One `--test_env` flag still redirects the lookup that
+  matters: `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`
+  (without it, `run_e2e.sh`'s `playwright install` re-downloads ~400 MB
+  of chromium + webkit every run instead of using the baked cache). The
+  other one, `CLAUDE_MIRROR_HOST_HOME=/root`, went away with the model
+  cache — nothing reads that variable any more.
 
 The cost is honest and worth naming: the suite is `no-sandbox` +
 `requires-network` and takes ~4 minutes, so unlike the rest of a warm

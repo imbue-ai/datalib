@@ -4,11 +4,11 @@
 // child (backend/unified_index/src/qmd/daemon.rs). The first such query
 // after the applet starts loads the embedding model; every query after
 // that is sub-second. The model file itself is not downloaded here —
-// tests/fixtures/materialize_tng_root.sh symlinks a shared
-// ~/.cache/qmd/models into each data root and refuses to run if that
-// cache is empty, precisely so a silent multi-minute download can't
-// masquerade as a hang. What is paid here is the npx resolve plus the
-// load.
+// tests/fixtures/materialize_tng_root.sh links it into each data root
+// from a bazel input (`@qmd_model_embeddinggemma`, pinned in
+// MODULE.bazel), so it is on disk before the suite starts and a silent
+// multi-minute download can't masquerade as a hang. What is paid here
+// is the npx resolve plus the load.
 //
 // Nothing used to own that cost. It landed on whichever spec issued the
 // first free-text query, which is decided by *alphabetical filename

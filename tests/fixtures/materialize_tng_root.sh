@@ -9,19 +9,22 @@
 #   <stanza>/rendered_md/...           Conversation markdown trees (from qmd.tar).
 #   unified_index/grid/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   unified_index/qmd/index.sqlite            QMD index (from qmd-index.tar).
-#   unified_index/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
+#   unified_index/qmd_models/          the three qmd GGUFs, linked in from
+#                                      bazel inputs (`:qmd_models`).
+#   unified_index/qmd/models -> ../qmd_models
 #   config.toml                        { data_root } plus the
 #                                      `unified_index` applet the grid
 #                                      is served by.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
-# Requires python3 on PATH. The qmd model cache at ~/.cache/qmd/models
-# must already contain the required GGUF files — this script refuses to
-# trigger a download (silent multi-minute stall). Set
-# `CLAUDE_MIRROR_HOST_HOME` to look for that cache under a different
-# home; CI needs it, because GitHub forces `HOME=/github/home` while the
-# image bakes the models under `/root`.
+# Requires python3 on PATH. Nothing about the host's home directory: the
+# qmd GGUFs arrive as bazel inputs, so this runs on a machine that has
+# never run qmd. It used to read `~/.cache/qmd/models` (or
+# `CLAUDE_MIRROR_HOST_HOME`, which CI set because GitHub forces
+# `HOME=/github/home` while the image bakes under `/root`) and refuse to
+# run when that cache was empty, rather than let a silent multi-GB
+# download masquerade as a hang.
 
 set -eo pipefail
 
@@ -82,45 +85,40 @@ id = "unified_index"
 command = "'$APPLET_BIN' unified_index"
 EOF
 
-# qmd models live once in ~/.cache/qmd/models (~1.6 GB) and every data
-# root symlinks them in. If the cache is empty we refuse — letting qmd
-# download silently is a multi-minute stall that masquerades as a hang.
-# Path matches qmd's own default so a standalone `qmd` populates the
-# same cache the build reads from.
+# qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, pinned
+# in MODULE.bazel), so this no longer depends on the developer having run
+# qmd at least once — which it used to, refusing with a "populate the
+# shared cache first" message. That check existed because letting qmd
+# download 2.2 GB silently is a multi-minute stall that masquerades as a
+# hang; taking the models from bazel removes the stall instead of
+# reporting it.
 #
-# `CLAUDE_MIRROR_HOST_HOME` wins over `$HOME` when set, the same way
-# `tests/fixtures/build_qmd_index.py` reads it. That is not a local
-# convenience — it is what makes this script usable in CI at all.
-# GitHub Actions forces `HOME=/github/home` for every container step,
-# while the devcontainer image bakes its caches under `/root`, so
-# `$HOME` here points at an empty directory that nothing will ever
-# populate. Without the override the two consumers of this script
-# disagree: the qmd genrule (which already reads this variable) finds
-# the models and the e2e suite does not.
-QMD_CACHE_HOME="${CLAUDE_MIRROR_HOST_HOME:-${HOME:-.}}"
-SHARED_MODELS="$QMD_CACHE_HOME/.cache/qmd/models"
-REQUIRED_MODELS=(
-  "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
-  "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf"
-)
-missing=()
-for m in "${REQUIRED_MODELS[@]}"; do
-  p="$SHARED_MODELS/$m"
-  if [[ ! -s "$p" ]]; then missing+=("$m"); fi
+# Two details, both deliberate:
+#
+#   * The links point INTO the runfiles tree rather than copying 2.2 GB
+#     into every root. Same assumption the applet `command` above already
+#     makes — a runfiles path outlives the run that wrote it, up to a
+#     `bazel clean`.
+#   * `unified_index/qmd/models` has to be a SYMLINK, not the directory
+#     itself. A later sync against this root calls
+#     `qmd_indexer::ensure_models_symlink`, which errors out when it
+#     finds a real directory at that path. So the real directory is a
+#     sibling and the expected path points at it.
+MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
+mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd"
+for entry in \
+  "qmd_model_embeddinggemma/file/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf" \
+  "qmd_model_query_expansion/file/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
+  "qmd_model_reranker/file/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
+  src="$(rlocation "$entry")" || src=""
+  if [[ -z "$src" || ! -s "$src" ]]; then
+    echo "ERROR: qmd model not found in runfiles: $entry" >&2
+    echo "  (is \`:qmd_models\` still in materialize_tng_root's \`data\`?)" >&2
+    exit 3
+  fi
+  ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
 done
-if (( ${#missing[@]} > 0 )); then
-  {
-    echo "ERROR: missing qmd models in $SHARED_MODELS:"
-    for m in "${missing[@]}"; do echo "  - $m"; done
-    echo
-    echo "Populate the shared cache once by running the qmd indexer"
-    echo "against any data root, e.g.:"
-    echo "  bazelisk run //datalib/backend/qmd_indexer -- --root <some-datalib-root>"
-  } >&2
-  exit 3
-fi
-mkdir -p "$OUT_ROOT/unified_index/qmd"
-ln -sfn "$SHARED_MODELS" "$OUT_ROOT/unified_index/qmd/models"
+ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
 # directory the `fsindex` (Unison-style) scanner can index; nothing renders it
