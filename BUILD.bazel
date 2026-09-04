@@ -28,16 +28,7 @@ exports_files([
 # step in `test.yml` and in `bazel run //:precommit`.
 filegroup(
     name = "python_sources",
-    srcs = glob(["scripts/**/*.py"]) + glob(
-        # Loose Python directly under `hack/`, i.e. anything not inside
-        # a hack package of its own. Legitimately empty today —
-        # `hack/dirtree_diff` is a package and contributes its own
-        # filegroup below — so this one allows empty rather than
-        # failing the build the day that stops being true in reverse.
-        ["hack/**/*.py"],
-        allow_empty = True,
-    ) + [
-        "//hack/dirtree_diff:python_sources",
+    srcs = glob(["scripts/**/*.py"]) + [
         "//tests/fixtures:python_sources",
         "//tools:python_sources",
     ],

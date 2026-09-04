@@ -10,15 +10,17 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../.." && pwd)"
+repo="$(cd "$here/../../.." && pwd)"
 out="${1:-/tmp/dirtree_diff_demo}"
 
 fsindex="$repo/bazel-bin/datalib/backend/etl/providers/fsindex/fsindex"
 doltlite="$repo/bazel-bin/third-party/doltlite/doltlite"
-if [[ ! -x "$fsindex" || ! -x "$doltlite" ]]; then
-    echo "building the scanner and the doltlite shell…" >&2
+dirtree_diff="$repo/bazel-bin/datalib/backend/dirtree_diff/dirtree_diff"
+if [[ ! -x "$fsindex" || ! -x "$doltlite" || ! -x "$dirtree_diff" ]]; then
+    echo "building the scanner, the viewer and the doltlite shell…" >&2
     (cd "$repo" && bazelisk build \
         //datalib/backend/etl/providers/fsindex:fsindex \
+        //datalib/backend/dirtree_diff:dirtree_diff \
         //third-party/doltlite:doltlite)
 fi
 
@@ -65,7 +67,7 @@ echo "scanning…" >&2
 "$fsindex" --db after.doltlite_db  --source-name after  --root after  --no-stamp >/dev/null 2>&1
 
 # Case 1: two independent files, unified through file:// remotes.
-python3 "$here/dirtree_diff.py" \
+"$dirtree_diff" \
     --left "$out/before.doltlite_db" \
     --right "$out/after.doltlite_db" \
     --full-tree \
@@ -81,7 +83,7 @@ rm -f branched.doltlite_db
 "$fsindex" --db branched.doltlite_db --source-name after --root after \
     --branch after --no-stamp >/dev/null 2>&1
 
-python3 "$here/dirtree_diff.py" \
+"$dirtree_diff" \
     --left "$out/branched.doltlite_db#before" \
     --right "$out/branched.doltlite_db#after" \
     --full-tree \

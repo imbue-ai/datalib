@@ -1,0 +1,88 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_dirtree_diff",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    compile_data = ["viewer.html.tmpl"],
+    crate_name = "datalib_dirtree_diff",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# `datalib-dirtree-diff` once staged by `//datalib/backend:bin`.
+rust_binary(
+    name = "dirtree_diff",
+    srcs = ["src/bin/dirtree_diff.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_dirtree_diff",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# Inline unit tests: the byte-size parser, the `path#ref` parser, the
+# commit-hash newtype that guards SQL interpolation, and the template
+# projection.
+rust_test(
+    name = "dirtree_diff_unittests",
+    size = "small",
+    crate = ":datalib_dirtree_diff",
+    edition = "2021",
+)
+
+# The interpretation, tested against its intermediate representation:
+# `analyze()` is a pure function from `Inputs` to `DiffResult`, so move
+# pairing, subtree rollup, delete-vs-copy-remains and in-tree duplicate
+# grouping are asserted on plain data — no doltlite, no HTML, no
+# browser.
+rust_test(
+    name = "analyze_test",
+    size = "small",
+    srcs = ["tests/analyze_test.rs"],
+    crate_root = "tests/analyze_test.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_dirtree_diff",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+# The doltlite side, against real stores: two independent files unify
+# through `file://` remotes and the prolly diff works across them, reads
+# go through a pin rather than the working set, and the vtab-registry
+# trap that forces `unify` to hand back a closed pool stays pinned.
+rust_test(
+    name = "store_test",
+    size = "small",
+    srcs = ["tests/store_test.rs"],
+    crate_root = "tests/store_test.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_dirtree_diff",
+        "@datalib_crates//:hex",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -11,10 +11,14 @@ and `archive/reports` was created, and leaves you to work out that they
 are the same bytes. Here the two are one row.
 
 ```sh
-bazelisk build //third-party/doltlite:doltlite \
-               //datalib/backend/etl/providers/fsindex:fsindex
+bazelisk build //datalib/backend/dirtree_diff:dirtree_diff
 ./demo.sh            # builds two trees, scans them, writes two pages
 ```
+
+Ships as `datalib-dirtree-diff` — it is in `//datalib/backend:dist`, so
+a tagged release carries it like every other binary. sqlx links the same
+doltlite amalgamation the rest of the tree does, so there is no CLI to
+locate and no subprocess per query.
 
 ## Can doltlite's prolly diff work across two separate files?
 
@@ -75,13 +79,13 @@ database entirely. The viewer accepts any mix:
 
 ```sh
 # two independent scan files (unified via file:// fetch)
-./dirtree_diff.py --left before.doltlite_db --right after.doltlite_db -o d.html
+datalib-dirtree-diff --left before.doltlite_db --right after.doltlite_db -o d.html
 
 # two branches of one file (diffed directly)
-./dirtree_diff.py --left scans.doltlite_db#main --right scans.doltlite_db#nightly -o d.html
+datalib-dirtree-diff --left scans.doltlite_db#main --right scans.doltlite_db#nightly -o d.html
 
 # a branch in one file vs. a raw commit hash in another
-./dirtree_diff.py --left a.doltlite_db#main --right b.doltlite_db#9447a1f5… -o d.html
+datalib-dirtree-diff --left a.doltlite_db#main --right b.doltlite_db#9447a1f5… -o d.html
 ```
 
 Each side is `PATH[#REF]`, where `REF` is a branch, `HEAD~2`, or a
@@ -251,21 +255,33 @@ should be testable without a database or a browser in the way:
 - **`DiffResult`** is the representation. The page is a projection of
   it (`to_payload()`), and so is `--json`.
 
-It is **not** serde — there is no schema and no derive, just dataclasses
-and an explicit `to_payload()` / `from_payload()` pair, which keeps the
-tool stdlib-only. But it does round-trip losslessly, and
-`dirtree_diff_test.py` asserts that, so a real run captured with
-`--json` can be replayed into a test or fed to some other viewer:
+Every type derives `Serialize` + `Deserialize`, so the JSON *is* the
+representation rather than a debug dump — a run captured with `--json`
+deserializes straight back into a `DiffResult`, and a test asserts that
+round-trip:
 
 ```sh
-./dirtree_diff.py --left before.doltlite_db --right after.doltlite_db \
+datalib-dirtree-diff --left before.doltlite_db --right after.doltlite_db \
     --json run.json -o run.html
 ```
 
-The tests (`bazel test //hack/dirtree_diff:dirtree_diff_test`) build
-`Inputs` literals and assert on `DiffResult`. No `.doltlite_db`, no
-HTML, no browser — a moved subtree is four `Entry` values and an
-assertion about which single row survives the rollup.
+`tests/analyze_test.rs` builds `Inputs` literals and asserts on
+`DiffResult` — no `.doltlite_db`, no HTML, no browser. A moved subtree
+is four `Entry` values and an assertion about which single row survives
+the rollup. `tests/store_test.rs` covers the half only a real store can
+prove: that two independent files unify and diff across each other.
+
+### One doltlite trap worth knowing
+
+`dolt_diff_<table>` and `dolt_at_<table>` are registered **when a
+connection opens**, from the tables present at that moment. A scratch
+database is empty when we open it to add the remotes, so *that*
+connection never learns about `files` and every later query on it fails
+with `no such table: dolt_diff_files` — while a fresh connection to the
+same file works. Fetching and reading therefore cannot share a
+connection, which is why `store::unify` hands back nothing and the
+caller reopens. `store_test.rs` pins the behaviour, so if doltlite ever
+starts refreshing the registry the test fails and the reopen can go.
 
 ## What a subtree move costs, and why
 
@@ -309,7 +325,7 @@ number before anyone reopens that debate.
 
 ## Status and limits
 
-A prototype, deliberately in `hack/`. Known gaps:
+Young, and the gaps are known:
 
 - **The page holds every node it renders.** Fine for the thousands;
   `--full-tree` on a multi-million-entry scan will produce an

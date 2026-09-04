@@ -1,0 +1,31 @@
+[package]
+name = "datalib-dirtree-diff"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_dirtree_diff"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dirtree_diff"
+path = "src/bin/dirtree_diff.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { version = "4.5", features = ["derive", "env"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+# The house observability stack: `--log-format` / `--log-level` /
+# OTLP, the same flags every other shipped binary takes.
+datalib-obs = { path = "../obs" }
+
+[dev-dependencies]
+hex = "0.4"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

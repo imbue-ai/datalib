@@ -74,6 +74,10 @@ filegroup(
         # invocable standalone against a data root's config.toml).
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
+        # Diffs two fsindex scans into one self-contained HTML page,
+        # with moves detected from the directory tree-hashes. Standalone
+        # — nothing else invokes it.
+        "//datalib/backend/dirtree_diff:dirtree_diff",
         # One-shot converter from a pre-TOML `config.yaml`. Ships so an
         # upgrading user can actually run it; nothing else invokes it,
         # and it is the only shipped binary that links a YAML parser.
@@ -133,6 +137,7 @@ copy_to_directory(
     srcs = [":dist"],
     replace_prefixes = {
         "dag/datalib_dag_bin": "datalib-dag",
+        "dirtree_diff/dirtree_diff": "datalib-dirtree-diff",
         "datalib_step/datalib_step": "datalib-step",
         "applets/datalib_applet": "datalib-applet",
         "http/datalib_http_bin": "datalib-http",
