@@ -167,55 +167,6 @@ jobs:
       # sandbox denies. Kept as a plain step so `bazel test //...` stays
       # fully hermetic. Runs before the build because it is ~instant and
       # its failures are cheap to fix.
-      # ── the qmd embedding models, for `//datalib/ui:e2e_test` ────────
-      #
-      # Two consumers need these GGUFs and neither can download them
-      # itself: `//tests/fixtures:ingested_tng_qmd` (a genrule, sandboxed)
-      # and `tests/fixtures/materialize_tng_root.sh`, which the e2e suite
-      # runs and which `exit 3`s on an empty cache on purpose — a silent
-      # multi-GB HuggingFace download masquerading as a hang is exactly
-      # what that check exists to prevent.
-      #
-      # The image does NOT carry them. `release.yml` publishes the
-      # devcontainer against `datalib:<ver>-slim`, i.e.
-      # `QMD_PREFETCH_MODELS=false`, which creates
-      # `/root/.cache/qmd/models` EMPTY. So CI has to fill it, and this
-      # is where.
-      #
-      # `/root`, not `$HOME`: GitHub forces `HOME=/github/home` for
-      # container steps, while every other qmd accommodation in this job
-      # (the sandbox mount pair, `CLAUDE_MIRROR_HOST_HOME`) already names
-      # `/root`. Keeping one location keeps one copy — pointing them at
-      # two homes would cache 2.2 GB twice.
-      #
-      # Keyed on the repo's qmd pin, since that is what decides which
-      # GGUFs qmd wants. Note the image's globally-installed `qmd` is
-      # whatever the last release built with; if the repo pin moves ahead
-      # of it and the model set changes, the materializer fails by name
-      # ("missing qmd models in ...") rather than mysteriously — which is
-      # the failure mode we want.
-      #
-      # Watch the disk if this job starts failing on space: 2.2 GB is a
-      # real increment on top of the image and bazel's outputs, and this
-      # job has no cleanup step. `release.yml`'s "Free up runner disk"
-      # is the ready-made fix to copy if it comes to that.
-      - name: Cache the qmd models
-        id: qmd-models
-        uses: actions/cache@v4
-        with:
-          path: /root/.cache/qmd/models
-          key: qmd-models-${{ hashFiles('third-party/qmd/runtime/package.json') }}
-
-      - name: Populate the qmd models
-        if: steps.qmd-models.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          # `qmd pull` writes to $HOME/.cache/qmd/models, and $HOME is
-          # /github/home here — so override it for this one command
-          # rather than letting 2.2 GB land where nothing reads it.
-          HOME=/root qmd pull
-          ls -lh /root/.cache/qmd/models
-
       - name: repo hygiene lints
         run: |
           # This job runs in a container as root, while the checkout is
@@ -250,13 +201,14 @@ jobs:
           # kept it out was two things that note never mentioned, both
           # now handled above and below:
           #
-          #   1. The qmd GGUFs are absent from the `-slim`-based image.
-          #      The "Cache the qmd models" step fills
-          #      `/root/.cache/qmd/models`.
+          #   1. The qmd GGUFs are absent from the `-slim`-based image,
+          #      and the suite refused to run without them. They are
+          #      bazel inputs now (`@qmd_model_*`), so the suite brings
+          #      its own.
           #   2. `HOME=/github/home`, which GitHub forces for container
           #      steps, points every cache lookup away from the `/root`
-          #      the image bakes into. The two `--test_env` flags below
-          #      redirect the only two lookups that matter.
+          #      the image bakes into. That still matters for Playwright's
+          #      browser cache — the `--test_env` below redirects it.
           #
           # WebKit's arrival was verified in v0.30.1's build log rather
           # than inferred from the Dockerfile, since layer caching could
@@ -286,79 +238,57 @@ jobs:
           # replay like the rest of a warm `main` run. That is the price
           # of gating UI regressions; see `docs/dev/testing.md`.
           #
-          # `--test_env=CLAUDE_MIRROR_HOST_HOME=/root` — read by
-          # `tests/fixtures/materialize_tng_root.sh` in place of `$HOME`
-          # when resolving the model cache, the same variable and the
-          # same reason as the `--action_env` form below (that one
-          # covers build actions; this one covers tests, and they are
-          # separate flags).
-          #
           # `--test_env=PLAYWRIGHT_BROWSERS_PATH=...` — `run_e2e.sh` runs
           # `playwright install` before the suite. Left pointing at
           # `/github/home`, that is a ~400 MB re-download of chromium +
           # webkit on EVERY run; pointed at the image's baked cache it is
           # the no-op it was designed to be.
           #
-          # Do NOT try to collapse these two into a single
-          # `--test_env=HOME=/root`. It looks equivalent and is not: the
-          # target declares `env_inherit = ["PATH", "HOME", ...]`, and
-          # env_inherit WINS over `--test_env` for the same name, so the
-          # flag is silently ignored and HOME stays `/github/home`.
-          # Measured, not assumed — a local run with
-          # `--test_env=HOME=/nonexistent` passed, which it could only do
-          # by ignoring the flag. Redirecting the two specific lookups
-          # is the mechanism that actually works, which is why there are
-          # two flags here rather than one.
+          # Do NOT try to replace it with `--test_env=HOME=/root`. That
+          # looks equivalent and is not: the target declares
+          # `env_inherit = ["PATH", "HOME", ...]`, and env_inherit WINS
+          # over `--test_env` for the same name, so the flag is silently
+          # ignored and HOME stays `/github/home`. Measured, not assumed
+          # — a local run with `--test_env=HOME=/nonexistent` passed,
+          # which it could only do by ignoring the flag. Redirecting the
+          # specific lookup is the mechanism that actually works.
           #
-          # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
-          # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
-          # into the sandbox. The PROD image bakes them at
-          # `/root/.cache/qmd/models`, but the devcontainer image CI runs
-          # in is built on the `-slim` prod variant (release.yml passes
-          # `--build-arg PROD_IMAGE_TAG=${version}-slim`), where that path
-          # exists and is EMPTY. #256 wrote that down, and the trade it
-          # described was: 2.2 GB of image pulled on every run, against
-          # ~2 GB downloaded by qmd on the rare cold genrule.
+          # qmd models: nothing to arrange here any more, and the
+          # steps that used to arrange it are gone. The GGUFs are pinned
+          # in MODULE.bazel (`@qmd_model_*`) and reach their two
+          # consumers as bazel inputs: the
+          # `//tests/fixtures:ingested_tng_qmd` genrule (embedding model
+          # only) and `tests/fixtures/materialize_tng_root.sh`, which the
+          # e2e suite runs (all three). Neither reads a host cache, so
+          # neither cares that the devcontainer image CI runs in is built
+          # on the `-slim` prod variant (release.yml passes
+          # `--build-arg PROD_IMAGE_TAG=${version}-slim`) and carries an
+          # EMPTY `/root/.cache/qmd/models`.
           #
-          # **That trade is off the table now.** The e2e suite needs the
-          # same models on EVERY run and refuses to download them
-          # (`materialize_tng_root.sh` `exit 3`s on an empty cache, so a
-          # multi-GB stall cannot masquerade as a hang), so the "Cache the
-          # qmd models" step above fills the path up front. The genrule is
-          # the second beneficiary: its cold run no longer downloads
-          # anything either.
+          # What this replaced: a `Cache the qmd models` + `Populate the
+          # qmd models` pair of steps that filled that directory from the
+          # GitHub Actions cache, plus a `qmd pull` on a cache miss. They
+          # existed because the two consumers downloaded models
+          # themselves, and on 2026-09-03 one of those downloads drew a
+          # 429 from HuggingFace and failed a merge-gating build.
           #
-          # An earlier version of this comment ended by claiming "qmd then
-          # finds the baked models + their `.etag` sidecars and skips the
-          # download". That was true of a LOCAL devcontainer, which
-          # `devcontainer.json` builds against the full prod image, and
-          # false here until the cache step existed — it is the cache
-          # step, not the image, that makes it true of CI. Read the
-          # genrule's own output before believing any version of this
-          # story: it prints a line per model saying which it did.
+          # The fetch has to happen somewhere, and a fresh container has
+          # an empty repository cache — so `.bazelrc`'s `buildbuddy`
+          # config routes repository downloads through BuildBuddy's
+          # remote downloader. The models come from the same host as the
+          # action cache, and HuggingFace is not in the loop at all.
           #
-          # The two flags below are still load-bearing, for a different
-          # reason than "find the baked models". GitHub Actions overrides
-          # HOME=/github/home for container steps, so `.bazelrc`'s
-          # `$(HOME)/.cache/qmd/models` mount and build_qmd_index.py's
-          # `~/.cache/qmd/models` would otherwise resolve to two different
-          # places, and the models dir would not be reachable from inside
-          # the genrule sandbox at all:
-          #   * --sandbox_add_mount_pair makes /root/.cache/qmd/models
-          #     visible in the genrule sandbox (additive to the .bazelrc
-          #     $(HOME) mount, which stays correct for local dev).
-          #   * CLAUDE_MIRROR_HOST_HOME makes build_qmd_index.py resolve
-          #     its models dir to the same path (the script reads it in
-          #     place of $HOME).
-          # Standing CI accommodation — not a republish bridge: the image
-          # bakes as root and GH always sets HOME=/github/home.
+          # Three flags went with those steps:
+          # `--sandbox_add_mount_pair=/root/.cache/qmd/models`,
+          # `--action_env=CLAUDE_MIRROR_HOST_HOME=/root` and
+          # `--test_env=CLAUDE_MIRROR_HOST_HOME=/root` — between them
+          # what aimed the genrule and the e2e materializer at the
+          # image's cache, GitHub having forced HOME=/github/home for
+          # container steps. Nothing reads that variable now.
           bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
             --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
-            --sandbox_add_mount_pair=/root/.cache/qmd/models \
-            --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
-            --test_env=CLAUDE_MIRROR_HOST_HOME=/root \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...
 

@@ -56,28 +56,26 @@ build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
-# Mount the host's shared qmd embedding-model cache (`~/.cache/qmd/models`,
-# ~2GB of GGUF files) into the sandbox at the same path. Without this,
-# the qmd-indexer genrule (`//tests/fixtures:ingested_tng_qmd`) would
-# have to re-download the multi-GB model files every action: inside the
-# sandbox `$HOME` is remapped to a per-action tmpdir, so an absolute
-# path to the host cache is the only way through.
+# There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
+# here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
+# from inside the sandbox instead of re-downloading it. Nothing in the
+# build reads that directory any more: the models are pinned in
+# MODULE.bazel (`@qmd_model_*`) and reach the two places that need them —
+# `//tests/fixtures:ingested_tng_qmd` and `:materialize_tng_root` — as
+# ordinary bazel inputs. Dropping the mount also drops its onboarding
+# cost, which was a `mkdir -p ~/.cache/qmd/models` that a missing
+# directory turned into a build failure rather than a warning.
 #
-# Path matches qmd's own default (`join(homedir(), ".cache", "qmd",
-# "models")` in third-party/qmd/src/llm.ts), so a standalone `qmd`
-# invocation on the dev host populates the same directory the build
-# reads from. //tests/fixtures:qmd_model_cache_path_test enforces
-# the match — break it and that test fails.
+# The host cache still exists and still matters — it is where the SHIPPED
+# app puts models at sync time, which is why
+# `qmd_indexer::default_models_dir()` still has to agree with qmd's own
+# `MODEL_CACHE_DIR`. That agreement is asserted by the rust unit test
+# `default_models_dir_matches_qmd_default` and by
+# `//tools:qmd_model_cache_path_test`.
 #
-# Safe to mount because the cache is content-keyed (qmd looks up models
-# by their HuggingFace repo + filename, never by mtime). Pairs with
-# `--action_env=HOME` below so `os.path.expanduser('~')` inside the
-# build script resolves to the same host path the mount uses.
-#
-# `$(HOME)` here is expanded by Bazel at startup time (one of the few
-# flags that supports it). If your host is missing the cache dir,
-# create it: `mkdir -p ~/.cache/qmd/models`.
-build --sandbox_add_mount_pair=$(HOME)/.cache/qmd/models
+# `--action_env=HOME` stays. It was introduced alongside the mount, but
+# it is not specific to it, and the actions that would notice its
+# absence have not been enumerated.
 build --action_env=HOME
 
 # libsqlite3-sys's build script invokes bindgen, which uses
@@ -166,6 +164,31 @@ build:buildbuddy --bes_backend=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_timeout=600
 build:buildbuddy --remote_upload_local_results=true
+
+# Fetch repository downloads through BuildBuddy too, not just action
+# results. Bazel asks BuildBuddy for the URL; BuildBuddy serves it from
+# its cache if it has it, otherwise fetches it once from the origin and
+# keeps it. So `http_archive` / `http_file` content — the rust
+# toolchains, the doltlite amalgamation, the qmd GGUFs — comes from the
+# same host as everything else instead of from a third-party server per
+# machine, per CI container.
+#
+# The qmd models are why this is here. They are ~2.26 GB of
+# `@qmd_model_*` (MODULE.bazel), a CI container starts with an empty
+# repository cache, and HuggingFace answered one of those cold fetches
+# with `429 Too Many Requests` on 2026-09-03 and failed the build.
+#
+# Measured, not assumed: fetching `@qmd_model_reranker//file` cold with
+# this flag uploaded 639,174,366 bytes to BuildBuddy on the first run
+# (origin fetch, then stored) and 20,814 bytes on the second, with the
+# same 639,153,184 downloaded — i.e. the second fetch came from
+# BuildBuddy, not HuggingFace.
+#
+# `_local_fallback=true` because the default is `false`, which turns a
+# BuildBuddy outage into a failed fetch rather than a slow one. With it,
+# bazel just downloads from the origin URL itself.
+build:buildbuddy --experimental_remote_downloader=grpcs://imbue.buildbuddy.io
+build:buildbuddy --experimental_remote_downloader_local_fallback=true
 
 # Fully-static musl release builds. Selects the musl platform for the
 # TARGET configuration only: build scripts, proc macros, and genrule

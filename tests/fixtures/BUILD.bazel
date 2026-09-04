@@ -23,6 +23,21 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# qmd's three GGUF models, pinned in MODULE.bazel and fetched by bazel
+# rather than downloaded by qmd at run time. Only the materialize path
+# takes all three: `:ingested_tng_qmd` embeds and nothing else, so it
+# names the embedding model alone rather than dragging 1.8 GB of inputs
+# it never opens through every action key.
+filegroup(
+    name = "qmd_models",
+    srcs = [
+        "@qmd_model_embeddinggemma//file",
+        "@qmd_model_query_expansion//file",
+        "@qmd_model_reranker//file",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # Materialize a datalib data root from :ingested_tng + :ingested_tng_qmd
 # into a caller-provided directory. Used by both `//datalib:dev_tng`
 # (interactive eyeballing) and the UI e2e test (fixture setup) so the two
@@ -33,6 +48,12 @@ sh_binary(
     data = [
         ":ingested_tng",
         ":ingested_tng_qmd",
+        # The models the materialized root's `unified_index/qmd/models`
+        # points at. Before this they came from the developer's
+        # `~/.cache/qmd/models`, and the script refused to run when that
+        # was empty — which made "have you run qmd once?" a prerequisite
+        # for `bazelisk run //datalib:dev_tng` and for the e2e suite.
+        ":qmd_models",
         # TNG-themed scan tree dropped into the root as `fsindex_scan/` — a
         # directory the `fsindex` (Unison-style) scanner can index. It's not
         # rendered (fsindex is extract-only), so it just sits in the root.
@@ -258,12 +279,20 @@ py_test(
 # markdown tree plus `.datalib/qmd/index.sqlite`.
 #
 # Caveats:
-#   * Needs NO host `node` and no npm registry access: Node and the qmd
-#     package tree are Bazel inputs (see //third-party/qmd/runtime), which
-#     the driver symlinks into a `DATALIB_RUNTIME_DIR` layout so the
-#     indexer resolves them instead of shelling out to `npx`. Still needs
-#     network on a cold cache for the ~2GB embedding models. Tagged
-#     accordingly.
+#   * Needs NO host `node`, no npm registry access, and no network at
+#     all. Node and the qmd package tree are Bazel inputs (see
+#     //third-party/qmd/runtime), which the driver symlinks into a
+#     `DATALIB_RUNTIME_DIR` layout so the indexer resolves them instead
+#     of shelling out to `npx`. The embedding model is a Bazel input too
+#     (`@qmd_model_embeddinggemma`, pinned in MODULE.bazel), staged into
+#     a models dir inside the sandbox — so this action no longer reads
+#     the host's `~/.cache/qmd/models`, and no longer downloads it on a
+#     machine where that cache is cold (which is every CI run).
+#   * Embeds only; it does not `qmd pull`. Pull exists to put the query
+#     expansion and reranker models in place for interactive querying,
+#     which the fixture never does — and it is also the step that would
+#     re-download our staged model, since it treats "cached file whose
+#     etag I cannot confirm" as stale. The driver passes `--no-pull`.
 #   * SQLite output is NOT byte-stable across runs (timestamps, packing).
 #     This rule is correctness-only. That does not stop it from being
 #     CACHEABLE, though — bazel keys an action on its inputs, never on
@@ -273,7 +302,13 @@ QMD_VERSION = "2.8.3"
 
 genrule(
     name = "ingested_tng_qmd",
-    srcs = ["ingested/qmd.tar"],
+    srcs = [
+        "ingested/qmd.tar",
+        # The embedding model `qmd embed` loads. See MODULE.bazel for why
+        # it is fetched by bazel rather than by qmd, and why its filename
+        # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
+        "@qmd_model_embeddinggemma//file",
+    ],
     outs = ["ingested/qmd-index.tar"],
     tools = [
         "//datalib/backend/qmd_indexer:qmd_indexer_bin",
@@ -294,29 +329,34 @@ genrule(
         QMD_VERSION,
         "$(execpath @nodejs_host//:node_bin)",
         "$(execpath //third-party/qmd/runtime:qmd_package_dir)",
+        "$(execpath @qmd_model_embeddinggemma//file)",
     ]),
     tags = [
-        # STILL network-dependent, but for one reason now instead of two:
-        # qmd's first run downloads ~2GB of GGUF models from HuggingFace.
-        # Subsequent runs use the host cache at ~/.cache/qmd/models
-        # (mounted into the sandbox via --sandbox_add_mount_pair in
-        # .bazelrc). What this tag no longer covers is fetching qmd
-        # ITSELF: the package tree is Bazel-managed and integrity-pinned
-        # (see //third-party/qmd/runtime), so no npm registry traffic and
-        # no install scripts happen here. Pinning the GGUFs would remove
-        # the tag outright.
-        "requires-network",
-        # `no-remote-exec`, NOT `no-remote`. This rule must run locally —
-        # it needs the network and the host model cache, neither of which
-        # a remote executor would have — but its RESULT is perfectly
-        # cacheable. `no-remote` is shorthand for no-remote-exec PLUS
-        # no-remote-cache, and that second half meant every CI run
-        # recomputed the index from scratch: CPU-only embedding of 62
-        # chunks, 51-382s depending on how much else was competing for
-        # the 4 vCPUs, always at the tail of the run because everything
-        # else had already finished. With the cache half restored, a run
-        # whose rendered markdown is unchanged downloads a ~3MB tar
-        # instead. Measured: 91s -> 0s on the CI critical path.
+        # No `requires-network`, deliberately. It was here for the model
+        # download, which is now `@qmd_model_embeddinggemma` — a bazel
+        # input, fetched by the repository rule outside the action and
+        # kept in the repository cache. The other thing this tag used to
+        # cover, fetching qmd ITSELF, went away earlier: the package tree
+        # is Bazel-managed and integrity-pinned (see
+        # //third-party/qmd/runtime), so no npm registry traffic and no
+        # install scripts happen here either.
+        #
+        # `no-remote-exec`, NOT `no-remote`. `no-remote` is shorthand for
+        # no-remote-exec PLUS no-remote-cache, and that second half meant
+        # every CI run recomputed the index from scratch: CPU-only
+        # embedding of 80 chunks, 61-611s depending on how much else was
+        # competing for the runner's 4 vCPUs. With the cache half
+        # restored, a run whose rendered markdown is unchanged downloads
+        # a ~3MB tar instead. Measured: 91s -> 0s on the CI critical
+        # path.
+        #
+        # The exec half stays for a plainer reason than it had before —
+        # the rule no longer needs the network or the host model cache,
+        # so it *could* run remotely, but this repo configures a remote
+        # CACHE only (see `.bazelrc`'s `buildbuddy` config) and has never
+        # run a 300 MB-input, CPU-bound inference action on a remote
+        # executor. Dropping the tag would change nothing today and would
+        # be an untested change the day someone turns on RBE.
         "no-remote-exec",
     ],
     visibility = ["//visibility:public"],

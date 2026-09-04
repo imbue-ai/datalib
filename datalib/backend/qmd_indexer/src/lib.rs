@@ -50,6 +50,18 @@ pub struct IndexOptions {
     pub collection_name: String,
     pub mask: String,
     pub models_dir: PathBuf,
+    /// Whether to run `qmd pull` before embedding. On by default,
+    /// because it is what puts the query-expansion and reranker models
+    /// in place for the first interactive query.
+    ///
+    /// Turn it off when the caller has already staged the embedding
+    /// model into `models_dir` and does not query — the fixture build
+    /// (`tests/fixtures/build_qmd_index.py`) is the one such caller.
+    /// Pull is not merely redundant there, it is destructive: it decides
+    /// a cached file is stale unless it can fetch a matching etag from
+    /// HuggingFace, so with no network (or a 429) it DELETES the staged
+    /// model and the embed that follows has to download a replacement.
+    pub pull: bool,
 }
 
 impl IndexOptions {
@@ -61,6 +73,7 @@ impl IndexOptions {
             collection_name: DEFAULT_COLLECTION_NAME.to_string(),
             mask: DEFAULT_MASK.to_string(),
             models_dir: default_models_dir(),
+            pull: true,
         }
     }
 }
@@ -85,13 +98,17 @@ pub fn default_models_dir() -> PathBuf {
 /// from the HF URIs). Used by [`models_present`] to detect a cold cache
 /// (the backend logs a first-search-will-download heads-up).
 ///
-/// These mirror `tests/fixtures/materialize_tng_root.sh`'s
-/// `REQUIRED_MODELS` — keep the two lists in sync when bumping
-/// `DEFAULT_QMD_VERSION`. We intentionally list only the embedding +
-/// query-expansion models (not the reranker): they're the gate the
-/// fixture + README guarantee, and qmd lazily fetches any other model
-/// (e.g. the reranker) on first use, so a missing one degrades to a
-/// one-time on-demand download rather than a hard failure.
+/// Only the embedding + query-expansion models, not the reranker: those
+/// two are what the app can actually load (the daemon embeds every
+/// query; the CLI fallback additionally expands), and qmd lazily fetches
+/// anything else on first use, so a missing one degrades to a one-time
+/// download rather than a hard failure.
+///
+/// This is about a REAL data root, whose models the app downloads to
+/// `default_models_dir()`. Test roots no longer come through here: the
+/// three GGUFs are pinned in MODULE.bazel and
+/// `tests/fixtures/materialize_tng_root.sh` links them in from bazel
+/// inputs, so it has no list of its own to keep in sync any more.
 pub const REQUIRED_MODELS: &[&str] = &[
     "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
     "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf",
@@ -213,8 +230,16 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // before, and queries still work with the first one paying for the
     // rest. The likely failure is a network hiccup against huggingface,
     // which shouldn't mark an otherwise-fine sync as errored.
-    if let Err(e) = run_qmd(&cache_home, &opts.qmd_version, &["pull"]) {
-        status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
+    //
+    // A caller that staged the models itself skips this entirely — see
+    // `IndexOptions::pull` for why running it anyway would undo the
+    // staging rather than confirm it.
+    if opts.pull {
+        if let Err(e) = run_qmd(&cache_home, &opts.qmd_version, &["pull"]) {
+            status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
+        }
+    } else {
+        status_line!("[qmd-indexer] pull        = skipped (models pre-staged)");
     }
 
     if opts.embed {
