@@ -28,7 +28,7 @@
 //! mirror's schema is never *compared* to anything — it is simply
 //! rebuilt. See [`super::mirror`] for why that is free.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqliteConnection;
 use sqlx::Row;
 
@@ -45,17 +45,46 @@ pub struct ColumnSpec {
     /// round-trips only if the mirror leaves it untyped too.
     pub decl_type: String,
     pub not_null: bool,
-    /// Default expression, verbatim SQL text (`''`, `-63113817600`,
-    /// `'unset'`). Spliced back into the DDL as-is.
+    /// Default expression as SQL text (`''`, `-63113817600`,
+    /// `'unset'`). Spliced back into the DDL when [`is_literal_default`]
+    /// recognises it as a literal, and dropped — with a warning — when
+    /// it does not. See [`ColumnSpec::decl`].
     pub default: Option<String>,
 }
 
 impl ColumnSpec {
     /// The `"name" TYPE [NOT NULL] [DEFAULT expr]` fragment, usable both
     /// inside `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`.
-    pub fn decl(&self) -> String {
+    ///
+    /// The name is quoted. The declared type and the default expression
+    /// are *checked* instead: neither is an identifier, so quoting one
+    /// would change its meaning rather than make it safe. Both arrive
+    /// from `PRAGMA table_xinfo` on the attached source catalog — an
+    /// arbitrary SQLite file we did not write — so neither can be
+    /// spliced in on trust.
+    ///
+    /// The two are handled differently because the consequences differ:
+    ///
+    /// - An unrecognised **type** is an error. Dropping it would leave
+    ///   the column untyped, which changes its affinity and so what the
+    ///   mirror stores; narrowing the schema quietly is worse than
+    ///   failing the step.
+    /// - An unrecognised **DEFAULT** is dropped, with a warning. The
+    ///   mirror is truncate-and-refill and [`TableSpec::copy_sql`] names
+    ///   every column explicitly, so no mirrored row ever takes a
+    ///   default — dropping one changes nothing observable.
+    pub fn decl(&self) -> Result<String> {
         let mut s = quote_ident(&self.name);
         if !self.decl_type.is_empty() {
+            if !is_plain_type_name(&self.decl_type) {
+                bail!(
+                    "column {:?} declares type {:?}, which is not a plain SQLite type name; \
+                     refusing to splice it into the mirror's CREATE TABLE. If the source \
+                     really is shaped like this, drop the column with exclude_columns.",
+                    self.name,
+                    self.decl_type,
+                );
+            }
             s.push(' ');
             s.push_str(&self.decl_type);
         }
@@ -63,11 +92,118 @@ impl ColumnSpec {
             s.push_str(" NOT NULL");
         }
         if let Some(d) = &self.default {
-            s.push_str(" DEFAULT ");
-            s.push_str(d);
+            if is_literal_default(d) {
+                s.push_str(" DEFAULT ");
+                s.push_str(d);
+            } else {
+                tracing::warn!(
+                    column = %self.name,
+                    default = %d,
+                    "lightroom: column DEFAULT is not a literal; dropping it from the mirror \
+                     (every mirrored column is written explicitly, so no row would use it)"
+                );
+            }
         }
-        s
+        Ok(s)
     }
+}
+
+/// Is `ty` a declared type we are willing to splice into DDL verbatim?
+///
+/// Accepted: letters, digits, underscores and spaces, optionally
+/// followed by a parenthesised list of one or two numbers. That covers
+/// every type name SQLite itself documents — `INTEGER`, `VARCHAR(255)`,
+/// `UNSIGNED BIG INT`, `NUMERIC(10,5)` — and admits nothing that could
+/// end the column definition early: no quotes, no commas outside the
+/// argument list, no parentheses beyond the one pair, no semicolons.
+///
+/// What it rejects is a type name SQLite would have accepted only
+/// because it was quoted (`CREATE TABLE t(a "my type")`). Those are
+/// legal and vanishingly rare, and the caller says how to skip such a
+/// column, so refusing them is cheaper than reconstructing the quoting.
+fn is_plain_type_name(ty: &str) -> bool {
+    let (head, args) = match ty.split_once('(') {
+        Some((head, rest)) => (head, Some(rest)),
+        None => (ty, None),
+    };
+    let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == ' ';
+    if !head.chars().any(|c| c.is_ascii_alphanumeric()) || !head.chars().all(word_char) {
+        return false;
+    }
+    let Some(args) = args else { return true };
+    let Some(inner) = args.trim_end().strip_suffix(')') else {
+        return false;
+    };
+    let nums: Vec<&str> = inner.split(',').collect();
+    // `VARCHAR()` is not a type, and SQLite takes at most two arguments.
+    (1..=2).contains(&nums.len())
+        && nums.iter().all(|n| {
+            let n = n.trim().strip_prefix(['-', '+']).unwrap_or(n.trim());
+            !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Is `d` a literal — as opposed to an arbitrary expression — that we
+/// are willing to splice into a `DEFAULT` clause?
+///
+/// Accepted: `NULL`, `TRUE`, `FALSE`, the three `CURRENT_*` keywords, a
+/// number, a quoted string, and a blob literal. Everything else — most
+/// really being expression defaults such as `(datetime('now'))` — is
+/// dropped by [`ColumnSpec::decl`] rather than parsed.
+fn is_literal_default(d: &str) -> bool {
+    let d = d.trim();
+    if matches!(
+        d.to_ascii_uppercase().as_str(),
+        "NULL" | "TRUE" | "FALSE" | "CURRENT_DATE" | "CURRENT_TIME" | "CURRENT_TIMESTAMP"
+    ) {
+        return true;
+    }
+    is_quoted_literal(d) || is_number_literal(d)
+}
+
+/// A single-quoted string, or a blob literal (`X'4142'`) — which is the
+/// same thing with a one-letter prefix. Embedded quotes must be doubled,
+/// and nothing may follow the closing quote; either would let the
+/// literal end early and the rest be read as SQL.
+fn is_quoted_literal(d: &str) -> bool {
+    let body = d
+        .strip_prefix('X')
+        .or_else(|| d.strip_prefix('x'))
+        .unwrap_or(d);
+    let Some(inner) = body.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) else {
+        return false;
+    };
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\'' && chars.next() != Some('\'') {
+            return false;
+        }
+    }
+    true
+}
+
+/// A decimal or hexadecimal number, with an optional sign — the forms
+/// `PRAGMA table_xinfo` reports for a numeric default.
+fn is_number_literal(d: &str) -> bool {
+    let d = d.strip_prefix(['-', '+']).unwrap_or(d);
+    if let Some(hex) = d.strip_prefix("0x").or_else(|| d.strip_prefix("0X")) {
+        return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    let (mantissa, exponent) = match d.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e.strip_prefix(['-', '+']).unwrap_or(e))),
+        None => (d, None),
+    };
+    let digits_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    let mantissa_ok = match mantissa.split_once('.') {
+        // `1.`, `.5` and `1.5` are all valid SQLite numbers; `.` is not.
+        Some((int, frac)) => {
+            (digits_ok(int) || digits_ok(frac))
+                && int.chars().all(|c| c.is_ascii_digit())
+                && frac.chars().all(|c| c.is_ascii_digit())
+        }
+        None => digits_ok(mantissa),
+    };
+    mantissa_ok && exponent.is_none_or(digits_ok)
 }
 
 /// A table as it will exist in the mirror.
@@ -107,17 +243,26 @@ impl TableSpec {
     /// `CREATE TABLE …` for this table. No `IF NOT EXISTS`: the caller
     /// has just dropped it, and a silent no-op here would mean quietly
     /// keeping a stale schema.
-    pub fn create_ddl(&self) -> String {
-        let mut cols: Vec<String> = self.columns.iter().map(|c| c.decl()).collect();
+    ///
+    /// Fails if any column's declared type is not one
+    /// [`ColumnSpec::decl`] will splice into DDL.
+    pub fn create_ddl(&self) -> Result<String> {
+        let mut cols: Vec<String> = Vec::with_capacity(self.columns.len() + 1);
+        for c in &self.columns {
+            cols.push(
+                c.decl()
+                    .with_context(|| format!("build CREATE TABLE for {:?}", self.name))?,
+            );
+        }
         if !self.pk.is_empty() {
             let key: Vec<String> = self.pk.iter().map(|c| quote_ident(c)).collect();
             cols.push(format!("PRIMARY KEY ({})", key.join(", ")));
         }
-        format!(
+        Ok(format!(
             "CREATE TABLE {} ({})",
             quote_ident(&self.name),
             cols.join(", ")
-        )
+        ))
     }
 
     /// The mirrored column list, quoted: `"a", "b"`.
@@ -300,7 +445,7 @@ mod tests {
             vec!["id_global"],
         );
         assert_eq!(
-            s.create_ddl(),
+            s.create_ddl().unwrap(),
             r#"CREATE TABLE "t" ("id_global", "id_local" INTEGER, PRIMARY KEY ("id_global"))"#
         );
     }
@@ -308,7 +453,7 @@ mod tests {
     #[test]
     fn keyless_ddl_has_no_primary_key_clause() {
         let s = spec(vec![col("a", "")], vec![]);
-        assert_eq!(s.create_ddl(), r#"CREATE TABLE "t" ("a")"#);
+        assert_eq!(s.create_ddl().unwrap(), r#"CREATE TABLE "t" ("a")"#);
     }
 
     #[test]
@@ -319,7 +464,98 @@ mod tests {
             not_null: true,
             default: Some("''".into()),
         };
-        assert_eq!(c.decl(), r#""xmp" NOT NULL DEFAULT ''"#);
+        assert_eq!(c.decl().unwrap(), r#""xmp" NOT NULL DEFAULT ''"#);
+    }
+
+    #[test]
+    fn a_type_that_is_not_a_plain_type_name_is_refused() {
+        // The declared type is spliced into DDL, so a source catalog
+        // that carries SQL there must not be able to close the column
+        // definition and open something of its own.
+        let c = col("id", "INTEGER, x TEXT); DROP TABLE t; --");
+        assert!(c.decl().is_err());
+        let s = spec(vec![c], vec![]);
+        assert!(s.create_ddl().is_err());
+    }
+
+    #[test]
+    fn real_sqlite_type_names_are_accepted() {
+        for ty in [
+            "INTEGER",
+            "TEXT",
+            "VARCHAR(255)",
+            "NUMERIC(10,5)",
+            "UNSIGNED BIG INT",
+            "DOUBLE PRECISION",
+            "NATIVE CHARACTER (70)",
+        ] {
+            assert!(is_plain_type_name(ty), "should accept {ty:?}");
+        }
+        for ty in [
+            "",
+            "TEXT'",
+            r#""my type""#,
+            "TEXT)",
+            "VARCHAR(255",
+            "VARCHAR()",
+            "VARCHAR(255) CHECK (1)",
+            "INT(1,2,3)",
+            "INT(a)",
+        ] {
+            assert!(!is_plain_type_name(ty), "should reject {ty:?}");
+        }
+    }
+
+    #[test]
+    fn a_default_that_is_not_a_literal_is_dropped_not_spliced() {
+        // Dropping it is observationally free: `copy_sql` writes every
+        // column, so no mirrored row would ever have taken the default.
+        let c = ColumnSpec {
+            name: "t".into(),
+            decl_type: "TEXT".into(),
+            not_null: false,
+            default: Some("'' ); DROP TABLE t; --".into()),
+        };
+        assert_eq!(c.decl().unwrap(), r#""t" TEXT"#);
+    }
+
+    #[test]
+    fn literal_defaults_are_kept() {
+        for d in [
+            "''",
+            "'unset'",
+            "'it''s'",
+            "-63113817600",
+            "0",
+            "1.5",
+            "1.",
+            ".5",
+            "1e3",
+            "-2.5E-3",
+            "0xFF",
+            "NULL",
+            "null",
+            "TRUE",
+            "CURRENT_TIMESTAMP",
+            "X'4142'",
+        ] {
+            assert!(is_literal_default(d), "should keep {d:?}");
+        }
+        for d in [
+            "",
+            "'",
+            "'a' || 'b'",
+            "''''''''''''; DROP TABLE t; --'",
+            "'a'--",
+            "datetime('now')",
+            "(1+2)",
+            "1 2",
+            ".",
+            "1e",
+            "0x",
+        ] {
+            assert!(!is_literal_default(d), "should drop {d:?}");
+        }
     }
 
     #[test]

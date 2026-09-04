@@ -73,6 +73,7 @@ Tables and their rows. Deliberately not mirrored:
 | Triggers, views | Behavior, not data. The mirror is never written to by an application. |
 | CHECK / FOREIGN KEY, collations | `PRAGMA table_info` doesn't surface them, and enforcing the source's integrity rules on a copy of already-valid data buys nothing. |
 | Generated columns | No stored value to copy. |
+| Non-literal `DEFAULT`s | A default that is an expression rather than a literal — `(datetime('now'))` — is dropped, with a warning. Every mirrored column is written explicitly, so no mirrored row would have taken it. See below. |
 
 The schema is rebuilt from `PRAGMA table_xinfo` rather than replayed from
 the source's `sqlite_master` text. Replaying verbatim does work —
@@ -81,6 +82,29 @@ doltlite parses all 133 of a stock catalog's table definitions unchanged
 schema: drop a column, and choose a different primary key. Both are
 textual surgery on arbitrary SQL if you start from the source text, and
 neither is if you start from introspection.
+
+Introspection reports two things that are not identifiers, so quoting
+them on the way back into the mirror's `CREATE TABLE` would change their
+meaning rather than make them safe: a column's declared type and its
+`DEFAULT`. Both come out of the `.lrcat`, which is a SQLite file we did
+not write — and SQLite lets a *quoted* type name contain anything at
+all, which `PRAGMA table_xinfo` then reports back with the quotes gone.
+So both are checked instead.
+
+A declared type has to be a plain type name: letters, digits,
+underscores and spaces, optionally followed by one or two numbers in
+parentheses. That covers everything SQLite documents (`INTEGER`,
+`VARCHAR(255)`, `UNSIGNED BIG INT`, `NUMERIC(10,5)`). Anything else
+fails the run, and the way past it is to skip that column with
+`exclude_columns`. Failing is deliberate: dropping the type instead
+would leave the column untyped, which changes its affinity and so what
+the mirror stores — a quiet narrowing rather than a loud stop.
+
+A `DEFAULT` has to be a literal: a number, a quoted string, a blob,
+`NULL`, `TRUE`/`FALSE`, or one of the `CURRENT_*` keywords. Anything
+else is dropped with a warning rather than failing the run, because a
+dropped default changes nothing observable here — `copy_sql` names every
+column, so no mirrored row is ever filled in from one.
 
 ## When the primary key changes
 
