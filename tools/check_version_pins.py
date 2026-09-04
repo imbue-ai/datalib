@@ -111,6 +111,14 @@ FAMILIES: list[Family] = [
                 r'^pub const LATCHKEY_VERSION: &str = "([^"]+)"',
             ),
             ("datalib/docker/Dockerfile", r"^ARG LATCHKEY_VERSION=(\S+)"),
+            # The Bazel-managed package tree the .app bundles. The Rust
+            # constant names the directory stage-runtime.sh stages into,
+            # so a drift here stages a tree the resolver never looks in
+            # and the packaged app silently falls back to npx.
+            (
+                "third-party/latchkey/runtime/package.json",
+                r'"latchkey"\s*:\s*"([^"]+)"',
+            ),
         ],
     ),
     Family(
@@ -163,18 +171,18 @@ FAMILIES: list[Family] = [
     Family(
         name="node-major",
         why=(
-            "Three Node runtimes are in play — the one Tauri bundles into "
-            "the .app, the one the prod image installs, and the one "
-            "rules_js resolves for the build. They need not be identical "
+            "Two Node runtimes are in play — the one Bazel resolves, "
+            "which is also the one Tauri now bundles into the .app, and "
+            "the one the prod image installs. They need not be identical "
             "patch releases, but a major-version split would put the "
             "shipped app and the image on different N-API ABIs, which is "
             "what decides whether a native module loads."
         ),
-        canonical="datalib/tauri/stage-runtime.sh",
+        canonical="MODULE.bazel",
         sites=[
             # Capture only the major from each, since that is the part
             # that has to agree.
-            ("datalib/tauri/stage-runtime.sh", r'^NODE_VERSION="v(\d+)\.'),
+            ("MODULE.bazel", r'^NODE_VERSION = "(\d+)\.'),
             ("datalib/docker/Dockerfile", r"^ARG NODE_MAJOR=(\d+)"),
         ],
     ),

@@ -81,7 +81,6 @@ py_test(
         "//.devcontainer:Dockerfile",
         "//:MODULE.bazel",
         "//:requirements.txt",
-        "//datalib/tauri:stage-runtime.sh",
         "//datalib/backend/core:src/node_runtime.rs",
         "//datalib/backend/unified_index:src/qmd/mod.rs",
         "//datalib/docker:Dockerfile",
@@ -89,34 +88,8 @@ py_test(
         "//tests/fixtures:BUILD.bazel",
         "//third-party/doltlite:BUILD.bazel",
         "//third-party/qmd:package.json",
+        "//third-party/latchkey/runtime:package.json",
         "//third-party/qmd/runtime:package.json",
     ],
     main = "check_version_pins.py",
-)
-
-# --- Node tarball digests vs nodejs.org ------------------------------
-#
-# The sibling of version_pins_test for the one pin it structurally
-# cannot cover. `stage-runtime.sh` pins NODE_VERSION *and* a sha256 per
-# platform; a stale digest is self-consistent, so no in-repo comparison
-# can see it — only upstream can. Hence the network tag, and hence a
-# separate target rather than another family in the table.
-#
-# It exists because v0.30.0's macos-app leg died on
-# `sha256 mismatch for node-v22.23.2-darwin-arm64.tar.gz`: a dependency
-# bump moved NODE_VERSION and left the four digests behind. Nothing in
-# `bazel test //...` runs `stage-runtime.sh` — the Tauri app is
-# cargo/pnpm-driven — so the first thing to notice was a tag that had
-# already been pushed.
-py_test(
-    name = "node_pins_test",
-    size = "small",
-    srcs = ["check_node_pins.py"],
-    data = ["//datalib/tauri:stage-runtime.sh"],
-    main = "check_node_pins.py",
-    # One ~4 KB text file from nodejs.org. NOT `external`: that tag is
-    # reserved for third-party services CI shouldn't talk to, and it
-    # would drop this from `bazel test //...` — which is the only place
-    # it can do its job.
-    tags = ["requires-network"],
 )

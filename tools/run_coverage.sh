@@ -113,10 +113,25 @@ for b in "${BINARIES[@]:1}"; do
     BIN_ARGS+=("--object" "$(resolve_bin "$b")")
 done
 
+# Third-party sources are dropped here rather than by
+# --instrumentation_filter, which cannot reach them: `llvm-cov export`
+# reads the coverage-mapping section out of the linked binary, and that
+# section names every file compiled into it. Bazel's own baseline
+# enumerates the ~350 first-party files the filter selects; this list is
+# what the binary adds on top.
+#
+# Not cosmetic. Before this, 81% of the report was C we do not own —
+# doltlite's sqlite3.c amalgamation alone was 5.4 MB of an 8.0 MB file,
+# plus oniguruma and ring's vendored crypto — so `genhtml`'s tree view
+# opened on third-party code. With it: 2.0 MB, 304 files, 302 of them
+# ours.
+IGNORE_RE="${IGNORE_RE:-(^/rustc/|^external/|/external/|oniguruma|sqlite3\.c|_bs\.cargo_runfiles/)}"
+
 echo "==> llvm-cov export → $LCOV_OUT" >&2
 "$LLVM_COV" export \
     --format=lcov \
     --instr-profile="$MERGED" \
+    --ignore-filename-regex="$IGNORE_RE" \
     "${BIN_ARGS[@]}" \
     > "$LCOV_OUT"
 
