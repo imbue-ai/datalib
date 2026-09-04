@@ -48,8 +48,6 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
 
-use datalib_index_lib::Sidecar;
-
 /// Serializes concurrent writers against one doltlite index pool AND
 /// optionally batches all writes into one big transaction — with
 /// observability baked in.
@@ -711,29 +709,42 @@ pub async fn build_grid_index(
     // data_root holds one dir per stanza (each with a `rendered_md/` tree)
     // plus the reserved `system/` dir. Walk each stanza's rendered_md; skip
     // `system/` (the aggregate indices live there, no sidecars).
-    // (stanza name, sidecar path): the stanza directory name IS the
+    // (stanza name, its render store): the stanza directory name IS the
     // config-level source name — `<data_root>/<name>/rendered_md/…` —
     // so `documents.source_name` keeps the user-facing name exactly as
     // the fused loader did.
-    let mut sidecars: Vec<(String, PathBuf)> = Vec::new();
+    //
+    // This used to walk every stanza's tree collecting `*.grid_rows.json`
+    // and parse each one. Each source now keeps its rows in a doltlite
+    // store written by this same `apply_one`, so the index is *stacked*
+    // from those rather than re-projected from JSON.
+    let mut docs: Vec<(String, RenderedMarkdown)> = Vec::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
+        let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
         for entry in entries.flatten() {
             if entry.file_name() == datalib_core::layout::SYSTEM_DIR {
                 continue;
             }
             let stanza = entry.file_name().to_string_lossy().into_owned();
             let rendered_root = entry.path().join("rendered_md");
-            if rendered_root.is_dir() {
-                let mut paths = Vec::new();
-                collect_sidecars(&rendered_root, &mut paths);
-                sidecars.extend(paths.into_iter().map(|p| (stanza.clone(), p)));
+            if crate::indexed_markdown::path_for(&rendered_root).is_file() {
+                stanzas.push((stanza, rendered_root));
             }
         }
+        stanzas.sort();
+        for (stanza, rendered_root) in stanzas {
+            let store = crate::indexed_markdown::IndexedMarkdownStore::open(&rendered_root)
+                .with_context(|| format!("open render store for {stanza}"))?;
+            let found = store
+                .documents(out_dir)
+                .with_context(|| format!("read documents from {stanza}"))?;
+            store.close();
+            docs.extend(found.into_iter().map(|d| (stanza.clone(), d)));
+        }
     }
-    sidecars.sort();
 
     let mut summary = GridIndexSummary {
-        markdowns_total: sidecars.len(),
+        markdowns_total: docs.len(),
         ..Default::default()
     };
 
@@ -751,7 +762,7 @@ pub async fn build_grid_index(
         &write_lock,
         &prior_fingerprints,
         out_dir,
-        &sidecars,
+        &docs,
         &progress,
         now_override,
         &mut summary,
@@ -774,13 +785,13 @@ pub async fn build_grid_index(
     }
 }
 
-/// The per-sidecar loop of [`build_grid_index`], separated so the caller can
-/// wrap it in one begin/rollback-or-commit transaction.
+/// The per-document loop of [`build_grid_index`], separated so the caller
+/// can wrap it in one begin/rollback-or-commit transaction.
 async fn load_all_batch(
     write_lock: &WriteLock,
     prior_fingerprints: &HashMap<String, String>,
     out_dir: &Path,
-    sidecars: &[(String, PathBuf)],
+    docs: &[(String, RenderedMarkdown)],
     progress: &impl Fn(&str),
     now_override: Option<&str>,
     summary: &mut GridIndexSummary,
@@ -788,24 +799,12 @@ async fn load_all_batch(
     // One run's id claims, used to catch two sources writing the same
     // `markdown_uuid` / `grid_rows.uuid`. See [`IdClaims`].
     let mut claims = IdClaims::new();
-    for (stanza, sidecar_path) in sidecars {
-        let raw = fs::read_to_string(sidecar_path)
-            .with_context(|| format!("read {}", sidecar_path.display()))?;
-        let sidecar: Sidecar = serde_json::from_str(&raw)
-            .with_context(|| format!("parse {}", sidecar_path.display()))?;
-
-        let md_path = derive_md_path(sidecar_path)
-            .with_context(|| format!("derive .md path from {}", sidecar_path.display()))?;
-
-        let markdown_uuid = sidecar.header.markdown_uuid.clone();
-        let fingerprint = sidecar.header.source_fingerprint.clone();
-
+    for (stanza, md) in docs {
         // The stanza dir name is the config-level source name; fall
         // back to the canonical row's provider only if it were somehow
         // empty.
         let source_name = if stanza.is_empty() {
-            sidecar
-                .rows
+            md.rows
                 .first()
                 .map(|r| r.provider.clone())
                 .unwrap_or_default()
@@ -813,37 +812,29 @@ async fn load_all_batch(
             stanza.clone()
         };
 
-        // Claim this sidecar's ids BEFORE the fingerprint skip below:
+        // Claim this document's ids BEFORE the fingerprint skip below:
         // an overlap between two sources must still be caught on a
-        // steady-state re-run, where one of the two sidecars is
-        // unchanged and would otherwise never be looked at.
-        if let Some(collision) = claims.claim(&source_name, &markdown_uuid, &sidecar.rows) {
+        // steady-state re-run, where one of the two is unchanged and
+        // would otherwise never be looked at.
+        if let Some(collision) = claims.claim(&source_name, &md.markdown_uuid, &md.rows) {
             return Err(anyhow::anyhow!("{collision}"))
-                .with_context(|| format!("load {}", sidecar_path.display()));
+                .with_context(|| format!("load {} from {stanza}", md.markdown_uuid));
         }
 
-        if prior_fingerprints.get(&markdown_uuid) == Some(&fingerprint) {
+        if prior_fingerprints.get(&md.markdown_uuid) == Some(&md.source_fingerprint) {
             summary.markdowns_skipped += 1;
             continue;
         }
+        // Re-stamp the source name from the stanza, which is
+        // authoritative; everything else comes through from the store
+        // unchanged, because the store holds what the renderer emitted.
         let md = RenderedMarkdown {
-            markdown_uuid,
             source_name,
-            source_fingerprint: fingerprint,
-            // build_grid_index rebuilds the index from sidecars on disk, which
-            // don't carry the cheap-probe cursor (it lives in the
-            // indexer only). Leaving it None forces the next live sync
-            // to fall back to the fingerprint check for these markdowns
-            // — safe, just not as fast as the cursor short-circuit.
-            upstream_cursor: None,
-            md_path,
-            render_version: sidecar.header.render_version,
-            rows: sidecar.rows,
-            edges: sidecar.edges,
+            ..md.clone()
         };
         let inserted = apply_one(write_lock, out_dir, &md, now_override)
             .await
-            .with_context(|| format!("load {}", sidecar_path.display()))?;
+            .with_context(|| format!("load {} from {stanza}", md.markdown_uuid))?;
         summary.rows_inserted += inserted;
         summary.markdowns_loaded += 1;
         progress(&format!(
@@ -853,28 +844,6 @@ async fn load_all_batch(
         ));
     }
     Ok(())
-}
-
-fn collect_sidecars(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            collect_sidecars(&p, out);
-        } else if p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".grid_rows.json"))
-        {
-            out.push(p);
-        }
-    }
-}
-
-fn derive_md_path(sidecar: &Path) -> Option<PathBuf> {
-    let name = sidecar.file_name()?.to_str()?;
-    let stem = name.strip_suffix(".grid_rows.json")?;
-    Some(sidecar.with_file_name(format!("{stem}.md")))
 }
 
 /// Bulk fingerprint snapshot. Used once per sync to populate the

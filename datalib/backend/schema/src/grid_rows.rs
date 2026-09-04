@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// One row in the grid_rows table. Producers (provider render steps)
 /// emit one or more GridRow per source entity; consumers (the grid
 /// backend + UI) read them as a single union.
-#[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
+#[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "grid_rows", primary_key = "uuid")]
 pub struct GridRow {
     /// Stable, globally-unique row identifier. Must be deterministic from

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// markdown file and compares it to the stored value; on mismatch the
 /// renderer re-emits the file and bumps `rendered_at`. A bump to
 /// `renderer_version` invalidates every cache entry at once.
-#[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
+#[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "markdowns", primary_key = "markdown_uuid")]
 pub struct MarkdownRow {
     /// Stable identifier for one rendered `.md` file. For providers

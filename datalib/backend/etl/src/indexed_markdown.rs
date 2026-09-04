@@ -261,6 +261,66 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Every document this store holds, as the same
+    /// [`RenderedMarkdown`] the renderer emitted.
+    ///
+    /// This is what lets the unified index be *stacked* from the
+    /// per-source stores rather than rebuilt by walking a tree of JSON:
+    /// the index calls the same `apply_one` on these values that the
+    /// render step called to write them, so nothing is re-projected on
+    /// the way through.
+    ///
+    /// `md_path` is rebuilt absolute from `out_dir` + the stored
+    /// relative `md_path`, because that is what `apply_one` strips back
+    /// off to derive `qmd_path`.
+    pub fn documents(&self, out_dir: &Path) -> Result<Vec<RenderedMarkdown>> {
+        blocking(async {
+            let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
+                sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
+                    .fetch_all(&self.pool)
+                    .await
+                    .context("read markdowns")?;
+            let mut out = Vec::with_capacity(mds.len());
+            for md in mds {
+                let rows: Vec<datalib_schema::grid_rows::GridRow> =
+                    sqlx::query_as("SELECT * FROM grid_rows WHERE markdown_uuid = ? ORDER BY uuid")
+                        .bind(&md.markdown_uuid)
+                        .fetch_all(&self.pool)
+                        .await
+                        .with_context(|| format!("read rows for {}", md.markdown_uuid))?;
+                let edges: Vec<datalib_schema::edges::EdgeRow> = sqlx::query_as(
+                    "SELECT * FROM edges WHERE src_markdown_uuid = ? ORDER BY edge_uuid",
+                )
+                .bind(&md.markdown_uuid)
+                .fetch_all(&self.pool)
+                .await
+                .with_context(|| format!("read edges for {}", md.markdown_uuid))?;
+                // `renderer_version` is `"<index>.<render>"`; the render
+                // half is what the renderer declared.
+                let render_version = md
+                    .renderer_version
+                    .as_deref()
+                    .and_then(|v| v.rsplit('.').next())
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                out.push(RenderedMarkdown {
+                    markdown_uuid: md.markdown_uuid.clone(),
+                    source_name: md.source_name.clone(),
+                    source_fingerprint: md.source_fingerprint.clone().unwrap_or_default(),
+                    upstream_cursor: md.upstream_cursor.clone(),
+                    md_path: match md.md_path.as_deref() {
+                        Some(rel) => out_dir.join(rel),
+                        None => PathBuf::from(&md.markdown_uuid),
+                    },
+                    render_version,
+                    rows,
+                    edges,
+                });
+            }
+            Ok(out)
+        })
+    }
+
     /// How many problems the store currently holds, by outcome.
     ///
     /// R4 needs a numerator; this is it. The denominator — records read
