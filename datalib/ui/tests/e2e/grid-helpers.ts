@@ -13,6 +13,43 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 
+// The DOM node for a row index. One definition, so the wait and the
+// click can never drift onto different selectors.
+const rowLocator = (page: Page, rowIndex: number): Locator =>
+  page.locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`);
+
+// Ask the grid to put `uuid`'s row in the middle of the viewport, and
+// report the index it lives at (null if no node carries that uuid).
+//
+// Annotated: `found` is only ever assigned inside the forEachNode
+// callback, so TypeScript infers the evaluate's return as plain `null`
+// and the casts at the call sites would be rejected as mistakes.
+const nudgeRowIntoView = (page: Page, uuid: string): Promise<number | null> =>
+  page.evaluate(
+    ({ uuid }) => {
+      type Node = {
+        rowIndex: number | null;
+        data?: { uuid: string };
+      };
+      const w = window as unknown as {
+        __fwGridApi?: {
+          forEachNode: (cb: (n: Node) => void) => void;
+          ensureNodeVisible: (n: Node, pos: "middle") => void;
+        };
+      };
+      const api = w.__fwGridApi!;
+      let found: number | null = null;
+      api.forEachNode((node) => {
+        if (node.data && node.data.uuid === uuid) {
+          api.ensureNodeVisible(node, "middle");
+          found = node.rowIndex;
+        }
+      });
+      return found;
+    },
+    { uuid },
+  );
+
 // Scroll a (possibly virtualized-away) row into view via the grid api
 // the GridCard exposes on window, and return its row index once the DOM
 // node for it actually exists.
@@ -31,44 +68,13 @@ import { expect, type Locator, type Page } from "@playwright/test";
 // surfaced when the specs started running four at a time and rendering
 // got slower relative to the scroll.
 async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
-  // Annotated: `found` is only ever assigned inside the forEachNode
-  // callback, so TypeScript infers the evaluate's return as plain
-  // `null` and the cast below would be rejected as a mistake.
-  const nudge = (): Promise<number | null> =>
-    page.evaluate(
-      ({ uuid }) => {
-        type Node = {
-          rowIndex: number | null;
-          data?: { uuid: string };
-        };
-        const w = window as unknown as {
-          __fwGridApi?: {
-            forEachNode: (cb: (n: Node) => void) => void;
-            ensureNodeVisible: (n: Node, pos: "middle") => void;
-          };
-        };
-        const api = w.__fwGridApi!;
-        let found: number | null = null;
-        api.forEachNode((node) => {
-          if (node.data && node.data.uuid === uuid) {
-            api.ensureNodeVisible(node, "middle");
-            found = node.rowIndex;
-          }
-        });
-        return found;
-      },
-      { uuid },
-    );
-
-  const rowIndex = await nudge();
+  const rowIndex = await nudgeRowIntoView(page, uuid);
   expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
   await expect
     .poll(
       async () => {
-        await nudge();
-        return page
-          .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
-          .count();
+        await nudgeRowIntoView(page, uuid);
+        return rowLocator(page, rowIndex as number).count();
       },
       {
         timeout: 15_000,
@@ -82,46 +88,73 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
 
 // Scroll a row into view and act on it, retrying the *pair*.
 //
-// `scrollRowIntoView` returning means the row was rendered **then**.
-// AG Grid can virtualize it away again before the action re-resolves
-// the locator, and once the node is gone only another nudge brings it
-// back — so retrying the action alone would spin against a DOM that
-// will never contain it. This is the same race the comment above
-// describes, one step later: that fix put the nudge inside the poll,
-// and left this gap between the poll and the click.
+// `scrollRowIntoView` returning means the row was rendered **then**. AG
+// Grid can virtualize it away again before the action re-resolves the
+// locator, and once the node is gone only another nudge brings it back
+// — so retrying the action alone spins against a DOM that will never
+// contain it, and retrying without a per-attempt timeout never gets to
+// a second attempt at all. Playwright's default click timeout is the
+// whole 30s test budget, so the first click consumed it waiting for a
+// node that was already gone. Both halves are load-bearing; either one
+// alone leaves the race in place.
 //
-// The per-attempt timeout is the load-bearing part. Playwright's
-// default is the whole 30s test timeout, so the first click consumed
-// the entire budget waiting for a node that was already gone and the
-// test died having never re-scrolled — which is exactly how this
-// failed in CI (`yolink-plots`, webkit), while passing in isolation
-// where nothing competes for the render.
+// That is how this failed in CI (`yolink-plots`, webkit, run
+// 33857724612) while passing in isolation, where nothing competes for
+// the render.
+//
+// `expect(...).toPass()` rather than a hand-rolled loop: it is what
+// Playwright provides for "do this until it takes", it bounds the whole
+// dance rather than multiplying per-attempt timeouts, and its failure
+// names the step instead of rethrowing the last error from a loop that
+// ran out.
 async function actOnRowByUuid(
   page: Page,
   uuid: string,
   act: (row: Locator) => Promise<void>,
 ): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  await expect(async () => {
     const rowIndex = await scrollRowIntoView(page, uuid);
-    try {
-      await act(
-        page.locator(
-          `.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`,
-        ),
-      );
-      return;
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError;
+    await act(rowLocator(page, rowIndex));
+  }, `row uuid=${uuid} never took the action`).toPass({
+    timeout: 15_000,
+    intervals: [100, 250, 500],
+  });
 }
 
 // Scroll a (possibly virtualized-away) row into view, then click it.
 // Returns after the click; callers assert on the consequences.
 export async function clickRowByUuid(page: Page, uuid: string) {
-  await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 5_000 }));
+  await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 3_000 }));
+}
+
+// Select a row and confirm the grid agrees that it is selected.
+//
+// A click can land — the row takes `ag-row-focus` — and still leave the
+// node unselected. Seen on webkit as `aria-selected="false"` with the
+// focus class present, held for the whole 5s the assertion allowed, so
+// it is a lost selection rather than a slow one.
+//
+// Clicking again is safe: the grid is `rowSelection: { mode: "multiRow",
+// enableClickSelection: true }`, where a plain click selects exactly the
+// row clicked rather than toggling it. The already-selected check before
+// each click keeps even that from mattering.
+export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
+  const row = page.locator(`.ag-grid-scrolling-rows [role="row"][row-id="${uuid}"]`);
+  // `aria-selected`, not the `ag-row-selected` class: the attribute is
+  // AG Grid reporting the node's selection state, while the class is the
+  // styling hook that follows from it. Asserting the semantic one means
+  // a re-theme cannot break this and a half-applied render cannot pass
+  // it.
+  await expect(async () => {
+    if ((await row.getAttribute("aria-selected")) !== "true") {
+      await clickRowByUuid(page, uuid);
+    }
+    await expect(row).toHaveAttribute("aria-selected", "true", { timeout: 1_000 });
+  }, `row ${uuid} never became selected`).toPass({
+    timeout: 15_000,
+    intervals: [100, 250, 500],
+  });
+  return row;
 }
 
 // Right-click a row located by uuid. Same virtualization dance as
@@ -130,7 +163,7 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
   await actOnRowByUuid(page, uuid, (row) =>
-    row.click({ button: "right", timeout: 5_000 }),
+    row.click({ button: "right", timeout: 3_000 }),
   );
   await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
 }
@@ -288,6 +321,7 @@ export async function stampOf(page: Page, id: string): Promise<string | null> {
 /// States a run will not move a step out of.
 export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 
+
 /// How long a row may take to settle: a real `datalib-dag` run over the
 /// fixture corpus on a cold action cache.
 export const ROW_SETTLE = 60_000;
@@ -389,6 +423,18 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
   }, id);
 }
 
+/// Has the runner closed its record for the run in flight?
+///
+/// `finished_at` is written by the runner when the run ends, so it is a
+/// fact rather than an inference — unlike `run.live`, which the endpoint
+/// derives by probing the lock. A root that has never run reports no run
+/// at all, which counts as closed: there is nothing in flight to be
+/// wrong about.
+async function runIsClosed(page: Page): Promise<boolean> {
+  const dag = await (await page.request.get("/api/dag")).json();
+  return !dag.run || dag.run.finished_at != null;
+}
+
 /// Wait for a row to finish a run newer than the one it was showing.
 ///
 /// `before` is that row's stamp read *before* the click — see
@@ -406,7 +452,25 @@ async function settleRowOnly(
       async () => {
         last = (await statusOf(page, id)) ?? "(no status)";
         const stamp = await stampOf(page, id);
-        return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
+        const done = TERMINAL.test(last) && stamp !== before;
+        // "Interrupted" is the one terminal status the UI INFERS rather
+        // than reads: `stepStatus` reports it when a step says
+        // `running` on a run with no `finished_at` while `GET /api/dag`
+        // says no runner holds the lock — and that endpoint answers by
+        // taking the lock itself, which its own comment calls "racy by
+        // nature". So the instant a runner is taking or dropping the
+        // root looks like a run that died, and a settle that believes it
+        // returns "Interrupted" for a healthy `Sync everything`.
+        //
+        // The fix is not to wait a while and ask again — that only
+        // changes the odds. `stepStatus` cannot reach that branch at all
+        // once `finished_at` is set, because it reads `current_state`
+        // only for a run still in flight. So believe this one status
+        // exactly when the runner's own record agrees the run is over.
+        if (done && last === "Interrupted" && !(await runIsClosed(page))) {
+          return `${last} @ ${stamp} (run record still open)`;
+        }
+        return done ? "finished" : `${last} @ ${stamp}`;
       },
       {
         timeout,

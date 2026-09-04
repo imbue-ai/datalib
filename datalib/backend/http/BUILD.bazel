@@ -27,6 +27,7 @@ rust_library(
         "src/applets.rs",
         "src/auth.rs",
         "src/boot.rs",
+        "src/connect.rs",
         "src/frontend.rs",
         "src/embed.rs",
         "src/lib.rs",

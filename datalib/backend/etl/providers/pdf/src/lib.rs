@@ -20,10 +20,14 @@
 //!
 //! ## What this build does not do
 //!
-//! **No OCR.** Scanned documents are classified, recorded with
-//! `needs_ocr = 1`, and skipped. See `DOWNLOAD.md` §"Why no OCR yet"
-//! for the measurements behind that choice and what adding an engine
-//! would involve.
+//! **No OCR.** Pages that carry no extractable text are classified and
+//! counted (`pdf_documents.ocr_page_count`), never converted. A
+//! document made only of such pages produces no markdown; one that also
+//! has readable pages renders those, with a note in the markdown where
+//! each unreadable page would have been. See `DOWNLOAD.md` §"Why no OCR
+//! yet" for the measurements behind that choice, and its subsection
+//! §"`needs_ocr` is a work list, not a verdict on the document" for why
+//! the two are separate questions.
 
 pub mod download;
 pub mod processor;

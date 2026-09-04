@@ -50,7 +50,8 @@
 // wizard never silently drops something it can't model.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
-import type { CatalogEntry, Field, FieldPhase } from "./catalog";
+import { catalogForStep } from "./catalog";
+import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Derived from the shape of the id,
@@ -308,9 +309,64 @@ export function paramsAreRepresentable(
   step: ConfiguredStep,
   entry: CatalogEntry,
 ): { ok: true } | { ok: false; unknown: string[] } {
-  const known = new Set(fieldsFor(entry, fieldPhaseOf(step)).map((f) => f.target));
+  const phase = fieldPhaseOf(step);
+  // Presets count as known. They are values this descriptor *writes*,
+  // just without a box to type them in, so a Gmail step's
+  // `gmail_api.user_id` is modeled even though no field names it —
+  // and without this, every source with a preset would be permanently
+  // un-editable.
+  const known = new Set([
+    ...fieldsFor(entry, phase).map((f) => f.target),
+    ...presetsFor(entry, phase).map((p) => p.target),
+  ]);
   const unknown = leafPaths(step.params).filter((path) => !known.has(path));
   return unknown.length === 0 ? { ok: true } : { ok: false, unknown };
+}
+
+/// A descriptor's presets for one phase. Same default as a field's:
+/// absent means `download`.
+export function presetsFor(entry: CatalogEntry, phase: FieldPhase): Preset[] {
+  return (entry.preset ?? []).filter((p) => (p.phase ?? "download") === phase);
+}
+
+/// The step whose output this one reads — its producer.
+///
+/// A render step is configured against the *account* its fetch step
+/// mirrors, not against anything in its own params, so two things need
+/// this: picking the right catalog entry for it (a Fastmail render step
+/// and a Gmail render step are both `datalib-step render email`, and
+/// only the producer says which), and probing (a render step holds no
+/// credentials).
+///
+/// Resolved by `inputs` first, because that is the real declaration.
+/// The `<stem>/raw` sibling is the fallback, for a render step written
+/// by hand with no `inputs` — a config the loader accepts.
+export function producerOf(
+  step: ConfiguredStep,
+  all: ConfiguredStep[],
+): ConfiguredStep | undefined {
+  for (const id of step.inputs) {
+    const hit = all.find((s) => s.id === id);
+    if (hit) return hit;
+  }
+  return all.find((s) => s.id === `${stemOf(step.id)}/raw`);
+}
+
+/// The catalog entry describing a step, in the context of the config it
+/// sits in.
+///
+/// [`catalogForStep`] is enough for a fetch step: its own params carry
+/// the `variantKey`. A render step's do not — its params are render
+/// knobs — so this reaches through [`producerOf`] to the step that
+/// does. Without that, every email render step would resolve to the
+/// catch-all `email` entry and lose its form.
+export function entryForStep(
+  step: ConfiguredStep,
+  all: ConfiguredStep[],
+): CatalogEntry | undefined {
+  const params =
+    step.phase === "render" ? (producerOf(step, all)?.params ?? step.params) : step.params;
+  return catalogForStep(step.type, params);
 }
 
 /// Which half of a catalog entry's fields this step takes. A catalog
@@ -391,19 +447,92 @@ export function seedFieldValues(entry: CatalogEntry, step?: ConfiguredStep): Fie
 // Writing
 // ---------------------------------------------------------------------------
 
+/// Every `(dotted target, value)` pair this descriptor writes for one
+/// phase, in the order they should appear: presets first (they are what
+/// the step *is*), then the fields that are active and set.
+///
+/// The one place the two sources of a param are combined, so the TOML
+/// writer and the probe's params object cannot disagree about what a
+/// step's config actually contains.
+function paramEntries(
+  entry: CatalogEntry,
+  values: FieldValues,
+  phase: FieldPhase,
+): { target: string; value: unknown; field?: Field }[] {
+  const out: { target: string; value: unknown; field?: Field }[] = presetsFor(entry, phase).map(
+    (p) => ({ target: p.target, value: p.value }),
+  );
+  for (const field of fieldsFor(entry, phase)) {
+    if (!fieldIsActive(field, values)) continue;
+    const value = values[field.target];
+    if (!isSet(field, value)) continue;
+    out.push({ target: field.target, value, field });
+  }
+  return out;
+}
+
+/// The same params as a nested object, for anything that has to *send*
+/// a step's config rather than write it — today the wizard's "Test
+/// connection", which POSTs it to `/api/probe`.
+///
+/// Deliberately built from [`paramEntries`] rather than by parsing the
+/// TOML back: what the probe tests has to be exactly what Save would
+/// write, and a second derivation is a second thing to drift.
+export function paramsObject(
+  entry: CatalogEntry,
+  values: FieldValues,
+  phase: FieldPhase,
+): Record<string, unknown> {
+  const root: Record<string, unknown> = {};
+  for (const { target, value, field } of paramEntries(entry, values, phase)) {
+    const segs = target.split(".");
+    let cur = root;
+    for (const seg of segs.slice(0, -1)) {
+      if (typeof cur[seg] !== "object" || cur[seg] === null) cur[seg] = {};
+      cur = cur[seg] as Record<string, unknown>;
+    }
+    cur[segs[segs.length - 1]] = jsonValue(field, value);
+  }
+  // A mode-selecting table with no keys of its own still has to exist
+  // — `gmail_api = {}` is how a config says "this is a Gmail source" —
+  // and the same is true of the params object the probe receives. A
+  // preset always puts a key in one today, so this is a guard rather
+  // than a workaround; it costs a line and prevents a probe that
+  // mysteriously reports "no live download mode".
+  for (const preset of presetsFor(entry, phase)) {
+    const head = preset.target.split(".")[0];
+    if (!(head in root)) root[head] = {};
+  }
+  return root;
+}
+
+/// A form value as JSON. Mirrors [`tomlValue`]'s coercions: an `int`
+/// field holds the string an `<input type=number>` produced, and the
+/// backend's `Option<usize>` will not take `"5000"`.
+function jsonValue(field: Field | undefined, value: unknown): unknown {
+  if (!field) return value;
+  switch (field.kind) {
+    case "bool":
+      return !!value;
+    case "int":
+      return Number(value);
+    case "string_list":
+      return value as string[];
+    default:
+      return String(value);
+  }
+}
+
 /// Render the download step's `[steps.params.…]` body from form values.
 /// Emitted as sub-table headers, so it must come last within its step —
 /// in TOML every key after a table header belongs to that table.
 function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase): string {
   // Group by the table each target sits in (`sync.channels` → `sync`).
   const tables = new Map<string, string[]>();
-  for (const field of fieldsFor(entry, phase)) {
-    if (!fieldIsActive(field, values)) continue;
-    const value = values[field.target];
-    if (!isSet(field, value)) continue;
-    const dot = field.target.lastIndexOf(".");
-    const table = dot < 0 ? "" : field.target.slice(0, dot);
-    const key = dot < 0 ? field.target : field.target.slice(dot + 1);
+  for (const { target, value, field } of paramEntries(entry, values, phase)) {
+    const dot = target.lastIndexOf(".");
+    const table = dot < 0 ? "" : target.slice(0, dot);
+    const key = dot < 0 ? target : target.slice(dot + 1);
     const lines = tables.get(table) ?? [];
     lines.push(`${key} = ${tomlValue(field, value)}`);
     tables.set(table, lines);
@@ -455,7 +584,15 @@ function isSet(field: Field, value: unknown): boolean {
   return true;
 }
 
-function tomlValue(field: Field, value: unknown): string {
+/// A value as TOML. `field` is absent for a preset, whose value is a
+/// literal in the catalog rather than something a form produced — so
+/// its own JavaScript type is the right thing to read.
+function tomlValue(field: Field | undefined, value: unknown): string {
+  if (!field) {
+    if (typeof value === "boolean") return value ? "true" : "false";
+    if (typeof value === "number") return String(value);
+    return quote(String(value));
+  }
   switch (field.kind) {
     case "bool":
       return value ? "true" : "false";
