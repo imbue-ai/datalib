@@ -468,11 +468,29 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 # `//tests/fixtures:ingested_tng_qmd` needs the node BINARY as a label —
 # it stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the qmd
 # package tree) so `datalib_core::node_runtime::bundled_command` resolves,
-# which is what takes `npx` out of the build. Version tracks what
-# aspect_rules_js 3.1.2 already resolves, so this adds no new fetch.
+# which is what takes `npx` out of the build.
 bazel_dep(name = "rules_nodejs", version = "6.7.5")
 
+# NODE_VERSION is the one Node pin in the repo, and it is read by
+# //tools:version_pins_test. It used to be two: this toolchain's
+# (implicit, whatever rules_nodejs defaulted to) and a second one in
+# `datalib/tauri/stage-runtime.sh`, which curled its own tarball from
+# nodejs.org and verified it against four hand-maintained sha256s. That
+# arrangement shipped v0.30.0's macOS leg broken — a bump moved the
+# version and left the digests behind — and needed a network test
+# (`//tools:node_pins_test`) whose whole job was to notice.
+#
+# Both are gone. `datalib/tauri:bundled_node` copies THIS Node out of
+# bazel-out and stage-runtime.sh drops it into the .app, so the runtime
+# the desktop app ships is the same binary every build action already
+# runs, fetched once by Bazel against rules_nodejs's own integrity
+# hashes. Bumping it is this one line.
+#
+# Must stay >= 22: qmd requires it (latchkey needs only >= 20).
+NODE_VERSION = "22.23.1"
+
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = NODE_VERSION)
 use_repo(node, "nodejs_host")
 
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
@@ -515,6 +533,21 @@ npm.npm_translate_lock(
     verify_node_modules_ignored = "//:.bazelignore",
 )
 use_repo(npm, "npm_qmd")
+
+# The latchkey CLI's 7-package tree, and the sibling of `npm_qmd` above.
+# Same reason, different consumer: this one replaces the `npm install
+# latchkey@<v>` that `datalib/tauri/stage-runtime.sh` ran against the
+# live registry — with no lockfile, no integrity checking, and
+# `--ignore-scripts` as the only thing standing between us and
+# playwright's 400 MB browser download. The result was then codesigned
+# with our Developer ID and notarized, which is the part that made an
+# unpinned install worth removing rather than tolerating.
+npm.npm_translate_lock(
+    name = "npm_latchkey",
+    pnpm_lock = "//third-party/latchkey/runtime:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm_latchkey")
 
 # better-sqlite3 needs no special handling here, and that is new as of
 # qmd 2.8.3. Until then it was the ONE package in the qmd tree the

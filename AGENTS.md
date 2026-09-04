@@ -308,10 +308,13 @@ It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin (`DEFAULT_QMD_VERSION`
 in `datalib/backend/unified_index/src/qmd/mod.rs`): the Tauri app
-bundles a pinned Node runtime plus registry-installed `latchkey`/`qmd`
-trees (staged by
-`datalib/tauri/stage-runtime.sh`, resolved by
-`datalib_core::node_runtime`), and every other environment — and
+bundles a pinned Node runtime plus `latchkey`/`qmd` package trees.
+All three come out of Bazel — `//datalib/tauri:bundled_node`,
+`//third-party/qmd/runtime:qmd_tree` and
+`//third-party/latchkey/runtime:latchkey_tree` — so what the signed
+app ships is what those lockfiles name; `datalib/tauri/stage-runtime.sh`
+only copies them into place, and `datalib_core::node_runtime` resolves
+them at run time. Every other environment — and
 the app, when a pinned version isn't staged — falls back to
 `npx -y @tobilu/qmd@<version>`.
 
