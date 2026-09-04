@@ -526,18 +526,14 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .begin()
         .await
         .with_context(|| format!("begin rebuild tx for {}", spec.name))?;
-    // Audited: `create_ddl()` / `copy_sql()` render every *identifier* —
-    // table and column names — through `plan::quote_ident`, which
-    // double-quotes and escapes embedded quotes. The one fragment that
-    // is not an identifier, and so cannot be quoted, is a column's
-    // declared type; `ColumnSpec::decl` checks it instead and fails the
-    // step on anything that is not a plain type name. It comes from
-    // `PRAGMA table_xinfo` on the attached source catalog, i.e. from the
-    // .lrcat file, which is outside our control. Column DEFAULTs would
-    // be the other such fragment, and are not mirrored at all (see the
-    // `plan` module docs).
-    let create_ddl = spec.create_ddl()?;
-    sqlx::query(sqlx::AssertSqlSafe(create_ddl))
+    // Audited: every fragment `create_ddl()` / `copy_sql()` take from the
+    // source catalog — table names, column names, and the columns'
+    // declared types — goes through `plan::quote_ident`, which
+    // double-quotes and escapes embedded quotes. Nothing else from the
+    // catalog reaches these statements: column DEFAULTs, the one other
+    // piece of SQL text `table_xinfo` reports, are not mirrored at all
+    // (see the `plan` module docs).
+    sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
         .execute(&mut *tx)
         .await
         .with_context(|| format!("create mirror table {}", spec.name))?;
@@ -714,10 +710,7 @@ mod tests {
         let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[]).unwrap();
         assert_eq!(s.pk, vec!["version".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
-        assert!(s
-            .create_ddl()
-            .unwrap()
-            .contains(r#"PRIMARY KEY ("version")"#));
+        assert!(s.create_ddl().contains(r#"PRIMARY KEY ("version")"#));
     }
 
     #[test]
@@ -746,7 +739,7 @@ mod tests {
         let s = build_spec(&o, "Adobe_AdditionalMetadata", &lightroom_cols(), &[]).unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "xmp"));
         assert_eq!(s.dropped_columns, vec!["xmp".to_string()]);
-        assert!(!s.create_ddl().unwrap().contains("xmp"));
+        assert!(!s.create_ddl().contains("xmp"));
         assert!(!s.copy_sql("src").contains("xmp"));
     }
 
@@ -760,7 +753,6 @@ mod tests {
         assert_eq!(s.key_origin, KeyOrigin::Override);
         assert!(s
             .create_ddl()
-            .unwrap()
             .contains(r#"PRIMARY KEY ("id_local", "id_global")"#));
     }
 

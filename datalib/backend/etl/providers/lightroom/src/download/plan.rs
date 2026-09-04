@@ -23,7 +23,7 @@
 //! prolly tree keyed by its primary key, so a secondary index buys a
 //! backup nothing and costs it space in every commit.
 //!
-//! ## Why column DEFAULTs are not mirrored either
+//! ## Why column DEFAULTs are not mirrored
 //!
 //! A `DEFAULT` is a rule for writes, and the mirror is not written to.
 //! It only ever applies to a row inserted without a value for that
@@ -46,7 +46,7 @@
 //! mirror's schema is never *compared* to anything — it is simply
 //! rebuilt. See [`super::mirror`] for why that is free.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use sqlx::sqlite::SqliteConnection;
 use sqlx::Row;
 
@@ -71,72 +71,32 @@ impl ColumnSpec {
     /// `DEFAULT`: see the module docs for why the mirror does not carry
     /// one.
     ///
-    /// The name is quoted; the declared type is *checked* instead. A
-    /// type is not an identifier, so quoting it would change its meaning
-    /// rather than make it safe — `"VARCHAR(255)"` is a column named
-    /// that, not a type. And it cannot be spliced in on trust: it
-    /// arrives from `PRAGMA table_xinfo` on the attached source catalog,
-    /// an arbitrary SQLite file we did not write.
+    /// The declared type is quoted, like the name is, and for the same
+    /// reason: it comes from `PRAGMA table_xinfo` on the attached source
+    /// catalog — an arbitrary SQLite file we did not write — and SQLite
+    /// lets a *quoted* type name hold anything at all, reporting it back
+    /// with the quotes gone. Unquoted, `INTEGER); DROP TABLE x; --` is a
+    /// perfectly legal declared type that ends our column definition
+    /// early.
     ///
-    /// An unrecognised type fails the step rather than being dropped.
-    /// Dropping it would leave the column untyped, which changes its
-    /// affinity and so what the mirror stores — a quiet narrowing where
-    /// a loud stop is cheap.
-    pub fn decl(&self) -> Result<String> {
+    /// Quoting a type is meaning-preserving, which is not obvious and is
+    /// the reason this is two lines rather than a validator. A type name
+    /// may be a quoted name, and SQLite dequotes it before deciding
+    /// anything, so `"VARCHAR(255)"` and `VARCHAR(255)` produce the same
+    /// column: same affinity, same `table_info` text, and an
+    /// `INTEGER PRIMARY KEY` stays a rowid alias either way. Verified in
+    /// both doltlite and stock SQLite across every affinity class.
+    pub fn decl(&self) -> String {
         let mut s = quote_ident(&self.name);
         if !self.decl_type.is_empty() {
-            if !is_plain_type_name(&self.decl_type) {
-                bail!(
-                    "column {:?} declares type {:?}, which is not a plain SQLite type name; \
-                     refusing to splice it into the mirror's CREATE TABLE. If the source \
-                     really is shaped like this, drop the column with exclude_columns.",
-                    self.name,
-                    self.decl_type,
-                );
-            }
             s.push(' ');
-            s.push_str(&self.decl_type);
+            s.push_str(&quote_ident(&self.decl_type));
         }
         if self.not_null {
             s.push_str(" NOT NULL");
         }
-        Ok(s)
+        s
     }
-}
-
-/// Is `ty` a declared type we are willing to splice into DDL verbatim?
-///
-/// Accepted: letters, digits, underscores and spaces, optionally
-/// followed by a parenthesised list of one or two numbers. That covers
-/// every type name SQLite itself documents — `INTEGER`, `VARCHAR(255)`,
-/// `UNSIGNED BIG INT`, `NUMERIC(10,5)` — and admits nothing that could
-/// end the column definition early: no quotes, no commas outside the
-/// argument list, no parentheses beyond the one pair, no semicolons.
-///
-/// What it rejects is a type name SQLite would have accepted only
-/// because it was quoted (`CREATE TABLE t(a "my type")`). Those are
-/// legal and vanishingly rare, and the caller says how to skip such a
-/// column, so refusing them is cheaper than reconstructing the quoting.
-fn is_plain_type_name(ty: &str) -> bool {
-    let (head, args) = match ty.split_once('(') {
-        Some((head, rest)) => (head, Some(rest)),
-        None => (ty, None),
-    };
-    let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == ' ';
-    if !head.chars().any(|c| c.is_ascii_alphanumeric()) || !head.chars().all(word_char) {
-        return false;
-    }
-    let Some(args) = args else { return true };
-    let Some(inner) = args.trim_end().strip_suffix(')') else {
-        return false;
-    };
-    let nums: Vec<&str> = inner.split(',').collect();
-    // `VARCHAR()` is not a type, and SQLite takes at most two arguments.
-    (1..=2).contains(&nums.len())
-        && nums.iter().all(|n| {
-            let n = n.trim().strip_prefix(['-', '+']).unwrap_or(n.trim());
-            !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())
-        })
 }
 
 /// A table as it will exist in the mirror.
@@ -176,26 +136,17 @@ impl TableSpec {
     /// `CREATE TABLE …` for this table. No `IF NOT EXISTS`: the caller
     /// has just dropped it, and a silent no-op here would mean quietly
     /// keeping a stale schema.
-    ///
-    /// Fails if any column's declared type is not one
-    /// [`ColumnSpec::decl`] will splice into DDL.
-    pub fn create_ddl(&self) -> Result<String> {
-        let mut cols: Vec<String> = Vec::with_capacity(self.columns.len() + 1);
-        for c in &self.columns {
-            cols.push(
-                c.decl()
-                    .with_context(|| format!("build CREATE TABLE for {:?}", self.name))?,
-            );
-        }
+    pub fn create_ddl(&self) -> String {
+        let mut cols: Vec<String> = self.columns.iter().map(|c| c.decl()).collect();
         if !self.pk.is_empty() {
             let key: Vec<String> = self.pk.iter().map(|c| quote_ident(c)).collect();
             cols.push(format!("PRIMARY KEY ({})", key.join(", ")));
         }
-        Ok(format!(
+        format!(
             "CREATE TABLE {} ({})",
             quote_ident(&self.name),
             cols.join(", ")
-        ))
+        )
     }
 
     /// The mirrored column list, quoted: `"a", "b"`.
@@ -227,6 +178,9 @@ impl TableSpec {
 /// user, but they still get quoted: SQLite permits spaces, keywords, and
 /// punctuation in identifiers, and a mirror that only worked on
 /// well-behaved schemas would be a mirror with a footgun in it.
+///
+/// Also used for a column's declared *type*, which SQLite's grammar
+/// likewise allows to be a quoted name — see [`ColumnSpec::decl`].
 pub fn quote_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
@@ -376,15 +330,15 @@ mod tests {
             vec!["id_global"],
         );
         assert_eq!(
-            s.create_ddl().unwrap(),
-            r#"CREATE TABLE "t" ("id_global", "id_local" INTEGER, PRIMARY KEY ("id_global"))"#
+            s.create_ddl(),
+            r#"CREATE TABLE "t" ("id_global", "id_local" "INTEGER", PRIMARY KEY ("id_global"))"#
         );
     }
 
     #[test]
     fn keyless_ddl_has_no_primary_key_clause() {
         let s = spec(vec![col("a", "")], vec![]);
-        assert_eq!(s.create_ddl().unwrap(), r#"CREATE TABLE "t" ("a")"#);
+        assert_eq!(s.create_ddl(), r#"CREATE TABLE "t" ("a")"#);
     }
 
     #[test]
@@ -394,50 +348,33 @@ mod tests {
             decl_type: String::new(),
             not_null: true,
         };
-        assert_eq!(c.decl().unwrap(), r#""xmp" NOT NULL"#);
+        assert_eq!(c.decl(), r#""xmp" NOT NULL"#);
     }
 
     #[test]
-    fn a_type_that_is_not_a_plain_type_name_is_refused() {
-        // The declared type is spliced into DDL, so a source catalog
-        // that carries SQL there must not be able to close the column
-        // definition and open something of its own.
-        let c = col("id", "INTEGER, x TEXT); DROP TABLE t; --");
-        assert!(c.decl().is_err());
-        let s = spec(vec![c], vec![]);
-        assert!(s.create_ddl().is_err());
-    }
-
-    #[test]
-    fn real_sqlite_type_names_are_accepted() {
-        for ty in [
-            "INTEGER",
-            "TEXT",
-            "VARCHAR(255)",
-            "NUMERIC(10,5)",
-            "UNSIGNED BIG INT",
-            "DOUBLE PRECISION",
-            "NATIVE CHARACTER (70)",
-        ] {
-            assert!(is_plain_type_name(ty), "should accept {ty:?}");
-        }
-        for ty in [
-            "",
-            "TEXT'",
-            r#""my type""#,
-            "TEXT)",
-            "VARCHAR(255",
-            "VARCHAR()",
-            "VARCHAR(255) CHECK (1)",
-            "INT(1,2,3)",
-            "INT(a)",
-        ] {
-            assert!(!is_plain_type_name(ty), "should reject {ty:?}");
-        }
+    fn a_declared_type_carrying_sql_is_quoted_shut() {
+        // A source catalog can declare this type — SQLite lets a type
+        // name be a quoted name — and `table_xinfo` hands it back with
+        // the quotes gone. Unquoted it would close our column
+        // definition; quoted it is just a strange type.
+        let s = spec(
+            vec![col("id", r#"INTEGER, x TEXT); DROP TABLE t; --"#)],
+            vec![],
+        );
+        assert_eq!(
+            s.create_ddl(),
+            r#"CREATE TABLE "t" ("id" "INTEGER, x TEXT); DROP TABLE t; --")"#
+        );
     }
 
     #[test]
     fn quote_ident_escapes_embedded_quotes() {
         assert_eq!(quote_ident(r#"we"ird"#), r#""we""ird""#);
+    }
+
+    #[test]
+    fn a_declared_type_with_a_quote_in_it_is_escaped_too() {
+        let s = spec(vec![col("id", r#"IN"TEGER"#)], vec![]);
+        assert_eq!(s.create_ddl(), r#"CREATE TABLE "t" ("id" "IN""TEGER")"#);
     }
 }

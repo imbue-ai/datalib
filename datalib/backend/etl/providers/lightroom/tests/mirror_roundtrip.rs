@@ -1068,32 +1068,37 @@ async fn snapshot_is_a_separate_readable_copy() -> Result<()> {
 // Hostile catalogs
 // ─────────────────────────────────────────────────────────────────────
 
-/// A column's declared type is not an identifier, so it cannot be
-/// quoted on the way into the mirror's `CREATE TABLE` — and it is not
-/// ours: SQLite lets a *quoted* type name hold anything, and reports it
-/// back through `PRAGMA table_xinfo` with the quotes gone. The mirror
-/// refuses such a type instead of splicing it in.
+/// SQLite lets a column's declared *type* be a quoted name holding
+/// anything, and `PRAGMA table_xinfo` reports it back with the quotes
+/// gone — so the type text can carry SQL that would close the mirror's
+/// `CREATE TABLE` early. The mirror quotes it, exactly as it quotes the
+/// column name, so the statement stays one statement and the odd type is
+/// mirrored as the odd type it is.
 #[tokio::test]
-async fn a_column_type_carrying_sql_is_refused() -> Result<()> {
+async fn a_column_type_carrying_sql_is_quoted_not_executed() -> Result<()> {
     let f = Fixture::new();
-    f.ingest().await?;
     f.edit_catalog(&[concat!(
         "CREATE TABLE AgEvil (id_local INTEGER PRIMARY KEY, ",
         r#"a "INTEGER); DROP TABLE Adobe_images; --")"#
     )])
     .await?;
 
-    let err = f
-        .ingest()
-        .await
-        .expect_err("a declared type carrying SQL should fail the run");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("not a plain SQLite type name"), "{msg}");
+    f.ingest().await?;
 
-    // The table the injected statement named is still there, with its
-    // rows — the run failed before any of this reached the database.
     let pool = f.mirror_pool().await?;
+    // The table the injected statement named still has its rows.
     assert!(scalar_i64(&pool, "SELECT COUNT(*) FROM Adobe_images").await > 0);
+    // And the hostile type round-tripped as data rather than as SQL.
+    assert_eq!(
+        opt_string(
+            &pool,
+            "SELECT type FROM pragma_table_info('AgEvil') WHERE name = 'a'"
+        )
+        .await
+        .as_deref(),
+        Some("INTEGER); DROP TABLE Adobe_images; --")
+    );
+    assert_eq!(mirror_pk(&pool, "AgEvil").await, vec!["id_local"]);
     pool.close().await;
     Ok(())
 }

@@ -83,23 +83,22 @@ schema: drop a column, and choose a different primary key. Both are
 textual surgery on arbitrary SQL if you start from the source text, and
 neither is if you start from introspection.
 
-One thing introspection reports is neither data nor an identifier: the
-column's declared type. Quoting it on the way back into the mirror's
-`CREATE TABLE` would change its meaning rather than make it safe —
-`"VARCHAR(255)"` is a column *named* that, not a type — and it cannot be
-trusted either, because it comes out of the `.lrcat`, a SQLite file we
-did not write. SQLite lets a *quoted* type name contain anything at all,
-and `PRAGMA table_xinfo` reports it back with the quotes gone. So it is
-checked instead.
+Two things introspection hands back are SQL text out of the `.lrcat`, a
+file we did not write: the column's declared **type**, and its
+**DEFAULT**. Neither is treated as trustworthy.
 
-A declared type has to be a plain type name: letters, digits,
-underscores and spaces, optionally followed by one or two numbers in
-parentheses. That covers everything SQLite documents (`INTEGER`,
-`VARCHAR(255)`, `UNSIGNED BIG INT`, `NUMERIC(10,5)`). Anything else
-fails the run, and the way past it is to skip that column with
-`exclude_columns`. Failing is deliberate: dropping the type instead
-would leave the column untyped, which changes its affinity and so what
-the mirror stores — a quiet narrowing rather than a loud stop.
+The type is **quoted**, exactly as the table and column names are.
+SQLite's grammar lets a type name be a quoted name — `CREATE TABLE t(a
+"my type")` is legal — and `PRAGMA table_xinfo` reports it back with the
+quotes gone, so a catalog can declare a type of `INTEGER); DROP TABLE x;
+--` and have that text land in the middle of our `CREATE TABLE`. Quoting
+closes it, and costs nothing: SQLite dequotes a type name before
+deciding anything about the column, so `"VARCHAR(255)"` and
+`VARCHAR(255)` are the same column — same affinity, same `table_info`
+text, and an `INTEGER PRIMARY KEY` stays a rowid alias either way
+(checked in doltlite and stock SQLite across every affinity class). The
+mirror's DDL therefore reads `"id_local" "INTEGER"`, which looks unusual
+and is exactly equivalent.
 
 A column's `DEFAULT` is not carried across at all. A default only ever
 applies to a row inserted without a value for that column, and no such
