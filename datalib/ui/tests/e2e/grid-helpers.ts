@@ -80,13 +80,48 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
   return rowIndex as number;
 }
 
+// Scroll a row into view and act on it, retrying the *pair*.
+//
+// `scrollRowIntoView` returning means the row was rendered **then**.
+// AG Grid can virtualize it away again before the action re-resolves
+// the locator, and once the node is gone only another nudge brings it
+// back — so retrying the action alone would spin against a DOM that
+// will never contain it. This is the same race the comment above
+// describes, one step later: that fix put the nudge inside the poll,
+// and left this gap between the poll and the click.
+//
+// The per-attempt timeout is the load-bearing part. Playwright's
+// default is the whole 30s test timeout, so the first click consumed
+// the entire budget waiting for a node that was already gone and the
+// test died having never re-scrolled — which is exactly how this
+// failed in CI (`yolink-plots`, webkit), while passing in isolation
+// where nothing competes for the render.
+async function actOnRowByUuid(
+  page: Page,
+  uuid: string,
+  act: (row: Locator) => Promise<void>,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const rowIndex = await scrollRowIntoView(page, uuid);
+    try {
+      await act(
+        page.locator(
+          `.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`,
+        ),
+      );
+      return;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError;
+}
+
 // Scroll a (possibly virtualized-away) row into view, then click it.
 // Returns after the click; callers assert on the consequences.
 export async function clickRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await scrollRowIntoView(page, uuid);
-  await page
-    .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
-    .click();
+  await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 5_000 }));
 }
 
 // Right-click a row located by uuid. Same virtualization dance as
@@ -94,10 +129,9 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 // node to dispatch at — but opens the context menu instead of
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await scrollRowIntoView(page, uuid);
-  await page
-    .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
-    .click({ button: "right" });
+  await actOnRowByUuid(page, uuid, (row) =>
+    row.click({ button: "right", timeout: 5_000 }),
+  );
   await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
 }
 
