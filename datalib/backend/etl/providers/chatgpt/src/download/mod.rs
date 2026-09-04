@@ -774,7 +774,7 @@ async fn list_all_conversations(
 /// Parse a `since` config value — full RFC 3339 or bare `YYYY-MM-DD`
 /// (assumed UTC midnight) — down to the whole-second Unix epoch the
 /// skip-check compares at. Same accepted forms as slack's `since` and
-/// anthropic's.
+/// claude's.
 fn parse_since_secs(s: &str) -> Result<i64> {
     let t = datalib_time::parse_strict(s)
         .or_else(|_| datalib_time::parse_yyyy_mm_dd_assumed_utc(s))

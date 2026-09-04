@@ -104,17 +104,27 @@ id = "claude-api/rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["claude-api/raw"]
 
-# Render-only view of a Claude data export already on disk. No
-# network, no credentials, and no download step — the unpacked export
-# is already in the "export shape" the renderer reads, so the render
-# step's `common.raw_path` points straight at it. With no `inputs`
-# this is a fringe step (its real input lives outside the data root),
-# so it runs every sync; per-document fingerprints keep re-runs cheap.
+# An unpacked Claude data export already on disk. No network and no
+# credentials — the download step just reads the export's JSON and
+# writes it into the same raw store the `claude_api` download fills, so
+# one renderer serves both. Note the split every file-backed source
+# uses: `input_path` is where the export is read FROM, `raw_path`
+# (unset here, so the default `<data_root>/claude-export/raw`) is where
+# our copy lives.
+#
+# The export is a complete snapshot, so a re-exported tree that no
+# longer mentions a conversation drops it from the store — the one
+# thing reading the tree in place could never notice.
+[[steps]]
+id = "claude-export/raw"
+command = "datalib-step download claude_export"
+[steps.params.common]
+input_path = "~/backups/claude-export"
+
 [[steps]]
 id = "claude-export/rendered_md"
 command = "datalib-step render claude_export"
-[steps.params.common]
-raw_path = "~/backups/claude-export"
+inputs = ["claude-export/raw"]
 
 # --- ChatGPT ------------------------------------------------------------
 

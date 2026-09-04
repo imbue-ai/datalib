@@ -14,7 +14,7 @@ members = [
     "id",
     "etl",
     "etl/macros",
-    "etl/providers/anthropic",
+    "etl/providers/claude",
     "etl/providers/beeper",
     "etl/providers/chatgpt",
     "etl/providers/contacts",

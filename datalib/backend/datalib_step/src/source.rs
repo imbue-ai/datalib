@@ -15,8 +15,8 @@
 use anyhow::{Context, Result};
 
 /// The provider config subtree from `--params`. Absent → empty
-/// object, so param-less sources (render-only exports) need no
-/// `params:` in the config.
+/// object, so a step whose provider needs no knobs (most render
+/// steps) needs no `params:` in the config.
 pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
     match params {
         None => Ok(serde_json::Value::Object(Default::default())),

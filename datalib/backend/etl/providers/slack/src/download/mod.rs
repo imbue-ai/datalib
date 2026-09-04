@@ -783,7 +783,7 @@ async fn export_channel(
     }
 
     // End-of-channel flush: CAS put_many + slack_attachments bulk
-    // upsert. Mirrors chatgpt/anthropic's per-conv flush pattern.
+    // upsert. Mirrors chatgpt/claude's per-conv flush pattern.
     if let Err(e) = api::flush_channel_attachments(db, &attach).await {
         warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e);
     }

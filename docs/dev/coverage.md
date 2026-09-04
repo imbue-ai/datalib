@@ -49,7 +49,7 @@ genrule, exercising the **entire ETL pipeline** end-to-end across every
 provider's TNG fixtures. With the wrapper above you get **302 source
 files** covered (measured 2026-09-04), including:
 
-  - the per-provider download + render (`anthropic`, `chatgpt`,
+  - the per-provider download + render (`claude`, `chatgpt`,
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
     `contacts`, `perseus`, `email`, `yolink`)
   - shared infra (`doltlite_raw`, `blob_cas`, `load`, `latchkey`,

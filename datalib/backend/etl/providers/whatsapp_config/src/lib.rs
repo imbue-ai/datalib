@@ -8,8 +8,8 @@ use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The whatsapp-owned slice of a `whatsapp_backup` source. `sync:` present →
-/// the decrypt+mirror download path; absent → render-only over an
-/// already-on-disk raw store.
+/// the decrypt+mirror download path; absent → no download wave, and
+/// render reads whatever an earlier run already ingested.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhatsappConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

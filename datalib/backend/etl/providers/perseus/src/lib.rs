@@ -64,8 +64,8 @@
 //! Each entry is a subpath under
 //! `https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data/`
 //! and gets fetched verbatim to `<input_path>/<basename>`. Omit
-//! `sync:` entirely to run render-only against whatever XMLs
-//! you've pre-staged at `input_path` (the `ClaudeExport` shape).
+//! `sync:` entirely to skip the fetch and render whatever XMLs you
+//! have pre-staged at `input_path`.
 //!
 //! ### Render is Thucydides-specific for now
 //!

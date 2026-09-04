@@ -509,7 +509,7 @@ function formatSlugUuid(slug: string, uuid: string): string {
 /// action returning whichever happened to exist would leave no way to
 /// tell which one you were holding.
 ///
-/// This used to be moot: anthropic, chatgpt and notion passed the
+/// This used to be moot: claude, chatgpt and notion passed the
 /// upstream id straight through as their primary key, so "Copy UUIDs"
 /// yielded a native id for those three and ours for the other
 /// thirteen — by accident, not by design. Porting them onto

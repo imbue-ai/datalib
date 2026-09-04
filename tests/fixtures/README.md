@@ -13,12 +13,12 @@ the three real backup sources Sculptor ingests. These are checked in so that:
 
 ```
 fixtures/
-├── anthropic_export/          source-of-truth shape for `provider: anthropic, kind: export_dir, provenance: export`
+├── claude_export/          source-of-truth shape for `provider: claude, kind: export_dir, provenance: export`
 │   ├── users.json             list[Account]
 │   ├── conversations.json     list[Conversation] (each with embedded chat_messages)
 │   └── projects/<uuid>.json   per-project metadata
 │
-├── anthropic_api/             same parser, but provenance: api — adds _source, model, settings, platform, is_starred, current_leaf_message_uuid; richer block types (thinking, tool_use, tool_result)
+├── claude_export/             same parser, but provenance: api — adds _source, model, settings, platform, is_starred, current_leaf_message_uuid; richer block types (thinking, tool_use, tool_result)
 │   ├── users.json
 │   └── conversations.json
 │
@@ -54,10 +54,11 @@ fixtures/
 └── (yolink lives with its provider:
     datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json)
     A *spec*, not a capture: `yolink-make-fixture` expands it into a
-    doltlite raw store, and the pipeline runs the source render-only.
-    YoLink's downloader shells out to `curl` for signed-URL CSVs, so it
-    has no playback tape to replay — see `run_sync_pipeline.py`'s
-    `RENDER_ONLY`. Four Enterprise-D sensors, 288 five-minute samples
+    doltlite raw store, and the pipeline then runs only the render step
+    over it. YoLink's downloader shells out to `curl` for signed-URL
+    CSVs, so it has no playback tape to replay — a limitation of this
+    harness, not of the source; see `run_sync_pipeline.py`'s
+    `PRESEEDED_RAW`. Four Enterprise-D sensors, 288 five-minute samples
     each over 2369-04-14, deterministic values (sine + hash jitter, no
     RNG).
 ```
@@ -73,7 +74,7 @@ Aim: at least one example of every shape we've seen in real backups.
 
 | Variation                      | Where                                             |
 |--------------------------------|---------------------------------------------------|
-| Multiple accounts              | `anthropic_export/users.json` (Picard, La Forge)  |
+| Multiple accounts              | `claude_export/users.json` (Picard, La Forge)  |
 | Conversation in a project      | `c0000001` (Holodeck Program Library)             |
 | Conversation w/o project       | `c0000002`                                        |
 | Multi-turn thread w/ parent IDs| every fixture                                     |

@@ -5,7 +5,7 @@
 # `edges` UI without populating a real on-disk data root.
 #
 # Unlike `:dev_tng`, the data root is built at runtime by invoking
-# the DAG runner directly (render-only — no GitHub fetch). That keeps
+# the DAG runner directly (render only, no GitHub fetch). That keeps
 # the Bazel-side wiring trivial: we ship the datalib binaries + the
 # in-crate `:tiny_fixture` filegroup as runfiles and let them do
 # their normal thing.

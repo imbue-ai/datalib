@@ -1,0 +1,201 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+# Filegroup for the checked-in TNG-themed fixture used by both Rust
+# integration tests here and the Python fixture-build pipeline at
+# //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/claude_export/**/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_claude",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_claude",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/index_lib:datalib_index_lib",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:once_cell",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_binary(
+    name = "claude_download",
+    srcs = ["src/bin/claude_download.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/obs:datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "claude_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Integration test for --reset-and-redownload: synth a playback fixture,
+# fetch, reset, refetch, assert per-row data-table equality. Verifies
+# PK design is stable across re-downloads.
+rust_test(
+    name = "claude_reset_and_redownload",
+    srcs = ["tests/reset_and_redownload.rs"],
+    crate_root = "tests/reset_and_redownload.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# End-to-end coverage for the Claude Projects mirror: synthesize →
+# download → doltlite → render::parse. The insta golden only exercises
+# the legacy JSON-tree parse path, which is not what production runs.
+rust_test(
+    name = "claude_projects",
+    srcs = ["tests/claude_projects.rs"],
+    crate_root = "tests/claude_projects.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "claude_unittests",
+    size = "small",
+    crate = ":datalib_etl_claude",
+    edition = "2021",
+)
+
+# Translate smoke test against the in-crate TNG fixture. Bazel stages
+# the fixture via `data` and points `CLAUDE_FIXTURE_DIR` at the
+# runfiles-relative path (the test reads it with CARGO_MANIFEST_DIR
+# as the cargo fallback).
+rust_test(
+    name = "claude_translate_test",
+    srcs = ["tests/claude_translate.rs"],
+    crate_root = "tests/claude_translate.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
+    },
+    deps = [
+        ":datalib_etl_claude",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "claude_live",
+    srcs = ["tests/claude_live.rs"],
+    crate_root = "tests/claude_live.rs",
+    data = glob(["tests/snapshots/claude_live__*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to claude.ai/api
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        ":datalib_etl_claude",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "claude_render",
+    srcs = ["tests/claude_render.rs"],
+    crate_root = "tests/claude_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "claude_render.update",
+    test = ":claude_render",
+    extra_data = [":tng_fixture"],
+    extra_env = {
+        "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
+    },
+)
+
+insta_update(
+    name = "claude_live.update",
+    test = ":claude_live",
+    test_args = ["--ignored"],
+)

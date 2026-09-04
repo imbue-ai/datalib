@@ -6,8 +6,8 @@ use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The notion-owned slice of a `notion_api` source. `sync:` present → live
-/// Notion mirror (the download path); absent → render-only over an
-/// already-on-disk API capture.
+/// Notion mirror (the download path); absent → no download wave, and
+/// render reads whatever an earlier run already mirrored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotionConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -106,7 +106,8 @@ mod tests {
 
     #[test]
     fn translate_only_config_validates() {
-        // No `sync:` → render-only; the inbox-or-subtree rule doesn't apply.
+        // No `sync:` → no download wave; the inbox-or-subtree rule
+        // doesn't apply.
         assert!(NotionConfig::default().validate().is_ok());
     }
 

@@ -224,7 +224,7 @@ fn scan_sidecars(rendered_root: &Path) -> Result<SidecarScan> {
 /// so the documents re-render on their own. That is enough only while a
 /// document's output *path* is stable. It is not: chat-common writes to
 /// `rendered_md/<chat_uuid>/<period>.md`, and `chat_uuid` is an id the
-/// renderer mints — so a change to the id recipe (#216 put anthropic,
+/// renderer mints — so a change to the id recipe (#216 put claude,
 /// chatgpt and slack through `datalib_id`) writes every document to a
 /// new directory and leaves the old one sitting beside it. The index
 /// walks whatever it finds, so both copies load and every conversation

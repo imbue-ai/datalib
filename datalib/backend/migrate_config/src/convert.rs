@@ -207,9 +207,10 @@ pub fn steps_yaml_to_toml(text: &str) -> Result<String> {
 }
 
 /// The retired `sources:` config, translated to the step format: each
-/// source becomes a `<name>.download` + `<name>.render` step pair
-/// (render-only for unmanaged sources like `claude_export`), preceded
-/// by the shared `grid_index`/`qmd_index` fan-in steps. Global
+/// source becomes a `<name>.download` + `<name>.render` step pair (just
+/// the render half for an unmanaged source — one with neither a `sync:`
+/// block nor, if it is file-backed, an `input_path:`), preceded by the
+/// shared `grid_index`/`qmd_index` fan-in steps. Global
 /// `defaults:` are folded into each source's `common:` (value-level
 /// only — no path resolution), so the per-step params are
 /// self-contained.

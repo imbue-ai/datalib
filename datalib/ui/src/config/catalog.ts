@@ -514,7 +514,7 @@ export const CATALOG: CatalogEntry[] = [
   { type: "carddav", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", wizard: false },
   { type: "yolink", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", wizard: false },
 
-  { type: "claude_export", label: "Claude export", blurb: "Render an unpacked Claude data export already on disk.", keywords: ["claude", "anthropic", "export", "backup"], kind: "export", icon: "claude", defaultName: "claude-export", wizard: false },
+  { type: "claude_export", label: "Claude export", blurb: "Ingest an unpacked Claude data export already on disk.", keywords: ["claude", "anthropic", "export", "backup"], kind: "export", icon: "claude", defaultName: "claude-export", wizard: false },
   { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", wizard: false },
   { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", wizard: false },
   {

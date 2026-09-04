@@ -1009,7 +1009,7 @@ fn step_id_list(summary: &Value) -> String {
 ///
 /// Only the API-backed providers stamp `sync_runs` — as of writing, the eight
 /// that route their download through `DownloadRun`: slack, github, gitlab,
-/// notion, anthropic, chatgpt, email, beeper. File-backed sources (carddav,
+/// notion, claude, chatgpt, email, beeper. File-backed sources (carddav,
 /// linkedin, google_takeout, sms_backup_restore, fsindex) read a local export
 /// and never open a run, so their table is present but empty. That is the
 /// right answer rather than a gap: incrementality here means "didn't re-fetch
