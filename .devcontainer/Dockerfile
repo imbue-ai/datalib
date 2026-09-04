@@ -8,8 +8,14 @@
 # when building against `datalib:<ver>` — the default, and what a local
 # devcontainer gets. `release.yml` builds the PUBLISHED devcontainer
 # against `datalib:<ver>-slim` instead, which omits them; only CI pulls
-# that image, and it hits the remote cache for the one action that reads
-# them. See `QMD_PREFETCH_MODELS` in `datalib/docker/Dockerfile`.
+# that image.
+#
+# Neither the build nor the tests care either way any more: the models
+# are pinned in MODULE.bazel (`@qmd_model_*`) and reach the fixture's
+# index genrule and the materialized demo root as bazel inputs. What the
+# baked copy still buys, in the full image, is a first `datalib` sync
+# that doesn't stall on a 2.2 GB download. See `QMD_PREFETCH_MODELS` in
+# `datalib/docker/Dockerfile`.
 #
 # Contributors who've already pulled the prod image during `docker pull
 # ghcr.io/imbue-ai/datalib:<ver>` (or anyone who ran
@@ -154,8 +160,8 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # `HOME=/github/home` for container steps), so `test.yml` passes
 # `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` to
 # reach it; and the qmd GGUFs the same suite needs are NOT here, because
-# this image is published against the `-slim` prod base — `test.yml`
-# pulls those separately behind an `actions/cache`.
+# this image is published against the `-slim` prod base — the suite
+# brings its own, as bazel inputs (`@qmd_model_*` in MODULE.bazel).
 ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/*
@@ -185,9 +191,10 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 # That removes a whole class of friction:
 #
 #   * No symlink-shenanigans to make qmd's pre-baked GGUFs at
-#     /root/.cache/qmd/models reachable from a different `$HOME` —
-#     `.bazelrc`'s `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
-#     just resolves to /root/.cache/qmd/models directly.
+#     /root/.cache/qmd/models reachable from a different `$HOME` — an
+#     app run inside the container finds them where qmd looks. (The
+#     BUILD no longer cares either way; it takes its models from
+#     `@qmd_model_*`.)
 #   * No `chmod 0755 /root` to grant a non-root user traversal access
 #     to the models directory.
 #   * No `chown`-on-named-volume dance in postCreateCommand.

@@ -229,16 +229,6 @@ jobs:
               echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
           fi
 
-      # Pre-create the host-side qmd model cache. .bazelrc has
-      # `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` so the
-      # ingested_tng_qmd genrule can read its ~2GB GGUF cache without
-      # re-downloading per action. macOS sandboxing refuses to mount a
-      # nonexistent host path ("Operation not permitted (os error 1)"),
-      # so create the dir up-front; harmless on Linux. Empty dir is
-      # fine — qmd populates it on first run.
-      - name: Ensure ~/.cache/qmd/models exists
-        run: mkdir -p "$HOME/.cache/qmd/models"
-
       # Defense in depth against "tagged the wrong version" or "forgot
       # to bump Cargo.toml before tagging". The bazel test below already
       # asserts Cargo.toml == BUILD.bazel; this asserts tag == Cargo.toml.
@@ -543,11 +533,6 @@ jobs:
           else
               echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
           fi
-
-      # .bazelrc's --sandbox_add_mount_pair needs the host path to exist;
-      # see the build job's identically-named step.
-      - name: Ensure ~/.cache/qmd/models exists
-        run: mkdir -p "$HOME/.cache/qmd/models"
 
       # The tauri crate is built by cargo (not bazel's hermetic rust
       # toolchain), so make sure a current stable toolchain is default
