@@ -32,6 +32,10 @@ pub async fn run(
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     let rendered_root = data_root.join(&planned.name).join("rendered_md");
+    // Skip state and renderer versions come from the store now, not from
+    // walking the tree and parsing every sidecar header. The walk still
+    // happens below *as a cross-check* while both writers are live; it
+    // goes away with the sidecars themselves.
     let scan = scan_sidecars(&rendered_root)?;
     // A tree an older renderer wrote can't be updated in place, only
     // replaced — see [`discard_tree_from_an_older_renderer`]. When it is
@@ -60,6 +64,10 @@ pub async fn run(
     let source_name = planned.name.clone();
     let data_root = data_root.to_path_buf();
     let docs_in = docs.clone();
+    // The store lives inside the tree, so the render task needs its own
+    // copy of the path; the post-render checks below still use the
+    // original.
+    let store_root = rendered_root.clone();
     // Render is synchronous work driven by `futures`' executor (NOT
     // tokio's — providers block_on their own internal futures); run it
     // on a blocking thread.
@@ -67,7 +75,20 @@ pub async fn run(
         let checkpoints = CheckpointSink::new();
         let control = datalib_etl::control::DownloadControl::default();
         let now = String::new();
-        let mut on_doc = |_md: RenderedMarkdown| -> Result<()> {
+        // Every finished document goes into the per-source store. The
+        // providers already hand us a `RenderedMarkdown` carrying its
+        // rows, edges, fingerprint and version through `ctx.emit_doc` —
+        // the same value `grid_index::apply_one` consumes — so nothing
+        // provider-side had to change to start writing a database.
+        //
+        // `problems` is empty here: the sink exists and this is the
+        // path that will carry it, but no renderer reports into it yet.
+        let store = datalib_etl::indexed_markdown::IndexedMarkdownStore::open(&store_root)
+            .with_context(|| format!("open render store for {}", planned.name))?;
+        let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+            store
+                .put_document(&data_root, &md, &[])
+                .with_context(|| format!("store document {}", md.markdown_uuid))?;
             docs_in.fetch_add(1, Ordering::SeqCst);
             Ok(())
         };
@@ -85,6 +106,15 @@ pub async fn run(
             futures::executor::block_on(proc.run(&ctx))
                 .with_context(|| format!("processor {}", proc.id()))?;
         }
+        // One commit for the whole render. Per-document commits would
+        // put thousands of entries in `dolt_log` per run; committing
+        // once is also what makes `dolt_diff` over this store answer
+        // "what did this render change?".
+        let stored = docs_in.load(Ordering::SeqCst);
+        store
+            .commit(&format!("render {}: {stored} document(s)", planned.name))
+            .with_context(|| format!("commit render store for {}", planned.name))?;
+        store.close();
         Ok(())
     })
     .await

@@ -473,6 +473,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # ── pipeline driver ────────────────────────────────────────────
 
+    def _render_stores(self) -> dict[str, int]:
+        """Per-source render stores, as `source -> grid_rows count`.
+
+        Each source's render step writes
+        `<source>/rendered_md/indexed_markdown.doltlite_db` holding the
+        same rows that stack into the unified index — same derived DDL,
+        same writer (`grid_index::apply_one`). Asserted from the outside
+        with the doltlite CLI, so a store that exists but is empty, or
+        holds a shape the CLI cannot read, fails here rather than
+        silently indexing nothing.
+        """
+        out: dict[str, int] = {}
+        for store in sorted(
+            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+        ):
+            source = store.parent.parent.name
+            out[source] = self._count(store, "grid_rows")
+        return out
+
     def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
         env = {**os.environ}
         if reset:
@@ -584,6 +603,28 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ),
             0,
             "the qmd_path/md_path join must cover pdf rows",
+        )
+
+        # ── the per-source render stores ────────────────────────
+        # Each source's render step writes its rows into
+        # `<source>/rendered_md/indexed_markdown.doltlite_db` — the same
+        # rows, same derived DDL and same writer as the unified index,
+        # so "what stacks into the index" needs no second projection to
+        # keep in step.
+        #
+        # Asserted against the index rather than against a number: a
+        # store that silently wrote nothing would still pass a
+        # "file exists" check, and a bare row count would drift with
+        # every fixture tweak.
+        stores = self._render_stores()
+        self.assertNotEqual(stores, {}, "every rendering source must write a store")
+        for source, rows in stores.items():
+            self.assertGreater(rows, 0, f"{source}'s render store holds no rows")
+        self.assertEqual(
+            sum(stores.values()),
+            self._count(self._index_db, "grid_rows"),
+            "the stores and the index must hold the same number of rows — "
+            f"per-source: {stores}",
         )
 
         # ── id-space guardrails ─────────────────────────────────
