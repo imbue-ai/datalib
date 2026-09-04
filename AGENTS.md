@@ -240,8 +240,17 @@ datalib/
                    pre-TOML `config.yaml`. Holds every retired config
                    schema and the tree's last YAML parser, so the
                    shipping programs accept only `config.toml`.
-    core/          data-root layout, the feedback + job stores,
-                   host-runtime helpers. Knows nothing about the index.
+    runtime/       the data-root layout, the bundled-Node/npx resolver,
+                   and the qmd version pin + spawn helper. Has NO
+                   dependencies, deliberately: `qmd_indexer_bin` is a
+                   bazel `tools=` input to the fixture's ~90s embedding
+                   action, so whatever it links is the set of crates
+                   whose next edit re-runs that embed on CI. `core` and
+                   `unified_index` re-export from here, so the old
+                   `datalib_core::layout::…` paths still resolve.
+    core/          the feedback + job stores, plus re-exports of
+                   `runtime`'s layout and host-runtime helpers. Knows
+                   nothing about the index.
     unified_index/ the grid index, the qmd index, the query language
                    over them, and the repo that reads them. Linked by
                    datalib-step (writes it) and datalib-applet (serves
@@ -311,7 +320,7 @@ app's own components and endpoints, which the scheduler never sees
 It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin (`DEFAULT_QMD_VERSION`
-in `datalib/backend/unified_index/src/qmd/mod.rs`): the Tauri app
+in `datalib/backend/runtime/src/qmd.rs`): the Tauri app
 bundles a pinned Node runtime plus `latchkey`/`qmd` package trees.
 All three come out of Bazel — `//datalib/tauri:bundled_node`,
 `//third-party/qmd/runtime:qmd_tree` and

@@ -6,6 +6,7 @@ members = [
     "index_lib",
     "unified_index",
     "core",
+    "runtime",
     "dag",
     "http",
     "obs",

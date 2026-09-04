@@ -8,10 +8,17 @@ rust_library(
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
+    # SHORT ON PURPOSE. `:qmd_indexer_bin` is a `tools=` input to
+    # //tests/fixtures:ingested_tng_qmd, and bazel keys an action on its
+    # tools' digests — so this list is exactly the set of crates whose
+    # next edit re-runs a ~90s CPU-only embed on CI. It used to name
+    # datalib_core (160 rdeps) and datalib_unified_index to reach three
+    # constants and a Command builder; those now live in the
+    # dependency-free datalib_runtime. Add to `datalib_runtime` (or
+    # re-export through it) before adding a crate here.
     deps = [
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
     ],
 )

@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files([
+    "Cargo.toml",
+    # Canonical version constants, read by //tools:version_pins_test
+    # (and by //tools:qmd_model_cache_path_test for the qmd one).
+    "src/node_runtime.rs",  # LATCHKEY_VERSION
+    "src/qmd.rs",  # DEFAULT_QMD_VERSION
+])
+
+# The data-root layout plus the bundled-Node/npx resolution every binary
+# shares. Deliberately DEPENDENCY-FREE — see src/lib.rs for why that is
+# load-bearing rather than tidy: this crate's digest is what gates the
+# fixture's ~90s embedding action, so anything added here is paid for on
+# CI.
+rust_library(
+    name = "datalib_runtime",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_runtime",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "runtime_unittests",
+    size = "small",
+    crate = ":datalib_runtime",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
