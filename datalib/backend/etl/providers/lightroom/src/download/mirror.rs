@@ -526,19 +526,13 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .begin()
         .await
         .with_context(|| format!("begin rebuild tx for {}", spec.name))?;
-    // Audited: `create_ddl()` / `copy_sql()` render every *identifier* —
-    // table and column names — through `plan::quote_ident`, which
-    // double-quotes and escapes embedded quotes.
-    //
-    // NOT covered, and worth knowing: `ColumnSpec::decl()` also splices the
-    // column's declared type and DEFAULT expression in verbatim, and both
-    // come from `PRAGMA table_xinfo` on the attached source catalog — i.e.
-    // from the .lrcat file, which is outside our control. A crafted catalog
-    // can therefore influence this CREATE TABLE beyond the identifiers.
-    // Blast radius is the mirror we are building (a fresh doltlite file);
-    // the source is opened `read_only(true)` and copied via VACUUM INTO
-    // before anything is attached, so it cannot be written back. Tracked
-    // separately — this bump did not introduce it and does not fix it.
+    // Audited: every fragment `create_ddl()` / `copy_sql()` take from the
+    // source catalog — table names, column names, and the columns'
+    // declared types — goes through `plan::quote_ident`, which
+    // double-quotes and escapes embedded quotes. Nothing else from the
+    // catalog reaches these statements: column DEFAULTs, the one other
+    // piece of SQL text `table_xinfo` reports, are not mirrored at all
+    // (see the `plan` module docs).
     sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
         .execute(&mut *tx)
         .await
@@ -641,7 +635,6 @@ mod tests {
                 name: name.into(),
                 decl_type: ty.into(),
                 not_null: false,
-                default: None,
             },
             pk_seq,
             generated: false,
@@ -710,7 +703,6 @@ mod tests {
                 name: "version".into(),
                 decl_type: "TEXT".into(),
                 not_null: false,
-                default: None,
             },
             pk_seq: 1,
             generated: false,
@@ -789,7 +781,6 @@ mod tests {
                 name: "computed".into(),
                 decl_type: "".into(),
                 not_null: false,
-                default: None,
             },
             pk_seq: 0,
             generated: true,

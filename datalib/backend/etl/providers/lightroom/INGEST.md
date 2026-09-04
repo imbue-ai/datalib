@@ -73,6 +73,7 @@ Tables and their rows. Deliberately not mirrored:
 | Triggers, views | Behavior, not data. The mirror is never written to by an application. |
 | CHECK / FOREIGN KEY, collations | `PRAGMA table_info` doesn't surface them, and enforcing the source's integrity rules on a copy of already-valid data buys nothing. |
 | Generated columns | No stored value to copy. |
+| Column `DEFAULT`s | A rule for writes, and nothing writes to the mirror. See below. |
 
 The schema is rebuilt from `PRAGMA table_xinfo` rather than replayed from
 the source's `sqlite_master` text. Replaying verbatim does work —
@@ -81,6 +82,33 @@ doltlite parses all 133 of a stock catalog's table definitions unchanged
 schema: drop a column, and choose a different primary key. Both are
 textual surgery on arbitrary SQL if you start from the source text, and
 neither is if you start from introspection.
+
+Two things introspection hands back are SQL text out of the `.lrcat`, a
+file we did not write: the column's declared **type**, and its
+**DEFAULT**. Neither is treated as trustworthy.
+
+The type is **quoted**, exactly as the table and column names are.
+SQLite's grammar lets a type name be a quoted name — `CREATE TABLE t(a
+"my type")` is legal — and `PRAGMA table_xinfo` reports it back with the
+quotes gone, so a catalog can declare a type of `INTEGER); DROP TABLE x;
+--` and have that text land in the middle of our `CREATE TABLE`. Quoting
+closes it, and costs nothing: SQLite dequotes a type name before
+deciding anything about the column, so `"VARCHAR(255)"` and
+`VARCHAR(255)` are the same column — same affinity, same `table_info`
+text, and an `INTEGER PRIMARY KEY` stays a rowid alias either way
+(checked in doltlite and stock SQLite across every affinity class). The
+mirror's DDL therefore reads `"id_local" "INTEGER"`, which looks unusual
+and is exactly equivalent.
+
+A column's `DEFAULT` is not carried across at all. A default only ever
+applies to a row inserted without a value for that column, and no such
+insert happens here: the mirror names every column on both sides of its
+`INSERT … SELECT`, so every mirrored value comes from the source row it
+was copied from. A mirrored default could never fire — it would be
+decoration on a backup — and reproducing it would mean either trusting
+or parsing SQL text out of the `.lrcat`. So it goes the way of the CHECK
+constraints and the foreign keys, for the same reason: the mirror copies
+data, not the source's rules about writing.
 
 ## When the primary key changes
 

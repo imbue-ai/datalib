@@ -10,7 +10,7 @@
 //! Usage:
 //!   datalib-qmd-indexer --root <DIR> [--no-embed] [--qmd-version <V>]
 //!                           [--collection-name <N>] [--mask <GLOB>]
-//!                           [--models-dir <DIR>]
+//!                           [--models-dir <DIR>] [--no-pull]
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -26,6 +26,7 @@ fn parse_args() -> Result<IndexOptions> {
     let mut collection_name: Option<String> = None;
     let mut mask: Option<String> = None;
     let mut models_dir: Option<PathBuf> = None;
+    let mut pull: Option<bool> = None;
 
     let mut it = std::env::args_os().skip(1);
     while let Some(raw) = it.next() {
@@ -42,6 +43,10 @@ fn parse_args() -> Result<IndexOptions> {
             "--models-dir" => {
                 models_dir = Some(PathBuf::from(next_value(&mut it, "--models-dir")?))
             }
+            // For a caller that has already put the embedding model in
+            // `--models-dir` and never queries: `pull` would delete it
+            // again. See `IndexOptions::pull`.
+            "--no-pull" => pull = Some(false),
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -66,6 +71,9 @@ fn parse_args() -> Result<IndexOptions> {
     if let Some(v) = models_dir {
         o.models_dir = v;
     }
+    if let Some(v) = pull {
+        o.pull = v;
+    }
     Ok(o)
 }
 
@@ -80,7 +88,7 @@ fn print_help() {
     eprintln!(
         "datalib-qmd-indexer --root <DIR> [--no-embed] \
          [--qmd-version <V>] [--collection-name <N>] [--mask <GLOB>] \
-         [--models-dir <DIR>]"
+         [--models-dir <DIR>] [--no-pull]"
     );
 }
 

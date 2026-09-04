@@ -158,6 +158,83 @@ LIGHTROOM_DB_DIFF_COMMIT = "733187a5216ccf631a92969a8fc147a4885353df"
     ]
 ]
 
+# qmd's GGUF models, as build inputs instead of build-time downloads.
+#
+# Three files, and the three code paths that load them are worth knowing
+# apart, because "qmd needs 2.2 GB of models" is true of the shipped app
+# and not of any one thing here:
+#
+#   embeddinggemma        `qmd embed` (the fixture index genrule) and
+#                         every search — the applet's daemon embeds the
+#                         query text.
+#   query-expansion 1.7B  only the applet's CLI FALLBACK, which shells
+#                         out to `qmd query` (auto-expanding) when the
+#                         long-lived `qmd mcp` daemon fails.
+#   qwen3-reranker        nothing, today. Both query paths disable
+#                         reranking (`"rerank": false` in daemon.rs,
+#                         `--no-rerank` in runner.rs). It is here so a
+#                         data root materialized for the e2e suite holds
+#                         what a real one does, and so flipping that flag
+#                         is a code change rather than a surprise
+#                         download.
+#
+# Why bazel fetches them rather than qmd: inside the action a download is
+# invisible on a laptop, where `~/.cache/qmd/models` is warm forever
+# after the first build, and a cold download on CI, where the published
+# devcontainer is built on the `-slim` prod variant that omits the models
+# and every job gets a fresh container. On 2026-09-03 one of those drew a
+# `429 Too Many Requests` from HuggingFace's CDN and failed a
+# merge-gating build (invocation e846f2cf, 1468s in the action before it
+# gave up). As bazel inputs the bytes are integrity-pinned, land in the
+# repository cache, and are shared by every worktree on the machine — and
+# nothing in `bazel test //...` reaches HuggingFace at all.
+#
+# Pinned to repo REVISIONS rather than `main`: HuggingFace serves
+# `resolve/main/...` as a moving pointer, so a re-quantized re-upload
+# would otherwise change what we embed with. With the revision pinned,
+# such a change is a `git` edit here.
+#
+# `downloaded_file_path` is load-bearing, not cosmetic. node-llama-cpp
+# decides a model is already cached by looking for the filename it would
+# itself have downloaded to — `hf_<owner>_<file>`, see
+# `findMatchingFilesInDirectory` in its `resolveModelFile.js`. Name a
+# file anything else and it downloads its own copy next to ours.
+#
+# The sha256s are HuggingFace's own LFS oids for each blob, which are
+# sha256 of the content — cross-checked against `shasum -a 256` of a warm
+# `~/.cache/qmd/models` before being written down here.
+[
+    http_file(
+        name = "qmd_model_%s" % short,
+        urls = ["https://huggingface.co/%s/resolve/%s/%s" % (repo, rev, basename)],
+        sha256 = sha,
+        downloaded_file_path = "hf_%s_%s" % (repo.split("/")[0], basename),
+    )
+    for short, repo, rev, basename, sha in [
+        (
+            "embeddinggemma",
+            "ggml-org/embeddinggemma-300M-GGUF",
+            "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
+            "embeddinggemma-300M-Q8_0.gguf",
+            "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+        ),
+        (
+            "query_expansion",
+            "tobil/qmd-query-expansion-1.7B-gguf",
+            "7816de0b72572c6c860ca1eddf97ba9e7fb8cc65",
+            "qmd-query-expansion-1.7B-q4_k_m.gguf",
+            "000dfb1c06efa6a049e9f64ba921c3740e2454f62abab6fa10e77bd30bb2bcc0",
+        ),
+        (
+            "reranker",
+            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+            "a02f48bb4f057028298c21fa033da2b30d7742d5",
+            "qwen3-reranker-0.6b-q8_0.gguf",
+            "22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48",
+        ),
+    ]
+]
+
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.3.2")
 

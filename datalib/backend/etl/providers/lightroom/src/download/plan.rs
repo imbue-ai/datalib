@@ -23,6 +23,24 @@
 //! prolly tree keyed by its primary key, so a secondary index buys a
 //! backup nothing and costs it space in every commit.
 //!
+//! ## Why column DEFAULTs are not mirrored
+//!
+//! A `DEFAULT` is a rule for writes, and the mirror is not written to.
+//! It only ever applies to a row inserted without a value for that
+//! column, and no such insert happens here: [`TableSpec::copy_sql`]
+//! names every column on both sides, so every mirrored value comes from
+//! the source row it was copied from. A mirrored `DEFAULT` could
+//! therefore never fire.
+//!
+//! Carrying one across is not free, either. `PRAGMA table_xinfo`
+//! reports the default as SQL text — a literal like `'unset'`, but
+//! equally an expression like `datetime('now')` — out of the `.lrcat`,
+//! a SQLite file we did not write. Splicing that back into our own
+//! `CREATE TABLE` means either trusting it or parsing arbitrary SQL to
+//! decide whether to. That is a real cost, paid to reproduce a rule
+//! nothing can trigger, so the defaults are simply dropped — same
+//! reasoning as the constraints above.
+//!
 //! There is deliberately no schema-reconciliation logic here. Every run
 //! drops each mirror table and recreates it from the source, so the
 //! mirror's schema is never *compared* to anything — it is simply
@@ -45,26 +63,37 @@ pub struct ColumnSpec {
     /// round-trips only if the mirror leaves it untyped too.
     pub decl_type: String,
     pub not_null: bool,
-    /// Default expression, verbatim SQL text (`''`, `-63113817600`,
-    /// `'unset'`). Spliced back into the DDL as-is.
-    pub default: Option<String>,
 }
 
 impl ColumnSpec {
-    /// The `"name" TYPE [NOT NULL] [DEFAULT expr]` fragment, usable both
-    /// inside `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`.
+    /// The `"name" TYPE [NOT NULL]` fragment, usable both inside
+    /// `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`. No
+    /// `DEFAULT`: see the module docs for why the mirror does not carry
+    /// one.
+    ///
+    /// The declared type is quoted, like the name is, and for the same
+    /// reason: it comes from `PRAGMA table_xinfo` on the attached source
+    /// catalog — an arbitrary SQLite file we did not write — and SQLite
+    /// lets a *quoted* type name hold anything at all, reporting it back
+    /// with the quotes gone. Unquoted, `INTEGER); DROP TABLE x; --` is a
+    /// perfectly legal declared type that ends our column definition
+    /// early.
+    ///
+    /// Quoting a type is meaning-preserving, which is not obvious and is
+    /// the reason this is two lines rather than a validator. A type name
+    /// may be a quoted name, and SQLite dequotes it before deciding
+    /// anything, so `"VARCHAR(255)"` and `VARCHAR(255)` produce the same
+    /// column: same affinity, same `table_info` text, and an
+    /// `INTEGER PRIMARY KEY` stays a rowid alias either way. Verified in
+    /// both doltlite and stock SQLite across every affinity class.
     pub fn decl(&self) -> String {
         let mut s = quote_ident(&self.name);
         if !self.decl_type.is_empty() {
             s.push(' ');
-            s.push_str(&self.decl_type);
+            s.push_str(&quote_ident(&self.decl_type));
         }
         if self.not_null {
             s.push_str(" NOT NULL");
-        }
-        if let Some(d) = &self.default {
-            s.push_str(" DEFAULT ");
-            s.push_str(d);
         }
         s
     }
@@ -149,6 +178,9 @@ impl TableSpec {
 /// user, but they still get quoted: SQLite permits spaces, keywords, and
 /// punctuation in identifiers, and a mirror that only worked on
 /// well-behaved schemas would be a mirror with a footgun in it.
+///
+/// Also used for a column's declared *type*, which SQLite's grammar
+/// likewise allows to be a quoted name — see [`ColumnSpec::decl`].
 pub fn quote_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
@@ -212,7 +244,6 @@ pub async fn table_columns(
                 name,
                 decl_type: r.try_get("type").unwrap_or_default(),
                 not_null: not_null != 0,
-                default: r.try_get("dflt_value").ok().flatten(),
             },
             pk_seq: r.try_get("pk").unwrap_or(0),
             generated: hidden == 2 || hidden == 3,
@@ -279,7 +310,6 @@ mod tests {
             name: name.into(),
             decl_type: ty.into(),
             not_null: false,
-            default: None,
         }
     }
 
@@ -301,7 +331,7 @@ mod tests {
         );
         assert_eq!(
             s.create_ddl(),
-            r#"CREATE TABLE "t" ("id_global", "id_local" INTEGER, PRIMARY KEY ("id_global"))"#
+            r#"CREATE TABLE "t" ("id_global", "id_local" "INTEGER", PRIMARY KEY ("id_global"))"#
         );
     }
 
@@ -312,27 +342,39 @@ mod tests {
     }
 
     #[test]
-    fn decl_carries_not_null_and_default() {
+    fn decl_carries_not_null() {
         let c = ColumnSpec {
             name: "xmp".into(),
             decl_type: String::new(),
             not_null: true,
-            default: Some("''".into()),
         };
-        assert_eq!(c.decl(), r#""xmp" NOT NULL DEFAULT ''"#);
+        assert_eq!(c.decl(), r#""xmp" NOT NULL"#);
     }
 
     #[test]
-    fn copy_sql_names_columns_on_both_sides() {
-        let s = spec(vec![col("a", ""), col("b", "")], vec!["a"]);
+    fn a_declared_type_carrying_sql_is_quoted_shut() {
+        // A source catalog can declare this type — SQLite lets a type
+        // name be a quoted name — and `table_xinfo` hands it back with
+        // the quotes gone. Unquoted it would close our column
+        // definition; quoted it is just a strange type.
+        let s = spec(
+            vec![col("id", r#"INTEGER, x TEXT); DROP TABLE t; --"#)],
+            vec![],
+        );
         assert_eq!(
-            s.copy_sql("src"),
-            r#"INSERT INTO main."t" ("a", "b") SELECT "a", "b" FROM "src"."t""#
+            s.create_ddl(),
+            r#"CREATE TABLE "t" ("id" "INTEGER, x TEXT); DROP TABLE t; --")"#
         );
     }
 
     #[test]
     fn quote_ident_escapes_embedded_quotes() {
         assert_eq!(quote_ident(r#"we"ird"#), r#""we""ird""#);
+    }
+
+    #[test]
+    fn a_declared_type_with_a_quote_in_it_is_escaped_too() {
+        let s = spec(vec![col("id", r#"IN"TEGER"#)], vec![]);
+        assert_eq!(s.create_ddl(), r#"CREATE TABLE "t" ("id" "IN""TEGER")"#);
     }
 }
