@@ -56,7 +56,7 @@ block, and every attachment (sorted by `(message_uuid,
 block_index/attachment_index)`). The Load step uses this to dedup
 the sidecar against prior runs.
 
-Bump [`RENDER_VERSION`](src/translate/grid_rows.rs) when the on-disk
+Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk
 render layout changes in a way that should invalidate stale `.md`
 files even though their `source_fingerprint` would otherwise still
 match.

@@ -116,7 +116,8 @@ impl Fixture {
     async fn edit_catalog(&self, stmts: &[&str]) -> Result<()> {
         let pool = mirror::open_sqlite(&self.catalog, false).await?;
         for s in stmts {
-            sqlx::query(s)
+            // Test: `stmts` are literal catalog edits written by the test itself.
+            sqlx::query(sqlx::AssertSqlSafe(*s))
                 .execute(&pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("{s}: {e}"))?;
@@ -140,7 +141,7 @@ fn fixture_catalog() -> PathBuf {
 }
 
 async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
-    sqlx::query(sql)
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -148,7 +149,7 @@ async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
 }
 
 async fn opt_string(pool: &SqlitePool, sql: &str) -> Option<String> {
-    sqlx::query(sql)
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_optional(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -163,7 +164,7 @@ async fn commit_count(pool: &SqlitePool) -> i64 {
 async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String> {
     let sql =
         format!("SELECT diff_type FROM dolt_diff_{table} WHERE to_commit = ? OR from_commit = ?");
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(commit)
         .bind(commit)
         .fetch_all(pool)
@@ -179,19 +180,23 @@ async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String>
 
 /// Column names present on a mirror table.
 async fn mirror_columns(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(&format!("PRAGMA table_xinfo(\"{table}\")"))
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA table_xinfo(\"{table}\")"
+    )))
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     rows.iter().map(|r| r.get::<String, _>("name")).collect()
 }
 
 /// A table's primary-key columns, in key order.
 async fn mirror_pk(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(&format!("PRAGMA table_xinfo(\"{table}\")"))
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA table_xinfo(\"{table}\")"
+    )))
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     let mut keyed: Vec<(i64, String)> = rows
         .iter()
         .map(|r| (r.get::<i64, _>("pk"), r.get::<String, _>("name")))
@@ -1056,5 +1061,88 @@ async fn snapshot_is_a_separate_readable_copy() -> Result<()> {
         !Path::new(&path).exists(),
         "the snapshot cleans up after itself"
     );
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Hostile catalogs
+// ─────────────────────────────────────────────────────────────────────
+
+/// SQLite lets a column's declared *type* be a quoted name holding
+/// anything, and `PRAGMA table_xinfo` reports it back with the quotes
+/// gone — so the type text can carry SQL that would close the mirror's
+/// `CREATE TABLE` early. The mirror quotes it, exactly as it quotes the
+/// column name, so the statement stays one statement and the odd type is
+/// mirrored as the odd type it is.
+#[tokio::test]
+async fn a_column_type_carrying_sql_is_quoted_not_executed() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[concat!(
+        "CREATE TABLE AgEvil (id_local INTEGER PRIMARY KEY, ",
+        r#"a "INTEGER); DROP TABLE Adobe_images; --")"#
+    )])
+    .await?;
+
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    // The table the injected statement named still has its rows.
+    assert!(scalar_i64(&pool, "SELECT COUNT(*) FROM Adobe_images").await > 0);
+    // And the hostile type round-tripped as data rather than as SQL.
+    assert_eq!(
+        opt_string(
+            &pool,
+            "SELECT type FROM pragma_table_info('AgEvil') WHERE name = 'a'"
+        )
+        .await
+        .as_deref(),
+        Some("INTEGER); DROP TABLE Adobe_images; --")
+    );
+    assert_eq!(mirror_pk(&pool, "AgEvil").await, vec!["id_local"]);
+    pool.close().await;
+    Ok(())
+}
+
+/// Column DEFAULTs are not mirrored — literal or expression. The rows
+/// still land, which is the whole point: a DEFAULT only applies to a row
+/// inserted without a value for the column, and the mirror inserts a
+/// value for every column of every row.
+#[tokio::test]
+async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        "CREATE TABLE AgLibraryImportTime (\
+             id_local INTEGER PRIMARY KEY, \
+             imported TEXT DEFAULT (datetime('now')), \
+             note TEXT DEFAULT 'unset')",
+        "INSERT INTO AgLibraryImportTime (id_local, imported, note) \
+         VALUES (901, '2387-06-11T09:00:00-07:00', 'first contact')",
+    ])
+    .await?;
+
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    assert_eq!(
+        opt_string(
+            &pool,
+            "SELECT imported FROM AgLibraryImportTime WHERE id_local = 901"
+        )
+        .await
+        .as_deref(),
+        Some("2387-06-11T09:00:00-07:00"),
+        "the copied value is what matters, not the default"
+    );
+    let ddl = opt_string(
+        &pool,
+        "SELECT sql FROM sqlite_master WHERE name = 'AgLibraryImportTime'",
+    )
+    .await
+    .expect("mirror DDL");
+    assert!(
+        !ddl.contains("DEFAULT"),
+        "neither the expression default nor the literal one is carried: {ddl}"
+    );
+    pool.close().await;
     Ok(())
 }

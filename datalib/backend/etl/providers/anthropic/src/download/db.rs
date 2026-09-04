@@ -190,7 +190,9 @@ impl RawDb {
             "SELECT id, updated_at FROM {table} \
               WHERE id IN ({placeholders}) AND updated_at IS NOT NULL"
         );
-        let mut q = sqlx::query(&sql);
+        // Audited: `table` is a literal at every callsite; `placeholders` is a
+        // `?,?,?` run sized from `ids.len()` and each id is bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for id in ids {
             q = q.bind(*id);
         }

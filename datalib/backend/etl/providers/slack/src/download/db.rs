@@ -381,7 +381,9 @@ impl RawDb {
             sql.push_str(" AND (is_archived IS NULL OR is_archived = 0)");
         }
         sql.push_str(" ORDER BY id");
-        let rows = sqlx::query(&sql)
+        // Audited: `sql` is a static base with further `&'static str` clauses
+        // appended by the `members_only` / `include_archived` flags.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
             .context("select channels_for_fetch")?;

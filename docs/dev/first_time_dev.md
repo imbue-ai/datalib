@@ -109,8 +109,13 @@ Runs:
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
 - Playwright e2e suite (`//datalib/ui:e2e_test`) — non-hermetic by
-  design: the test shells out to host `pnpm` / `node` / Playwright browser
-  cache rather than wiring `rules_js`.
+  design, though less so than it used to be: under `bazel test` it runs
+  from the `rules_js`-linked `node_modules` and a Bazel-managed Node, and
+  the remaining host reach is the Playwright **browser cache** at
+  `~/.cache/ms-playwright` (`env_inherit = HOME`). The qmd models used to
+  be a second such reach and are now bazel inputs (`@qmd_model_*`). What
+  is left is why it is tagged `requires-network` + `no-sandbox`, and what
+  CI has to arrange for explicitly — see [`testing.md`](testing.md).
 
 ### Quickest first run (no data root needed)
 

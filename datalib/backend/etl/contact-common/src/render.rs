@@ -232,7 +232,10 @@ fn compute_fingerprint(render_version: u32, contact: &NormalizedContact) -> Stri
     h.update((contact.photo.as_ref().map(|p| p.bytes.len()).unwrap_or(0) as u64).to_be_bytes());
     h.update(b"|photo_url:");
     h.update(contact.photo_url.as_deref().unwrap_or("").as_bytes());
-    format!("{:x}", h.finalize())
+    h.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
 }
 
 fn render_markdown(

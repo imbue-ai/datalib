@@ -297,7 +297,9 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
          GROUP BY room_uuid, period_key
          ORDER BY room_uuid, period_key"
     );
-    let bucket_rows = sqlx::query(&bucket_sql)
+    // Audited: the only interpolation is `period_expr`, built above from the
+    // `Period` enum (`strftime_fmt()` / `key_for_all()`), not from row data.
+    let bucket_rows = sqlx::query(sqlx::AssertSqlSafe(bucket_sql))
         .fetch_all(&pool)
         .await
         .context("group events by (room, period)")?;
@@ -322,7 +324,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
          FROM events
          ORDER BY room_uuid, timestamp_ms"
     );
-    let event_rows = sqlx::query(&events_sql)
+    let event_rows = sqlx::query(sqlx::AssertSqlSafe(events_sql))
         .fetch_all(&pool)
         .await
         .context("read events for bucketing")?;

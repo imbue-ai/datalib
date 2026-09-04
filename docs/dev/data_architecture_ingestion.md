@@ -15,7 +15,7 @@ Parts of this are not novel — the data pipeline aspect shares shape with Flume
 This document describes the principles we strive towards for the **ingestion (download) side**: how raw data lands on disk, what shape it has at rest, and the operational properties (monitorable, stoppable, resumable, incrementally cheap, verifiable) the download stage aims for. It is aspirational as much as descriptive: a new provider, table, or transformation should be judged against it, and divergences should be either justified or fixed.
 
 ## Related documents
-The downstream stages — render, grid_index, qmd indexing, view, annotation — are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the sidecar contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
+The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.when_ts` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the sidecar contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
 
 Practitioner-facing material — how we test, how to add a provider, how the schema evolves, and the open questions — lives in the companion [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md).
 
@@ -73,12 +73,7 @@ We lean **heavily** on upstream-provided UUIDs to establish permanent object ide
 - Every raw-store entity table keys by the upstream provider's identifier — no surrogate `AUTOINCREMENT`. That's what makes `dolt diff` stable across re-fetches, what makes `ON CONFLICT(id) DO UPDATE` work, and what makes cross-table references (e.g. `messages.conversation_id`) mean something.
 - When an upstream doesn't expose a stable UUID, we **synthesize one via UUIDv5** from a per-provider namespace and the most stable available fields. This is done in the data source's schema_raw.rs DDL.
 - We do **not** use row autoincrement or hashes-of-content as identity for objects. Both break the Ship-of-Theseus property: autoincrement isn't deterministic across re-ingest; content hashes change every time the content does.
-- **(NOT download/ingest related) Backpointers and outlinks are first-class** in the projection schema. `GridRow` (one of our indexed representations, not a raw format) carries:
-    - `uuid` — the Ship-of-Theseus identity, deterministic from upstream so re-ingest is idempotent.
-    - `external_id` — the provider-native primary id (numeric GH/GL id, PR number, …) preserved alongside our UUID so we can round-trip back to the provider's API.
-    - `source_url` — the canonical URL on the provider's web UI (e.g. `pull_request.html_url`, GitLab `note.web_url` with `#note_<id>` anchor), populated everywhere we can construct it.
-    - `qmd_path` — the path to the rendered markdown sidecar.
-    - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `slack_link`, `git_sha`, …) so the UI can link sideways as well as out.
+- The **projection** side of identity — `GridRow.uuid`, the `upstream_*` backpointers, `source_url`, and the per-provider cross-references the UI links sideways through — moved to [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#identity-and-backpointers-are-first-class-in-the-projection).
 
 ### `schema_raw.rs`: Per-provider schema layout
 Within each provider crate the bytes-at-rest schema is its own file, deliberately declarations-only:
@@ -86,7 +81,15 @@ Within each provider crate the bytes-at-rest schema is its own file, deliberatel
 - **`providers/<name>/src/download/schema_raw.rs`** — the raw-store schema: DDL constants (one per table / index / bookkeeping sidecar), schema-evolution migration constants co-located with the table they touch, any synthesized-PK recipe functions, and a tiny `full_ddl()` composer that splices in `dr::bookkeeping_ddl_for(table)` for each entity. **No manipulation code** — `RawDb`, UPSERTs, SELECTs, and parameter binding stay in `download/db.rs` and import from `schema_raw`. The convention is proto/pydantic-flavored: opening the `schema_raw.rs` files at the same fixed path answers "what does the world look like at rest?" without opening anything else.
 - **`providers/<name>/src/render/schema_translate.rs`** (aspirational, landing per provider) — the normalized representation render emits: mostly serde-shaped Rust types, not SQL DDL, the in-memory POD form before it's shredded into sidecar rows. A provider may have multiple `schema_translate_<family>.rs` files; where a shape is shared across providers (chat-human, code-review, time-series, …) the canonical type lives in a shared crate and the per-provider file re-exports.
 
-Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port guide §6a](/datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads)) — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+
+**The JSONB convention, concretely.** Doltlite v0.11.2+ inherits SQLite 3.45's binary JSON. A `payload` column holds JSONB (a BLOB at the SQLite level): wrap the bind in `jsonb(?)` on INSERT, unwrap with `json(payload) AS payload` on SELECT. The Rust side still binds and reads a text JSON string; only the on-disk representation changes. Three things that are easy to get wrong:
+
+- `ON CONFLICT … DO UPDATE SET payload = excluded.payload` carries the JSONB through the upsert already — **don't re-wrap it**.
+- `dr::load_payloads()` unwraps for you; a hand-written SELECT that returns `payload` must call `json()` itself.
+- **Don't** wrap `sync_runs.config` / `summary`. Those are tiny single-row bookkeeping where `sqlite3 … SELECT` ergonomics beat binary-parse speed.
+
+Because dropping the `jsonb()` wrapper silently falls back to text storage with no other visible difference, providers assert the encoding directly — `SELECT typeof(payload)` must be `blob`. Five provider test modules do this today; a new one should too.
 
 ### More details
 
@@ -109,7 +112,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 - Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from.  Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
- Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). Full schema + helpers in [port guide §7](/datalib/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+ Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). The universal edge shape and the three shared flush primitives are below; the code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs).
 
 **Per-provider CAS edge tables**
 
@@ -243,17 +246,16 @@ A long chain of incremental syncs can in principle silently drop data (an upstre
 
 The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS, and `--reset-and-redownload` is the "invalidate entity data, keep the cache" path.
 
-`cas_objects` has no reset path either way. Bytes are byte-stable; the only legitimate way to remove them is `blob_cas::gc_orphans()`.
+`cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. A `blob_cas::gc_orphans()` sweep existed once and was removed, uncalled, in `7f588ba1`; three docs went on recommending it for months. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
-## Time and ordering discipline
+## Timestamps: one clock, no fabrication
 
-If [Object identity](#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal sibling: **timestamps give global temporal ordering** across every provider that has a time-shape to its data. That global ordering is what makes the UI's union grid time-sortable, what makes `before:` / `after:` queries mean the same thing across Slack and GitHub and Notion, and what lets a sync delta be "what happened in the last week" instead of "what happened to be at the top of each provider's result list."
-
-The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** Concretely, in `GridRow.when_ts`:
-
-- **Real upstream timestamp when one exists.** A Slack message's `ts`, a GitHub PR's `created_at`, a Notion page's `last_edited_time`. Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
-- **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
-- **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
+What goes in `GridRow.when_ts` — the global-ordering policy, the
+microsecond-bump recipe for sub-items, no-fabricated-timestamps, and
+which entity kinds legitimately have none — is a projection concern and
+lives in [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#6-timestamps).
+What stays here is the crate every stage shares, including download for
+its own `fetched_at` stamps.
 
 ### Single source of truth: `datalib-time`
 Every `now()` call and every inbound RFC 3339 parse in the workspace funnels through the `datalib-time` crate (`datalib/backend/time/`). The crate exposes:
@@ -262,22 +264,6 @@ Every `now()` call and every inbound RFC 3339 parse in the workspace funnels thr
 - `parse_strict(s)` — accepts only strings that already carry an explicit offset. Most parse callsites should use this.
 - `parse_with_assumed_utc(s)` — **the single function in the whole repo** where "the upstream string lacked an offset, assume UTC" is allowed. Reach for it only after auditing an upstream feed and confirming naive-means-UTC. Any other fallback (local time, midnight, run start, epoch) is fabrication.
 - `IsoOffsetTimestamp::bump_micros(n)` / `bump_micros_str(s, n)` — the canonical sub-item synthesized-stamp recipe.
-
-### No fabricated timestamps
-A logical corollary of the broader "[don't make up data](#wire-fidelity-of-the-raw-store)" principle, called out here because timestamps are the easiest place to accidentally violate it:
-
-- When upstream gives us no timestamp and we can't pick one up from a parent (no `bump_micros` source), `when_ts` is **null**. Not "epoch," not "now," not "midnight UTC of the row's date."
-- When upstream's timestamp string is naive and we haven't audited that feed, parsing returns an error — surfaced as a warning in the per-run summary, not silently rescued.
-- Fallback paths that synthesize a value when upstream is silent are anti-patterns even when they "look plausible." They mask incompleteness in ways the consumer can't tell apart from real data.
-
-### Entities without a time-shape
-Some upstream object types genuinely don't have a meaningful timestamp:
-
-- **Contacts (vCards).** A person doesn't have a creation event; they exist. The vCard's `REV` field is sometimes set, but most contacts lack one.
-- **Perseus texts and other immutable corpora.** The corpus is upstream-frozen; per-section "timestamps" would be nonsense.
-- **Workspace/account metadata** (Slack `team`, GitHub `org`): arguably has a creation date, but it isn't shown in any time-ordered view.
-
-For these `when_ts` is **null** and the consumer query filters them out of time-ordered views — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `when_ts` for each.
 
 ## Commit lifecycle
 **Providers do not call `dolt_commit` or `commit_run` themselves.** The orchestrator wraps each source's download in exactly one commit at the end. A run that touches N upstream pages / windows / items produces **one** entry in `dolt_log()`, not N. The commit message is `download <name>: <stats>`.
@@ -303,6 +289,8 @@ Why the discipline matters: the alternative is per-column conflict policies (COA
 Every download is shaped the same at the bottom: for some entity table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with N rows on `<t>_bookkeeping` for `(id, fetched_at, attempt_count, last_error)`, and (if the source produced blobs) M rows on the CAS of `(blake3, byte_len, content_type, bytes)`. Doltlite charges a prolly-tree manifest mutation per `BEGIN … COMMIT`, so the right shape is **one entity-pool tx + one CAS-pool tx per batch**, each containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE` statements. Email's mbox downloader proved this in practice: 25k emails dropped from many minutes to ~75 seconds at FLUSH_BATCH=2000.
 
 The principle: **every provider's download uses shared chunked-multi-row helpers for the entity-table UPSERT, the `<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs are an anti-pattern outside ad-hoc maintenance code.
+
+Because those statements are built at runtime, they go through `sqlx::AssertSqlSafe` — see [`AGENTS.md`](/AGENTS.md) §"Dynamic SQL needs `AssertSqlSafe` and a reason" for what that assertion means and when it is not the right tool.
 
 ### The shared pieces, all in `datalib_etl`:
 
@@ -381,26 +369,9 @@ The longest write-up of the reasoning, including what is deliberately
 *not* recorded and why, is `providers/slack/DOWNLOAD.md` § "Config
 changes the cursor would otherwise swallow".
 
-### The same problem on the render side
-
-Render has its own cursor (`_render_cursor.json`, see
-[`render_cursor`](../../datalib/backend/etl/src/render_cursor.rs)) and the
-same failure mode: a render param only reaches documents that the
-upstream diff happens to surface, so widening `only_render_labels`
-renders nothing new and changing `period` re-buckets only the chats that
-moved.
-
-The cursor therefore records the render params too, and
-`read_for_params` drops it when they differ. Render invalidates
-*wholesale* where download reacts proportionally — it's local work over
-an on-disk store, so there's no rate limit to ration and the simpler
-rule is easier to trust.
-
-**Known gap:** nothing prunes `rendered_md/`. A re-render under new
-params writes the new documents but leaves any that changed identity
-(notably a different `period` bucketing) beside them as orphans, and
-they stay in the grid index. Fixing that needs a pruning pass that knows
-the full expected document set.
+Render has the same failure mode and resolves it differently —
+wholesale invalidation rather than a proportional reaction. See
+[`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#the-same-problem-on-the-render-side).
 
 ## Auth and credentials
 Two patterns:

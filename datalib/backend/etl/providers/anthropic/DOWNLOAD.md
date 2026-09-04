@@ -15,7 +15,7 @@ the existing translator consumes either source indistinguishably:
 The bulk-export format is deprecated upstream, but the on-disk shape
 is stable and the parser layer is already written against it. The
 downloader fetches from `https://claude.ai/api` and runs each
-response through [`normalize::normalize_to_export_shape`](src/extract/normalize.rs)
+response through [`normalize::normalize_to_export_shape`](src/download/normalize.rs)
 to coerce it into the export format:
 
   * Inserts a synthetic `account: { uuid }` (live API omits this).

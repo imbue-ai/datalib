@@ -17,8 +17,7 @@
 //! Scope: decrypt-and-verify only. Empty AAD (WhatsApp doesn't use AAD
 //! for crypt15). The full encrypt direction isn't needed by ingest.
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
+use aes::cipher::{BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::Aes256;
 use ghash::universal_hash::UniversalHash;
 use ghash::GHash;
@@ -51,7 +50,7 @@ pub fn decrypt_crypt15(
     }
     let (ciphertext, tag_in) = ciphertext_with_tag.split_at(ciphertext_with_tag.len() - 16);
 
-    let aes = Aes256::new(GenericArray::from_slice(key));
+    let aes = Aes256::new(key.into());
 
     // GHASH subkey H = E_K(0^128).
     let h = compute_h(&aes);
@@ -67,26 +66,23 @@ pub fn decrypt_crypt15(
     let mut counter_init = j0;
     incr_u32_be_lsb(&mut counter_init);
     let mut plaintext = ciphertext.to_vec();
-    let mut ctr = AesCtr::new(
-        GenericArray::from_slice(key),
-        GenericArray::from_slice(&counter_init),
-    );
+    let mut ctr = AesCtr::new(key.into(), (&counter_init).into());
     ctr.apply_keystream(&mut plaintext);
 
     // GCM auth tag:
     //   S = GHASH(H, AAD || 0^pad_a || C || 0^pad_c || len(AAD)_64_BE || len(C)_64_BE)
     //   T = S XOR E_K(J0)
-    let mut ghash = GHash::new(GenericArray::from_slice(&h));
+    let mut ghash = GHash::new((&h).into());
     update_padded(&mut ghash, aad);
     update_padded(&mut ghash, ciphertext);
     let mut len_block = [0u8; 16];
     len_block[..8].copy_from_slice(&((aad.len() as u64) * 8).to_be_bytes());
     len_block[8..].copy_from_slice(&((ciphertext.len() as u64) * 8).to_be_bytes());
-    ghash.update(&[GenericArray::clone_from_slice(&len_block)]);
+    ghash.update(&[len_block.into()]);
     let s = ghash.finalize();
 
     let mut tag_block = j0;
-    aes.encrypt_block(GenericArray::from_mut_slice(&mut tag_block));
+    aes.encrypt_block((&mut tag_block).into());
     let mut tag_calc = [0u8; 16];
     for i in 0..16 {
         tag_calc[i] = s[i] ^ tag_block[i];
@@ -104,7 +100,7 @@ pub fn decrypt_crypt15(
 /// instead of recomputing.
 pub(crate) fn compute_h(aes: &Aes256) -> [u8; 16] {
     let mut h = [0u8; 16];
-    aes.encrypt_block(GenericArray::from_mut_slice(&mut h));
+    aes.encrypt_block((&mut h).into());
     h
 }
 
@@ -112,13 +108,13 @@ pub(crate) fn compute_h(aes: &Aes256) -> [u8; 16] {
 /// `J0 = GHASH(H, IV || 0^s || len(IV)_bits_64_BE)` where `s` zero-pads
 /// `IV` to a 128-bit boundary and an extra 64 bits.
 pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
-    let mut ghash = GHash::new(GenericArray::from_slice(h));
+    let mut ghash = GHash::new(h.into());
     // Pad IV to a multiple of 16 bytes.
     update_padded(&mut ghash, iv);
     // Final block: 64 zero bits followed by len(IV) in bits as 64-bit big-endian.
     let mut tail = [0u8; 16];
     tail[8..].copy_from_slice(&((iv.len() as u64) * 8).to_be_bytes());
-    ghash.update(&[GenericArray::clone_from_slice(&tail)]);
+    ghash.update(&[tail.into()]);
     let out = ghash.finalize();
     let mut j0 = [0u8; 16];
     j0.copy_from_slice(&out);
@@ -133,12 +129,12 @@ fn update_padded(ghash: &mut GHash, data: &[u8]) {
     // clippy asks for it over `chunks_exact` with a constant size.
     let (blocks, rem) = data.as_chunks::<16>();
     for chunk in blocks {
-        ghash.update(&[GenericArray::clone_from_slice(chunk)]);
+        ghash.update(&[(*chunk).into()]);
     }
     if !rem.is_empty() {
         let mut last = [0u8; 16];
         last[..rem.len()].copy_from_slice(rem);
-        ghash.update(&[GenericArray::clone_from_slice(&last)]);
+        ghash.update(&[last.into()]);
     }
 }
 
@@ -154,12 +150,20 @@ fn incr_u32_be_lsb(block: &mut [u8; 16]) {
 mod tests {
     use super::*;
 
-    /// NIST SP 800-38D Appendix B, Test Case 16 (AES-256-GCM with 16-byte IV
-    /// — non-default nonce size to exercise the GHASH-based J0 derivation).
+    /// NIST SP 800-38D Appendix B, **Test Case 18** — AES-256-GCM with a
+    /// 60-byte IV, which is what exercises the GHASH-based J0 derivation
+    /// this module exists for.
+    ///
+    /// This was labelled "Test Case 16" until #258. It never was: TC16 is
+    /// the 12-byte-IV vector, which takes the `len(IV) == 96` shortcut and
+    /// would not touch `compute_j0` at all. The vector below (and the
+    /// assertions on it) were always TC18's; only the citation was wrong,
+    /// and it mattered because looking up TC16 to check this code hands you
+    /// a vector that cannot match it.
     #[test]
-    fn nist_test_case_16() {
+    fn nist_test_case_18() {
         // Key, IV, P, A, C, T from the official "GCM Test Vectors" PDF,
-        // Test Case 16 (the 256-bit-key, non-96-bit IV one).
+        // Test Case 18 (256-bit key, 60-byte IV).
         let key =
             hex_to_bytes::<32>("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308");
         let iv = hex_to_bytes::<60>(
@@ -182,36 +186,32 @@ mod tests {
         let mut ct_with_tag = expected_ct.clone();
         ct_with_tag.extend_from_slice(&expected_tag);
 
-        // The IV in this test vector is 60 bytes, not 16 — exercises the
-        // non-12-byte path. We can't pass it as `&[u8; 16]`, so we test
-        // compute_j0 + cipher composition directly.
-        let aes = Aes256::new(GenericArray::from_slice(&key));
+        // 60 bytes, so we can't pass it as `&[u8; 16]` to `decrypt_crypt15`;
+        // test `compute_j0` + the cipher composition directly instead.
+        let aes = Aes256::new((&key).into());
         let mut h = [0u8; 16];
-        aes.encrypt_block(GenericArray::from_mut_slice(&mut h));
+        aes.encrypt_block((&mut h).into());
         let j0 = compute_j0(&h, &iv);
 
         let mut counter_init = j0;
         incr_u32_be_lsb(&mut counter_init);
         let mut pt = expected_ct.clone();
-        let mut ctr = AesCtr::new(
-            GenericArray::from_slice(&key),
-            GenericArray::from_slice(&counter_init),
-        );
+        let mut ctr = AesCtr::new((&key).into(), (&counter_init).into());
         ctr.apply_keystream(&mut pt);
         assert_eq!(pt, plaintext, "plaintext mismatch (J0 derivation wrong)");
 
         // Verify tag too.
-        let mut g = GHash::new(GenericArray::from_slice(&h));
+        let mut g = GHash::new((&h).into());
         update_padded(&mut g, &aad);
         update_padded(&mut g, &expected_ct);
         let mut len_block = [0u8; 16];
         len_block[..8].copy_from_slice(&((aad.len() as u64) * 8).to_be_bytes());
         len_block[8..].copy_from_slice(&((expected_ct.len() as u64) * 8).to_be_bytes());
-        g.update(&[GenericArray::clone_from_slice(&len_block)]);
+        g.update(&[len_block.into()]);
         let s = g.finalize();
 
         let mut tag_block = j0;
-        aes.encrypt_block(GenericArray::from_mut_slice(&mut tag_block));
+        aes.encrypt_block((&mut tag_block).into());
         let mut tag_calc = [0u8; 16];
         for i in 0..16 {
             tag_calc[i] = s[i] ^ tag_block[i];
@@ -229,29 +229,26 @@ mod tests {
         // Hand-encrypt: AES-CTR with j0+1 as initial counter, then compute
         // the tag the same way decrypt does.
         let plaintext = b"hello whatsapp crypt15 backup test vector".to_vec();
-        let aes = Aes256::new(GenericArray::from_slice(&key));
+        let aes = Aes256::new((&key).into());
         let mut h = [0u8; 16];
-        aes.encrypt_block(GenericArray::from_mut_slice(&mut h));
+        aes.encrypt_block((&mut h).into());
         let j0 = compute_j0(&h, &iv);
 
         let mut counter_init = j0;
         incr_u32_be_lsb(&mut counter_init);
         let mut ct = plaintext.clone();
-        let mut ctr = AesCtr::new(
-            GenericArray::from_slice(&key),
-            GenericArray::from_slice(&counter_init),
-        );
+        let mut ctr = AesCtr::new((&key).into(), (&counter_init).into());
         ctr.apply_keystream(&mut ct);
 
-        let mut g = GHash::new(GenericArray::from_slice(&h));
+        let mut g = GHash::new((&h).into());
         update_padded(&mut g, &ct);
         let mut len_block = [0u8; 16];
         len_block[8..].copy_from_slice(&((ct.len() as u64) * 8).to_be_bytes());
-        g.update(&[GenericArray::clone_from_slice(&len_block)]);
+        g.update(&[len_block.into()]);
         let s = g.finalize();
 
         let mut tag_block = j0;
-        aes.encrypt_block(GenericArray::from_mut_slice(&mut tag_block));
+        aes.encrypt_block((&mut tag_block).into());
         let mut tag = [0u8; 16];
         for i in 0..16 {
             tag[i] = s[i] ^ tag_block[i];
@@ -272,26 +269,23 @@ mod tests {
 
         // Encrypt with `key`.
         let pt = b"plaintext".to_vec();
-        let aes = Aes256::new(GenericArray::from_slice(&key));
+        let aes = Aes256::new((&key).into());
         let mut h = [0u8; 16];
-        aes.encrypt_block(GenericArray::from_mut_slice(&mut h));
+        aes.encrypt_block((&mut h).into());
         let j0 = compute_j0(&h, &iv);
         let mut counter_init = j0;
         incr_u32_be_lsb(&mut counter_init);
         let mut ct = pt.clone();
-        let mut ctr = AesCtr::new(
-            GenericArray::from_slice(&key),
-            GenericArray::from_slice(&counter_init),
-        );
+        let mut ctr = AesCtr::new((&key).into(), (&counter_init).into());
         ctr.apply_keystream(&mut ct);
-        let mut g = GHash::new(GenericArray::from_slice(&h));
+        let mut g = GHash::new((&h).into());
         update_padded(&mut g, &ct);
         let mut len_block = [0u8; 16];
         len_block[8..].copy_from_slice(&((ct.len() as u64) * 8).to_be_bytes());
-        g.update(&[GenericArray::clone_from_slice(&len_block)]);
+        g.update(&[len_block.into()]);
         let s = g.finalize();
         let mut tag_block = j0;
-        aes.encrypt_block(GenericArray::from_mut_slice(&mut tag_block));
+        aes.encrypt_block((&mut tag_block).into());
         let mut tag = [0u8; 16];
         for i in 0..16 {
             tag[i] = s[i] ^ tag_block[i];

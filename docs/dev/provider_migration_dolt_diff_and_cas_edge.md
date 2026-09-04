@@ -177,7 +177,7 @@ Examples landed: `chatgpt_attachments`, `anthropic_attachments`,
 `slack_attachments`, `chat_item_attachments`.
 
 In both shapes the renderer reaches the bytes via the per-bucket
-[`BlobBundle`](#blobbundle), which `parse_doltlite_async` loads once
+[`BlobBundle`](/datalib/backend/etl/src/blob_cas.rs), which `parse_doltlite_async` loads once
 per bucket via a small projection SQL against the per-provider edge
 column/table.
 

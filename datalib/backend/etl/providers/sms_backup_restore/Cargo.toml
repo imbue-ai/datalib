@@ -25,7 +25,7 @@ uuid = { workspace = true, features = ["v5"] }
 # are inlined as base64 in the `data` attribute, decoded via `base64`.
 quick-xml = "0.36"
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = { workspace = true }
 tracing = "0.1"
 
 [dev-dependencies]

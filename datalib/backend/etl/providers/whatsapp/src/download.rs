@@ -192,7 +192,9 @@ async fn truncate_wa_tables(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await.context("begin truncate tx")?;
     for table in DATA_TABLES {
         let sql = format!("DELETE FROM {table}");
-        sqlx::query(&sql)
+        // Audited: `table` iterates a `&'static str` const array of our own
+        // table names; no runtime data reaches the statement.
+        sqlx::query(sqlx::AssertSqlSafe(sql))
             .execute(&mut *tx)
             .await
             .with_context(|| format!("truncate {table}"))?;
@@ -880,7 +882,11 @@ fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         let mut h = Sha256::new();
         h.update(&bytes);
-        let sha = format!("{:x}", h.finalize());
+        let sha = h
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         let meta = entry.metadata().ok();
         let size_bytes = bytes.len() as u64;
         let mtime_unix = meta

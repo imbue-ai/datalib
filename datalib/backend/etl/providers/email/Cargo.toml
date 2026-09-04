@@ -36,7 +36,7 @@ uuid = { workspace = true, features = ["v5"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
 sqlx = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
 # HTML → Markdown for rendering JMAP `text/html` email bodies.
 # turndown.js-port; html5ever DOM walk; GFM tables; script/style/head
 # stripped via the builder. We pre-rewrite `cid:<id>` srcs to

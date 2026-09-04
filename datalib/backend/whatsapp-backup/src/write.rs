@@ -12,8 +12,7 @@
 //! output across runs. Caller supplies the IV; the writer never
 //! generates randomness.
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
+use aes::cipher::{BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::Aes256;
 use ghash::universal_hash::UniversalHash;
 use ghash::GHash;
@@ -54,39 +53,36 @@ pub fn encrypt_to_crypt15(
     // 3. AES-256-GCM encrypt with the NIST-J0 derivation matching
     //    decrypt. Reuses `compute_h` / `compute_j0` from crypto.rs so
     //    encrypt and decrypt stay in lockstep.
-    let aes = Aes256::new(GenericArray::from_slice(&aes_key));
+    let aes = Aes256::new((&aes_key).into());
     let h = compute_h(&aes);
     let j0 = compute_j0(&h, iv);
 
     let mut ciphertext = deflated.clone();
     let mut counter_init = j0;
     incr_u32_be_lsb(&mut counter_init);
-    let mut ctr = ctr::Ctr32BE::<Aes256>::new(
-        GenericArray::from_slice(&aes_key),
-        GenericArray::from_slice(&counter_init),
-    );
+    let mut ctr = ctr::Ctr32BE::<Aes256>::new((&aes_key).into(), (&counter_init).into());
     ctr.apply_keystream(&mut ciphertext);
 
     // 4. Compute GCM auth tag with empty AAD.
-    let mut g = GHash::new(GenericArray::from_slice(&h));
+    let mut g = GHash::new((&h).into());
     // See the note in crypto.rs::update_padded — same split, same lint.
     let (blocks, tail) = ciphertext.as_chunks::<16>();
     for chunk in blocks {
-        g.update(&[GenericArray::clone_from_slice(chunk)]);
+        g.update(&[(*chunk).into()]);
     }
     if !tail.is_empty() {
         let mut last = [0u8; 16];
         last[..tail.len()].copy_from_slice(tail);
-        g.update(&[GenericArray::clone_from_slice(&last)]);
+        g.update(&[last.into()]);
     }
     let mut len_block = [0u8; 16];
     // AAD bit length = 0; ciphertext bit length follows.
     len_block[8..].copy_from_slice(&((ciphertext.len() as u64) * 8).to_be_bytes());
-    g.update(&[GenericArray::clone_from_slice(&len_block)]);
+    g.update(&[len_block.into()]);
     let s = g.finalize();
 
     let mut tag_block = j0;
-    aes.encrypt_block(GenericArray::from_mut_slice(&mut tag_block));
+    aes.encrypt_block((&mut tag_block).into());
     let mut tag = [0u8; 16];
     for i in 0..16 {
         tag[i] = s[i] ^ tag_block[i];

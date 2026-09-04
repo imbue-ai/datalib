@@ -164,7 +164,8 @@ async fn open_pool(path: &std::path::Path) -> Result<SqlitePool> {
         .await
         .context("connect_with")?;
     for stmt in SHARED_DDL {
-        sqlx::query(stmt)
+        // Loadtest harness; `SHARED_DDL` is our own const DDL array.
+        sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
             .await
             .with_context(|| format!("DDL: {}", &stmt[..40.min(stmt.len())]))?;

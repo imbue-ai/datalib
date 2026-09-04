@@ -9,16 +9,22 @@
 #   <stanza>/rendered_md/...           Conversation markdown trees (from qmd.tar).
 #   unified_index/grid/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   unified_index/qmd/index.sqlite            QMD index (from qmd-index.tar).
-#   unified_index/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
+#   unified_index/qmd_models/          the three qmd GGUFs, linked in from
+#                                      bazel inputs (`:qmd_models`).
+#   unified_index/qmd/models -> ../qmd_models
 #   config.toml                        { data_root } plus the
 #                                      `unified_index` applet the grid
 #                                      is served by.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
-# Requires python3 on PATH. The qmd model cache at ~/.cache/qmd/models
-# must already contain the required GGUF files — this script refuses to
-# trigger a download (silent multi-minute stall).
+# Requires python3 on PATH. Nothing about the host's home directory: the
+# qmd GGUFs arrive as bazel inputs, so this runs on a machine that has
+# never run qmd. It used to read `~/.cache/qmd/models` (or
+# `CLAUDE_MIRROR_HOST_HOME`, which CI set because GitHub forces
+# `HOME=/github/home` while the image bakes under `/root`) and refuse to
+# run when that cache was empty, rather than let a silent multi-GB
+# download masquerade as a hang.
 
 set -eo pipefail
 

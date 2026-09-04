@@ -154,7 +154,10 @@ impl QmdIndexReader {
                   WHERE d.collection = ? AND d.active = 1 AND d.hash IN ({placeholders}) \
                   GROUP BY d.hash"
             );
-            let mut q = sqlx::query(&sql).bind(&self.collection);
+            // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: the only
+            // interpolation is `placeholders`, a `?,?,?` run built from
+            // `chunk.len()`. Collection and hashes are bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&self.collection);
             for h in chunk {
                 q = q.bind(h);
             }
@@ -213,7 +216,10 @@ pub fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     let mut h = Sha256::new();
     h.update(&bytes);
-    Ok(format!("{:x}", h.finalize()))
+    Ok(h.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>())
 }
 
 /// One markdown's index state, as reported to a caller.

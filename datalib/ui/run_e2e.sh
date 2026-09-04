@@ -44,11 +44,12 @@ trap cleanup EXIT
 # `webkit` project so the AG-Grid specs also run in the engine the Tauri
 # desktop app uses (WKWebView).
 #
-# Overridable because the Linux CI image bakes Chromium *and its OS
-# libraries* but not WebKit's — see `.devcontainer/Dockerfile`. There,
-# `install webkit` would download ~100 MB of browser that cannot launch
-# for want of shared libraries, so a chromium-only run says so up front
-# rather than paying for a download it will not use.
+# Overridable, but nothing overrides it today: `.devcontainer/Dockerfile`
+# bakes BOTH engines with `--with-deps`, so the Linux image can launch
+# either one. (It used to bake Chromium only, which is what this knob was
+# added for — WebKit arrived in d5be7eb8.) Kept for an environment that
+# can genuinely only run one engine, where `install webkit` would
+# otherwise fetch ~100 MB of browser that cannot start.
 E2E_BROWSERS="${E2E_BROWSERS:-chromium webkit}"
 
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"

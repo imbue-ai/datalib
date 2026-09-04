@@ -78,13 +78,13 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
 
     for (_t, ddl) in GRID_DDL {
-        sqlx::query(ddl)
+        sqlx::query(*ddl)
             .execute(repo.index_pool())
             .await
             .expect("create grid_rows");
     }
     for (_t, ddl) in MARKDOWNS_DDL {
-        sqlx::query(ddl)
+        sqlx::query(*ddl)
             .execute(repo.index_pool())
             .await
             .expect("create markdowns");

@@ -165,6 +165,31 @@ build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_timeout=600
 build:buildbuddy --remote_upload_local_results=true
 
+# Fetch repository downloads through BuildBuddy too, not just action
+# results. Bazel asks BuildBuddy for the URL; BuildBuddy serves it from
+# its cache if it has it, otherwise fetches it once from the origin and
+# keeps it. So `http_archive` / `http_file` content — the rust
+# toolchains, the doltlite amalgamation, the qmd GGUFs — comes from the
+# same host as everything else instead of from a third-party server per
+# machine, per CI container.
+#
+# The qmd models are why this is here. They are ~2.26 GB of
+# `@qmd_model_*` (MODULE.bazel), a CI container starts with an empty
+# repository cache, and HuggingFace answered one of those cold fetches
+# with `429 Too Many Requests` on 2026-09-03 and failed the build.
+#
+# Measured, not assumed: fetching `@qmd_model_reranker//file` cold with
+# this flag uploaded 639,174,366 bytes to BuildBuddy on the first run
+# (origin fetch, then stored) and 20,814 bytes on the second, with the
+# same 639,153,184 downloaded — i.e. the second fetch came from
+# BuildBuddy, not HuggingFace.
+#
+# `_local_fallback=true` because the default is `false`, which turns a
+# BuildBuddy outage into a failed fetch rather than a slow one. With it,
+# bazel just downloads from the origin URL itself.
+build:buildbuddy --experimental_remote_downloader=grpcs://imbue.buildbuddy.io
+build:buildbuddy --experimental_remote_downloader_local_fallback=true
+
 # Fully-static musl release builds. Selects the musl platform for the
 # TARGET configuration only: build scripts, proc macros, and genrule
 # tools keep running under the host (gnu/darwin) toolchains, so these

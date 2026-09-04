@@ -74,6 +74,65 @@ cache self-heals. That network reach is what the target's
 `requires-network` tag is for. Making the browsers real Bazel inputs is a
 separate project.
 
+### It IS a CI merge gate — and what that cost
+
+`.github/workflows/test.yml` runs a bare `bazel test ... //...`, so this
+suite gates merges like everything else. It spent a long time excluded
+behind a FIXME, and the story of why is worth keeping, because the note
+went stale in the direction that bites: it said the last thing missing
+was a published image carrying `rsync` and both browsers, and **that had
+been true since `v0.30.1`** (WebKit landed five days after `v0.29.0`,
+and `v0.30.0`'s release run failed, so `v0.30.1` is the first published
+image carrying it). Anyone acting on it would have dropped the
+exclusion and gotten a red gate, because the actual blockers were two
+things the note never mentioned.
+
+* **The qmd GGUFs are not in the image.** The published devcontainer is
+  built on the `-slim` prod image (`QMD_PREFETCH_MODELS=false`), which
+  creates `/root/.cache/qmd/models` empty, and
+  `materialize_tng_root.sh` used to require that directory to hold them
+  — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
+  could not masquerade as a hang. CI filled it with a `qmd pull` behind
+  an `actions/cache`. Both halves are gone now: the three GGUFs are
+  pinned in `MODULE.bazel` as `@qmd_model_*` and reach the materializer
+  (and the fixture's index genrule) as bazel inputs, and `.bazelrc`'s
+  `buildbuddy` config fetches them through BuildBuddy's remote
+  downloader rather than from HuggingFace.
+* **`HOME=/github/home`.** GitHub forces that for container steps, while
+  the image bakes its caches under `/root`, so every lookup landed in an
+  empty directory. One `--test_env` flag still redirects the lookup that
+  matters: `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`
+  (without it, `run_e2e.sh`'s `playwright install` re-downloads ~400 MB
+  of chromium + webkit every run instead of using the baked cache). The
+  other one, `CLAUDE_MIRROR_HOST_HOME=/root`, went away with the model
+  cache — nothing reads that variable any more.
+
+The cost is honest and worth naming: the suite is `no-sandbox` +
+`requires-network` and takes ~4 minutes, so unlike the rest of a warm
+`main` run it is real work on the critical path rather than a cache
+replay.
+
+It buys back more than it costs. CI had never run this suite, which is
+easy to miss precisely because a local `bazelisk test //...` does — so
+for its whole life the only thing standing between a UI regression and
+`main` was whoever remembered to run it. [#252](https://github.com/imbue-ai/datalib/pull/252)
+is the worked example: AG Grid 36 restructured the row DOM and 39 tests
+across 18 spec files failed *while the grid rendered perfectly*, and a
+Vite 8 `outDir` change let the `dist` action succeed with an empty
+declared output, which 60 e2e tests reported as "UI bundle not embedded
+in this binary". CI was green through both.
+
+### It needs a `long` timeout, and that is not slack
+
+The target sets `timeout = "long"` (900s). Bazel's default for a test
+with no `size` or `timeout` is `medium` — **300s** — and this suite does
+not fit in that: 66 tests across two engines behind nine backend
+processes, plus a qmd cold model load that grew to 1.2-1.5 min in qmd
+2.8.3. Measured wall clock is ~70s warm and 200-270s on a loaded machine,
+so the default budget made `bazelisk test //...` flaky in a way that
+pointed at nothing. Bazel enforces the ceiling but does not wait for it,
+so the larger budget costs nothing.
+
 ## Bazel-fetched test data (`lightroom`)
 
 `//datalib/backend/etl/providers/lightroom:real_catalogs` ingests four real

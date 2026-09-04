@@ -190,58 +190,107 @@ jobs:
       - name: bazel test //...
         run: |
           libdir="${{ steps.env.outputs.libclang-path }}"
-          # FIXME(e2e): `-//datalib/ui:e2e_test` excludes the Playwright
-          # e2e suite from the CI gate. It needs three things from the
-          # image: `rsync`, a Chromium browser cache, and a WebKit one —
-          # the suite's `webkit` project re-runs the grid specs in the
-          # engine the desktop app's WKWebView matches, and a browser
-          # without its apt-installed shared libraries cannot launch.
+          # `//datalib/ui:e2e_test` (Playwright) IS in this gate. It was
+          # excluded for a long time behind a FIXME whose stated
+          # precondition — a published image carrying `rsync` and both
+          # browsers — has been satisfied since `v0.30.1`, the first
+          # release whose devcontainer-publish actually ran the
+          # `playwright install --with-deps chromium webkit` layer
+          # (WebKit landed in d5be7eb8, five days after v0.29.0, and
+          # v0.30.0's release run failed). What actually
+          # kept it out was two things that note never mentioned, both
+          # now handled above and below:
           #
-          # All three are now in `.devcontainer/Dockerfile`. What is left
-          # is a *published* image built from it, which happens on the
-          # next `v*` tag: `:latest` is whatever the last release built,
-          # so dropping this pattern earlier would point CI at an image
-          # with no WebKit. Once that image exists, DROP the negative
-          # pattern to re-enable the suite as a merge gate.
+          #   1. The qmd GGUFs are absent from the `-slim`-based image,
+          #      and the suite refused to run without them. They are
+          #      bazel inputs now (`@qmd_model_*`), so the suite brings
+          #      its own.
+          #   2. `HOME=/github/home`, which GitHub forces for container
+          #      steps, points every cache lookup away from the `/root`
+          #      the image bakes into. That still matters for Playwright's
+          #      browser cache — the `--test_env` below redirects it.
           #
-          # (Local `bazel test //...` is unaffected and still runs it,
-          # both engines.) When the pattern comes off, the suite's
-          # Playwright report — video and trace per test — rides along
-          # as this job's `outputs.zip`, with no second invocation
-          # needed; see datalib/ui/tests/e2e/README-artifacts.md. The
-          # `--` keeps the leading `-` from being read as a flag.
+          # WebKit's arrival was verified in v0.30.1's build log rather
+          # than inferred from the Dockerfile, since layer caching could
+          # have skipped the step:
           #
-          # qmd models: nothing to arrange here any more. The
-          # `//tests/fixtures:ingested_tng_qmd` genrule takes its
-          # embedding GGUF as a bazel input (`@qmd_model_embeddinggemma`
-          # in MODULE.bazel) and stages it into the sandbox itself, so it
-          # neither reads a host cache nor downloads anything.
+          #   #12 [stage-0 4/10] RUN npx -y "playwright@1.62.1" install --with-deps chromium webkit
+          #   #12 62.88 WebKit 26.5 (playwright webkit v2336) downloaded to /root/.cache/ms-playwright/webkit-2336
           #
-          # That matters more here than on a laptop. The devcontainer
-          # image CI runs in is built on the `-slim` prod variant
-          # (release.yml passes `--build-arg PROD_IMAGE_TAG=${version}-slim`),
-          # which omits the models — `/root/.cache/qmd/models` exists and
-          # is EMPTY, and the container is fresh every job. So every run
-          # that missed the remote cache used to re-download the model;
-          # on 2026-09-03 one of those drew a 429 from HuggingFace and
-          # failed the build outright.
+          # Why bother gating on this at all, given it costs real
+          # wall-clock: CI had never run this suite, which is easy to
+          # miss because a local `bazel test //...` does. #252 is the
+          # worked example — AG Grid 36 restructured the row DOM and 39
+          # tests across 18 spec files failed while the grid rendered
+          # perfectly, and a Vite 8 `outDir` change made the `dist`
+          # action succeed with an empty declared output, which 60 e2e
+          # tests reported as "UI bundle not embedded in this binary".
+          # CI was green through both. They were caught only because
+          # someone happened to run the suite locally.
           #
-          # This is what removed two flags that used to be on the line
-          # below: `--sandbox_add_mount_pair=/root/.cache/qmd/models` and
-          # `--action_env=CLAUDE_MIRROR_HOST_HOME=/root`, which together
-          # were what aimed the genrule at the image's (empty) cache,
-          # GitHub having forced HOME=/github/home for container steps.
+          # The suite's Playwright report — video and trace per test —
+          # rides along as this job's `outputs.zip` with no second
+          # invocation needed; see
+          # datalib/ui/tests/e2e/README-artifacts.md.
           #
-          # The e2e suite, if it comes back into this job (see the
-          # FIXME above), inherits the same property:
-          # `tests/fixtures/materialize_tng_root.sh` links all three
-          # GGUFs into the data root from bazel inputs rather than from
-          # `$HOME/.cache/qmd/models`, which on this runner is empty.
+          # It is `no-sandbox` + `requires-network` and takes ~4 min, so
+          # it lands on the critical path rather than being a cache
+          # replay like the rest of a warm `main` run. That is the price
+          # of gating UI regressions; see `docs/dev/testing.md`.
+          #
+          # `--test_env=PLAYWRIGHT_BROWSERS_PATH=...` — `run_e2e.sh` runs
+          # `playwright install` before the suite. Left pointing at
+          # `/github/home`, that is a ~400 MB re-download of chromium +
+          # webkit on EVERY run; pointed at the image's baked cache it is
+          # the no-op it was designed to be.
+          #
+          # Do NOT try to replace it with `--test_env=HOME=/root`. That
+          # looks equivalent and is not: the target declares
+          # `env_inherit = ["PATH", "HOME", ...]`, and env_inherit WINS
+          # over `--test_env` for the same name, so the flag is silently
+          # ignored and HOME stays `/github/home`. Measured, not assumed
+          # — a local run with `--test_env=HOME=/nonexistent` passed,
+          # which it could only do by ignoring the flag. Redirecting the
+          # specific lookup is the mechanism that actually works.
+          #
+          # qmd models: nothing to arrange here any more, and the
+          # steps that used to arrange it are gone. The GGUFs are pinned
+          # in MODULE.bazel (`@qmd_model_*`) and reach their two
+          # consumers as bazel inputs: the
+          # `//tests/fixtures:ingested_tng_qmd` genrule (embedding model
+          # only) and `tests/fixtures/materialize_tng_root.sh`, which the
+          # e2e suite runs (all three). Neither reads a host cache, so
+          # neither cares that the devcontainer image CI runs in is built
+          # on the `-slim` prod variant (release.yml passes
+          # `--build-arg PROD_IMAGE_TAG=${version}-slim`) and carries an
+          # EMPTY `/root/.cache/qmd/models`.
+          #
+          # What this replaced: a `Cache the qmd models` + `Populate the
+          # qmd models` pair of steps that filled that directory from the
+          # GitHub Actions cache, plus a `qmd pull` on a cache miss. They
+          # existed because the two consumers downloaded models
+          # themselves, and on 2026-09-03 one of those downloads drew a
+          # 429 from HuggingFace and failed a merge-gating build.
+          #
+          # The fetch has to happen somewhere, and a fresh container has
+          # an empty repository cache — so `.bazelrc`'s `buildbuddy`
+          # config routes repository downloads through BuildBuddy's
+          # remote downloader. The models come from the same host as the
+          # action cache, and HuggingFace is not in the loop at all.
+          #
+          # Three flags went with those steps:
+          # `--sandbox_add_mount_pair=/root/.cache/qmd/models`,
+          # `--action_env=CLAUDE_MIRROR_HOST_HOME=/root` and
+          # `--test_env=CLAUDE_MIRROR_HOST_HOME=/root` — between them
+          # what aimed the genrule and the e2e materializer at the
+          # image's cache, GitHub having forced HOME=/github/home for
+          # container steps. Nothing reads that variable now.
           bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
             --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
-            -- //... -//datalib/ui:e2e_test
+            --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+            //...
 
   # PR-time gate for the fully-static musl release leg. The musl dist
   # build only otherwise runs at tag time (release.yml), and this repo

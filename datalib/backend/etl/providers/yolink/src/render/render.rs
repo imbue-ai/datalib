@@ -295,7 +295,10 @@ fn compute_fingerprint(parsed: &ParsedYolink) -> String {
             h.update(v.to_be_bytes());
         }
     }
-    format!("{:x}", h.finalize())
+    h.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
 }
 
 // ---------------------------------------------------------------- markdown

@@ -230,7 +230,9 @@ async fn vacuum_into(source: &Path, dest: &Path) -> Result<()> {
     // not portable across the versions we care about; the path is ours
     // (a tempdir), so escape it for a SQL string literal instead.
     let literal = dest.display().to_string().replace('\'', "''");
-    let r = sqlx::query(&format!("VACUUM INTO '{literal}'"))
+    // Audited: `literal` is our own tempdir destination path with `'` doubled
+    // for a SQL string literal, as the comment above explains.
+    let r = sqlx::query(sqlx::AssertSqlSafe(format!("VACUUM INTO '{literal}'")))
         .execute(&mut conn)
         .await
         .with_context(|| format!("VACUUM INTO {}", dest.display()));
@@ -312,10 +314,12 @@ pub async fn run(
     let mut conn = pool.acquire().await.context("acquire mirror connection")?;
 
     let literal = src_path.display().to_string().replace('\'', "''");
-    sqlx::query(&format!(
+    // Audited: `literal` is the source path, `'`-escaped; the schema alias is
+    // a const through `quote_ident`.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ATTACH DATABASE '{literal}' AS {}",
         plan::quote_ident(SRC_SCHEMA)
-    ))
+    )))
     .execute(&mut *conn)
     .await
     .with_context(|| format!("attach source {}", src_path.display()))?;
@@ -324,10 +328,10 @@ pub async fn run(
 
     // Detach even on failure, so a retry on the same pooled connection
     // doesn't trip over a stale alias.
-    let _ = sqlx::query(&format!(
+    let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
         "DETACH DATABASE {}",
         plan::quote_ident(SRC_SCHEMA)
-    ))
+    )))
     .execute(&mut *conn)
     .await;
     drop(conn);
@@ -522,12 +526,19 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .begin()
         .await
         .with_context(|| format!("begin rebuild tx for {}", spec.name))?;
-    sqlx::query(&spec.create_ddl())
+    // Audited: every fragment `create_ddl()` / `copy_sql()` take from the
+    // source catalog — table names, column names, and the columns'
+    // declared types — goes through `plan::quote_ident`, which
+    // double-quotes and escapes embedded quotes. Nothing else from the
+    // catalog reaches these statements: column DEFAULTs, the one other
+    // piece of SQL text `table_xinfo` reports, are not mirrored at all
+    // (see the `plan` module docs).
+    sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
         .execute(&mut *tx)
         .await
         .with_context(|| format!("create mirror table {}", spec.name))?;
 
-    sqlx::query(&spec.copy_sql(SRC_SCHEMA))
+    sqlx::query(sqlx::AssertSqlSafe(spec.copy_sql(SRC_SCHEMA)))
         .execute(&mut *tx)
         .await
         .with_context(|| format!("copy rows into {}", spec.name))?;
@@ -535,10 +546,10 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     // Count from the table rather than trusting `rows_affected` on an
     // `INSERT … SELECT`: it is the number the summary reports and the
     // tests assert, so it should be read back from what actually landed.
-    let n: i64 = sqlx::query(&format!(
+    let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(*) AS n FROM main.{}",
         plan::quote_ident(&spec.name)
-    ))
+    )))
     .fetch_one(&mut *tx)
     .await
     .with_context(|| format!("count rows in {}", spec.name))?
@@ -572,10 +583,10 @@ async fn drop_all_mirror_tables(conn: &mut SqliteConnection) -> Result<Vec<Strin
         if RESERVED_TABLES.contains(&name.as_str()) {
             continue;
         }
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "DROP TABLE IF EXISTS main.{}",
             plan::quote_ident(&name)
-        ))
+        )))
         .execute(&mut *tx)
         .await
         .with_context(|| format!("drop mirror table {name}"))?;
@@ -624,7 +635,6 @@ mod tests {
                 name: name.into(),
                 decl_type: ty.into(),
                 not_null: false,
-                default: None,
             },
             pk_seq,
             generated: false,
@@ -693,7 +703,6 @@ mod tests {
                 name: "version".into(),
                 decl_type: "TEXT".into(),
                 not_null: false,
-                default: None,
             },
             pk_seq: 1,
             generated: false,
@@ -772,7 +781,6 @@ mod tests {
                 name: "computed".into(),
                 decl_type: "".into(),
                 not_null: false,
-                default: None,
             },
             pk_seq: 0,
             generated: true,
