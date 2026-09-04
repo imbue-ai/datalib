@@ -78,12 +78,14 @@ import {
   unwireFromFanIns,
   wireIntoFanIns,
   paramsAreRepresentable,
+  entryForStep,
+  producerOf,
   emptyTableDiagnosis,
   type ConfiguredStep,
   type StepPhase,
 } from "@/config/sourceSteps";
 import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
-import { catalogFor, type CatalogEntry } from "@/config/catalog";
+import { type CatalogEntry } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { stepLogLines, type StepLogLine } from "@/config/stepLog";
@@ -230,10 +232,19 @@ const wizardOpen = ref(false);
 /// reads as `other`, so it was never wired into the fan-ins either.
 /// A key that changes forces the remount the flow was assuming.
 const wizardKey = ref(0);
-const editing = ref<{ step: ConfiguredStep; entry: CatalogEntry } | null>(null);
+const editing = ref<{
+  step: ConfiguredStep;
+  entry: CatalogEntry;
+  downloadParams?: Record<string, unknown>;
+} | null>(null);
 /// Set while the wizard is being used to add the render step for a
 /// fetch step that was just written (or picked from a row action).
-const renderFor = ref<{ fetchId: string; fetchName: string; entry: CatalogEntry } | null>(
+const renderFor = ref<{
+  fetchId: string;
+  fetchName: string;
+  entry: CatalogEntry;
+  downloadParams?: Record<string, unknown>;
+} | null>(
   null,
 );
 
@@ -403,7 +414,11 @@ function stepStatus(id: string, dropped: Diagnostic | null): StatusView {
 
 const rows = computed<Row[]>(() =>
   sources.value.map((s) => {
-    const entry = s.type ? catalogFor(s.type) : undefined;
+    // Not `catalogFor(s.type)`: one step type can have several
+    // descriptors (Gmail and Fastmail are both `email`), and which one
+    // a step is comes from its params — or, for a render step, from
+    // the params of the step it reads.
+    const entry = entryForStep(s, sources.value);
     const dropped = droppedReason(s.id);
     const run = s.kind === "applet" ? null : stepStatus(s.id, dropped);
     // A step writes exactly one tree, and it is the step's id.
@@ -1413,10 +1428,17 @@ function openAdd() {
 function openEdit(id: string) {
   const step = sources.value.find((s) => s.id === id);
   if (!step?.type) return;
-  const entry = catalogFor(step.type);
+  const entry = entryForStep(step, sources.value);
   if (!entry) return;
   renderFor.value = null;
-  editing.value = { step, entry };
+  editing.value = {
+    step,
+    entry,
+    // Only meaningful when editing a render step: the credentials its
+    // "Test connection" authenticates with belong to the step it reads.
+    downloadParams:
+      step.phase === "render" ? producerOf(step, sources.value)?.params : undefined,
+  };
   wizardKey.value++;
   wizardOpen.value = true;
 }
@@ -1426,10 +1448,15 @@ function openEdit(id: string) {
 function openRenderFor(fetchId: string) {
   const step = sources.value.find((s) => s.id === fetchId);
   if (!step?.type) return;
-  const entry = catalogFor(step.type);
+  const entry = entryForStep(step, sources.value);
   if (!entry) return;
   editing.value = null;
-  renderFor.value = { fetchId, fetchName: step.name, entry };
+  renderFor.value = {
+    fetchId,
+    fetchName: step.name,
+    entry,
+    downloadParams: step.params,
+  };
   wizardKey.value++;
   wizardOpen.value = true;
 }
@@ -1440,7 +1467,11 @@ async function onWizardSubmit(payload: {
   body: string;
   entry: CatalogEntry;
   inputs: string[];
-  offerRenderFor: { fetchId: string; fetchName: string } | null;
+  offerRenderFor: {
+    fetchId: string;
+    fetchName: string;
+    downloadParams: Record<string, unknown>;
+  } | null;
   alsoRender: { id: string; body: string } | null;
 }) {
   const current = editing.value;

@@ -25,9 +25,9 @@ expression: snapshot
       "md_path": "tng_pdfs/rendered_md/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.v2",
+      "source_fingerprint": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.v3",
       "source_name": "tng_pdfs",
       "title": "Captain's Log",
       "updated_at": "2364-04-13T08:45:00-07:00"
@@ -151,9 +151,9 @@ expression: snapshot
       "md_path": "tng_pdfs/rendered_md/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.v2",
+      "source_fingerprint": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.v3",
       "source_name": "tng_pdfs",
       "title": "warp_core_manual.pdf",
       "updated_at": null
@@ -299,6 +299,20 @@ expression: snapshot
       "updated_at": "2369-04-15T11:30:00Z"
     },
     {
+      "created_at": null,
+      "kind": "document",
+      "markdown_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "md_path": "tng_pdfs/rendered_md/docs/c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.md",
+      "provider": "pdf",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.3",
+      "row_set_hash": "<machine-specific: rows embed an absolute path>",
+      "source_fingerprint": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.v3",
+      "source_name": "tng_pdfs",
+      "title": "Hull Integrity Survey",
+      "updated_at": null
+    },
+    {
       "created_at": "2369-04-15T14:00:00.000Z",
       "kind": "mr",
       "markdown_uuid": "6fc719a5-94c3-5757-a26f-2f34579d2508",
@@ -417,9 +431,9 @@ expression: snapshot
       "md_path": "tng_pdfs/rendered_md/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.v2",
+      "source_fingerprint": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.v3",
       "source_name": "tng_pdfs",
       "title": "Captain's Log",
       "updated_at": "2364-04-13T08:45:00-07:00"
@@ -808,7 +822,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_loaded=57 markdowns_skipped=0 rows_inserted=192"
+      "message": "datalib-step grid_index: markdowns_loaded=58 markdowns_skipped=0 rows_inserted=194"
     }
   ],
   "grid_rows": [
@@ -3249,6 +3263,35 @@ expression: snapshot
       "when_ts": "2369-04-15T11:30:00Z"
     },
     {
+      "account": "tng_pdfs",
+      "author": null,
+      "channel": null,
+      "conversation_name": "Hull Integrity Survey",
+      "conversation_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "entire_chat": "/chat/6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "git_sha": null,
+      "kind": "PDF Document",
+      "markdown_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "tng_pdfs/rendered_md/docs/c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "file://…/hull_survey.pdf",
+      "text_len": 21,
+      "text_sha": "sha256:54d41ced6b9992051afc762f69c758683565437efcc2f5ce1bd74286b8ce2a2e",
+      "upstream_entity_kind": "document",
+      "upstream_id": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2",
+      "upstream_scope": null,
+      "uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "when_ts": null
+    },
+    {
       "account": null,
       "author": "+17015550103",
       "channel": "Bridge Crew",
@@ -4349,6 +4392,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "93d73572-6935-59a9-afc9-54856edaa0fd",
       "when_ts": "2369-04-14T10:01:00+00:00"
+    },
+    {
+      "account": "tng_pdfs",
+      "author": null,
+      "channel": null,
+      "conversation_name": "Hull Integrity Survey",
+      "conversation_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "entire_chat": "/chat/6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "git_sha": null,
+      "kind": "PDF Page",
+      "markdown_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "pdf",
+      "qmd_path": "tng_pdfs/rendered_md/docs/c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.md",
+      "slack_link": null,
+      "source_label": "PDF",
+      "source_url": "file://…/hull_survey.pdf",
+      "text_len": 194,
+      "text_sha": "sha256:f3f20956c8549842ecd12d640cc1588b311abf98e70f59418c79b129604e03b6",
+      "upstream_entity_kind": "page",
+      "upstream_id": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2#1",
+      "upstream_scope": null,
+      "uuid": "9747740a-55e6-57fa-b53f-dc2f73ce5824",
+      "when_ts": null
     },
     {
       "account": null,
@@ -6382,8 +6454,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 57,
+    "documents_count": 58,
     "dolt_log_count": 2,
-    "grid_rows_count": 192
+    "grid_rows_count": 194
   }
 }

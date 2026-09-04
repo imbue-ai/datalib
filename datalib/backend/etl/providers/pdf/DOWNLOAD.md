@@ -80,6 +80,47 @@ The seam for that work is `render::convert::RENDER_VERSION`, which
 participates in the render cache key: bumping it re-renders every
 affected document with no migration.
 
+### `needs_ocr` is a work list, not a verdict on the document
+
+`needs_ocr = 1` means *some* page of a document is unreadable. It does
+not mean the document is skipped, and the two must not be conflated —
+they were, and that was issue #173: the render step selected
+`WHERE needs_ocr = 0`, so a document with one scanned insert among 200
+readable pages rendered nothing at all. Every `Mixed` document has at
+least one unreadable page by definition, so no `Mixed` document ever
+rendered, despite three places in the code saying it should.
+
+What renders now is decided per page:
+
+```sql
+WHERE has_encoding_issues = 0 AND page_count > ocr_page_count
+```
+
+— at least one page carries text we can extract. The pages we could not
+read stay counted in `ocr_page_count`, and the render step writes a
+`*Page N — no extractable text …*` note in their place, so the gap is
+visible to whoever opens the document rather than only to whoever
+queries the store. Those notes get no `grid_rows` row: the sentence is
+identical on every unreadable page, so rows would add nothing to the
+grid while costing a qmd embedding each.
+
+`has_encoding_issues` is the one all-or-nothing case, and deliberately
+so. A page whose fonts do not decode produces mojibake, which *looks*
+like text — it would be indexed, searched, and shown as if it meant
+something. An absent page is an honest gap; a garbled one is a lie, so
+one such page suppresses the whole document. That is the same
+blast-radius trade #173 rejected for scanned pages, taken the other way
+because the two failures are not comparable.
+
+Note that the column is populated from the detector's per-page reasons
+(`suspected_garbled_text`: an Identity-H font with no `ToUnicode`, or a
+Type3-only page), **not** from pdf-inspector's own
+`has_encoding_issues`. That field is always `false` for us: it is
+computed from extracted markdown, and the download step runs
+detect-only. Undecodable *fonts* are what we can see without paying for
+a conversion; genuinely garbled *text* from a decodable font is not
+caught here.
+
 ## What the metadata is actually worth
 
 Measured over a 20-document real corpus (arXiv papers, IRS forms,
@@ -140,6 +181,14 @@ unreadable as a grid cell either way. The full value stays in
 - **Dense forms convert poorly.** A fillable grid (a tax form) has no
   prose reading order to recover; the output is a scramble of field
   labels.
+- **One garbled page costs the whole document.** `has_encoding_issues`
+  is document-level, so a 200-page report with a single
+  Identity-H-without-`ToUnicode` page renders nothing. Fixing that means
+  recording *which* pages are garbled, not just how many — the render
+  step would then drop those pages the way it notes scanned ones. Not
+  done because the failure is usually document-wide anyway: font
+  encoding is a property of the font, and a document generally uses one
+  set throughout.
 
 ## `source_url` is absolute, and that has consequences
 
@@ -191,6 +240,17 @@ db=<root>/pdfs/raw/entities.doltlite_db
 $dl $db "SELECT pdf_type, needs_ocr, COUNT(*) FROM pdf_documents
          GROUP BY pdf_type, needs_ocr;"
 
+# Pages, not documents: what an OCR engine would actually have to read,
+# and how much we are already getting out of the same files.
+$dl $db "SELECT SUM(ocr_page_count) unreadable,
+                SUM(page_count - ocr_page_count) readable
+           FROM pdf_documents;"
+
+# Documents that render nothing at all, and why.
+$dl $db "SELECT pdf_type, has_encoding_issues, COUNT(*) FROM pdf_documents
+          WHERE has_encoding_issues = 1 OR page_count <= ocr_page_count
+          GROUP BY pdf_type, has_encoding_issues;"
+
 # Duplicates: one document, many locations.
 $dl $db "SELECT blake3, COUNT(*) c, GROUP_CONCAT(id) FROM pdf_paths
          GROUP BY blake3 HAVING c > 1;"
@@ -235,7 +295,14 @@ reason `make_lightroom_catalog.py` sits there. Regenerate with:
 uv run python tests/fixtures/make_pdf_fixtures.py
 ```
 
+`engineering/hull_survey.pdf` is the `Mixed` case: one text page and
+one image-only page. The corpus had no such document until #173, which
+is why nothing caught the whole-document skip — the one Mixed document
+in the 20-file development corpus cost a single page, so the bug was
+invisible there too. It costs one embedded page, the same as any
+one-page fixture: its second page renders as a note, not as a row.
+
 The corpus deliberately includes a byte-identical duplicate pair, a
-same-`DocumentID` revision, a metadata-free document, an image-only
-page, a truncated file, and a non-PDF — one per behavior the e2e test
-asserts.
+same-`DocumentID` revision, a metadata-free document, a mixed
+text-and-scan document, an image-only page, a truncated file, and a
+non-PDF — one per behavior the e2e test asserts.

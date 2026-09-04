@@ -848,3 +848,128 @@ export async function submitFeedback(
   }
   return (await r.json()) as FeedbackResponse;
 }
+
+// ---------------------------------------------------------------------
+// Credentials and connection testing, for the Add-a-source wizard.
+//
+// These four deliberately do NOT go through `getJson`, which toasts
+// every failure. A wizard failure belongs *in the wizard*, next to the
+// field it is about — "that account has no Gmail credential" is not
+// news for the whole app, and a toast would have said it while the
+// dialog stayed silent. They throw the server's own message instead, so
+// the dialog can print it.
+// ---------------------------------------------------------------------
+
+export type StoredAccount = {
+  /// latchkey's account key. The empty string is a real value: it is
+  /// how latchkey spells its one unnamed account for a service, and it
+  /// is addressed by writing no `latchkey_settings.account` at all.
+  account: string;
+  credential_type: string | null;
+  /// `valid`, `invalid`, `missing`, `unknown`.
+  credential_status: string | null;
+};
+
+export type LatchkeyService = {
+  service: string;
+  /// `browser`, `set`, … — which ways this service can be authenticated.
+  auth_options: string[];
+  accounts: StoredAccount[];
+  /// Set when latchkey itself could not be asked. Not fatal: the
+  /// account can still be typed.
+  error: string | null;
+};
+
+export type ProbeLabel = {
+  /// The exact string to put in a label filter.
+  path: string;
+  /// `mailbox` (emails are filed here) or `keyword` (a Gmail flag —
+  /// downloadable, but never matched by the render-side filter).
+  kind: string;
+  role: string | null;
+  messages: number | null;
+};
+
+export type ProbeReport = {
+  mode: string;
+  account: {
+    id: string;
+    address: string | null;
+    display_name: string | null;
+    message_estimate: number | null;
+  };
+  labels: ProbeLabel[];
+  notes: string[];
+};
+
+export type ConnectAttempt = {
+  id: string;
+  /// `running`, `ok`, `failed`.
+  status: string;
+  output: string;
+};
+
+/// The server's message for a failed request, which for these routes is
+/// a JSON `{error}` — the provider's own words ("Gmail
+/// users.getProfile: HTTP 401 …"), which is the whole value of showing
+/// it. Falls back to the raw body, then to the status code.
+async function quietError(url: string, r: Response): Promise<Error> {
+  let detail = "";
+  try {
+    const text = (await r.text()).trim();
+    try {
+      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+    } catch {
+      detail = text;
+    }
+  } catch {
+    // ignore — the status line below is still worth reporting
+  }
+  return new Error(detail || `${url} → ${r.status}`);
+}
+
+async function quietJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init);
+  if (!r.ok) throw await quietError(url, r);
+  return (await r.json()) as T;
+}
+
+/// Which accounts latchkey holds for one service, and how another could
+/// be added.
+export function latchkeyService(service: string): Promise<LatchkeyService> {
+  return quietJson<LatchkeyService>(`/api/latchkey/${encodeURIComponent(service)}`);
+}
+
+/// Start latchkey's browser login. Returns immediately with an id to
+/// poll — the flow waits for a person, so there is nothing to await.
+export function startLatchkeyConnect(
+  service: string,
+  account?: string,
+): Promise<ConnectAttempt> {
+  return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account: account ?? "" }),
+  });
+}
+
+/// Poll one browser login. The server drops a finished attempt once it
+/// has been read, so a second poll after `ok`/`failed` is a 404 — read
+/// it once and keep the answer.
+export function latchkeyConnectStatus(id: string): Promise<ConnectAttempt> {
+  return quietJson<ConnectAttempt>(`/api/latchkey/connect/${encodeURIComponent(id)}/status`);
+}
+
+/// Ask a provider what these credentials can reach. `params` is the
+/// **download** params, even when the caller is configuring a render
+/// step: that is where the credentials and the download mode live.
+export function probeSource(
+  type: string,
+  params: Record<string, unknown>,
+): Promise<ProbeReport> {
+  return quietJson<ProbeReport>("/api/probe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type, params }),
+  });
+}

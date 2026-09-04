@@ -11,6 +11,7 @@
 
 pub mod download;
 pub mod mailbox_labels;
+pub mod probe;
 pub mod processor;
 pub mod render;
 

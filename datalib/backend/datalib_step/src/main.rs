@@ -32,6 +32,10 @@
 //!   is the load step un-fused from render.
 //! * `qmd_index` — the qmd search index over every rendered_md tree,
 //!   writing `unified_index/qmd`.
+//! * `probe <source_type>` — utility, not a pipeline step: ask a
+//!   provider what a set of credentials can reach (the account, its
+//!   labels), and print one JSON object. Backs the wizard's "Test
+//!   connection" button; see `probe.rs`.
 //! * `synthesize` — dev utility, not a pipeline step: build HTTP
 //!   playback fixtures for one source from its `input_path` raw
 //!   fixture tree (the `--synthesize-playback-root` mode of the old
@@ -50,6 +54,7 @@ mod download;
 mod events;
 mod grid_index;
 mod hints;
+mod probe;
 mod qmd_index;
 mod render;
 mod source;
@@ -143,6 +148,13 @@ enum Cmd {
         #[arg(long)]
         models_dir: Option<PathBuf>,
     },
+    /// Utility (not a pipeline step): ask a provider what these
+    /// credentials can reach, and print one JSON object on stdout.
+    /// Writes nothing and needs no data root.
+    Probe {
+        /// Source type, same position as in `download <source_type>`.
+        source_type: String,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from its `input_path` raw fixture tree, for
     /// later replay via `download --playback-root`.
@@ -177,6 +189,14 @@ static CHECKPOINTS: std::sync::OnceLock<std::sync::Arc<datalib_etl::processor::C
 async fn main() {
     let cli = Cli::parse();
     let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
+
+    // `probe` is answered before any of the step machinery below: it
+    // owns no tree, claims no outputs and must leave stdout holding
+    // exactly one JSON object, so an `outcome` event line after it
+    // would corrupt the only thing its caller reads.
+    if let Cmd::Probe { source_type } = &cli.cmd {
+        probe::run_cli(source_type, cli.params.as_deref()).await;
+    }
 
     let step_id = std::env::var(ENV_STEP).unwrap_or_else(|_| "step".to_string());
     let data_root = std::env::var_os(ENV_DATA_ROOT)
@@ -297,6 +317,9 @@ async fn run(
             hints::emit_auth_hint_on_failure(emitter, type_str, &res);
             res
         }
+        // Handled in `main` before the step machinery starts; see
+        // there for why it cannot come through the outcome path.
+        Cmd::Probe { .. } => unreachable!("probe is answered in main"),
         Cmd::GridIndex => grid_index::run(data_root, Some(now), emitter).await,
         Cmd::QmdIndex { models_dir } => qmd_index::run(data_root, models_dir, emitter).await,
         Cmd::Synthesize {
