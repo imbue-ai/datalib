@@ -315,6 +315,85 @@ pub fn parse_yyyy_mm_dd_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, Times
 ///
 /// Some feeds ship *basic* ISO 8601 — no `-`/`:` separators, e.g. the
 /// vCard `REV` Fastmail exports (`20260605T191839Z`). That form is valid
+/// Precision for a rendered `when_ts`. Per-provider, and **not** a free
+/// choice: the value goes into `source_fingerprint`, so changing a
+/// provider's precision re-cuts every fingerprint it has and re-renders
+/// its whole tree. Existing providers keep what they already emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhenTsPrecision {
+    /// `2026-06-05T19:18:39+00:00` — chat-common, signal.
+    Seconds,
+    /// `2026-06-05T19:18:39.123+00:00` — beeper.
+    Millis,
+}
+
+/// An upstream epoch-millis stamp as a grid-ready `when_ts`, or `None`
+/// when there is no answer.
+///
+/// **Both ways of having no answer land on `None`, and that is the
+/// point.** An item upstream never stamped (`ms == None`) and one whose
+/// stamp is not a representable instant are equally "we do not know when
+/// this happened", and
+/// [§6](/docs/dev/data_architecture_parse_and_render.md#6-timestamps)
+/// says that is a null column, never a stand-in. `GridRow.when_ts` is
+/// already `Option<String>` and [`split_when_ts`] already leaves the
+/// index columns NULL, so `None` needs nothing else built to receive it.
+///
+/// This lives here rather than in each provider because it *is* the
+/// timestamp policy, and three copies of it had already drifted: two
+/// rendered seconds and one millis, two logged the discard and one
+/// silently returned a marker string that `GridRow::build` then
+/// rejected, failing the whole step on one bad row.
+///
+/// TODO(problem-sink): an unrepresentable stamp is currently only
+/// `warn!`d, which on the render path reaches nobody — `RunCtx` drops
+/// its diagnostics buffer there. When R1's problem sink exists
+/// (`docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
+/// this should record `{field: "when_ts", reason: CoercionFailed,
+/// sample: ms}` against the row instead of logging into the void. Every
+/// `TODO(problem-sink)` in the tree marks a drop that is currently
+/// silent; grep for them when wiring the sink up.
+pub fn when_ts_from_unix_millis(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
+    let ms = ms?;
+    match IsoOffsetTimestamp::from_unix_millis(ms) {
+        Some(t) => Some(match precision {
+            WhenTsPrecision::Seconds => t.to_rfc3339_secs(),
+            WhenTsPrecision::Millis => t.to_rfc3339_millis(),
+        }),
+        None => {
+            tracing::warn!(
+                ms,
+                "when_ts_from_unix_millis: epoch-ms is not a representable instant; \
+                 when_ts left null"
+            );
+            None
+        }
+    }
+}
+
+/// Human-readable timestamp for a rendered markdown body.
+///
+/// Three cases, deliberately spelled differently so a reader can tell
+/// them apart:
+///
+/// * a real instant renders normally;
+/// * an item upstream never stamped says so in words;
+/// * a stamp that exists but is not representable keeps its raw value on
+///   screen (`@{ms}ms`), because "we have a number and it is nonsense"
+///   is a different fact from "we have nothing", and the number is the
+///   only lead a reader has.
+///
+/// Display-only. Nothing derived from this reaches the index, so unlike
+/// [`when_ts_from_unix_millis`] the formatting here is safe to change.
+pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
+    let Some(ms) = ms else {
+        return "(no timestamp)".to_string();
+    };
+    IsoOffsetTimestamp::from_unix_millis(ms)
+        .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| format!("@{ms}ms"))
+}
+
 /// ISO 8601 but not RFC 3339, so it slips past producers and gets
 /// rejected at `GridRow::build`, silently dropping the row's
 /// `.grid_rows.json`. This normalizes it; already-valid values pass

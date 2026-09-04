@@ -198,6 +198,14 @@ fn nonempty(s: &str) -> Option<&str> {
     (!t.is_empty()).then_some(t)
 }
 
+/// TODO(problem-sink): a shape we don't recognize is dropped silently.
+/// `None` is the right *value* for `when_ts`, but nothing anywhere
+/// records that we discarded something upstream actually sent — that is
+/// only half of R1 ("drop, count, log; never abort, never hide"). When
+/// the problem sink exists (see
+/// `docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
+/// report `{field, reason: CoercionFailed, sample}` here as well as
+/// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis,
 /// or `None` on any shape we don't recognize.
 ///

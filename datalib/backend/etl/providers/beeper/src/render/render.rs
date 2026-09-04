@@ -12,7 +12,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_time::IsoOffsetTimestamp;
 
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
@@ -485,46 +484,22 @@ fn human_bytes(n: i64) -> String {
         format!("{:.2} GiB", n / (1024.0 * 1024.0 * 1024.0))
     }
 }
-
-/// RFC-3339 timestamp with millisecond precision. Used for
-/// machine-facing surfaces (`grid_rows.when_ts`, frontmatter
-/// `first_ts` / `last_ts`) so cross-provider sorts / range
-/// queries behave consistently with the other providers' index
-/// rows.
-/// Returns `None` when `ms` is not a representable instant, so the
-/// caller leaves `when_ts` null rather than putting something in it.
+/// `when_ts` for an epoch-ms stamp, at **millisecond** precision —
+/// which is what this renderer has always emitted, and changing it
+/// would re-cut every fingerprint beeper has written.
 ///
-/// This used to return the marker string `@{ms}ms`, on the reasoning
-/// that a corrupt row should be loudly visible in `when_ts`. It was
-/// louder than intended: `@{ms}ms` is not RFC 3339, so
-/// `GridRow::builder().build()` rejects it and the whole render step
-/// fails on one bad row. Null is both the honest value
-/// (`docs/dev/data_architecture_parse_and_render.md` §6) and the one the
-/// grid can actually store.
+/// The policy (unrepresentable ⇒ null, and say so) lives in
+/// `datalib-time`. This used to be a local copy that returned the
+/// marker string `@{ms}ms` instead, which is not RFC 3339, so
+/// `GridRow::builder().build()` rejected it and one bad row failed the
+/// whole render step.
 fn iso_from_ms(ms: i64) -> Option<String> {
-    match IsoOffsetTimestamp::from_unix_millis(ms) {
-        Some(t) => Some(t.to_rfc3339_millis()),
-        None => {
-            tracing::warn!(
-                ms,
-                "iso_from_ms: epoch-ms out of chrono range; when_ts left null"
-            );
-            None
-        }
-    }
+    datalib_time::when_ts_from_unix_millis(Some(ms), datalib_time::WhenTsPrecision::Millis)
 }
 
-/// Human-friendly timestamp for rendering inside the markdown
-/// body (section headers, hidden-event one-liners). Easier to
-/// skim than a full RFC-3339 string when a person is reading the
-/// transcript.
+/// Human-friendly timestamp for the markdown body.
 fn display_ts(ms: i64) -> String {
-    // Human-display rendering of an upstream epoch-ms value. Funnels
-    // through `datalib-time` so the interpretation rule lives in
-    // one place; the strftime is local to this human-display callsite.
-    IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("@{ms}ms"))
+    datalib_time::display_ts_from_unix_millis(Some(ms))
 }
 
 // ─────────────────────────────────────────────────────────────────────

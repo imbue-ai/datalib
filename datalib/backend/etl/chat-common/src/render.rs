@@ -23,7 +23,6 @@ use datalib_etl::section::msg_div_open;
 use datalib_etl::title::Title;
 use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
-use datalib_time::IsoOffsetTimestamp;
 use sha2::{Digest, Sha256};
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
@@ -746,46 +745,20 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
 // ─────────────────────────────────────────────────────────────────────
 // Format helpers
 // ─────────────────────────────────────────────────────────────────────
+// `when_ts_from_ms` / `display_ts` used to live here. Both were the
+// timestamp policy rather than anything chat-shaped, and beeper and
+// signal each carried their own drifting copy, so they moved to
+// `datalib-time` — see the note on `when_ts_from_unix_millis`.
+use datalib_time::{display_ts_from_unix_millis, when_ts_from_unix_millis, WhenTsPrecision};
 
-/// A `GridRow.when_ts` from an item's optional epoch-ms stamp, or
-/// `None`.
-///
-/// Both ways of having no answer land on `None`, which is the whole
-/// point: an item upstream never stamped (`ms == None`) and an item
-/// whose stamp is not a representable instant are equally "we do not
-/// know when this happened," and §6 says that is a null column, never a
-/// stand-in value. `GridRow.when_ts` is already `Option<String>` and
-/// `split_when_ts` already leaves the index columns NULL, so `None`
-/// needs nothing else built to receive it.
+/// Seconds precision, as this renderer has always emitted. Changing it
+/// would re-cut every fingerprint chat-common has written.
 fn when_ts_from_ms(ms: Option<i64>) -> Option<String> {
-    let ms = ms?;
-    match IsoOffsetTimestamp::from_unix_millis(ms) {
-        Some(t) => Some(t.to_rfc3339_secs()),
-        None => {
-            tracing::warn!(
-                ms,
-                "when_ts_from_ms: epoch-ms out of chrono range; when_ts left null"
-            );
-            None
-        }
-    }
+    when_ts_from_unix_millis(ms, WhenTsPrecision::Seconds)
 }
 
-/// Human-readable timestamp for the markdown body.
-///
-/// Three cases, deliberately spelled differently so a reader can tell
-/// them apart: a real instant renders normally; an item upstream never
-/// stamped says so in words; and a stamp that exists but is not a
-/// representable instant keeps its raw value on screen (`@{ms}ms`),
-/// because "we have a number and it is nonsense" is a different fact
-/// from "we have nothing" and the number is the only lead a reader has.
 fn display_ts(ms: Option<i64>) -> String {
-    let Some(ms) = ms else {
-        return "(no timestamp)".to_string();
-    };
-    IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("@{ms}ms"))
+    display_ts_from_unix_millis(ms)
 }
 
 fn human_bytes(n: i64) -> String {

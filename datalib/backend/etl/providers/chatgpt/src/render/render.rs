@@ -328,6 +328,10 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
+/// is the right value for `when_ts`, but nothing records that upstream
+/// sent something we could not read — half of R1. See the note on
+/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis. Accepts `…Z` and explicit
 /// offsets; returns `None` on anything unparseable (callers fall back to
 /// the bumped previous time).

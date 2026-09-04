@@ -303,6 +303,14 @@ fn space_of_dir(dir: &str) -> String {
         .to_string()
 }
 
+/// TODO(problem-sink): a shape we don't recognize is dropped silently.
+/// `None` is the right *value* for `when_ts`, but nothing anywhere
+/// records that we discarded something upstream actually sent — that is
+/// only half of R1 ("drop, count, log; never abort, never hide"). When
+/// the problem sink exists (see
+/// `docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
+/// report `{field, reason: CoercionFailed, sample}` here as well as
+/// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
 /// timestamp to unix millis, or `None` on any shape we don't recognize.
 ///
@@ -559,6 +567,10 @@ fn party_id(party: Option<&Value>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
+/// is the right value for `when_ts`, but nothing records that upstream
+/// sent something we could not read — half of R1. See the note on
+/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the
 /// raw value, then to `None`.
 ///

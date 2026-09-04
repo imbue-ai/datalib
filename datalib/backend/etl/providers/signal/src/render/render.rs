@@ -30,7 +30,6 @@ use datalib_etl::section::section_attrs;
 use datalib_etl::title::Title;
 use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
-use datalib_time::IsoOffsetTimestamp;
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
 use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
@@ -501,28 +500,20 @@ fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {
         .map(|r| r.display())
         .unwrap_or_else(|| format!("recipient_{}", item.author_id))
 }
-
-/// `date_sent` (epoch ms) as a grid-ready `when_ts`, or `None` when it
-/// isn't a representable instant.
+/// `date_sent` (epoch ms) as a grid-ready `when_ts`, at seconds
+/// precision, or `None` when it isn't a representable instant.
 ///
 /// This used to fall back to the literal `"1970-01-01T00:00:00+00:00"`,
-/// on the reasoning that a sortable epoch is a "visible-broken"
-/// marker. It isn't visible at all: in the grid it is indistinguishable
-/// from a real 1970 message, it sorts into a real position, and it
-/// matches `before:` / `after:` queries it should not. Null is the
-/// honest answer and the one
-/// `docs/dev/data_architecture_parse_and_render.md` §6 requires.
+/// on the reasoning that a sortable epoch is a "visible-broken" marker.
+/// It isn't visible at all: in the grid it is indistinguishable from a
+/// real 1970 message, it sorts into a real position, and it matches
+/// `before:` / `after:` queries it should not. The policy now lives in
+/// `datalib-time` so all three renderers that had a copy of it agree.
 fn iso_ts(date_sent_ms: i64) -> Option<String> {
-    match IsoOffsetTimestamp::from_unix_millis(date_sent_ms) {
-        Some(t) => Some(t.to_rfc3339_secs()),
-        None => {
-            tracing::warn!(
-                date_sent_ms,
-                "signal::iso_ts: date_sent_ms out of chrono range; when_ts left null"
-            );
-            None
-        }
-    }
+    datalib_time::when_ts_from_unix_millis(
+        Some(date_sent_ms),
+        datalib_time::WhenTsPrecision::Seconds,
+    )
 }
 
 #[cfg(test)]
