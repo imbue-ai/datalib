@@ -174,6 +174,51 @@ def simple_doc(
     return build(objs, trailer_extra)
 
 
+def mixed_doc(
+    text_lines: list[str],
+    *,
+    title: str | None = None,
+) -> bytes:
+    """A two-page document: page 1 is real text, page 2 is image-only.
+
+    This is the `Mixed` classification — the one the classifier exists to
+    describe and the one the corpus had no example of. Page 1 must still
+    convert; page 2 has no text operators at all, so it lands in
+    `pages_needing_ocr` and shows up in the markdown as a
+    "no extractable text" note rather than silently vanishing.
+
+    Deliberately two pages and no more: only page 1 is embedded by the
+    qmd indexer, so the fixture costs one page on every full build.
+    """
+    img = bytes([0x00, 0xFF, 0xFF, 0x00])
+    image_content = b"q 612 0 0 792 0 0 cm /Im0 Do Q"
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Count 2 /Kids [3 0 R 5 0 R] >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>"
+        ),
+        stream_obj(text_stream(text_lines)),
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /XObject << /Im0 8 0 R >> >> /Contents 6 0 R >>"
+        ),
+        stream_obj(image_content),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        stream_obj(
+            img,
+            " /Type /XObject /Subtype /Image /Width 2 /Height 2 "
+            "/ColorSpace /DeviceGray /BitsPerComponent 8",
+        ),
+    ]
+    trailer_extra = b""
+    if title:
+        objs.append(b"<< /Title (" + title.encode("latin-1", "replace") + b") >>")
+        trailer_extra += f" /Info {len(objs)} 0 R".encode()
+    return build(objs, trailer_extra)
+
+
 def scanned_doc(*, title: str | None = None, doc_id: str | None = None) -> bytes:
     """A page whose only content is an image XObject — no text operators,
     which is exactly what the classifier keys on to say `Scanned`.
@@ -283,6 +328,20 @@ def main() -> int:
             ],
         ],
         dc_creator="Geordi La Forge",
+    )
+
+    # (5) The `Mixed` case: page 1 is text, page 2 is an image-only
+    # insert. The corpus had no such document, which is why nothing
+    # caught the whole-document skip this fixture now pins (issue #173).
+    # It must render page 1 and leave a visible note for page 2.
+    FIXTURES["engineering/hull_survey.pdf"] = mixed_doc(
+        [
+            "Hull Integrity Survey, Stardate 41209.2",
+            "Ablative plating on decks nine through twelve shows",
+            "microfracturing consistent with prolonged warp stress.",
+            "The scanned schematic follows on the next page.",
+        ],
+        title="Hull Integrity Survey",
     )
 
     # Image-only: classified `scanned`, recorded with needs_ocr, and NOT

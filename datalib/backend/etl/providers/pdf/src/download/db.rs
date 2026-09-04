@@ -143,6 +143,17 @@ impl RawDb {
     ///
     /// `MIN(p.id)` makes the choice deterministic when a document has
     /// several copies, so two runs render byte-identical output.
+    ///
+    /// The `WHERE` clause is the render gate, and it is per *page*, not
+    /// per document: anything with at least one readable page is worth
+    /// converting, and the pages we could not read are noted in the
+    /// markdown and counted in `ocr_page_count`. It used to read
+    /// `d.needs_ocr = 0`, which skipped a document entirely if any one
+    /// of its pages was a scan — so every `Mixed` document, the exact
+    /// case the classification exists to describe, rendered nothing
+    /// (issue #173). `has_encoding_issues` still suppresses the whole
+    /// document; see [`super::schema_raw::document_is_renderable`],
+    /// which this mirrors, for why that one is all-or-nothing.
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
         let rows = sqlx::query(
             "SELECT d.blake3      AS blake3,
@@ -156,7 +167,8 @@ impl RawDb {
                     COUNT(p.id)   AS copy_count
                FROM pdf_documents d
                JOIN pdf_paths p ON p.blake3 = d.blake3
-              WHERE d.needs_ocr = 0
+              WHERE d.has_encoding_issues = 0
+                AND d.page_count > d.ocr_page_count
               GROUP BY d.blake3
               ORDER BY d.blake3",
         )
@@ -201,4 +213,99 @@ pub struct RenderTarget {
     pub rel_path: String,
     /// How many paths currently hold these bytes.
     pub copy_count: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::download::schema_raw::{document_is_renderable, PdfDocumentRow, PdfKind};
+
+    const NOW: &str = "2364-04-13T08:45:00-07:00";
+
+    fn doc(blake3: &str, page_count: i64, ocr_page_count: i64, enc: bool) -> PdfDocumentRow {
+        PdfDocumentRow {
+            blake3: blake3.to_string(),
+            size: 1,
+            page_count,
+            pdf_type: PdfKind::Mixed,
+            confidence: 0.7,
+            // Set the way `identify` now sets it: inclusive, so this
+            // column cannot be what the gate keys on.
+            needs_ocr: ocr_page_count > 0,
+            ocr_page_count,
+            has_encoding_issues: enc,
+            title: None,
+            author: None,
+            doc_created_at: None,
+            doc_modified_at: None,
+            content_blake3: None,
+            pdf_id_permanent: None,
+            xmp_document_id: None,
+            xmp_instance_id: None,
+            xmp_original_document_id: None,
+            first_seen_at: NOW.to_string(),
+        }
+    }
+
+    fn path_row(id: &str, blake3: &str) -> PdfPathRow {
+        PdfPathRow {
+            id: id.to_string(),
+            blake3: blake3.to_string(),
+            mtime_ns: 0,
+            size: 1,
+            stamp_kind: StampKind::from_str_or_rescan("rescan"),
+            inode: None,
+            dev: None,
+            last_seen_at: NOW.to_string(),
+        }
+    }
+
+    /// The render gate, exercised through the query that actually runs.
+    ///
+    /// The bug this pins (#173) lived in the `WHERE` clause, so a test
+    /// of any Rust-side predicate could not have caught it — the one
+    /// that existed asserted `PdfKind::Mixed` was convertible and passed
+    /// happily while the query skipped every Mixed document.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn renders_only_documents_with_readable_pages() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let db = RawDb::open(&tmp.path().join("entities.doltlite_db")).await?;
+
+        let docs = vec![
+            // A long report with three scanned inserts: the #173 case.
+            doc("aa", 200, 3, false),
+            // Fully text.
+            doc("bb", 2, 0, false),
+            // Fully scanned: nothing to convert.
+            doc("cc", 4, 4, false),
+            // Readable pages, but the text decodes to mojibake.
+            doc("dd", 10, 1, true),
+        ];
+        let paths: Vec<PdfPathRow> = docs
+            .iter()
+            .map(|d| path_row(&format!("{}.pdf", d.blake3), &d.blake3))
+            .collect();
+        db.write_batch(&docs, &paths).await?;
+
+        let got: Vec<String> = db
+            .convertible_documents(Path::new("/corpus"))
+            .await?
+            .into_iter()
+            .map(|t| t.blake3)
+            .collect();
+        assert_eq!(got, vec!["aa".to_string(), "bb".to_string()]);
+
+        // ...and the Rust-side statement of the same rule agrees, so the
+        // doc comment on `document_is_renderable` is not describing
+        // something other than what ships.
+        for d in &docs {
+            assert_eq!(
+                document_is_renderable(d.page_count, d.ocr_page_count, d.has_encoding_issues),
+                got.contains(&d.blake3),
+                "predicate and query disagree on {}",
+                d.blake3
+            );
+        }
+        Ok(())
+    }
 }
