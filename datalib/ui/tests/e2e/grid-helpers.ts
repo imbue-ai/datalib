@@ -112,20 +112,16 @@ async function clickRowByUuidWith(
   options: Parameters<Locator["click"]>[0],
 ) {
   const rowIndex = await scrollRowIntoView(page, uuid);
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await nudgeRowIntoView(page, uuid);
-    try {
-      await rowLocator(page, rowIndex).click({ ...options, timeout: 3_000 });
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(
-    `row ${rowIndex} (uuid=${uuid}) did not take a click in 3 attempts; ` +
-      `last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-  );
+  await expect(async () => {
+    // Re-issued every attempt, and that is the whole fix: a click that
+    // waits on a detached node waits forever, because nothing else is
+    // asking the grid to bring that row back.
+    await nudgeRowIntoView(page, uuid);
+    await rowLocator(page, rowIndex).click({ ...options, timeout: 2_000 });
+  }, `row ${rowIndex} (uuid=${uuid}) never took a click`).toPass({
+    timeout: 10_000,
+    intervals: [100, 250, 500],
+  });
 }
 
 // Scroll a (possibly virtualized-away) row into view, then click it.
@@ -149,24 +145,20 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 // each click keeps even that from mattering.
 export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
   const row = page.locator(`.ag-grid-scrolling-rows [role="row"][row-id="${uuid}"]`);
-  const selected = async () =>
-    ((await row.getAttribute("class")) ?? "").includes("ag-row-selected");
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (await selected()) return row;
-    await clickRowByUuid(page, uuid);
-    try {
-      await expect(row).toHaveClass(/ag-row-selected/, { timeout: 2_000 });
-      return row;
-    } catch {
-      // Fall through and click again — something cleared it.
+  // `aria-selected`, not the `ag-row-selected` class: the attribute is
+  // AG Grid reporting the node's selection state, while the class is the
+  // styling hook that follows from it. Asserting the semantic one means
+  // a re-theme cannot break this and a half-applied render cannot pass
+  // it.
+  await expect(async () => {
+    if ((await row.getAttribute("aria-selected")) !== "true") {
+      await clickRowByUuid(page, uuid);
     }
-  }
-  // Out of attempts: assert once more so the failure reads as "never
-  // became selected" rather than as a bare loop exit.
-  await expect(row, `row ${uuid} never became selected`).toHaveClass(
-    /ag-row-selected/,
-    { timeout: 2_000 },
-  );
+    await expect(row).toHaveAttribute("aria-selected", "true", { timeout: 1_000 });
+  }, `row ${uuid} never became selected`).toPass({
+    timeout: 15_000,
+    intervals: [100, 250, 500],
+  });
   return row;
 }
 
@@ -332,10 +324,6 @@ export async function stampOf(page: Page, id: string): Promise<string | null> {
 /// States a run will not move a step out of.
 export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 
-/// How long "Interrupted" has to hold before a settle believes it. See
-/// the note in `settleRowOnly`: it is the one terminal status inferred
-/// from a racy lock probe rather than recorded by the runner.
-const INTERRUPTED_CONFIRM_MS = 2_000;
 
 /// How long a row may take to settle: a real `datalib-dag` run over the
 /// fixture corpus on a cold action cache.
@@ -438,6 +426,18 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
   }, id);
 }
 
+/// Has the runner closed its record for the run in flight?
+///
+/// `finished_at` is written by the runner when the run ends, so it is a
+/// fact rather than an inference — unlike `run.live`, which the endpoint
+/// derives by probing the lock. A root that has never run reports no run
+/// at all, which counts as closed: there is nothing in flight to be
+/// wrong about.
+async function runIsClosed(page: Page): Promise<boolean> {
+  const dag = await (await page.request.get("/api/dag")).json();
+  return !dag.run || dag.run.finished_at != null;
+}
+
 /// Wait for a row to finish a run newer than the one it was showing.
 ///
 /// `before` is that row's stamp read *before* the click — see
@@ -450,33 +450,28 @@ async function settleRowOnly(
   timeout: number,
 ): Promise<string> {
   let last = "(no status)";
-  let interruptedSince: number | null = null;
   await expect
     .poll(
       async () => {
         last = (await statusOf(page, id)) ?? "(no status)";
         const stamp = await stampOf(page, id);
         const done = TERMINAL.test(last) && stamp !== before;
-        // "Interrupted" is the one terminal status derived from an
-        // ABSENCE rather than from an outcome the runner wrote down:
-        // `stepStatus` reports it when a step reads `running` on a run
-        // with no `finished_at` while `GET /api/dag` says no runner
-        // holds the lock. That probe is racy by construction — the
-        // endpoint's own comment says as much — so the moment a runner
-        // is taking or dropping the root reads as a run that died.
+        // "Interrupted" is the one terminal status the UI INFERS rather
+        // than reads: `stepStatus` reports it when a step says
+        // `running` on a run with no `finished_at` while `GET /api/dag`
+        // says no runner holds the lock — and that endpoint answers by
+        // taking the lock itself, which its own comment calls "racy by
+        // nature". So the instant a runner is taking or dropping the
+        // root looks like a run that died, and a settle that believes it
+        // returns "Interrupted" for a healthy `Sync everything`.
         //
-        // Latching it there is how a healthy `Sync everything` came
-        // back as `pdfs/raw` = "Interrupted". A real interruption is
-        // permanent (nothing will move that record again), so waiting
-        // out the window costs a dead run nothing and costs a live one
-        // a correct answer.
-        if (done && last === "Interrupted") {
-          interruptedSince ??= Date.now();
-          if (Date.now() - interruptedSince < INTERRUPTED_CONFIRM_MS) {
-            return `${last} @ ${stamp} (confirming)`;
-          }
-        } else {
-          interruptedSince = null;
+        // The fix is not to wait a while and ask again — that only
+        // changes the odds. `stepStatus` cannot reach that branch at all
+        // once `finished_at` is set, because it reads `current_state`
+        // only for a run still in flight. So believe this one status
+        // exactly when the runner's own record agrees the run is over.
+        if (done && last === "Interrupted" && !(await runIsClosed(page))) {
+          return `${last} @ ${stamp} (run record still open)`;
         }
         return done ? "finished" : `${last} @ ${stamp}`;
       },
