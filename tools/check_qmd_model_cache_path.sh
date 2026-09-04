@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Asserts that the vendored qmd snapshot under `third-party/qmd/`
 # resolves its model cache to `$XDG_CACHE_HOME/qmd/models` (with a
-# `$HOME/.cache/qmd/models` fallback) — i.e. the same path the build
-# mounts via `.bazelrc`'s `--sandbox_add_mount_pair` and that
+# `$HOME/.cache/qmd/models` fallback) — i.e. the same path
 # `datalib_qmd_indexer::default_models_dir()` returns.
 #
-# Why this exists: qmd is fetched at build time via `npx -y
-# @tobilu/qmd@<DEFAULT_QMD_VERSION>` (see unified_index/src/qmd/mod.rs). The
-# vendored `third-party/qmd/` snapshot is kept in sync with that
-# version (parity checked below) so this test catches the case where
-# upstream qmd changes its cache-path constant — we'd otherwise notice
-# only after a release rebuilds the multi-GB GGUF cache from scratch
-# at the new path. Pairs with the rust-side
+# This is about the SHIPPED app, not the build: a sync run by the app
+# downloads models to that path, and the indexer has to look for them
+# where qmd put them. The build itself stopped reading the host cache
+# when the models became bazel inputs (`@qmd_model_*` in MODULE.bazel).
+#
+# Why this exists: the vendored `third-party/qmd/` snapshot is kept in
+# sync with `DEFAULT_QMD_VERSION` (parity checked below) so this test
+# catches the case where upstream qmd changes its cache-path constant —
+# we'd otherwise notice only when a user's app quietly re-downloaded
+# multiple GB into a second directory. Pairs with the rust-side
 # `default_models_dir_matches_qmd_default` unit test in
 # //datalib/backend/qmd_indexer:qmd_indexer_unittests.
 #
@@ -34,9 +36,8 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 llm_ts="$(rlocation _main/third-party/qmd/src/llm.ts)"
 pkg_json="$(rlocation _main/third-party/qmd/package.json)"
 core_qmd_mod="$(rlocation _main/datalib/backend/unified_index/src/qmd/mod.rs)"
-bazelrc="$(rlocation _main/.bazelrc)"
 
-for f in "$llm_ts" "$pkg_json" "$core_qmd_mod" "$bazelrc"; do
+for f in "$llm_ts" "$pkg_json" "$core_qmd_mod"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
 done
 
@@ -57,11 +58,8 @@ qmd model cache path drift detected.
   XDG_CACHE_HOME with ("qmd", "models").
 
 If upstream qmd intentionally moved the cache, update:
-  * .bazelrc                                 (--sandbox_add_mount_pair)
   * datalib/backend/qmd_indexer/src/lib.rs (default_models_dir)
-  * tests/fixtures/build_qmd_index.py        (models_dir)
-  * tests/fixtures/materialize_tng_root.sh   (SHARED_MODELS)
-  * .github/workflows/release.yml            (mkdir step)
+  * datalib/dev_perseus.sh                   (SHARED_MODELS)
   * README.md / docs/user/first_time_user.md
 …then re-run this test.
 EOF
@@ -97,20 +95,4 @@ EOF
     exit 1
 fi
 
-# ── 3. .bazelrc mount path matches qmd's default ────────────────────
-#
-# `$(HOME)/.cache/qmd/models` — that's the line that has to track
-# qmd's MODEL_CACHE_DIR. We assert it appears verbatim in .bazelrc.
-mount_pattern='--sandbox_add_mount_pair=\$\(HOME\)/\.cache/qmd/models'
-if ! grep -qE -- "$mount_pattern" "$bazelrc"; then
-    cat >&2 <<EOF
-.bazelrc does not mount \$(HOME)/.cache/qmd/models.
-
-The sandbox mount path has to match qmd's MODEL_CACHE_DIR — otherwise
-every action's qmd run re-downloads ~2 GB of GGUF models. Fix
-.bazelrc, then re-run this test.
-EOF
-    exit 1
-fi
-
-echo "OK: vendored qmd $pkg_version, model cache at \$XDG_CACHE_HOME/qmd/models (fallback \$HOME/.cache/qmd/models), .bazelrc mount agrees."
+echo "OK: vendored qmd $pkg_version, model cache at \$XDG_CACHE_HOME/qmd/models (fallback \$HOME/.cache/qmd/models)."

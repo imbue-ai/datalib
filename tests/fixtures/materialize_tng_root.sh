@@ -79,34 +79,40 @@ id = "unified_index"
 command = "'$APPLET_BIN' unified_index"
 EOF
 
-# qmd models live once in ~/.cache/qmd/models (~1.6 GB) and every data
-# root symlinks them in. If the cache is empty we refuse — letting qmd
-# download silently is a multi-minute stall that masquerades as a hang.
-# Path matches qmd's own default so a standalone `qmd` populates the
-# same cache the build reads from.
-SHARED_MODELS="${HOME:-.}/.cache/qmd/models"
-REQUIRED_MODELS=(
-  "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
-  "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf"
-)
-missing=()
-for m in "${REQUIRED_MODELS[@]}"; do
-  p="$SHARED_MODELS/$m"
-  if [[ ! -s "$p" ]]; then missing+=("$m"); fi
+# qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, pinned
+# in MODULE.bazel), so this no longer depends on the developer having run
+# qmd at least once — which it used to, refusing with a "populate the
+# shared cache first" message. That check existed because letting qmd
+# download 2.2 GB silently is a multi-minute stall that masquerades as a
+# hang; taking the models from bazel removes the stall instead of
+# reporting it.
+#
+# Two details, both deliberate:
+#
+#   * The links point INTO the runfiles tree rather than copying 2.2 GB
+#     into every root. Same assumption the applet `command` above already
+#     makes — a runfiles path outlives the run that wrote it, up to a
+#     `bazel clean`.
+#   * `unified_index/qmd/models` has to be a SYMLINK, not the directory
+#     itself. A later sync against this root calls
+#     `qmd_indexer::ensure_models_symlink`, which errors out when it
+#     finds a real directory at that path. So the real directory is a
+#     sibling and the expected path points at it.
+MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
+mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd"
+for entry in \
+  "qmd_model_embeddinggemma/file/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf" \
+  "qmd_model_query_expansion/file/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
+  "qmd_model_reranker/file/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
+  src="$(rlocation "$entry")" || src=""
+  if [[ -z "$src" || ! -s "$src" ]]; then
+    echo "ERROR: qmd model not found in runfiles: $entry" >&2
+    echo "  (is \`:qmd_models\` still in materialize_tng_root's \`data\`?)" >&2
+    exit 3
+  fi
+  ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
 done
-if (( ${#missing[@]} > 0 )); then
-  {
-    echo "ERROR: missing qmd models in $SHARED_MODELS:"
-    for m in "${missing[@]}"; do echo "  - $m"; done
-    echo
-    echo "Populate the shared cache once by running the qmd indexer"
-    echo "against any data root, e.g.:"
-    echo "  bazelisk run //datalib/backend/qmd_indexer -- --root <some-datalib-root>"
-  } >&2
-  exit 3
-fi
-mkdir -p "$OUT_ROOT/unified_index/qmd"
-ln -sfn "$SHARED_MODELS" "$OUT_ROOT/unified_index/qmd/models"
+ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
 # directory the `fsindex` (Unison-style) scanner can index; nothing renders it

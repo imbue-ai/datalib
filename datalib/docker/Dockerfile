@@ -153,15 +153,20 @@ ARG QMD_VERSION=2.8.3
 # `QMD_PREFETCH_MODELS=false` skips `qmd pull`, which is what makes the
 # `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of a 6.45 GB
 # image. Prod keeps them (default `true`): a first sync would otherwise
-# stall on a multi-GB HuggingFace download. CI does not need them,
-# because the one action that reads them
-# (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit on almost
-# every run — see `.github/workflows/release.yml`'s docker-publish job.
+# stall on a multi-GB HuggingFace download.
 #
-# The `else` branch still creates the empty directory: `test.yml` passes
-# `--sandbox_add_mount_pair=/root/.cache/qmd/models` unconditionally, and
-# a mount pair whose source does not exist is not a state we want to
-# discover on the first PR that runs a sandboxed action.
+# CI genuinely does not need them, though this comment used to say so
+# for a reason that was not true: it claimed the one action that reads
+# them (`//tests/fixtures:ingested_tng_qmd`) "is a remote cache hit on
+# almost every run", and on 2026-09-03 that action executed 15 times
+# against 13 cache hits. What makes the claim true now is that every
+# build-time consumer takes its models as bazel inputs
+# (`@qmd_model_*` in MODULE.bazel) and never looks in this directory.
+#
+# The `else` branch still creates the empty directory. Nothing in the
+# build requires it now that `.bazelrc` has no mount pair for it, but a
+# container that runs the app writes models here, and creating it in the
+# image keeps that path owned and present rather than made on the fly.
 #
 # `npm cache clean --force` at the end drops npm's download cache: 512 MB
 # of tarballs neither variant ever reads again. It is pure image weight,

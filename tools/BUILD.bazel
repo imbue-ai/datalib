@@ -18,17 +18,17 @@ exports_files([
     "workspace_status.sh",
 ])
 
-# Asserts that the vendored qmd snapshot, our .bazelrc mount path,
-# and `default_models_dir()` all agree on `~/.cache/qmd/models` (the
-# upstream qmd default). See check_qmd_model_cache_path.sh for the
-# full rationale. Pairs with the rust-side unit test
+# Asserts that the vendored qmd snapshot and `default_models_dir()`
+# agree on `~/.cache/qmd/models` (the upstream qmd default) — the path
+# the SHIPPED app downloads models to. See
+# check_qmd_model_cache_path.sh for the full rationale. Pairs with the
+# rust-side unit test
 # //datalib/backend/qmd_indexer:qmd_indexer_unittests.
 sh_test(
     name = "qmd_model_cache_path_test",
     size = "small",
     srcs = ["check_qmd_model_cache_path.sh"],
     data = [
-        "//:.bazelrc",
         "//datalib/backend/unified_index:src/qmd/mod.rs",
         "//third-party/qmd:package.json",
         "//third-party/qmd:src/llm.ts",

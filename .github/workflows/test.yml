@@ -211,46 +211,36 @@ jobs:
           # needed; see datalib/ui/tests/e2e/README-artifacts.md. The
           # `--` keeps the leading `-` from being read as a flag.
           #
-          # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
-          # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
-          # into the sandbox. The PROD image bakes them at
-          # `/root/.cache/qmd/models`, but the devcontainer image CI runs
-          # in is built on the `-slim` prod variant (release.yml passes
-          # `--build-arg PROD_IMAGE_TAG=${version}-slim`), where that path
-          # exists and is EMPTY. So on a run where this genrule misses the
-          # remote cache, qmd downloads the models rather than finding
-          # them. That is the deliberate trade: 2.2 GB of image pulled on
-          # every run, against ~2 GB downloaded on the rare cold genrule.
+          # qmd models: nothing to arrange here any more. The
+          # `//tests/fixtures:ingested_tng_qmd` genrule takes its
+          # embedding GGUF as a bazel input (`@qmd_model_embeddinggemma`
+          # in MODULE.bazel) and stages it into the sandbox itself, so it
+          # neither reads a host cache nor downloads anything.
           #
-          # An earlier version of this comment ended by claiming "qmd then
-          # finds the baked models + their `.etag` sidecars and skips the
-          # download". That is true of a LOCAL devcontainer, which
-          # `devcontainer.json` builds against the full prod image; it has
-          # never been true here. Read the genrule's own output before
-          # believing either story — it prints a line per model saying
-          # which it did.
+          # That matters more here than on a laptop. The devcontainer
+          # image CI runs in is built on the `-slim` prod variant
+          # (release.yml passes `--build-arg PROD_IMAGE_TAG=${version}-slim`),
+          # which omits the models — `/root/.cache/qmd/models` exists and
+          # is EMPTY, and the container is fresh every job. So every run
+          # that missed the remote cache used to re-download the model;
+          # on 2026-09-03 one of those drew a 429 from HuggingFace and
+          # failed the build outright.
           #
-          # The two flags below are still load-bearing, for a different
-          # reason than "find the baked models". GitHub Actions overrides
-          # HOME=/github/home for container steps, so `.bazelrc`'s
-          # `$(HOME)/.cache/qmd/models` mount and build_qmd_index.py's
-          # `~/.cache/qmd/models` would otherwise resolve to two different
-          # places, and the models dir would not be reachable from inside
-          # the genrule sandbox at all:
-          #   * --sandbox_add_mount_pair makes /root/.cache/qmd/models
-          #     visible in the genrule sandbox (additive to the .bazelrc
-          #     $(HOME) mount, which stays correct for local dev).
-          #   * CLAUDE_MIRROR_HOST_HOME makes build_qmd_index.py resolve
-          #     its models dir to the same path (the script reads it in
-          #     place of $HOME).
-          # Standing CI accommodation — not a republish bridge: the image
-          # bakes as root and GH always sets HOME=/github/home.
+          # This is what removed two flags that used to be on the line
+          # below: `--sandbox_add_mount_pair=/root/.cache/qmd/models` and
+          # `--action_env=CLAUDE_MIRROR_HOST_HOME=/root`, which together
+          # were what aimed the genrule at the image's (empty) cache,
+          # GitHub having forced HOME=/github/home for container steps.
+          #
+          # The e2e suite, if it comes back into this job (see the
+          # FIXME above), inherits the same property:
+          # `tests/fixtures/materialize_tng_root.sh` links all three
+          # GGUFs into the data root from bazel inputs rather than from
+          # `$HOME/.cache/qmd/models`, which on this runner is empty.
           bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
             --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
-            --sandbox_add_mount_pair=/root/.cache/qmd/models \
-            --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
             -- //... -//datalib/ui:e2e_test
 
   # PR-time gate for the fully-static musl release leg. The musl dist

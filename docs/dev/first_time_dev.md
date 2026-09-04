@@ -12,13 +12,15 @@ just want to *run* the released tools against your own data, start with the
 #    build driver.
 brew install bazel cmake
 
-# 2. Create the shared qmd model cache directory. `.bazelrc` bind-mounts
-#    this into every sandboxed action via
-#    `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` so the qmd-indexer
-#    genrule doesn't re-download ~2 GB of GGUF models on every build —
-#    Bazel can read the dir, but won't create it. The path matches qmd's
-#    own default, so a standalone `qmd` populates the same cache.
-mkdir -p ~/.cache/qmd/models
+# 2. (Nothing to do here any more.) This step used to be
+#    `mkdir -p ~/.cache/qmd/models`, because `.bazelrc` bind-mounted that
+#    directory into every sandboxed action and a missing one failed the
+#    build. qmd's three GGUF models are now pinned in MODULE.bazel
+#    (`@qmd_model_*`) and reach both the fixture's index genrule and the
+#    materialized demo root as ordinary bazel inputs, so neither
+#    `bazel test //...` nor `bazelisk run //datalib:dev_tng` needs
+#    anything in your home directory. The app you build still downloads
+#    models there at sync time, as a user's would.
 
 # 3. (Nothing to check here any more.) The build used to need host
 #    `npx` on Bazel's pinned PATH, because `qmd-indexer` shelled out to
