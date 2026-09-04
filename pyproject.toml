@@ -34,6 +34,7 @@ extend-exclude = ["third-party"]
 # Keep in sync with `//:python_sources`, which is the Bazel-side list of
 # the same files; `scripts/lint_repo.py` fails if the two drift.
 include = [
+    "hack",
     "scripts",
     "tests/fixtures",
     "tools",

@@ -210,7 +210,7 @@ def _scan(root: Path) -> set[str]:
 # Keep in sync with `//:python_sources` in BUILD.bazel and with
 # `[tool.pyright] include` in pyproject.toml. Adding a root means editing
 # all three; this check is what makes forgetting one an error.
-PYTHON_LINT_ROOTS: tuple[str, ...] = ("scripts", "tests/fixtures", "tools")
+PYTHON_LINT_ROOTS: tuple[str, ...] = ("hack", "scripts", "tests/fixtures", "tools")
 
 # Vendored subtrees are upstream-owned — excluded from ruff via
 # `[tool.ruff] extend-exclude` and from pyright via `[tool.pyright]

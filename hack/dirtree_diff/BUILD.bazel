@@ -1,0 +1,35 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+# This package's contribution to `//:python_sources`. `glob` can't cross
+# a package boundary, so the root package's `hack/**/*.py` stops at this
+# BUILD file and these sources have to be handed over by hand — see the
+# comment on `//:python_sources` for how an omission gets caught.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)
+
+# The diff interpretation, tested against its intermediate
+# representation: no doltlite, no HTML, no browser. `analyze()` is a
+# pure function from `Inputs` to `DiffResult`, so every behaviour worth
+# pinning — move pairing, subtree rollup, delete-vs-copy-remains,
+# in-tree duplicate grouping — is asserted on plain data.
+#
+# Deliberately hermetic and dependency-free (stdlib `unittest`), so it
+# runs in `bazel test //...` alongside everything else rather than being
+# a thing you have to remember to run by hand in `hack/`.
+py_test(
+    name = "dirtree_diff_test",
+    size = "small",
+    srcs = [
+        "dirtree_diff.py",
+        "dirtree_diff_test.py",
+    ],
+    # Put this directory on sys.path so the test imports `dirtree_diff`
+    # the same way a person running it from `hack/dirtree_diff/` does.
+    # Without it the module is only reachable as
+    # `hack.dirtree_diff.dirtree_diff`, which no other caller uses.
+    imports = ["."],
+    main = "dirtree_diff_test.py",
+)
