@@ -134,3 +134,21 @@ rust_test(
         "@datalib_crates//:tokio",
     ],
 )
+
+# The only test that exercises `FetchOptions::target_doltlite_branch`.
+# Every other caller passes `None`, so `--branch` sat broken (MySQL
+# `CALL DOLT_CHECKOUT`, which doltlite rejects) with the suite green.
+rust_test(
+    name = "branch_scan_test",
+    size = "small",
+    srcs = ["tests/branch_scan.rs"],
+    crate_root = "tests/branch_scan.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_fsindex",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

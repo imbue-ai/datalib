@@ -6,12 +6,29 @@
 //! bookkeeping-free write path, since fsindex has no `_bookkeeping`
 //! sidecars (see [`super::schema_raw::full_ddl`]).
 //!
-//! Branch handling: dolt is single-active-branch per connection, and
-//! the sql-surface for "create-if-missing" differs across versions.
-//! [`Self::checkout_branch`] tries `DOLT_CHECKOUT(branch)` first and
-//! falls back to `DOLT_CHECKOUT('-b', branch)`.
-//! FIXME(dolt-branch-untested-at-scale): branch ops are not yet
-//! bench-verified at scale; the fallback is a pragmatic guess.
+//! Branch handling: dolt is single-active-branch per connection, so
+//! [`Self::checkout_branch`] switches the pool's one connection. It
+//! tries `dolt_checkout(branch)` and falls back to
+//! `dolt_checkout('-b', branch)` when that reports no such branch.
+//!
+//! Spelling matters here: doltlite exposes the dolt procedures as SQL
+//! **functions**, so it is `SELECT dolt_checkout(?)`, never MySQL's
+//! `CALL DOLT_CHECKOUT(?)` — the latter is a parse error
+//! (`near "CALL": syntax error`) and, because both the primary and the
+//! `-b` fallback used it, `--branch` failed outright rather than
+//! degrading. `//datalib/backend/core/src/app_store.rs` documents the
+//! same distinction for `dolt_commit`.
+//!
+//! The order is load-bearing in both directions: a plain checkout of a
+//! branch that does not exist errors with `no such branch or table`,
+//! and `-b` on one that does errors with `branch already exists`. So
+//! the fallback has to be tried in that order, and neither call may be
+//! treated as idempotent.
+//!
+//! Because a fresh connection starts on `main`, the checkout is only
+//! true for as long as the pool keeps this connection. [`dr::open`]
+//! pins `max_connections(1)` and disables connection recycling for
+//! exactly that reason — see its "Connection pool size" docs.
 //!
 //! See [`super::schema_raw`] for the table shapes and
 //! [`EXTRACT.md`](../../EXTRACT.md) §"Multi-root via doltlite branches"
@@ -102,23 +119,43 @@ impl RawDb {
     }
 
     /// Switch the open connection's active branch, creating it if it
-    /// doesn't exist. See module docs for the FIXME on fallback.
+    /// doesn't exist. See the module docs for the spelling and the
+    /// ordering, both of which are load-bearing.
+    ///
+    /// Verifies the switch by reading `active_branch()` back. A
+    /// checkout that returned `Ok` without moving would be the
+    /// dangerous shape — the scan would go on to write every row to
+    /// whatever branch it was already on and report success.
     pub async fn checkout_branch(&self, branch: &str) -> Result<()> {
-        let try_existing = sqlx::query("CALL DOLT_CHECKOUT(?)")
+        // `dolt_checkout(branch)` errors when the branch is absent, so
+        // the error is the signal to create it rather than a failure.
+        let existing = sqlx::query("SELECT dolt_checkout(?)")
             .bind(branch)
             .execute(&self.pool)
             .await;
-        match try_existing {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                sqlx::query("CALL DOLT_CHECKOUT('-b', ?)")
-                    .bind(branch)
-                    .execute(&self.pool)
-                    .await
-                    .with_context(|| format!("dolt checkout -b {branch}"))?;
-                Ok(())
-            }
+        if let Err(no_such_branch) = existing {
+            sqlx::query("SELECT dolt_checkout('-b', ?)")
+                .bind(branch)
+                .execute(&self.pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "dolt checkout -b {branch} (after checkout {branch}                          reported: {no_such_branch})"
+                    )
+                })?;
         }
+
+        let active: String = sqlx::query("SELECT active_branch() AS b")
+            .fetch_one(&self.pool)
+            .await
+            .with_context(|| format!("read back active branch after checkout {branch}"))?
+            .try_get("b")
+            .with_context(|| format!("decode active branch after checkout {branch}"))?;
+        anyhow::ensure!(
+            active == branch,
+            "checkout of branch {branch:?} reported success but the connection              is on {active:?}"
+        );
+        Ok(())
     }
 
     /// Load the Unison fast-rescan cache fully into memory, as **two
