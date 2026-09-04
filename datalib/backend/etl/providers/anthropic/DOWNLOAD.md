@@ -1,4 +1,4 @@
-# Anthropic Extract
+# Claude: download
 
 This provider serves **two source types** that share one renderer:
 
@@ -259,18 +259,83 @@ configured `since` (config `sync.since:` / CLI `--since`; RFC 3339 or
 detail-fetched and are invisible to overlap selection. The filter only
 gates fetching — already-stored rows are untouched — so moving `since`
 further back later backfills the newly-in-scope conversations as
-"new" on that run. Everything in scope is classified into one of:
+"missing" on that run. Everything in scope is classified into one of:
 
-  1. **new** — not in either the API cache or the export seed.
-  2. **overlap** — one of the N most-recently-updated export
-     conversations (controlled by `--overlap`, default 3); refetched
-     as a live-vs-export sanity check.
-  3. **updated** — in the API cache but with a different `updated_at`.
-  4. **export-stale** — in the export seed but not the API cache, and
-     the export's `updated_at` is stale.
+  1. **missing** — no row in `conversations` yet.
+  2. **stale** — a row exists, but its stored `updated_at` differs from
+     the listing's. Also where an **overlap** item lands: the N
+     most-recently-updated conversations (`refresh_most_recent_n_chat_count`,
+     CLI `--overlap`) are forced into this bucket regardless of
+     `updated_at`, as a sanity check against the live copy.
+  3. **up to date** — stored `updated_at` matches the listing's. Skipped.
 
-Everything else is skipped. The per-org work queue is sorted by
-priority ascending so genuinely-new conversations are fetched first.
+The per-org work queue is `missing` first, then `stale`, so genuinely
+new conversations are fetched first.
+
+The comparison is against the `conversations` table and nothing else,
+which is what makes bootstrapping from an export work (next section).
+An earlier version of this list described a four-way split over "the
+API cache" and a separate "export seed" — two different stores, from
+the design that predates the doltlite raw store. There is one store
+now, and one `updated_at` column.
+
+## Bootstrapping from an export, then keeping it fresh with the API
+
+**Not built, and not quite safe to do by hand yet — read the hazard at
+the end before trying it.** Written down because it is the obvious thing
+to want: seed years of history from a bulk export (which needs no
+credentials and no rate limit), then let `claude_api` keep it current.
+
+Because both source types write the same tables of the same store, most
+of this already works:
+
+  * **Incrementality falls out for free.** The API listing pass compares
+    each conversation's stored `updated_at` against the listing's, and
+    the export ingest fills that column from the export payload. So an
+    export-seeded store is already "up to date" for everything that has
+    not changed since the export was taken — the first API run fetches
+    only what actually moved, not the whole account.
+  * **Identity survives the switch.** `grid_rows.uuid` is minted from
+    Anthropic's own conversation UUID and is deliberately *not* scoped
+    by our source name (`docs/dev/entity_ids.md`), so a conversation
+    keeps the same id, the same rendered path, and its feedback history
+    when the API takes over from the export.
+
+Two things stay half-filled, and both come from the same root: a row is
+only ever enriched when the API *detail-fetches* it, and the whole point
+above is that it mostly won't.
+
+  * **`org_uuid` / `org_name`.** An export carries no organization, so
+    those columns are NULL on export-ingested rows and the Org grid
+    column is empty for them. They fill in per conversation as the API
+    re-fetches it. This is not wrong — the row really did come from
+    somewhere with no org — but a mixed store shows Org only for the
+    part the API has touched.
+  * **Attachments.** Export rows have no CAS edges (there are no bytes
+    in an export to hash), so their attachments keep rendering as
+    un-fetched until the same re-fetch happens.
+
+To force either one, make the API re-fetch: widen `sync.since`, raise
+`refresh_most_recent_n_chat_count`, name the conversations in
+`sync.conv_uuids`, or `--reset-and-redownload` for the whole store.
+
+### The hazard: don't leave both download steps pointed at one store
+
+The export ingest treats the export as a complete snapshot and **prunes
+every conversation the export does not mention**. That is correct when
+the export is the only writer. It is destructive once the API has added
+conversations the export predates: re-running `download claude_export`
+over that store would delete exactly the rows the API just fetched.
+
+So today the bootstrap is a one-way door — ingest the export, then
+change the step's command to `datalib-step download claude_api` and
+don't run the export ingest against that store again.
+
+Making it a supported configuration means teaching the prune whose rows
+it owns. The discriminator already exists: an export-ingested
+conversation has a NULL `org_uuid` and an API-fetched one does not, so
+the prune could be narrowed to rows it wrote. That is not implemented,
+and `users` / `projects` / `project_docs` would need their own answer.
 
 ## Single-conversation mode
 

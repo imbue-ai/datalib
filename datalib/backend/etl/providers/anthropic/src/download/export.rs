@@ -119,7 +119,7 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     // when asked so `--reset-and-redownload` means the same thing here
     // as everywhere else.
     if opts.control.reset_and_redownload {
-        info!(event = "claude_export_reset_and_redownload");
+        info!(event = "anthropic_export_reset_and_redownload");
         db.reset().await.context("reset raw db before re-ingest")?;
     }
 
@@ -158,7 +158,7 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
         // `account`, so the only thing a missing users.json costs is
         // the account row itself.
         warn!(
-            event = "claude_export_no_users_json",
+            event = "anthropic_export_no_users_json",
             dir = %dir.display(),
         );
     }
@@ -184,7 +184,7 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
         // Loud on purpose: this is the one path that removes stored
         // rows, and "the export got smaller" is worth seeing.
         info!(
-            event = "claude_export_pruned",
+            event = "anthropic_export_pruned",
             rows = summary.pruned,
             "dropped rows the export no longer contains",
         );
@@ -304,7 +304,7 @@ async fn upsert_conversations(
     let mut rows = Vec::with_capacity(convs.len());
     for c in convs {
         let Some(id) = str_field(c, "uuid") else {
-            warn!(event = "claude_export_conversation_without_uuid");
+            warn!(event = "anthropic_export_conversation_without_uuid");
             continue;
         };
         rows.push(ConversationRowSchema {
@@ -335,7 +335,7 @@ async fn upsert_projects(
     let mut doc_rows: Vec<ProjectDocRow> = Vec::new();
     for p in projects {
         let Some(project_uuid) = str_field(p, "uuid") else {
-            warn!(event = "claude_export_project_without_uuid");
+            warn!(event = "anthropic_export_project_without_uuid");
             continue;
         };
         for d in docs_of(p) {

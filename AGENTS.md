@@ -838,8 +838,39 @@ Until #207 the export type had no download wave at all: the renderer
 read the export tree in place through a second parser, and the source
 had no raw store, no `sync_runs` row and no way to notice a deleted
 conversation. If you find prose calling `claude_export` "render-only",
-it predates that fix. See
-`datalib/backend/etl/providers/anthropic/DOWNLOAD.md`.
+it predates that fix.
+
+Because the two types share a store, seeding one from an export and
+then keeping it fresh with the API nearly works today — and has one
+destructive edge (the export ingest prunes to its own snapshot, so
+re-running it over an API-extended store deletes what the API added).
+Read DOWNLOAD.md's "Bootstrapping from an export" section before trying
+it. See `datalib/backend/etl/providers/anthropic/DOWNLOAD.md`.
+
+### "Claude" or "Anthropic"?
+
+Both, and the split is not arbitrary — **"Claude" is the product,
+"anthropic" is our code namespace for it**:
+
+- **Claude** wherever a person reads or types it: the source `type:`
+  strings (`claude_api`, `claude_export`), UI labels, the latchkey
+  service (`claude-ai`), user-facing docs and error messages. This is
+  what the data *is*; nobody exports "their Anthropic".
+- **anthropic** for the provider namespace in code: the crate
+  (`datalib_etl_anthropic`), its directory, the `anthropic_attachments`
+  table, processor ids (`anthropic/<name>/download`), Bazel targets, and
+  `event = "anthropic_*"` tracing fields. One provider crate serves
+  several Claude-branded source types, which is exactly why the
+  namespace is the vendor rather than one product.
+
+New tracing events go in the `anthropic_*` namespace even when they are
+about the export path (`anthropic_export_pruned`), so an operator can
+grep one prefix for the whole provider.
+
+Renaming across that boundary is not worth it: `anthropic_attachments`
+is a doltlite table (renaming it is a schema migration on every user's
+store), and the crate is upstream of ~130 Bazel targets. Fix prose that
+picks the wrong side; leave the identifiers alone.
 
 ## Unordered collections: give a bag an order before storing it
 
