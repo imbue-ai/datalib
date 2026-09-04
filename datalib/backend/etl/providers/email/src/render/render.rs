@@ -41,7 +41,12 @@ use crate::download::db::{LoadedAttachment, LoadedEmail};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (+ quoted-text folding, label chips).
-pub const RENDER_VERSION: u32 = 3;
+/// v4: an email with a missing or malformed `Date` header gets a null
+///     `when_ts` instead of a real-looking `1970-01-01T00:00:00` — see
+///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
+///     `Date` headers are common in real mail, so this changes real
+///     output and stale docs must be re-rendered.
+pub const RENDER_VERSION: u32 = 4;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -433,7 +438,10 @@ fn build_chat(
             } else {
                 parsed_eml.from_display.clone()
             },
-            date_ms: em.received_at.as_deref().and_then(iso_to_ms).unwrap_or(0),
+            // No `Date` header, or one we cannot parse, is a null
+            // `when_ts` — not the epoch. There is no parent stamp to
+            // inherit here: an email thread's items are the emails.
+            date_ms: em.received_at.as_deref().and_then(iso_to_ms),
             text: (!text.trim().is_empty()).then_some(text),
             kind: ItemKind::Text,
             attachments: Vec::new(),
@@ -494,12 +502,23 @@ fn labels_for_email(
         .collect()
 }
 
+/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
+/// is the right value for `when_ts`, but nothing records that upstream
+/// sent something we could not read — half of R1. See the note on
+/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
 /// unparseable.
+///
+/// Goes through `datalib-time` rather than calling `chrono` directly:
+/// timestamps are a cross-source concept, so exactly one crate decides
+/// how a string becomes an instant (rule P3 in
+/// `docs/dev/data_architecture_parse_and_render.md`). `parse_strict`
+/// is the right member of that family here — `received_at` is written
+/// by our own downloader and always carries an explicit offset.
 fn iso_to_ms(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s)
+    datalib_time::parse_strict(s)
         .ok()
-        .map(|dt| dt.timestamp_millis())
+        .map(|t| t.to_unix_millis())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -819,6 +838,31 @@ pub fn email_uuid(account_id: &str, email_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A missing or malformed `Date` header must produce no timestamp,
+    /// not the epoch. Real mail carries malformed `Date` headers often
+    /// enough that this was a live source of fake-1970 grid rows.
+    #[test]
+    fn iso_to_ms_refuses_to_invent_a_timestamp() {
+        assert_eq!(
+            iso_to_ms("2026-04-14T09:15:00-07:00"),
+            Some(1_776_183_300_000)
+        );
+        for bad in [
+            "",
+            "not a date",
+            // A `Date` header that never made it through RFC 3339.
+            "Tue, 14 Apr 2026 09:15:00 -0700",
+            // Naive — no offset — which we refuse rather than assume.
+            "2026-04-14T09:15:00",
+        ] {
+            assert_eq!(
+                iso_to_ms(bad),
+                None,
+                "iso_to_ms({bad:?}) fabricated a stamp"
+            );
+        }
+    }
 
     #[test]
     fn thread_uuid_is_stable() {

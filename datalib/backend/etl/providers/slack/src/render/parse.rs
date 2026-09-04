@@ -171,7 +171,7 @@ async fn parse_doltlite_async(
     let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
     for (thread_uuid, mut msgs) in by_thread {
         msgs.sort_by(|a, b| {
-            (a.ts_iso.as_str(), a.ts.as_str()).cmp(&(b.ts_iso.as_str(), b.ts.as_str()))
+            (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
         threads.push(SlackThreadBucket {
             thread_uuid,
@@ -603,7 +603,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
     let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
     for (thread_uuid, mut msgs) in by_thread {
         msgs.sort_by(|a, b| {
-            (a.ts_iso.as_str(), a.ts.as_str()).cmp(&(b.ts_iso.as_str(), b.ts.as_str()))
+            (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
         threads.push(SlackThreadBucket {
             thread_uuid,

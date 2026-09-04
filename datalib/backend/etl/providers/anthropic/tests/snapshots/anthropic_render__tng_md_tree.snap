@@ -14,7 +14,7 @@ display: "Borg Encryption Signature Lookup"
 account: 00000001-1701-4d00-8000-000000000001
 external_id: c0000005-1701-4d00-8000-00000000c005
 item_count: 6
-source_fingerprint: 8eb2ac9c47941189f0f63e20540a14ced9b92ff7a590f8ce24039250c6d02e9b
+source_fingerprint: 18944340932d5dd7815d528190ad9249a203c4a18f15d91883eeb37e7474e2dc
 ---
 
 <h1 class="page-title" data-page-title-uuid="4f6192ca-a4c2-5ef6-bd64-377fdf35435d">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -107,7 +107,7 @@ account: 00000001-1701-4d00-8000-000000000001
 project: Bridge Operations
 external_id: c0000003-1701-4d00-8000-00000000c003
 item_count: 6
-source_fingerprint: e9e36832476d5b1abd5f427df4ca95b7cf2e5f7c19c48a3aadf9e3254058956d
+source_fingerprint: 8980ac74717f73bc28a2ebbdea5606dbda0b4eb6f760a861d85f6875791c560b
 ---
 
 <h1 class="page-title" data-page-title-uuid="8f5a3f9f-43cc-5dc6-96fc-d0cd78cb0bc9">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -199,7 +199,7 @@ display: "Tricorder Image Diagnostic"
 account: 00000003-1701-4d00-8000-000000000003
 external_id: c0000004-1701-4d00-8000-00000000c004
 item_count: 2
-source_fingerprint: 4c4451d7e806e172e8bce9625a85ca287ccc9e728d107498f32067d2a63c9851
+source_fingerprint: b7cde548b6c749445e364ec8401ef25ab04854870d67e3c5ba950d5cc0e24b8f
 ---
 
 <h1 class="page-title" data-page-title-uuid="a291f856-67f6-5905-a4f8-1292e655ae76">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -236,7 +236,7 @@ account: 00000001-1701-4d00-8000-000000000001
 project: Bridge Operations
 external_id: 70000001-1701-4d00-8000-000000000701
 item_count: 4
-source_fingerprint: 1f1d9d5c44d6de4bb20c99dc91c3e417c2753a81aa9a05167a9a613c063aa04a
+source_fingerprint: 088bc2eb36f0b667bce839b8596246f385025dbd45f680527ad1d950ab9a3aff
 ---
 
 <h1 class="page-title" data-page-title-uuid="b6cd7d5c-7cbf-5606-a4c7-1fc17de46a6d">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -277,6 +277,55 @@ Open on subspace band 3 unless the target is cloaked.
 
 Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
 Medical emergencies route directly to Sickbay (Crusher).
+
+
+</div>
+
+
+=== anthropic_api/rendered_md/d5bfab57-fc56-5769-ba07-09e1cd28bd8f/all.md ===
+---
+title: "Claude Project · Stellar Cartography (all)"
+provider: anthropic
+source_label: "Claude"
+chat_uuid: d5bfab57-fc56-5769-ba07-09e1cd28bd8f
+markdown_uuid: d5bfab57-fc56-5769-ba07-09e1cd28bd8f
+period: all
+display: "Stellar Cartography"
+account: 00000002-1701-4d00-8000-000000000002
+project: Stellar Cartography
+external_id: 70000002-1701-4d00-8000-000000000702
+item_count: 3
+source_fingerprint: a46accb0a9a925f36e1edc5984eacfa6881e417cc9d194ec6be12e9bcd182b03
+---
+
+<h1 class="page-title" data-page-title-uuid="d5bfab57-fc56-5769-ba07-09e1cd28bd8f">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-b9d4253f-bf81-5da9-a5d0-e646184d7374" data-section-uuid="b9d4253f-bf81-5da9-a5d0-e646184d7374" class="msg msg--anthropic">
+
+## (no timestamp) — Description
+
+Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.
+
+</div>
+
+<div id="m-cbfc4f66-5f5c-5037-aee2-3125b2829672" data-section-uuid="cbfc4f66-5f5c-5037-aee2-3125b2829672" class="msg msg--anthropic">
+
+## (no timestamp) — Custom instructions
+
+Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.
+
+</div>
+
+<div id="m-a578fdb9-110f-5f34-a37f-6022428c045a" data-section-uuid="a578fdb9-110f-5f34-a37f-6022428c045a" class="msg msg--anthropic">
+
+## (no timestamp) — charting-conventions.md
+
+# Charting conventions
+
+Bearings are given from the ship's current heading, not from galactic north.
+
+- Sector designations use the Federation catalogue number, never the local name.
+- An extrapolated position is written in parentheses.
 
 
 </div>

@@ -196,7 +196,13 @@ async fn snapshot_grid_rows_and_documents() {
                 "provider": r.try_get::<String, _>("provider").ok(),
                 "kind": r.try_get::<String, _>("kind").ok(),
                 "source_label": r.try_get::<String, _>("source_label").ok(),
-                "when_ts": r.try_get::<String, _>("when_ts").ok(),
+                // `Option<String>`, not `String`: `when_ts` is nullable, and
+                // reading it as a bare `String` rendered SQL NULL as `""` —
+                // so this golden could not tell "upstream gave us no
+                // timestamp" from "upstream gave us an empty one". That is
+                // exactly the distinction §6 turns on, and it was invisible
+                // here until a fixture finally had an undated record.
+                "when_ts": r.try_get::<Option<String>, _>("when_ts").ok().flatten(),
                 "author": r.try_get::<Option<String>, _>("author").ok().flatten(),
                 "account": r.try_get::<Option<String>, _>("account").ok().flatten(),
                 "project": r.try_get::<Option<String>, _>("project").ok().flatten(),
