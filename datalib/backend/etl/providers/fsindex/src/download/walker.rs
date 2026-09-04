@@ -243,12 +243,13 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         );
         let dir_effective = dir_cascade.effective();
 
-        // Enumerate children: from the in-memory cache when the dir's
-        // own mtime is unchanged, otherwise via a real readdir.
+        // Enumerate children: from the in-memory cache when this is
+        // demonstrably the same directory, unmodified; otherwise via a
+        // real readdir.
         let unchanged_names = self
             .prev_stats
             .get(dir_rel)
-            .map(|p| p.mtime_ns == dir_fresh.mtime_ns)
+            .map(|p| same_dir_unmodified(p, &dir_fresh))
             .unwrap_or(false);
         let children: Vec<(String, String)> = if unchanged_names {
             self.counters
@@ -461,13 +462,27 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             symlink_target: None,
             identity_uuid,
         };
+        // Directories carry the same `(inode, dev)` identity files do.
+        // Without it the readdir-skip above can only ask "did the mtime
+        // change", which cannot tell one directory from a *different*
+        // directory that happens to share an mtime — see
+        // [`same_dir_unmodified`].
+        let stamp_kind = self.default_stamp_kind;
         let stat_row = FileStatsRow {
             id: dir_rel.to_string(),
             mtime_ns: dir_fresh.mtime_ns,
             size: dir_size,
-            stamp_kind: StampKind::NoStamp,
-            inode: None,
-            dev: None,
+            stamp_kind,
+            inode: if matches!(stamp_kind, StampKind::Inode) {
+                dir_fresh.inode
+            } else {
+                None
+            },
+            dev: if matches!(stamp_kind, StampKind::Inode) {
+                dir_fresh.dev
+            } else {
+                None
+            },
             ctime_ns: dir_fresh.ctime_ns,
         };
         self.push_row(file_row, stat_row)?;
@@ -558,6 +573,41 @@ fn cascade_for_dir(
         cascade_cache.insert(d.clone(), cascade.clone());
     }
     cascade
+}
+
+/// Can this directory's cached child list stand in for a `readdir`?
+///
+/// Only when the cached row describes *this* directory and nothing in
+/// it has changed. The mtime alone is not enough: the cache is keyed by
+/// root-relative path, so a scan of a different tree — the scan root is
+/// always the key `""` — compares against whatever the previous scan
+/// left at that path. Two unrelated directories sharing an mtime then
+/// look "unchanged" and the walker enumerates the *other* tree's
+/// children, silently producing a wrong listing rather than an error.
+/// `(inode, dev)` is the filesystem's own answer to "same directory",
+/// so it settles the question.
+///
+/// Unlike [`datalib_etl::fswalk::decide`] this does not compare size:
+/// `file_stats.size` for a directory is the rolled-up size of its
+/// visible contents, computed by this walker, not the `st_size` a fresh
+/// stat reports.
+fn same_dir_unmodified(prev: &FileStatsRow, fresh: &FreshStat) -> bool {
+    if matches!(prev.stamp_kind, StampKind::Rescan) {
+        // A previous run was interrupted here; take the readdir.
+        return false;
+    }
+    if prev.mtime_ns != fresh.mtime_ns {
+        return false;
+    }
+    if matches!(prev.stamp_kind, StampKind::Inode)
+        && (prev.inode != fresh.inode || prev.dev != fresh.dev)
+    {
+        return false;
+    }
+    // `NoStamp` rows have no identity to check — the filesystem could
+    // not give us a stable one — so mtime is all there is, which is the
+    // same bargain the file path makes there.
+    true
 }
 
 fn ancestor_chain(root: &Path, entry: &Path) -> Vec<PathBuf> {
@@ -937,6 +987,59 @@ mod tests {
         assert!(
             has(&rows_edit, "mid/added.txt"),
             "the previously-added file is still present"
+        );
+    }
+
+    /// A *different* directory that happens to share an mtime must not
+    /// inherit the cached child list.
+    ///
+    /// The cache is keyed by root-relative path and the scan root is
+    /// always `""`, so scanning tree B against a cache built from tree
+    /// A compares their two roots directly. On a filesystem with coarse
+    /// mtimes — or simply two directories created in the same tick — an
+    /// mtime-only check calls them equal, and the walker then
+    /// enumerates A's children while standing in B. That is silent
+    /// corruption, not an error: CI (Linux) caught it through
+    /// `fsindex/tests/branch_scan.rs`, which scans two roots into two
+    /// branches of one file, where it dropped a whole subdirectory.
+    ///
+    /// The cache is doctored rather than the filesystem: the point is
+    /// the identity check, and forcing two real directories to share an
+    /// mtime would need a crate we do not otherwise depend on.
+    #[test]
+    fn a_different_directory_with_the_same_mtime_is_not_skipped() {
+        let a = tempfile::tempdir().unwrap();
+        write(&a.path().join("only_a.txt"), b"aaa");
+        let (rows_a, _) = walk(a.path(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+        let (mut stats, blake3s, kids) = build_cache(&rows_a);
+
+        let b = tempfile::tempdir().unwrap();
+        write(&b.path().join("nested/only_b.txt"), b"bbb");
+
+        // Pretend the previous scan saw a root with B's mtime — so an
+        // mtime-only check passes — but A's identity.
+        let b_root = fresh_stat_for(&std::fs::metadata(b.path()).unwrap());
+        let root_stat = stats.get_mut("").expect("the root row is cached");
+        root_stat.mtime_ns = b_root.mtime_ns;
+        assert_ne!(
+            root_stat.inode, b_root.inode,
+            "the two temp roots must be distinct directories"
+        );
+
+        let (rows_b, counters) = walk(b.path(), &stats, &blake3s, &kids);
+        let ids: Vec<&str> = rows_b.iter().map(|r| r.file_row.id.as_str()).collect();
+        assert!(
+            ids.contains(&"nested/only_b.txt"),
+            "the walker enumerated the cached tree instead of the real one: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"only_a.txt"),
+            "a file from the *other* tree leaked into the scan: {ids:?}"
+        );
+        assert_eq!(
+            counters.dirs_readdir_skipped.load(Ordering::Relaxed),
+            0,
+            "a directory whose identity does not match must re-read"
         );
     }
 }
