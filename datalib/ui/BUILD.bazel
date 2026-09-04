@@ -227,9 +227,21 @@ sh_test(
     # runner. There is no cost to the larger budget — bazel enforces
     # the ceiling, it does not wait for it.
     timeout = "long",
-    # Inherit the user's PATH and HOME so the script can find pnpm / node
-    # and reuse ~/Library/Caches/ms-playwright (the browser cache) /
-    # ~/.local/share/pnpm. Bazel scrubs the test env otherwise.
+    # Bazel scrubs the test env, so anything the suite still needs from
+    # the host has to be named here.
+    #
+    # HOME is down to ONE job: Playwright resolves its browser cache to
+    # `~/Library/Caches/ms-playwright`, and the browsers are not Bazel
+    # inputs. It used to have a second — the qmd GGUFs came from
+    # `~/.cache/qmd/models` — and #268 made those `http_file`s, so that
+    # reason is gone. Measured rather than assumed: with HOME dropped
+    # from this list and `--test_env=PLAYWRIGHT_BROWSERS_PATH=...`
+    # supplied, the suite passes. Whoever makes the browsers a Bazel
+    # input deletes this line and `requires-network` in one go.
+    #
+    # PATH is the `bazel run` half: that mode uses the source tree and
+    # needs the host's pnpm / node. Under `bazel test` both come from
+    # Bazel (`:node_modules`, `@nodejs_host`).
     env_inherit = [
         "PATH",
         "HOME",
