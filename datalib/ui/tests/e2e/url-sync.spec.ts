@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 
+import { selectRowByUuid } from "./grid-helpers";
+
 // The URL path encodes the whole column stack: a /-separated list of
 // `code:state` segments (see src/router/columns.ts), where `code` is
 // the card source (e.g. `gridView()`) and `state` is the card's
@@ -13,9 +15,16 @@ import { test, expect } from "@playwright/test";
 // does not pin the state-string serialization.
 
 // Resolve a stable target row by its `row-id` (AG Grid's per-row UUID
-// attribute). `.first()` in a virtualized grid is racy: after a sort or
-// scroll, the row at DOM-position-0 can shift mid-test, so a click and
-// the subsequent class-assertion may end up looking at different rows.
+// attribute — `getRowId` in GridCard returns `data.uuid`). `.first()` in
+// a virtualized grid is racy: after a sort or scroll, the row at
+// DOM-position-0 can shift mid-test, so a click and the subsequent
+// class-assertion may end up looking at different rows.
+//
+// The id is then handed to `selectRowByUuid`, which scrolls that row
+// into view before clicking it and confirms the selection took. Both
+// halves matter here: the row this pins can be outside the viewport
+// (a fresh load does not always start at the top of the collection),
+// and the click races the app's own view restore.
 async function pinFirstRowId(page: import("@playwright/test").Page) {
   const first = page.locator('.ag-grid-scrolling-rows [role="row"]').first();
   await expect(first).toBeVisible({ timeout: 10_000 });
@@ -30,15 +39,11 @@ test.describe("URL reflects app state", () => {
   }) => {
     await page.goto("/");
     const rowId = await pinFirstRowId(page);
-    const target = page.locator(
-      `.ag-grid-scrolling-rows [role="row"][row-id="${rowId}"]`,
-    );
 
     const beforePath = await page.evaluate(() => location.pathname);
 
-    await target.click();
     // Selection visibly applies (row gets ag-row-selected class).
-    await expect(target).toHaveClass(/ag-row-selected/);
+    await selectRowByUuid(page, rowId);
 
     const afterPath = await page.evaluate(() => location.pathname);
     expect(
@@ -56,11 +61,7 @@ test.describe("URL reflects app state", () => {
   }) => {
     await page.goto("/");
     const rowId = await pinFirstRowId(page);
-    const target = page.locator(
-      `.ag-grid-scrolling-rows [role="row"][row-id="${rowId}"]`,
-    );
-    await target.click();
-    await expect(target).toHaveClass(/ag-row-selected/);
+    await selectRowByUuid(page, rowId);
     await expect(page.locator(".chat-preview")).toBeVisible();
 
     const pathWithSelection = await page.evaluate(() => location.pathname);
