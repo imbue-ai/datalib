@@ -34,8 +34,8 @@
 # The version pins are still grepped out of the Rust sources that spawn
 # the tools, because they name the staged DIRECTORIES and the resolver
 # looks those up by the Rust constant:
-#   * latchkey  — LATCHKEY_VERSION in backend/core/src/node_runtime.rs
-#   * qmd       — DEFAULT_QMD_VERSION in backend/unified_index/src/qmd/mod.rs
+#   * latchkey  — LATCHKEY_VERSION in backend/runtime/src/node_runtime.rs
+#   * qmd       — DEFAULT_QMD_VERSION in backend/runtime/src/qmd.rs
 # `//tools:version_pins_test` holds each equal to the package.json that
 # its Bazel tree is built from, so a pin that moves in one place fails
 # the build rather than staging a directory nothing will look in.
@@ -77,9 +77,9 @@ extract_pin() { # file, pattern of the const line
     printf '%s' "$v"
 }
 
-latchkey_version="$(extract_pin "$backend_dir/core/src/node_runtime.rs" \
+latchkey_version="$(extract_pin "$backend_dir/runtime/src/node_runtime.rs" \
     '^pub const LATCHKEY_VERSION:')"
-qmd_version="$(extract_pin "$backend_dir/unified_index/src/qmd/mod.rs" \
+qmd_version="$(extract_pin "$backend_dir/runtime/src/qmd.rs" \
     '^pub const DEFAULT_QMD_VERSION:')"
 
 log "pins: latchkey=$latchkey_version qmd=$qmd_version"

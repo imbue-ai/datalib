@@ -205,7 +205,8 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.validate().is_err());
-        // No `sync` table at all = render-only/unmanaged; nothing to check.
+        // No `sync` table at all = unmanaged, no download wave;
+        // nothing to check.
         SlackConfig::default().validate().unwrap();
     }
 }

@@ -82,7 +82,7 @@ Reach for the simplest existing provider that's shaped like yours,
      dance), so the auth and resume machinery you'd need to understand
      for live providers stays out of the way while you learn the
      download / render / sidecar shape.
-  2. **`anthropic`** (Claude) — first choice if your provider *is* a
+  2. **`claude`** (Claude) — first choice if your provider *is* a
      live API. Single-account, simple bearer auth via latchkey, clean
      forward-walk cursor. Most of the "what does download / render /
      blob-CAS look like for an API-backed provider" is here without

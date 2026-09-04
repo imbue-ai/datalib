@@ -1,11 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
-exports_files([
-    "Cargo.toml",
-    # Canonical version constant, read by //tools:version_pins_test.
-    "src/qmd/mod.rs",  # DEFAULT_QMD_VERSION
-])
+exports_files(["Cargo.toml"])
 
 # The unified index: the grid index, the qmd index, and the query
 # language over them.
@@ -28,6 +24,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

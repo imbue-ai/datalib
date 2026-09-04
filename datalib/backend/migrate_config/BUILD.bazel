@@ -28,7 +28,7 @@ rust_library(
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
+        "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
         "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
@@ -103,7 +103,7 @@ rust_test(
     deps = [
         ":datalib_migrate_config",
         "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/etl/providers/anthropic_config:datalib_etl_anthropic_config",
+        "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
         "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",

@@ -240,8 +240,17 @@ datalib/
                    pre-TOML `config.yaml`. Holds every retired config
                    schema and the tree's last YAML parser, so the
                    shipping programs accept only `config.toml`.
-    core/          data-root layout, the feedback + job stores,
-                   host-runtime helpers. Knows nothing about the index.
+    runtime/       the data-root layout, the bundled-Node/npx resolver,
+                   and the qmd version pin + spawn helper. Has NO
+                   dependencies, deliberately: `qmd_indexer_bin` is a
+                   bazel `tools=` input to the fixture's ~90s embedding
+                   action, so whatever it links is the set of crates
+                   whose next edit re-runs that embed on CI. `core` and
+                   `unified_index` re-export from here, so the old
+                   `datalib_core::layout::…` paths still resolve.
+    core/          the feedback + job stores, plus re-exports of
+                   `runtime`'s layout and host-runtime helpers. Knows
+                   nothing about the index.
     unified_index/ the grid index, the qmd index, the query language
                    over them, and the repo that reads them. Linked by
                    datalib-step (writes it) and datalib-applet (serves
@@ -311,7 +320,7 @@ app's own components and endpoints, which the scheduler never sees
 It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin (`DEFAULT_QMD_VERSION`
-in `datalib/backend/unified_index/src/qmd/mod.rs`): the Tauri app
+in `datalib/backend/runtime/src/qmd.rs`): the Tauri app
 bundles a pinned Node runtime plus `latchkey`/`qmd` package trees.
 All three come out of Bazel — `//datalib/tauri:bundled_node`,
 `//third-party/qmd/runtime:qmd_tree` and
@@ -648,7 +657,7 @@ bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 # the shim once:
 bazel build //datalib/backend/etl:latchkey_curl_impersonate
 export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
-bazel run //datalib/backend/etl/providers/anthropic:anthropic_live.update
+bazel run //datalib/backend/etl/providers/claude:claude_live.update
 ```
 
 The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
@@ -826,13 +835,61 @@ bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 
 Claude data can come from the live web API (`type: claude_api`) or an
 unpacked bulk export (`type: claude_export`) — two separate source
-types, each its own stanza/step pair. The API downloader normalizes
-every response into the bulk-export on-disk shape
+types, each its own download + render step pair, both served by one
+provider crate.
+
+**They write the same raw store.** `claude_api` walks the API and
+`claude_export` reads the export's JSON off `common.input_path`, and
+both land rows in the same six tables of `<name>/raw`, so the render
+step has exactly one input shape. The API downloader gets there by
+normalizing every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in
-`datalib/backend/etl/providers/anthropic/src/download/normalize.rs`,
-stamping `_source: { via: "claude.ai/api", org_uuid }` provenance) so a
-single render path consumes either source indistinguishably. See
-`datalib/backend/etl/providers/anthropic/DOWNLOAD.md`.
+`datalib/backend/etl/providers/claude/src/download/normalize.rs`,
+stamping `_source: { via: "claude.ai/api", org_uuid }` provenance); the
+export ingest stores what the export already said, with the org columns
+NULL — which is how the renderer tells the two apart and knows not to
+normalize an already-normalized payload a second time.
+
+Until #207 the export type had no download wave at all: the renderer
+read the export tree in place through a second parser, and the source
+had no raw store, no `sync_runs` row and no way to notice a deleted
+conversation. If you find prose calling `claude_export` "render-only",
+it predates that fix.
+
+Because the two types share a store, seeding one from an export and
+then keeping it fresh with the API nearly works today — and has one
+destructive edge (the export ingest prunes to its own snapshot, so
+re-running it over an API-extended store deletes what the API added).
+Read DOWNLOAD.md's "Bootstrapping from an export" section before trying
+it. See `datalib/backend/etl/providers/claude/DOWNLOAD.md`.
+
+### "Claude", not "Anthropic"
+
+**Claude is the product; that is the name we use.** The provider crate is
+`datalib_etl_claude` under `providers/claude/`, the source types are
+`claude_api` / `claude_export`, the `grid_rows.provider` tag is
+`claude`, the tables are `claude_attachments`, processor ids are
+`claude/<name>/…`, and tracing events are `claude_*`.
+
+The rule that settled it is the sibling comparison, not a headcount:
+**every source type in this tree is named for the product a person
+recognizes, never for the vendor** — `chatgpt_api`, not `openai_api`;
+`lightroom`, not `adobe_catalog`. The provider directory was the single
+exception until #269, where `anthropic` sat next to `chatgpt` and named
+the company instead of the thing.
+
+Write **Anthropic** only where you mean the company or something it
+issues, because there the distinction is real and load-bearing:
+
+- "Anthropic issues stable UUIDs for every entity" — a fact about
+  upstream, and the reason `Scope::ProviderGlobal` is safe here.
+- "the owning Anthropic organization" — `org_uuid` is an org *in
+  Anthropic's account system*, not in ours.
+- "if Anthropic ever ships attachment bytes inside the export".
+
+The one deliberate survivor of the rename is the `anthropic` **search
+keyword** in `ui/src/config/catalog.ts`: someone who thinks of the
+company should still find the source in the picker.
 
 ## Unordered collections: give a bag an order before storing it
 
@@ -852,7 +909,7 @@ from itself, and everything downstream believes it changed:
 the manual-e2e golden's `--reset-and-redownload` stability check fails
 on content that never moved. Found this way on 2026-08-31 — claude.ai
 returns a project's eight `permissions` strings in a different order on
-different fetches (`canonicalize_project_payload` in the anthropic
+different fetches (`canonicalize_project_payload` in the Claude
 downloader now sorts them).
 
 **Sort; don't declare it volatile.** The two look interchangeable and

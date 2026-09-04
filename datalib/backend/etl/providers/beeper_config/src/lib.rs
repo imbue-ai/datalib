@@ -8,8 +8,8 @@ use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The beeper-owned slice of a `beeper` source. `sync:` present → live
-/// Beeper Texts ingest (the download path); absent → render-only over an
-/// already-on-disk raw store.
+/// Beeper Texts ingest (the download path); absent → no download wave,
+/// and render reads whatever an earlier run already ingested.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BeeperConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

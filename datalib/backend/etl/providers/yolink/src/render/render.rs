@@ -9,9 +9,10 @@
 //!    gets an `id="m-<uuid>" data-section-uuid="<uuid>"` wrapper, which
 //!    is what the UI's per-section feedback and copy-id affordances hang
 //!    off, and what the device's grid row addresses.
-//! 3. **Store** — provenance: the configured fetch scope, the doltlite
-//!    commit log, the error count. Answers "where did this come from and
-//!    when?" without opening the CLI.
+//! 3. **Store** — provenance: the configured fetch scope, plus counts of
+//!    commits, readings and recorded fetch errors. Deliberately no
+//!    doltlite HEAD and no commit log; see `render_store_section` for
+//!    why those two stay out of the rendered page.
 //!
 //! Secrets never reach the page: `family_device_id` and the device UDID
 //! are a per-device read credential for the device's entire history (see
@@ -506,14 +507,23 @@ fn render_metric_table(out: &mut String, series: &[&Series]) {
     out.push('\n');
 }
 
+/// The store's own provenance — the doltlite HEAD hash and the per-commit
+/// hashes and wall-clock dates — is deliberately NOT rendered here, only
+/// the counts.
+///
+/// Two reasons, and the second is the one that bites. It is storage-layer
+/// bookkeeping rather than anything the user's sensors recorded, so
+/// putting it in a vector index buys noise; and it changes on every
+/// single run, because doltlite stamps its bootstrap commits with the
+/// wall clock and the hashes follow from those timestamps. That made
+/// this one file the reason a whole rendered markdown tree was never
+/// byte-identical to its previous self, which in turn re-ran the ~90s
+/// CPU-only embed on CI for changes that altered nothing it reads (see
+/// `tests/fixtures/tar_qmd.py`). `dolt_log` still has all of it — read
+/// it with the doltlite CLI, per docs/dev/doltlite.md.
 fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
-    let _ = writeln!(
-        out,
-        "| doltlite HEAD | `{}` |",
-        parsed.head.as_deref().unwrap_or("(unavailable)")
-    );
     let _ = writeln!(out, "| Commits | {} |", parsed.commits.len());
     let _ = writeln!(out, "| Readings | {} |", thousands(parsed.reading_count));
     let _ = writeln!(
@@ -531,21 +541,6 @@ fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
             scope.updated_at,
             pretty_json(&scope.config),
         );
-    }
-
-    if !parsed.commits.is_empty() {
-        out.push_str("### Commit log\n\n");
-        out.push_str("| When | Commit | Message |\n| --- | --- | --- |\n");
-        for c in &parsed.commits {
-            let _ = writeln!(
-                out,
-                "| {} | `{}` | {} |",
-                c.date,
-                &c.hash[..c.hash.len().min(12)],
-                escape_table_cell(&c.message),
-            );
-        }
-        out.push('\n');
     }
 }
 
@@ -704,10 +699,6 @@ fn pretty_json(raw: &str) -> String {
         Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| raw.to_string()),
         Err(_) => raw.to_string(),
     }
-}
-
-fn escape_table_cell(s: &str) -> String {
-    s.replace('|', "\\|").replace('\n', " ")
 }
 
 fn yaml_safe(s: &str) -> String {

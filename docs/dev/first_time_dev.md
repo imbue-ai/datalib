@@ -52,7 +52,7 @@ named volumes so rebuilds aren't cold.
 Two coupled projects that mirror personal data into a queryable local store:
 
 - **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
-  chat exports and other sources (Anthropic, OpenAI, Slack, GitHub, GitLab,
+  chat exports and other sources (Claude, ChatGPT, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
   doltlite DB, renders one Markdown file per conversation, builds a qmd
   search index, and serves the result over axum / Tauri.
@@ -265,7 +265,7 @@ Design notes:
 
 Several provider crates ship a `*_live` snapshot test that hits the real
 service API through `latchkey`:
-`//datalib/backend/etl/providers/anthropic:anthropic_live`, plus the
+`//datalib/backend/etl/providers/claude:claude_live`, plus the
 sibling `chatgpt_live`, `github_live`, `gitlab_live`, `notion_live`, and
 `email:jmap_live` targets. Each downloads a small known fixture (e.g. one
 conversation), then asserts a curated stable view against committed
@@ -277,14 +277,14 @@ shim:
 ```sh
 bazel build //datalib/backend/etl:latchkey_curl_impersonate
 export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
-bazelisk test //datalib/backend/etl/providers/anthropic:anthropic_live \
+bazelisk test //datalib/backend/etl/providers/claude:claude_live \
     --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
     --test_env=LATCHKEY_CURL
 ```
 
 When upstream content changes, the test will fail with a diff; accept the
 change with the sibling `.update` target (e.g. `bazel run
-//datalib/backend/etl/providers/anthropic:anthropic_live.update` —
+//datalib/backend/etl/providers/claude:claude_live.update` —
 see [`/AGENTS.md`](/AGENTS.md) § "Updating insta snapshots").
 
 ### Changing a row schema

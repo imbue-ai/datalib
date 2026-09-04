@@ -35,7 +35,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 
 llm_ts="$(rlocation _main/third-party/qmd/src/llm.ts)"
 pkg_json="$(rlocation _main/third-party/qmd/package.json)"
-core_qmd_mod="$(rlocation _main/datalib/backend/unified_index/src/qmd/mod.rs)"
+core_qmd_mod="$(rlocation _main/datalib/backend/runtime/src/qmd.rs)"
 
 for f in "$llm_ts" "$pkg_json" "$core_qmd_mod"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
@@ -86,7 +86,7 @@ if [[ "$pkg_version" != "$pinned_version" ]]; then
 Vendored qmd snapshot is out of sync with DEFAULT_QMD_VERSION.
 
   third-party/qmd/package.json               version = "$pkg_version"
-  unified_index/src/qmd/mod.rs    DEFAULT_QMD_VERSION = "$pinned_version"
+  runtime/src/qmd.rs              DEFAULT_QMD_VERSION = "$pinned_version"
 
 Either update DEFAULT_QMD_VERSION to "$pkg_version" or re-vendor
 third-party/qmd/ at $pinned_version, then re-run this test. The

@@ -135,10 +135,10 @@ fn load_grid_rows(root: &Path) -> Vec<GridRowRef> {
 
 /// Synthesize a two-document fixture tree under `root/rendered_md/`:
 ///
-///   * One anthropic chat doc (Chat row + 2 message rows).
+///   * One claude chat doc (Chat row + 2 message rows).
 ///   * One github PR thread doc (3 PR Comment rows).
 fn make_fixture(root: &Path) {
-    let chat = "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md";
+    let chat = "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md";
     write_sidecar(
         root,
         chat,
@@ -147,19 +147,19 @@ fn make_fixture(root: &Path) {
                 "c0000001-1701-4d00-8000-00000000c001",
                 "Chat",
                 chat,
-                "anthropic",
+                "claude",
             ),
             row(
                 "30000001-1701-4d00-8000-000000030001",
                 "User Input",
                 chat,
-                "anthropic",
+                "claude",
             ),
             row(
                 "30000002-1701-4d00-8000-000000030002",
                 "LLM Response",
                 chat,
-                "anthropic",
+                "claude",
             ),
         ],
     );
@@ -237,7 +237,7 @@ fn line_resolves_to_single_message_row() {
     // qmd_path — no snippet anchor required.
     let tmp = tempfile::tempdir().unwrap();
     make_fixture(tmp.path());
-    let chat = "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md";
+    let chat = "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md";
     let anchors = write_md(
         tmp.path(),
         chat,
@@ -270,7 +270,7 @@ fn path_fallback_returns_all_rows_for_doc() {
     let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
 
     let stdout = fake_stdout(&[(
-        "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md",
+        "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md",
         "no anchors here",
     )]);
     let hits = parse_stdout(&stdout).unwrap();
@@ -343,7 +343,7 @@ fn hits_for_row_reverse_mapping() {
         (pr_thread, "nothing anchored"),
         // Different doc altogether → must NOT match.
         (
-            "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md",
+            "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md",
             s_diff.as_str(),
         ),
     ]);

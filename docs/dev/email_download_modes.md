@@ -168,7 +168,7 @@ Deletions carry Gmail's own message id, but rows are keyed by
 `Message-ID`, so the mapping is not local. Ingest stamps
 `_source: { via, gmailMessageId, gmailThreadId }` into the envelope
 payload (the same provenance pattern
-`datalib_etl_anthropic::normalize_to_export_shape` uses) and the delete
+`datalib_etl_claude::normalize_to_export_shape` uses) and the delete
 matches on it.
 
 ### Throughput and the budget

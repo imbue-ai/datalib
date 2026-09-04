@@ -4,7 +4,7 @@
 // ingest time, keyed by a provider-namespaced UUID. The Rust grid
 // backend reads this table from <root>/unified_index/grid/db.doltlite_db with a
 // single query and renders rows directly. Per-provider tables
-// (anthropic_*, openai_*, slack_*) remain the authoritative store for
+// (claude_*, openai_*, slack_*) remain the authoritative store for
 // raw payloads + render input; grid_rows is the denormalized
 // projection.
 //
@@ -26,9 +26,9 @@ pub struct GridRow {
     /// the source entity so re-ingest is idempotent.
     ///
     /// Per-provider mapping:
-    ///   anthropic.chat: anthropic_conversations.conversation_uuid
-    ///   anthropic.message: anthropic_messages.message_uuid
-    ///   anthropic.block: format!('{}:{}', message_uuid, block_index)
+    ///   claude.chat: claude_conversations.conversation_uuid
+    ///   claude.message: claude_messages.message_uuid
+    ///   claude.block: format!('{}:{}', message_uuid, block_index)
     ///   openai.chat: openai_conversations.conversation_id
     ///   openai.message: openai_messages.message_id
     ///   slack.thread: uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')
@@ -53,11 +53,11 @@ pub struct GridRow {
     /// filter (chat: vs message:) and the icon.
     ///
     /// Per-provider mapping:
-    ///   anthropic.chat: 'Chat'
-    ///   anthropic.message.human: 'User Input'
-    ///   anthropic.message.assistant: 'LLM Response'
-    ///   anthropic.block.thinking: 'LLM Thinking'
-    ///   anthropic.block.tool_*: 'Tool Call'
+    ///   claude.chat: 'Chat'
+    ///   claude.message.human: 'User Input'
+    ///   claude.message.assistant: 'LLM Response'
+    ///   claude.block.thinking: 'LLM Thinking'
+    ///   claude.block.tool_*: 'Tool Call'
     ///   openai.chat: 'Chat'
     ///   openai.message.user: 'User Input'
     ///   openai.message.assistant.thoughts|reasoning_recap: 'LLM Thinking'
@@ -82,7 +82,7 @@ pub struct GridRow {
     /// Human-friendly provider label shown in the Source column.
     ///
     /// Per-provider mapping:
-    ///   anthropic: 'Claude'
+    ///   claude: 'Claude'
     ///   openai: 'ChatGPT'
     ///   slack: 'Slack'
     ///   github: 'GitHub'
@@ -107,9 +107,9 @@ pub struct GridRow {
     /// the original local wall-clock for display.
     ///
     /// Per-provider mapping:
-    ///   anthropic.chat: IFNULL(created_at, updated_at)
-    ///   anthropic.message: messages.created_at
-    ///   anthropic.block: blocks.start_timestamp OR bump_micros(parent_msg.created_at, block_index+1)
+    ///   claude.chat: IFNULL(created_at, updated_at)
+    ///   claude.message: messages.created_at
+    ///   claude.block: blocks.start_timestamp OR bump_micros(parent_msg.created_at, block_index+1)
     ///   openai.chat: IFNULL(create_time, update_time)
     ///   openai.message: messages.create_time OR bump_micros(parent_conv.create_time, msg_idx+1)
     ///   slack.message: slack_messages.ts (Slack ts is unix-seconds-with-fractional, formatted as ISO-8601 in UTC)
@@ -130,9 +130,9 @@ pub struct GridRow {
     /// the user real_name.
     ///
     /// Per-provider mapping:
-    ///   anthropic.chat: ''
-    ///   anthropic.message.human: account_uuid
-    ///   anthropic.message.assistant: conversation.raw_json.model OR sender
+    ///   claude.chat: ''
+    ///   claude.message.human: account_uuid
+    ///   claude.message.assistant: conversation.raw_json.model OR sender
     ///   openai.message.user: account_id
     ///   openai.message.assistant: model_slug OR role
     ///   slack.message: users.real_name OR users.name
@@ -147,7 +147,7 @@ pub struct GridRow {
     /// Account identifier (provider-native). Drives the account: filter.
     ///
     /// Per-provider mapping:
-    ///   anthropic: anthropic_conversations.account_uuid
+    ///   claude: claude_conversations.account_uuid
     ///   openai: openai_conversations.account_id
     ///   slack: slack_workspaces.team_id
     ///   github: self_identity.viewer.login (the host account that fetched the data)
@@ -155,13 +155,13 @@ pub struct GridRow {
     ///   notion: notion_space.name (workspace name; one per ingest)
     #[col(sql = "VARCHAR(96)")]
     pub account: Option<String>,
-    /// Project identifier. For anthropic this is the Claude Project's
+    /// Project identifier. For claude this is the Claude Project's
     /// *name*; for github/gitlab this is the repo full name (e.g.
     /// 'owner/repo' or 'group/.../project_path'). Null for providers
     /// without a project notion (openai, slack).
     ///
     /// Per-provider mapping:
-    ///   anthropic: the `projects.name` of the conversation's
+    ///   claude: the `projects.name` of the conversation's
     ///     `project.uuid`, so a project page and every conversation in
     ///     it group under one label. Falls back to the bare UUID when
     ///     projects aren't mirrored (`sync.projects = false`).
@@ -179,7 +179,7 @@ pub struct GridRow {
     /// non-Anthropic rows.
     ///
     /// Per-provider mapping:
-    ///   anthropic: anthropic_conversations._source.org_uuid
+    ///   claude: claude_conversations._source.org_uuid
     #[col(sql = "VARCHAR(96)")]
     pub org_uuid: Option<String>,
     /// Anthropic-only. Human-readable org display name (from
@@ -188,7 +188,7 @@ pub struct GridRow {
     /// Null for non-Anthropic rows.
     ///
     /// Per-provider mapping:
-    ///   anthropic: anthropic_conversations._source.org_name
+    ///   claude: claude_conversations._source.org_name
     #[col(sql = "VARCHAR(255)")]
     pub org_name: Option<String>,
     /// Channel display name. For Slack this is the channel (e.g. 'bridge',
@@ -198,7 +198,7 @@ pub struct GridRow {
     /// channel: filter.
     ///
     /// Per-provider mapping:
-    ///   anthropic: null
+    ///   claude: null
     ///   openai: null
     ///   slack: slack_channels.channel_name
     ///   whatsapp: chat display name (wa_chat.subject for groups, JID label for 1:1)
@@ -213,7 +213,7 @@ pub struct GridRow {
     /// each grid row stands alone without a join.
     ///
     /// Per-provider mapping:
-    ///   anthropic: anthropic_conversations.name
+    ///   claude: claude_conversations.name
     ///   openai: openai_conversations.title
     ///   slack: slack_channels.channel_name + thread root snippet
     ///   github: pull_request.title (carried onto every child comment/review row)
@@ -229,9 +229,9 @@ pub struct GridRow {
     /// parent so the chat preview pane knows which thread to open.
     ///
     /// Per-provider mapping:
-    ///   anthropic.chat: = uuid (conversation_uuid)
-    ///   anthropic.message: messages.conversation_uuid
-    ///   anthropic.block: parent_message.conversation_uuid
+    ///   claude.chat: = uuid (conversation_uuid)
+    ///   claude.message: messages.conversation_uuid
+    ///   claude.block: parent_message.conversation_uuid
     ///   openai.chat: = uuid (conversation_id)
     ///   openai.message: messages.conversation_id
     ///   slack.thread: = uuid (thread root uuid)
@@ -262,9 +262,9 @@ pub struct GridRow {
     /// pre-truncated snippet.
     ///
     /// Per-provider mapping:
-    ///   anthropic.chat: summary OR name
-    ///   anthropic.message: messages.text
-    ///   anthropic.block: blocks.text OR raw_json.thinking OR type
+    ///   claude.chat: summary OR name
+    ///   claude.message: messages.text
+    ///   claude.block: blocks.text OR raw_json.thinking OR type
     ///   openai.chat: title
     ///   openai.message: messages.text
     ///   slack.thread: root message text
@@ -306,7 +306,7 @@ pub struct GridRow {
     /// the TNG fixture (`//tests/fixtures:ingested_tng`, 2026-08-27):
     ///
     /// ```text
-    /// anthropic  anthropic-api/rendered_md/{conversation_uuid}/all.md
+    /// claude  claude-api/rendered_md/{conversation_uuid}/all.md
     /// openai     chatgpt-api/rendered_md/{conversation_id}/all.md
     /// slack      slack/rendered_md/{thread_uuid}/all.md
     /// beeper     beeper/rendered_md/{network}/{chat_uuid}/{YYYY-MM}.md
@@ -377,7 +377,7 @@ pub struct GridRow {
     /// Null only for rows whose provider has not been ported onto
     /// `datalib_id` yet. Formerly `external_id`, which named what it
     /// was not rather than what it was, and was never populated by the
-    /// three providers that most needed it (anthropic, chatgpt and
+    /// three providers that most needed it (claude, chatgpt and
     /// slack all wrote NULL) precisely because those passed the
     /// upstream id through as the primary key instead.
     ///

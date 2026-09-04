@@ -240,7 +240,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
                 serde_json::Value::String(received_at.clone()),
             );
         }
-        // Provenance, mirroring what the anthropic provider stamps: which
+        // Provenance, mirroring what the claude provider stamps: which
         // transport produced this row, and the ids only this one knows.
         obj.insert(
             "_source".into(),

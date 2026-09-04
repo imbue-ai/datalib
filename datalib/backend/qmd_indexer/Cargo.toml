@@ -14,5 +14,5 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-datalib-core = { path = "../core" }
 datalib-obs = { path = "../obs" }
+datalib-runtime = { path = "../runtime" }

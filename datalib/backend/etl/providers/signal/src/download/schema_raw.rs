@@ -64,7 +64,7 @@
 //!   present in the JSON. See
 //!   `docs/dev/data_architecture_ingestion.md` §"Wire-fidelity of the
 //!   raw store" for the principle. The `jsonb(?)` / `json(payload)`
-//!   round-trip used by JSON-shaped providers (anthropic, chatgpt,
+//!   round-trip used by JSON-shaped providers (claude, chatgpt,
 //!   notion, …) applies here too.
 //!
 //! - **No live upstream UUIDs.** Signal's in-backup `recipient_id`

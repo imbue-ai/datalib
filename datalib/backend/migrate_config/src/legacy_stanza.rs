@@ -28,10 +28,10 @@ use std::path::{Path, PathBuf};
 
 pub use datalib_source_common::{Defaults, DownloadParams, EventTapeConfig, SourceCommon};
 
-use datalib_etl_anthropic_config::AnthropicConfig;
 use datalib_etl_beeper_config::BeeperConfig;
 use datalib_etl_carddav_config::CarddavConfig;
 use datalib_etl_chatgpt_config::ChatgptConfig;
+use datalib_etl_claude_config::{ClaudeConfig, ClaudeExportConfig};
 use datalib_etl_email_config::EmailConfig;
 use datalib_etl_fsindex_config::FsindexConfig;
 use datalib_etl_github_config::GithubConfig;
@@ -143,8 +143,8 @@ impl SourceEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceConfig {
-    ClaudeExport(AnthropicConfig),
-    ClaudeApi(AnthropicConfig),
+    ClaudeExport(ClaudeExportConfig),
+    ClaudeApi(ClaudeConfig),
     ChatgptApi(ChatgptConfig),
     SlackApi(SlackConfig),
     GithubApi(GithubConfig),
@@ -198,7 +198,8 @@ pub enum SourceConfig {
 macro_rules! over_payload {
     ($self:expr, $c:ident => $e:expr) => {
         match $self {
-            SourceConfig::ClaudeExport($c) | SourceConfig::ClaudeApi($c) => $e,
+            SourceConfig::ClaudeExport($c) => $e,
+            SourceConfig::ClaudeApi($c) => $e,
             SourceConfig::ChatgptApi($c) => $e,
             SourceConfig::SlackApi($c) => $e,
             SourceConfig::GithubApi($c) => $e,
@@ -267,11 +268,11 @@ impl SourceConfig {
 
     /// True when the worker is allowed to download into / build the raw store
     /// for this source — a `sync:` block, or (for file-backed sources) an
-    /// `input_path:` export on disk. `claude_export` is never managed (it is a
-    /// pure render-only view of a local export).
+    /// `input_path:` export on disk.
     pub fn is_managed(&self) -> bool {
         match self {
-            SourceConfig::ClaudeExport(_) => false,
+            // File-backed only: managed iff an `input_path:` export is set.
+            SourceConfig::ClaudeExport(c) => c.common.input_path.is_some(),
             SourceConfig::ClaudeApi(c) => c.sync.is_some(),
             SourceConfig::ChatgptApi(c) => c.sync.is_some(),
             SourceConfig::SlackApi(c) => c.sync.is_some(),
@@ -689,7 +690,7 @@ sources:
     #[test]
     fn bare_source_with_no_config_keys_parses() {
         // claude_export has no required keys: `source: {type: claude_export}`
-        // must deserialize into an all-default AnthropicConfig.
+        // must deserialize into an all-default ClaudeExportConfig.
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 sources:

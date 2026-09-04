@@ -1190,7 +1190,7 @@ mod insert_round_trip_tests {
     fn fully_populated_row() -> GridRow {
         GridRow {
             uuid: "row-everything".into(),
-            provider: "anthropic".into(),
+            provider: "claude".into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             // Offset-bearing and parseable, so the two `#[derived]`
@@ -1297,7 +1297,7 @@ mod id_claim_tests {
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
         GridRow {
             uuid: uuid.into(),
-            provider: "anthropic".into(),
+            provider: "claude".into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             when_ts: None,
@@ -1412,7 +1412,7 @@ mod id_claim_tests {
 #[allow(clippy::disallowed_macros)]
 mod write_lock_tests {
     //! Reproduces the production "(code 5) database is locked" we saw
-    //! on a real render-only run: multiple per-source render
+    //! on a real render run: multiple per-source render
     //! workers calling [`apply_one`] in parallel against one pool that
     //! has `max_connections > 1`. Without the [`WriteLock`] argument
     //! each task gets its own connection, all of them race for
@@ -1438,7 +1438,7 @@ mod write_lock_tests {
         // the DELETE + insert path. We don't care about content.
         let row = GridRow {
             uuid: uuid.clone(),
-            provider: "anthropic".into(),
+            provider: "claude".into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             when_ts: Some("2026-06-02T20:00:00+00:00".into()),
@@ -1788,7 +1788,7 @@ mod schema_reconcile_tests {
         }
         sqlx::query(
             "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \
-             VALUES ('md-1', 'claude_web', 'anthropic', 'Chat', 'fp-1')",
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 'fp-1')",
         )
         .execute(pool)
         .await
@@ -1796,7 +1796,7 @@ mod schema_reconcile_tests {
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
              entire_chat, text, external_id, markdown_uuid) \
-             VALUES ('row-1', 'anthropic', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
+             VALUES ('row-1', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
              'upstream-1', 'md-1')",
         )
         .execute(pool)
@@ -1852,7 +1852,7 @@ mod schema_reconcile_tests {
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
              entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid) \
-             VALUES ('row-2', 'anthropic', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
+             VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
              'upstream-1', 'conversation', '', 'md-1')",
         )
         .execute(&pool)
@@ -1876,7 +1876,7 @@ mod schema_reconcile_tests {
 
         sqlx::query(
             "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \
-             VALUES ('md-1', 'claude_web', 'anthropic', 'Chat', 'fp-1')",
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 'fp-1')",
         )
         .execute(&pool)
         .await

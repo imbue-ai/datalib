@@ -1,7 +1,7 @@
 //! Shared utilities for provider-specific doltlite-backed raw stores.
 //!
 //! Every provider that ports its raw download to doltlite (notion,
-//! chatgpt, anthropic, …) ends up needing the same bookkeeping:
+//! chatgpt, claude, …) ends up needing the same bookkeeping:
 //! identical `blob_refs` / `sync_runs` tables,
 //! identical "open this file with `journal_mode=DELETE`" boilerplate,
 //! identical bookkeeping columns on every object table

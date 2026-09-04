@@ -67,9 +67,9 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # not disappear quietly.
 # Providers still minting `grid_rows.uuid` values that are not UUIDs.
 #
-# Empty, and it must stay that way. It held `anthropic` and `openai`,
+# Empty, and it must stay that way. It held `claude` and `openai`,
 # the two that passed an upstream id through verbatim (or lightly
-# prefixed) instead of deriving a v5: anthropic emitted
+# prefixed) instead of deriving a v5: claude emitted
 # `tu-{tool_use_id}` / `tr-{tool_use_id}` / `th-{msg_uuid}-{idx}` /
 # `pdesc-{project_uuid}` for its structural blocks, and openai used
 # ChatGPT's `conversation_id` / `message_id` directly. Both now mint
@@ -109,7 +109,7 @@ ID_SEP = "\x1f"
 # skipped by the round-trip check below, and `PORTED_PROVIDERS` keeps
 # that from being silent.
 SCOPE_TAG_BY_PROVIDER = {
-    "anthropic": ("pg", ""),
+    "claude": ("pg", ""),
     "openai": ("pg", ""),
     # Slack scopes on `team_id`, which the row carries in `account`.
     # Resolved per-row rather than from a constant here — see
@@ -120,7 +120,7 @@ SCOPE_TAG_BY_PROVIDER = {
 # Providers whose rows MUST round-trip. Separate from the table above so
 # a typo in a provider name shows up as "no rows checked" rather than as
 # a silent pass.
-PORTED_PROVIDERS = frozenset({"anthropic", "openai", "slack"})
+PORTED_PROVIDERS = frozenset({"claude", "openai", "slack"})
 
 
 def datalib_entity_id(provider, scope_tag, scope_val, entity_kind, natural_key):
@@ -138,7 +138,7 @@ UUID_SQL_REGEX = (
 
 EXPECTED_PROVIDERS = frozenset(
     {
-        "anthropic",
+        "claude",
         "beeper",
         "contacts",
         "github",
@@ -156,10 +156,11 @@ EXPECTED_PROVIDERS = frozenset(
         "slack",
         "sms_backup_restore",
         "whatsapp",
-        # Render-only in the fixture: its raw store is seeded by
-        # `yolink-make-fixture` rather than downloaded, so there is no
-        # `yolink.download` step. Rows here prove the render step ran
-        # over that store — see run_sync_pipeline.py's RENDER_ONLY.
+        # This fixture seeds yolink's raw store with
+        # `yolink-make-fixture` rather than downloading it, so the
+        # generated config has no yolink download step. Rows here prove
+        # the render step ran over that store — see
+        # run_sync_pipeline.py's PRESEEDED_RAW.
         "yolink",
     }
 )
@@ -758,7 +759,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         #   * anything that varies between upstream *responses* rather
         #     than within one. The fixture replays fixed tapes, so the
         #     two known instabilities — slack's count-only reactions and
-        #     anthropic's positional thinking-block index — cannot
+        #     claude's positional thinking-block index — cannot
         #     surface here. See `docs/dev/entity_ids.md`.
         shutil.rmtree(self.workspace)
         self.workspace.mkdir(parents=True, exist_ok=True)

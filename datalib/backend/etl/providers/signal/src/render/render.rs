@@ -192,7 +192,7 @@ fn render_one(
     // before the .md is written, so the relative links the renderer
     // emits resolve to files that exist by the time the file appears
     // on disk. Filename comes from `BlobBundle::filename_for` — same
-    // convention every other provider uses (slack, anthropic, notion,
+    // convention every other provider uses (slack, claude, notion,
     // chatgpt, email), via the shared `BlobBundle::materialize_to_dir`.
     let blobs_dir = page_dir.join("blobs");
     let ref_ids: Vec<&str> = doc

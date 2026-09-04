@@ -196,17 +196,44 @@ mod tests {
     #[test]
     fn an_unmanaged_source_keeps_its_input_path() {
         let out = convert(
+            "sources:\n  - name: greek\n    source:\n      type: perseus\n      \
+             common:\n        input_path: ~/corpora/perseus\n",
+        )
+        .unwrap();
+        assert!(out.contains(r#"id = "greek/rendered_md""#), "{out}");
+        assert!(
+            out.contains(r#"input_path = "~/corpora/perseus""#),
+            "input_path dropped:\n{out}"
+        );
+        // ...and it gets no download step to consume it.
+        assert!(!out.contains(r#"id = "greek/raw""#), "{out}");
+    }
+
+    /// `claude_export` used to be the example above: unmanaged, no
+    /// download step, rendering an export tree in place. It now ingests
+    /// that tree into a raw store like every other file-backed source
+    /// (issue #207), so a legacy stanza has to migrate to a step
+    /// *pair*, with `input_path` on the download half.
+    #[test]
+    fn a_claude_export_stanza_migrates_to_a_download_and_render_pair() {
+        let out = convert(
             "sources:\n  - name: claude-export\n    source:\n      type: claude_export\n      \
              common:\n        input_path: ~/backups/claude-export\n",
         )
         .unwrap();
-        assert!(out.contains(r#"id = "claude-export/rendered_md""#), "{out}");
+        let dl = out
+            .find(r#"id = "claude-export/raw""#)
+            .unwrap_or_else(|| panic!("no download step:\n{out}"));
+        let rn = out.find(r#"id = "claude-export/rendered_md""#).unwrap();
+        let input_at = out.find("input_path").unwrap();
         assert!(
-            out.contains(r#"input_path = "~/backups/claude-export""#),
-            "input_path dropped:\n{out}"
+            dl < input_at && input_at < rn,
+            "input_path misplaced:\n{out}"
         );
-        // ...and it stays render-only: no download step to consume it.
-        assert!(!out.contains(r#"id = "claude-export/raw""#), "{out}");
+        assert!(
+            out.contains(r#"inputs = ["claude-export/raw"]"#),
+            "the render step must consume the raw store:\n{out}"
+        );
     }
 
     /// A managed source keeps `input_path` on the *download* step,

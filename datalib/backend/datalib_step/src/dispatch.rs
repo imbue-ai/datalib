@@ -97,7 +97,24 @@ pub fn plan(
     data_root: &Path,
 ) -> Result<PlannedSource> {
     macro_rules! arm {
-        ($cfgty:ty, $rcfgty:ty, $provider:ident, $tstr:expr) => {{
+        // The usual shape: a provider's two waves are its
+        // `plan_download` / `plan_render` pair.
+        ($cfgty:ty, $rcfgty:ty, $provider:ident, $tstr:expr) => {
+            arm!(
+                $cfgty,
+                $rcfgty,
+                $provider,
+                plan_download,
+                plan_render,
+                $tstr
+            )
+        };
+        // …and the shape for a provider serving more than one source
+        // type, which needs a different entry point per type. Only
+        // claude does: `claude_api` walks the live API,
+        // `claude_export` ingests an export off disk, and they share
+        // one `plan_render`.
+        ($cfgty:ty, $rcfgty:ty, $provider:ident, $dl:ident, $rn:ident, $tstr:expr) => {{
             let ctx = PlanContext {
                 name: name.to_string(),
                 // Playback redirection goes through the
@@ -123,7 +140,7 @@ pub fn plan(
                         type_str: $tstr,
                         raw_path,
                         download_params,
-                        processors: $provider::processor::plan_download(ctx, cfg)?,
+                        processors: $provider::processor::$dl(ctx, cfg)?,
                     }
                 }
                 Phase::Render => {
@@ -141,7 +158,7 @@ pub fn plan(
                         raw_path,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
-                        processors: $provider::processor::plan_render(ctx, cfg)?,
+                        processors: $provider::processor::$rn(ctx, cfg)?,
                     }
                 }
             }
@@ -150,15 +167,17 @@ pub fn plan(
 
     Ok(match step_type {
         "claude_api" => arm!(
-            datalib_etl_anthropic_config::AnthropicConfig,
-            datalib_etl_anthropic_config::AnthropicRenderConfig,
-            datalib_etl_anthropic,
+            datalib_etl_claude_config::ClaudeConfig,
+            datalib_etl_claude_config::ClaudeRenderConfig,
+            datalib_etl_claude,
             "claude_api"
         ),
         "claude_export" => arm!(
-            datalib_etl_anthropic_config::AnthropicConfig,
-            datalib_etl_anthropic_config::AnthropicRenderConfig,
-            datalib_etl_anthropic,
+            datalib_etl_claude_config::ClaudeExportConfig,
+            datalib_etl_claude_config::ClaudeExportRenderConfig,
+            datalib_etl_claude,
+            plan_export_download,
+            plan_render,
             "claude_export"
         ),
         "chatgpt_api" => arm!(
@@ -402,18 +421,89 @@ mod tests {
         assert_eq!(rn.processors.len(), 1);
     }
 
+    /// An API source with no `sync:` block has nothing to fetch this
+    /// run, so its download wave is empty — render still reads whatever
+    /// an earlier run put in the store.
     #[test]
     fn download_without_sync_plans_empty_for_api_sources() {
         let td = tempfile::tempdir().unwrap();
         let dl = plan(
-            "claude_export",
+            "claude_api",
             Phase::Download,
             "claude",
             serde_json::json!({}),
             td.path(),
         )
         .unwrap();
-        assert!(dl.processors.is_empty(), "claude_export is render-only");
+        assert!(dl.processors.is_empty(), "no sync: means nothing to fetch");
+    }
+
+    /// `claude_export` is file-backed, not render-only: it ingests the
+    /// export at `input_path` into the same raw store `claude_api`
+    /// writes, so it plans a download wave like every other file-backed
+    /// source (issue #207).
+    #[test]
+    fn claude_export_plans_an_ingest_from_its_input_path() {
+        let td = tempfile::tempdir().unwrap();
+        let export = td.path().join("unpacked");
+        std::fs::create_dir_all(&export).unwrap();
+        let dl = plan(
+            "claude_export",
+            Phase::Download,
+            "claude-export",
+            serde_json::json!({"common": {"input_path": export.to_str().unwrap()}}),
+            td.path(),
+        )
+        .unwrap();
+        assert_eq!(dl.processors.len(), 1);
+        assert_eq!(dl.raw_path, td.path().join("claude-export/raw"));
+
+        // …and its render wave reads that store, same as claude_api's.
+        let rn = plan(
+            "claude_export",
+            Phase::Render,
+            "claude-export",
+            serde_json::json!({}),
+            td.path(),
+        )
+        .unwrap();
+        assert_eq!(rn.processors.len(), 1);
+    }
+
+    /// An export pointed at nothing would ingest the raw dir into
+    /// itself. Refuse at plan time, which is where `datalib-dag --check`
+    /// will see it.
+    #[test]
+    fn claude_export_without_an_input_path_is_a_config_error() {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            "claude_export",
+            Phase::Download,
+            "claude-export",
+            serde_json::json!({}),
+            td.path(),
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("input_path"), "{err}");
+    }
+
+    /// The API-shaped knobs are meaningless on an export and are
+    /// rejected rather than ignored — a `sync:` block on a
+    /// `claude_export` step used to silently start a live API download.
+    #[test]
+    fn claude_export_rejects_api_only_params() {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            "claude_export",
+            Phase::Download,
+            "claude-export",
+            serde_json::json!({"sync": {}}),
+            td.path(),
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("sync"), "{err}");
     }
 
     /// Download-only sources are not in the `ingested_tng` fixture

@@ -62,7 +62,7 @@ looks like the textbook `Upstream` case — right until you notice the
 column is empty whenever orgs aren't mirrored (`sync.projects = false`,
 or an older ingest) and populated afterwards. It issues service-wide
 unique uuids anyway, so `ProviderGlobal` is both correct and safe. See
-`anthropic/src/render/ids.rs` §Scope for the full argument.
+`claude/src/render/ids.rs` §Scope for the full argument.
 
 So the test is not "is this key unique within the account?" but "will
 this scope value be identical on every future ingest, including the ones
@@ -199,7 +199,7 @@ response-shaped rather than issued by the provider:
   aggregate row keyed with an empty user, and a re-fetch in the other
   shape re-keys it. Options and their costs are written out on
   `slack::ids::reaction`.
-- **anthropic `thinking` blocks** (and the fallback for a tool block
+- **claude `thinking` blocks** (and the fallback for a tool block
   missing its id) are keyed on `(message_uuid, block_index)`, where the
   index is the block's position in the message's `content` array.
   Claude's content order is meaningful, so this is stable in practice —
@@ -242,7 +242,7 @@ fixture is UUID-shaped.
 
 | Provider | Status | Scope |
 |---|---|---|
-| anthropic | ported | `ProviderGlobal` |
+| claude | ported | `ProviderGlobal` |
 | openai (chatgpt) | ported | `ProviderGlobal` |
 | slack | ported | `Upstream(team_id)` |
 | github, gitlab | pending | `Upstream(repo)` — recipe already carries it |

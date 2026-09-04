@@ -30,7 +30,7 @@
 //!
 //! # Why strip the parameter rather than declare the field volatile
 //!
-//! The same reasoning `anthropic`'s `canonicalize_project_payload`
+//! The same reasoning `claude`'s `canonicalize_project_payload`
 //! records for sorting `permissions` instead of dropping it: the
 //! *contents* are content — an avatar actually changing is a change we
 //! want to see — and it is only the cache-buster that carries no

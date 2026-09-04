@@ -22,7 +22,7 @@ Args (positional):
     5:  --now stamp (ISO-8601)
     6:  data_root for the pipeline (rendered_md/, system/, raw/ land
         directly underneath; the DAG config + playback also stashed here)
-    7:  anthropic_api fixture dir (input)
+    7:  claude_export fixture dir (input)
     8:  chatgpt_api   fixture dir
     9:  slack_api     fixture dir
     10: github_api    fixture dir
@@ -58,8 +58,9 @@ Args (positional):
     21: yolink-make-fixture binary
     22: yolink_tng    JSON spec for the TNG YoLink sensor history. We
                       run `yolink-make-fixture` on it to seed the raw
-                      doltlite store; the source itself is render-only
-                      (see the seeding block in main()).
+                      doltlite store, so the generated config has no
+                      download step for it (see the seeding block in
+                      main(), and PRESEEDED_RAW).
 
     23: pdf_tng       TNG-themed PDF corpus (Captain's logs, a warp-core
                       manual, a scanned blueprint). File-backed; the
@@ -100,21 +101,26 @@ FIXTURE_SIGNAL_AEP = "0" * 64
 # need any special wiring.
 FIXTURE_WHATSAPP_KEY = "0" * 64
 
-# Sources that contribute a render step but no download step.
+# Sources whose raw store this harness seeds directly, so the generated
+# config emits no download step for them.
 #
-# `datalib-step download` treats "planned zero processors" as an error
-# (download.rs: "has no download work"), and rightly so — for every other
-# source that state means a misconfigured `sync:`. YoLink in the fixture
-# is the genuine exception: its raw store is seeded directly by
-# `yolink-make-fixture` because the real downloader shells out to `curl`
-# for signed-URL CSVs, so there is no playback tape to replay. Emitting
-# the step and letting it fail is not an option; emitting no step is the
-# honest description.
+# This is a property of the FIXTURE, not of the source. YoLink has a
+# perfectly real doltlite downloader; what it does not have is a
+# hermetic one — it fetches signed-URL CSVs by shelling out to `curl`,
+# which is not routed through the HTTP transport that `datalib-step
+# synthesize` records playback tapes for. So `yolink-make-fixture`
+# writes the store and the pipeline skips straight to render.
 #
-# The render step still declares `inputs = ["<name>/raw"]`, so the
-# scheduler hashes the seeded store and re-runs render when it changes —
-# it just has no producer edge to wait on.
-RENDER_ONLY = {"yolink"}
+# Emitting a download step anyway is not an option: `datalib-step
+# download` treats "planned zero processors" as an error (download.rs:
+# "has no download work"), and rightly so — for every other source that
+# state means a misconfigured `sync:`.
+#
+# The render step declares no `inputs` either: the store it reads has no
+# producer step in this config, so there is no step id to name. That
+# makes it a fringe step the runner always runs, and the per-document
+# fingerprints keep the re-runs cheap.
+PRESEEDED_RAW = {"yolink"}
 
 
 def main() -> int:
@@ -192,13 +198,13 @@ def main() -> int:
     _run([str(whatsapp_make_fixture_bin), str(whatsapp_spec), str(whatsapp_root)])
     whatsapp_dir = whatsapp_root / "WhatsApp"
 
-    # YoLink: seed the raw doltlite store directly, then run the source
-    # render-only. Its downloader fetches signed-URL CSVs by shelling out
-    # to `curl` — neither hermetic nor routed through the HTTP transport
-    # that `datalib-step synthesize` records playback tapes for, so there
-    # is nothing to replay. The config below carries no `sync:`, which
-    # makes yolink's `plan_download` contribute zero processors; the
-    # download step is then a no-op over the store we just wrote.
+    # YoLink: seed the raw doltlite store directly, so the generated
+    # config can skip straight to render. Its downloader fetches
+    # signed-URL CSVs by shelling out to `curl` — neither hermetic nor
+    # routed through the HTTP transport that `datalib-step synthesize`
+    # records playback tapes for, so there is nothing to replay. The
+    # config below also carries no `sync:`, which yolink requires, so
+    # `plan_download` would contribute zero processors anyway.
     #
     # Skipped when the store already exists. The maker is a pure function
     # of the spec, so regenerating would be harmless content-wise, but it
@@ -229,7 +235,7 @@ def main() -> int:
     # file-backed ones). Raw doltlite stores always land at the
     # canonical `<data_root>/<name>/raw` regardless.
     sources: dict[str, tuple[str, Path, Path]] = {
-        "anthropic-api": ("claude_api", anth_fx, raw_root / "anthropic-api"),
+        "claude-api": ("claude_api", anth_fx, raw_root / "claude-api"),
         "chatgpt-api": ("chatgpt_api", cgpt_fx, raw_root / "chatgpt-api"),
         "slack": ("slack_api", slack_fx, raw_root / "slack"),
         "github": ("github_api", gh_fx, raw_root / "github"),
@@ -307,7 +313,7 @@ def main() -> int:
         # A step's id is the tree it writes, so there is no `outputs`.
         download_block = (
             ""
-            if name in RENDER_ONLY
+            if name in PRESEEDED_RAW
             else f"""[[steps]]
 id = "{name}/raw"
 command = "datalib-step download {type_str}"
@@ -315,11 +321,10 @@ params = {params}
 
 """
         )
-        # A render-only source has no download step to name, and its
-        # data is not an artifact the DAG knows about — it comes from
-        # `params.common.input_path`. So it declares no inputs, which
-        # also makes it a fringe step the runner always runs.
-        inputs_line = "" if name in RENDER_ONLY else f'\ninputs = ["{name}/raw"]'
+        # A source whose store this harness pre-seeded has no download
+        # step to name, so its render declares no inputs — which also
+        # makes it a fringe step the runner always runs.
+        inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/raw"]'
         steps.append(
             download_block
             + f"""[[steps]]
@@ -366,7 +371,7 @@ inputs = [{rendered}]"""
     # Anthropic extract reads users.json from `export_dir` (== input_path
     # in our wiring) — that file is a bulk-export artifact, not an HTTP
     # response, so seed it from the checked-in fixture tree.
-    anth_raw = raw_root / "anthropic-api"
+    anth_raw = raw_root / "claude-api"
     anth_raw.mkdir(parents=True, exist_ok=True)
     users_src = anth_fx / "users.json"
     if users_src.exists():
@@ -532,9 +537,10 @@ def _source_config(
         # would reject `sync: {}`). Extract walks `input_path`.
         pass
     elif type_str == "yolink":
-        # No `sync:` — that absence is what makes this source
-        # render-only. `sync: {}` would also fail validation outright:
-        # yolink requires at least one entry under `sync.devices`.
+        # No `sync:` — the fixture seeds this store itself, so nothing
+        # here would use one. `sync: {}` would fail validation outright
+        # anyway: yolink requires at least one entry under
+        # `sync.devices`.
         pass
     elif type_str == "pdf":
         # File-backed, no `sync:` field at all (deny_unknown_fields

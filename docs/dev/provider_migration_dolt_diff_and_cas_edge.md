@@ -3,7 +3,7 @@
 This doc is the migration recipe for the remaining ETL providers
 (notion, github, gitlab, beeper, contacts, perseus, yolink). It
 captures what we learned doing **whatsapp → email → signal → chatgpt
-→ anthropic → slack** and consolidates the steady-state shape that
+→ claude → slack** and consolidates the steady-state shape that
 the recipe lands at.
 
 The recipe matured a lot as we ported providers. The shape is now:
@@ -72,7 +72,7 @@ whole migration.
 - Direct writes to the shared `blob_refs` table.
 
 **Also dropped during the port (where the provider had it):**
-- Listing-pass pre-seeding. The chatgpt and anthropic providers used
+- Listing-pass pre-seeding. The chatgpt and claude providers used
   to write a stub row `(id, name, updated_at, payload=NULL)` for
   every conversation surfaced by the listing endpoint, before the
   detail fetch ran. The stub row didn't fit `WirePayloadRow` and
@@ -173,7 +173,7 @@ Plug into `full_ddl()`:
 out.extend(<Provider>AttachmentRow::all_ddl());
 ```
 
-Examples landed: `chatgpt_attachments`, `anthropic_attachments`,
+Examples landed: `chatgpt_attachments`, `claude_attachments`,
 `slack_attachments`, `chat_item_attachments`.
 
 In both shapes the renderer reaches the bytes via the per-bucket
@@ -432,7 +432,7 @@ Don't refactor that signature mid-migration.
 
 ## Per-provider notes
 
-### Anthropic (claude.ai)
+### Claude (claude.ai)
 
 - Schema: 3 wire-payload tables (`users`, `orgs`, `conversations`).
 - Attachments: inline in `conversations.payload.chat_messages[*].files[]`,
@@ -440,7 +440,7 @@ Don't refactor that signature mid-migration.
 - **Recommended edge: Shape B** — new
   `conversation_attachments(id, conversation_uuid, file_uuid,
   blake3)` table. PK can be `file_uuid` (already a stable
-  anthropic-supplied UUID).
+  Anthropic-supplied UUID).
 - Bucket: one rendered .md per conversation. Bucket key:
   `conversation_uuid`.
 - dolt_diff union: `dolt_diff_conversations`,
@@ -452,7 +452,7 @@ Don't refactor that signature mid-migration.
 ### ChatGPT (chatgpt.com)
 
 - Schema: 2 wire-payload tables (`me`, `conversations`).
-- Attachments: same shape as anthropic — inline in
+- Attachments: same shape as claude — inline in
   `conversations.payload.mapping[*]...` keyed by `file_id`.
 - **Recommended edge: Shape B** — `conversation_attachments(id,
   conversation_id, file_id, blake3)`.
@@ -640,7 +640,7 @@ non-negotiable for the upcoming ones:
 1. **ChatGPT first.** Smallest schema (2 tables), simplest call
    graph. Use it to confirm the recipe transfers cleanly to a
    never-touched-before provider.
-2. **Anthropic second.** Three tables, slightly more complex org +
+2. **Claude second.** Three tables, slightly more complex org +
    conversation hierarchy. Should reuse most of the chatgpt port's
    patterns.
 3. **Notion third.** Page/block hierarchy is the largest schema

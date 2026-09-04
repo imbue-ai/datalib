@@ -34,7 +34,7 @@ the path, which delivered freshness for free and made the proposed
 **The qmd index is a plain SQLite file in WAL mode** —
 `third-party/qmd/src/store.ts:833`, at
 `<root>/unified_index/qmd/index.sqlite`
-(`unified_index/src/qmd/mod.rs:QMD_INDEX_REL`). Four tables matter:
+(`runtime/src/qmd.rs:QMD_INDEX_REL`). Four tables matter:
 
 ```
 content(hash PK, doc, created_at)                         -- store.ts:842

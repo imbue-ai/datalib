@@ -369,7 +369,7 @@ mod tests {
     /// Anchor lines: `m-AAA…` at line 7, `m-BBB…` at line 13.
     fn write_two_message_doc(root: &std::path::Path, rel: &str) -> Vec<GridRowRef> {
         let body = "---\n\
-                    provider: anthropic\n\
+                    provider: claude\n\
                     ---\n\
                     \n\
                     <h1 class=\"page-title\">Reactive data pipeline composition in Rust</h1>\n\
@@ -393,13 +393,13 @@ mod tests {
                 "aaaaaaaa-0000-0000-0000-000000000001",
                 "User Input",
                 rel,
-                "anthropic",
+                "claude",
             ),
             row(
                 "bbbbbbbb-0000-0000-0000-000000000002",
                 "LLM Response",
                 rel,
-                "anthropic",
+                "claude",
             ),
         ]
     }
@@ -409,12 +409,12 @@ mod tests {
         // A hit whose diff header lands in the *second* message resolves to
         // exactly that one row — no snippet anchor required.
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "rendered_md/anthropic/acct/org/llm_chats/conv/index.md";
+        let rel = "rendered_md/claude/acct/org/llm_chats/conv/index.md";
         let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel));
 
         // `@@ -13,4 @@ (2 before, …)` → matched line 15, inside the 2nd message.
         let h = hit(
-            "rendered-md/anthropic/acct/org/llm-chats/conv/index.md",
+            "rendered-md/claude/acct/org/llm-chats/conv/index.md",
             "@@ -13,4 @@ (2 before, 3 after)\n## Assistant",
         );
         let got = idx.rows_for_hit(&h);
@@ -427,12 +427,12 @@ mod tests {
         // The motivating bug: a hit on the conversation *title* (above the
         // first message) must resolve to the first message, not fan out.
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "rendered_md/anthropic/acct/org/llm_chats/conv/index.md";
+        let rel = "rendered_md/claude/acct/org/llm_chats/conv/index.md";
         let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel));
 
         // `@@ -4,4 @@ (1 before, …)` → matched line 5 (the <h1>), before any anchor.
         let h = hit(
-            "rendered-md/anthropic/acct/org/llm-chats/conv/index.md",
+            "rendered-md/claude/acct/org/llm-chats/conv/index.md",
             "@@ -4,4 @@ (1 before, 10 after)\n<h1>Reactive data pipeline composition in Rust</h1>",
         );
         let got = idx.rows_for_hit(&h);
@@ -450,20 +450,20 @@ mod tests {
                 row(
                     "u1",
                     "User Input",
-                    "anthropic/acct/llm_chats/conv/index.md",
-                    "anthropic",
+                    "claude/acct/llm_chats/conv/index.md",
+                    "claude",
                 ),
                 row(
                     "u2",
                     "LLM Response",
-                    "anthropic/acct/llm_chats/conv/index.md",
-                    "anthropic",
+                    "claude/acct/llm_chats/conv/index.md",
+                    "claude",
                 ),
-                row("u3", "Chat", "other/path/index.md", "anthropic"),
+                row("u3", "Chat", "other/path/index.md", "claude"),
             ],
         );
         let h = hit(
-            "anthropic/acct/llm-chats/conv/index.md",
+            "claude/acct/llm-chats/conv/index.md",
             "@@ -9,4 @@ (2 before, 5 after)\nx",
         );
         let got = idx.rows_for_hit(&h);
@@ -477,7 +477,7 @@ mod tests {
         // signal callers log as an error.
         let idx = GridIndex::new(
             "/nonexistent-root",
-            vec![row("u1", "Chat", "a/b.md", "anthropic")],
+            vec![row("u1", "Chat", "a/b.md", "claude")],
         );
         let h = hit("totally/different.md", "@@ -1,4 @@ (0 before, 1 after)\nx");
         assert!(idx.rows_for_hit(&h).is_empty());
@@ -493,7 +493,7 @@ mod tests {
                 "11111111-2222-3333-4444-555555555555",
                 "LLM Response",
                 "p/index.md",
-                "anthropic",
+                "claude",
             )],
         );
         let h1 = hit("p/index.md", "@@ -1,4 @@ (0 before, 1 after)\nx");
@@ -559,7 +559,7 @@ mod tests {
     fn relevant_chat_outranks_spam_with_canonical_path() {
         // The stale nested render is gone, so the grid stores the CANONICAL
         // path — the same one qmd's #1 hit reports.
-        let chat_path = "anthropic/acct/llm_chats/b0c2f022/index.md";
+        let chat_path = "claude/acct/llm_chats/b0c2f022/index.md";
         let chat_user = "019e2d00-aad9-7ecd-9cfd-b1cd1648b98f"; // the great result
         let chat_llm = "019e2d00-aad9-7933-8639-51c8474c1b11";
         let spam_path = "slack/team/chan/threads/dba0820c/index.md";
@@ -572,8 +572,8 @@ mod tests {
             "/nonexistent-root",
             vec![
                 row(spam_msg, "Slack Message", spam_path, "slack"),
-                row(chat_user, "User Input", chat_path, "anthropic"),
-                row(chat_llm, "LLM Response", chat_path, "anthropic"),
+                row(chat_user, "User Input", chat_path, "claude"),
+                row(chat_llm, "LLM Response", chat_path, "claude"),
             ],
         );
 
@@ -620,7 +620,7 @@ mod tests {
     fn ranked_rows_one_per_doc_keeps_top_hit_per_document() {
         let tmp = tempfile::tempdir().unwrap();
         // A two-message chat (anchors at lines 7 and 13) ...
-        let chat = "rendered_md/anthropic/acct/llm_chats/conv/index.md";
+        let chat = "rendered_md/claude/acct/llm_chats/conv/index.md";
         let mut rows = write_two_message_doc(tmp.path(), chat);
         // ... plus a second, single-message document (anchor at line 5).
         let other = "rendered_md/slack/team/chan/index.md";

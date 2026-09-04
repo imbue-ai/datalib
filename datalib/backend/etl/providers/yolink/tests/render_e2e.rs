@@ -197,7 +197,20 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     assert!(md.contains("temperature_humidity"), "{md}");
     assert!(md.contains("watermeter"), "{md}");
     assert!(md.contains("## Store"), "{md}");
-    assert!(md.contains("test seed"), "commit log missing:\n{md}");
+    assert!(md.contains("| Commits |"), "store counts missing:\n{md}");
+    // Counts yes; the doltlite HEAD hash and the per-commit hashes and
+    // wall-clock dates no. `test seed` is this test's own commit message,
+    // so it appears in the page only if the commit log is being rendered.
+    // That log is stamped from the wall clock, which made this one file
+    // the reason a rendered tree was never byte-identical to its previous
+    // self — and so re-ran the fixture's ~90s CPU-only embed on CI for
+    // changes that altered nothing the embedder reads. See
+    // `render_store_section` and `tests/fixtures/tar_qmd.py`.
+    assert!(
+        !md.contains("test seed"),
+        "the doltlite commit log is back in the rendered page, which makes \
+         the render nondeterministic:\n{md}"
+    );
     assert!(
         !md.contains("0123456789abcdef0123456789abcdef"),
         "family_device_id (a device read credential) leaked into the page"

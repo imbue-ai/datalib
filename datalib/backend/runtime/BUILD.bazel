@@ -1,0 +1,42 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files([
+    "Cargo.toml",
+    # Canonical version constants, read by //tools:version_pins_test
+    # (and by //tools:qmd_model_cache_path_test for the qmd one).
+    "src/node_runtime.rs",  # LATCHKEY_VERSION
+    "src/qmd.rs",  # DEFAULT_QMD_VERSION
+])
+
+# The data-root layout plus the bundled-Node/npx resolution every binary
+# shares.
+#
+# Editing this crate re-embeds the qmd index on CI. `qmd_indexer_bin`
+# links exactly this crate and //datalib/backend/obs, and it is a bazel
+# `tools=` input to //tests/fixtures:ingested_tng_qmd — which keys on its
+# tools' digests. So any change here, comments included, re-runs a ~90s
+# CPU-only embed of the whole fixture corpus (61-611s on CI, depending on
+# what else is competing for the runner's 4 vCPUs). Not a reason to avoid
+# editing it; a reason to know the bill.
+#
+# `deps` is empty and should stay that way. That is load-bearing rather
+# than tidy: a dependency added here is inherited by the indexer binary,
+# so it widens the set of crates whose next edit pays that ~90s. See
+# src/lib.rs.
+rust_library(
+    name = "datalib_runtime",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_runtime",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "runtime_unittests",
+    size = "small",
+    crate = ":datalib_runtime",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
