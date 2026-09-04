@@ -1,0 +1,28 @@
+{
+  "uuid": "70000002-1701-4d00-8000-000000000702",
+  "name": "Stellar Cartography",
+  "description": "Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.",
+  "prompt_template": "Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.",
+  "is_private": true,
+  "is_starred": false,
+  "is_starter_project": false,
+  "creator": {
+    "uuid": "00000002-1701-4d00-8000-000000000002",
+    "full_name": "Data"
+  },
+  "_source": {
+    "via": "claude.ai/api",
+    "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+    "org_name": "USS Enterprise"
+  },
+  "docs": [
+    {
+      "uuid": "7d000003-1701-4d00-8000-0000000007d3",
+      "file_name": "charting-conventions.md",
+      "content": "# Charting conventions\n\nBearings are given from the ship's current heading, not from galactic north.\n\n- Sector designations use the Federation catalogue number, never the local name.\n- An extrapolated position is written in parentheses.\n",
+      "project_uuid": "70000002-1701-4d00-8000-000000000702",
+      "estimated_token_count": 52,
+      "content_length": 201
+    }
+  ]
+}

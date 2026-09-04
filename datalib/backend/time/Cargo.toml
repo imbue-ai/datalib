@@ -13,6 +13,10 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Only for the one WARN when an epoch-ms value is not a representable
+# instant. Declared directly, not via workspace, matching how every
+# other crate here takes it.
+tracing = "0.1"
 
 [dev-dependencies]
 serde_json = { workspace = true }

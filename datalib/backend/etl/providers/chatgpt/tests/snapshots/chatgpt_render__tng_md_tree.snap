@@ -14,7 +14,7 @@ display: "I have been reviewing the Daystrom Institute archives on subspace harm
 account: user-FAKE0DATAANDROID0POSITRONIC1
 external_id: 68fa0003-fake-7000-8000-positronic0003
 item_count: 2
-source_fingerprint: 927ed440bb5b74a0a1d56da137969bd6c129d30639fb199d0f81e66ddb56f522
+source_fingerprint: fd57cc53f84d6c0168fb854c2d3a891198384767dd59b7368f8d3c91675d6f1d
 ---
 
 <h1 class="page-title" data-page-title-uuid="361aee82-0548-50a2-bc51-7675e7f05b1d">I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? (all) <a class="source-link" href="https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -48,7 +48,7 @@ display: "Polynomial Fit for Sensor Calibration"
 account: user-FAKE0DATAANDROID0POSITRONIC1
 external_id: 68fa0002-fake-7000-8000-positronic0002
 item_count: 3
-source_fingerprint: b09342f16bedeed43c58678f43620ec3dc6a3bcf825dd6f6c4595af8437d64e1
+source_fingerprint: ad6d12fbad8f9866dc272d9cd295c1a9dda89683a839cac9a803c3e093adb493
 ---
 
 <h1 class="page-title" data-page-title-uuid="66c13967-7f8d-5fde-84a4-6ba6a2a028ac">Polynomial Fit for Sensor Calibration (all) <a class="source-link" href="https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -96,7 +96,7 @@ display: "Sonnet on a Cat Named Spot"
 account: user-FAKE0DATAANDROID0POSITRONIC1
 external_id: 68fa0001-fake-7000-8000-positronic0001
 item_count: 4
-source_fingerprint: 7b39608e03fc10e5d1ac94c2b64992bbe1ad905fc7cd09b9d26326968e5f0473
+source_fingerprint: 4b9ff13964e5252d093f1eac30e03d5b752591fc46bd071918dcb002e89c7d07
 ---
 
 <h1 class="page-title" data-page-title-uuid="bcdacefa-9943-5831-bae1-9636d096c80d">Sonnet on a Cat Named Spot (all) <a class="source-link" href="https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001" target="_blank" rel="noopener noreferrer">↗</a></h1>

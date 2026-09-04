@@ -22,6 +22,16 @@ binary on disk to translate the runtime hit counts back into source
 locations). Output lands at `/tmp/datalib_coverage.lcov` by
 default; override with `$LCOV_OUT`.
 
+The report is first-party only. `--instrumentation_filter` cannot make
+it so — `llvm-cov export` reads the coverage-mapping section out of the
+linked binary, and that section names every file compiled into it,
+vendored C included. The wrapper passes `--ignore-filename-regex`
+instead; override the pattern with `$IGNORE_RE`. Without it the report
+was 8.0 MB, 81% of it code we do not own (doltlite's `sqlite3.c`
+amalgamation alone was 5.4 MB, plus oniguruma and ring's vendored
+crypto), so `genhtml`'s tree view opened on third-party sources. With
+it: 2.0 MB.
+
 HTML report:
 
 ```bash
@@ -36,8 +46,8 @@ The most useful single coverage target right now is
 `//tests/fixtures:ingested_tng_test`. It's a `py_test` wrapper around
 the same `run_sync_pipeline.py` invocation as the `:ingested_tng`
 genrule, exercising the **entire ETL pipeline** end-to-end across every
-provider's TNG fixtures. With the wrapper above you get ~150 source
-files covered including:
+provider's TNG fixtures. With the wrapper above you get **302 source
+files** covered (measured 2026-09-04), including:
 
   - the per-provider download + render (`anthropic`, `chatgpt`,
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,

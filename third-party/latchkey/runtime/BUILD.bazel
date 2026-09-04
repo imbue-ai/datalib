@@ -1,0 +1,22 @@
+load("@npm_latchkey//:defs.bzl", "npm_link_all_packages")
+
+# The latchkey pin, read by //tools:version_pins_test.
+exports_files(["package.json"])
+
+# The latchkey CLI and its 6 transitive packages, materialized from
+# pnpm-lock.yaml. Sibling of //third-party/qmd/runtime:qmd_tree, and the
+# same trade: every tarball is integrity-checked and no install script
+# runs. `datalib/tauri/stage-runtime.sh` copies this into the .app's
+# `Contents/Resources/runtime/`, so what gets codesigned and notarized
+# under our Developer ID is exactly what the lockfile names.
+npm_link_all_packages(name = "node_modules")
+
+# The ENTIRE package store, for the same reason the qmd sibling exports
+# the whole thing: latchkey resolves its dependencies from directories
+# inside `node_modules/.aspect_rules_js/`, so a consumer that stages the
+# tree needs all of them, not just the `latchkey` link.
+alias(
+    name = "latchkey_tree",
+    actual = ":node_modules",
+    visibility = ["//visibility:public"],
+)

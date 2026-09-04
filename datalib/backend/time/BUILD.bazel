@@ -17,6 +17,7 @@ rust_library(
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
         "@datalib_crates//:thiserror",
+        "@datalib_crates//:tracing",
     ],
 )
 
