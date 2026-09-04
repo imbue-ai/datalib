@@ -217,9 +217,15 @@ Any subsequent sync should pick up as close as possible to where the last one le
 Two layers do the work:
 
 - **Provider-side dedup**: every UPSERT uses the upstream identifier as PK with `ON CONFLICT(id) DO UPDATE`; unchanged rows are no-op writes. `dolt diff` reports an empty changeset and the trailing orchestrator commit is skipped.
-- **Render-side dedup**: the sidecar carries a `source_fingerprint`; if the existing `.md` already matches, the write is skipped. The grid_index step honors the same fingerprint in `markdowns_loaded`.
+- **Render-side dedup**: the sidecar carries a `source_fingerprint`; if the existing `.md` already matches, the write is skipped. The grid_index step honors the same fingerprint, read from the `markdowns` table. (There is no `markdowns_loaded` table; an earlier one by that name was folded into `documents`.)
 
 Different upstreams expose different surfaces for "what changed since X", and that drives the cursor pattern (see [Cursor / resume strategy](#cursor--resume-strategy)).
+
+**Both layers rest on writes being surgical, and that is easy to break by accident.** The diff is cheap because it is proportional to what actually changed; a write that touches every row produces a diff the size of the table, and every consumer downstream re-does all its work for nothing. So a record that is *unchanged* upstream must serialize *identically* to itself, byte for byte, on every fetch.
+
+That is what makes [`AGENTS.md`'s "give a bag an order before storing it"](/AGENTS.md) an architectural rule rather than a tidiness one: an API that returns a set in a different order each time will, left alone, manufacture a diff out of nothing — and the symptom is not an error but a pipeline that quietly stops being incremental. The same reasoning covers the `*_VOLATILE_PATHS` mechanism (drop a per-fetch stamp that carries no information) and any future rule of that shape: canonical field order, stable number formatting, excluded bookkeeping. When you add one, say which of the two it is — **sorting keeps the signal and removes the noise; declaring a field volatile throws the signal away too** — because the two look interchangeable and are not.
+
+The property this protects is what a consumer actually buys with a cursor; [`toolchain_for_agents.md`](data_lib_as_a_library/toolchain_for_agents.md#the-incremental-contract-is-a-capability-not-a-protocol) makes the case for it as the thing datalib offers anyone building on it.
 
 ## Wire-fidelity of the raw store
 The raw store preserves the **semantic content** of upstream responses verbatim — every field, every value, with no loss and no pre-shaping into our internal model. The on-disk *encoding* of that content is a separate question; we pick whichever encoding is human-readable and inspectable. Concretely:
@@ -310,7 +316,7 @@ The per-bucket fingerprint pattern has been **replaced with `dolt_diff_<table>` 
 
 Mechanism: on render success, the per-source render cursor stamps the doltlite HEAD into `_render_cursor.json`. On the next render, `parse` reads that hash and runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec { global_fanout_tables, bucket_query })`, which cold-starts if any `dolt_diff_<global_fanout_table>` row is non-`unchanged` (those fan out to "render everything"), otherwise runs the per-bucket `bucket_query` across the relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the surviving bucket keys.
 
-Sidecar `source_fingerprint` and the grid_index-step compare stay — they still gate the grid_index step ("have we already loaded this sidecar's rows?"). `source_fingerprint` is now just the stable bucket UUID. This swap moves the "what's different?" decision from Rust-computed hash trees to doltlite's native diff, which it maintains anyway for `dolt diff`. The per-row `payload_blake3` columns are gone — the `WirePayloadRow` derive no longer emits them.
+Sidecar `source_fingerprint` and the grid_index-step compare stay — they still gate the grid_index step ("have we already loaded this sidecar's rows?"). `source_fingerprint` is now just the stable bucket UUID. (Expected to be temporary: the direction recorded in [`data_architecture_parse_and_render.md` §2](data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database) replaces the sidecar tree with per-source doltlite tables, at which point render gets the same cursor treatment described here and the fingerprint compare goes away.) This swap moves the "what's different?" decision from Rust-computed hash trees to doltlite's native diff, which it maintains anyway for `dolt diff`. The per-row `payload_blake3` columns are gone — the `WirePayloadRow` derive no longer emits them.
 
 **Rule for new stages.** Any new derivation added to the pipeline (future Annotate step, future index shard, future projection) follows the same recipe: declare what the inputs are (content + dependency hashes), compute a deterministic hash over them, store it alongside the output, compare on re-run. The compare-and-skip loop is what makes the system feel responsive on a laptop with months of accumulated data.
 
