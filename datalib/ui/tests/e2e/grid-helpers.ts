@@ -13,6 +13,43 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 
+// The DOM node for a row index. One definition, so the wait and the
+// click can never drift onto different selectors.
+const rowLocator = (page: Page, rowIndex: number): Locator =>
+  page.locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`);
+
+// Ask the grid to put `uuid`'s row in the middle of the viewport, and
+// report the index it lives at (null if no node carries that uuid).
+//
+// Annotated: `found` is only ever assigned inside the forEachNode
+// callback, so TypeScript infers the evaluate's return as plain `null`
+// and the casts at the call sites would be rejected as mistakes.
+const nudgeRowIntoView = (page: Page, uuid: string): Promise<number | null> =>
+  page.evaluate(
+    ({ uuid }) => {
+      type Node = {
+        rowIndex: number | null;
+        data?: { uuid: string };
+      };
+      const w = window as unknown as {
+        __fwGridApi?: {
+          forEachNode: (cb: (n: Node) => void) => void;
+          ensureNodeVisible: (n: Node, pos: "middle") => void;
+        };
+      };
+      const api = w.__fwGridApi!;
+      let found: number | null = null;
+      api.forEachNode((node) => {
+        if (node.data && node.data.uuid === uuid) {
+          api.ensureNodeVisible(node, "middle");
+          found = node.rowIndex;
+        }
+      });
+      return found;
+    },
+    { uuid },
+  );
+
 // Scroll a (possibly virtualized-away) row into view via the grid api
 // the GridCard exposes on window, and return its row index once the DOM
 // node for it actually exists.
@@ -31,44 +68,13 @@ import { expect, type Locator, type Page } from "@playwright/test";
 // surfaced when the specs started running four at a time and rendering
 // got slower relative to the scroll.
 async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
-  // Annotated: `found` is only ever assigned inside the forEachNode
-  // callback, so TypeScript infers the evaluate's return as plain
-  // `null` and the cast below would be rejected as a mistake.
-  const nudge = (): Promise<number | null> =>
-    page.evaluate(
-      ({ uuid }) => {
-        type Node = {
-          rowIndex: number | null;
-          data?: { uuid: string };
-        };
-        const w = window as unknown as {
-          __fwGridApi?: {
-            forEachNode: (cb: (n: Node) => void) => void;
-            ensureNodeVisible: (n: Node, pos: "middle") => void;
-          };
-        };
-        const api = w.__fwGridApi!;
-        let found: number | null = null;
-        api.forEachNode((node) => {
-          if (node.data && node.data.uuid === uuid) {
-            api.ensureNodeVisible(node, "middle");
-            found = node.rowIndex;
-          }
-        });
-        return found;
-      },
-      { uuid },
-    );
-
-  const rowIndex = await nudge();
+  const rowIndex = await nudgeRowIntoView(page, uuid);
   expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
   await expect
     .poll(
       async () => {
-        await nudge();
-        return page
-          .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
-          .count();
+        await nudgeRowIntoView(page, uuid);
+        return rowLocator(page, rowIndex as number).count();
       },
       {
         timeout: 15_000,
@@ -80,13 +86,88 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
   return rowIndex as number;
 }
 
+// Click a row the grid may recycle out from under us.
+//
+// `scrollRowIntoView` leaves the row in the DOM, but "in the DOM now" is
+// not "in the DOM when the click lands". AG Grid recycles row elements
+// as the viewport settles, and a `click()` with no timeout of its own
+// inherits the whole 30s per-test budget waiting on a node that has
+// already detached — with nothing re-issuing `ensureNodeVisible` for the
+// duration of that wait. The poll above cannot help: it has already
+// returned.
+//
+// That is exactly the CI failure on 2026-09-04 (run 33857724612, the
+// webkit run of `yolink-plots.spec.ts`): `locator.click: Test timeout of
+// 30000ms exceeded` waiting for a row the poll had just counted. A
+// re-run passed, which is the signature of a race rather than a broken
+// selector.
+//
+// So each attempt gets a short timeout of its own and a failed one
+// re-nudges before the next. Worst case is the 15s poll plus 3 x 3s,
+// which still fits the 30s the playwright config allows per test —
+// raising that timeout instead would only have made the race rarer.
+async function clickRowByUuidWith(
+  page: Page,
+  uuid: string,
+  options: Parameters<Locator["click"]>[0],
+) {
+  const rowIndex = await scrollRowIntoView(page, uuid);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await nudgeRowIntoView(page, uuid);
+    try {
+      await rowLocator(page, rowIndex).click({ ...options, timeout: 3_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(
+    `row ${rowIndex} (uuid=${uuid}) did not take a click in 3 attempts; ` +
+      `last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  );
+}
+
 // Scroll a (possibly virtualized-away) row into view, then click it.
 // Returns after the click; callers assert on the consequences.
 export async function clickRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await scrollRowIntoView(page, uuid);
-  await page
-    .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
-    .click();
+  await clickRowByUuidWith(page, uuid, {});
+}
+
+// Select a row and confirm the grid agrees that it is selected.
+//
+// A click can land — the row takes `ag-row-focus` — and still leave the
+// node unselected. The app restores its persisted view asynchronously
+// after load, and a restore that arrives *after* the click resets the
+// selection the click just made. Seen on webkit as `aria-selected=
+// "false"` with the focus class present, held for the whole 5s the
+// assertion allowed, so it is a lost selection rather than a slow one.
+//
+// Clicking again is safe: the grid is `rowSelection: { mode: "multiRow",
+// enableClickSelection: true }`, where a plain click selects exactly the
+// row clicked rather than toggling it. The already-selected check before
+// each click keeps even that from mattering.
+export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
+  const row = page.locator(`.ag-grid-scrolling-rows [role="row"][row-id="${uuid}"]`);
+  const selected = async () =>
+    ((await row.getAttribute("class")) ?? "").includes("ag-row-selected");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (await selected()) return row;
+    await clickRowByUuid(page, uuid);
+    try {
+      await expect(row).toHaveClass(/ag-row-selected/, { timeout: 2_000 });
+      return row;
+    } catch {
+      // Fall through and click again — something cleared it.
+    }
+  }
+  // Out of attempts: assert once more so the failure reads as "never
+  // became selected" rather than as a bare loop exit.
+  await expect(row, `row ${uuid} never became selected`).toHaveClass(
+    /ag-row-selected/,
+    { timeout: 2_000 },
+  );
+  return row;
 }
 
 // Right-click a row located by uuid. Same virtualization dance as
@@ -94,10 +175,7 @@ export async function clickRowByUuid(page: Page, uuid: string) {
 // node to dispatch at — but opens the context menu instead of
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  const rowIndex = await scrollRowIntoView(page, uuid);
-  await page
-    .locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`)
-    .click({ button: "right" });
+  await clickRowByUuidWith(page, uuid, { button: "right" });
   await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
 }
 
@@ -254,6 +332,11 @@ export async function stampOf(page: Page, id: string): Promise<string | null> {
 /// States a run will not move a step out of.
 export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
 
+/// How long "Interrupted" has to hold before a settle believes it. See
+/// the note in `settleRowOnly`: it is the one terminal status inferred
+/// from a racy lock probe rather than recorded by the runner.
+const INTERRUPTED_CONFIRM_MS = 2_000;
+
 /// How long a row may take to settle: a real `datalib-dag` run over the
 /// fixture corpus on a cold action cache.
 export const ROW_SETTLE = 60_000;
@@ -367,12 +450,35 @@ async function settleRowOnly(
   timeout: number,
 ): Promise<string> {
   let last = "(no status)";
+  let interruptedSince: number | null = null;
   await expect
     .poll(
       async () => {
         last = (await statusOf(page, id)) ?? "(no status)";
         const stamp = await stampOf(page, id);
-        return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
+        const done = TERMINAL.test(last) && stamp !== before;
+        // "Interrupted" is the one terminal status derived from an
+        // ABSENCE rather than from an outcome the runner wrote down:
+        // `stepStatus` reports it when a step reads `running` on a run
+        // with no `finished_at` while `GET /api/dag` says no runner
+        // holds the lock. That probe is racy by construction — the
+        // endpoint's own comment says as much — so the moment a runner
+        // is taking or dropping the root reads as a run that died.
+        //
+        // Latching it there is how a healthy `Sync everything` came
+        // back as `pdfs/raw` = "Interrupted". A real interruption is
+        // permanent (nothing will move that record again), so waiting
+        // out the window costs a dead run nothing and costs a live one
+        // a correct answer.
+        if (done && last === "Interrupted") {
+          interruptedSince ??= Date.now();
+          if (Date.now() - interruptedSince < INTERRUPTED_CONFIRM_MS) {
+            return `${last} @ ${stamp} (confirming)`;
+          }
+        } else {
+          interruptedSince = null;
+        }
+        return done ? "finished" : `${last} @ ${stamp}`;
       },
       {
         timeout,
