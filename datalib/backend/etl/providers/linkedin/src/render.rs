@@ -40,7 +40,12 @@ use crate::download::{db_path_for, RawDb};
 /// build produced. Three independently-bumped constants (which is what
 /// this was) cannot answer that question, since a tree carrying two of
 /// them is indistinguishable from a stale one.
-pub const RENDER_VERSION: u32 = 1;
+///
+/// v2: a `DATE` / `Date` column we cannot parse gets a null `when_ts`
+///     instead of a real-looking `1970-01-01T00:00:00`, which used to
+///     sort those rows to the top of the grid. See
+///     `docs/dev/data_architecture_parse_and_render.md` §6.
+pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -193,13 +198,38 @@ fn nonempty(s: &str) -> Option<&str> {
     (!t.is_empty()).then_some(t)
 }
 
-/// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis.
-/// Returns 0 on any unexpected shape (sorts such rows to the top).
-fn parse_date_ms(s: &str) -> i64 {
+/// TODO(problem-sink): a shape we don't recognize is dropped silently.
+/// `None` is the right *value* for `when_ts`, but nothing anywhere
+/// records that we discarded something upstream actually sent — that is
+/// only half of R1 ("drop, count, log; never abort, never hide"). When
+/// the problem sink exists (see
+/// `docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
+/// report `{field, reason: CoercionFailed, sample}` here as well as
+/// returning `None`. Grep `TODO(problem-sink)` for every such site.
+/// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis,
+/// or `None` on any shape we don't recognize.
+///
+/// **The one place a LinkedIn date is interpreted** — `posts.rs` calls
+/// this rather than keeping the second copy it used to have.
+///
+/// **Assume-UTC is legal here and the audit is in the string.** LinkedIn
+/// states the zone as the literal trailing word `UTC`, which chrono
+/// cannot turn into an offset, so this is a naive parse plus a UTC
+/// assumption. That assumption is only permitted inside `datalib-time`
+/// (see its module docs), which is why this calls
+/// `parse_custom_strftime_assumed_utc` instead of doing
+/// `NaiveDateTime::parse_from_str(..).and_utc()` locally. The trailing
+/// ` UTC` is optional in the `posts` feed, so it is trimmed first rather
+/// than baked into the format.
+///
+/// It used to return `0` on an unexpected shape — its own doc comment
+/// noted that "sorts such rows to the top." `None` now reaches `when_ts`
+/// as a null instead.
+pub(crate) fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().trim_end_matches(" UTC").trim();
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map(|dt| dt.and_utc().timestamp_millis())
-        .unwrap_or(0)
+    datalib_time::parse_custom_strftime_assumed_utc(s, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|t| t.to_unix_millis())
 }
 
 #[cfg(test)]
@@ -238,7 +268,29 @@ mod tests {
             .unwrap()
             .and_utc()
             .timestamp_millis();
-        assert_eq!(parse_date_ms("2026-06-16 22:11:33 UTC"), expected);
-        assert_eq!(parse_date_ms(""), 0);
+        assert_eq!(parse_date_ms("2026-06-16 22:11:33 UTC"), Some(expected));
+        // The `posts` feed sometimes omits the trailing " UTC".
+        assert_eq!(parse_date_ms("2026-06-16 22:11:33"), Some(expected));
+    }
+
+    /// A date we can't read must produce no timestamp, not the epoch.
+    /// The old helper's own doc comment admitted the consequence:
+    /// "sorts such rows to the top."
+    #[test]
+    fn unparseable_dates_yield_none_not_the_epoch() {
+        for bad in ["", "   ", "not a date", "2026-06-16", "16/06/2026 22:11:33"] {
+            assert_eq!(
+                parse_date_ms(bad),
+                None,
+                "parse_date_ms({bad:?}) fabricated a stamp"
+            );
+        }
+    }
+
+    #[test]
+    fn undated_message_gets_a_null_timestamp() {
+        let payloads = vec![msg("c1", "A", "B", "", "undated")];
+        let chats = build_chats("messages", &payloads);
+        assert_eq!(chats[0].buckets[0].items[0].date_ms, None);
     }
 }

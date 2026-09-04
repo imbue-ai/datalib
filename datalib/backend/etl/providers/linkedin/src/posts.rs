@@ -47,7 +47,7 @@ use serde_json::Value;
 use crate::download::schema_raw::ns_id as uuid5;
 use crate::download::{db_path_for, RawDb};
 
-use crate::render::RENDER_VERSION;
+use crate::render::{parse_date_ms, RENDER_VERSION};
 
 /// Author label for the export owner. Every share and comment in these
 /// two feeds is something the user themselves wrote.
@@ -174,12 +174,14 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             }
             items.push(me_item(&key, "post", date, body, &thread.url));
         } else {
+            // Earliest *real* comment date, or `None` when none of the
+            // comments carry one — the placeholder then has no
+            // timestamp to report rather than a fabricated epoch.
             let earliest = thread
                 .comments
                 .iter()
-                .map(|c| parse_date_ms(field(c, "Date")))
-                .min()
-                .unwrap_or(0);
+                .filter_map(|c| parse_date_ms(field(c, "Date")))
+                .min();
             items.push(post_placeholder(&key, earliest, &thread.url));
         }
 
@@ -244,7 +246,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
 
 /// Opening item for a thread whose post body LinkedIn didn't export
 /// (a post we only commented on). A system note carries the linkout.
-fn post_placeholder(key: &str, date_ms: i64, url: &str) -> NormalizedChatItem {
+fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedChatItem {
     let note = match nonempty(url) {
         Some(u) => format!("Original post not included in the LinkedIn export — {u}"),
         None => "Original post not included in the LinkedIn export.".to_string(),
@@ -342,16 +344,6 @@ fn field<'a>(p: &'a Value, key: &str) -> &'a str {
 fn nonempty(s: &str) -> Option<&str> {
     let t = s.trim();
     (!t.is_empty()).then_some(t)
-}
-
-/// Parse LinkedIn's `2026-06-16 22:11:33` (optionally ` UTC`) timestamp
-/// to unix millis. Returns 0 on any unexpected shape (sorts such rows to
-/// the top).
-fn parse_date_ms(s: &str) -> i64 {
-    let s = s.trim().trim_end_matches(" UTC").trim();
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map(|dt| dt.and_utc().timestamp_millis())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

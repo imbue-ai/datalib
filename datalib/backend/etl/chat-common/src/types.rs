@@ -93,9 +93,11 @@ pub struct NormalizedReaction {
     pub reactor_display: String,
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
-    /// Unix milliseconds when the reaction was sent. Used for
-    /// fingerprint stability.
-    pub date_ms: i64,
+    /// Unix milliseconds when the reaction was sent, or `None` when
+    /// upstream gave none. Used for fingerprint stability and for the
+    /// reaction row's `when_ts` — see [`NormalizedChatItem::date_ms`]
+    /// for why this is an `Option` and what `None` costs downstream.
+    pub date_ms: Option<i64>,
     /// What this reaction is upstream, for its grid_row's backpointer
     /// columns. `None` for providers not yet ported onto `datalib_id`.
     ///
@@ -120,8 +122,29 @@ pub struct NormalizedChatItem {
     /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
-    /// Unix milliseconds for the item's effective timestamp.
-    pub date_ms: i64,
+    /// Unix milliseconds for the item's effective timestamp, or `None`
+    /// when this item has no timestamp at all.
+    ///
+    /// **`None` is the honest answer, and it must survive to the grid.**
+    /// `docs/dev/data_architecture_parse_and_render.md` §6 requires
+    /// `GridRow.when_ts` to be null when upstream gave no timestamp and
+    /// none can be inherited from a parent — "not 'epoch,' not 'now,'
+    /// not 'midnight UTC of the row's date.'" This field was an `i64`
+    /// until 2026-09, which meant a provider *could not say* "no
+    /// timestamp"; all eight providers on chat-common invented a `0` at
+    /// the boundary and the grid filled up with real-looking
+    /// `1970-01-01T00:00:00+00:00` rows. A fabricated epoch is strictly
+    /// worse than a null: it sorts into a real position, it is
+    /// indistinguishable from a genuine 1970 record, and it matches
+    /// `before:` / `after:` queries it should not.
+    ///
+    /// Before settling for `None`, prefer inheriting: a sub-item that
+    /// lacks its own stamp should take the parent's plus a
+    /// microsecond/millisecond bump (see
+    /// [`datalib_time::IsoOffsetTimestamp::bump_micros`]), which is
+    /// §6-sanctioned and what anthropic and chatgpt do. `None` is for
+    /// when there is no parent stamp to inherit either.
+    pub date_ms: Option<i64>,
     /// Optional message body. Text items always carry this; attachment
     /// items use it as the caption; system items use it as the summary.
     pub text: Option<String>,

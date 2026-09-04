@@ -12,7 +12,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_time::IsoOffsetTimestamp;
 
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
@@ -258,8 +257,14 @@ fn render_markdown(
     out.push_str(&format!("period: {}\n", doc.period_key));
     out.push_str(&format!("is_dm: {}\n", room.is_dm));
     out.push_str(&format!("event_count: {}\n", doc.messages.len()));
-    out.push_str(&format!("first_ts: {}\n", iso_from_ms(doc.first_ms)));
-    out.push_str(&format!("last_ts: {}\n", iso_from_ms(doc.last_ms)));
+    // Frontmatter omits a bound it cannot state, rather than printing a
+    // placeholder that reads like a timestamp.
+    if let Some(first) = iso_from_ms(doc.first_ms) {
+        out.push_str(&format!("first_ts: {first}\n"));
+    }
+    if let Some(last) = iso_from_ms(doc.last_ms) {
+        out.push_str(&format!("last_ts: {last}\n"));
+    }
     out.push_str("---\n\n");
 
     let title_text = format!(
@@ -479,37 +484,22 @@ fn human_bytes(n: i64) -> String {
         format!("{:.2} GiB", n / (1024.0 * 1024.0 * 1024.0))
     }
 }
-
-/// RFC-3339 timestamp with millisecond precision. Used for
-/// machine-facing surfaces (`grid_rows.when_ts`, frontmatter
-/// `first_ts` / `last_ts`) so cross-provider sorts / range
-/// queries behave consistently with the other providers' index
-/// rows.
-fn iso_from_ms(ms: i64) -> String {
-    IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.to_rfc3339_millis())
-        .unwrap_or_else(|| {
-            // Out-of-range epoch ms is unreachable in practice (chrono
-            // covers ±580B years); preserve the audit-friendly marker
-            // so a corrupt row is loudly visible in `when_ts` instead
-            // of pretending to be a real time. See data_architecture_ingestion.md
-            // "no fabricated timestamps".
-            tracing::warn!(ms, "iso_from_ms: epoch-ms out of chrono range");
-            format!("@{ms}ms")
-        })
+/// `when_ts` for an epoch-ms stamp, at **millisecond** precision —
+/// which is what this renderer has always emitted, and changing it
+/// would re-cut every fingerprint beeper has written.
+///
+/// The policy (unrepresentable ⇒ null, and say so) lives in
+/// `datalib-time`. This used to be a local copy that returned the
+/// marker string `@{ms}ms` instead, which is not RFC 3339, so
+/// `GridRow::builder().build()` rejected it and one bad row failed the
+/// whole render step.
+fn iso_from_ms(ms: i64) -> Option<String> {
+    datalib_time::when_ts_from_unix_millis(Some(ms), datalib_time::WhenTsPrecision::Millis)
 }
 
-/// Human-friendly timestamp for rendering inside the markdown
-/// body (section headers, hidden-event one-liners). Easier to
-/// skim than a full RFC-3339 string when a person is reading the
-/// transcript.
+/// Human-friendly timestamp for the markdown body.
 fn display_ts(ms: i64) -> String {
-    // Human-display rendering of an upstream epoch-ms value. Funnels
-    // through `datalib-time` so the interpretation rule lives in
-    // one place; the strftime is local to this human-display callsite.
-    IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("@{ms}ms"))
+    datalib_time::display_ts_from_unix_millis(Some(ms))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -635,7 +625,7 @@ fn build_grid_rows(
             .provider("beeper")
             .kind(kind_for_conversation(&room.network))
             .source_label(source_label.clone())
-            .when_ts(Some(iso_from_ms(doc.first_ms)))
+            .when_ts(iso_from_ms(doc.first_ms))
             .account(room.account_id.clone())
             .project(room.external_workspace_id.clone())
             .channel(conversation_name.clone())
@@ -668,7 +658,7 @@ fn build_grid_rows(
                 .provider("beeper")
                 .kind(kind_for_message(&room.network, &m.event_type))
                 .source_label(source_label.clone())
-                .when_ts(Some(iso_from_ms(m.timestamp_ms)))
+                .when_ts(iso_from_ms(m.timestamp_ms))
                 .author(m.sender_label.clone())
                 .account(room.account_id.clone())
                 .project(room.external_workspace_id.clone())
@@ -700,7 +690,7 @@ fn build_grid_rows(
                     .provider("beeper")
                     .kind(format!("{} Reaction", network_label(&room.network)))
                     .source_label(source_label.clone())
-                    .when_ts(Some(iso_from_ms(r.timestamp_ms)))
+                    .when_ts(iso_from_ms(r.timestamp_ms))
                     .author(r.sender_label.clone())
                     .account(room.account_id.clone())
                     .project(room.external_workspace_id.clone())
@@ -757,5 +747,28 @@ fn network_label(network: &str) -> &str {
         "facebook" => "Facebook",
         "sms" => "SMS",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    /// An epoch-ms value chrono cannot represent leaves `when_ts` null.
+    /// It used to become the marker string `@{ms}ms`, which is not RFC
+    /// 3339 — so `GridRow::builder().build()` rejected it and one bad
+    /// row failed the whole render step.
+    #[test]
+    fn iso_from_ms_yields_none_for_unrepresentable_values() {
+        assert_eq!(
+            iso_from_ms(0).as_deref(),
+            Some("1970-01-01T00:00:00.000+00:00")
+        );
+        assert_eq!(iso_from_ms(i64::MAX), None);
+        assert_eq!(iso_from_ms(i64::MIN), None);
+        // Whatever it returns must satisfy the grid's own contract.
+        let ts = iso_from_ms(1_776_183_300_000).expect("representable");
+        datalib_time::validate_iso_offset(&ts)
+            .expect("when_ts must be RFC 3339 with an explicit offset");
     }
 }

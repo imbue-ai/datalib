@@ -171,6 +171,9 @@ _E2E_DATA = [
     "@nodejs_host//:node_bin",
     "//third-party/qmd/runtime:qmd_tree",
     "//third-party/qmd/runtime:package.json",
+    # The anchor `FW_E2E_QMD_DIR_RLOC` resolves; `qmd_tree` above is what
+    # actually materializes the 277-package store.
+    "//third-party/qmd/runtime:qmd_package_dir",
 ]
 
 # Runfiles paths of the two staging inputs above, handed to run_e2e.sh
@@ -179,6 +182,17 @@ _E2E_DATA = [
 _E2E_ENV = {
     "FW_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
     "FW_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
+    # The store's location has to be anchored on a GENERATED artifact,
+    # not derived from the source `package.json` above. In the runfiles
+    # tree that package.json is a symlink back into the source dir, so
+    # `dirname` of it lands in `third-party/qmd/runtime/` — where
+    # `node_modules/` does not exist, because pnpm materializes it under
+    # `bazel-bin/`. Under `bazel test` the resolution happened to stay
+    # inside the runfiles tree and the sibling was found; under
+    # `bazel run` it did not, and the documented
+    # `--update-snapshots` workflow failed with "qmd package store not
+    # in runfiles". `qmd_package_dir` exists precisely as this anchor.
+    "FW_E2E_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
 }
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]

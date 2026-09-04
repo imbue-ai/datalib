@@ -272,7 +272,24 @@ fi
 # tree; qmd resolves its deps from siblings inside it, which is why
 # `:qmd_tree` (the entire store) is the data dep rather than the single
 # `@tobilu/qmd` link.
-QMD_STORE="$(dirname "$QMD_PKG_RUNFILE")/node_modules"
+# Anchored on the generated `@tobilu/qmd` package dir, NOT on the
+# source `package.json` read above. Deriving the store as
+# `dirname($QMD_PKG_RUNFILE)/node_modules` looked equivalent and was not:
+# in the runfiles tree that package.json is a symlink back into the
+# source checkout, so under `bazel run` the dirname resolved to
+# `third-party/qmd/runtime/`, where `node_modules/` does not exist — pnpm
+# materializes it under `bazel-bin/`. `bazel test` happened to stay
+# inside the runfiles tree, so the suite passed while the documented
+# `bazel run … -- --update-snapshots` path failed. Anchoring on a
+# generated artifact resolves correctly in both modes.
+QMD_DIR_RUNFILE="$(rlocation "${FW_E2E_QMD_DIR_RLOC:-}")" || QMD_DIR_RUNFILE=""
+if [[ -z "$QMD_DIR_RUNFILE" || ! -d "$QMD_DIR_RUNFILE" ]]; then
+  echo "ERROR: qmd package dir not in runfiles (FW_E2E_QMD_DIR_RLOC='${FW_E2E_QMD_DIR_RLOC:-}')" >&2
+  echo "Did //third-party/qmd/runtime:qmd_package_dir drop out of _E2E_DATA?" >&2
+  exit 1
+fi
+# <store>/@tobilu/qmd -> <store>
+QMD_STORE="$(cd "$QMD_DIR_RUNFILE/../.." && pwd)"
 if [[ ! -d "$QMD_STORE" ]]; then
   echo "ERROR: qmd package store not in runfiles at $QMD_STORE" >&2
   echo "Did //third-party/qmd/runtime:qmd_tree drop out of _E2E_DATA?" >&2

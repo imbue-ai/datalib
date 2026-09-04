@@ -44,7 +44,11 @@ are relative to the repo root.
 - [`docs/dev/data_lib_as_a_library/`](docs/dev/data_lib_as_a_library/)
   — two linked *proposals* (nothing built) about datalib as something
   others build on, prompted by the `data-pipeline-builder` skill in
-  `imbue-ai/default-workspace-template#534`.
+  `imbue-ai/default-workspace-template#534`, plus
+  [`render_audit_2026_09_03.md`](docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md)
+  — the first of those proposals' audit actually run, and the one file
+  here that is measurement rather than intent (read it before believing
+  any claim about what render does today).
   [`data_handling_practices.md`](docs/dev/data_lib_as_a_library/data_handling_practices.md)
   is the one to read first and the one that touches this repo: the
   seven things that skill does better than we do, the four audit
@@ -836,6 +840,11 @@ single render path consumes either source indistinguishably. See
 — capabilities, permissions, tags, member ids, labels — the array order
 is whatever the server happened to emit, and nothing promises it is
 stable between fetches. Sort it before it goes into a content payload.
+
+This is an architectural rule, not tidiness: the whole pipeline's
+incrementality rests on an unchanged record serializing identically to
+itself. The argument is in
+[`data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md#efficiently-incremental).
 
 Left unsorted, a re-fetch of an unchanged object serializes differently
 from itself, and everything downstream believes it changed:
