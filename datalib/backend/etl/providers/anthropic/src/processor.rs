@@ -1,7 +1,13 @@
-//! Program-A `DataProcessor`s for the anthropic (claude_api / claude_export)
-//! source. `claude_api` contributes download + render; `claude_export` is
-//! render-only (no `sync:`), sharing the same renderer. The source owns its
-//! raw store (open/commit/checkpoint); the orchestrator only drives `run`.
+//! Program-A `DataProcessor`s for the anthropic source types.
+//!
+//! Two source types, one renderer. `claude_api` downloads from the live
+//! claude.ai API ([`plan_download`]); `claude_export` ingests an
+//! unpacked bulk export off disk ([`plan_export_download`]). Both write
+//! the *same six tables* of the same raw store, which is what lets
+//! [`plan_render`] serve either one with a single parser.
+//!
+//! The source owns its raw store (open/commit/checkpoint); the
+//! orchestrator only drives `run`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,12 +18,13 @@ use async_trait::async_trait;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_anthropic_config::AnthropicRenderConfig;
-use datalib_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
+use datalib_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync, ClaudeExportConfig};
 
 use crate::download;
 
-/// Download wave: empty unless a `sync:` block makes the source managed
-/// (claude_export stays render-only).
+/// `claude_api` download wave: empty unless a `sync:` block says what
+/// to fetch. Absent `sync:` means "no download this run" — render still
+/// reads whatever an earlier run left in the raw store.
 pub fn plan_download(
     ctx: PlanContext,
     config: AnthropicConfig,
@@ -35,6 +42,30 @@ pub fn plan_download(
         }));
     }
     Ok(procs)
+}
+
+/// `claude_export` download wave: always present. Ingests the unpacked
+/// export at `common.input_path` into the raw store at
+/// `common.raw_path` — the same `input_path` / `raw_path` split every
+/// other file-backed source uses.
+pub fn plan_export_download(
+    ctx: PlanContext,
+    config: ClaudeExportConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    // Without one, `input_or_raw_path()` would fall back to the raw dir
+    // and we would ingest the store into itself — which reads as an
+    // export with nothing in it. Say so instead.
+    let Some(input_path) = config.common.input_path.clone() else {
+        anyhow::bail!(
+            "claude_export needs `common.input_path` set to the directory you              unpacked the Claude export into (the one holding conversations.json)"
+        );
+    };
+    Ok(vec![Box::new(ClaudeExportIngest {
+        id: format!("anthropic/{name}/download"),
+        raw_path: config.common.raw_path().to_path_buf(),
+        input_path,
+    })])
 }
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -108,6 +139,43 @@ impl DataProcessor for AnthropicDownload {
             s.requests,
             s.forbidden_retry_attempts,
             s.forbidden_retry_recoveries,
+        );
+        Ok(session.finish(ctx, summary).await)
+    }
+}
+
+/// `claude_export`'s download processor: an unpacked bulk export on
+/// disk becomes rows in the same raw store the API downloader writes.
+struct ClaudeExportIngest {
+    id: String,
+    raw_path: PathBuf,
+    input_path: PathBuf,
+}
+
+#[async_trait]
+impl DataProcessor for ClaudeExportIngest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        let s = download::export::ingest(download::export::IngestOptions {
+            db_path: self.raw_path.clone(),
+            db: Some(db),
+            input_path: self.input_path.clone(),
+            // The run-pinned `now`, so every bookkeeping stamp this
+            // ingest writes agrees with the rest of the run.
+            now: ctx.now.to_string(),
+            progress: ctx.progress.clone(),
+            control: ctx.control.clone(),
+        })
+        .await?;
+        let summary = format!(
+            "users={} conversations={} projects={} project_docs={} pruned={}",
+            s.users, s.conversations, s.projects, s.project_docs, s.pruned,
         );
         Ok(session.finish(ctx, summary).await)
     }

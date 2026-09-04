@@ -54,10 +54,11 @@ fixtures/
 └── (yolink lives with its provider:
     datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json)
     A *spec*, not a capture: `yolink-make-fixture` expands it into a
-    doltlite raw store, and the pipeline runs the source render-only.
-    YoLink's downloader shells out to `curl` for signed-URL CSVs, so it
-    has no playback tape to replay — see `run_sync_pipeline.py`'s
-    `RENDER_ONLY`. Four Enterprise-D sensors, 288 five-minute samples
+    doltlite raw store, and the pipeline then runs only the render step
+    over it. YoLink's downloader shells out to `curl` for signed-URL
+    CSVs, so it has no playback tape to replay — a limitation of this
+    harness, not of the source; see `run_sync_pipeline.py`'s
+    `PRESEEDED_RAW`. Four Enterprise-D sensors, 288 five-minute samples
     each over 2369-04-14, deterministic values (sine + hash jitter, no
     RNG).
 ```

@@ -4,8 +4,10 @@
 //! A *data source* contributes one or more `DataProcessor`s grouped into the
 //! two waves (`plan_download` / `plan_render` per provider): a download processor (ingests
 //! from the outside world), a render processor (reads artifacts, emits
-//! rendered docs), or just one of them. "Download-only" / "render-only" is
+//! rendered docs), or just one of them. Contributing only one is
 //! **structural** — a missing processor — not a flag or a no-op default.
+//! `media`, `fsindex` and `lightroom` are download-only: they mirror a
+//! tree and there is nothing chat-shaped to render.
 //!
 //! The defining rule of this layer is **storage-agnosticism**: the
 //! orchestrator drives a processor purely through [`DataProcessor::run`] and

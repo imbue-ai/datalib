@@ -54,9 +54,12 @@ pub fn run(
     };
 
     let synth: Box<dyn Synthesizer> = match step_type {
-        "claude_api" | "claude_export" => Box::new(
-            datalib_etl_anthropic::synthesize::AnthropicSynth::new(input.clone()),
-        ),
+        // `claude_export` is deliberately absent: its download reads an
+        // export off disk and makes no requests, so there is no HTTP to
+        // play back.
+        "claude_api" => Box::new(datalib_etl_anthropic::synthesize::AnthropicSynth::new(
+            input.clone(),
+        )),
         "chatgpt_api" => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
             input.clone(),
         )),
@@ -88,8 +91,8 @@ pub fn run(
                 input.clone(),
             ))
         }
-        // Everything else is file-backed / render-only / synth-less:
-        // no download HTTP to play back. Skip quietly like sync did.
+        // Everything else is file-backed or otherwise synth-less: no
+        // download HTTP to play back. Skip quietly like sync did.
         other => {
             log(format!(
                 "synthesize {name} ({other}): skipped (no HTTP synthesizer for this source type)"

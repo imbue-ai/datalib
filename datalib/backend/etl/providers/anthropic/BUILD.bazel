@@ -137,6 +137,8 @@ rust_test(
     },
     deps = [
         ":datalib_etl_anthropic",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 
@@ -178,6 +180,7 @@ rust_test(
         "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:insta",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 

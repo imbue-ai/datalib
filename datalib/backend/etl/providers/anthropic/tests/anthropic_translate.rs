@@ -3,7 +3,8 @@
 //! via `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an
 //! integration test tagged `manual` and is run via `cargo test`.
 
-use datalib_etl_anthropic::render::parse::{parse_export, shred};
+use datalib_etl_anthropic::download::export::{ingest, IngestOptions};
+use datalib_etl_anthropic::render::parse::{parse, shred};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -14,9 +15,22 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anthropic_api")
 }
 
-#[test]
-fn parses_tng_api_fixture() {
-    let parsed = parse_export(&fixture_dir()).expect("parse");
+#[tokio::test(flavor = "multi_thread")]
+async fn parses_tng_api_fixture() {
+    // Same path the pipeline takes: the export directory is ingested
+    // into a raw store, and render reads that store.
+    let raw = tempfile::tempdir().expect("raw");
+    ingest(IngestOptions {
+        db_path: raw.path().to_path_buf(),
+        db: None,
+        input_path: fixture_dir(),
+        now: "2026-09-04T00:00:00-07:00".to_string(),
+        progress: Default::default(),
+        control: Default::default(),
+    })
+    .await
+    .expect("ingest");
+    let parsed = parse(raw.path(), None).expect("parse");
 
     assert!(!parsed.accounts.is_empty(), "expected accounts");
     assert!(!parsed.conversations.is_empty(), "expected conversations");

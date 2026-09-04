@@ -1,5 +1,17 @@
 # Anthropic Extract
 
+This provider serves **two source types** that share one renderer:
+
+| type            | download wave                                      | needs credentials |
+|-----------------|----------------------------------------------------|-------------------|
+| `claude_api`    | walks the live `claude.ai` API                     | yes               |
+| `claude_export` | reads an unpacked bulk export off disk             | no                |
+
+Both write **the same six tables of the same raw store** — `users`,
+`orgs`, `projects`, `project_docs`, `conversations`,
+`anthropic_attachments` — which is the whole point: `render` has one
+input shape to be correct against, and there is exactly one parser.
+
 `anthropic-download` incrementally mirrors `claude.ai` conversations
 into a local JSON cache that matches Anthropic's bulk-export shape so
 the existing translator consumes either source indistinguishably:
@@ -130,6 +142,76 @@ upserts what the listing returns, same as conversations. A
 `sync.project_uuids` that matches nothing in any visible org logs
 `anthropic_project_uuid_not_found` rather than quietly mirroring
 nothing.
+
+## `claude_export`: ingesting a bulk export
+
+`type: claude_export` points `common.input_path` at the directory you
+unpacked Anthropic's data export into:
+
+```
+<input_path>/
+  users.json            # array of accounts (optional)
+  conversations.json    # array of conversations, in export shape
+  projects/*.json       # one Claude Project per file, `docs` nested
+```
+
+The download step (`datalib-step download claude_export`,
+[`src/download/export.rs`](src/download/export.rs)) reads those files
+and writes the same rows the API walk writes: `users` from
+`users.json`, `conversations` from `conversations.json`, and each
+project split into a `projects` row plus one `project_docs` row per
+nested knowledge document — the same split the API gets from its two
+separate endpoints. Then render reads the store, exactly as it does for
+`claude_api`.
+
+This replaced a renderer that walked the export tree in place
+(issue #207). What that bought:
+
+  * **One input shape.** There is no second parser to keep in agreement
+    with the doltlite one, and the golden test now exercises the path
+    production actually runs.
+  * **Deletions.** A bulk export is a complete snapshot, so an id it
+    stops mentioning has been deleted upstream. After upserting, the
+    ingest drops the rows the export no longer names. Pruning is
+    per-table and only runs when that table's file was actually present,
+    so a partially-unpacked export can't wipe the store. This is the one
+    place in this provider that removes rows; the API walk deliberately
+    does not (a listing can omit a conversation for reasons other than
+    deletion).
+  * **The ordinary bookkeeping.** A `sync_runs` row per ingest —
+    `started_at` / `finished_at` / `elapsed_ms` / `status`, the
+    `deltas` summary — plus `dolt_diff`-driven incremental render, none
+    of which a directory read in place could provide.
+
+### Org columns
+
+`conversations.org_uuid` / `org_name` stay **NULL** for an
+export-ingested row. An export carries no organization anywhere; only
+the API walk learns one, from `/organizations`. That NULL is
+load-bearing rather than merely absent: `render::parse::parse_loaded`
+reads it as "this payload is already export-shaped" and skips
+`normalize_to_export_shape`, which would otherwise stamp the row
+`_source: {via: "claude.ai/api", org_uuid: ""}` — a lie about its
+provenance and an empty org on every grid row. A conversation whose
+payload happens to carry its own `_source.org_uuid` (an export produced
+from our own API mirror) still gets its org onto the grid row: that is
+read from the payload, not the column.
+
+Projects are the other way round — the render side reads a project's
+org from the **column** — so `_source.org_uuid` / `_source.org_name`
+are lifted out of the project payload at ingest time when the file has
+them.
+
+### No blob CAS
+
+A Claude bulk export ships JSON only. `chat_messages[*].files[]` name a
+`preview_url` back on claude.ai, and fetching it needs the credentials
+this source type deliberately does not have;
+`chat_messages[*].attachments[]` carry their text inline and have no
+bytes to fetch at all (see the next section). So there is nothing on
+disk to content-address, and `anthropic_attachments` stays empty for an
+export-backed store. If Anthropic ever ships the binaries inside the
+export, `src/download/export.rs` is where the CAS walk goes.
 
 ## Attachments: `files[]` vs `attachments[]`
 

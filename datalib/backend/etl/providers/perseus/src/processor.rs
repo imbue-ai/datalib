@@ -21,10 +21,10 @@ use crate::download;
 // here. Both waves key off the input path (the TEI tree): download fetches
 // into it, render reads from it. For a managed source `input_path:` is
 // unset and `input_or_raw_path()` falls back to `<data_root>/raw/perseus`;
-// for a render-only source it's the pre-staged tree named by `input_path:`.
+// without a `sync:` block it is the pre-staged tree named by `input_path:`.
 
 /// Download wave: present iff `sync:` — fetch the TEI files; otherwise
-/// the source is render-only over files already on disk.
+/// nothing is fetched and render reads the files already on disk.
 pub fn plan_download(
     ctx: PlanContext,
     config: PerseusConfig,

@@ -467,8 +467,9 @@ mod tests {
         ));
     }
 
-    /// No live block is not an error — it's the mbox / render-only case,
-    /// which the provider resolves by probing `input_path`.
+    /// No live block is not an error — it's the mbox case (or simply
+    /// no download wave this run), which the provider resolves by
+    /// probing `input_path`.
     #[test]
     fn no_live_block_is_not_an_error() {
         assert!(EmailConfig::default().live_mode().unwrap().is_none());

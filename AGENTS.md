@@ -819,12 +819,26 @@ bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 
 Claude data can come from the live web API (`type: claude_api`) or an
 unpacked bulk export (`type: claude_export`) — two separate source
-types, each its own stanza/step pair. The API downloader normalizes
-every response into the bulk-export on-disk shape
+types, each its own download + render step pair, both served by one
+provider crate.
+
+**They write the same raw store.** `claude_api` walks the API and
+`claude_export` reads the export's JSON off `common.input_path`, and
+both land rows in the same six tables of `<name>/raw`, so the render
+step has exactly one input shape. The API downloader gets there by
+normalizing every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in
 `datalib/backend/etl/providers/anthropic/src/download/normalize.rs`,
-stamping `_source: { via: "claude.ai/api", org_uuid }` provenance) so a
-single render path consumes either source indistinguishably. See
+stamping `_source: { via: "claude.ai/api", org_uuid }` provenance); the
+export ingest stores what the export already said, with the org columns
+NULL — which is how the renderer tells the two apart and knows not to
+normalize an already-normalized payload a second time.
+
+Until #207 the export type had no download wave at all: the renderer
+read the export tree in place through a second parser, and the source
+had no raw store, no `sync_runs` row and no way to notice a deleted
+conversation. If you find prose calling `claude_export` "render-only",
+it predates that fix. See
 `datalib/backend/etl/providers/anthropic/DOWNLOAD.md`.
 
 ## Unordered collections: give a bag an order before storing it

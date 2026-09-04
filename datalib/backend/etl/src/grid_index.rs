@@ -1412,7 +1412,7 @@ mod id_claim_tests {
 #[allow(clippy::disallowed_macros)]
 mod write_lock_tests {
     //! Reproduces the production "(code 5) database is locked" we saw
-    //! on a real render-only run: multiple per-source render
+    //! on a real render run: multiple per-source render
     //! workers calling [`apply_one`] in parallel against one pool that
     //! has `max_connections > 1`. Without the [`WriteLock`] argument
     //! each task gets its own connection, all of them race for

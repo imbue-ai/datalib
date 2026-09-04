@@ -1,13 +1,18 @@
 //! Golden test for Anthropic render::render against the TNG fixture.
 //!
-//! The expected snapshot is byte-equal to what `src/ingest/render.py`
-//! produces for the same fixture.
+//! The fixture is an unpacked bulk export, so the test runs the whole
+//! `claude_export` path: ingest the export directory into a doltlite
+//! raw store, then parse and render off that store. That is exactly
+//! what the pipeline does, which is the point — the golden used to go
+//! through a second, export-tree-only parser that production never
+//! touched (issue #207).
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use datalib_etl_anthropic::render::parse::parse_export;
+use datalib_etl_anthropic::download::export::{ingest, IngestOptions};
+use datalib_etl_anthropic::render::parse::parse;
 use datalib_etl_anthropic::render::render::render_all;
 
 fn fixture_dir() -> PathBuf {
@@ -41,9 +46,26 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
     out
 }
 
-#[test]
-fn renders_tng_fixture() {
-    let parsed = parse_export(&fixture_dir()).expect("parse");
+/// Ingest the fixture export into a fresh raw store and return the
+/// store's directory.
+async fn ingest_fixture(raw: &Path) {
+    ingest(IngestOptions {
+        db_path: raw.to_path_buf(),
+        db: None,
+        input_path: fixture_dir(),
+        now: "2026-09-04T00:00:00-07:00".to_string(),
+        progress: Default::default(),
+        control: Default::default(),
+    })
+    .await
+    .expect("ingest the TNG export");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn renders_tng_fixture() {
+    let raw = tempfile::tempdir().expect("raw");
+    ingest_fixture(raw.path()).await;
+    let parsed = parse(raw.path(), None).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     render_all(
         &parsed,

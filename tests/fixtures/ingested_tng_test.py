@@ -156,10 +156,11 @@ EXPECTED_PROVIDERS = frozenset(
         "slack",
         "sms_backup_restore",
         "whatsapp",
-        # Render-only in the fixture: its raw store is seeded by
-        # `yolink-make-fixture` rather than downloaded, so there is no
-        # `yolink.download` step. Rows here prove the render step ran
-        # over that store — see run_sync_pipeline.py's RENDER_ONLY.
+        # This fixture seeds yolink's raw store with
+        # `yolink-make-fixture` rather than downloading it, so the
+        # generated config has no yolink download step. Rows here prove
+        # the render step ran over that store — see
+        # run_sync_pipeline.py's PRESEEDED_RAW.
         "yolink",
     }
 )

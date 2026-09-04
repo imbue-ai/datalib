@@ -286,7 +286,9 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
         };
         out.push(LoadedConversation {
             id: r.try_get("id").unwrap_or_default(),
-            org_uuid: r.try_get("org_uuid").unwrap_or_default(),
+            org_uuid: r
+                .try_get::<Option<String>, _>("org_uuid")
+                .unwrap_or_default(),
             org_name: r.try_get("org_name").ok(),
             payload,
         });
@@ -367,7 +369,15 @@ fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Option<Value> {
 #[derive(Debug, Clone)]
 pub struct LoadedConversation {
     pub id: String,
-    pub org_uuid: String,
+    /// Owning Anthropic organization, or `None`.
+    ///
+    /// **`None` is load-bearing**, not just missing data: only the live
+    /// API walk learns an org (from `/organizations`), so a NULL column
+    /// means this row was ingested from a bulk export by
+    /// [`crate::download::export`] and its payload is therefore
+    /// *already* in export shape. `render::parse::parse_loaded` keys
+    /// its `normalize_to_export_shape` call off exactly that.
+    pub org_uuid: Option<String>,
     pub org_name: Option<String>,
     pub payload: Value,
 }

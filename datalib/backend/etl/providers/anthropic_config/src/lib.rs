@@ -1,13 +1,20 @@
 //! Provider-owned config schema for the `claude_api` / `claude_export` sources
 //! (Program A goal #1). Schema-only (serde + anyhow), so the orchestrator and
 //! `http` can name `AnthropicConfig` without linking the provider.
+//!
+//! The two source types share a renderer but not a config: [`AnthropicConfig`]
+//! describes the live claude.ai mirror, [`ClaudeExportConfig`] describes an
+//! unpacked bulk export on disk. Both waves of both types read the raw store
+//! at `common.raw_path`; only the export type also reads
+//! `common.input_path`, and only the API type authenticates.
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The anthropic-owned slice of a `claude_api` (or `claude_export`) source.
-/// `sync:` present → live Claude.ai mirror (the download path); absent →
-/// render-only over an already-on-disk export (`claude_export`).
+/// The anthropic-owned slice of a `claude_api` source: the live
+/// claude.ai mirror. `sync:` present → the download wave fetches from
+/// the API; absent → no download wave this run, and render reads
+/// whatever an earlier run already put in the raw store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AnthropicConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -97,6 +104,42 @@ impl Default for ClaudeApiSync {
     }
 }
 
+/// The anthropic-owned slice of a `claude_export` source: an unpacked
+/// Claude bulk export sitting on disk.
+///
+/// `common.input_path` is where the export is read **from**;
+/// `common.raw_path` is where we keep our own copy of it — the same
+/// split every other file-backed source uses. There is no `sync:`
+/// block and no `latchkey_settings:`: an export needs no credentials
+/// and makes no requests, so naming either of them is a mistake this
+/// struct rejects rather than ignores.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeExportConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
+}
+
+impl ClaudeExportConfig {
+    /// No cross-field constraints to check.
+    ///
+    /// A *missing* `input_path` is not one: as with every other
+    /// file-backed source, its absence means the source is unmanaged —
+    /// no download step at all — rather than a download step pointed at
+    /// nothing. A download step that really was written without one is
+    /// refused by the provider's `plan_export_download`, which is the
+    /// layer that knows a download is being asked for.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Params for the `claude_export` render step. The same shape the
+/// `claude_api` render step takes — one renderer, one set of knobs.
+pub type ClaudeExportRenderConfig = AnthropicRenderConfig;
+
 /// Params for the render step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,6 +209,32 @@ mod tests {
             AnthropicRenderConfig::default().max_project_doc_bytes,
             Some(128 * 1024)
         );
+    }
+
+    /// The API-only knobs are meaningless on an export. Before
+    /// `claude_export` had its own config type it shared
+    /// `AnthropicConfig`, so a `sync:` block on a `claude_export` step
+    /// silently started a live API download instead of being rejected.
+    #[test]
+    fn claude_export_rejects_api_only_knobs() {
+        for body in ["sync = {}", "[latchkey_settings]"] {
+            let err = toml::from_str::<ClaudeExportConfig>(body)
+                .expect_err("api-only knobs must not parse as claude_export");
+            assert!(err.to_string().contains("unknown field"), "{body}: {err}");
+        }
+    }
+
+    /// …and the shape it does take is the shared envelope, so
+    /// `input_path` (where the export is read from) and `raw_path`
+    /// (where our copy lives) are both nameable.
+    #[test]
+    fn claude_export_takes_the_shared_path_envelope() {
+        let c: ClaudeExportConfig = toml::from_str(
+            "[common]\ninput_path = \"~/backups/claude-export\"\nraw_path = \"/big/disk/claude\"\n",
+        )
+        .unwrap();
+        assert!(c.common.input_path.is_some());
+        assert!(c.validate().is_ok());
     }
 
     #[test]

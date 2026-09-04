@@ -33,9 +33,9 @@
 //!   `https://carddav.fastmail.com/` with an app password from
 //!   Fastmail's settings → "App passwords" (Contacts read-only).
 //!
-//! * **Render-only mode (no live CardDAV).** Drop a `.vcf`
+//! * **File-backed mode (no live CardDAV).** Drop a `.vcf`
 //!   export (Google "Export contacts", Fastmail bulk export, etc.)
-//!   on disk and point a render-only source at it:
+//!   on disk and point `common.input_path` at it:
 //!
 //!   ```toml
 //!   [[steps]]

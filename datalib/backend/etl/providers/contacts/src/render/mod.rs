@@ -8,9 +8,9 @@
 //! addressbook together.
 //!
 //! This path also works for the test pipeline: a config that omits
-//! the `sync:` block is render-only (same shape as
-//! `SourceConfig::ClaudeExport`), so a checked-in fixture full of
-//! vCards renders without any CardDAV server in the loop.
+//! the `sync:` block has no live download wave, so a checked-in
+//! fixture full of vCards renders without any CardDAV server in the
+//! loop.
 //!
 //! The UUID derivation is upstream-stable: `contact_uuid(account,
 //! addressbook, uid)` derives the same id whether the vCard came

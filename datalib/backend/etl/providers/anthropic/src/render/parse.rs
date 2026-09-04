@@ -1,17 +1,17 @@
 //! Port of `src/ingest/providers/anthropic/parse.py`.
 //!
-//! Reads either the doltlite raw store written by [`crate::download`]
-//! (the production path), normalizing each conversation into export
-//! shape at read time, or the legacy JSON tree (`users.json` +
-//! `conversations.json` [+ optional `projects/*.json`, each of which
-//! may carry a nested `docs` array]) used by the in-crate render
-//! fixture test.
+//! Reads the doltlite raw store written by [`crate::download`] — and
+//! only that. Both source types that share this renderer put their rows
+//! in the same six tables: `claude_api` from the live API walk,
+//! `claude_export` from [`crate::download::export`], which ingests an
+//! unpacked bulk export. There is one input shape here, deliberately;
+//! the second reader that used to walk an export tree in place is gone
+//! (issue #207).
 //!
 //! `raw_json` carries the JSON minus any sibling rows we've exploded
 //! out.
 
 use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -196,28 +196,17 @@ fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
 
-/// Cold-start entry point: no render cursor, render everything.
-/// Kept for the in-crate JSON-tree fixture used by `anthropic_render`
-/// and similar tests.
-pub fn parse_export(path: &Path) -> Result<ParsedExport> {
-    parse(path, None)
-}
-
 /// Two-phase parse driven by `dolt_diff_<table>`.
 pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
     let db_path = db_path_for(path);
     if db_path.exists() {
         return parse_doltlite(&db_path, last_render_hash);
     }
-    if path.is_dir() {
-        return parse_export_json_dir(path);
-    }
-    // No store and no legacy tree: this source has never been
-    // downloaded. That is the normal state of every source in a
-    // freshly scaffolded config, not an error — render nothing and
-    // succeed. A store that exists but can't be read still fails
-    // above. See docs/dev/step_protocol.md, "Rendering a source with
-    // no data".
+    // No store: this source has never been downloaded. That is the
+    // normal state of every source in a freshly scaffolded config, not
+    // an error — render nothing and succeed. A store that exists but
+    // can't be read still fails above. See docs/dev/step_protocol.md,
+    // "Rendering a source with no data".
     Ok(ParsedExport::default())
 }
 
@@ -400,9 +389,7 @@ fn name_index(projects: &[ProjectRow]) -> std::collections::HashMap<String, Stri
         .collect()
 }
 
-/// Build a [`ProjectRow`] from one stored project payload. Shared by
-/// the doltlite path and the legacy JSON-tree path so the two can't
-/// disagree about which upstream field maps where.
+/// Build a [`ProjectRow`] from one stored project payload.
 fn project_row(
     project_uuid: String,
     org_uuid: Option<String>,
@@ -494,8 +481,18 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
 }
 
 /// Build a [`ParsedExport`] from a snapshot already loaded out of the
-/// doltlite DB. Each conversation is normalized into export shape (the
-/// same step that used to happen at fetch time) before being walked.
+/// doltlite DB.
+///
+/// A conversation the **API** walk stored holds the raw `/api/...`
+/// response, so it gets normalized into export shape here (the step
+/// that used to happen at fetch time). A conversation the **export**
+/// ingest stored is already in export shape and must not be
+/// normalized: doing so would stamp it `_source: {via: "claude.ai/api",
+/// org_uuid: ""}`, which is both a lie about where it came from and an
+/// empty org on every one of its grid rows.
+///
+/// The two are told apart by the `org_uuid` column, which only the API
+/// walk can fill — see [`crate::download::db::LoadedConversation`].
 pub fn parse_loaded(raw: crate::download::db::LoadedRaw) -> ParsedExport {
     let mut out = ParsedExport::default();
     for u in &raw.users {
@@ -518,8 +515,12 @@ pub fn parse_loaded(raw: crate::download::db::LoadedRaw) -> ParsedExport {
         payload,
     } in raw.conversations
     {
-        let normalized =
-            normalize_to_export_shape(payload, account_uuid, &org_uuid, org_name.as_deref());
+        let normalized = match org_uuid {
+            Some(org) => {
+                normalize_to_export_shape(payload, account_uuid, &org, org_name.as_deref())
+            }
+            None => payload,
+        };
         match build_conv_row(&normalized) {
             Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
                 conv,
@@ -533,114 +534,6 @@ pub fn parse_loaded(raw: crate::download::db::LoadedRaw) -> ParsedExport {
         }
     }
     out
-}
-
-/// Legacy fallback: walk a `users.json` / `conversations.json` /
-/// `projects/*.json` tree. Kept around for the in-crate fixture used
-/// by `tests/anthropic_render.rs`.
-pub fn parse_export_json_dir(export_dir: &Path) -> Result<ParsedExport> {
-    let mut out = ParsedExport::default();
-
-    let users_path = export_dir.join("users.json");
-    if !users_path.exists() {
-        return Err(anyhow!("missing users.json in {}", export_dir.display()));
-    }
-    let users: Value = serde_json::from_str(&fs::read_to_string(&users_path)?)
-        .with_context(|| format!("parsing {}", users_path.display()))?;
-    let Value::Array(users_arr) = users else {
-        return Err(anyhow!("users.json must be a list"));
-    };
-    for u in users_arr {
-        let obj = u
-            .as_object()
-            .ok_or_else(|| anyhow!("user entry must be an object"))?;
-        out.accounts.push(AccountRow {
-            account_uuid: str_field(obj, "uuid").ok_or_else(|| anyhow!("user missing uuid"))?,
-            email: str_field(obj, "email_address"),
-            full_name: str_field(obj, "full_name"),
-            raw_json: u.clone(),
-        });
-    }
-
-    let projects_dir = export_dir.join("projects");
-    if projects_dir.is_dir() {
-        let mut files: Vec<_> = fs::read_dir(&projects_dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
-            .collect();
-        files.sort();
-        for f in files {
-            let p: Value = serde_json::from_str(&fs::read_to_string(&f)?)
-                .with_context(|| format!("parsing {}", f.display()))?;
-            let Some(obj) = p.as_object() else { continue };
-            let project_uuid =
-                str_field(obj, "uuid").ok_or_else(|| anyhow!("project missing uuid"))?;
-            // The bulk export nests each project's knowledge documents
-            // under `docs`; the live API serves them from a separate
-            // endpoint. Both land in the same `ProjectRow::docs`.
-            let docs: Vec<ProjectDocRow> = obj
-                .get("docs")
-                .and_then(Value::as_array)
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|d| {
-                            let doc_uuid = d.get("uuid").and_then(Value::as_str)?;
-                            Some(project_doc_row(
-                                project_uuid.clone(),
-                                doc_uuid.to_string(),
-                                d.clone(),
-                            ))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            // The export tree carries no org scope; `_source.org_uuid`
-            // is present when the file came out of our own API mirror.
-            let source = obj.get("_source").and_then(Value::as_object);
-            let org_uuid = source
-                .and_then(|s| s.get("org_uuid"))
-                .and_then(Value::as_str)
-                .map(String::from);
-            let org_name = source
-                .and_then(|s| s.get("org_name"))
-                .and_then(Value::as_str)
-                .map(String::from);
-            let mut row = project_row(project_uuid, org_uuid, org_name, p.clone(), docs);
-            // `docs` is bookkeeping we exploded out, same rule as
-            // `chat_messages` on a conversation.
-            if let Some(o) = row.raw_json.as_object_mut() {
-                o.remove("docs");
-            }
-            out.projects.push(row);
-        }
-    }
-    out.project_name_by_uuid = name_index(&out.projects);
-
-    let convs_path = export_dir.join("conversations.json");
-    if !convs_path.exists() {
-        return Err(anyhow!(
-            "missing conversations.json in {}",
-            export_dir.display()
-        ));
-    }
-    let convs: Value = serde_json::from_str(&fs::read_to_string(&convs_path)?)
-        .with_context(|| format!("parsing {}", convs_path.display()))?;
-    let Value::Array(convs_arr) = convs else {
-        return Err(anyhow!("conversations.json must be a list"));
-    };
-    for c in convs_arr {
-        match build_conv_row(&c) {
-            Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
-                conv,
-                upstream_payload: c,
-                blobs: BlobBundle::default(),
-            }),
-            Ok(None) => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(out)
 }
 
 /// Build the [`ConversationRow`] metadata for one fully-normalized

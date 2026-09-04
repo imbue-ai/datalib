@@ -113,7 +113,8 @@ genrule(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         # Spec → seeded doltlite raw store. YoLink has no playback path
         # (its downloader shells out to `curl`), so the fixture pipeline
-        # runs it render-only over a store this binary writes.
+        # emits no download step and renders over the store this binary
+        # writes.
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "run_sync_pipeline.py",
         "tar_qmd.py",

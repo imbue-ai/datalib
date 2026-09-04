@@ -1,14 +1,19 @@
-//! Anthropic (claude.ai) downloader entry point. Port of
-//! `src/download/claude_web.py`.
+//! Anthropic (claude.ai) downloader entry point — the `claude_api`
+//! source type's download wave. Port of `src/download/claude_web.py`.
 //!
 //! Writes into a single doltlite database file
 //! (`<data_root>/<name>/raw/entities.doltlite_db`). Conversations are stored as
 //! the **raw** `/api/...` payload — the export-shape normalization
 //! used to happen here at fetch time, but now lives in `render`
 //! so the raw store stays as close to the wire as possible.
+//!
+//! The sibling [`export`] module is the other writer of these same
+//! tables: it ingests an unpacked bulk export (`claude_export`) rather
+//! than calling an API, so one renderer serves both source types.
 
 pub mod api;
 pub mod db;
+pub mod export;
 pub mod normalize;
 pub mod schema_raw;
 
@@ -798,7 +803,11 @@ async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: boo
 /// collection from an API must be given an order before it is stored.**
 /// JSON arrays preserve whatever order the server happened to emit, and
 /// nothing upstream promises that is stable.
-fn canonicalize_project_payload(payload: &Value) -> Value {
+///
+/// The export ingest ([`export::ingest`]) runs this too: an export is
+/// generated from the same upstream data, so a re-export can reorder
+/// the same bag just as a re-fetch can.
+pub(crate) fn canonicalize_project_payload(payload: &Value) -> Value {
     let mut out = payload.clone();
     if let Some(permissions) = out.get_mut("permissions").and_then(Value::as_array_mut) {
         // Sort by the rendered string so mixed types (which would make
