@@ -1063,3 +1063,86 @@ async fn snapshot_is_a_separate_readable_copy() -> Result<()> {
     );
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Hostile catalogs
+// ─────────────────────────────────────────────────────────────────────
+
+/// SQLite lets a column's declared *type* be a quoted name holding
+/// anything, and `PRAGMA table_xinfo` reports it back with the quotes
+/// gone — so the type text can carry SQL that would close the mirror's
+/// `CREATE TABLE` early. The mirror quotes it, exactly as it quotes the
+/// column name, so the statement stays one statement and the odd type is
+/// mirrored as the odd type it is.
+#[tokio::test]
+async fn a_column_type_carrying_sql_is_quoted_not_executed() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[concat!(
+        "CREATE TABLE AgEvil (id_local INTEGER PRIMARY KEY, ",
+        r#"a "INTEGER); DROP TABLE Adobe_images; --")"#
+    )])
+    .await?;
+
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    // The table the injected statement named still has its rows.
+    assert!(scalar_i64(&pool, "SELECT COUNT(*) FROM Adobe_images").await > 0);
+    // And the hostile type round-tripped as data rather than as SQL.
+    assert_eq!(
+        opt_string(
+            &pool,
+            "SELECT type FROM pragma_table_info('AgEvil') WHERE name = 'a'"
+        )
+        .await
+        .as_deref(),
+        Some("INTEGER); DROP TABLE Adobe_images; --")
+    );
+    assert_eq!(mirror_pk(&pool, "AgEvil").await, vec!["id_local"]);
+    pool.close().await;
+    Ok(())
+}
+
+/// Column DEFAULTs are not mirrored — literal or expression. The rows
+/// still land, which is the whole point: a DEFAULT only applies to a row
+/// inserted without a value for the column, and the mirror inserts a
+/// value for every column of every row.
+#[tokio::test]
+async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        "CREATE TABLE AgLibraryImportTime (\
+             id_local INTEGER PRIMARY KEY, \
+             imported TEXT DEFAULT (datetime('now')), \
+             note TEXT DEFAULT 'unset')",
+        "INSERT INTO AgLibraryImportTime (id_local, imported, note) \
+         VALUES (901, '2387-06-11T09:00:00-07:00', 'first contact')",
+    ])
+    .await?;
+
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    assert_eq!(
+        opt_string(
+            &pool,
+            "SELECT imported FROM AgLibraryImportTime WHERE id_local = 901"
+        )
+        .await
+        .as_deref(),
+        Some("2387-06-11T09:00:00-07:00"),
+        "the copied value is what matters, not the default"
+    );
+    let ddl = opt_string(
+        &pool,
+        "SELECT sql FROM sqlite_master WHERE name = 'AgLibraryImportTime'",
+    )
+    .await
+    .expect("mirror DDL");
+    assert!(
+        !ddl.contains("DEFAULT"),
+        "neither the expression default nor the literal one is carried: {ddl}"
+    );
+    pool.close().await;
+    Ok(())
+}
