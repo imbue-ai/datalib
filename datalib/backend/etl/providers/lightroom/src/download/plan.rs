@@ -23,6 +23,24 @@
 //! prolly tree keyed by its primary key, so a secondary index buys a
 //! backup nothing and costs it space in every commit.
 //!
+//! ## Why column DEFAULTs are not mirrored either
+//!
+//! A `DEFAULT` is a rule for writes, and the mirror is not written to.
+//! It only ever applies to a row inserted without a value for that
+//! column, and no such insert happens here: [`TableSpec::copy_sql`]
+//! names every column on both sides, so every mirrored value comes from
+//! the source row it was copied from. A mirrored `DEFAULT` could
+//! therefore never fire.
+//!
+//! Carrying one across is not free, either. `PRAGMA table_xinfo`
+//! reports the default as SQL text — a literal like `'unset'`, but
+//! equally an expression like `datetime('now')` — out of the `.lrcat`,
+//! a SQLite file we did not write. Splicing that back into our own
+//! `CREATE TABLE` means either trusting it or parsing arbitrary SQL to
+//! decide whether to. That is a real cost, paid to reproduce a rule
+//! nothing can trigger, so the defaults are simply dropped — same
+//! reasoning as the constraints above.
+//!
 //! There is deliberately no schema-reconciliation logic here. Every run
 //! drops each mirror table and recreates it from the source, so the
 //! mirror's schema is never *compared* to anything — it is simply
@@ -45,34 +63,25 @@ pub struct ColumnSpec {
     /// round-trips only if the mirror leaves it untyped too.
     pub decl_type: String,
     pub not_null: bool,
-    /// Default expression as SQL text (`''`, `-63113817600`,
-    /// `'unset'`). Spliced back into the DDL when [`is_literal_default`]
-    /// recognises it as a literal, and dropped — with a warning — when
-    /// it does not. See [`ColumnSpec::decl`].
-    pub default: Option<String>,
 }
 
 impl ColumnSpec {
-    /// The `"name" TYPE [NOT NULL] [DEFAULT expr]` fragment, usable both
-    /// inside `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`.
+    /// The `"name" TYPE [NOT NULL]` fragment, usable both inside
+    /// `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`. No
+    /// `DEFAULT`: see the module docs for why the mirror does not carry
+    /// one.
     ///
-    /// The name is quoted. The declared type and the default expression
-    /// are *checked* instead: neither is an identifier, so quoting one
-    /// would change its meaning rather than make it safe. Both arrive
-    /// from `PRAGMA table_xinfo` on the attached source catalog — an
-    /// arbitrary SQLite file we did not write — so neither can be
-    /// spliced in on trust.
+    /// The name is quoted; the declared type is *checked* instead. A
+    /// type is not an identifier, so quoting it would change its meaning
+    /// rather than make it safe — `"VARCHAR(255)"` is a column named
+    /// that, not a type. And it cannot be spliced in on trust: it
+    /// arrives from `PRAGMA table_xinfo` on the attached source catalog,
+    /// an arbitrary SQLite file we did not write.
     ///
-    /// The two are handled differently because the consequences differ:
-    ///
-    /// - An unrecognised **type** is an error. Dropping it would leave
-    ///   the column untyped, which changes its affinity and so what the
-    ///   mirror stores; narrowing the schema quietly is worse than
-    ///   failing the step.
-    /// - An unrecognised **DEFAULT** is dropped, with a warning. The
-    ///   mirror is truncate-and-refill and [`TableSpec::copy_sql`] names
-    ///   every column explicitly, so no mirrored row ever takes a
-    ///   default — dropping one changes nothing observable.
+    /// An unrecognised type fails the step rather than being dropped.
+    /// Dropping it would leave the column untyped, which changes its
+    /// affinity and so what the mirror stores — a quiet narrowing where
+    /// a loud stop is cheap.
     pub fn decl(&self) -> Result<String> {
         let mut s = quote_ident(&self.name);
         if !self.decl_type.is_empty() {
@@ -90,19 +99,6 @@ impl ColumnSpec {
         }
         if self.not_null {
             s.push_str(" NOT NULL");
-        }
-        if let Some(d) = &self.default {
-            if is_literal_default(d) {
-                s.push_str(" DEFAULT ");
-                s.push_str(d);
-            } else {
-                tracing::warn!(
-                    column = %self.name,
-                    default = %d,
-                    "lightroom: column DEFAULT is not a literal; dropping it from the mirror \
-                     (every mirrored column is written explicitly, so no row would use it)"
-                );
-            }
         }
         Ok(s)
     }
@@ -141,69 +137,6 @@ fn is_plain_type_name(ty: &str) -> bool {
             let n = n.trim().strip_prefix(['-', '+']).unwrap_or(n.trim());
             !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())
         })
-}
-
-/// Is `d` a literal — as opposed to an arbitrary expression — that we
-/// are willing to splice into a `DEFAULT` clause?
-///
-/// Accepted: `NULL`, `TRUE`, `FALSE`, the three `CURRENT_*` keywords, a
-/// number, a quoted string, and a blob literal. Everything else — most
-/// really being expression defaults such as `(datetime('now'))` — is
-/// dropped by [`ColumnSpec::decl`] rather than parsed.
-fn is_literal_default(d: &str) -> bool {
-    let d = d.trim();
-    if matches!(
-        d.to_ascii_uppercase().as_str(),
-        "NULL" | "TRUE" | "FALSE" | "CURRENT_DATE" | "CURRENT_TIME" | "CURRENT_TIMESTAMP"
-    ) {
-        return true;
-    }
-    is_quoted_literal(d) || is_number_literal(d)
-}
-
-/// A single-quoted string, or a blob literal (`X'4142'`) — which is the
-/// same thing with a one-letter prefix. Embedded quotes must be doubled,
-/// and nothing may follow the closing quote; either would let the
-/// literal end early and the rest be read as SQL.
-fn is_quoted_literal(d: &str) -> bool {
-    let body = d
-        .strip_prefix('X')
-        .or_else(|| d.strip_prefix('x'))
-        .unwrap_or(d);
-    let Some(inner) = body.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) else {
-        return false;
-    };
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == '\'' && chars.next() != Some('\'') {
-            return false;
-        }
-    }
-    true
-}
-
-/// A decimal or hexadecimal number, with an optional sign — the forms
-/// `PRAGMA table_xinfo` reports for a numeric default.
-fn is_number_literal(d: &str) -> bool {
-    let d = d.strip_prefix(['-', '+']).unwrap_or(d);
-    if let Some(hex) = d.strip_prefix("0x").or_else(|| d.strip_prefix("0X")) {
-        return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
-    }
-    let (mantissa, exponent) = match d.split_once(['e', 'E']) {
-        Some((m, e)) => (m, Some(e.strip_prefix(['-', '+']).unwrap_or(e))),
-        None => (d, None),
-    };
-    let digits_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    let mantissa_ok = match mantissa.split_once('.') {
-        // `1.`, `.5` and `1.5` are all valid SQLite numbers; `.` is not.
-        Some((int, frac)) => {
-            (digits_ok(int) || digits_ok(frac))
-                && int.chars().all(|c| c.is_ascii_digit())
-                && frac.chars().all(|c| c.is_ascii_digit())
-        }
-        None => digits_ok(mantissa),
-    };
-    mantissa_ok && exponent.is_none_or(digits_ok)
 }
 
 /// A table as it will exist in the mirror.
@@ -357,7 +290,6 @@ pub async fn table_columns(
                 name,
                 decl_type: r.try_get("type").unwrap_or_default(),
                 not_null: not_null != 0,
-                default: r.try_get("dflt_value").ok().flatten(),
             },
             pk_seq: r.try_get("pk").unwrap_or(0),
             generated: hidden == 2 || hidden == 3,
@@ -424,7 +356,6 @@ mod tests {
             name: name.into(),
             decl_type: ty.into(),
             not_null: false,
-            default: None,
         }
     }
 
@@ -457,14 +388,13 @@ mod tests {
     }
 
     #[test]
-    fn decl_carries_not_null_and_default() {
+    fn decl_carries_not_null() {
         let c = ColumnSpec {
             name: "xmp".into(),
             decl_type: String::new(),
             not_null: true,
-            default: Some("''".into()),
         };
-        assert_eq!(c.decl().unwrap(), r#""xmp" NOT NULL DEFAULT ''"#);
+        assert_eq!(c.decl().unwrap(), r#""xmp" NOT NULL"#);
     }
 
     #[test]
@@ -504,67 +434,6 @@ mod tests {
         ] {
             assert!(!is_plain_type_name(ty), "should reject {ty:?}");
         }
-    }
-
-    #[test]
-    fn a_default_that_is_not_a_literal_is_dropped_not_spliced() {
-        // Dropping it is observationally free: `copy_sql` writes every
-        // column, so no mirrored row would ever have taken the default.
-        let c = ColumnSpec {
-            name: "t".into(),
-            decl_type: "TEXT".into(),
-            not_null: false,
-            default: Some("'' ); DROP TABLE t; --".into()),
-        };
-        assert_eq!(c.decl().unwrap(), r#""t" TEXT"#);
-    }
-
-    #[test]
-    fn literal_defaults_are_kept() {
-        for d in [
-            "''",
-            "'unset'",
-            "'it''s'",
-            "-63113817600",
-            "0",
-            "1.5",
-            "1.",
-            ".5",
-            "1e3",
-            "-2.5E-3",
-            "0xFF",
-            "NULL",
-            "null",
-            "TRUE",
-            "CURRENT_TIMESTAMP",
-            "X'4142'",
-        ] {
-            assert!(is_literal_default(d), "should keep {d:?}");
-        }
-        for d in [
-            "",
-            "'",
-            "'a' || 'b'",
-            "''''''''''''; DROP TABLE t; --'",
-            "'a'--",
-            "datetime('now')",
-            "(1+2)",
-            "1 2",
-            ".",
-            "1e",
-            "0x",
-        ] {
-            assert!(!is_literal_default(d), "should drop {d:?}");
-        }
-    }
-
-    #[test]
-    fn copy_sql_names_columns_on_both_sides() {
-        let s = spec(vec![col("a", ""), col("b", "")], vec!["a"]);
-        assert_eq!(
-            s.copy_sql("src"),
-            r#"INSERT INTO main."t" ("a", "b") SELECT "a", "b" FROM "src"."t""#
-        );
     }
 
     #[test]

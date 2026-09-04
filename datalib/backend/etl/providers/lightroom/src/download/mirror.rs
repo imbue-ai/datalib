@@ -528,13 +528,14 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
         .with_context(|| format!("begin rebuild tx for {}", spec.name))?;
     // Audited: `create_ddl()` / `copy_sql()` render every *identifier* —
     // table and column names — through `plan::quote_ident`, which
-    // double-quotes and escapes embedded quotes. The two fragments that
-    // are not identifiers, and so cannot be quoted — a column's declared
-    // type and its DEFAULT — are checked instead by `ColumnSpec::decl`,
-    // which errors on a type it does not recognise and drops a DEFAULT
-    // that is not a literal. Both come from `PRAGMA table_xinfo` on the
-    // attached source catalog, i.e. from the .lrcat file, which is
-    // outside our control.
+    // double-quotes and escapes embedded quotes. The one fragment that
+    // is not an identifier, and so cannot be quoted, is a column's
+    // declared type; `ColumnSpec::decl` checks it instead and fails the
+    // step on anything that is not a plain type name. It comes from
+    // `PRAGMA table_xinfo` on the attached source catalog, i.e. from the
+    // .lrcat file, which is outside our control. Column DEFAULTs would
+    // be the other such fragment, and are not mirrored at all (see the
+    // `plan` module docs).
     let create_ddl = spec.create_ddl()?;
     sqlx::query(sqlx::AssertSqlSafe(create_ddl))
         .execute(&mut *tx)
@@ -638,7 +639,6 @@ mod tests {
                 name: name.into(),
                 decl_type: ty.into(),
                 not_null: false,
-                default: None,
             },
             pk_seq,
             generated: false,
@@ -707,7 +707,6 @@ mod tests {
                 name: "version".into(),
                 decl_type: "TEXT".into(),
                 not_null: false,
-                default: None,
             },
             pk_seq: 1,
             generated: false,
@@ -790,7 +789,6 @@ mod tests {
                 name: "computed".into(),
                 decl_type: "".into(),
                 not_null: false,
-                default: None,
             },
             pk_seq: 0,
             generated: true,

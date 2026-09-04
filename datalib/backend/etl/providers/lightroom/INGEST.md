@@ -73,7 +73,7 @@ Tables and their rows. Deliberately not mirrored:
 | Triggers, views | Behavior, not data. The mirror is never written to by an application. |
 | CHECK / FOREIGN KEY, collations | `PRAGMA table_info` doesn't surface them, and enforcing the source's integrity rules on a copy of already-valid data buys nothing. |
 | Generated columns | No stored value to copy. |
-| Non-literal `DEFAULT`s | A default that is an expression rather than a literal — `(datetime('now'))` — is dropped, with a warning. Every mirrored column is written explicitly, so no mirrored row would have taken it. See below. |
+| Column `DEFAULT`s | A rule for writes, and nothing writes to the mirror. See below. |
 
 The schema is rebuilt from `PRAGMA table_xinfo` rather than replayed from
 the source's `sqlite_master` text. Replaying verbatim does work —
@@ -83,13 +83,14 @@ schema: drop a column, and choose a different primary key. Both are
 textual surgery on arbitrary SQL if you start from the source text, and
 neither is if you start from introspection.
 
-Introspection reports two things that are not identifiers, so quoting
-them on the way back into the mirror's `CREATE TABLE` would change their
-meaning rather than make them safe: a column's declared type and its
-`DEFAULT`. Both come out of the `.lrcat`, which is a SQLite file we did
-not write — and SQLite lets a *quoted* type name contain anything at
-all, which `PRAGMA table_xinfo` then reports back with the quotes gone.
-So both are checked instead.
+One thing introspection reports is neither data nor an identifier: the
+column's declared type. Quoting it on the way back into the mirror's
+`CREATE TABLE` would change its meaning rather than make it safe —
+`"VARCHAR(255)"` is a column *named* that, not a type — and it cannot be
+trusted either, because it comes out of the `.lrcat`, a SQLite file we
+did not write. SQLite lets a *quoted* type name contain anything at all,
+and `PRAGMA table_xinfo` reports it back with the quotes gone. So it is
+checked instead.
 
 A declared type has to be a plain type name: letters, digits,
 underscores and spaces, optionally followed by one or two numbers in
@@ -100,11 +101,15 @@ fails the run, and the way past it is to skip that column with
 would leave the column untyped, which changes its affinity and so what
 the mirror stores — a quiet narrowing rather than a loud stop.
 
-A `DEFAULT` has to be a literal: a number, a quoted string, a blob,
-`NULL`, `TRUE`/`FALSE`, or one of the `CURRENT_*` keywords. Anything
-else is dropped with a warning rather than failing the run, because a
-dropped default changes nothing observable here — `copy_sql` names every
-column, so no mirrored row is ever filled in from one.
+A column's `DEFAULT` is not carried across at all. A default only ever
+applies to a row inserted without a value for that column, and no such
+insert happens here: the mirror names every column on both sides of its
+`INSERT … SELECT`, so every mirrored value comes from the source row it
+was copied from. A mirrored default could never fire — it would be
+decoration on a backup — and reproducing it would mean either trusting
+or parsing SQL text out of the `.lrcat`. So it goes the way of the CHECK
+constraints and the foreign keys, for the same reason: the mirror copies
+data, not the source's rules about writing.
 
 ## When the primary key changes
 

@@ -1098,12 +1098,12 @@ async fn a_column_type_carrying_sql_is_refused() -> Result<()> {
     Ok(())
 }
 
-/// A DEFAULT that is not a literal is dropped rather than spliced or
-/// fatal. Nothing observable changes: the mirror names every column in
-/// its `INSERT … SELECT`, so no mirrored row would have taken the
-/// default anyway.
+/// Column DEFAULTs are not mirrored — literal or expression. The rows
+/// still land, which is the whole point: a DEFAULT only applies to a row
+/// inserted without a value for the column, and the mirror inserts a
+/// value for every column of every row.
 #[tokio::test]
-async fn an_expression_default_is_dropped_and_the_rows_still_land() -> Result<()> {
+async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()> {
     let f = Fixture::new();
     f.edit_catalog(&[
         "CREATE TABLE AgLibraryImportTime (\
@@ -1135,12 +1135,8 @@ async fn an_expression_default_is_dropped_and_the_rows_still_land() -> Result<()
     .await
     .expect("mirror DDL");
     assert!(
-        !ddl.contains("datetime"),
-        "expression default dropped: {ddl}"
-    );
-    assert!(
-        ddl.contains("'unset'"),
-        "the literal default beside it is kept: {ddl}"
+        !ddl.contains("DEFAULT"),
+        "neither the expression default nor the literal one is carried: {ddl}"
     );
     pool.close().await;
     Ok(())
