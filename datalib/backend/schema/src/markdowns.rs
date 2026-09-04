@@ -10,6 +10,12 @@
 //
 // Hand-written row struct; the `CREATE TABLE` DDL + column metadata are
 // derived from it by `#[derive(PortableTable)]`.
+//
+// This struct went unused for a long time while `grid_index.rs` carried
+// a hand-written `MARKDOWNS_DDL` string beside it, and the two drifted:
+// the string grew `source_fingerprint` and `upstream_cursor`, the struct
+// did not. A schema object nothing reads is not a schema. Both columns
+// are here now, and `grid_index` derives its DDL from this struct.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -51,7 +57,7 @@ pub struct MarkdownRow {
     /// markdown frontmatter / page header. Nullable for sources whose
     /// entities don't have an authored title (e.g. early Slack threads);
     /// the renderer falls back to a snippet of the first message.
-    #[col(sql = "VARCHAR(512)")]
+    #[col(sql = "TEXT")]
     pub title: Option<String>,
     /// Earliest authored timestamp for content in this markdown (ISO-8601
     /// with explicit offset, per AGENTS.md). Sourced from the underlying
@@ -75,20 +81,43 @@ pub struct MarkdownRow {
     /// hit→row mapping depends on it.
     #[col(sql = "VARCHAR(1024)")]
     pub md_path: Option<String>,
+    /// Hash of the upstream payload(s) that produced this document, as
+    /// computed by the renderer. The render stage's skip check compares
+    /// it: an unchanged fingerprint means the document does not need
+    /// re-rendering.
+    ///
+    /// Distinct from `row_set_hash`, which is computed *from the rows*
+    /// after the fact; this one is computed from the *input* before any
+    /// work is done, which is what makes it a skip check rather than a
+    /// verification.
+    #[col(sql = "VARCHAR(64)")]
+    pub source_fingerprint: Option<String>,
+    /// Optional provider-defined cheap-probe value, consulted *before*
+    /// loading payloads to decide whether a markdown has changed.
+    /// Slack stamps each thread's `MAX(fetched_at)` here so the next run
+    /// can skip untouched threads without reading them. NULL for
+    /// providers with no signal cheaper than the fingerprint.
+    #[col(sql = "VARCHAR(64)")]
+    pub upstream_cursor: Option<String>,
     /// SHA-256 (hex) over the canonical tuple list of grid_rows that feed
     /// this markdown — message texts, authors, timestamps, attachments.
     /// Computed by ingest; if it matches the stored value and
     /// `renderer_version` is unchanged, the renderer skips this markdown.
     /// The canonical tuple definition is part of the renderer contract;
     /// bump `renderer_version` if you change it.
+    /// Nullable, and that is production's shape rather than an
+    /// aspiration: `grid_index` writes NULL here for a markdown it has
+    /// not hashed. The struct declared it non-null for as long as
+    /// nothing read the struct.
     #[col(sql = "CHAR(64)")]
-    pub row_set_hash: String,
+    pub row_set_hash: Option<String>,
     /// Opaque version string for the renderer that produced `md_path`.
     /// Bumping this value (typically when the markdown layout or
     /// templating changes) invalidates every markdowns row's cache and
     /// forces a global re-render on the next ingest.
+    /// Nullable for the same reason as `row_set_hash`.
     #[col(sql = "VARCHAR(32)")]
-    pub renderer_version: String,
+    pub renderer_version: Option<String>,
     /// When `md_path` was last written (ISO-8601 with explicit local
     /// offset, per AGENTS.md). NULL before the first render.
     #[col(sql = "VARCHAR(40)")]

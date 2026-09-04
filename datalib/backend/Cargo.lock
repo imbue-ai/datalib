@@ -1725,6 +1725,7 @@ dependencies = [
  "datalib-time",
  "serde",
  "serde_json",
+ "sqlx",
 ]
 
 [[package]]

@@ -10,6 +10,8 @@ rust_library(
         "src/grid_rows_builder.rs",
         "src/edges.rs",
         "src/markdowns.rs",
+        "src/render_problems.rs",
+        "src/bulk.rs",
     ],
     crate_name = "datalib_schema",
     edition = "2021",
@@ -21,6 +23,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
     ],
 )
 

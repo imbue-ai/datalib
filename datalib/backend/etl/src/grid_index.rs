@@ -40,6 +40,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
+use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
@@ -278,22 +279,14 @@ impl Drop for WriteLockGuard<'_> {
 /// (beeper renders one file per period) a single upstream
 /// "conversation" maps to N rows here — `conversation_uuid` is not
 /// unique in the table.
-pub const MARKDOWNS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS markdowns (
-    markdown_uuid VARCHAR(96) NOT NULL,
-    source_name VARCHAR(64) NOT NULL,
-    provider VARCHAR(32) NOT NULL,
-    kind VARCHAR(32) NOT NULL,
-    title TEXT,
-    created_at VARCHAR(40),
-    updated_at VARCHAR(40),
-    md_path VARCHAR(1024),
-    source_fingerprint VARCHAR(64),
-    upstream_cursor VARCHAR(64),
-    row_set_hash CHAR(64),
-    renderer_version VARCHAR(32),
-    rendered_at VARCHAR(40),
-    PRIMARY KEY (markdown_uuid)
-)"#;
+///
+/// Derived from `datalib_schema::markdowns::MarkdownRow`, not written
+/// out here. It used to be a hand-written string beside that struct,
+/// and the two drifted: this string grew `source_fingerprint` and
+/// `upstream_cursor` while the struct — which nothing read — kept the
+/// older eleven columns. Pointing the DDL at the struct is what makes
+/// the struct the schema rather than a description of one.
+pub const MARKDOWNS_DDL: &str = MARKDOWNS_TABLE_DDL[0].1;
 
 /// Stats emitted on every load run. Stable shape so a web UI can poll
 /// or stream it without per-provider branches.
