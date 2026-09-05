@@ -134,6 +134,64 @@ pub async fn record_finished(
     Ok(())
 }
 
+/// Ingest one file, but only if it has moved since `scope` last
+/// finished with it.
+///
+/// Every single-file feed repeated the same dozen lines around its
+/// parser: does the file exist, has it changed, read it, parse it,
+/// open a transaction, write the rows, stamp the checkpoint, commit.
+/// Only the path, the scope and the parser ever differed. This is that
+/// dozen lines, once.
+///
+/// The ordering is the part worth centralising: the rows and the
+/// checkpoint land in **one** transaction, so a crash between them
+/// cannot leave a stamp claiming content that never arrived. Getting
+/// that wrong in one feed out of nine would be invisible until it
+/// mattered.
+///
+/// Returns the number of rows written — `0` when the file is absent or
+/// unchanged, which is what a caller reports as "nothing to do".
+///
+/// A parse that yields no rows still stamps: the file was read and
+/// understood to contain nothing, and re-reading it on every future run
+/// would be the "retry forever" shape rather than a fresh look. If its
+/// bytes change, the fingerprint changes and it is read again.
+pub async fn ingest_changed_file<T, F>(
+    pool: &SqlitePool,
+    scope: &str,
+    path: &Path,
+    parse: F,
+) -> Result<usize>
+where
+    T: crate::bulk::BulkUpsertable,
+    F: FnOnce(&[u8]) -> Result<Vec<T>>,
+{
+    if !path.exists() {
+        return Ok(0);
+    }
+    let fp = FileFingerprint::of(path)?;
+    let stamped = load(pool, scope).await?;
+    if should_skip(&stamped, &fp) {
+        return Ok(0);
+    }
+
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let rows = parse(&bytes)?;
+    let n = rows.len();
+
+    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin {scope} tx"))?;
+    crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    record_finished(&mut tx, scope, &fp).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit {scope} tx"))?;
+    Ok(n)
+}
+
 /// One-shot convenience for callers that don't already own a tx.
 pub async fn record_finished_pool(
     pool: &SqlitePool,

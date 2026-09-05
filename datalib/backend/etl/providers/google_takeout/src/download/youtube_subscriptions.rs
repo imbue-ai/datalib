@@ -5,11 +5,9 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use anyhow::Result;
+use datalib_etl::file_checkpoint::{self};
 use datalib_etl::progress::Progress;
-use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use tracing::warn;
 
@@ -22,59 +20,41 @@ const SCOPE: &str = "google_takeout/youtube_subscriptions";
 
 pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<usize> {
     let path = root.join(FILE_REL);
-    if !path.exists() {
-        return Ok(0);
-    }
-    let fp = FileFingerprint::of(&path)?;
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
-    if file_checkpoint::should_skip(&stamped, &fp) {
-        return Ok(0);
-    }
-    let text =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if i == 0 || line.trim().is_empty() {
-            continue;
+    let n = file_checkpoint::ingest_changed_file(db.pool(), SCOPE, &path, |bytes| {
+        let text = String::from_utf8_lossy(bytes);
+        let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            if i == 0 || line.trim().is_empty() {
+                continue;
+            }
+            let cells = split_csv_row(line);
+            if cells.len() < 3 {
+                warn!(event = "youtube_subscriptions_short_row", row = i, line);
+                continue;
+            }
+            let channel_id = cells[0].trim().to_string();
+            let channel_url = cells[1].trim().to_string();
+            let channel_title = cells[2].trim().to_string();
+            if channel_id.is_empty() {
+                continue;
+            }
+            let payload = json!({
+                "channelId": channel_id,
+                "channelUrl": channel_url,
+                "channelTitle": channel_title,
+            });
+            rows.push(YoutubeSubscriptionRow {
+                id_and_payload: WirePayload {
+                    id: channel_id,
+                    payload: payload.to_string(),
+                },
+                channel_title: Some(channel_title),
+            });
         }
-        let cells = split_csv_row(line);
-        if cells.len() < 3 {
-            warn!(event = "youtube_subscriptions_short_row", row = i, line);
-            continue;
-        }
-        let channel_id = cells[0].trim().to_string();
-        let channel_url = cells[1].trim().to_string();
-        let channel_title = cells[2].trim().to_string();
-        if channel_id.is_empty() {
-            continue;
-        }
-        let payload = json!({
-            "channelId": channel_id,
-            "channelUrl": channel_url,
-            "channelTitle": channel_title,
-        });
-        rows.push(YoutubeSubscriptionRow {
-            id_and_payload: WirePayload {
-                id: channel_id,
-                payload: payload.to_string(),
-            },
-            channel_title: Some(channel_title),
-        });
-    }
-    let n = rows.len();
+        Ok(rows)
+    })
+    .await?;
     progress.set_message(&format!("youtube_subscriptions: {n}"));
-
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin youtube_subscriptions tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-    file_checkpoint::record_finished(&mut tx, SCOPE, &fp).await?;
-    tx.commit()
-        .await
-        .context("commit youtube_subscriptions tx")?;
     Ok(n)
 }
 

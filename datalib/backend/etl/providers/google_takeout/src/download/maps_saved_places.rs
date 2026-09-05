@@ -6,10 +6,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint::{self};
 use datalib_etl::progress::Progress;
-use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use tracing::warn;
 
@@ -22,54 +20,38 @@ const SCOPE: &str = "google_takeout/maps_saved_places";
 
 pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<usize> {
     let path = root.join(FILE_REL);
-    if !path.exists() {
-        return Ok(0);
-    }
-    let fp = FileFingerprint::of(&path)?;
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
-    if file_checkpoint::should_skip(&stamped, &fp) {
-        return Ok(0);
-    }
-    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-    let geo: Value = serde_json::from_slice(&bytes).context("parse Saved Places.json")?;
-    let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-        warn!(event = "maps_saved_no_features", path = %path.display());
-        return Ok(0);
-    };
-    let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
-    for f in features {
-        let Some(props) = f.get("properties") else {
-            continue;
+    let n = file_checkpoint::ingest_changed_file(db.pool(), SCOPE, &path, |bytes| {
+        let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
+        let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
+            warn!(event = "maps_saved_no_features", path = %path.display());
+            return Ok(Vec::new());
         };
-        let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");
-        let url = props
-            .get("google_maps_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let key = extract_ftid_or_cid(url).unwrap_or("");
-        if key.is_empty() || date.is_empty() {
-            warn!(event = "maps_saved_missing_key", path = %path.display());
-            continue;
+        let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
+        for f in features {
+            let Some(props) = f.get("properties") else {
+                continue;
+            };
+            let date = props.get("date").and_then(|v| v.as_str()).unwrap_or("");
+            let url = props
+                .get("google_maps_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let key = extract_ftid_or_cid(url).unwrap_or("");
+            if key.is_empty() || date.is_empty() {
+                warn!(event = "maps_saved_missing_key", path = %path.display());
+                continue;
+            }
+            let id = ns_id(&format!("maps_saved:{key}:{date}"));
+            let payload = serde_json::to_string(f).context("serialize saved-place feature")?;
+            rows.push(MapsSavedPlaceRow {
+                id_and_payload: WirePayload { id, payload },
+                when_ts: Some(date.to_string()),
+            });
         }
-        let id = ns_id(&format!("maps_saved:{key}:{date}"));
-        let payload = serde_json::to_string(f).context("serialize saved-place feature")?;
-        rows.push(MapsSavedPlaceRow {
-            id_and_payload: WirePayload { id, payload },
-            when_ts: Some(date.to_string()),
-        });
-    }
-    let n = rows.len();
+        Ok(rows)
+    })
+    .await?;
     progress.set_message(&format!("maps_saved_places: {n}"));
-
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin maps_saved_places tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-    file_checkpoint::record_finished(&mut tx, SCOPE, &fp).await?;
-    tx.commit().await.context("commit maps_saved_places tx")?;
     Ok(n)
 }
 
