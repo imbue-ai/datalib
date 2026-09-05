@@ -234,15 +234,15 @@ pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String
 /// protobuf for nothing. This cursor lets fetch short-circuit at
 /// "have we ever ingested this snapshot?" before any of that work.
 ///
-/// **PK choice — `fingerprint`.** A composite stat-derived string
-/// `"{metadata_mtime_ns}:{metadata_size}:{main_mtime_ns}:{main_size}:
-/// {files_mtime_ns}:{files_size}"`. Cheap (three `stat()`s, no
-/// I/O on file bodies), and unique enough in practice: Signal's
-/// backup writer emits a fresh directory per snapshot, so the
-/// triple-(mtime, size) per file changes on every legitimate
-/// snapshot. False-positive skips would require both the same
-/// mtime and the same byte length across files, which a real
-/// backup pipeline doesn't produce.
+/// **PK choice — `fingerprint`.** The blake3 of `metadata`, `main` and
+/// `files`, joined in that order, read through the host-wide
+/// fingerprint cache — so an unchanged snapshot costs three `stat()`s
+/// and no file reads.
+///
+/// It was a stat-derived string of each file's `(mtime, size)`, which
+/// was wrong in both directions: `touch`ing a backup changed the
+/// fingerprint and forced a full re-decrypt, while a file swapped for
+/// a same-size copy at the same mtime was invisible.
 ///
 /// **Forensic — `blake3`.** Hex-encoded Blake3 of
 /// `metadata || main || files` concatenated in that order. Computed

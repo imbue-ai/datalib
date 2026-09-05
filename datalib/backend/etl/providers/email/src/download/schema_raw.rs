@@ -57,10 +57,11 @@
 //!   delete-then-insert per email upsert. No bookkeeping sidecars.
 //! - `email_blobs` — CAS edge ([`EmlBlobRow`]) carrying the `.eml`
 //!   `blake3`, NULL until the bytes land in the CAS.
-//! - `ingested_files` — the shared per-file resume cursor ([`RawTable`] plain
-//!   mode, PK `path`): per file, the `(size_bytes, mtime_ns)` stamp
-//!   from the last full ingest. Lets `mbox::fetch` skip files that
-//!   haven't been appended to since the last run.
+//! - `ingested_files` — the shared per-file resume cursor
+//!   (`datalib_etl::file_checkpoint`, scope `email/mbox`): per file,
+//!   the blake3 it hashed to at the last full ingest, read through the
+//!   host-wide fingerprint cache. Lets `mbox::fetch` skip a file whose
+//!   contents have not moved, without re-reading it.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
