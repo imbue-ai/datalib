@@ -23,18 +23,17 @@ use super::{
     whatsapp_chat_uuid, whatsapp_markdown_uuid, whatsapp_message_uuid, whatsapp_reaction_uuid,
 };
 
-/// SQL projection that maps an attachment's `sha256` (the upstream
-/// `ref_id` render stamps onto each `NormalizedAttachment`) to its
-/// CAS `blake3`. Consumed by [`BlobBundle::load`] from the per-chat
-/// load below. Returns one row per requested ref_id whose bytes are
-/// known to the CAS — `blake3 IS NOT NULL` guards against
-/// half-extracted Media/ trees.
+/// SQL projection resolving an attachment's `ref_id` — the file's
+/// blake3, which render stamps onto each `NormalizedAttachment` — to
+/// its CAS entry. Consumed by [`BlobBundle::load`] from the per-chat
+/// load below. A row exists only for a file the scan actually saw, so
+/// a half-extracted `Media/` tree simply yields no bytes.
 const ATTACHMENTS_PROJECTION_SQL: &str = "
-    SELECT sha256 AS ref_id, blake3,
+    SELECT blake3 AS ref_id, blake3,
            mime_type AS content_type,
            relative_path AS upstream_name
       FROM wa_media_files
-     WHERE sha256 IN ({placeholders}) AND blake3 IS NOT NULL";
+     WHERE blake3 IN ({placeholders})";
 
 /// What `parse` returns to render: the chat tree plus a per-chat
 /// `BlobBundle` (keyed by `NormalizedChat::id`) carrying every
@@ -125,12 +124,12 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
     .context("select wa_message")?;
 
     // 3) Media joined to its `wa_media_files` row to pick up the
-    //    `sha256` download stored alongside the blob_cas put. That sha256
-    //    IS the `blob_refs.ref_id`, so chat-common can stream the bytes
-    //    out at render time without render ever touching disk.
+    //    blake3 the download stored alongside the blob_cas put. That
+    //    blake3 IS the `blob_refs.ref_id`, so chat-common can stream
+    //    the bytes out at render time without render touching disk.
     let media_rows = sqlx::query(
         "SELECT m.chat_jid, m.key_id, m.from_me, m.file_path, m.mime_type, m.file_size, \
-                m.media_caption, m.media_name, f.sha256 \
+                m.media_caption, m.media_name, f.blake3 \
          FROM wa_message_media m \
          LEFT JOIN wa_media_files f ON f.relative_path = m.file_path",
     )
@@ -150,7 +149,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
         let mime_type: Option<String> = r.get("mime_type");
         let file_size: Option<i64> = r.get("file_size");
         let media_caption: Option<String> = r.get("media_caption");
-        // `sha256` is the `blob_refs.ref_id` download stored at put time
+        // `blake3` is the `blob_refs.ref_id` download stored at put time
         // (see `download::mirror_media_files`). `None` here means either
         // the file went missing between scan and put, or the message's
         // `file_path` didn't resolve to a row in `wa_media_files`
@@ -170,7 +169,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
                 mime_type,
                 byte_len: file_size,
                 source_url: file_path.clone().or_else(|| media_caption.clone()),
-                ref_id: r.get("sha256"),
+                ref_id: r.get("blake3"),
             });
     }
 

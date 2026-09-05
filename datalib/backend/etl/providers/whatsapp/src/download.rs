@@ -4,7 +4,7 @@
 //! (containing `Databases/msgstore.db.crypt15` and `Media/`), the
 //! 32-byte root key, and a target `wa_raw.doltlite_db` path, decrypts
 //! the message store to a tempfile, walks the curated tables into the
-//! target db (drop-and-rebuild), registers media files by sha256, and
+//! target db (drop-and-rebuild), registers media files by blake3, and
 //! issues a single `dolt_commit`.
 //!
 //! The decrypted msgstore lives in a `tempfile::NamedTempFile` and is
@@ -13,18 +13,19 @@
 //! `backup_dir/Media/` (WhatsApp stores them in the clear) so no
 //! plaintext copy of those is ever made.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use datalib_etl::blob_cas::{self, blake3_hex, BlobCas, CasInsert};
+use datalib_etl::blob_cas::{self, BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
+use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
 use datalib_whatsapp_backup::decrypt_file;
 
 use crate::schema_raw::{ALL_DDL, DATA_TABLES};
@@ -90,16 +91,22 @@ pub async fn ingest(
     backup_dir: &Path,
     root_key: &[u8; 32],
     target_db_path: &Path,
+    cache: &FingerprintCache,
 ) -> Result<IngestSummary> {
     let db = RawDb::open(target_db_path).await?;
-    fetch(backup_dir, root_key, &db).await
+    fetch(backup_dir, root_key, &db, cache).await
 }
 
 /// Variant of [`ingest`] that takes an already-open [`RawDb`]. Used by
 /// the sync orchestrator, which opens the pool up front (so SIGINT can
 /// flush) and threads it through.
-pub async fn fetch(backup_dir: &Path, root_key: &[u8; 32], db: &RawDb) -> Result<IngestSummary> {
-    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.db_path()).await
+pub async fn fetch(
+    backup_dir: &Path,
+    root_key: &[u8; 32],
+    db: &RawDb,
+    cache: &FingerprintCache,
+) -> Result<IngestSummary> {
+    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.db_path(), cache).await
 }
 
 async fn fetch_with_pool(
@@ -107,6 +114,7 @@ async fn fetch_with_pool(
     root_key: &[u8; 32],
     dst_pool: SqlitePool,
     target_db_path: &Path,
+    cache: &FingerprintCache,
 ) -> Result<IngestSummary> {
     // `backup_dir` lives inside the `sync:` block (not on
     // SourceCommon.input_path), so core's load-time tilde expansion
@@ -160,7 +168,7 @@ async fn fetch_with_pool(
 
     let media_root = backup_dir.join("Media");
     if media_root.is_dir() {
-        mirror_media_files(&dst_pool, target_db_path, &media_root, &mut summary).await?;
+        mirror_media_files(&dst_pool, target_db_path, &media_root, cache, &mut summary).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
@@ -762,149 +770,131 @@ async fn mirror_message_add_on_reaction(
     Ok(())
 }
 
-/// Walk `media_root`, register every regular file in `wa_media_files`,
-/// and put its bytes into the sibling blob_cas keyed by blake3. Render
-/// resolves attachments by joining `wa_message_media.file_path` →
-/// `wa_media_files.sha256` → `wa_media_files.blake3` → `cas_objects.bytes`.
+/// Register every media file in `wa_media_files`, and make sure its
+/// bytes are in the sibling blob_cas keyed by blake3.
 ///
-/// Skips dot-prefixed dirs (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`,
-/// …) — those are local WhatsApp scratch state, not message media.
+/// Render resolves an attachment by joining
+/// `wa_message_media.file_path` → `wa_media_files.relative_path`, then
+/// uses that row's blake3 as the CAS key.
+///
+/// One scan of `Media/` produces the metadata rows outright — path,
+/// size and hash — without opening a single file, because the host
+/// fingerprint cache already vouches for anything whose stat has not
+/// moved. Bytes are then read only for hashes the CAS does not already
+/// hold, in bounded batches.
+///
+/// Both halves of that are new. This used to read *every* media file
+/// on *every* run, hold all of their bytes in memory at once, and hash
+/// each twice — sha256 for the table key and blake3 for the CAS. A
+/// real `Media/` folder is gigabytes.
+///
+/// Dot-prefixed entries (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`)
+/// are WhatsApp's own scratch state, not message media.
 async fn mirror_media_files(
     dst: &SqlitePool,
     target_db_path: &Path,
     media_root: &Path,
+    cache: &FingerprintCache,
     summary: &mut IngestSummary,
 ) -> Result<()> {
-    let media_root_owned = media_root.to_path_buf();
-    // Hashing + reading bytes are CPU+IO work — do them on the blocking
-    // pool so we don't starve the sqlx async runtime.
-    let entries: Vec<MediaEntry> =
-        tokio::task::spawn_blocking(move || scan_media(&media_root_owned)).await??;
+    let scan = fsscan::scan(
+        cache,
+        media_root,
+        &fsscan::ScanOptions {
+            ignore: vec![".*".to_string()],
+            ..Default::default()
+        },
+        |_| true,
+    )
+    .await?;
+    for e in &scan.errors {
+        tracing::warn!(
+            event = "wa_media_walk_error",
+            path = %e.path.display(),
+            error = %e.error,
+        );
+    }
 
-    // Precompute blake3 for every file; cheap relative to the disk read
-    // we already paid for, and lets us batch the CAS insert + the
-    // metadata UPDATE.
-    let blake3s: Vec<String> = entries.iter().map(|e| blake3_hex(&e.content)).collect();
-
-    // Insert metadata rows with blake3 = NULL up front. Drop-and-rebuild
-    // truncates this table on every run, so we don't risk clobbering
-    // a previously-good blake3.
+    // Metadata rows, straight from the scan.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
-    let mut n = 0u64;
-    for e in &entries {
+    for f in &scan.files {
         sqlx::query(
-            "INSERT OR IGNORE INTO wa_media_files (sha256, relative_path, size_bytes, \
-                mtime_unix, mime_type) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO wa_media_files \
+                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
         )
-        .bind(&e.sha256)
-        .bind(&e.relative_path)
-        .bind(e.size_bytes as i64)
-        .bind(e.mtime_unix)
-        .bind(&e.mime_type)
+        .bind(fsscan::hex(&f.blake3))
+        .bind(&f.rel)
+        .bind(f.size)
+        .bind(mime_from_ext(&f.path))
         .execute(&mut *tx)
         .await
         .context("insert wa_media_files")?;
-        n += 1;
     }
     tx.commit().await.context("commit wa_media_files tx")?;
+    summary.media_files = scan.files.len() as u64;
 
-    // Bulk CAS put — one transaction for the whole batch.
+    // Bytes: only for hashes the CAS does not already hold.
     let cas_path = blob_cas::cas_path_for(target_db_path);
     let cas = BlobCas::open(&cas_path)
         .await
         .with_context(|| format!("open blob_cas at {}", cas_path.display()))?;
-    let cas_inserts: Vec<CasInsert<'_>> = entries
-        .iter()
-        .zip(blake3s.iter())
-        .map(|(e, b)| CasInsert {
-            blake3: b.as_str(),
-            bytes: &e.content,
-            content_type: e.mime_type.as_deref(),
-        })
+    let known: HashSet<String> = sqlx::query_scalar("SELECT blake3 FROM cas_objects")
+        .fetch_all(cas.pool())
+        .await
+        .context("read cas_objects blake3s")?
+        .into_iter()
         .collect();
-    cas.put_many(&cas_inserts)
-        .await
-        .context("blob_cas put_many wa_media_files")?;
 
-    // Stamp blake3 onto each metadata row now that the bytes are
-    // durable in the CAS.
-    let mut tx = dst
-        .begin()
-        .await
-        .context("begin wa_media_files blake3 tx")?;
-    for (e, b) in entries.iter().zip(blake3s.iter()) {
-        sqlx::query("UPDATE wa_media_files SET blake3 = ? WHERE sha256 = ?")
-            .bind(b)
-            .bind(&e.sha256)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("update wa_media_files.blake3 for {}", e.sha256))?;
+    let mut staged: HashSet<String> = HashSet::new();
+    let mut pending: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
+    let mut pending_bytes: u64 = 0;
+    for f in &scan.files {
+        let hex = fsscan::hex(&f.blake3);
+        if known.contains(&hex) || !staged.insert(hex.clone()) {
+            continue;
+        }
+        let bytes = match std::fs::read(&f.path) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    event = "wa_media_unreadable",
+                    path = %f.path.display(),
+                    error = %e,
+                );
+                continue;
+            }
+        };
+        pending_bytes += bytes.len() as u64;
+        pending.push((hex, bytes, mime_from_ext(&f.path)));
+        if pending_bytes >= PUT_BATCH_BYTES {
+            put_media_batch(&cas, &pending).await?;
+            pending.clear();
+            pending_bytes = 0;
+        }
     }
-    tx.commit()
-        .await
-        .context("commit wa_media_files blake3 tx")?;
+    put_media_batch(&cas, &pending).await?;
 
-    summary.media_files = n;
     Ok(())
 }
 
-struct MediaEntry {
-    sha256: String,
-    relative_path: String,
-    size_bytes: u64,
-    mtime_unix: Option<i64>,
-    mime_type: Option<String>,
-    /// Raw file bytes. Kept in memory between scan and the blob_cas
-    /// put so a single walk over `Media/` produces both the metadata
-    /// rows and the CAS contents in one pass. Released immediately
-    /// after the put.
-    content: Vec<u8>,
-}
+/// How many bytes of media may sit in memory before a CAS flush.
+const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 
-fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
-    use walkdir::WalkDir;
-    let mut out = Vec::new();
-    for entry in WalkDir::new(media_root).into_iter().filter_entry(|e| {
-        // Skip dotfile/dotdir branches (`.Thumbs`, `.Shared`, …).
-        e.file_name()
-            .to_str()
-            .map(|n| !n.starts_with('.'))
-            .unwrap_or(true)
-    }) {
-        let entry = entry.context("walk media root")?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        let Ok(rel) = path.strip_prefix(media_root) else {
-            continue;
-        };
-        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let mut h = Sha256::new();
-        h.update(&bytes);
-        let sha = h
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        let meta = entry.metadata().ok();
-        let size_bytes = bytes.len() as u64;
-        let mtime_unix = meta
-            .as_ref()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64);
-        let mime_type = mime_from_ext(path);
-        out.push(MediaEntry {
-            sha256: sha,
-            relative_path: rel.to_string_lossy().into_owned(),
-            size_bytes,
-            mtime_unix,
-            content: bytes,
-            mime_type,
-        });
+async fn put_media_batch(cas: &BlobCas, items: &[(String, Vec<u8>, Option<String>)]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
     }
-    Ok(out)
+    let inserts: Vec<CasInsert<'_>> = items
+        .iter()
+        .map(|(h, b, ct)| CasInsert {
+            blake3: h.as_str(),
+            bytes: b.as_slice(),
+            content_type: ct.as_deref(),
+        })
+        .collect();
+    cas.put_many(&inserts)
+        .await
+        .context("blob_cas put_many wa_media_files")
 }
 
 fn mime_from_ext(path: &Path) -> Option<String> {
@@ -976,7 +966,10 @@ mod tests {
             }));
         let tmpdir = tempfile::tempdir().expect("tmpdir");
         let target = tmpdir.path().join("wa_raw.doltlite_db");
-        let summary = ingest(&backup_dir, &root, &target)
+        let cache = FingerprintCache::open(&tmpdir.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        let summary = ingest(&backup_dir, &root, &target, &cache)
             .await
             .expect("ingest ok");
         // Test-only diagnostic. `disallowed-macros` would forbid this

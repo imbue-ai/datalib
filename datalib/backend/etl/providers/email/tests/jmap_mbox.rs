@@ -5,6 +5,7 @@
 //! the sync orchestrator picks up when a `type: email` source has no
 //! `sync:` block and `input_path` points at an `.mbox` file.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -32,7 +33,11 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
         db: Some(db),
         input_path: mbox_path,
         account_id_override: Some("enterprise".to_string()),
-        ..Default::default()
+        ..mbox::FetchOptions::new(
+            FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+                .await
+                .unwrap(),
+        )
     })
     .await
     .expect("mbox download fetch");
@@ -122,7 +127,11 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
         db: Some(db2),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
-        ..Default::default()
+        ..mbox::FetchOptions::new(
+            FingerprintCache::open(&_tmp.path().join("fp.sqlite"))
+                .await
+                .unwrap(),
+        )
     })
     .await
     .unwrap();
@@ -151,7 +160,11 @@ async fn mbox_only_labels_filters_extraction() {
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         only_labels: vec!["Sent".to_string()],
-        ..Default::default()
+        ..mbox::FetchOptions::new(
+            FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+                .await
+                .unwrap(),
+        )
     })
     .await
     .expect("mbox download fetch with label filter");
