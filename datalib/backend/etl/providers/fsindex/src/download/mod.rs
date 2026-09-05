@@ -106,6 +106,18 @@ pub struct FetchSummary {
     pub cache_entries_written: u64,
     /// Cache entries dropped because their paths are gone from disk.
     pub cache_entries_forgotten: u64,
+    /// The cache's on-disk footprint before this scan, in bytes —
+    /// database plus its `-wal` / `-shm` sidecars.
+    pub cache_bytes_before: u64,
+    /// And after, once the WAL has been folded back in.
+    ///
+    /// Note this does **not** shrink when entries are forgotten:
+    /// SQLite returns freed pages to its own freelist, not to the
+    /// filesystem, so a scan reporting `cache_forgot=4000` will still
+    /// show no change. The space is reused by the next insert. Only
+    /// `VACUUM` hands it back, which rewrites the whole file and is not
+    /// worth doing on a cache.
+    pub cache_bytes_after: u64,
     /// Total bytes fed through blake3 this scan — i.e. the content of
     /// the `files_hashed` files only.
     pub bytes_hashed: u64,
@@ -174,6 +186,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let opts = FetchOptions { root, ..opts };
 
     let load_start = Instant::now();
+    let cache_bytes_before = opts.cache.disk_bytes();
     let mut cache_entries_loaded = 0usize;
     let prev = if opts.control.reset_and_redownload {
         CachedTree::default()
@@ -283,7 +296,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         "could not tidy the fingerprint cache: {e}"),
     }
 
+    // Settle the WAL before measuring, or the footprint depends on
+    // when SQLite last checkpointed rather than on what we wrote.
+    opts.cache.checkpoint().await;
     summary.cache_path = opts.cache.path().to_path_buf();
+    summary.cache_bytes_before = cache_bytes_before;
+    summary.cache_bytes_after = opts.cache.disk_bytes();
     summary.cache_entries_loaded = cache_entries_loaded;
     summary.cache_entries_written = cache_entries_written;
     summary.cache_entries_forgotten = cache_entries_forgotten;
@@ -653,6 +671,22 @@ fn new_uuid() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
+/// A cache footprint as `before->after (H -> H, ±H)`, raw bytes first
+/// so the line stays greppable and the human form right after so it is
+/// readable without arithmetic.
+pub fn human_growth(before: u64, after: u64) -> String {
+    let delta = if after >= before {
+        format!("+{}", human_bytes(after - before))
+    } else {
+        format!("-{}", human_bytes(before - after))
+    };
+    format!(
+        "{before}->{after} ({} -> {}, {delta})",
+        human_bytes(before),
+        human_bytes(after)
+    )
+}
+
 /// Human-readable byte count, decimal (1000-based) units to match the
 /// `MB/s` throughput readouts (which divide by 1_000_000).
 pub fn human_bytes(n: u64) -> String {
@@ -697,3 +731,34 @@ fn build_dir_cascade(root: &std::path::Path, dir: &std::path::Path) -> OptionsCa
 // Keep types referenced even if not used at the module surface.
 const _: Option<EffectiveOptions> = None;
 const _: Option<FsindexYaml> = None;
+
+#[cfg(test)]
+mod growth_tests {
+    use super::human_growth;
+
+    #[test]
+    fn growth_shows_raw_bytes_then_the_human_form() {
+        assert_eq!(
+            human_growth(12_288, 475_136),
+            "12288->475136 (12.3 KB -> 475.1 KB, +462.8 KB)"
+        );
+    }
+
+    #[test]
+    fn no_change_is_plus_zero_not_a_blank() {
+        assert_eq!(
+            human_growth(4096, 4096),
+            "4096->4096 (4.1 KB -> 4.1 KB, +0 B)"
+        );
+    }
+
+    /// A cache can shrink — `VACUUM`, or a fresh file — so the delta
+    /// has to carry a sign rather than underflowing.
+    #[test]
+    fn a_shrink_is_reported_as_negative() {
+        assert_eq!(
+            human_growth(1_000_000, 400_000),
+            "1000000->400000 (1.0 MB -> 400.0 KB, -600.0 KB)"
+        );
+    }
+}

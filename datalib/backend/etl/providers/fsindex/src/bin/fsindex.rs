@@ -236,7 +236,7 @@ async fn main() -> Result<()> {
         println!(
             "fsindex: scanned={} files_reused={} files_hashed={} dirs={} symlinks={} \
              stamped={} errors={} hashed={} skipped={} wall={:.2}s \
-             cache={} cache_read={} cache_wrote={} cache_forgot={}",
+             cache={} cache_read={} cache_wrote={} cache_forgot={} cache_bytes={}",
             summary.entries_scanned,
             summary.files_reused,
             summary.files_hashed,
@@ -251,6 +251,7 @@ async fn main() -> Result<()> {
             summary.cache_entries_loaded,
             summary.cache_entries_written,
             summary.cache_entries_forgotten,
+            download::human_growth(summary.cache_bytes_before, summary.cache_bytes_after),
         );
     }
     Ok(())
