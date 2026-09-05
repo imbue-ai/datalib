@@ -201,23 +201,6 @@ impl RawDb {
         Ok(ids)
     }
 
-    /// Every entry id this scan wrote, root-relative.
-    ///
-    /// After the truncate-and-rebuild the `files` table is exactly what
-    /// the walk saw, so this is the authoritative "still present" set —
-    /// which is what the fingerprint cache is pruned against. Streamed
-    /// rather than `fetch_all`ed so the row set is never materialised
-    /// twice.
-    pub async fn all_entry_ids(&self) -> Result<std::collections::BTreeSet<String>> {
-        use futures::TryStreamExt;
-        let mut out = std::collections::BTreeSet::new();
-        let mut rows = sqlx::query("SELECT id FROM files").fetch(&self.pool);
-        while let Some(r) = rows.try_next().await.context("stream file ids")? {
-            out.insert(sqlx::Row::try_get::<String, _>(&r, 0).context("read id")?);
-        }
-        Ok(out)
-    }
-
     /// Stamp one already-written directory row with its breadcrumb
     /// UUID. The row was written by the streaming pass; this is the
     /// explicit enrichment UPDATE the stamping pass issues after the

@@ -315,3 +315,63 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
         "rescan must keep the same identity_uuid"
     );
 }
+
+/// The cache is keyed by ABSOLUTE path, which is what makes it one
+/// chain per host rather than one per root. A relative `--root` must
+/// not produce relative keys: the same relative name used from two
+/// directories would put two unrelated trees on one key.
+///
+/// Caught by running the real binary with `--root sub` from two
+/// different working directories and finding both trees stored under
+/// `sub/...`.
+#[tokio::test]
+async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+
+    // Two distinct trees that share a relative name.
+    for (tree, body) in [("one", "x"), ("two", "y")] {
+        let root = tmp.path().join(tree).join("sub");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("f.txt"), body).unwrap();
+
+        let mut opts = fetch_opts(
+            &tmp.path().join(format!("{tree}.doltlite_db")),
+            &root,
+            cache.clone(),
+        );
+        // A non-canonical root: the shape that broke it. The original
+        // bug was a *relative* `--root`, which cannot be exercised here
+        // without `set_current_dir` — racy under a threaded runner — but
+        // both go through the same `canonicalize`, and canonicalize
+        // always yields an absolute path.
+        opts.root = root.join("..").join("sub");
+        download::fetch(opts).await.unwrap();
+    }
+
+    let rows: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    assert!(!rows.is_empty(), "nothing reached the cache");
+    for path in &rows {
+        assert!(
+            path.starts_with('/'),
+            "relative key {path:?} in the cache — two trees could collide on it"
+        );
+    }
+    let unique: std::collections::BTreeSet<&String> = rows.iter().collect();
+    assert_eq!(
+        unique.len(),
+        rows.len(),
+        "two trees collided on one cache key"
+    );
+    // Both trees are present and distinct.
+    assert_eq!(
+        rows.iter().filter(|p| p.ends_with("/sub/f.txt")).count(),
+        2,
+        "expected one `sub/f.txt` per tree, got {rows:?}"
+    );
+}

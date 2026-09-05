@@ -40,12 +40,52 @@
 //!
 //! # Keyed by absolute path
 //!
-//! One chain per host, not per root. Absolute keys mean overlapping and
-//! nested scan roots share entries instead of duplicating them, a root
-//! that moves simply misses rather than colliding, and two providers
-//! scanning the same tree reuse each other's work.
+//! One chain per host, not per root — which is the part Unison gets
+//! wrong. Its `fpcache` is per replica *pair*, so syncing one tree
+//! against two peers hashes the same bytes twice, and scanning a
+//! directory tells you nothing about its parent.
+//!
+//! Absolute keys make overlapping roots share work in both directions.
+//! Measured, an inner directory of 2000 files inside a parent that also
+//! holds 500 of its own:
+//!
+//! | | files reused | files hashed |
+//! |---|---|---|
+//! | scan the inner directory (cold) | 0 | 2000 |
+//! | then scan the **parent** | **2000** | 500 (only its own) |
+//! | then scan the inner directory again | 2000 | 0 |
+//!
+//! Pruning stays scoped to the root it was given, so the parent's
+//! entries survive a nested scan and vice versa — otherwise two
+//! overlapping scans would keep evicting each other and neither would
+//! ever be fast.
+//!
+//! A root that moves simply misses rather than colliding, and two
+//! providers scanning one tree reuse each other's work.
+//!
+//! # Nothing is ever evicted
+//!
+//! The cache is append-and-update only. There is deliberately no
+//! "delete what this scan did not see" pass, because *what a scan sees*
+//! is a property of that scan's filters, not of the filesystem. Two
+//! consumers share this cache and do not agree on what is interesting:
+//! `fsindex` honours a per-directory `ignore` cascade, `pdf` only cares
+//! about PDFs. A pass like that lets the narrowest scan of a tree
+//! destroy every other scan's work in it — measured, an `fsindex` scan
+//! that ignored `*.tmp` evicted 200 entries a previous full scan had
+//! cached, so the next full scan had to rehash them.
+//!
+//! It buys no safety either. The hazard it looks like it addresses — a
+//! path deleted and recreated matching a stale cursor — is already
+//! handled by the stamp: a recreated file has a different inode, so
+//! `fswalk::decide` rehashes it. An entry for a path that no longer
+//! exists is simply never looked up.
+//!
+//! What that costs is one row (~150 B) per path ever scanned on this
+//! host, including paths since deleted. Deleting the file reclaims it
+//! and is always safe — the next scan rebuilds what it needs.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -281,7 +321,7 @@ impl FingerprintCache {
     /// One indexed range scan: the primary key is the absolute path, so
     /// a subtree is a contiguous run.
     pub async fn load_under(&self, root: &Path) -> Result<CachedTree> {
-        let root_s = root.display().to_string();
+        let root_s = canonical_root(root).display().to_string();
         let prefix = format!("{}/", root_s.trim_end_matches('/'));
         let rows = sqlx::query(
             "SELECT abs_path, kind, blake3, mtime_ns, size, stamp_kind, inode, dev \
@@ -353,44 +393,6 @@ impl FingerprintCache {
         Ok(())
     }
 
-    /// Drop cached entries under `root` that this scan did not see.
-    ///
-    /// `kept` holds root-relative paths. Without this the cache grows
-    /// forever across deletes, and — worse — a path that is deleted and
-    /// later recreated could match a stale cursor.
-    pub async fn prune_missing(&self, root: &Path, kept: &BTreeSet<String>) -> Result<u64> {
-        let cached = self.load_under(root).await?;
-        let root_s = root.display().to_string();
-        let prefix = format!("{}/", root_s.trim_end_matches('/'));
-        let stale: Vec<String> = cached
-            .entries
-            .keys()
-            .filter(|rel| !kept.contains(*rel))
-            .map(|rel| {
-                if rel.is_empty() {
-                    root_s.clone()
-                } else {
-                    format!("{prefix}{rel}")
-                }
-            })
-            .collect();
-        if stale.is_empty() {
-            return Ok(0);
-        }
-        let mut removed = 0u64;
-        let mut tx = self.pool.begin().await.context("begin prune tx")?;
-        for path in &stale {
-            let r = sqlx::query("DELETE FROM fingerprints WHERE abs_path = ?")
-                .bind(path)
-                .execute(&mut *tx)
-                .await
-                .context("prune fingerprint")?;
-            removed += r.rows_affected();
-        }
-        tx.commit().await.context("commit prune tx")?;
-        Ok(removed)
-    }
-
     /// Total rows, for diagnostics.
     pub async fn count(&self) -> Result<i64> {
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprints")
@@ -420,7 +422,27 @@ fn glob_escape(literal: &str) -> String {
     out
 }
 
+/// The canonical form of a scan root, as the cache keys it.
+///
+/// Every entry point normalizes through this rather than trusting the
+/// caller, so a relative root, a `..`, a trailing slash and a symlinked
+/// route to the same tree all address one set of entries. Absolute
+/// keying is the whole basis of "one chain per host": a relative key
+/// would put two unrelated trees, scanned as the same relative name
+/// from different directories, on top of each other.
+///
+/// A root that cannot be resolved (it was deleted, say) falls back to
+/// the path as given — a lookup then simply finds nothing, which is the
+/// right answer.
+pub fn canonical_root(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+}
+
 /// Absolute path for a root-relative entry, as the cache keys it.
+///
+/// `root` is expected to be canonical already — the walker canonicalizes
+/// once and reuses it per entry, rather than paying a `canonicalize`
+/// syscall per row.
 pub fn abs_key(root: &Path, rel: &str) -> String {
     if rel.is_empty() {
         root.display().to_string()
@@ -598,6 +620,39 @@ mod tests {
         );
     }
 
+    /// The mirror of the case above, and the one that pays off most:
+    /// a scan of a parent must reuse a nested scan's hashes for the
+    /// subtree they share, hashing only what is genuinely new to it.
+    ///
+    /// This is what per-host keying buys over Unison's per-replica-pair
+    /// `fpcache`, where scanning `/a` and `/a/b/c` are unrelated jobs
+    /// that each hash the overlap from scratch.
+    #[tokio::test]
+    async fn an_outer_root_reuses_a_nested_scan_s_work() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = FingerprintCache::open(&tmp.path().join("c.sqlite"))
+            .await
+            .unwrap();
+        // A scan of the inner directory happened first.
+        cache
+            .store(&[
+                fp(Path::new("/a/b/c"), "", EntryKind::Dir, 9),
+                fp(Path::new("/a/b/c"), "deep.bin", EntryKind::File, 5),
+            ])
+            .await
+            .unwrap();
+
+        // Now the parent is scanned. It should see the inner entries,
+        // addressed relative to *its* root.
+        let outer = cache.load_under(Path::new("/a")).await.unwrap();
+        assert_eq!(
+            outer.blake3("b/c/deep.bin"),
+            Some([5u8; 32]),
+            "the parent scan did not reuse the nested scan's hashes"
+        );
+        assert_eq!(outer.kind("b/c"), Some(EntryKind::Dir));
+    }
+
     #[tokio::test]
     async fn storing_the_same_path_twice_updates_it() {
         let tmp = tempfile::tempdir().unwrap();
@@ -618,8 +673,18 @@ mod tests {
         assert_eq!(tree.blake3("a.txt"), Some([2u8; 32]));
     }
 
+    /// The cache is grow-only, and that is the point: a narrower scan
+    /// must not evict a broader one's work.
+    ///
+    /// Two consumers share this cache and disagree about what is
+    /// interesting — `fsindex` honours an `ignore` cascade, `pdf` only
+    /// wants PDFs. A "delete what this scan did not see" pass would let
+    /// whichever scan is narrowest destroy the rest. Measured before it
+    /// was removed: an `fsindex` scan ignoring `*.tmp` evicted 200
+    /// entries a full scan had just cached, so the next full scan had
+    /// to rehash them.
     #[tokio::test]
-    async fn pruning_drops_what_the_scan_did_not_see() {
+    async fn a_narrower_scan_does_not_evict_a_broader_one() {
         let tmp = tempfile::tempdir().unwrap();
         let root = Path::new("/r");
         let cache = FingerprintCache::open(&tmp.path().join("c.sqlite"))
@@ -627,46 +692,24 @@ mod tests {
             .unwrap();
         cache
             .store(&[
-                fp(root, "kept.txt", EntryKind::File, 1),
-                fp(root, "gone.txt", EntryKind::File, 2),
-                fp(root, "also/gone.txt", EntryKind::File, 3),
+                fp(root, "doc.pdf", EntryKind::File, 1),
+                fp(root, "scratch.tmp", EntryKind::File, 2),
             ])
             .await
             .unwrap();
-
-        let kept: BTreeSet<String> = ["kept.txt".to_string()].into_iter().collect();
-        let removed = cache.prune_missing(root, &kept).await.unwrap();
-        assert_eq!(removed, 2);
+        // A narrower consumer stores only what it cares about.
+        cache
+            .store(&[fp(root, "doc.pdf", EntryKind::File, 1)])
+            .await
+            .unwrap();
 
         let tree = cache.load_under(root).await.unwrap();
-        assert_eq!(tree.len(), 1);
-        assert!(tree.blake3("kept.txt").is_some());
-    }
-
-    #[tokio::test]
-    async fn pruning_leaves_other_roots_alone() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = FingerprintCache::open(&tmp.path().join("c.sqlite"))
-            .await
-            .unwrap();
-        cache
-            .store(&[
-                fp(Path::new("/a"), "x.txt", EntryKind::File, 1),
-                fp(Path::new("/b"), "y.txt", EntryKind::File, 2),
-            ])
-            .await
-            .unwrap();
-        cache
-            .prune_missing(Path::new("/a"), &BTreeSet::new())
-            .await
-            .unwrap();
-        assert_eq!(cache.count().await.unwrap(), 1);
-        assert!(cache
-            .load_under(Path::new("/b"))
-            .await
-            .unwrap()
-            .blake3("y.txt")
-            .is_some());
+        assert_eq!(
+            tree.blake3("scratch.tmp"),
+            Some([2u8; 32]),
+            "an entry the narrower scan had no opinion about was evicted"
+        );
+        assert_eq!(cache.count().await.unwrap(), 2);
     }
 
     /// A path containing GLOB metacharacters must not become a pattern.
@@ -689,6 +732,42 @@ mod tests {
             tree.blake3("y.txt").is_none(),
             "`[d]` was treated as a character class"
         );
+    }
+
+    /// A relative root must never become a relative key: two unrelated
+    /// trees scanned as the same relative name from different
+    /// directories would land on top of each other. Found by running
+    /// the real binary with `--root sub` from two working directories.
+    #[tokio::test]
+    async fn a_relative_root_is_keyed_absolutely() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        let cache = FingerprintCache::open(&tmp.path().join("c.sqlite"))
+            .await
+            .unwrap();
+
+        let canonical = canonical_root(&tree);
+        assert!(canonical.is_absolute());
+        cache
+            .store(&[fp(&canonical, "x.bin", EntryKind::File, 7)])
+            .await
+            .unwrap();
+
+        // A non-canonical spelling of the same root finds it.
+        let via_dotdot = tree.join("..").join("tree");
+        assert_eq!(
+            cache.load_under(&via_dotdot).await.unwrap().blake3("x.bin"),
+            Some([7u8; 32]),
+            "a non-canonical root missed its own entries"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_root_falls_back_to_the_path_as_given() {
+        // A deleted root simply finds nothing; it must not panic.
+        let p = Path::new("/definitely/not/here/at/all");
+        assert_eq!(canonical_root(p), p.to_path_buf());
     }
 
     #[test]

@@ -115,6 +115,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     let _ = opts.control.refetch_blobs;
 
+    // Canonicalize the root before anything keys off it. The
+    // fingerprint cache is keyed by ABSOLUTE path — that is what makes
+    // it one chain per host rather than one per root — so a relative
+    // `--root` would store relative keys, and the same relative name
+    // used from two directories would have two unrelated trees fighting
+    // over one key. It also collapses `.`, `..`, a trailing slash and a
+    // symlinked route to the same tree onto one set of entries.
+    let root = opts
+        .root
+        .canonicalize()
+        .with_context(|| format!("resolve scan root {}", opts.root.display()))?;
+    let opts = FetchOptions { root, ..opts };
+
     let load_start = Instant::now();
     let prev = if opts.control.reset_and_redownload {
         CachedTree::default()
@@ -185,25 +198,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
             );
         }
-    }
-
-    // ── prune the cache ──────────────────────────────────────────────
-    // Entries this walk did not see are gone from the tree. Dropping
-    // them keeps the cache from growing forever across deletes, and —
-    // the sharper reason — stops a path that is deleted and later
-    // recreated from matching a stale cursor.
-    let seen = db.all_entry_ids().await?;
-    match opts.cache.prune_missing(&opts.root, &seen).await {
-        Ok(0) => {}
-        Ok(n) => info!(
-            event = "fsindex_cache_pruned",
-            removed = n,
-            "dropped {n} cache entries for paths this scan did not see"
-        ),
-        // A cache that cannot be pruned is still a correct cache; it is
-        // only larger than it needs to be. Not worth failing a scan.
-        Err(e) => warn!(event = "fsindex_cache_prune_failed", error = %e,
-                        "could not prune the fingerprint cache: {e}"),
     }
 
     // ── scan_meta ────────────────────────────────────────────────────
