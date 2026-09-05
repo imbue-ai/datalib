@@ -120,9 +120,13 @@ async fn main() -> Result<()> {
     let cache = FingerprintCache::open(&cache_path).await?;
     info!(
         event = "fsindex_cache_open",
-        path = %cache_path.display(),
+        // The cache's own resolved path, not the one typed: a relative
+        // `--cache-db fp.sqlite` says nothing about where it landed.
+        path = %cache.path().display(),
         entries = cache.count().await.unwrap_or(-1),
-        "using this host's fingerprint cache",
+        "reading this host's fingerprint cache from {} ({} entries)",
+        cache.path().display(),
+        cache.count().await.unwrap_or(-1),
     );
     // Live terminal bar attached to obs's shared MultiProgress (same
     // wiring the pipeline gives each source). Falls back to
@@ -231,7 +235,8 @@ async fn main() -> Result<()> {
     {
         println!(
             "fsindex: scanned={} files_reused={} files_hashed={} dirs={} symlinks={} \
-             stamped={} errors={} hashed={} skipped={} wall={:.2}s",
+             stamped={} errors={} hashed={} skipped={} wall={:.2}s \
+             cache={} cache_read={} cache_wrote={} cache_forgot={}",
             summary.entries_scanned,
             summary.files_reused,
             summary.files_hashed,
@@ -242,6 +247,10 @@ async fn main() -> Result<()> {
             download::human_bytes(summary.bytes_hashed),
             download::human_bytes(summary.bytes_skipped),
             elapsed.as_secs_f64(),
+            summary.cache_path.display(),
+            summary.cache_entries_loaded,
+            summary.cache_entries_written,
+            summary.cache_entries_forgotten,
         );
     }
     Ok(())

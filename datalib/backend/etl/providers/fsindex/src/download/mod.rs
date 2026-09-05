@@ -95,6 +95,17 @@ pub struct FetchSummary {
     pub symlinks: usize,
     pub stamped_directories: usize,
     pub errors: usize,
+    /// Absolute path of the fingerprint cache this scan used. Worth
+    /// reporting because it is host state living outside both the data
+    /// root and the scan store, so it is the one input a reader cannot
+    /// infer from the command line.
+    pub cache_path: PathBuf,
+    /// Entries this host had already cached for the scan root.
+    pub cache_entries_loaded: usize,
+    /// Fingerprints written back — one per entry the walk visited.
+    pub cache_entries_written: u64,
+    /// Cache entries dropped because their paths are gone from disk.
+    pub cache_entries_forgotten: u64,
     /// Total bytes fed through blake3 this scan — i.e. the content of
     /// the `files_hashed` files only.
     pub bytes_hashed: u64,
@@ -163,6 +174,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let opts = FetchOptions { root, ..opts };
 
     let load_start = Instant::now();
+    let mut cache_entries_loaded = 0usize;
     let prev = if opts.control.reset_and_redownload {
         CachedTree::default()
     } else {
@@ -180,6 +192,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.root.display()
         ));
         let cached = opts.cache.load_under(&opts.root).await?;
+        cache_entries_loaded = cached.len();
         info!(
             event = "fsindex_load_cache_done",
             entry_rows = cached.len(),
@@ -205,7 +218,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
 
-    let (mut summary, walker_errors, counters, phase_walk, phase_write_total) = streaming_pipeline(
+    let (
+        mut summary,
+        walker_errors,
+        counters,
+        phase_walk,
+        phase_write_total,
+        cache_entries_written,
+    ) = streaming_pipeline(
         opts.root.clone(),
         default_stamp_kind,
         prev,
@@ -245,19 +265,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Cheap because the candidate set is small: on an unchanged tree it
     // is empty, and otherwise it is the deletions plus whatever this
     // scan ignored.
+    let mut cache_entries_forgotten = 0u64;
     match forget_deleted(&opts.cache, &opts.root, &db).await {
         Ok((0, _)) => {}
-        Ok((gone, kept)) => info!(
-            event = "fsindex_cache_forgot_deleted",
-            removed = gone,
-            kept_present = kept,
-            "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
+        Ok((gone, kept)) => {
+            cache_entries_forgotten = gone;
+            info!(
+                event = "fsindex_cache_forgot_deleted",
+                removed = gone,
+                kept_present = kept,
+                "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
              scan did not look at but which still exist"
-        ),
+            );
+        }
         // A cache that cannot be tidied is still a correct cache.
         Err(e) => warn!(event = "fsindex_cache_forget_failed", error = %e,
                         "could not tidy the fingerprint cache: {e}"),
     }
+
+    summary.cache_path = opts.cache.path().to_path_buf();
+    summary.cache_entries_loaded = cache_entries_loaded;
+    summary.cache_entries_written = cache_entries_written;
+    summary.cache_entries_forgotten = cache_entries_forgotten;
 
     // ── scan_meta ────────────────────────────────────────────────────
     let root_cascade = build_root_cascade(&opts.root);
@@ -369,6 +398,8 @@ async fn streaming_pipeline(
     Arc<WalkerCounters>,
     Duration,
     Duration,
+    // Fingerprints written back to the host cache.
+    u64,
 )> {
     let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
     let counters = Arc::new(WalkerCounters::default());
@@ -390,15 +421,21 @@ async fn streaming_pipeline(
     let writer_handle = tokio::spawn(async move {
         let mut total_write = Duration::ZERO;
         let mut batches_written: u64 = 0;
+        let mut fingerprints_written: u64 = 0;
         while let Some((files, fingerprints)) = rx.recv().await {
             // Two destinations, deliberately: content to the versioned
             // store, host observations to the unversioned cache.
             let took = writer_db.write_batch(&files, &writer_now).await?;
+            fingerprints_written += fingerprints.len() as u64;
             writer_cache.store(&fingerprints).await?;
             total_write += took;
             batches_written += 1;
         }
-        Ok::<(Duration, u64), anyhow::Error>((total_write, batches_written))
+        Ok::<(Duration, u64, u64), anyhow::Error>((
+            total_write,
+            batches_written,
+            fingerprints_written,
+        ))
     });
 
     // ── Progress task ────────────────────────────────────────────────
@@ -520,7 +557,7 @@ async fn streaming_pipeline(
     // walker's `blocking_send` then fails with a generic "channel
     // closed". That masks the real cause. So if the writer errored,
     // surface the writer's error regardless of what the walker said.
-    let (phase_write_total, _batches_written) = match writer_join {
+    let (phase_write_total, _batches_written, fingerprints_written) = match writer_join {
         Ok(v) => v,
         Err(writer_err) => {
             return Err(writer_err.context("doltlite writer task failed"));
@@ -553,6 +590,7 @@ async fn streaming_pipeline(
         counters,
         phase_walk,
         phase_write_total,
+        fingerprints_written,
     ))
 }
 
