@@ -10,6 +10,7 @@
 //! for interrupt-safety, and issues its own post-download `dolt_commit`. The
 //! orchestrator never sees a pool or a commit.
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
@@ -85,7 +86,8 @@ impl DataProcessor for WhatsappDownload {
             .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
         let root_key = key_hex.and_then(|h| datalib_whatsapp_backup::decode_hex_key(&h))?;
 
-        let s = download::fetch(&self.sync.backup_dir, &root_key, &db).await?;
+        let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+        let s = download::fetch(&self.sync.backup_dir, &root_key, &db, &cache).await?;
         let summary = format!(
             "jids={} chats={} messages={} message_text={} message_media={} \
              reactions={} media_files={}",

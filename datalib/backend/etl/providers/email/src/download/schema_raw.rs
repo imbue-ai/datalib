@@ -57,10 +57,11 @@
 //!   delete-then-insert per email upsert. No bookkeeping sidecars.
 //! - `email_blobs` — CAS edge ([`EmlBlobRow`]) carrying the `.eml`
 //!   `blake3`, NULL until the bytes land in the CAS.
-//! - `mbox_files_checkpoint` — Mbox-only cursor ([`RawTable`] plain
-//!   mode, PK `path`): per file, the `(size_bytes, mtime_ns)` stamp
-//!   from the last full ingest. Lets `mbox::fetch` skip files that
-//!   haven't been appended to since the last run.
+//! - `ingested_files` — the shared per-file resume cursor
+//!   (`datalib_etl::file_checkpoint`, scope `email/mbox`): per file,
+//!   the blake3 it hashed to at the last full ingest, read through the
+//!   host-wide fingerprint cache. Lets `mbox::fetch` skip a file whose
+//!   contents have not moved, without re-reading it.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
@@ -463,33 +464,6 @@ impl EmlBlobRow {
 
 // ── cursor table ────────────────────────────────────────────────────
 
-/// `mbox_files_checkpoint` — Mbox-only resume cursor. One row per
-/// mbox file the extractor has fully ingested. Before opening a
-/// file, `mbox::fetch` checks the row: if `(size_bytes, mtime_ns)`
-/// match what's on disk, the file is skipped entirely. Mbox is
-/// append-only by convention (mail clients only ever append), so
-/// `(size, mtime)` is a sufficient fingerprint without re-hashing
-/// contents.
-#[derive(Debug, Clone, RawTable)]
-#[raw_table(table = "mbox_files_checkpoint", primary_key = "path")]
-pub struct MboxFilesCheckpointRow {
-    pub path: String,
-    pub size_bytes: i64,
-    pub mtime_ns: i64,
-    pub last_finished_at: String,
-}
-
-impl MboxFilesCheckpointRow {
-    pub fn new(path: &str, size_bytes: i64, mtime_ns: i64, last_finished_at: &str) -> Self {
-        Self {
-            path: path.to_string(),
-            size_bytes,
-            mtime_ns,
-            last_finished_at: last_finished_at.to_string(),
-        }
-    }
-}
-
 /// `gmail_messages` — Gmail's own message id → the row it produced.
 ///
 /// Gmail's API speaks in its own opaque message ids; our rows are keyed
@@ -534,7 +508,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailMailboxRow::all_ddl());
     out.extend(EmailKeywordRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
-    out.extend(MboxFilesCheckpointRow::all_ddl());
+    out.push(datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out.extend(GmailMessageRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

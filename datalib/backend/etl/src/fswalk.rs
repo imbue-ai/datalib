@@ -227,6 +227,7 @@ pub struct WalkedFile {
 /// One entry we could not read. Surfaced rather than swallowed so the
 /// caller can land it in a `_bookkeeping` sidecar per the framework's
 /// universal pattern.
+#[derive(Debug, Clone)]
 pub struct WalkError {
     pub path: PathBuf,
     pub error: String,

@@ -18,7 +18,8 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
+use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
@@ -50,130 +51,112 @@ pub struct VoiceSummary {
 /// [`schema_raw`]), so re-runs upsert in place.
 pub async fn ingest(
     db: &RawDb,
-    root: &Path,
+    scan: &fsscan::Scan,
     include_spam: bool,
     progress: &Progress,
 ) -> Result<VoiceSummary> {
-    let voice_root = root.join("Voice");
-    if !voice_root.exists() {
-        return Ok(VoiceSummary::default());
-    }
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
+    // Voice keeps three kinds of file under one subtree, and they
+    // already shared one cursor. Each section takes the changed files
+    // whose relative path is its own — no walk of its own, no stat.
+    let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
+    let changes = scan.changes_since(&prev);
+    let changed: Vec<&fsscan::ScannedFile> = changes.needs_reading_under("Voice").collect();
+    let under = |f: &fsscan::ScannedFile, dir: &str| {
+        let prefix = format!("Voice/{dir}/");
+        f.rel.len() > prefix.len()
+            && f.rel
+                .get(..prefix.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
+    };
 
     let mut message_rows: Vec<VoiceMessageRow> = Vec::new();
     let mut bill_rows: Vec<VoiceBillRow> = Vec::new();
     let mut greeting_rows: Vec<VoiceGreetingRow> = Vec::new();
-    let mut fps: Vec<FileFingerprint> = Vec::new();
+    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut n_attachments = 0usize;
 
     // ── Calls/ (+ optional Spam/) per-record HTML & orphan audio ────
-    let mut folders: Vec<(&str, PathBuf)> = vec![("calls", voice_root.join("Calls"))];
-    if include_spam {
-        folders.push(("spam", voice_root.join("Spam")));
-    }
-    for (folder, dir) in &folders {
-        if !dir.exists() {
+    for f in &changed {
+        let folder = if under(f, "Calls") {
+            "calls"
+        } else if include_spam && under(f, "Spam") {
+            "spam"
+        } else {
             continue;
-        }
-        for entry in
-            std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let fp = FileFingerprint::of(&path)?;
-            if file_checkpoint::should_skip(&stamped, &fp) {
-                continue;
-            }
-            let consumed = ingest_record(
-                folder,
-                &path,
-                &mut message_rows,
-                &mut acc,
-                &mut n_attachments,
-            )
-            .unwrap_or_else(|e| {
-                warn!(event = "voice_record_failed", path = %path.display(), error = %e);
-                false
-            });
-            if consumed {
-                fps.push(fp);
-            }
+        };
+        let path = &f.path;
+        let consumed = ingest_record(
+            folder,
+            path,
+            &mut message_rows,
+            &mut acc,
+            &mut n_attachments,
+        )
+        .unwrap_or_else(|e| {
+            warn!(event = "voice_record_failed", path = %path.display(), error = %e);
+            false
+        });
+        if consumed {
+            done.push(f);
         }
     }
 
     // ── Bills.html ──────────────────────────────────────────────────
-    let bills_path = voice_root.join("Bills.html");
-    if bills_path.exists() {
-        let fp = FileFingerprint::of(&bills_path)?;
-        if !file_checkpoint::should_skip(&stamped, &fp) {
-            match std::fs::read_to_string(&bills_path) {
-                Ok(html) => {
-                    let (headers, rows) = parse_bills(&html);
-                    for cells in rows {
-                        let key = sha8(&cells.join("\u{1f}"));
-                        let payload = json!({
-                            "kind": "bill",
-                            "headers": headers,
-                            "cells": cells,
-                        });
-                        bill_rows.push(VoiceBillRow {
-                            id_and_payload: WirePayload {
-                                id: ns_id(&format!("voice:bill:{key}")),
-                                payload: payload.to_string(),
-                            },
-                        });
-                    }
-                    fps.push(fp);
+    if let Some(f) = changed
+        .iter()
+        .find(|f| f.rel.eq_ignore_ascii_case("Bills.html"))
+    {
+        match std::fs::read_to_string(&f.path) {
+            Ok(html) => {
+                let (headers, rows) = parse_bills(&html);
+                for cells in rows {
+                    let key = sha8(&cells.join("\u{1f}"));
+                    let payload = json!({
+                        "kind": "bill",
+                        "headers": headers,
+                        "cells": cells,
+                    });
+                    bill_rows.push(VoiceBillRow {
+                        id_and_payload: WirePayload {
+                            id: ns_id(&format!("voice:bill:{key}")),
+                            payload: payload.to_string(),
+                        },
+                    });
                 }
-                Err(e) => warn!(event = "voice_bills_failed", error = %e),
+                done.push(f);
             }
+            Err(e) => warn!(event = "voice_bills_failed", error = %e),
         }
     }
 
     // ── Greetings/ (blobs) ──────────────────────────────────────────
-    let greetings_dir = voice_root.join("Greetings");
-    if greetings_dir.exists() {
-        for entry in std::fs::read_dir(&greetings_dir)
-            .with_context(|| format!("read_dir {}", greetings_dir.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
+    for f in changed.iter().filter(|f| under(f, "Greetings")) {
+        let path = &f.path;
+        let name = file_name(path);
+        let greeting_id = ns_id(&format!("voice:greeting:{name}"));
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let blake3 = blake3_hex(&bytes);
+                acc.add_fetched(
+                    &greeting_id,
+                    &name,
+                    bytes,
+                    guess_content_type(path),
+                    Some(name.clone()),
+                );
+                n_attachments += 1;
+                greeting_rows.push(VoiceGreetingRow {
+                    id_and_payload: WirePayload {
+                        id: greeting_id,
+                        payload: json!({ "kind": "greeting", "filename": name }).to_string(),
+                    },
+                    blake3: Some(blake3),
+                });
+                done.push(f);
             }
-            let fp = FileFingerprint::of(&path)?;
-            if file_checkpoint::should_skip(&stamped, &fp) {
-                continue;
-            }
-            let name = file_name(&path);
-            let greeting_id = ns_id(&format!("voice:greeting:{name}"));
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let blake3 = blake3_hex(&bytes);
-                    acc.add_fetched(
-                        &greeting_id,
-                        &name,
-                        bytes,
-                        guess_content_type(&path),
-                        Some(name.clone()),
-                    );
-                    n_attachments += 1;
-                    greeting_rows.push(VoiceGreetingRow {
-                        id_and_payload: WirePayload {
-                            id: greeting_id,
-                            payload: json!({ "kind": "greeting", "filename": name }).to_string(),
-                        },
-                        blake3: Some(blake3),
-                    });
-                    fps.push(fp);
-                }
-                Err(e) => {
-                    warn!(event = "voice_greeting_failed", path = %path.display(), error = %e)
-                }
+            Err(e) => {
+                warn!(event = "voice_greeting_failed", path = %path.display(), error = %e)
             }
         }
     }
@@ -190,8 +173,8 @@ pub async fn ingest(
     bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &bill_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &greeting_rows, &now).await?;
-    for fp in &fps {
-        file_checkpoint::record_finished(&mut tx, SCOPE, fp).await?;
+    for f in &done {
+        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit google_voice tx")?;
 

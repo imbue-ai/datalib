@@ -39,6 +39,9 @@ pub struct FetchOptions {
     /// snapshot subdirs. The newest (lexicographically — Signal's
     /// timestamps sort correctly) is the one we ingest.
     pub snapshot_root: PathBuf,
+    /// This host's shared fingerprint cache. Host state, so it lives
+    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    pub cache: datalib_etl::fingerprint_cache::FingerprintCache,
     /// Directory holding the encrypted attachment blobs (the shared
     /// `files/XX/<media_name>` tree). When `None`, defaults to
     /// `snapshot_root.join("files")` — the layout Signal Android
@@ -52,20 +55,6 @@ pub struct FetchOptions {
     pub aep_env_var: Option<String>,
     pub progress: Progress,
     pub control: DownloadControl,
-}
-
-impl Default for FetchOptions {
-    fn default() -> Self {
-        Self {
-            db_path: PathBuf::new(),
-            db: None,
-            snapshot_root: PathBuf::new(),
-            files_root: None,
-            aep_env_var: None,
-            progress: Progress::noop(),
-            control: DownloadControl::default(),
-        }
-    }
 }
 
 #[derive(Debug, Default, Serialize, Clone)]
@@ -148,11 +137,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         files_root = %files_root.display(),
     );
 
-    // Resume cursor — fast path. Build a stat-derived fingerprint
-    // (three `(mtime_ns, byte_size)` pairs joined by `:`) and look
-    // it up against `ingested_backups`. No body I/O on the skip,
-    // no crypto, no decrypt. See `schema_raw::snapshot_fingerprint`.
-    let fingerprint = schema_raw::snapshot_fingerprint(&snapshot_dir)
+    // Resume cursor — fast path. Fingerprint the snapshot by the
+    // content of its three files and look that up against
+    // `ingested_backups`. No decrypt on the skip, and the digests come
+    // from this host's shared cache, so a snapshot something else
+    // already walked costs three stat calls. See
+    // `schema_raw::snapshot_fingerprint`.
+    let fingerprint = schema_raw::snapshot_fingerprint(&opts.cache, &snapshot_dir)
+        .await
         .with_context(|| format!("snapshot fingerprint {}", snapshot_dir.display()))?;
     if db.snapshot_already_ingested(&fingerprint).await? {
         info!(

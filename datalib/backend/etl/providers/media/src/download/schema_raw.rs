@@ -66,7 +66,6 @@ use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::fswalk::StampKind;
 
 use super::kind::{Container, MediaClass};
 
@@ -198,11 +197,6 @@ pub const MEDIA_VISUAL_INDEXES: &[&str] = &[
 pub const MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS media_files (
     id           TEXT PRIMARY KEY,
     blake3       TEXT NOT NULL,
-    mtime_ns     INTEGER NOT NULL,
-    size         INTEGER NOT NULL,
-    stamp_kind   TEXT NOT NULL,
-    inode        INTEGER NULL,
-    dev          INTEGER NULL,
     last_seen_at TEXT NOT NULL
 )";
 
@@ -510,25 +504,12 @@ pub struct MediaFileRow {
     /// Hex blake3 of the bytes at this path — the FK into
     /// `media_items`.
     pub blake3: String,
-    pub mtime_ns: i64,
-    pub size: i64,
-    pub stamp_kind: StampKind,
-    pub inode: Option<i64>,
-    pub dev: Option<i64>,
     pub last_seen_at: String,
 }
 
 impl BulkUpsertable for MediaFileRow {
     const TABLE: &'static str = "media_files";
-    const TYPED_COLUMNS: &'static [&'static str] = &[
-        "blake3",
-        "mtime_ns",
-        "size",
-        "stamp_kind",
-        "inode",
-        "dev",
-        "last_seen_at",
-    ];
+    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "last_seen_at"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -539,14 +520,7 @@ impl BulkUpsertable for MediaFileRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.blake3)
-            .bind(self.mtime_ns)
-            .bind(self.size)
-            .bind(self.stamp_kind.as_str())
-            .bind(self.inode)
-            .bind(self.dev)
-            .bind(&self.last_seen_at)
+        q.bind(&self.id).bind(&self.blake3).bind(&self.last_seen_at)
     }
 }
 

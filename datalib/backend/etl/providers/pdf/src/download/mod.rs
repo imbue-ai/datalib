@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fswalk::{self, StampDecision};
+use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
+use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
@@ -43,6 +45,9 @@ pub struct FetchOptions {
     pub root: PathBuf,
     pub ignore: Vec<String>,
     pub max_bytes: Option<u64>,
+    /// This host's shared fingerprint cache. Host state, so it lives
+    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    pub cache: FingerprintCache,
     /// Ignore the rescan cache and re-read every file. Wired to the
     /// framework's `--reset-and-redownload`.
     pub force_rehash: bool,
@@ -91,15 +96,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await
         .context("record scan root")?;
 
-    let (files, walk_errors) = fswalk::walk_files(&opts.root, &opts.ignore, is_pdf)
-        .with_context(|| format!("walk {}", opts.root.display()))?;
-    summary.errors += walk_errors.len();
-    for e in &walk_errors {
+    // One walk, hashing only what this host's shared cache cannot
+    // vouch for — so a `media` or `fsindex` scan of the same tree has
+    // already paid for most of it.
+    let scan = fsscan::scan(
+        &opts.cache,
+        &opts.root,
+        &fsscan::ScanOptions {
+            ignore: opts.ignore.clone(),
+            max_bytes: opts.max_bytes,
+            force_rehash: opts.force_rehash,
+        },
+        is_pdf,
+    )
+    .await?;
+    summary.errors += scan.errors.len();
+    for e in &scan.errors {
         tracing::warn!(path = %e.path.display(), error = %e.error, "pdf_walk_error");
     }
-
-    summary.pdfs_seen = files.len();
-    opts.progress.set_length(Some(files.len() as u64));
+    summary.pdfs_seen = scan.files.len();
+    summary.too_large = scan.stats.too_large;
+    summary.hashed = scan.stats.hashed;
+    summary.reused = scan.stats.reused;
+    opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut doc_batch: Vec<PdfDocumentRow> = Vec::new();
     let mut path_batch: Vec<PdfPathRow> = Vec::new();
@@ -107,51 +126,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // are classified once rather than N times.
     let mut seen_docs: HashMap<String, bool> = HashMap::new();
 
-    for f in files {
+    for f in &scan.files {
         opts.progress.inc(1);
-
-        let fresh = fswalk::fresh_stat(&f.meta);
-        if let Some(max) = opts.max_bytes {
-            if fresh.size as u64 > max {
-                summary.too_large += 1;
-                tracing::info!(path = %f.rel, size = fresh.size, "pdf_skipped_too_large");
-                continue;
-            }
-        }
-
-        // ── Reuse or rehash ──────────────────────────────────────────
-        let cached = prev.paths.get(&f.rel);
-        let decision = if opts.force_rehash {
-            StampDecision::Rehash
-        } else {
-            fswalk::decide(cached.map(|(c, _)| c), &fresh)
-        };
-
-        let hash_hex = match decision {
-            StampDecision::ReuseHash => {
-                // Only safe when the document row survives too;
-                // otherwise we'd record a path pointing at nothing.
-                let (_, h) = cached.expect("ReuseHash implies a cache entry");
-                if prev.known_docs.contains(h) || seen_docs.contains_key(h) {
-                    summary.reused += 1;
-                    h.clone()
-                } else {
-                    match hash_and_count(&f.path, fresh.size as u64, &mut summary) {
-                        Some(h) => h,
-                        None => continue,
-                    }
-                }
-            }
-            StampDecision::Rehash => match hash_and_count(&f.path, fresh.size as u64, &mut summary)
-            {
-                Some(h) => h,
-                None => continue,
-            },
-        };
+        let hash_hex = fswalk::to_hex(&f.blake3);
 
         // ── Classify the document, once per distinct content ─────────
         if !prev.known_docs.contains(&hash_hex) && !seen_docs.contains_key(&hash_hex) {
-            match identify(&f.path, fresh.size, &opts.now) {
+            match identify(&f.path, f.size, &opts.now) {
                 Ok(row) => {
                     let needs_ocr = row.needs_ocr;
                     seen_docs.insert(hash_hex.clone(), needs_ocr);
@@ -175,11 +156,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         path_batch.push(PdfPathRow {
             id: f.rel.clone(),
             blake3: hash_hex,
-            mtime_ns: fresh.mtime_ns,
-            size: fresh.size,
-            stamp_kind: fswalk::stamp_kind_for(&fresh),
-            inode: fresh.inode,
-            dev: fresh.dev,
             last_seen_at: opts.now.clone(),
         });
 
@@ -200,20 +176,6 @@ fn is_pdf(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
-}
-
-fn hash_and_count(path: &Path, size: u64, summary: &mut FetchSummary) -> Option<String> {
-    match fswalk::hash_file(path, size) {
-        Ok(h) => {
-            summary.hashed += 1;
-            Some(fswalk::to_hex(&h))
-        }
-        Err(e) => {
-            summary.errors += 1;
-            tracing::warn!(path = %path.display(), error = %e, "pdf_hash_failed");
-            None
-        }
-    }
 }
 
 /// Classify one PDF and read its metadata. Returns a row with an empty

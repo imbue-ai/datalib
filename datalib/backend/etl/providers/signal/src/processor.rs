@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_signal_config::SignalRenderConfig;
@@ -80,6 +81,7 @@ impl DataProcessor for SignalDownload {
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
+            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             snapshot_root: self.sync.snapshot_dir.clone(),
             // Default: `<snapshot_root>/files/XX/<name>` — the layout Signal
             // Android produces. Override via a future SignalSync knob if it

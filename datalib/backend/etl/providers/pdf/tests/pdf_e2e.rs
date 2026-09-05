@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::download::{self, RawDb};
 use datalib_etl_pdf::render;
 
@@ -67,11 +68,15 @@ impl Harness {
 
     async fn scan(&self) -> Result<download::FetchSummary> {
         let db = RawDb::open(&download::db_path_for(&self.raw_dir)).await?;
+        // A temp cache per harness: tests must never read or write this
+        // host's real one.
+        let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
         download::fetch(download::FetchOptions {
             db,
             source_name: STANZA.to_string(),
             root: self.root.clone(),
             ignore: vec![],
+            cache: cache.clone(),
             max_bytes: None,
             force_rehash: false,
             now: NOW.to_string(),
@@ -422,16 +427,26 @@ async fn rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
     assert_eq!(first.reused, 0, "nothing to reuse on a cold scan");
 
     let second = h.scan().await?;
-    // Exactly one file is re-read: `holodeck/corrupt.pdf`, which failed
-    // to identify the first time and so never got a `pdf_documents`
-    // row. Re-reading it is deliberate — a file that could not be
-    // parsed (mid-write, partially synced) should be retried rather
-    // than cached as permanently broken.
+    // Nothing is re-read. The host fingerprint cache vouches for every
+    // byte, including `holodeck/corrupt.pdf`.
+    //
+    // That file still has to be *retried* — a PDF that could not be
+    // parsed (mid-write, partially synced) must not be cached as
+    // permanently broken — and it is, because the retry is gated on
+    // `pdf_documents` rather than on the hash being stale. It failed to
+    // identify, so it has no document row, so `identify` runs again and
+    // fails again. This used to also re-read the bytes, which was a
+    // side effect of how reuse was gated rather than the point: there
+    // is nothing to learn from recomputing a digest we already hold.
     assert_eq!(
-        second.hashed, 1,
-        "only the unidentifiable file should be re-read"
+        second.hashed, 0,
+        "the shared cache should vouch for every byte on a rescan"
     );
     assert!(second.reused > 0, "the rescan cursor should have hit");
+    assert!(
+        second.errors >= 1,
+        "the unparseable file must be retried, not cached as broken"
+    );
 
     // Row counts must not drift between identical scans.
     let db = h.db().await;

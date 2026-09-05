@@ -6,6 +6,7 @@
 //! asserts the merged per-number conversations + materialized
 //! attachments.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -42,6 +43,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
             db_path: raw_dir.clone(),
             db: None,
             input_path: fixture_root(),
+            cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -73,12 +75,15 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         assert_eq!(blobs, 3, "3 blobs stored");
 
         // ── resume cursor ────────────────────────────────────────
-        // A second pass over the unchanged files is a no-op: the
-        // (size, mtime) cursor skips both, and nothing re-ingests.
+        // A second pass over the unchanged files is a no-op: both
+        // hash to what the cursor already stamped, so nothing
+        // re-ingests — and the host cache answers without re-reading
+        // a byte, because neither file's stat moved.
         let again = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
             db: None,
             input_path: fixture_root(),
+            cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
             control: Default::default(),
         })

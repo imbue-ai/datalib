@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl_media::download::{self, RawDb};
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
@@ -71,10 +72,14 @@ impl Harness {
         F: FnOnce(download::FetchOptions) -> download::FetchOptions,
     {
         let db = self.db().await?;
+        // A temp cache per harness: tests must never touch this host's
+        // real one.
+        let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
         download::fetch(tweak(download::FetchOptions {
             db,
             source_name: STANZA.to_string(),
             root: self.root.clone(),
+            cache,
             ignore: vec![],
             max_bytes: None,
             payload_max_bytes: None,
@@ -799,7 +804,7 @@ async fn a_rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
     let second = h.scan().await?;
     // Nothing changed on disk, so the Unison cursor should carry every
     // file and no bytes should be re-read.
-    assert_eq!(second.reused, first.files_seen);
+    assert_eq!(second.reused, first.entries_scanned);
     assert_eq!(second.hashed, 0, "no file should be rehashed: {second:?}");
     assert_eq!(second.items, 0, "no item should be re-identified");
 
@@ -856,7 +861,7 @@ async fn a_failed_scan_leaves_the_rescan_cursors_intact() -> Result<()> {
 
     // …and the point of keeping them: the next scan reads no bytes.
     let after = h.scan().await?;
-    assert_eq!(after.reused, first.files_seen);
+    assert_eq!(after.reused, first.entries_scanned);
     assert_eq!(
         after.hashed, 0,
         "cursors survived, so nothing should be rehashed: {after:?}"
@@ -944,7 +949,7 @@ async fn force_rehash_re_reads_everything_without_changing_a_row() -> Result<()>
             ..o
         })
         .await?;
-    assert_eq!(forced.hashed, first.files_seen, "every file re-read");
+    assert_eq!(forced.hashed, first.entries_scanned, "every file re-read");
     assert_eq!(forced.reused, 0);
 
     let db = h.db().await?;
@@ -1013,7 +1018,7 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     let hum_payload_before = payload_of(&db, "music/untagged_hum.mp3").await?.0;
     assert!(hum_payload_before.is_some());
     assert_eq!(
-        first.hashed, first.files_seen,
+        first.hashed, first.entries_scanned,
         "first scan reads everything"
     );
     assert_eq!(first.removed, 0);
@@ -1065,13 +1070,18 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
         first.files_seen - 1 + 2,
         "one deleted, two added"
     );
-    // The whole point of the cursor: only the four files whose stat
-    // changed are read. Everything else is skipped without a read.
+    // The whole point of the cursor: only the files whose stat changed
+    // are read. Everything else is skipped without a read.
+    //
+    // Five, not four: the shortened playlist from (6) is a file whose
+    // bytes changed like any other. It was always being hashed — the
+    // playlist pass did it separately — but did not use to be counted
+    // here, and is now hashed once by the scan rather than twice.
     assert_eq!(
-        second.hashed, 4,
-        "retagged + touched + copied + new: {second:?}"
+        second.hashed, 5,
+        "retagged + touched + copied + new + the edited playlist: {second:?}"
     );
-    assert_eq!(second.reused, second.files_seen - 4);
+    assert_eq!(second.reused, second.entries_scanned - 5);
     // Two of those four hold content we had not seen: the retagged MP3
     // and the new WAV. The copy and the touched file do not.
     assert_eq!(second.items, 2, "{second:?}");
@@ -1188,10 +1198,12 @@ async fn scan_root(
     raw_dir: &std::path::Path,
 ) -> Result<download::FetchSummary> {
     let db = RawDb::open(&download::db_path_for(raw_dir)).await?;
+    let cache = FingerprintCache::open(&raw_dir.join("fingerprints.sqlite")).await?;
     download::fetch(download::FetchOptions {
         db,
         source_name: STANZA.to_string(),
         root: root.to_path_buf(),
+        cache,
         ignore: vec![],
         max_bytes: None,
         payload_max_bytes: None,

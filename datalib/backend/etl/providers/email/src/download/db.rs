@@ -94,7 +94,7 @@ impl RawDb {
                 .await
                 .with_context(|| format!("clear {prefix} scope state on reset"))?;
         }
-        sqlx::query("DELETE FROM mbox_files_checkpoint")
+        sqlx::query("DELETE FROM ingested_files")
             .execute(&mut *tx)
             .await
             .context("clear mbox file checkpoints on reset")?;

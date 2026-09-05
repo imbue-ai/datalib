@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasInsert};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
+use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
@@ -31,43 +32,40 @@ const SCOPE: &str = "google_takeout/maps_photos";
 type PendingCas = (String, Vec<u8>, Option<String>);
 
 /// `(rows_upserted, blobs_stored)`.
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<(usize, usize)> {
-    let dir = root.join(DIR_REL);
-    if !dir.exists() {
-        return Ok((0, 0));
-    }
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
+pub async fn ingest(
+    db: &RawDb,
+    scan: &fsscan::Scan,
+    progress: &Progress,
+) -> Result<(usize, usize)> {
+    let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
+    let changes = scan.changes_since(&prev);
+
     let mut rows: Vec<MapsPhotoRow> = Vec::new();
     let mut cas_inserts_owned: Vec<PendingCas> = Vec::new();
-    let mut fingerprints: Vec<(String, FileFingerprint)> = Vec::new();
-    for entry in std::fs::read_dir(&dir).with_context(|| format!("read_dir {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let json_fp = FileFingerprint::of(&path)?;
-        if file_checkpoint::should_skip(&stamped, &json_fp) {
-            continue;
-        }
-        match ingest_one(&path) {
+    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
+    for f in changes
+        .needs_reading_under(DIR_REL)
+        .filter(|f| f.path.extension().and_then(|s| s.to_str()) == Some("json"))
+    {
+        match ingest_one(&f.path) {
             Ok(Some((row, cas))) => {
                 rows.push(row);
                 if let Some(c) = cas {
                     cas_inserts_owned.push(c);
                 }
-                fingerprints.push((path.to_string_lossy().into_owned(), json_fp));
+                done.push(f);
             }
             Ok(None) => {
-                // Missing media file or malformed sidecar — fingerprint
-                // still recorded so we don't loop on it forever.
-                fingerprints.push((path.to_string_lossy().into_owned(), json_fp));
+                // Missing media file or malformed sidecar — stamped
+                // anyway so we don't loop on it forever.
+                done.push(f);
             }
             Err(e) => {
-                warn!(event = "maps_photo_failed", path = %path.display(), error = %e);
+                warn!(event = "maps_photo_failed", path = %f.path.display(), error = %e);
             }
         }
     }
+
     let row_count = rows.len();
     let blob_count = cas_inserts_owned.len();
     progress.set_message(&format!(
@@ -88,8 +86,8 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<(usi
     let now = IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin maps_photos tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-    for (_path, fp) in &fingerprints {
-        file_checkpoint::record_finished(&mut tx, SCOPE, fp).await?;
+    for f in &done {
+        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit maps_photos tx")?;
     Ok((row_count, blob_count))

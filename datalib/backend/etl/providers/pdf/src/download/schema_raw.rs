@@ -81,7 +81,6 @@ use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::fswalk::StampKind;
 
 /// Entity tables truncated and rebuilt by a scan. `pdf_paths` is
 /// rebuilt so deletions fall out naturally (a path absent this scan is
@@ -133,11 +132,6 @@ pub const PDF_DOCUMENTS_INDEXES: &[&str] = &[
 pub const PDF_PATHS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_paths (
     id          TEXT PRIMARY KEY,
     blake3      TEXT NOT NULL,
-    mtime_ns    INTEGER NOT NULL,
-    size        INTEGER NOT NULL,
-    stamp_kind  TEXT NOT NULL,
-    inode       INTEGER NULL,
-    dev         INTEGER NULL,
     last_seen_at TEXT NOT NULL
 )";
 
@@ -335,25 +329,12 @@ pub struct PdfPathRow {
     /// Hex blake3 of the bytes at this path — the FK into
     /// `pdf_documents`.
     pub blake3: String,
-    pub mtime_ns: i64,
-    pub size: i64,
-    pub stamp_kind: StampKind,
-    pub inode: Option<i64>,
-    pub dev: Option<i64>,
     pub last_seen_at: String,
 }
 
 impl BulkUpsertable for PdfPathRow {
     const TABLE: &'static str = "pdf_paths";
-    const TYPED_COLUMNS: &'static [&'static str] = &[
-        "blake3",
-        "mtime_ns",
-        "size",
-        "stamp_kind",
-        "inode",
-        "dev",
-        "last_seen_at",
-    ];
+    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "last_seen_at"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -364,14 +345,7 @@ impl BulkUpsertable for PdfPathRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.blake3)
-            .bind(self.mtime_ns)
-            .bind(self.size)
-            .bind(self.stamp_kind.as_str())
-            .bind(self.inode)
-            .bind(self.dev)
-            .bind(&self.last_seen_at)
+        q.bind(&self.id).bind(&self.blake3).bind(&self.last_seen_at)
     }
 }
 

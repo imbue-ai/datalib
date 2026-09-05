@@ -13,6 +13,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
@@ -116,9 +117,12 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
     }
 
+    // A temp cache: tests must never touch this host's real one.
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
     let summary = download::fetch(FetchOptions {
         db_path: raw_db_path.clone(),
         db: None,
+        cache,
         snapshot_root: snapshot_root.clone(),
         files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
         aep_env_var: None, // defaults to SIGNAL_BACKUP_PASSPHRASE

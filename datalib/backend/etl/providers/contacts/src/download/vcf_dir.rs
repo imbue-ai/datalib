@@ -22,10 +22,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
+use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 
 use super::api::{vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
@@ -36,6 +38,9 @@ pub struct FetchOptions {
     pub db_path: PathBuf,
     pub db: Option<RawDb>,
     pub input_path: PathBuf,
+    /// Host-wide fingerprint cache — the shared answer to "did this
+    /// file change?", so an unchanged `.vcf` costs a `stat`.
+    pub cache: FingerprintCache,
     /// Overrides the synthetic `account_id`. Defaults to `"local"`.
     pub account_id_override: Option<String>,
     pub progress: Progress,
@@ -47,8 +52,8 @@ pub struct FetchSummary {
     pub addressbooks: usize,
     pub contacts_new: usize,
     pub contacts_updated: usize,
-    /// `.vcf` files whose `(size, mtime)` matched the resume cursor and
-    /// were skipped without re-parsing.
+    /// `.vcf` files whose contents matched the resume cursor and were
+    /// skipped without re-parsing.
     pub files_skipped: usize,
     pub errors: usize,
 }
@@ -79,54 +84,44 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.upsert_account(&account_id, &server_url, None, None)
         .await?;
 
-    let files = collect_vcf_files(&opts.input_path)?;
-    opts.progress.set_length(Some(files.len() as u64));
-
-    // Resume cursor: `(size, mtime)` per already-ingested file. Same
-    // mechanism mbox/email and the shared takeout providers use.
-    let stamped = file_checkpoint::load(db.pool(), CHECKPOINT_SCOPE).await?;
+    // One scan answers both questions at once: which `.vcf` files are
+    // there, and which have changed since this source last finished
+    // with them. The walk, the hashing, and the decision not to re-hash
+    // what the host cache can vouch for all live in the utility.
+    let scan = fsscan::scan(
+        &opts.cache,
+        &opts.input_path,
+        &fsscan::ScanOptions::default(),
+        |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("vcf")),
+    )
+    .await?;
 
     let mut summary = FetchSummary::default();
-    for path in &files {
-        // One `stat` up front. A file we can't stat is treated as
-        // changed (fall through to ingest, which surfaces the real
-        // read error if the path is genuinely broken).
-        let fingerprint = match FileFingerprint::of(path) {
-            Ok(fp) => Some(fp),
-            Err(e) => {
-                warn!(event = "carddav_vcf_stat_failed", path = %path.display(), error = %e);
-                None
-            }
-        };
-        if let Some(fp) = &fingerprint {
-            if file_checkpoint::should_skip(&stamped, fp) {
-                info!(
-                    event = "carddav_vcf_skipped",
-                    path = %path.display(),
-                    size_bytes = fp.size_bytes,
-                    "fingerprint matches checkpoint; skipping re-ingest",
-                );
-                summary.files_skipped += 1;
-                opts.progress.inc(1);
-                continue;
-            }
-        }
+    summary.errors += scan.errors.len();
+    for e in &scan.errors {
+        warn!(event = "carddav_vcf_walk_error", path = %e.path.display(), error = %e.error);
+    }
 
+    let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
+    let changes = scan.changes_since(&prev);
+    summary.files_skipped = changes.unchanged;
+    opts.progress.set_length(Some(scan.files.len() as u64));
+    opts.progress.inc(changes.unchanged as u64);
+
+    for f in changes.needs_reading() {
         opts.progress
-            .set_message(&format!("ingesting {}", path.display()));
-        match ingest_one(&db, &opts.input_path, path, &account_id, &mut summary).await {
+            .set_message(&format!("ingesting {}", f.path.display()));
+        match ingest_one(&db, &opts.input_path, &f.path, &account_id, &mut summary).await {
             Ok(()) => {
                 // Stamp only after a clean ingest, so a crash mid-file
                 // leaves no cursor and the next run re-ingests it.
-                if let Some(fp) = &fingerprint {
-                    file_checkpoint::record_finished_pool(db.pool(), CHECKPOINT_SCOPE, fp).await?;
-                }
+                file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
             }
             Err(e) => {
                 summary.errors += 1;
                 warn!(
                     event = "carddav_vcf_ingest_failed",
-                    path = %path.display(),
+                    path = %f.path.display(),
                     error = %e,
                 );
             }
@@ -247,33 +242,6 @@ fn contact_uid(
     uid
 }
 
-fn collect_vcf_files(input: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    if input.is_file() {
-        if input.extension().and_then(|s| s.to_str()) == Some("vcf") {
-            out.push(input.to_path_buf());
-        }
-    } else if input.is_dir() {
-        walk(input, &mut out)?;
-    }
-    out.sort();
-    Ok(out)
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))?;
-    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
-    paths.sort();
-    for p in paths {
-        if p.is_dir() {
-            walk(&p, out)?;
-        } else if p.extension().and_then(|s| s.to_str()) == Some("vcf") {
-            out.push(p);
-        }
-    }
-    Ok(())
-}
-
 fn addressbook_label(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
@@ -328,6 +296,18 @@ fn split_vcards(body: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// A fingerprint cache in a throwaway directory, so no test ever
+    /// touches — or is influenced by — the host's real one. The temp
+    /// dir is leaked deliberately: its lifetime should be the test
+    /// process, and a guard threaded through every constructor would
+    /// only obscure what these tests are about.
+    async fn test_cache() -> FingerprintCache {
+        let d = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        FingerprintCache::open(&d.path().join("fpcache.sqlite"))
+            .await
+            .unwrap()
+    }
+
     // Production shape: the processor passes the per-source *directory* as
     // `db_path` (e.g. `raw/fastmail_contacts`) and a `db` already opened at
     // its `entities.doltlite_db`. The inline-photo CAS must land beside that
@@ -362,6 +342,7 @@ mod tests {
             db_path: source_dir.clone(),
             db: Some(db),
             input_path: export.path().to_path_buf(),
+            cache: test_cache().await,
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),
@@ -390,10 +371,12 @@ mod tests {
         )
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
+        let cache = test_cache().await;
         let opts = || FetchOptions {
             db_path: db_path.clone(),
             db: None,
             input_path: dir.path().to_path_buf(),
+            cache: cache.clone(),
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),
@@ -428,10 +411,12 @@ mod tests {
         )
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
+        let cache = test_cache().await;
         let opts = || FetchOptions {
             db_path: db_path.clone(),
             db: None,
             input_path: dir.path().to_path_buf(),
+            cache: cache.clone(),
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),
@@ -468,10 +453,12 @@ mod tests {
         )
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
+        let cache = test_cache().await;
         let opts = || FetchOptions {
             db_path: db_path.clone(),
             db: None,
             input_path: dir.path().to_path_buf(),
+            cache: cache.clone(),
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),
@@ -517,6 +504,7 @@ mod tests {
             db_path: db_path.clone(),
             db: None,
             input_path: dir.path().to_path_buf(),
+            cache: test_cache().await,
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),
@@ -549,6 +537,7 @@ mod tests {
             db_path: db_path.clone(),
             db: None,
             input_path: dir.path().to_path_buf(),
+            cache: test_cache().await,
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),

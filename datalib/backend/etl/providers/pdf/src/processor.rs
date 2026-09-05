@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_pdf_config::{PdfConfig, PdfRenderConfig};
@@ -63,6 +64,7 @@ impl DataProcessor for PdfDownload {
             source_name: ctx.name.to_string(),
             root: self.root.clone(),
             ignore: self.ignore.clone(),
+            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             max_bytes: self.max_bytes,
             force_rehash: ctx.control.reset_and_redownload,
             now: ctx.now.to_string(),

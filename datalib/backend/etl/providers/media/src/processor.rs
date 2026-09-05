@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_media_config::{MediaConfig, MediaRenderConfig};
@@ -70,6 +71,7 @@ impl DataProcessor for MediaDownload {
             db,
             source_name: ctx.name.to_string(),
             root: self.root.clone(),
+            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             ignore: self.ignore.clone(),
             max_bytes: self.max_bytes,
             payload_max_bytes: self.payload_max_bytes,

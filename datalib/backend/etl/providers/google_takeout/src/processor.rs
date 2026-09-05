@@ -8,6 +8,7 @@
 //! mapping `GoogleTakeoutSync` → `download::SyncFlags` is provider-owned here
 //! (it used to be hand-copied in the orchestrator's `ExtractPlan::for_source`).
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -87,6 +88,7 @@ impl DataProcessor for GoogleTakeoutDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
+            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             db: Some(db),
             input_path: self.input_path.clone(),
             sync: self.sync.clone(),
