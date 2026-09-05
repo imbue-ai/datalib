@@ -1,21 +1,4 @@
 //! "SMS Backup & Restore" export ingester.
-//!
-//! Walks an export directory for `*.xml` files, sniffs each one's root
-//! (`<smses>` vs `<calls>`), and lands every `<sms>` / `<mms>` / `<call>`
-//! record as its own `(id, payload)` raw row. MMS attachment bytes
-//! (images, audio recordings, …) are decoded from their base64 `data`
-//! attribute and stored as content-addressed blobs in the sibling CAS,
-//! linked back to the owning message via the `sms_attachments` edge.
-//!
-//! Idempotent + resumable:
-//!
-//!   - Every row's PK is a uuidv5 over stable parsed fields (see
-//!     [`schema_raw`]), so re-ingesting a fresh (often superset) export
-//!     upserts in place rather than duplicating messages.
-//!   - A `(size, mtime)` resume cursor (the shared
-//!     [`datalib_etl::file_checkpoint`] `ingested_files` table)
-//!     skips files already ingested unchanged — the standard
-//!     export-shaped-source cursor.
 
 pub mod parse;
 pub mod schema_raw;
@@ -115,7 +98,6 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
-/// Run one ingest pass over the export at `input_path`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,
@@ -218,7 +200,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// One `<sms>` → one `sms_messages` row.
 fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>) {
     let tel = normalize_tel(&s.address);
     let display = conversation_display(&tel, s.contact_name.as_deref());
@@ -259,7 +240,6 @@ fn ingest_sms(s: &SmsRecord, rows: &mut Vec<SmsMessageRow>) {
     });
 }
 
-/// One `<mms>` → one `sms_messages` row + CAS edges for its blobs.
 fn ingest_mms(
     m: &MmsRecord,
     rows: &mut Vec<SmsMessageRow>,
@@ -328,7 +308,6 @@ fn ingest_mms(
     });
 }
 
-/// One `<call>` → one `sms_calls` row.
 fn ingest_call(c: &CallRecord, rows: &mut Vec<SmsCallRow>) {
     let tel = normalize_tel(&c.number);
     let display = conversation_display(&tel, c.contact_name.as_deref());
@@ -364,8 +343,6 @@ fn ingest_call(c: &CallRecord, rows: &mut Vec<SmsCallRow>) {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-/// Recursively collect every `*.xml` under `root` (or `root` itself if
-/// it's a file), sorted for stable ordering.
 fn discover_xml(root: &Path) -> Vec<PathBuf> {
     if root.is_file() {
         return vec![root.to_path_buf()];
@@ -411,14 +388,10 @@ fn normalize_tel(addr: &str) -> String {
     }
 }
 
-/// Display name for a conversation: a clean contact name when present,
-/// else the normalized number.
 fn conversation_display(tel: &str, contact_name: Option<&str>) -> String {
     clean_contact(contact_name).unwrap_or_else(|| tel.to_string())
 }
 
-/// A usable contact name, or `None` for the app's `(Unknown)` / empty
-/// placeholders.
 fn clean_contact(contact_name: Option<&str>) -> Option<String> {
     contact_name
         .map(str::trim)
@@ -442,7 +415,6 @@ fn direction_box(msg_box: i64) -> &'static str {
     }
 }
 
-/// SMS Backup & Restore call `type` codes.
 fn call_type_str(t: i64) -> &'static str {
     match t {
         1 => "incoming",
@@ -455,8 +427,6 @@ fn call_type_str(t: i64) -> &'static str {
     }
 }
 
-/// Unix-millis epoch → RFC3339 with explicit `+00:00` offset (millis
-/// precision). `None` for a non-positive / unparseable stamp.
 fn ms_to_rfc3339(ms: i64) -> Option<String> {
     use chrono::TimeZone;
     if ms <= 0 {

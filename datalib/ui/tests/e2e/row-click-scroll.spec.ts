@@ -7,12 +7,6 @@ import { clickRowByUuid } from "./grid-helpers";
 // *different* messages of the same conversation must highlight
 // different sections — and each must actually be on screen, not just
 // carry the `.selected` class somewhere below the scrollport.
-//
-// (Each click opens a fresh documentView card — the section to show is
-// part of the card's source — so unlike the old in-place preview pane
-// there is no "second click is a visual no-op" failure mode; what's
-// left to pin is that the highlight lands on the right section and
-// the scroll puts it in view.)
 
 type Row = {
   uuid: string;

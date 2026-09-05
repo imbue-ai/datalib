@@ -1,8 +1,4 @@
 //! End-to-end integration test for `POST /api/feedback`.
-//!
-//! Opens a doltlite file in a temp directory, builds the axum router on
-//! top of a `DoltRepo`, drives a request through `tower::ServiceExt::oneshot`,
-//! and verifies the row landed in the `feedback` table.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

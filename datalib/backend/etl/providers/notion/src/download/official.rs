@@ -46,8 +46,6 @@ impl NotionOfficialClient {
         Self::default()
     }
 
-    /// Build a client that authenticates as the source's configured
-    /// latchkey identity. Every request it issues carries the settings.
     pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
         Self {
             latchkey,

@@ -1,26 +1,4 @@
 //! Claude (claude.ai) HTTP fixture synthesizer.
-//!
-//! Reads the snapshot layout the live downloader writes — `<api_dir>/
-//! conversations.json` (post-normalize array of full conversations) and
-//! `users.json` — and emits playback fixtures for every request
-//! [`crate::download::api::ClaudeClient`] would issue:
-//!
-//! * `GET /organizations` — reconstructed from the `account.uuid` /
-//!   `org_uuid` fields embedded in the stored conversations.
-//! * `GET /organizations/{org}/chat_conversations` — listing per org,
-//!   stripped down to `{uuid, name, summary, updated_at}`-ish shape.
-//! * `GET /organizations/{org}/chat_conversations/{conv}?tree=True&...`
-//!   — per-conversation detail. We serve the normalized form back; the
-//!   downstream `normalize_to_export_shape` pass is idempotent on
-//!   already-normalized input (text/account fields are added only when
-//!   absent), so playback re-runs converge.
-//! * `GET /organizations/{org}/projects` and
-//!   `…/projects/{project}/docs` — read from `<api_dir>/projects/*.json`,
-//!   each of which holds one project with its knowledge documents
-//!   nested under `docs`. The listing fixture is written for **every**
-//!   org even when it is empty, because the downloader lists projects
-//!   per org unconditionally and a missing fixture is a playback error,
-//!   not an empty result.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -113,8 +91,6 @@ fn read_projects(api_dir: &Path) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// The project as the *listing* endpoint returns it: everything except
-/// the nested `docs`, which the live API serves from its own endpoint.
 fn project_listing_item(project: &Value) -> Value {
     let mut obj = project.as_object().cloned().unwrap_or_default();
     obj.remove("docs");
@@ -197,15 +173,6 @@ impl Synthesizer for ClaudeSynth {
         let mut count = 0usize;
 
         // /organizations
-        //
-        // The `name` emitted here is what the downloader stores as the
-        // `org_name` column (see `download::org_identity`), which
-        // becomes `grid_rows.org_name`. Emitting the uuid as the name —
-        // as this did originally — makes `org_name` and `org_uuid`
-        // indistinguishable everywhere downstream, so a fixture-backed
-        // test cannot tell the two columns apart and a transposed
-        // binding reads as correct. Fall back to the uuid only when the
-        // snapshot genuinely carries no name.
         let orgs: Vec<Value> = by_org
             .keys()
             .map(|uuid| {

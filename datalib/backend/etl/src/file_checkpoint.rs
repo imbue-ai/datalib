@@ -1,27 +1,4 @@
 //! Shared `(scope, path, size_bytes, mtime_ns)` resume cursor.
-//!
-//! Mbox's per-file checkpoint pattern, lifted into a single shared
-//! `ingested_files` table that any provider can use. Each scope
-//! namespaces rows per `(provider, feed)` so two feeds can claim the
-//! same on-disk path without colliding.
-//!
-//! Surface:
-//!
-//! - [`INGESTED_FILES_DDL`] — table DDL; splice into the provider's
-//!   `full_ddl()`.
-//! - [`FileFingerprint::of`] — one `stat`; returns `(size_bytes,
-//!   mtime_ns)` plus the canonicalized path string used as the PK.
-//! - [`load`] — bulk pre-load of `(canonical_path → (size, mtime))`
-//!   for a scope. Cheap; one round trip per fetch.
-//! - [`should_skip`] — true when the stamped row matches the
-//!   current fingerprint.
-//! - [`record_finished`] — UPSERT, called inside the same tx that
-//!   flushed the file's last batch.
-//!
-//! Why `(size, mtime)` not content hash: cheap to check, sufficient
-//! for export-shaped data ("download a new export, point me at it"),
-//! consistent with what mbox already does. Path is part of the
-//! cursor key, so a rename means re-ingest — the safe default.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,10 +8,6 @@ use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// Shared resume-cursor table. One row per `(scope, canonical_path)`.
-///
-/// Scope names should be `"<provider>/<feed>"` (e.g.
-/// `"google_takeout/maps_reviews"`); collisions across providers are
-/// the caller's responsibility to avoid.
 pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files (
     scope TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -56,8 +29,6 @@ pub struct FileFingerprint {
 }
 
 impl FileFingerprint {
-    /// One `stat`. Returns the fingerprint + canonical path string
-    /// for the file at `path`.
     pub fn of(path: &Path) -> Result<Self> {
         let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
         let mtime = meta
@@ -81,8 +52,6 @@ impl FileFingerprint {
     }
 }
 
-/// Pre-load every stamped fingerprint under `scope`, keyed by the
-/// canonical path. One HashMap hit per file vs N round trips.
 pub async fn load(pool: &SqlitePool, scope: &str) -> Result<HashMap<String, (u64, i64)>> {
     let rows = sqlx::query_as::<_, (String, i64, i64)>(
         "SELECT path, size_bytes, mtime_ns FROM ingested_files WHERE scope = ?",
@@ -134,7 +103,6 @@ pub async fn record_finished(
     Ok(())
 }
 
-/// One-shot convenience for callers that don't already own a tx.
 pub async fn record_finished_pool(
     pool: &SqlitePool,
     scope: &str,
@@ -146,8 +114,6 @@ pub async fn record_finished_pool(
     Ok(())
 }
 
-/// `DELETE FROM ingested_files WHERE scope = ?`. Use from a
-/// provider's `reset` path when wiping per-feed state.
 pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
     sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
         .bind(scope)
@@ -157,9 +123,6 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
     Ok(())
 }
 
-/// `DELETE FROM ingested_files WHERE scope LIKE ?`. Use from a
-/// provider's `reset` when wiping every scope it owns
-/// (e.g. `"google_takeout/%"`).
 pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
     sqlx::query("DELETE FROM ingested_files WHERE scope LIKE ?")
         .bind(format!("{prefix}%"))

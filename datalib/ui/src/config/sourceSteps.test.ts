@@ -1,11 +1,5 @@
 // The wizard's attachment cap: it has to appear on new Slack sources
 // and stay away from existing ones.
-//
-// `blob_size_limit_bytes` means "no limit" when absent, so the 5 MB
-// default is a policy this wizard imposes rather than a mirror of the
-// backend's. That makes the create/edit asymmetry the whole behavior —
-// and a silent one, since getting it wrong caps a source without
-// anything on screen saying so. Hence a test rather than a comment.
 
 import { describe, expect, it } from "vitest";
 

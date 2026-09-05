@@ -10,10 +10,6 @@ use datalib_etl::progress::{Progress, ProgressSink};
 
 /// What this step claims about one of its outputs: its content version
 /// now. Mirrors the wire `ArtifactState`.
-///
-/// A step that cannot derive a version for an output omits the claim
-/// entirely — the runner then content-hashes that output, which is
-/// always correct and always slower.
 #[derive(Debug, Clone)]
 pub struct OutputClaim {
     pub path: String,
@@ -49,7 +45,6 @@ impl Emitter {
         }
     }
 
-    /// The final outcome line the runner's subprocess protocol parses.
     pub fn outcome(&self, outputs: &[OutputClaim], failure: Option<&str>) {
         let outs: Vec<serde_json::Value> = outputs
             .iter()
@@ -69,9 +64,6 @@ impl Emitter {
         self.line(&serde_json::Value::Object(m));
     }
 
-    /// An etl-side [`Progress`] handle whose sink forwards onto this
-    /// emitter — the bridge that lets every existing provider report
-    /// through the DAG event stream unmodified.
     pub fn progress(&self) -> Progress {
         Progress::new(Arc::new(EmitterSink {
             emitter: self.clone(),

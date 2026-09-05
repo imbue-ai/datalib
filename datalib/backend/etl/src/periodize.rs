@@ -1,38 +1,9 @@
 //! Time-bucketing for chat-shaped translate steps.
-//!
-//! Chat providers (beeper, signal, the upcoming whatsapp and googlechat
-//! readers) all face the same problem: a long-lived conversation has
-//! tens of thousands of messages, and rendering it into a single
-//! markdown file makes every new message re-fingerprint the whole
-//! transcript — and turns the search-grid preview pane into a slow
-//! many-MB scroll. The fix every provider lands on is the same: split
-//! each chat into period-keyed buckets (`2024-03`, `2024-04`, …) and
-//! render one `.md` per bucket.
-//!
-//! This module owns the `Period` knob + its key derivation so all the
-//! providers agree on the same period_key strings, and a single CLI
-//! config schema works across them.
-//!
-//! Two derivation paths:
-//!
-//! * [`Period::strftime_fmt`] — for providers that bucket in SQL
-//!   (`strftime(<fmt>, ts/1000, 'unixepoch')` in a GROUP BY). Beeper
-//!   pre-buckets in SQLite this way.
-//! * [`Period::key_for_ms`] — for providers that bucket in Rust after
-//!   pulling rows out (signal decodes prost payloads, so the
-//!   bucketing can't happen in SQL).
-//!
-//! Both paths produce the same `period_key` strings, so a sidecar
-//! emitted by either provider lines up with the other.
 
 use anyhow::{bail, Result};
 use chrono::{Datelike, TimeZone, Utc};
 
 /// How many messages share one rendered markdown bucket.
-///
-/// The default a config should fall back to is [`Period::Month`] —
-/// matches what beeper has been shipping and is the right point on
-/// the granularity / file-count tradeoff for typical chat volumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Period {
     Month,
@@ -42,8 +13,6 @@ pub enum Period {
 }
 
 impl Period {
-    /// Parse a YAML config knob. `None` yields the default (`Month`),
-    /// so providers can pass `sync.period` through directly.
     pub fn from_config(s: Option<&str>) -> Result<Self> {
         Ok(match s.unwrap_or("month").to_ascii_lowercase().as_str() {
             "month" => Period::Month,
@@ -90,31 +59,6 @@ impl Period {
         "all"
     }
 
-    /// The `period_key` an item with **no timestamp** files under.
-    ///
-    /// Bucketing and `when_ts` answer different questions, and the
-    /// answers deliberately diverge for an undated item. `when_ts` is
-    /// data: it says when the thing happened, and for an undated item
-    /// the only honest value is null (see
-    /// `docs/dev/data_architecture_parse_and_render.md` §6). A
-    /// `period_key` is not data — it is a filing decision, the name of
-    /// the `.md` file the item is written into, and every item has to be
-    /// filed *somewhere* or it disappears from the rendered tree.
-    ///
-    /// So undated items keep filing under the epoch bucket, exactly
-    /// where they have always gone. The alternative — a distinct
-    /// `"undated"` key — is more expressive and costs more than it is
-    /// worth: `period_key` is an input to every provider's
-    /// `markdown_uuid` recipe, so a new key mints a **new document
-    /// identity**, retiring the uuid the old page had. That uuid is what
-    /// filed feedback, `entire_chat` links and the grid's row selection
-    /// point at. Changing where a row *files* is not worth breaking what
-    /// points at it, when the only thing actually wrong was the
-    /// timestamp — and that is now null.
-    ///
-    /// Call this instead of `key_for_ms(0)` so the decision is legible
-    /// at the callsite rather than looking like an `unwrap_or(0)` that
-    /// nobody thought about.
     pub fn key_for_undated(self) -> String {
         self.key_for_ms(0)
     }

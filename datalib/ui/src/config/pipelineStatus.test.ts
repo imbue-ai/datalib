@@ -1,11 +1,5 @@
 // The pipeline Status column's state machine.
 //
-// Two kinds of test here, and the second is the one that matters.
-//
-// **Snapshot cases** pin what a single (queue, runner-record) pair
-// means. Necessary, but weak: every wrong answer this file has produced
-// was legal at some instant and wrong as part of a sequence.
-//
 // **Timeline cases** replay an ordered series of snapshots — the ones a
 // polling grid actually sees across a sync — and assert properties of
 // the whole run: that the row reaches Running, that it ends on the real
@@ -197,9 +191,6 @@ describe("what a step can be run from", () => {
 // The sequence of frames a grid really sees across one "Sync a/raw",
 // including the two places the queue and the runner's record disagree
 // because they are fetched separately.
-//
-// Written as data so the properties below can be asserted over the
-// whole run rather than at one instant.
 const TIMELINE: { note: string; frame: Frame }[] = [
   {
     note: "clicked: the job exists, the worker has not claimed it, and the runner's record is still last run's",
@@ -329,12 +320,6 @@ describe("the sequence a sync actually produces", () => {
 // The pushed sequence: what arrives over `GET /api/sync/stream`, in the
 // order the worker sends it, with NO `/api/dag` poll landing in
 // between.
-//
-// This is the case the grid is judged on, because it is the fast path
-// and the one a person actually watches. The runner's record is
-// deliberately left stale throughout — describing the *previous* run,
-// closed — so that any reading which lets a polled record veto a pushed
-// one shows up here as a row stuck on "Queued".
 describe("the pushed sequence, with the polled record still stale", () => {
   // Last run's record: closed, and about a different run entirely.
   const stalePoll: DagRun = {
@@ -522,20 +507,6 @@ describe("a second sync of a row that has already run", () => {
   // The frame this exists for is the one `manager2-sync.spec.ts` caught
   // intermittently as
   // `went backwards: ["Queued","Succeeded","Running","Succeeded"]`.
-  //
-  // It only happens on a *re-*sync, which is why every timeline above
-  // missed it: they all start from a row with no history. Press Sync on
-  // a row that already succeeded once and, for as long as it takes
-  // `/api/dag` to catch up, three things are true at the same time —
-  // the queue says a job is running, the fetched record still describes
-  // the *previous* run (closed), and that record's per-step
-  // `current_state` is the previous run's terminal state.
-  //
-  // `effectiveRun` correctly synthesizes a live run from the queue, so
-  // the row is judged against a run in flight. But the `current_state`
-  // it then reads belongs to the run before. Being set at all was taken
-  // as "the runner has reached this step", the queued branch was
-  // skipped, and the row painted the *previous* run's Succeeded.
   const PREVIOUS: DagRun = {
     run_id: T.yesterday,
     started_at: T.yesterday,

@@ -1,18 +1,6 @@
 //! Provider-owned config schema for the `lightroom` source.
 //! Schema-only (serde + anyhow), so the orchestrator can name
 //! [`LightroomConfig`] without linking the provider.
-//!
-//! `lightroom` is purely file-backed: the input is an Adobe Lightroom
-//! Classic catalog (`*.lrcat`), which is an ordinary SQLite database.
-//! There is no API and no `sync:` block — `common.input_path` points at
-//! the catalog and everything else here is a filter or a key-selection
-//! knob.
-//!
-//! The engine behind it is deliberately generic ("mirror every table of
-//! a SQLite file into a doltlite store"); nothing in this schema is
-//! Lightroom-specific except the [`XMP_COLUMN_PATTERNS`] preset and the
-//! default of `id_global` in [`LightroomConfig::stable_key_columns`].
-//! See the provider crate's `INGEST.md`.
 
 use std::collections::BTreeMap;
 
@@ -23,11 +11,6 @@ use serde::{Deserialize, Serialize};
 /// bulky, wholly-derived metadata blobs in a Lightroom catalog: the
 /// serialized XMP packet Lightroom keeps per image, and the flattened
 /// search-index strings it rebuilds from the harvested EXIF/IPTC tables.
-///
-/// Everything here is reconstructible from the columns that remain, so
-/// dropping it costs fidelity of the *catalog file* but not of the
-/// *catalog's information*. On a real catalog `Adobe_AdditionalMetadata.xmp`
-/// alone is routinely the single largest column in the file.
 pub const XMP_COLUMN_PATTERNS: &[&str] = &[
     "Adobe_AdditionalMetadata.xmp",
     "AgMetadataSearchIndex.*SearchIndex",
@@ -59,26 +42,11 @@ pub struct LightroomConfig {
     pub exclude_columns: Vec<String>,
 
     /// Fold [`XMP_COLUMN_PATTERNS`] into [`Self::exclude_columns`].
-    ///
-    /// Off by default: a backup should be a faithful mirror unless the
-    /// user says otherwise. Turn it on when catalog size matters more
-    /// than being able to reconstruct the `.lrcat` byte-for-byte.
     pub skip_xmp: bool,
 
     /// Column names that, when present as a single-column UNIQUE index on
     /// a source table, are preferred over that table's declared primary
     /// key as the mirror's primary key. First match in this list wins.
-    ///
-    /// This is the answer to "what if the primary key changes". Lightroom
-    /// tables are keyed by `id_local INTEGER PRIMARY KEY` — a rowid alias
-    /// that Lightroom is free to renumber on a catalog upgrade or
-    /// optimize — alongside a stable `id_global UNIQUE NOT NULL` UUID.
-    /// Keying the mirror on `id_local` would turn a renumbering into
-    /// "every row deleted and re-added"; keying it on `id_global` turns
-    /// the same event into a one-column modification per row, which is
-    /// both a truthful diff and a cheap one to store.
-    ///
-    /// Set to `[]` to mirror each table's declared primary key verbatim.
     pub stable_key_columns: Vec<String>,
 
     /// Per-table primary-key override, `table -> [columns]`. Beats both
@@ -88,21 +56,9 @@ pub struct LightroomConfig {
 
     /// Take a consistent snapshot (`VACUUM INTO`) of the catalog before
     /// reading it, instead of reading the live file.
-    ///
-    /// On by default. Lightroom holds its catalog open — and in WAL mode
-    /// — while running, so reading the live file can otherwise observe a
-    /// torn view or fail on a lock. The snapshot is written to a temp
-    /// directory and deleted when the run ends.
     pub snapshot: bool,
 
     /// Collect unreachable chunks (`dolt_gc()`) at the start of each run.
-    ///
-    /// Off by default: it rewrites the whole chunk store, which is time a
-    /// routine no-op run shouldn't spend. Turn it on — or run it by hand
-    /// with the doltlite shell — when store size matters. It is not a
-    /// history trade-off: `dolt_log` and `dolt_history_*` survive intact,
-    /// and on a 3.3 MB catalog with two versions of history it took the
-    /// store from 5.2 MB to 1.3 MB.
     pub gc: bool,
 }
 
@@ -130,8 +86,6 @@ impl LightroomConfig {
         Ok(())
     }
 
-    /// The effective column-exclusion patterns: the configured list plus
-    /// the XMP preset when [`Self::skip_xmp`] is set.
     pub fn effective_excluded_columns(&self) -> Vec<String> {
         let mut out = self.exclude_columns.clone();
         if self.skip_xmp {
@@ -140,7 +94,6 @@ impl LightroomConfig {
         out
     }
 
-    /// Should this table be mirrored?
     pub fn wants_table(&self, table: &str) -> bool {
         self.include_tables.iter().any(|p| glob_match(p, table))
             && !self.exclude_tables.iter().any(|p| glob_match(p, table))
@@ -164,10 +117,6 @@ pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
 /// one character). Everything else is literal, and matching is
 /// case-sensitive — SQLite identifiers here come straight out of
 /// `sqlite_master`, so the user sees exactly what they must type.
-///
-/// Deliberately hand-rolled rather than pulling in `globset`: two
-/// metacharacters over identifier-shaped strings is the whole
-/// requirement, and the crate universe doesn't expose a glob crate today.
 pub fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();

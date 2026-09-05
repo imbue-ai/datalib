@@ -4,22 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live ChatGPT single-conversation download test.
-//!
-//! Hits real `chatgpt.com/backend-api` via `latchkey curl` (and the
-//! `latchkey-curl-impersonate` Rust shim that injects a Chrome TLS
-//! fingerprint), downloads ONE known conversation into a hermetic
-//! tempdir, and insta-snapshots a curated stable view. Documents the
-//! end-to-end live shape.
-//!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo; run with:
-//!
-//! ```sh
-//! export LATCHKEY_CURL=$(pwd)/datalib/backend/target/debug/latchkey-curl-impersonate
-//! cargo test -p datalib-etl-chatgpt --test chatgpt_live -- --ignored
-//! ```
-//!
-//! The target conversation is tied to the test author's chatgpt.com
-//! account; accept any title/content changes via `cargo insta review`.
 
 use std::time::Duration;
 

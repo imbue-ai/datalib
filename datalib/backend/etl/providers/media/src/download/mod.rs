@@ -1,15 +1,5 @@
 //! The `media` download side: walk a tree, work out what each audio,
 //! image, video and playlist file is, and record it.
-//!
-//! There is no render side — see the crate docs. This is the whole
-//! provider.
-//!
-//! The shape follows `pdf`: load the rescan cache, truncate the
-//! path-keyed tables so deletions fall out, walk, and do per-item work
-//! only for content we have not seen. What differs is what "per-item
-//! work" means. `pdf` classifies; here it is a container sniff, a
-//! payload-hash plan, and a metadata read — all of which are keyed on
-//! content, so N copies of one song are parsed once.
 
 pub mod db;
 pub mod kind;
@@ -159,13 +149,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // this path is marked as still indexed, so what remains in
         // `prev.paths` at the end is the set of rows to delete. One
         // pass, no second bookkeeping structure.
-        //
-        // Note this sits *after* the dataless and size guards, so a
-        // file that got evicted to the cloud or grew past `max_bytes`
-        // keeps its stale entry and loses its row. That is right: we
-        // did not index it this run, and while it is evicted we cannot
-        // verify what it holds. It comes back on the scan after it
-        // does.
         let cached = prev.paths.remove(&f.rel);
         let decision = if opts.force_rehash {
             StampDecision::Rehash
@@ -252,13 +235,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Reconcile last. Whatever is still in the cache was never visited,
     // so it is a path that is gone.
-    //
-    // Doing it here rather than up front is what makes an interrupted
-    // scan cheap: a run killed before this point leaves every row it
-    // had, and a stale `(mtime, size, inode, dev)` is exactly as good a
-    // cursor as a fresh one. The cost is the opposite window — rows for
-    // deleted files linger until a scan runs to completion — which is
-    // the safe direction of the two.
     let gone_files: Vec<String> = prev.paths.into_keys().collect();
     let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
     summary.removed = (opts.db.delete_files(&gone_files).await?
@@ -272,17 +248,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 /// A cloud placeholder: the file has a size but no allocated blocks, so
 /// its bytes are not here.
-///
-/// Reading one is not a cheap mistake — it asks Dropbox or iCloud to
-/// materialize the file, so a first scan of an evicted library would
-/// try to pull the whole thing down. Skipping is the safe default and
-/// every skip is counted into `dataless_skipped=`.
-///
-/// It is a heuristic: a filesystem that reports no block counts at all
-/// looks entirely evicted, which is why `skip_dataless` can be turned
-/// off. iCloud's `.icloud` eviction markers need no handling here —
-/// they are named `.track.mp3.icloud`, so `kind::accept` never visits
-/// them in the first place.
 #[cfg(unix)]
 fn is_dataless(md: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;

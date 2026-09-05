@@ -1,33 +1,4 @@
 //! DDL for the curated `wa_*` mirror tables.
-//!
-//! Each table holds columns verbatim from msgstore.db's corresponding
-//! table, with two changes:
-//!
-//! 1. The autoincrement `_id` and `*_row_id` columns are replaced
-//!    with stable identifiers (see [`crate`] docs for the rekey rules).
-//!    The internal `_id` is dropped entirely — it would just be noise
-//!    in dolt diffs since it renumbers on phone restore.
-//! 2. The (parent's `*_row_id` foreign keys are resolved to the parent's
-//!    stable PK columns. For example, `message_text.message_row_id` →
-//!    `(chat_jid, key_id, from_me)` matching the parent `wa_message`.
-//!
-//! Column types match SQLite's source schema (`INTEGER`, `TEXT`,
-//! `BLOB`, `REAL`). Doltlite supports the same types so re-typing
-//! isn't needed.
-//!
-//! Schema notes for new readers:
-//!
-//! - `wa_message.text_data` carries the raw message body for simple
-//!   text messages. For rich content (links, replies, media captions,
-//!   …) the body lives in `wa_message_text` / `wa_message_media` /
-//!   the add-on tables and `text_data` is null.
-//! - `wa_message_add_on.parent_chat_jid` etc. are pinned at download
-//!   time by joining the source's `parent_message_row_id` → `message`
-//!   → `(chat_jid, key_id, from_me)`. add-ons in WhatsApp model
-//!   reactions, polls, pinned-in-chat markers, etc.
-//! - `wa_media_files` is keyed by sha256 of the file bytes. Multiple
-//!   `wa_message_media` rows can point at the same file (forwards,
-//!   re-sends); the registry is the dedup.
 
 use uuid::Uuid;
 
@@ -287,8 +258,6 @@ pub fn whatsapp_reaction_uuid(source: &str, chat_jid: &str, key_id: &str, from_m
     .to_string()
 }
 
-/// Per-bucket document UUID. Stable for the lifetime of a
-/// `(chat, period_key)` pair regardless of how many times we re-render.
 pub fn whatsapp_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
     Uuid::new_v5(
         &WHATSAPP_UUID_NS,

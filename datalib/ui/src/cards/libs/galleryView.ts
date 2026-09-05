@@ -8,16 +8,6 @@
 // to a coding agent. Picking an entry REPLACES this card with the
 // chosen component via ctx.host.setSource, so the gallery is a
 // transient "what should this card be?" step, not a lingering column.
-//
-// Dev mode additionally shows each entry's card source and a footer
-// reminding that source can be typed straight into the chrome bar.
-//
-// Custom components come from the frontend store, whoever wrote them:
-// each `<name>.json` that is a component contributes one row, and its
-// stored `component_args` are what the row's card source passes. That
-// is why a custom component *can* take arguments here, unlike a builtin
-// — a builtin needing arguments still registers a parameter-less picker
-// (documentView → documentPickerView).
 import { watch } from "vue";
 import type { CardRender } from "../types";
 import {

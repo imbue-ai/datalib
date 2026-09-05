@@ -1,8 +1,4 @@
 //! Slack API transport: latchkey curl shellout with retry.
-//!
-//! Both `slack.com/api/` and `files.slack.com/` are covered by the
-//! `slack` service's `baseApiUrls` (latchkey ≥ 2.11.2), so a single
-//! credential signs both API calls and file downloads.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
@@ -145,12 +141,8 @@ pub async fn call_slack(
     })
 }
 
-// ---------------------------------------------------------------------------
 // File-download path: `latchkey curl` against files.slack.com.
-// ---------------------------------------------------------------------------
 
-/// End-of-channel flush. Delegates to the shared
-/// [`CasEdgeAccumulator::flush`] with a slack-specific row builder.
 pub async fn flush_channel_attachments(db: &RawDb, attach: &CasEdgeAccumulator) -> Result<()> {
     attach
         .flush(db.pool(), db.cas(), |message_uuid, file_id, blake3| {

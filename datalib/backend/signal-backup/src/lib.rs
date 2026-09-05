@@ -1,27 +1,6 @@
 //! `datalib-signal-backup` — read Signal-Android's new directory-format
 //! ("AEP-keyed Backups", as opposed to the classic 30-digit `.backup` file)
 //! snapshot directories.
-//!
-//! Port of the Python reference at `~/src/SignalTool/` (audited clean).
-//! Crypto + framing match `dump.py` and `decrypt.py` byte-for-byte:
-//!
-//! * `metadata` — AES-256-CTR with a 12-byte IV padded by four zeros to
-//!   form a 16-byte CTR block; key = HKDF(`20241011_SIGNAL_LOCAL_BACKUP_METADATA_KEY`,
-//!   K_B). Plaintext is `signal.backup.local.Metadata.backupId`.
-//! * `main` — AES-256-CBC + HMAC-SHA256 trailer over a gzip stream.
-//!   Keys = HKDF(`20241007_SIGNAL_BACKUP_ENCRYPT_MESSAGE_BACKUP:` || backup_id,
-//!   K_B), split into hmac_key || aes_key (32 + 32). After
-//!   decrypt+gunzip the payload is a length-delimited stream of
-//!   `signal.backup.Frame` messages.
-//! * `files` — plaintext, length-delimited
-//!   `signal.backup.local.FilesFrame` — the list of media filenames in
-//!   the (shared) `files/XX/<name>` tree.
-//! * attachments — AES-256-CBC + HMAC-SHA256 trailer; 64-byte local key
-//!   split as `aes(32) || hmac(32)`.
-//!
-//! Scope is intentionally narrow: this crate decrypts and surfaces
-//! `Frame`s + the raw file list. The provider that maps frames into the
-//! datalib schema (`datalib-etl-signal`) is a separate crate.
 
 use std::path::{Path, PathBuf};
 
@@ -97,9 +76,6 @@ impl Snapshot {
         }
     }
 
-    /// Iterate over raw (undecoded) length-delimited records in the
-    /// decrypted `main`. Useful when you need both `BackupInfo` and
-    /// `Frame` typed separately.
     pub fn raw_records(&self) -> RecordIter<'_> {
         RecordIter {
             buf: &self.decrypted_main,
@@ -114,31 +90,19 @@ impl Snapshot {
         &self.file_names
     }
 
-    /// The decrypted `backupId` from the `metadata` envelope. Exposed
-    /// for callers that want to derive `MEDIA_ID` keys themselves.
     pub fn backup_id(&self) -> &[u8] {
         &self.backup_id
     }
 
-    /// Path the snapshot was opened from.
     pub fn snapshot_dir(&self) -> &Path {
         &self.snapshot_dir
     }
 }
 
-/// Decrypt a `files/XX/<media_name>` attachment blob using its
-/// 64-byte local key (the value stored on the `FilePointer.LocatorInfo`
-/// frame field). Returns the plaintext bytes.
-///
-/// Layout: `iv(16) || ciphertext || hmac_sha256(hmac_key, iv||ciphertext)(32)`,
-/// AES-256-CBC with PKCS7 padding. `local_key` is split `aes(32) || hmac(32)`.
 pub fn decrypt_attachment(enc: &[u8], local_key: &[u8; 64]) -> Result<Vec<u8>> {
     decrypt_attachment_inplace(enc, local_key)
 }
 
-/// Filename Signal uses for a locally-stored attachment:
-/// `sha256_hex(plaintext_hash || local_key)`. Matches
-/// `dump.py:_local_media_name`.
 pub fn local_media_name(plaintext_hash: &[u8], local_key: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();

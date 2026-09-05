@@ -1,21 +1,4 @@
 //! Integration test for the API token gate (`datalib_http::auth`).
-//!
-//! This is the regression guard for issue #138 — an unauthenticated
-//! local API that any web page could drive into arbitrary code
-//! execution via `PUT /api/config` + `POST /api/sync/jobs`. It asserts
-//! the properties that keep that closed, against the real router:
-//!
-//!   - no credential → 401, on reads *and* on the write endpoints;
-//!   - a wrong token is not a near-miss — it's the same 401;
-//!   - each of the four accepted carriers (Bearer, `X-Datalib-Token`,
-//!     `?token=`, cookie) works;
-//!   - a document load that presents the token gets a session cookie
-//!     back, `HttpOnly` + `SameSite=Lax`, and `?token=` is redirected
-//!     away so it can't linger in history;
-//!   - `CorsLayer::permissive()` is gone, so a cross-origin page can't
-//!     read a response even if it somehow had a token;
-//!   - the agent guides stay readable without one (they're what tells
-//!     an agent how to authenticate).
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -64,7 +47,6 @@ async fn status(app: &axum::Router, req: Request<Body>) -> StatusCode {
     app.clone().oneshot(req).await.unwrap().status()
 }
 
-/// The cookie the gate mints, as a `name=value` pair ready to send back.
 fn session_cookie(set_cookie: &str) -> String {
     set_cookie
         .split(';')

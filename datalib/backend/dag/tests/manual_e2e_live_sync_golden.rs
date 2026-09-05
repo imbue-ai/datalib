@@ -4,119 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live end-to-end golden test for the `datalib-dag` pipeline.
-//!
-//! Config, file-based source data, and golden snapshots live OUTSIDE this
-//! repo — in the dir named by `DATALIB_MANUAL_E2E_DIR` (e.g.
-//! `~/data_liberation_manual_e2e_test_data`), versioned in a private repo so
-//! the (slightly sensitive) source data is never shared when this repo is
-//! open-sourced. That dir holds:
-//!
-//!   <DATALIB_MANUAL_E2E_DIR>/
-//!     dag.toml             ← the pipeline config (file sources point at sources/)
-//!     sources/             ← LinkedIn / Takeout / SMS … export data
-//!     snapshots/           ← the golden .snap tree (below)
-//!
-//! The runner is `manual_e2e_run.sh`, which lives next to this test in the code
-//! repo (it's code, not data); it sets `DATALIB_MANUAL_E2E_DIR` (defaulting
-//! to the canonical checkout) and invokes the test / `.update`.
-//!
-//! # History: what this is a port OF
-//!
-//! This test previously lived at `frankweiler/backend/sync/tests/` and drove
-//! the monolithic `frankweiler-sync` binary. That crate — and this test with
-//! it — was deleted in e905d252 when the pipeline moved to the DAG runner.
-//! Everything below the "Normalization" heading is carried over verbatim: it
-//! operates on the produced data tree, whose layout the migration did not
-//! change, which is why the golden `snapshots/` tree keeps the same shape.
-//!
-//! Two things genuinely had to change:
-//!
-//!   * **Invocation.** `datalib-dag <config> [--now] [--reset-and-redownload]`,
-//!     with the config as a POSITIONAL arg (there is no `--config`). The runner
-//!     resolves step commands like `datalib-step download slack_api` purely
-//!     through the child `PATH`, falling back to its own directory — so we run
-//!     it out of `//datalib/backend:bin`, which stages every binary under its
-//!     public dash-separated name, and pass no `--binary-dir`. See [`bin_dir`].
-//!   * **Where the run record comes from.** The old binary wrote an aggregate
-//!     `sync_summary_<now>.json` carrying per-source `stats`. `datalib-dag`
-//!     emits a `run_summary` NDJSON event on stderr instead, and it is
-//!     deliberately thin — per step: status, attempts, error, and each
-//!     output's `{path, version, changed}`. No per-source counts, because the
-//!     orchestrator is storage-agnostic by design and does not know sources
-//!     persist to doltlite.
-//!
-//!     The counts did not disappear, they moved to the source of record: each
-//!     stanza's `<stanza>/raw/entities.doltlite_db` has a `sync_runs` table
-//!     whose `summary` column carries `deltas` (per-table added/modified/
-//!     removed, computed from `dolt_diff_<table>`) and `cursors` (which
-//!     `sync_scope_state` scopes moved). The run-2 incrementality snapshot
-//!     therefore reads `sync_runs` per stanza rather than one aggregate file —
-//!     see [`incrementality_report`]. Same signal, correct grain.
-//!
-//! Spawns the runner against that `dag.toml` (with two test-only tweaks:
-//! per-run `data_root` and slack `refresh_window_days=30`), hitting real
-//! provider APIs through `latchkey curl`. Then snapshots the produced data
-//! tree, one `.snap` per file under `<DATALIB_MANUAL_E2E_DIR>/snapshots/`,
-//! mirroring the layout:
-//!
-//! The data root is grouped by stanza (`<stanza>/raw`, `<stanza>/rendered_md`)
-//! with aggregates under `system/`; the snapshot tree mirrors that:
-//!
-//!   snapshots/
-//!     manifest.snap                                       ← list of paths
-//!     tiny-slack/raw/raw_api/auth.test/run-_.snap
-//!     tiny-slack/rendered_md/<chat_uuid>/all.md.snap
-//!     tiny-slack/rendered_md/<chat_uuid>/all.grid_rows.json.snap
-//!     notion-api/raw/notion_official_page/created/events.snap
-//!     …
-//!
-//! Per-file `.snap`s mean `cargo insta review` walks them one at a time,
-//! diffs stay local to the file that actually changed, and the file
-//! layout under `snapshots/` mirrors what the pipeline wrote.
-//!
-//! Normalization:
-//!   * `_recorded_at`, `duration_ms`, `_item_hashes`, `request_id`,
-//!     `fetched_at`, `last_edited_time`, `created_time`, `cache_ts`,
-//!     `updated`, and `source_fingerprint` keys keep their position but
-//!     get their value replaced with `"[redacted]"`. Same for the
-//!     non-deterministic dolt `commit_hash`, the `load.write_lock` timings
-//!     (`avg/total_hold_ms`, `avg/total_wait_ms`), and the extract-metrics
-//!     per-db byte sizes (`bytes_before/after/delta`) — row counts carry the
-//!     real signal there.
-//!   * The tempdir `data_root` prefix is replaced with the stable token
-//!     `<data_root>` wherever it appears in a path string, so a path keeps its
-//!     meaningful suffix (`<data_root>/tiny-slack/raw/entities.doltlite_db`) without
-//!     the per-run `/var/folders/…/.tmpXXXX` churn.
-//!   * `source_fingerprint:` lines in `.md` frontmatter get the same
-//!     treatment.
-//!   * `run-<timestamp>` filename segments collapse to `run-_`.
-//!   * `conversations.list` and `users.list` slack endpoints are dropped
-//!     entirely — they're workspace-wide listings that leak unrelated
-//!     channels/users and churn on every join/leave.
-//!   * Binary media files become `<binary N bytes>` markers.
-//!
-//! The aggregate index + qmd under `system/` are deliberately skipped —
-//! too noisy / not deterministic (the doltlite commit hashes churn).
-//!
-//! Tagged `manual` + `external` in Bazel and `#[ignore]` in cargo. Easiest
-//! path is `manual_e2e_run.sh` next to this test (it sets the env var and
-//! forwards creds):
-//!
-//! ```sh
-//! datalib/backend/dag/manual_e2e_run.sh           # run + diff
-//! datalib/backend/dag/manual_e2e_run.sh --update  # accept new goldens
-//! ```
-//!
-//! Bazel-only — there is no cargo path, because `datalib-step` is a
-//! bazel-only target and the runner needs it on `PATH`.
-//!
-//! To check the config alone — no network, no credentials, seconds not
-//! minutes — run the offline sibling instead:
-//!
-//! ```sh
-//! bazel test //datalib/backend/migrate_config:config_examples_test \
-//!     --test_arg=--ignored --test_env=DATALIB_MANUAL_E2E_DIR
-//! ```
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -132,8 +19,6 @@ use walkdir::WalkDir;
 /// file the path points at) while killing the per-run tempdir churn.
 static DATA_ROOT: OnceLock<String> = OnceLock::new();
 
-/// Replace the captured `data_root` prefix in `s` with `<data_root>`.
-/// A no-op until `DATA_ROOT` is set at the top of the test.
 fn norm_data_root(s: &str) -> String {
     match DATA_ROOT.get() {
         Some(dr) => s.replace(dr.as_str(), "<data_root>"),
@@ -141,12 +26,10 @@ fn norm_data_root(s: &str) -> String {
     }
 }
 
-/// Collapse the volatile query string of any AWS S3 pre-signed URL to a stable
-/// `?<presigned>` token, preserving the base URL (which file). Notion (and any
-/// S3-backed provider) re-signs these on every fetch, so the query — the
-/// `X-Amz-Signature`, `-Date`, `-Credential`, `-Security-Token`, `-Expires` —
-/// rotates each run while the path stays put. Handles both a bare value (JSON)
-/// and a URL embedded in `![alt](…)` markdown (terminated by `)`/`"`/space).
+/// Collapse the volatile query string of an AWS S3 pre-signed URL to a stable
+/// `?<presigned>` token, keeping the base URL. S3-backed providers re-sign on
+/// every fetch, so the signature and expiry rotate while the path stays put.
+/// Handles a bare value and one embedded in `![alt](…)`.
 fn scrub_presigned(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -163,7 +46,6 @@ fn scrub_presigned(s: &str) -> String {
     out
 }
 
-/// Per-string snapshot normalization: data_root prefix + pre-signed URLs.
 fn normalize_str(s: &str) -> String {
     scrub_presigned(&norm_data_root(s))
 }
@@ -203,17 +85,13 @@ const VOLATILE_KEYS: &[&str] = &[
     "last_edited_time",
     "created_time",
     "cache_ts",
-    // NB: `updated` is deliberately NOT redacted here. It's per-fetch
-    // bookkeeping that providers embed in their payload (Slack's
-    // channel/user `updated` epoch); rather than paper over it in the
-    // test, the extract pipeline splits it into the
-    // `volatile_payload` sidecar (which this dump excludes) so it never
-    // reaches a content table. See data_architecture_ingestion.md
-    // §"Volatile-field split". If a NEW provider's volatile `updated`
-    // shows up as golden churn, split it at the source — don't re-add it
-    // here.
-    // Fields of `sync_summary_<now>.json` that don't reproduce
-    // byte-identically across runs.
+    // NB: `updated` is deliberately NOT redacted. It is per-fetch bookkeeping
+    // that the pipeline splits into the `volatile_payload` sidecar (which this
+    // dump excludes), so it never reaches a content table. If a new provider's
+    // volatile `updated` shows up as golden churn, split it at the source —
+    // don't re-add it here.
+
+    // Fields of `sync_summary_<now>.json` that don't reproduce byte-identically.
     "started_at",
     "finished_at",
     "duration_secs",
@@ -235,17 +113,13 @@ const VOLATILE_KEYS: &[&str] = &[
     // "now" on every fetch attempt, so they churn on every run even
     // when the upstream payload is byte-identical.
     "last_attempt_at",
-    // NB: `captured_at` was here, filed under the same heading. Nothing
-    // in the tree stamps a `captured_at` to "now" — checked 2026-09-01,
-    // the only emitter is `media_visual.captured_at`, which is the
-    // moment the shutter opened, parsed out of fixed EXIF bytes. It is
-    // as deterministic as a blake3, and redacting it meant the golden
-    // could not have caught a regression in EXIF timestamp parsing —
-    // including the offset handling that `media`'s DOWNLOAD.md calls
-    // out as its one deviation from the repo timestamp convention.
-    // CAS blob "first stored" wall-clock stamp (the `blobs` table's
-    // `first_seen_at`). Identical bytes (content-addressed by blake3) land at
-    // the same PK, but the timestamp is whenever this run first wrote them.
+    // NB: `captured_at` was here under the same heading and should not be —
+    // the only emitter is `media_visual.captured_at`, the moment the shutter
+    // opened, parsed out of fixed EXIF bytes. Redacting it meant the golden
+    // could not catch a regression in EXIF timestamp parsing.
+
+    // CAS blob "first stored" wall-clock stamp. Identical bytes land at the
+    // same PK, but the timestamp is whenever this run first wrote them.
     "first_seen_at",
     // Resume-cursor / bookkeeping wall-clock stamps: `sync_scope_state`'s
     // `last_finished_at` + `after` (real now when the scope ran, not the
@@ -255,12 +129,10 @@ const VOLATILE_KEYS: &[&str] = &[
     "last_finished_at",
     "after",
     "last_seen_at",
-    // GitLab user object's `local_time` — the user's *current* local time
-    // ("4:52 PM"), so it ticks every minute. Upstream content, but volatile by
-    // nature. `last_activity_on` is the same class one granularity coarser:
-    // the date you last used GitLab, so it advances every day you do, and any
-    // two runs either side of midnight disagree. Genuine upstream data, but it
-    // tracks the observer rather than the observed.
+    // GitLab's `local_time` is the user's *current* local time, so it ticks
+    // every minute; `last_activity_on` is the same class one granularity
+    // coarser. Genuine upstream data that tracks the observer, not the
+    // observed.
     "local_time",
     "last_activity_on",
     // Notion file blocks carry a pre-signed S3 link the API re-signs on every
@@ -298,13 +170,6 @@ const VOLATILE_KEYS: &[&str] = &[
     // churns run-to-run even when the scanned bytes are identical, and
     // `scanner_version` is redacted so a version bump doesn't churn the
     // golden.
-    //
-    // The per-machine fields (mtime/ctime, inode, dev) used to need
-    // redacting here too, because fsindex kept its rescan cursor in the
-    // scan store. It no longer does — that is host state and lives in
-    // `datalib_etl::fingerprint_cache` — so nothing machine-specific
-    // reaches the golden in the first place. The names below are kept
-    // because other providers' stores still carry them.
     "mtime_ns",
     "ctime_ns",
     "inode",
@@ -330,8 +195,6 @@ const REPO_VOLATILE_KEYS: &[&str] = &[
     "updated_at",
 ];
 
-/// A JSON object is a GitHub repo object if it carries both `full_name` and
-/// `default_branch` — distinctive enough to scope `REPO_VOLATILE_KEYS` to it.
 fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
     map.contains_key("full_name") && map.contains_key("default_branch")
 }
@@ -339,18 +202,6 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
 /// table. Applied in [`dump_doltlite_db`], which knows the table name for
 /// certain — no shape-sniffing required.
-///
-/// This exists because the wall-clock stamps that churn worst live in the
-/// shared bookkeeping tables (`SHARED_DDL`: `sync_runs`, `sync_scope_state`,
-/// `sync_scope_config`), where a globally-scoped redaction would be wrong.
-/// `updated_at` is a perfectly good *content* field elsewhere — a GitHub
-/// comment's edit time, a GitLab note's — so blanket-redacting it would mask
-/// real upstream change. Same reasoning as `REPO_VOLATILE_KEYS` being scoped
-/// to repo objects, but keyed on the table rather than guessed from the row.
-///
-/// `sync_scope_config.updated_at` is re-stamped on every run that satisfies
-/// its scope config, so without this every API-backed source contributes a
-/// spurious one-line diff to every single bake.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updated_at"])];
 
 const REDACTED: &str = "[redacted]";
@@ -358,48 +209,24 @@ const REDACTED: &str = "[redacted]";
 /// Path components whose entire contents we deliberately omit. Slack's
 /// workspace-wide listings: every channel the user is in, every user in
 /// the workspace. Don't belong in a committed golden.
-///
-/// `events/` is the per-source JSONL wire-event tape (see
-/// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)"). Every line
-/// carries a wall-clock `_recorded_at`, so the files are non-deterministic
-/// across runs and would dominate a diff with churn that says nothing
-/// about extract correctness.
 const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "events"];
 
-/// External, out-of-repo home for this manual test's `config.toml`, the
-/// file-based `sources/`, and the golden `snapshots/`. Kept outside the repo
-/// so the (slightly sensitive) source data is never shared when the repo is
-/// open-sourced; versioned separately in a private repo. `manual_e2e_run.sh`
-/// (in the code repo) sets `DATALIB_MANUAL_E2E_DIR` and invokes this test.
-/// `None` when unset.
-///
-/// Exactly one name, deliberately. The pre-rename `FRANKWEILER_MANUAL_E2E_DIR`
-/// is NOT accepted: a fallback to a stale name keeps a stale shell profile
-/// silently working, which is how you end up with two documented spellings
-/// and no signal that one is wrong.
+/// External, out-of-repo home for this test's `config.toml`, its file-based
+/// `sources/`, and the golden `snapshots/` — kept outside the repo so the
+/// source data is never shared when the repo is open-sourced.
+/// `manual_e2e_run.sh` sets `DATALIB_MANUAL_E2E_DIR`; `None` when unset.
 fn e2e_dir() -> Option<PathBuf> {
     std::env::var("DATALIB_MANUAL_E2E_DIR")
         .ok()
         .map(PathBuf::from)
 }
 
-/// Base directory for golden snapshots. Resolves to `<e2e_dir>/snapshots`
-/// (absolute, so insta reads/writes there directly) when the data dir is
-/// configured, else the legacy in-tree `snapshots/` next to this file.
 fn snap_base() -> PathBuf {
     e2e_dir()
         .map(|d| d.join("snapshots"))
         .unwrap_or_else(|| PathBuf::from("snapshots"))
 }
 
-/// Resolve a bazel-built binary from the test's runfiles tree, where it is
-/// staged by a `data` dep in BUILD.bazel.
-///
-/// Deliberately runfiles-based rather than a `$(rootpath …)`-in-`env` string:
-/// a rootpath is workspace-relative, and the test's cwd is not the workspace
-/// root under every bazel config — the same trap documented at length in
-/// `datalib/backend/core/tests/fixture_db_snapshot.rs`. The env override is
-/// kept as an escape hatch for running against a hand-built binary.
 fn bin_dir() -> PathBuf {
     if let Ok(p) = std::env::var("DATALIB_BINARY_DIR") {
         return PathBuf::from(p);
@@ -425,12 +252,9 @@ fn bin_dir() -> PathBuf {
 }
 
 /// Root for this run's `data_root`, persisted pytest-`tmp_path`-style: each
-/// run gets its own dir under a stable base, and only the most recent
-/// [`KEEP_RUNS`] are retained. Lets you peek at the last few runs' working
-/// doltlite DBs / rendered output (e.g. to inspect a `dolt_diff_<table>`
-/// warning with the doltlite client) without unbounded disk growth. Unlike a
-/// `tempfile` tempdir these survive the process — including when a snapshot
-/// assertion panics mid-run.
+/// run gets its own dir and only the most recent [`KEEP_RUNS`] are kept, so
+/// you can inspect the last few runs' doltlite DBs without unbounded disk
+/// growth. Unlike a tempdir these survive a panic mid-run.
 fn persistent_run_root() -> PathBuf {
     /// How many recent runs to keep (this run + the previous KEEP_RUNS-1).
     const KEEP_RUNS: usize = 3;
@@ -539,11 +363,6 @@ fn manual_e2e_live_sync_golden() {
     // file. `run_summary` is far thinner, so snapshotting it wholesale would
     // buy little; assert the two things it CAN still tell us instead, both of
     // which fail loudly rather than silently.
-    //
-    // 1. Every declared step ran and succeeded. Catches a source that got
-    //    skipped, blocked behind a failed dep, or quietly dropped from the
-    //    config — none of which a per-file snapshot diff would flag as
-    //    anything but "files went missing".
     assert_step_statuses_ok(&summary1);
     // 2. The step-id set matches the config. Catches the reverse: a step
     //    silently added or renamed.
@@ -573,13 +392,6 @@ fn manual_e2e_live_sync_golden() {
     // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
     // walk below). `system/` must NOT be tagged — job logs are operational
     // history, not rebuildable from raw.
-    //
-    // One tag at `unified_index/`, not one per index: a CACHEDIR.TAG covers
-    // everything beneath it, so this excludes `grid/` and `qmd/` together and
-    // does not depend on which of them a given run happened to produce. Both
-    // index steps write it (`grid_index.rs`, `qmd_index.rs`); the cheap pin on
-    // that is `grid_index_marks_the_index_tree_as_derived_cache` in
-    // datalib_step, so a regression does not wait for a live run to surface.
     assert!(
         data_root.join("unified_index/CACHEDIR.TAG").is_file(),
         "unified_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
@@ -610,13 +422,10 @@ fn manual_e2e_live_sync_golden() {
     }
     manifest.sort();
 
-    // Prune orphaned `.snap` files left behind when the set of produced
-    // files changes (e.g. a renderer migration that changes output
-    // paths). insta's own `INSTA_UNREFERENCED=delete` is a cargo-insta
-    // feature that doesn't fire under `bazel run` and wouldn't scan our
-    // external `snapshot_path` tree anyway — so we prune ourselves,
-    // keyed off the manifest above. Only in update mode: a check run
-    // surfaces the change through the `manifest` snapshot diff instead.
+    // Prune snapshots orphaned when the set of produced files changes.
+    // insta's `INSTA_UNREFERENCED=delete` is a cargo-insta feature that does
+    // not fire under `bazel run` and would not scan our external snapshot
+    // tree anyway. Update mode only.
     prune_orphan_snapshots(&manifest);
 
     // Manifest pins which files we expect to find. Catches additions /
@@ -629,20 +438,6 @@ fn manual_e2e_live_sync_golden() {
     });
 
     // ── Second run: incrementality check ──────────────────────────────
-    //
-    // Run the same sync again against the now-populated data_root.
-    // A healthy incremental sync should make a small number of upstream
-    // requests, produce small `deltas` per source, and advance every
-    // `sync_scope_state` scope by the same wall-clock interval. A
-    // regression that broke incrementality (e.g. the gitlab+github
-    // `full_sync: true` override that bit us recently) would show up
-    // here as `requests` and `deltas.<table>.added` ballooning back to
-    // first-run scale.
-    //
-    // Snapshot redactions are tuned for this purpose: timestamps
-    // (`elapsed_ms`, `network_seconds`, cursor `before`/`after`) get
-    // [redacted], but per-source `stats` counts are PRESERVED — those
-    // are precisely the numbers that prove (or break) incrementality.
     let now2 = "2026-05-21T18:05:00Z";
     let run2 = run_pipeline(&bin, &cfg_path, now2, &[]);
     assert!(
@@ -653,12 +448,10 @@ fn manual_e2e_live_sync_golden() {
     );
     assert_step_statuses_ok(&run2.run_summary().expect("run 2 run_summary"));
 
-    // Read the incrementality signal from each stanza's own `sync_runs` table
-    // rather than the runner's summary — see the module header for why it
-    // lives there now. `strip_volatile_for_incrementality` is unchanged from
-    // the pre-DAG test: it redacts wall-clock jitter (`elapsed_ms`,
-    // `network_seconds`, cursor `before`/`after`, `commit_hash`) while
-    // PRESERVING the counts, which are the whole point of this snapshot.
+    // The incrementality signal comes from each stanza's own `sync_runs`
+    // table, not the runner's summary. `strip_volatile_for_incrementality`
+    // redacts wall-clock jitter while preserving the counts, which are the
+    // whole point of this snapshot.
     let mut report = incrementality_report(&data_root, &stanzas);
     strip_volatile_for_incrementality(&mut report);
     insta::with_settings!({
@@ -668,41 +461,12 @@ fn manual_e2e_live_sync_golden() {
     }, {
         assert_json_snapshot!("sync_summary_run2_incrementality", report);
     });
-    // On slack, read `messages` in that snapshot with care: it is the one
-    // count here that moves without anything being wrong. `rewrite_config`
-    // patches `refresh_window_days = 30` into the slack step, so run 2
-    // re-queries the trailing 30 days on top of its forward walk, and
-    // `messages` is however much DM/channel traffic happens to fall inside
-    // that window on the day of the bake. It was 15 on the 2026-08-31 bake,
-    // all of them in one DM; every other conversation's newest message
-    // predated the floor, so their refresh pass returned nothing.
-    //
-    // The counts that must stay at zero are the content deltas. If those are
-    // zero and only `messages` moved, incrementality is intact. To confirm
-    // from a run's own logs rather than by reasoning: `slack_history_page`
-    // prints one line per request, and the refresh pass is the one carrying
-    // `latest = <watermark>` — the forward walk has no `latest` at all.
+    // On slack, read `messages` with care: it is the one count here that
+    // moves without anything being wrong, because `refresh_window_days = 30`
+    // makes run 2 re-query the trailing 30 days and whatever traffic fell
+    // inside that window on the day of the bake.
 
     // ── Third run: --reset-and-redownload content stability ───────────
-    //
-    // Wipe every entity + bookkeeping table and re-download every row
-    // from upstream. The CONTENT tables must come back byte-identical:
-    // re-fetching the same upstream object must land the same bytes at
-    // the same PK, so `dolt_diff_<t>` (and incremental render) reflect
-    // real upstream change only. Any field that drifts across an
-    // identical re-fetch is per-fetch bookkeeping leaking into a content
-    // payload — it belongs in the `volatile_payload` sidecar (see
-    // data_architecture_ingestion.md §"Volatile-field split"), and THIS
-    // is the check that surfaces it.
-    //
-    // We compare RAW (un-redacted) content so a field that should have
-    // been split — but wasn't — shows up as drift instead of being
-    // masked by `strip_volatile`. Bookkeeping sidecars, `sync_runs`, and
-    // `sync_scope_state` legitimately change across a reset and are
-    // excluded by `content_tables`.
-    //
-    // Scoped to the providers that have adopted the split. Add a DB here
-    // as each provider migrates; the long-term goal is every provider.
     let stability_dbs = ["tiny-slack/raw/entities.doltlite_db"];
     // Skip (loudly) any db this config didn't produce, so a reduced config via
     // DATALIB_TEST_CONFIG doesn't crash here. On the full config a missing db
@@ -731,12 +495,10 @@ fn manual_e2e_live_sync_golden() {
 
     for (name, before_v) in &before {
         let after_v = content_tables(&data_root.join(name));
-        // Report a PATH-LEVEL diff, not `assert_eq!` on the two whole Values.
-        // These are multi-megabyte structures; the stock assertion prints both
-        // in full, which is unreadable — and worse, actively misleading, since
-        // eyeballing two offset 2MB dumps invites you to "find" differences
-        // that are only misalignment. Say exactly which row and which JSON
-        // path moved.
+        // A path-level diff, not `assert_eq!` on two whole Values: these
+        // are multi-megabyte structures, and eyeballing two offset 2MB
+        // dumps invites you to "find" differences that are only
+        // misalignment.
         let drifts = json_diff_paths(before_v, &after_v, DRIFT_REPORT_LIMIT);
         assert!(
             drifts.is_empty(),
@@ -757,13 +519,6 @@ fn manual_e2e_live_sync_golden() {
 /// the message becomes the thing that hides the answer.
 const DRIFT_REPORT_LIMIT: usize = 40;
 
-/// Structural diff of two JSON values: returns human-readable
-/// `path: before=… after=…` lines for every leaf that differs.
-///
-/// Arrays of objects carrying an `id` are matched BY ID rather than by
-/// position, so one inserted row doesn't cascade into "everything after this
-/// differs". That cascade is exactly the failure mode that makes a naive diff
-/// of these dumps untrustworthy.
 fn json_diff_paths(a: &Value, b: &Value, limit: usize) -> Vec<String> {
     fn short(v: &Value) -> String {
         let s = match v {
@@ -870,19 +625,12 @@ fn json_diff_paths(a: &Value, b: &Value, limit: usize) -> Vec<String> {
 }
 
 /// One invocation of `datalib-dag`, with its stderr captured.
-///
-/// stderr carries both the NDJSON event stream and the steps' forwarded
-/// logs, so we keep it whole: [`PipelineRun::run_summary`] mines the one
-/// line we assert on, and [`PipelineRun::stderr_tail`] surfaces the rest
-/// when something fails.
 struct PipelineRun {
     status: std::process::ExitStatus,
     stderr: String,
 }
 
 impl PipelineRun {
-    /// The single `{"event":"run_summary",…}` line. `None` if the runner died
-    /// before the scheduler finished (a crash, or a second SIGINT).
     fn run_summary(&self) -> Option<Value> {
         self.stderr
             .lines()
@@ -891,28 +639,12 @@ impl PipelineRun {
             .find(|v| v.get("event").and_then(Value::as_str) == Some("run_summary"))
     }
 
-    /// Last `n` stderr lines, for failure messages. The runner forwards every
-    /// step's stderr here, so this is where the actual provider error is.
-    ///
-    /// A tail answers "how did this end", which is the wrong question for a
-    /// run that wedged in the middle: a 14-minute stall at minute 4 of 18
-    /// leaves a tail that looks perfectly healthy. Issue #136 tracks adding
-    /// the complementary view — the log lines followed by the longest
-    /// silences, with context — to this report. Until then, the run's full
-    /// stream is persisted next to the data (see [`run_pipeline`]) and
-    /// `scripts/dag_profile.py` will find the gaps.
     fn stderr_tail(&self, n: usize) -> String {
         let lines: Vec<&str> = self.stderr.lines().collect();
         lines[lines.len().saturating_sub(n)..].join("\n")
     }
 }
 
-/// Spawn `datalib-dag <config> --now <now> [extra…]`.
-///
-/// The config is a POSITIONAL arg — there is no `--config` flag. stderr is
-/// captured (not inherited) because that is where the NDJSON run record goes;
-/// it is echoed on failure via [`PipelineRun::stderr_tail`], and in full when
-/// `--nocapture` is in play and the test fails.
 fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> PipelineRun {
     eprintln!("[test] run: {} --now {now} {extra_args:?}", bin.display());
     let out = Command::new(bin)
@@ -930,8 +662,6 @@ fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> 
     // without this the whole event stream is discarded on a *successful*
     // run and only the last 40 lines survive a failure — which is precisely
     // when you want to ask "why did that take 18 minutes?".
-    //
-    //   scripts/dag_profile.py <run_root>/<now>.ndjson
     let log = cfg_path
         .parent()
         .unwrap_or(Path::new("."))
@@ -948,12 +678,6 @@ fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> 
     }
 }
 
-/// Fail unless every step in a `run_summary` reached `succeeded`.
-///
-/// A non-zero exit already fails the run, but this catches the subtler
-/// shapes the exit code alone would let through on a green run — and names
-/// the offending step instead of leaving you to diff 2000 snapshots to find
-/// which source went quiet.
 fn assert_step_statuses_ok(summary: &Value) {
     let steps = summary
         .get("steps")
@@ -988,8 +712,6 @@ fn assert_step_statuses_ok(summary: &Value) {
     );
 }
 
-/// Sorted step ids from a `run_summary`, one per line — the snapshot body that
-/// pins which steps the config declared.
 fn step_id_list(summary: &Value) -> String {
     let mut ids: Vec<&str> = summary
         .get("steps")
@@ -1002,28 +724,6 @@ fn step_id_list(summary: &Value) -> String {
     ids.join("\n")
 }
 
-/// Per-stanza incrementality record, built from each source's own
-/// `sync_runs` table — `{stanza: {status, summary}}` for that stanza's most
-/// recent run.
-///
-/// `sync_runs.summary` is where the counts live: `deltas` (per-table
-/// added/modified/removed, from `dolt_diff_<table>`) plus `cursors` (the
-/// `sync_scope_state` scopes that moved). A regression that broke
-/// incrementality — the `full_sync: true` override that bit us once — shows up
-/// as `deltas.<table>.added` back at first-run scale.
-///
-/// Only the API-backed providers stamp `sync_runs` — as of writing, the eight
-/// that route their download through `DownloadRun`: slack, github, gitlab,
-/// notion, claude, chatgpt, email, beeper. File-backed sources (carddav,
-/// linkedin, google_takeout, sms_backup_restore, fsindex) read a local export
-/// and never open a run, so their table is present but empty. That is the
-/// right answer rather than a gap: incrementality here means "didn't re-fetch
-/// from upstream", and there is no upstream to be incremental about.
-///
-/// Every stanza is recorded either way — a source going quiet must move this
-/// snapshot, not vanish from it — but with an explicit marker string instead
-/// of a bare `null`, so a reader can tell "nothing to report" from "something
-/// broke". The two are distinguished.
 fn incrementality_report(data_root: &Path, stanzas: &[String]) -> Value {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1042,8 +742,6 @@ fn incrementality_report(data_root: &Path, stanzas: &[String]) -> Value {
     Value::Object(out)
 }
 
-/// The highest-`run_id` row of `sync_runs`, as `{status, summary}` with
-/// `summary` parsed from its JSON text so the diff stays at JSON granularity.
 async fn latest_sync_run(path: &Path) -> Value {
     use std::str::FromStr;
 
@@ -1083,22 +781,12 @@ async fn latest_sync_run(path: &Path) -> Value {
 
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison:
-///
-/// * `sync_runs` — the audit log; a reset adds a row by definition.
-/// * `sync_scope_state` — the resume cursor.
-/// * `sync_scope_config` — the recorded scope config, carrying a wall-clock
-///   `updated_at` that is re-stamped on every run. Missing from this list
-///   originally, which made the stability assertion fail on a pure
-///   timestamp — a false positive that looked like a real content leak.
 const NON_CONTENT_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
 
 /// Dump only the entity *content* tables of a doltlite DB for the
 /// --reset-and-redownload stability assertion: drops every
 /// `*_bookkeeping` sidecar (per-fetch stamps + the `volatile_payload`
 /// split-outs) plus [`NON_CONTENT_TABLES`].
-///
-/// Deliberately NOT volatile-redacted: the whole point is to catch a
-/// field that drifts on re-fetch, which `strip_volatile` would mask.
 fn content_tables(path: &Path) -> Value {
     let mut v = dump_doltlite_db(path);
     if let Value::Object(map) = &mut v {
@@ -1130,12 +818,9 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         {
             continue;
         }
-        // Doltlite leaves behind sidecar lock files (e.g.
-        // `.foo.doltlite_db-lock`) for in-process flock coordination.
-        // They're ephemeral, content-free, and would clutter goldens
-        // with hidden-dotfile noise. Skip anything whose name ends in
-        // `-lock`. Also skip the constant `CACHEDIR.TAG` marker (backup
-        // hint, not rendered content — asserted separately above).
+        // Doltlite's sidecar `-lock` files are ephemeral and
+        // content-free; `CACHEDIR.TAG` is a backup hint asserted
+        // separately. Neither belongs in a golden.
         if entry
             .file_name()
             .to_str()
@@ -1173,12 +858,9 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
     }
 }
 
-/// Delete per-stanza `.snap` files (those under a `raw/` or `rendered_md/`
-/// segment) that don't correspond to a key in `manifest` — orphans from a
-/// prior run whose produced paths have since changed. The top-level meta snaps
-/// (`manifest`, `sync_summary*`) are left untouched. No-op outside update mode
-/// (a check run surfaces the change via the `manifest` snapshot diff instead,
-/// and must never mutate the version-controlled golden).
+/// Delete per-stanza `.snap` files that no longer correspond to a manifest
+/// key — orphans from a run whose produced paths have since changed. No-op
+/// outside update mode, which must never mutate the version-controlled golden.
 fn prune_orphan_snapshots(manifest: &[String]) {
     if !insta_update_mode() {
         return;
@@ -1197,12 +879,9 @@ fn prune_orphan_snapshots(manifest: &[String]) {
         if p.extension().and_then(|e| e.to_str()) != Some("snap") {
             continue;
         }
-        // Snapshot path mirrors the data layout: a file at
-        // `<base>/<stanza>/<sub>/<canonical_rel>.snap` corresponds to manifest
-        // key `<stanza>/<sub>/<canonical_rel>`. Only the per-stanza tree snaps
-        // are managed by the manifest; the top-level meta snaps aren't keyed
-        // there, so we only ever prune snaps living under a `raw/` or
-        // `rendered_md/` path segment.
+        // Snapshot path mirrors the data layout, so only the per-stanza
+        // tree snaps are manifest-keyed — hence pruning only under a `raw/`
+        // or `rendered_md/` segment.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
         let is_tree_snap = key
@@ -1225,8 +904,6 @@ fn insta_update_mode() -> bool {
     )
 }
 
-/// Recursively remove directories under `dir` that became empty after
-/// pruning (leaves `dir` itself in place).
 fn remove_empty_dirs(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -1245,12 +922,10 @@ enum SnapValue {
     Text(String),
 }
 
-/// File → snapshot payload. JSONL is parsed line-by-line, sorted, and
-/// stripped of volatile fields. JSON likewise. Markdown is text with
-/// frontmatter redactions. `.doltlite_db` files are opened and dumped
-/// as `{table_name: [rows]}` JSON so the goldens carry the actual raw
-/// payload contents (lets the TNG fixture pipeline reuse the captured
-/// rows as seed data). Anything else (media) becomes a size marker.
+/// File → snapshot payload. JSONL and JSON are parsed, sorted and stripped of
+/// volatile fields; markdown is text with frontmatter redactions;
+/// `.doltlite_db` files are dumped as `{table: [rows]}` so the goldens carry
+/// the actual raw payloads. Anything else becomes a size marker.
 fn summarize_file(path: &Path) -> SnapValue {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     if name.ends_with(".doltlite_db") {
@@ -1297,31 +972,6 @@ fn summarize_file(path: &Path) -> SnapValue {
     }
 }
 
-/// Patch the DAG config with the two test-only tweaks: point `data_root` at
-/// this run's directory, and bump slack `refresh_window_days` so a fresh
-/// data_root re-downloads media.
-///
-/// **The refresh-window tweak also drives run 2's slack `messages` count, and
-/// it is the reason that count is not zero.** A config-driven slack step
-/// defaults to `refresh_window_days = 0` (only the CLI defaults to 30), so
-/// without this line run 2 would do a forward walk from the watermark and
-/// nothing else. With it, run 2 *additionally* re-queries the trailing 30
-/// days — `oldest = now - 30d, latest = watermark, inclusive = true` — and
-/// re-fetches every message in that window. Those messages come back
-/// byte-identical, so the content deltas stay at zero and incrementality is
-/// still what the snapshot proves; only `messages` and
-/// `messages_bookkeeping` move. See the note at the run-2 snapshot for what
-/// that means when the number changes.
-///
-/// The pre-DAG version also forced `qmd.skip=true`; in the steps format that
-/// is expressed by the config simply not declaring a `qmd_index` step, so
-/// there is nothing to override here. We assert it rather than assume it — a
-/// `qmd_index` step would make the golden non-deterministic (its status embeds
-/// byte sizes and a relative "updated N seconds ago").
-///
-/// Slack's knob is reached by *step id* (`<stanza>.download` whose command is
-/// `datalib-step download slack_api`), not by a `type` field — in the steps
-/// format the provider type lives in the `command` string.
 fn rewrite_config(text: &str, data_root: &Path) -> String {
     let mut doc: toml::Table = toml::from_str(text).expect("parse config toml");
     doc.insert(
@@ -1381,8 +1031,6 @@ fn rewrite_config(text: &str, data_root: &Path) -> String {
     toml::to_string(&doc).expect("serialize toml")
 }
 
-/// Replace `run-<timestamp>` segments in a path with `run-_` so per-run
-/// filenames don't churn the snapshot layout.
 fn canonicalize_path(rel: &Path) -> String {
     let parts: Vec<String> = rel
         .components()
@@ -1399,8 +1047,6 @@ fn canonicalize_path(rel: &Path) -> String {
     parts.join("/")
 }
 
-/// Line-level redaction for rendered markdown. Frontmatter lines like
-/// `source_fingerprint: ba02d4dd774685c7` get their value replaced.
 fn redact_markdown(text: &str) -> String {
     let prefixes = ["source_fingerprint:"];
     let mut out = text
@@ -1423,21 +1069,6 @@ fn redact_markdown(text: &str) -> String {
     out
 }
 
-/// Open a `.doltlite_db` sqlite file and dump every user table as a
-/// JSON object of the shape `{table_name: [{col: value, ...}, ...]}`.
-///
-/// - `payload` columns are unwrapped via `json(payload)` so JSONB blobs
-///   come back as text JSON, then re-parsed to a [`Value`] so the
-///   snapshot diff stays at JSON granularity rather than embedded
-///   string granularity. Other JSON-bearing text columns (`config`,
-///   `summary`, `example_headers`, `example_envelope_skeleton`) get the
-///   same parse treatment.
-/// - `BLOB` columns (e.g. `blobs.bytes`) collapse to `<bytes N>` markers
-///   — we don't want literal binary in goldens, but a row's *presence*
-///   and approximate size are signal worth keeping.
-/// - Rows are ordered by the table's natural primary key (`id`,
-///   `run_id`, `scope`, or `endpoint` depending on the table) so the
-///   snapshot is deterministic.
 fn dump_doltlite_db(path: &Path) -> Value {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1499,12 +1130,9 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         let columns: Vec<String> = info
             .iter()
             .map(|r| r.try_get::<String, _>("name").unwrap_or_default())
-            // `volatile_payload` (the bookkeeping sidecar's split-out
-            // per-fetch fields, e.g. Slack's `updated`) holds churn BY
-            // DEFINITION — that's why it was split off the content
-            // payload. Never snapshot it: it would make the golden
-            // non-deterministic across runs. See
-            // data_architecture_ingestion.md §"Volatile-field split".
+            // `volatile_payload` holds churn by definition — that is why
+            // it was split off the content payload. Snapshotting it would
+            // make the golden non-deterministic.
             .filter(|c| c != "volatile_payload")
             .collect();
 
@@ -1636,13 +1264,9 @@ fn strip_volatile(v: &mut Value) {
     }
 }
 
-/// Stricter-on-time-fields, looser-on-stats redaction used for the
-/// run 2 incrementality snapshot. Unlike [`strip_volatile`] this
-/// preserves per-source `stats` counts (since the whole point of the
-/// run 2 snapshot is to assert those counts stayed *small*) while
-/// redacting the per-run jitter fields that can't reproduce
-/// byte-identically (wall-clock timings, cursor advancement
-/// timestamps).
+/// Redaction for the run-2 incrementality snapshot: stricter on time fields,
+/// looser on stats. Unlike [`strip_volatile`] it preserves per-source counts,
+/// since asserting those stayed small is the whole point.
 fn strip_volatile_for_incrementality(v: &mut Value) {
     // Reuse most of `VOLATILE_KEYS` but drop `stats` (preserved) and
     // add timing/jitter fields specific to per-source summaries.

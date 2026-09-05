@@ -1,13 +1,5 @@
 // Turns card source — the JS expression shown in a card's header, like
 // `gridView()` or `comp.user.tetris()` — into a runnable CardRender.
-//
-// The expression is evaluated with the builtin view factories in scope,
-// plus a single `comp` object holding every custom component namespace
-// the source refers to. Card source is plain JS that calls them; it has
-// no implicit access to app internals beyond what those close over.
-//
-// Resolving `comp` means importing component modules, so compilation is
-// async.
 import { viewLibs } from "./libs";
 import { resolveCompScope } from "./frontendRegistry";
 import type { CardRender } from "./types";

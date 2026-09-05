@@ -135,8 +135,6 @@ impl DataProcessor for NotionRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }
@@ -159,9 +157,6 @@ impl DataProcessor for NotionRender {
     }
 }
 
-/// Walk `<playback>/notion/*.json`, decode each as an [`HttpResponse`], and
-/// collect every page id. Used to seed the BFS in playback mode (Notion has
-/// no listing endpoint, so without this there'd be nothing to walk).
 fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
     let mut seeds = Vec::new();
     if !notion_dir.is_dir() {

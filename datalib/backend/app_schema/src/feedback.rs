@@ -4,11 +4,6 @@
 // SQLite — so each row gets its own `dolt log` entry via `CALL
 // DOLT_COMMIT('-Am', 'feedback: <uuid>')`. Read-back is out of scope; the
 // user queries Dolt directly.
-//
-// Hand-written: `FeedbackRow` derives its `CREATE TABLE` DDL + column
-// metadata via `#[derive(PortableTable)]`. The discriminated-union
-// payload types below (`FeedbackContext` + the `FeedbackSurface*`
-// variants) are plain serde shapes carried inside `context_json`.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

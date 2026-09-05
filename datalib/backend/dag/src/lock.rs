@@ -1,30 +1,11 @@
 //! An exclusive claim on a file, held for the life of a process.
 //!
-//! Two invariants in this tree need one, and they are not the same
-//! claim:
+//! `flock(2)` rather than a pid file, because the kernel releases it when
+//! the holder dies. The file's contents are advisory — they let a refusal
+//! name the holder, and are never trusted to decide whether it is held.
 //!
-//!   * **One runner per data root.** The scheduler's state is a single
-//!     JSON file it rewrites after every terminal step, and the steps
-//!     it spawns write raw stores whose doltlite working set is shared
-//!     across processes. Two runners on one root interleave both.
-//!     That is [`RUNNER_LOCK_REL_PATH`], taken by `datalib-dag`.
-//!   * **One server per data root**, which `datalib-http` takes on its
-//!     own file for its own reasons (the API token, the job and
-//!     feedback stores). It has to be a *different* file: the server
-//!     spawns the runner, so sharing one lock would deadlock the server
-//!     against its own child.
-//!
-//! `flock(2)` rather than a pid file, because the kernel releases it
-//! when the holder dies — a crashed process leaves no stale lock to
-//! reason about, which is the failure mode pid files are famous for.
-//! The file's *contents* are advisory: they exist so a refusal can name
-//! the holder, and are never trusted to decide whether it is held.
-//!
-//! This lives in the runner's crate rather than the server's because
-//! the runner is the one with an invariant it cannot state any other
-//! way, and because `datalib-http` already depends on this crate —
-//! so one implementation serves both rather than two spellings of
-//! `flock` drifting apart.
+//! The runner and the server take separate locks on separate files; the
+//! crate README says why they cannot share one.
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -52,7 +33,6 @@ pub enum LockError {
 }
 
 impl LockError {
-    /// The holder's own description, when it left one.
     pub fn holder(&self) -> Option<&str> {
         match self {
             LockError::Held { holder, .. } => holder.as_deref(),
@@ -66,8 +46,6 @@ impl LockError {
         }
     }
 
-    /// True when someone else holds it, as opposed to the lock file
-    /// being unusable.
     pub fn is_held(&self) -> bool {
         matches!(self, LockError::Held { .. })
     }
@@ -103,8 +81,6 @@ pub struct FileLock {
 }
 
 impl FileLock {
-    /// Take the lock at `path`, creating the file and its parent if
-    /// needed, or fail saying who holds it.
     pub fn acquire(path: &Path) -> Result<Self, LockError> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| LockError::Io {
@@ -151,30 +127,16 @@ impl FileLock {
         Ok(lock)
     }
 
-    /// The runner's claim on a data root.
     pub fn acquire_runner(data_root: &Path) -> Result<Self, LockError> {
         Self::acquire(&data_root.join(RUNNER_LOCK_REL_PATH))
     }
 
     /// Is this lock held by some other process right now?
     ///
-    /// A **read-only** probe, and that is the whole reason it exists
-    /// separately from [`Self::acquire`]: acquiring creates the file if
-    /// absent and, on success, rewrites its contents with a holder
-    /// line. Both are right for a process claiming the root and wrong
-    /// for one merely asking — a caller on a timer would rewrite the
-    /// file every few seconds, and a root that had never run would
-    /// sprout a lock file from being looked at.
-    ///
-    /// A missing file means nobody has ever taken it, which is "not
-    /// held". So is a file we cannot open: an unreadable lock tells us
-    /// nothing, and claiming a run is in flight on that basis would be
-    /// a guess.
-    ///
-    /// Racy by nature — the holder may let go a microsecond later, and
-    /// the momentary claim this makes can refuse a runner starting in
-    /// the same instant. Both are only acceptable where being one poll
-    /// stale costs nothing; don't build an invariant on it.
+    /// Read-only, unlike [`Self::acquire`], which creates the file and
+    /// rewrites its contents — so a caller on a timer does not make a root
+    /// that never ran sprout a lock file. Racy by nature: the holder may let
+    /// go a microsecond later, so don't build an invariant on it.
     pub fn is_held(path: &Path) -> bool {
         let Ok(file) = File::open(path) else {
             return false;
@@ -188,7 +150,6 @@ impl FileLock {
         }
     }
 
-    /// Is a `datalib-dag` run holding this data root right now?
     pub fn runner_is_held(data_root: &Path) -> bool {
         Self::is_held(&data_root.join(RUNNER_LOCK_REL_PATH))
     }
@@ -224,9 +185,6 @@ fn take(file: &File) -> std::io::Result<()> {
     }
 }
 
-/// Drop a claim taken by [`take`] without closing the file. Only
-/// [`FileLock::is_held`] needs this — every other holder releases by
-/// dropping the `File`.
 #[cfg(unix)]
 fn release(file: &File) {
     use std::os::unix::io::AsRawFd;

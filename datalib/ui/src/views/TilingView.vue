@@ -4,22 +4,6 @@
 // horizontal root container holding a single card. Containers show
 // visible borders so the structure reads at a glance.
 //
-// Ways to grow/reshape the layout:
-//   - the "add" button at a container's end appends a blank card;
-//   - a card's `ctx.host.openCards(source)` opens the new card as a
-//     sibling next to the caller — no prompt; the user reshapes later
-//     with the per-container h/v/tab switch or by dragging
-//     (`openCards(a, b, …)` opens a run of siblings at once);
-//   - each container has a switch to set its arrangement (h/v/tab);
-//   - drag a node by its grip strip onto a container's add area (moves
-//     it there) or onto a card (replaces the card with a new split,
-//     perpendicular to the card's parent, holding the card then the
-//     dragged node).
-//
-// Closing a node removes it; a non-root split left with one child
-// collapses and promotes that child. Dividers between siblings drag to
-// reweight them.
-//
 // Persistent cards: the recursive TilingNode tree renders only the
 // structure and chrome — where a card goes it leaves an empty slot. The
 // cards themselves live in one flat, id-keyed pool here (`tiles`) and
@@ -29,9 +13,6 @@
 // preserving its shadow root, scroll, fetches, and (crucially) not
 // re-running a grid card's selection restore, which would otherwise
 // spawn a duplicate document.
-//
-// Like the tree layout this is in-memory only — no URL sync — and
-// cards are not carried across when toggling layouts (see CardsView).
 import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";

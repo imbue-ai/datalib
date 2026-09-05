@@ -1,20 +1,4 @@
 //! The launcher's decisions, with no Tauri in them.
-//!
-//! Opening the app with no data root used to raise a native folder
-//! picker immediately: a "choose a folder" sheet with no window behind
-//! it and no explanation of what the folder was for. This module holds
-//! everything the welcome screen that replaced it needs to decide —
-//! which roots the user has opened before, whether a directory is a
-//! data library at all, and where a brand-new one should go — so that
-//! `main.rs` is left with window and IPC plumbing only.
-//!
-//! **Deliberately free of `tauri` and of every other dependency but
-//! `serde_json`**, because this file is compiled twice: as a module of
-//! the shell (cargo, the shipping build) and as its own crate by
-//! `//datalib/tauri:launcher_test`. That second compile is the only
-//! way any of this reaches `bazelisk test //...` — the shell crate is
-//! a standalone cargo workspace that Bazel does not build (see
-//! `Cargo.toml`). Keep it dependency-free and keep the tests here.
 
 use std::path::{Path, PathBuf};
 
@@ -23,22 +7,10 @@ use std::path::{Path, PathBuf};
 /// and short enough to stay a list rather than a history.
 pub const MAX_RECENTS: usize = 8;
 
-/// The recents file: `<home>/.datalib/recent-roots.json`.
-///
-/// `~/.datalib/` is already the app's per-user directory — it is where
-/// `bin/` lives, the drop spot for user-provided step and applet
-/// programs (see `datalib_http::user_bin_dir`). One directory, not two.
 pub fn recents_file(home: &Path) -> PathBuf {
     home.join(".datalib").join("recent-roots.json")
 }
 
-/// The remembered roots, newest first.
-///
-/// Entries that are no longer data roots are dropped rather than shown:
-/// a folder the user deleted, renamed, or moved off an unmounted
-/// volume would otherwise sit in the list as a button that fails. This
-/// filters on read only — the file is rewritten by [`record_recent`],
-/// so an unplugged drive's root comes back when it is plugged back in.
 pub fn load_recents(file: &Path) -> Vec<PathBuf> {
     let Ok(text) = std::fs::read_to_string(file) else {
         return Vec::new();
@@ -50,11 +22,6 @@ pub fn load_recents(file: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Move `root` to the front of the remembered list and write it back.
-///
-/// Unlike [`load_recents`] this keeps entries whose directory is
-/// currently missing: the list on disk is a memory of what the user
-/// opened, and an unmounted volume is not a reason to forget it.
 pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     let existing = std::fs::read_to_string(file).unwrap_or_default();
     let mut roots = vec![root.to_path_buf()];
@@ -74,9 +41,6 @@ pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     std::fs::write(file, text)
 }
 
-/// Decode the file's contents. A corrupt or hand-mangled file reads as
-/// an empty list — the recents are a convenience, and refusing to
-/// launch over them would be worse than forgetting them.
 fn parse_recents(text: &str) -> Vec<PathBuf> {
     serde_json::from_str::<Vec<String>>(text)
         .unwrap_or_default()
@@ -85,14 +49,6 @@ fn parse_recents(text: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether `dir` is a datalib data root.
-///
-/// A root is identified by its config — `config.toml`, or the pre-TOML
-/// `config.yaml` that `datalib-migrate-config` converts (the app has
-/// something to say about those too, so hiding them from the recents
-/// list would be the wrong kind of tidy). `system/` is accepted as
-/// well: a root whose config was deleted still holds the user's
-/// feedback and job stores, and is not an empty folder.
 pub fn is_data_root(dir: &Path) -> bool {
     dir.is_dir()
         && (dir.join("config.toml").is_file()
@@ -104,14 +60,6 @@ pub fn is_data_root(dir: &Path) -> bool {
 /// `documents` (the platform's Documents directory, which the caller
 /// resolves — it is localized and relocatable, so it is not
 /// `<home>/Documents` everywhere).
-///
-/// Documents because that is where a user looks for their own files,
-/// and because the root is exactly that — their data, not application
-/// state. If the name is taken by something that is not already a data
-/// library, the next free `Datalib 2`, `Datalib 3`, … is used rather
-/// than merging into a stranger's directory. An existing *data
-/// library* at the default name is returned as-is: opening it is what
-/// the user meant.
 pub fn default_new_root(documents: &Path) -> PathBuf {
     let first = documents.join("Datalib");
     if !first.exists() || is_data_root(&first) {
@@ -141,7 +89,6 @@ pub fn display_name(root: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// A directory that reads as a data root, the cheapest way.
     fn make_root(dir: &Path) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("config.toml"), "steps = []\n").unwrap();

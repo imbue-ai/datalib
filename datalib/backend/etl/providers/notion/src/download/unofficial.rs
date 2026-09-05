@@ -2,10 +2,6 @@
 //! via the `notion_unofficial` latchkey service. Used only for the
 //! handful of endpoints the public API doesn't expose:
 //! `loadUserContent`, `getSpaces`, `getNotificationLog`.
-//!
-//! Responses can be large (notification logs in particular), so the
-//! body is captured to a tempfile via `-o` rather than via stdout.
-//! Port of `NotionUnofficialClient` in `src/download/notion_official.py`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -49,8 +45,6 @@ impl NotionUnofficialClient {
         Self::default()
     }
 
-    /// Build a client that authenticates as the source's configured
-    /// latchkey identity. Every request it issues carries the settings.
     pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
         Self {
             latchkey,

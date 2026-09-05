@@ -1,31 +1,4 @@
 //! quick-xml pull-parser for "SMS Backup & Restore" export files.
-//!
-//! The app emits two flat, attribute-heavy XML shapes:
-//!
-//! ```xml
-//! <smses count="N" ...>
-//!   <sms protocol="0" address="+1555" date="1778277131098" type="2"
-//!        body="Hello" date_sent="0" readable_date="..." contact_name="..." />
-//!   <mms date="1781547510000" msg_box="2" address="+1555" m_id="T19ec..."
-//!        tr_id="proto:..." ...>
-//!     <parts>
-//!       <part seq="-1" ct="application/smil" .../>          <!-- layout, skipped -->
-//!       <part seq="0"  ct="image/jpeg" cl="image000000.jpg" data="<base64>" />
-//!       <part seq="0"  ct="text/plain" text="caption" />     <!-- body text -->
-//!     </parts>
-//!     <addrs>
-//!       <addr address="+1555" type="151" charset="106" />
-//!     </addrs>
-//!   </mms>
-//! </smses>
-//! ```
-//!
-//! and `<calls><call number=".." duration=".." date=".." type=".." /></calls>`.
-//!
-//! All attribute values arrive XML-escaped (`&lt;`, `&#10;`, emoji as
-//! `&#129310;`); [`quick_xml`]'s `unescape_value` decodes them, so the
-//! parsed structs carry real text. `count`/`backup_set`/etc. on the root
-//! are ignored — we trust the records themselves.
 
 use std::collections::HashMap;
 
@@ -94,8 +67,6 @@ pub struct CallRecord {
     pub contact_name: Option<String>,
 }
 
-/// Sniff a file's root element. Returns `None` for anything that isn't
-/// a recognized SMS Backup & Restore export.
 pub fn detect_root(xml: &str) -> Option<RootKind> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
@@ -115,7 +86,6 @@ pub fn detect_root(xml: &str) -> Option<RootKind> {
     }
 }
 
-/// Parse a `<smses>` file into its `<sms>` and `<mms>` records.
 pub fn parse_smses(xml: &str) -> Result<(Vec<SmsRecord>, Vec<MmsRecord>)> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
@@ -147,7 +117,6 @@ pub fn parse_smses(xml: &str) -> Result<(Vec<SmsRecord>, Vec<MmsRecord>)> {
     Ok((smses, mmses))
 }
 
-/// Parse a `<calls>` file into its `<call>` records.
 pub fn parse_calls(xml: &str) -> Result<Vec<CallRecord>> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
@@ -221,8 +190,6 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
     Ok(rec)
 }
 
-/// The display filename for a content part: prefer `cl`, then `name`,
-/// else synthesize `part{idx}.<ext-from-ct>`.
 fn part_name(a: &Attrs, ct: &str, idx: usize) -> String {
     if let Some(cl) = opt(a, "cl") {
         return cl;
@@ -263,7 +230,6 @@ fn mms_from_attrs(a: &Attrs) -> MmsRecord {
 
 type Attrs = HashMap<String, String>;
 
-/// Collect an element's attributes into a map of unescaped strings.
 fn attrs(e: &BytesStart) -> Result<Attrs> {
     let mut map = HashMap::new();
     for attr in e.attributes() {
@@ -278,8 +244,6 @@ fn attrs(e: &BytesStart) -> Result<Attrs> {
     Ok(map)
 }
 
-/// A present, non-"null", non-empty attribute. The app writes the
-/// literal string `null` for absent values.
 fn opt(a: &Attrs, key: &str) -> Option<String> {
     a.get(key)
         .map(|s| s.as_str())
@@ -287,13 +251,10 @@ fn opt(a: &Attrs, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Parse an integer-valued attribute (`date`, `type`, `duration`, …),
-/// `None` when absent / non-numeric / "null".
 fn int(a: &Attrs, key: &str) -> Option<i64> {
     opt(a, key).and_then(|s| s.trim().parse::<i64>().ok())
 }
 
-/// Decode a base64 part payload, tolerating embedded whitespace.
 fn decode_base64(s: &str) -> Result<Vec<u8>> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     base64::engine::general_purpose::STANDARD

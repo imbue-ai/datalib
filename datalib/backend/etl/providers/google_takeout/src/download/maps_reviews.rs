@@ -1,9 +1,4 @@
 //! `Maps (your places)/Reviews.json` walker.
-//!
-//! The file is a GeoJSON `FeatureCollection`. Each `feature` is one
-//! review the user wrote. PK recipe:
-//! `uuidv5(NS, "maps_review:{ftid}:{date}")`, where `ftid` is the hex
-//! id after `!1s` in the feature's `google_maps_url`.
 
 use std::path::Path;
 
@@ -71,9 +66,6 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<usiz
     Ok(n)
 }
 
-/// Pull the hex ftid out of a Google Maps URL of the shape
-/// `https://www.google.com/maps/.../@.../!1s<HEX>!...`. Returns
-/// `None` when the URL doesn't carry an ftid.
 fn extract_ftid(url: &str) -> Option<&str> {
     let key = "!1s";
     let after = &url[url.find(key)? + key.len()..];

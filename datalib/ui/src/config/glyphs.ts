@@ -1,35 +1,10 @@
 // Monochrome UI glyphs: 24×24 `path` data, drawn in `currentColor`.
-//
-// These are Material Design Icons (Apache-2.0), vendored as raw path
-// data rather than pulled in as a dependency. The whole set is ~2500
-// icons and a build-time integration for the dozen we use; the paths
-// themselves are three lines each and cost nothing to carry. Every
-// entry below is verbatim from
-// `google/material-design-icons/src/<category>/<name>/materialicons/24px.svg`,
-// with the transparent 24×24 bounding rect that file also carries
-// dropped — it is layout padding for the font, not part of the mark.
-//
-// Distinct from `icons.ts`, which maps a *service* to its brand mark.
-// A brand mark is a picture of a company and is used nominatively; a
-// glyph here is a picture of a verb and is recolored freely.
 
 /// Icons naming a step's role in the pipeline (suffixed onto the name
 /// in the Manage grid), plus
 /// the two action buttons that switch on run state.
-///
-/// The metaphors, since a glyph is only as good as the word behind it:
-/// a fetch *downloads* — it brings bytes here that were somewhere else;
-/// a render makes a document you can read; an index is a card catalog
-/// over those documents; an applet is a small app the gateway hosts;
-/// anything else is an arbitrary command, which is a terminal.
 export const STEP_GLYPHS = {
   // file/file_download — an arrow into a tray.
-  //
-  // Deliberately not `sync`'s two circling arrows, which is what this
-  // was: those say "these two ends are being reconciled", and every
-  // row in the table is part of a sync. What distinguishes *this* step
-  // from the render and index steps beside it is direction — it is the
-  // one that pulls bytes in from somewhere else.
   fetch: "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z",
   // communication/import_contacts — an open book.
   render:
@@ -45,14 +20,6 @@ export const STEP_GLYPHS = {
 } as const;
 
 /// Icons for the Status column.
-///
-/// Keyed on the vocabulary `Manager2View` normalizes to, which is the
-/// runner's own (`succeeded` / `skipped_up_to_date` / `blocked` /
-/// `failed`) plus the four states only a reader can know: `running`,
-/// `queued`, `interrupted`, and `never_run`.
-///
-/// `running` is deliberately absent — a still frame cannot say "still
-/// going", so that one state is a CSS spinner rather than a path.
 export const STATUS_GLYPHS: Record<string, string> = {
   // action/check_circle
   succeeded: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z",
@@ -68,12 +35,6 @@ export const STATUS_GLYPHS: Record<string, string> = {
   // is not a success either.
   interrupted: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
   // action/hourglass_empty — due to run, and not started.
-  //
-  // An hourglass rather than the three-dot `pending`: the dots say
-  // "something is happening slowly", which is what the spinner beside
-  // it already means. This state is the opposite — nothing is happening
-  // to this step *yet*, and the question a reader has is what it is
-  // behind. The tooltip answers that by name.
   queued:
     "M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z",
   // alert/error_outline — the config declares this entry and the
@@ -93,16 +54,6 @@ export const STATUS_GLYPHS: Record<string, string> = {
 };
 
 /// Build a `<svg>` carrying one path, sized for a table cell.
-///
-/// `label` is the accessible name. Every use of these glyphs replaced a
-/// column that used to spell the word out, so the word has to survive
-/// somewhere a screen reader can reach.
-///
-/// Deliberately NOT an SVG `<title>` as well. A `<title>` renders as a
-/// native browser tooltip, and the cell wrapper already sets one — a
-/// fuller one, carrying the failure message or what a queued row is
-/// waiting for. Two nested tooltips means the inner, shorter one wins
-/// on hover, which is how the interesting half stayed invisible.
 export function glyphSvg(path: string, label: string, size = 16): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");

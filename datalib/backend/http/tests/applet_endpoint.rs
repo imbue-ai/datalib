@@ -1,16 +1,6 @@
 //! Integration test for the frontend store and the applets that fill
 //! it: eager start, namespace scanning, and the endpoints the UI reads
 //! (`GET /api/frontend`, `GET /modules/{hash}`).
-//!
-//! An applet is one invocation now — write the directory, then bind the
-//! port — so a fixture that only writes is no longer a valid applet.
-//! Working fixtures are the real `datalib-applet` binary; `sh` scripts
-//! cover the failure paths, where never binding is the whole point.
-//!
-//! Pure store semantics (a `.js` whose name lies about its bytes,
-//! metadata naming a component that is not there) are unit-tested in
-//! `datalib/backend/http/src/frontend.rs`, where they need no processes
-//! and stay hermetic.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -26,8 +16,6 @@ use tower::ServiceExt;
 
 const TEST_TOKEN: &str = "frontend-test-token";
 
-/// The real applet host, built by Bazel and handed over in `env`,
-/// spelled the way a config would: binary plus subcommand.
 fn applet_command() -> String {
     let bin = PathBuf::from(std::env::var("APPLET_BIN").expect("APPLET_BIN set by the BUILD rule"))
         .canonicalize()
@@ -35,11 +23,6 @@ fn applet_command() -> String {
     format!("{} slack", bin.display())
 }
 
-/// Write one document through the store the slack applet reads.
-///
-/// `msgs` is `(message_index, author, text, when_ts)`; the thread row
-/// itself carries no index, which is how the applet tells the document
-/// row from the messages inside it.
 fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
     use datalib_etl::grid_index::RenderedMarkdown;
     use datalib_etl::indexed_markdown::IndexedMarkdownStore;
@@ -99,8 +82,6 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
     store.close();
 }
 
-/// A rendered tree the slack applet can read, so a started applet has
-/// something to report.
 fn seed_tree(root: &Path) {
     let tree = root.join("slack/rendered_md");
     std::fs::create_dir_all(&tree).unwrap();
@@ -112,7 +93,6 @@ fn seed_tree(root: &Path) {
     );
 }
 
-/// A config declaring one instance of the real applet per id.
 fn config_for(ids: &[&str]) -> String {
     let bin = applet_command();
     ids.iter()
@@ -124,8 +104,6 @@ fn config_for(ids: &[&str]) -> String {
         .collect()
 }
 
-/// A component written by hand into `user` — the same two files an
-/// applet writes, which is the property the whole design rests on.
 fn seed_user(root: &Path, name: &str, title: &str) -> String {
     let dir = frontend_dir(root).join("user");
     std::fs::create_dir_all(&dir).unwrap();
@@ -372,16 +350,6 @@ async fn an_applet_that_never_binds_is_bounded() {
 }
 
 /// Readiness is the applet's own announcement, not an open port.
-///
-/// This is the shape of a real flake. The gateway used to pick a port,
-/// release it, and then treat "something accepts there" as "my applet
-/// is up" — which a stranger who had won the race for that port
-/// answered just as convincingly, so the store got scanned before the
-/// applet had written a byte and the gallery came up empty with no
-/// error. Here the applet genuinely binds, genuinely serves, and has
-/// genuinely written its namespace; only its announcement is thrown
-/// away. The gateway must still refuse to call it started, because a
-/// port it cannot hear about is a port it has no business proxying to.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listening_applet_that_never_announces_is_not_adopted() {
     let tmp = tempfile::tempdir().unwrap();
@@ -434,9 +402,6 @@ async fn a_config_edit_is_picked_up_without_a_restart() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// A wrapper around the real applet that appends its id to a log every
-/// time it is started. Counting those lines is the only way to tell
-/// "still the process from before" from "stopped and started again".
 fn start_logging_command(tmp: &Path, log: &Path) -> String {
     let wrapper = write_script(
         tmp,
@@ -450,7 +415,6 @@ fn start_logging_command(tmp: &Path, log: &Path) -> String {
     format!("sh {}", wrapper.display())
 }
 
-/// How many times the applet with this id has been started.
 fn starts(log: &Path, id: &str) -> usize {
     std::fs::read_to_string(log)
         .unwrap_or_default()
@@ -459,9 +423,6 @@ fn starts(log: &Path, id: &str) -> usize {
         .count()
 }
 
-/// One applet stanza, with an optional `workspace` param — the field
-/// the slack applet turns into its gallery title, so a change to it is
-/// visible from `/api/frontend`.
 fn applet_stanza(id: &str, command: &str, workspace: Option<&str>) -> String {
     let mut s = format!("[[applets]]\nid = \"{id}\"\ncommand = \"{command}\"\n[applets.params]\ntree = \"slack/rendered_md\"\n");
     if let Some(w) = workspace {

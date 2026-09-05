@@ -9,48 +9,6 @@
 //! and non-impersonating callers alike without breaking the latter: only
 //! callers that opt in get the Chrome-impersonating curl; everyone else
 //! keeps getting the system curl they expect.
-//!
-//! Routing, in order:
-//!   * If the request carries the marker header
-//!     `X-Imbue-Desktop-Proxy`, it is rewritten to go through
-//!     the latchkey gateway on the user's own computer (reached over a
-//!     tunnel whose URL the gateway that runs us already has in its
-//!     environment, see [`DESKTOP_PROXY_GATEWAY_URL_ENV`]) and handed to
-//!     the system curl.
-//!     The marker is dropped, and the request is marked for that gateway
-//!     to forward as-is, credentials and all (see
-//!     [`GATEWAY_NO_CREDENTIALS_HEADER`]). Any `X-Imbue-Impersonate`
-//!     marker rides along untouched, so the desktop gateway's own curl
-//!     impersonates on the final hop; this hop is plain HTTP over a local
-//!     tunnel, where impersonation would be meaningless.
-//!   * Else, if the request carries the marker header
-//!     `X-Imbue-Impersonate`, the args are handed to the
-//!     Chrome-impersonating curl (`latchkey-curl-impersonate`), found
-//!     next to this binary (installers ship the two side by side).
-//!   * Otherwise they go to the system curl: `curl` on `$PATH` (skipping
-//!     this binary, so a `LATCHKEY_CURL`-on-PATH setup can't recurse).
-//!
-//! Except for the desktop-proxy rewrite, the args are passed on verbatim
-//! — this binary only reads them. Removing the impersonation marker so
-//! it never reaches the wire is the impersonator's job (see
-//! `SUPPRESSED_HEADERS` there), which has to handle it regardless
-//! because it can be pointed at by `LATCHKEY_CURL` directly, with no
-//! dispatcher in front of it.
-//!
-//! The markers are matched by header *name*, with any value, because
-//! they reach us two different ways. Called directly, latchkey passes on
-//! the value-less `-H "X-Imbue-Impersonate:"` its caller wrote. Called
-//! by the latchkey *gateway* — how minds workspaces reach third-party
-//! services — the request first crossed an HTTP hop, so it can only
-//! have arrived with a value (a value-less header has no representation
-//! on the wire; see `IMPERSONATE_MARKER_HEADER` in `../../http.rs`), and
-//! the gateway rebuilds it as `-H "X-Imbue-Impersonate: 1"` in the
-//! invocation it hands us. Matching on the name covers both without the
-//! two sides having to agree on a spelling.
-//!
-//! Unix only (macOS + Linux): it `exec`s the chosen binary, replacing
-//! the process so exit status, signals, and stdio pass through
-//! unchanged.
 
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -111,15 +69,6 @@ fn die(msg: impl AsRef<str>) -> ! {
     std::process::exit(2);
 }
 
-/// Whether a `-H` / `--header` argument names the header `name`.
-///
-/// Only the header name is compared, so every value a marker can arrive
-/// with counts: none at all (`X-Imbue-Impersonate:`, what callers
-/// write), a value (`X-Imbue-Impersonate: 1`, the only form that
-/// survives an HTTP hop through the latchkey gateway), and curl's
-/// send-empty spelling (`X-Imbue-Impersonate;`). Header names are
-/// case-insensitive in HTTP and the gateway echoes back whatever case
-/// its client sent, so we compare that way too.
 fn is_header_named(header_argument: &str, name: &str) -> bool {
     match header_argument.find([':', ';']) {
         Some(index) => header_argument[..index].trim().eq_ignore_ascii_case(name),
@@ -129,20 +78,10 @@ fn is_header_named(header_argument: &str, name: &str) -> bool {
     }
 }
 
-/// Whether `token` is one of the two spellings of curl's header flag.
 fn is_header_flag(token: &str) -> bool {
     token == "-H" || token == "--header"
 }
 
-/// Whether argv (already sans program name) carries the header `name`,
-/// as the value of a two-token `-H` / `--header` argument.
-///
-/// Two tokens is the only form we need to handle: it is what latchkey's
-/// gateway emits when it rebuilds a curl invocation from an inbound
-/// request, and what `http::latchkey_curl` emits directly. Curl's glued
-/// spellings (`-HVALUE`, `--header=VALUE`) are not recognized — nothing
-/// that reaches us produces them, and missing one costs impersonation,
-/// never correctness.
 fn has_header(argv: &[String], name: &str) -> bool {
     let mut it = argv.iter();
     while let Some(tok) = it.next() {
@@ -215,17 +154,6 @@ impl DesktopGateway {
 
 /// Rewrite a marked invocation so it goes to the desktop gateway's
 /// outbound proxy instead of straight to the third party.
-///
-/// The target URL is the last argument, which is where both producers
-/// of the invocations we see put it (latchkey's gateway and
-/// `http::latchkey_curl`); anything else is refused rather than guessed
-/// at, since sending a rewritten request to the wrong place is worse
-/// than failing. It is spliced into the gateway path byte-for-byte, so
-/// the third party receives exactly what the caller sent, and every
-/// other argument keeps its position. The desktop-proxy marker is
-/// removed (it has done its job; the desktop gateway's own dispatch curl
-/// must not act on it again), and the gateway's password and
-/// forward-as-is headers are prepended.
 fn rewrite_for_desktop_proxy(
     argv: &[String],
     gateway: &DesktopGateway,
@@ -273,8 +201,6 @@ fn rewrite_for_desktop_proxy(
     Ok(rewritten)
 }
 
-/// Look for one of `names` next to `current_exe()`, following the exe
-/// symlink so we look in the real install dir.
 fn sibling_of_exe(names: &[&str]) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
@@ -294,8 +220,6 @@ fn resolve_impersonator() -> PathBuf {
     })
 }
 
-/// Find `curl` on `$PATH`, skipping any candidate that resolves to this
-/// dispatcher itself (so a `LATCHKEY_CURL`-on-PATH setup can't recurse).
 fn curl_on_path(self_exe: Option<&Path>) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -449,9 +373,6 @@ mod tests {
         }
     }
 
-    /// The shape the VPS latchkey gateway hands us for a request a remote
-    /// workspace marked for desktop egress: credentials already injected,
-    /// both markers present.
     fn marked_gateway_invocation() -> Vec<String> {
         argv(&[
             "-sS",

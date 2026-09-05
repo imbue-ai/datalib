@@ -1,12 +1,4 @@
 //! Program-A `DataProcessor`s for the `sms_backup_restore` source.
-//!
-//! `sms_backup_restore` is purely file-backed: there is no API and no `sync:`
-//! block, so it always contributes both an **download** ([`SmsDownload`] — ingest
-//! the `sms-*.xml` / `calls-*.xml` export at `input_path`) and a **render**
-//! ([`SmsRender`] — one chat per phone number). The orchestrator only drives
-//! `plan_download` returns it only when the source is managed; for an unmanaged file source it
-//! drives render alone. The source owns its raw store end to end
-//! (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use std::path::PathBuf;
 
@@ -19,7 +11,6 @@ use datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig;
 
 use crate::download;
 
-/// Download wave: walk the export dir at input_path into the raw store.
 pub fn plan_download(
     ctx: PlanContext,
     config: SmsBackupRestoreConfig,
@@ -96,8 +87,6 @@ impl DataProcessor for SmsRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::RENDER_VERSION)
     }

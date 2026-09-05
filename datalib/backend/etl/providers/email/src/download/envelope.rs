@@ -1,31 +1,10 @@
 //! Turning one RFC 5322 message into a JMAP-shaped `Email/get` envelope.
-//!
-//! The raw schema stores every email's envelope in JMAP's shape
-//! regardless of where it came from (see [`super::schema_raw`]), so that
-//! `EmailRow::from_jmap_envelope` — and therefore every promoted column,
-//! the stored payload, and the `mailboxIds` / `keywords` join inputs — is
-//! written by exactly one code path.
-//!
-//! The JMAP downloader gets that shape from the server. Every other mode
-//! has to build it: mbox parses a Google Takeout export, and the Gmail
-//! API mode parses `messages.get?format=RAW`. Both end up holding the
-//! same two things — the message bytes, and some per-message facts the
-//! *transport* supplied (which labels, which thread, which keywords) that
-//! are not derivable from the bytes. This module is where those meet.
-//!
-//! Extracting it is what makes "the same mailbox ingested two ways
-//! dedupes rather than doubles" a property of the code rather than of
-//! two implementations happening to agree.
 
 use anyhow::{anyhow, Result};
 use mail_parser::{Address, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
 use serde_json::{json, Value};
 
 /// The per-message facts a transport knows and the bytes do not.
-///
-/// A Takeout mbox carries labels in an `X-Gmail-Labels` header; the Gmail
-/// API returns them as `labelIds`. By the time we get here they have both
-/// been resolved to the same mailbox ids and JMAP keywords.
 #[derive(Debug, Clone)]
 pub struct TransportFacts {
     /// Stable email id — the `Message-ID` header, or the content hash
@@ -39,11 +18,6 @@ pub struct TransportFacts {
     pub keywords: Vec<String>,
 }
 
-/// Build the JMAP-shaped envelope for `raw`.
-///
-/// `msg` is the already-parsed form of `raw`; callers generally need the
-/// parse for other reasons (attachment detection, date extraction) and
-/// parsing a large message twice is not free.
 pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Value {
     let mailbox_ids_obj: serde_json::Map<String, Value> = facts
         .mailbox_ids
@@ -110,11 +84,6 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
 
 /// The stable email id for a message: its `Message-ID` header, falling
 /// back to the content hash when it has none.
-///
-/// Every mode must derive this the same way. Using a transport-native id
-/// instead (Gmail's hex `id`, JMAP's `Email.id`) would fork the id space
-/// per transport, so the same mailbox ingested from a Takeout export and
-/// then from a live sync would double rather than dedupe.
 pub fn email_id(msg: &Message<'_>, content_hash: &str) -> String {
     match msg.message_id() {
         Some(mid) => strip_angle(mid).to_string(),
@@ -122,8 +91,6 @@ pub fn email_id(msg: &Message<'_>, content_hash: &str) -> String {
     }
 }
 
-/// `Date:` as an offset-preserving ISO-8601 string, per the repo-wide
-/// timestamp convention.
 pub fn received_at(msg: &Message<'_>) -> Option<String> {
     msg.date()
         .and_then(|d| datalib_time::parse_strict(&d.to_rfc3339()).ok())
@@ -150,7 +117,6 @@ pub fn header_text(hv: &HeaderValue) -> Option<String> {
     }
 }
 
-/// JMAP `EmailAddress[]` from a parsed address header.
 pub fn addresses_to_jmap(addr: Option<&Address>) -> Option<Vec<Value>> {
     let list = addr?;
     let mut out = Vec::new();
@@ -166,9 +132,6 @@ pub fn addresses_to_jmap(addr: Option<&Address>) -> Option<Vec<Value>> {
     (!out.is_empty()).then_some(out)
 }
 
-/// Walk every MIME part the parser surfaces as an attachment or inline
-/// non-body part, yielding `(dotted_part_id, &MessagePart)`. Mirrors the
-/// JMAP server's `partId` convention (1-based dotted paths).
 pub fn iter_attachments<'a>(
     msg: &'a Message<'a>,
 ) -> impl Iterator<Item = (String, &'a mail_parser::MessagePart<'a>)> {

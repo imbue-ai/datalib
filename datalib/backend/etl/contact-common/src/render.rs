@@ -2,16 +2,6 @@
 //! fingerprint-skip and the `on_doc_complete` callback the orchestrator
 //! threads through. Provider-agnostic: everything provider-specific
 //! arrives via [`ContactRenderProfile`] + the [`NormalizedContact`]s.
-//!
-//! Layout under `out_dir` (one directory per contact, keyed by the stable
-//! contact UUID):
-//!   `<stanza>/rendered_md/<contact_uuid>/index.md`
-//!   `<stanza>/rendered_md/<contact_uuid>/index.grid_rows.json`
-//!   `<stanza>/rendered_md/<contact_uuid>/blobs/<uuid>.<ext>`
-//!
-//! Per-contact granularity (rather than one `.md` per group) lets the
-//! qmd embedding index treat each person as a searchable document —
-//! `qmd query "Picard"` returns one row, not a whole addressbook.
 
 use std::collections::HashMap;
 use std::fs;
@@ -54,9 +44,6 @@ pub struct RenderSummary {
     pub photos_materialized: usize,
 }
 
-/// Render every contact. Returns aggregate counts; per-contact work is
-/// delegated to [`render_one`]. A contact that fails to render logs a
-/// WARN and is skipped — one bad row shouldn't poison the batch.
 pub fn render_all(
     profile: &ContactRenderProfile,
     contacts: &[NormalizedContact],

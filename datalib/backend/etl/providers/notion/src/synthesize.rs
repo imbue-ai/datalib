@@ -1,26 +1,4 @@
 //! Notion (official API) HTTP fixture synthesizer.
-//!
-//! Reads the **checked-in JSONL fixture tree** under
-//! `<api_dir>/notion_official_{page,block,comment}/{created,updated}/events.jsonl`
-//! and emits HTTP playback fixtures for every request
-//! [`crate::download::official::NotionOfficialClient`] would issue:
-//!
-//! * `GET /v1/pages/{id}` — one per page record, body = `raw`.
-//! * `GET /v1/blocks/{parent_id}/children?page_size=100` — one per block
-//!   parent (= each page id plus every block with children). We collapse
-//!   the cursor chain into a single page (`has_more=false`); download only
-//!   walks `start_cursor` URLs when `has_more=true`, so no cursor variant
-//!   is ever requested.
-//! * `GET /v1/comments?block_id={page_id}&page_size=100` — one per page,
-//!   array of that page's `comment.raw` records.
-//!
-//! Why JSONL and not the runtime doltlite DB? The synth step is a test
-//! helper: it converts checked-in source fixtures into HTTP playback
-//! responses. Source fixtures stay in JSONL because that's the format
-//! humans diff and edit; the runtime doltlite database is produced
-//! naturally by download running against the playback fixtures this
-//! synth writes. Keeping JSONL as the synth input means we don't
-//! checked-in a binary sqlite file.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

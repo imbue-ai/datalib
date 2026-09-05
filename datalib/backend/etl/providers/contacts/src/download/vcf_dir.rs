@@ -1,22 +1,4 @@
 //! Local-filesystem vCard ingest.
-//!
-//! Walks a directory tree (or a single `.vcf` file) and writes every
-//! contained vCard into the raw doltlite store using the same row
-//! shape the CardDAV path produces. Render then has one input
-//! shape regardless of where the vCards came from: a remote CardDAV
-//! server, a Google "Export contacts" dump, or a test fixture.
-//!
-//! Synthetic identity:
-//!   - `account_id` = `opts.account_id_override` or `"local"`.
-//!     `server_url` is set to `file://<input_path>` so the row
-//!     round-trips a meaningful provenance string without pretending
-//!     it came over HTTP.
-//!   - One `addressbooks` row per `.vcf` file. `display_name` =
-//!     `addressbook_label` = file stem (the same convention the
-//!     render path used before).
-//!   - `href` for each contact = relative path within `input_path`,
-//!     suffixed with the block index when a single file packs many
-//!     vCards (Google's "Contacts.vcf" shape).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -194,17 +176,6 @@ async fn ingest_one(
 }
 
 /// Stable id for one vCard, in priority order:
-///
-/// 1. The RFC 6350 `UID:` if the card has one (the proper ship-of-
-///    Theseus identity; CardDAV servers and well-formed exports emit it).
-/// 2. Otherwise, when the card has a name, a UUIDv5 synthesized from
-///    first + last name ([`synthesized_name_uid`]) so the same person
-///    survives re-export. Two cards that collapse onto one synthesized
-///    id are flagged via `synth_seen`.
-/// 3. Otherwise (no UID, no name — ~20% of Google's export), the file
-///    position. Can't anchor identity to anything stable, but keeps
-///    distinct nameless cards from collapsing into one row. Warned so
-///    the loss of permanence is visible rather than silent.
 fn contact_uid(
     file: &Path,
     label: &str,
@@ -299,9 +270,6 @@ fn relative_href(root: &Path, file: &Path) -> String {
         })
 }
 
-/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
-/// blocks. Tolerates CRLF / LF / mixed line endings and case-
-/// insensitive markers. Text outside a block is dropped.
 fn split_vcards(body: &str) -> Vec<String> {
     let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
     let mut out: Vec<String> = Vec::new();

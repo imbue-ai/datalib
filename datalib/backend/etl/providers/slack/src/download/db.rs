@@ -1,22 +1,4 @@
 //! Doltlite-backed raw store for the Slack provider.
-//!
-//! Six tables — `workspaces`, `users`, `channels`, `messages`,
-//! `replies_pages`, `slack_attachments` — shared bookkeeping
-//! (`<table>_bookkeeping`, `sync_runs`, …) lives in
-//! [`datalib_etl::doltlite_raw`]. Per the dolt_diff + per-provider
-//! CAS edge migration: attachment bytes ride in the shared
-//! `cas_objects`, but the (file_id → blake3) mapping lives on
-//! `slack_attachments` rather than the shared `blob_refs`.
-//!
-//! No listing pre-seed: rows only appear after a successful detail
-//! fetch. See `schema_raw.rs` for the rationale.
-//!
-//! ## Wire-event tape
-//!
-//! `RawDb::attach_event_tape` wires a JSONL mirror of every entity
-//! upsert. The tape append fires after the doltlite commit succeeds;
-//! see [`docs/dev/data_architecture_ingestion.md`] § "Wire-event tape
-//! (JSONL)".
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -83,9 +65,6 @@ impl RawDb {
         &self.cas
     }
 
-    /// Attach a JSONL event tape. Every entity upsert is mirrored as
-    /// one line in `<tape.dir>/<table>.jsonl` in addition to landing
-    /// in doltlite. The tape is shared by clones of this `RawDb`.
     pub fn attach_event_tape(&mut self, tape: Arc<EventTape>) {
         self.tape = Some(tape);
     }
@@ -120,7 +99,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Age of the most recent successful sweep for `key`.
     pub async fn manifest_sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
         let scope = format!("slack:sweep:{key}");
         let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
@@ -139,9 +117,6 @@ impl RawDb {
         Ok(Some(Utc::now() - dt))
     }
 
-    /// Stamp `key`'s sweep as completed at `now()`. Call after every
-    /// page of the sweep has been written so an interrupted sweep
-    /// doesn't poison the TTL check.
     pub async fn record_manifest_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("slack:sweep:{key}");
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
@@ -186,8 +161,6 @@ impl RawDb {
         bulk_upsert_with_tape(&self.pool, self.tape_ref(), &[row], &payloads).await
     }
 
-    /// Return the cached workspace `team_id` so callers that need it
-    /// before re-fetching `auth.test` don't have to walk the payload.
     pub async fn cached_team_id(&self) -> Result<Option<String>> {
         let row = sqlx::query(
             "SELECT w.id FROM workspaces w \
@@ -347,20 +320,6 @@ impl RawDb {
         dr::load_payloads(&self.pool, "channels").await
     }
 
-    /// Conversations we should iterate during a fetch run.
-    ///
-    /// `include_archived` applies to everything — an `im` carries
-    /// `is_archived` like a channel does. `members_only` cannot: a 1:1
-    /// DM has no `is_member` field at all, so applying that predicate
-    /// to DM rows would drop every one of them. Hence the `is_dm`
-    /// split, and hence `include_dms` as the only DM-side gate here.
-    ///
-    /// Which DMs, specifically, is [`super::select_targets`]'s job: it
-    /// applies the `dm_users` allowlist against the participant list,
-    /// in Rust, where it is a pure function this crate can unit-test.
-    ///
-    /// `is_dm IS NULL` reads as "channel": rows written before the
-    /// column existed are all channels, because DMs were never listed.
     pub async fn channels_for_fetch(
         &self,
         members_only: bool,
@@ -516,14 +475,6 @@ impl RawDb {
         Ok(out)
     }
 
-    /// `(min(ts), max(ts))` per channel, in one aggregate scan.
-    ///
-    /// `latest` drives the downloader's forward resume cursor. `oldest`
-    /// is the floor of what we've already mirrored, which bounds the
-    /// backfill window a widened `since` schedules — see
-    /// `download::Adjustments`. Both come from the same GROUP BY because
-    /// they're read at the same scan point in a run, and a second full
-    /// aggregate over `messages` is not free on a large workspace.
     pub async fn ts_bounds_by_channel(&self) -> Result<HashMap<String, TsBounds>> {
         let rows = sqlx::query(
             "SELECT channel_id, MIN(ts) AS min_ts, MAX(ts) AS max_ts \
@@ -568,9 +519,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// `(channel_id, thread_ts) → latest_reply` for every thread we've
-    /// already walked. Used to skip redundant `conversations.replies`
-    /// calls on the next sync.
     pub async fn latest_reply_by_thread(&self) -> Result<HashMap<(String, String), String>> {
         let rows = sqlx::query(
             "SELECT channel_id, thread_ts, latest_reply FROM replies_pages
@@ -654,9 +602,6 @@ pub struct UserDirectoryEntry {
 }
 
 impl UserDirectoryEntry {
-    /// The most human of this user's names — the same rule the
-    /// renderer titles messages with, so a DM's download-time progress
-    /// line and its rendered title agree.
     pub fn label(&self) -> String {
         crate::user_label(self.real_name.as_deref(), self.name.as_deref(), &self.id)
     }
@@ -701,8 +646,6 @@ pub struct LoadedRaw {
     pub messages: Vec<LoadedMessage>,
 }
 
-/// Synchronous helper for tests + non-async callers that want a
-/// snapshot of every entity table at a fixed point in time.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {

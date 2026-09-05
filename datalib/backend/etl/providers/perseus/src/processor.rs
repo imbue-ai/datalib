@@ -1,9 +1,4 @@
 //! Program-A `DataProcessor`s for the perseus source (download + render).
-//!
-//! Perseus is **file-tree-backed**: download writes raw TEI XML to disk (no
-//! doltlite store), so its download processor opens no pool, registers no
-//! `Checkpoint`, and issues no commit. Render parses the on-disk tree and
-//! (optionally) runs sentence alignment before rendering.
 
 use std::path::PathBuf;
 
@@ -48,8 +43,6 @@ pub fn plan_download(
     Ok(procs)
 }
 
-/// Render wave. Alignment pairs come from the render step's own
-/// params (empty = no alignment).
 pub fn plan_render(
     ctx: PlanContext,
     config: PerseusRenderConfig,
@@ -110,8 +103,6 @@ impl DataProcessor for PerseusRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::RENDER_VERSION)
     }

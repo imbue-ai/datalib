@@ -1,10 +1,4 @@
 //! Markdown + grid_rows rendering for Beeper documents.
-//!
-//! One `.md` per `(room, period)` bucket. Reactions render inline
-//! under the message they target, even when the reaction itself
-//! landed in a later period. Blobs that were ingested with bytes
-//! get materialized to a sibling `blobs/` directory and linked
-//! relatively from the markdown.
 
 use std::collections::HashMap;
 use std::fs;
@@ -184,13 +178,8 @@ fn output_paths(
     (md_path, page_dir)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Fingerprint
-// ─────────────────────────────────────────────────────────────────────
 
-/// Stable hash of every message + attached reaction in the doc, plus
-/// the render-version stamp. Re-renders of unchanged docs collapse
-/// to a no-op via `prior_fingerprints`.
 fn compute_fingerprint(doc: &DocBucket) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     RENDER_VERSION.hash(&mut h);
@@ -219,9 +208,7 @@ fn compute_fingerprint(doc: &DocBucket) -> String {
     format!("{:016x}", h.finish())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Markdown
-// ─────────────────────────────────────────────────────────────────────
 
 fn render_markdown(
     room: &Room,
@@ -487,24 +474,15 @@ fn human_bytes(n: i64) -> String {
 /// `when_ts` for an epoch-ms stamp, at **millisecond** precision —
 /// which is what this renderer has always emitted, and changing it
 /// would re-cut every fingerprint beeper has written.
-///
-/// The policy (unrepresentable ⇒ null, and say so) lives in
-/// `datalib-time`. This used to be a local copy that returned the
-/// marker string `@{ms}ms` instead, which is not RFC 3339, so
-/// `GridRow::builder().build()` rejected it and one bad row failed the
-/// whole render step.
 fn iso_from_ms(ms: i64) -> Option<String> {
     datalib_time::when_ts_from_unix_millis(Some(ms), datalib_time::WhenTsPrecision::Millis)
 }
 
-/// Human-friendly timestamp for the markdown body.
 fn display_ts(ms: i64) -> String {
     datalib_time::display_ts_from_unix_millis(Some(ms))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Blob materialization
-// ─────────────────────────────────────────────────────────────────────
 
 /// Markdown link target for a Blob — `blobs/<short-b3>.<ext>` when
 /// bytes have been ingested into the CAS, falling back to a
@@ -548,9 +526,6 @@ fn content_type_to_ext(ct: &str) -> Option<String> {
     )
 }
 
-/// Stream each blob's bytes from the per-source CAS file into a file
-/// under `blobs/<short-b3>.<ext>`. Blobs without an attached hash
-/// (download failed to fetch them, or `--no-media` was set) are skipped.
 fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> Result<usize> {
     // (blake3, content_type) pairs we need from the CAS.
     let mut needed: Vec<(String, Option<String>)> = Vec::new();
@@ -593,15 +568,8 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
     .map_err(|e| anyhow::anyhow!("{e:#}"))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // GridRow
-// ─────────────────────────────────────────────────────────────────────
 
-/// Project one doc bucket into its `grid_rows`.
-///
-/// A row that will not validate is dropped and recorded on `problems`
-/// rather than failing the source's render — see
-/// `GridRowBuilder::build_or_record`.
 fn build_grid_rows(
     room: &Room,
     doc: &DocBucket,

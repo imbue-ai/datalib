@@ -1,16 +1,6 @@
 //! Encrypt path — inverse of [`crate::decrypt_file`]. Builds a complete
 //! crypt15 file (header + ciphertext + GCM tag + MD5 footer) from
 //! plaintext SQLite bytes.
-//!
-//! Used by `whatsapp_make_fixture` to generate the TNG-themed test
-//! backup at build time. Not exercised in production decrypt paths —
-//! the WhatsApp Android client is what produces real backup files.
-//!
-//! Determinism is the load-bearing requirement here: the genrule
-//! emitting the encrypted backup is cached under Bazel, so the same
-//! (root_key, plaintext, iv) inputs must produce byte-identical
-//! output across runs. Caller supplies the IV; the writer never
-//! generates randomness.
 
 use aes::cipher::{BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::Aes256;
@@ -21,18 +11,6 @@ use md5::{Digest, Md5};
 use crate::crypto::{compute_h, compute_j0};
 use crate::derive_backup_encryption_key;
 
-/// Assemble a complete crypt15 file (single-file backup, with trailing
-/// MD5 checksum) from `plaintext_sqlite` bytes.
-///
-/// `iv` must be exactly 16 bytes; caller picks it. For Bazel-cached
-/// fixtures use a fixed value (e.g. all zeros). `root_key` is the
-/// 32-byte WhatsApp root key (the value normally hex-encoded in
-/// `WHATSAPP_BACKUP_DECRYPTION_KEY`). The function derives the AES
-/// key from it the same way decrypt does.
-///
-/// The plaintext is zlib-deflate-compressed before encryption — the
-/// real WhatsApp client does the same, and `decrypt_file` rebuilds
-/// the SQLite by inflating the post-GCM bytes.
 pub fn encrypt_to_crypt15(
     plaintext_sqlite: &[u8],
     root_key: &[u8; 32],
@@ -115,14 +93,6 @@ pub fn encrypt_to_crypt15(
     Ok(out)
 }
 
-/// Build the smallest BackupPrefix that decrypts:
-///   field 1 (key_type)      = 1                       (`Key_Type.HSM_CONTROLLED`)
-///   field 3 (c15_iv submsg) = { field 1 (iv) = 16 bytes }
-///
-/// Real WhatsApp backups also carry `info` (field 4: app version,
-/// jid suffix, feature flags). The decrypt path ignores all of that
-/// — only the IV in field 3 is load-bearing — so this minimal proto
-/// is enough for fixtures.
 fn build_backup_prefix(iv: &[u8; 16]) -> Vec<u8> {
     let mut out = Vec::with_capacity(24);
     // field 1, wire type 0 (varint), value 1

@@ -1,39 +1,4 @@
 //! Raw doltlite store → in-memory [`ParsedContacts`].
-//!
-//! Render reads from the per-source doltlite raw store written by
-//! either CardDAV ([`crate::download::fetch`]) or the local file
-//! walker ([`crate::download::vcf_dir::fetch`]). Both writers produce
-//! the same row shape, so render has exactly one input contract.
-//!
-//! Each [`super::super::download::db::LoadedRawContact`] carries the
-//! raw vCard text (already unwrapped from the `{"vcard": …}` payload
-//! envelope on the SQL side) plus the addressbook label. We split
-//! the text into `BEGIN:VCARD…END:VCARD` blocks defensively — a
-//! single `contacts.payload` row usually carries one block, but
-//! Google-Takeout-shaped sources concatenate many under one `href`
-//! and the file-walker leaves that shape intact.
-//!
-//! ## Why not pull in a vCard crate?
-//!
-//! Surveyed the Rust ecosystem (2026-Q2): `vcard4` is the most
-//! actively maintained and most spec-faithful for RFC 6350 / vCard
-//! 4.0, with looser support for 3.0; `vcard` is older and less
-//! maintained; `ical` covers vCalendar primarily and treats vCard as
-//! a side concern. None is the de-facto "serde_json of vCards".
-//!
-//! Our read surface is intentionally small — UID / FN / EMAIL / TEL /
-//! ADR / ORG / TITLE / NOTE / PHOTO / REV — so hand-rolling the line
-//! folding + param parsing + multi-block splitting is ~50 lines and
-//! lets us keep our promoted-column shape (`ParsedContact`) without
-//! an adaptation layer. If we ever need to *write* vCards (e.g. push
-//! changes back to CardDAV), or hit a real spec edge case (grouped
-//! 4.0 properties, quoted-printable PHOTO), swap in `vcard4`:
-//!
-//!   https://crates.io/crates/vcard4
-//!
-//! The promoted columns + the `download::api::vcard_*` helpers are the
-//! seam — flip `parse_file` to call `vcard4::parse` and re-derive the
-//! same `ParsedContact` fields from its AST.
 
 use std::path::{Path, PathBuf};
 
@@ -98,10 +63,6 @@ pub struct ParsedContacts {
 /// parse each vCard. Returns an empty [`ParsedContacts`] when the
 /// store is absent or empty — render paths shouldn't fail hard
 /// when the upstream download hasn't run yet.
-///
-/// Sync wrapper around the async loader so callers in the
-/// (synchronous) render dispatch can stay synchronous, matching
-/// every other provider's `parse(&fixture)` shape.
 pub fn parse(db_path: &Path) -> Result<ParsedContacts> {
     if !db_path.exists() {
         return Ok(ParsedContacts::default());
@@ -116,8 +77,6 @@ pub fn parse(db_path: &Path) -> Result<ParsedContacts> {
     Ok(parse_loaded(rows))
 }
 
-/// Same as [`parse`] but takes an already-loaded row vector. Useful
-/// for tests that want to skip the doltlite round-trip.
 pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
     let mut out = ParsedContacts::default();
     for row in rows {
@@ -168,11 +127,6 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
 /// insensitive markers (RFC 6350 §3.3 says "BEGIN" / "END" are
 /// case-insensitive in practice every server emits uppercase, but
 /// stay defensive).
-///
-/// Discards any text outside a block — wrapper-style exports
-/// (CardDAV's `<address-data>` wrapping, leading mail-server
-/// envelope text) wouldn't survive a round trip through this and
-/// shouldn't.
 fn split_vcards(body: &str) -> Vec<String> {
     let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
     let mut out: Vec<String> = Vec::new();

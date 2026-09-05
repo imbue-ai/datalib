@@ -1,11 +1,4 @@
 //! The diff interpretation, with no database and no HTML.
-//!
-//! Everything here drives `analyze`, the pure function between what was
-//! read (`Inputs`) and what was concluded (`DiffResult`). A test builds
-//! the rows a doltlite prolly diff would have produced and asserts on
-//! the resulting statuses, so move pairing, subtree rollup, the
-//! delete-vs-copy-remains distinction and in-tree duplicate grouping
-//! are all pinned without a `.doltlite_db` or a browser in the picture.
 
 use std::collections::BTreeMap;
 
@@ -94,9 +87,7 @@ fn statuses(r: &DiffResult, side: Side) -> Vec<(String, Status)> {
     r.statuses(side).into_iter().collect()
 }
 
-// ---------------------------------------------------------------------
 // move detection
-// ---------------------------------------------------------------------
 
 #[test]
 fn same_digest_at_a_new_path_is_a_move() {
@@ -175,9 +166,7 @@ fn pairing_prefers_the_candidate_that_kept_its_basename() {
     );
 }
 
-// ---------------------------------------------------------------------
 // subtree rollup
-// ---------------------------------------------------------------------
 
 fn moved_tree() -> DiffResult {
     Case {
@@ -237,9 +226,7 @@ fn a_descendant_that_moved_somewhere_else_survives_the_rollup() {
     assert_eq!(r.node(Side::Left, "docs").unwrap().rolled_up, 0);
 }
 
-// ---------------------------------------------------------------------
 // deletes and copies
-// ---------------------------------------------------------------------
 
 #[test]
 fn a_delete_with_no_surviving_copy() {
@@ -343,9 +330,7 @@ fn copy_detection_off_downgrades_to_a_plain_delete_and_add() {
     );
 }
 
-// ---------------------------------------------------------------------
 // modifications
-// ---------------------------------------------------------------------
 
 #[test]
 fn a_changed_file_is_a_finding_on_both_sides() {
@@ -385,9 +370,7 @@ fn the_root_row_is_never_a_finding() {
     assert!(r.left.nodes.is_empty());
 }
 
-// ---------------------------------------------------------------------
 // in-tree duplicates
-// ---------------------------------------------------------------------
 
 #[test]
 fn repeated_bytes_are_grouped() {
@@ -460,9 +443,7 @@ fn a_duplicate_the_diff_never_mentioned_still_appears() {
     assert!(r.node(Side::Right, "a/x.bin").is_some());
 }
 
-// ---------------------------------------------------------------------
 // tree assembly
-// ---------------------------------------------------------------------
 
 #[test]
 fn ancestor_directories_are_synthesised() {
@@ -534,9 +515,7 @@ fn full_tree_does_not_relabel_a_rolled_up_move_as_a_separate_move() {
     );
 }
 
-// ---------------------------------------------------------------------
 // the JSON contract
-// ---------------------------------------------------------------------
 
 fn rich() -> DiffResult {
     Case {
@@ -615,9 +594,7 @@ fn the_status_strings_are_what_the_viewer_switches_on() {
     }
 }
 
-// ---------------------------------------------------------------------
 // diff weight, for sorting big changes to the top
-// ---------------------------------------------------------------------
 
 fn weight(r: &DiffResult, side: Side, path: &str) -> (u32, i64) {
     let n = r.node(side, path).unwrap();

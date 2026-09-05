@@ -1,15 +1,4 @@
 //! Signal render stage.
-//!
-//! Reads the doltlite raw store the download stage built and emits one
-//! markdown document per chat. Each message becomes one line of the
-//! markdown body; each chat also gets a chat-level grid_row plus one
-//! grid_row per chat item so the search grid can surface individual
-//! Signal messages alongside everything else.
-//!
-//! Scope (first pass): standardMessage text only. Stickers, view-once
-//! attachments, reactions, group updates etc. are skipped silently —
-//! the raw doltlite still carries the prost bytes, so a later render
-//! version can crack them open without re-downloading.
 
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not

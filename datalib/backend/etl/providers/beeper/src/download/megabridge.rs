@@ -1,23 +1,5 @@
 //! Post-pass enrichment from `~/Library/Application
 //! Support/BeeperTexts/local-<bridge>/megabridge.db`.
-//!
-//! `index.db` gives us a bridge-agnostic message cache but strips
-//! the upstream system's per-message ids (Signal message UUID,
-//! WhatsApp internal id, …). For **local** bridges, those ids live
-//! verbatim in the bridge's own `megabridge.db.message` table, which
-//! also carries a `mxid` column that's exactly the Matrix event id
-//! we already stored as `events.native_event_id`. A straight join
-//! gives us `events.external_event_id` for free.
-//!
-//! This module runs *after* [`super::index_db::ingest`] and only
-//! UPDATEs existing rows. Messages that exist in megabridge but
-//! never made it into index.db are reported as a count and left
-//! alone for now — a future pass can insert them with
-//! `source = "beeper_megabridge"` once we decide what to do about
-//! UUID coexistence.
-//!
-//! Cloud bridges (slackgo, googlechat, …) have no local megabridge
-//! file. We just skip them silently.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -105,9 +87,6 @@ pub struct EnrichSummary {
     pub events_orphaned: usize,
 }
 
-/// Walk every `local-*/megabridge.db` under `beeper_data_dir`, and
-/// for each one whose canonical network is in `networks`, populate
-/// `events.external_event_id` for matching rows in `dst`.
 pub async fn enrich(
     beeper_data_dir: &Path,
     dst: &RawDb,

@@ -1,19 +1,4 @@
 //! GitLab HTTP fixture synthesizer.
-//!
-//! Walks the event-store layout the live downloader writes under
-//! `<api_dir>/<entity>/{created,updated}/events.jsonl` and emits playback
-//! fixtures for every request [`crate::download`] would issue:
-//!
-//! * `GET /api/v4/user` — viewer identity, from latest `self_identity`.
-//! * `GET /api/v4/merge_requests?...` — one fixture per
-//!   [`crate::download::DEFAULT_SCOPES`] scope. First-run / full-sync
-//!   assumption: no `updated_after` clause is appended. The body is a
-//!   bare array of minimal items (`web_url` + `iid` are the only fields
-//!   download reads). No `Link: rel="next"` header → paginate stops.
-//! * `GET /api/v4/projects/{url-encoded-path}/merge_requests/{iid}` — MR
-//!   detail from latest `merge_request.raw`.
-//! * `GET /api/v4/projects/{path}/merge_requests/{iid}/discussions?per_page=100`
-//!   — array of `discussion.raw` per MR.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

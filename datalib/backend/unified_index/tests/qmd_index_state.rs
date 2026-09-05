@@ -1,20 +1,4 @@
 //! `QmdIndexReader` against the real qmd index the TNG fixture builds.
-//!
-//! The claim this test exists to defend is the one that would rot
-//! silently: **`documents.hash` is the SHA-256 of the rendered file's
-//! bytes**, which is the entire basis for joining grid rows to qmd
-//! documents without reimplementing qmd's `handelize` path mangling.
-//! If a qmd version bump changed the digest, or started hashing
-//! normalized rather than raw text, the grid's Indexed / Embedded
-//! columns would go all-❌ with nothing else failing. So this test
-//! walks the fixture's real rendered markdown tree, hashes every file
-//! itself, and asserts the reader reports every one of them indexed.
-//!
-//! Fixtures: `//tests/fixtures:ingested_tng` (the markdown tree) and
-//! `//tests/fixtures:ingested_tng_qmd` (a real qmd index over it,
-//! built by the real indexer). Both are already inputs to
-//! `//datalib/ui:e2e_test` via `materialize_tng_root`, so depending on
-//! them here adds nothing new to a `bazel test //...`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -51,9 +35,6 @@ fn fixture(rel: &str) -> PathBuf {
         })
 }
 
-/// Lay both fixture tars down into one directory. They share a `qmd/`
-/// staging prefix precisely so they layer: markdown tree plus
-/// `unified_index/qmd/index.sqlite` is a complete data root.
 fn materialize_root(dst: &Path) {
     for tar in ["ingested/qmd.tar", "ingested/qmd-index.tar"] {
         let status = Command::new("tar")
@@ -68,9 +49,6 @@ fn materialize_root(dst: &Path) {
     }
 }
 
-/// …plus the grid index, at the path `DoltRepo::open` resolves. Same
-/// placement `tests/fixtures/materialize_tng_root.sh` uses, so this
-/// test and the e2e harness build the same root.
 fn materialize_root_with_grid(dst: &Path) {
     materialize_root(dst);
     let grid_dir = dst.join("unified_index").join("grid");
@@ -85,8 +63,6 @@ fn materialize_root_with_grid(dst: &Path) {
     std::fs::set_permissions(&db, perms).expect("chmod");
 }
 
-/// Every `.md` under a `rendered_md/` directory in the root — the same
-/// set the indexer's `*/rendered_md/**/*.md` mask selects.
 fn rendered_markdowns(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -208,17 +184,6 @@ async fn a_root_without_an_index_opens_to_none() {
 /// Editing a rendered document must flip **exactly its own rows** to
 /// not-indexed, and restoring it must flip them back — with every other
 /// document's rows untouched throughout.
-///
-/// This is the behavior the grid's two columns promise, and it is the
-/// one that is easy to get subtly wrong: the grid is message-level
-/// while the index is document-level, so a bug in either hop (row →
-/// document by `markdown_uuid`, or document → qmd by content hash)
-/// shows up as neighbouring rows flipping together, or as nothing
-/// flipping at all. Both failure modes look plausible on screen.
-///
-/// Drives `resolve_markdown_states` — the same function the
-/// `/qmd_state` handler calls — against the real fixture index, so it
-/// cannot pass while the shipped path is broken.
 #[tokio::test]
 async fn editing_one_document_flips_only_its_own_rows() {
     let tmp = tempfile::tempdir().expect("tempdir");

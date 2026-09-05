@@ -1,29 +1,4 @@
 //! `StepRun::Subprocess` execution.
-//!
-//! The wire protocol is the Unix-y one from the design doc: the child
-//! writes NDJSON on **stdout** — the same [`Event`] schema the
-//! in-process sinks use, plus one final `{"event": "outcome", ...}`
-//! line carrying its [`StepOutcome`] (or failure classification).
-//! No ports, no registration, no per-child auth token.
-//!
-//! * Progress events are re-tagged with the authoritative step id and
-//!   forwarded to the orchestrator's sink.
-//! * Unparseable stdout lines are forwarded as info logs (so a step
-//!   can be a plain shell command that prints text).
-//! * stderr is captured and its tail becomes the error message on a
-//!   non-zero exit.
-//! * Exit 0 with no outcome line → success with no output report (the
-//!   scheduler content-hashes). Non-zero exit → failure; the kind
-//!   comes from the outcome line if the child wrote one, else `Data`.
-//!
-//! The child learns its identity from the environment:
-//! `DATALIB_DAG_STEP`, `DATALIB_DAG_DATA_ROOT`,
-//! `DATALIB_DAG_INPUTS` (all resolved input artifacts,
-//! `\n`-separated, relative to the data root) and
-//! `DATALIB_DAG_CHANGED_INPUTS` (the subset whose version moved).
-//! Run-wide settings arrive the same way (`DATALIB_DAG_NOW`, the
-//! reset flags, a `PATH` with the binary dir prepended) — see
-//! [`crate::scheduler::Runner::child_env`].
 
 use std::collections::BTreeMap;
 use std::process::Stdio;
@@ -52,14 +27,6 @@ pub const ENV_RESET_AND_REDOWNLOAD: &str = "DATALIB_DAG_RESET_AND_REDOWNLOAD";
 pub const ENV_REFETCH_BLOBS: &str = "DATALIB_DAG_REFETCH_BLOBS";
 
 /// The final stdout line a subprocess step may emit.
-///
-/// Deliberately lenient about the per-output rows: any executable can
-/// be a step, and one written against an older protocol reports
-/// `{"path": …, "changed": true}` with no version. Rejecting that would
-/// fail the step and poison its subtree over a field that used to be
-/// valid, so a row with no version is dropped with a warning and the
-/// runner content-hashes that output — exactly what the old
-/// `changed: true` resolved to anyway.
 #[derive(Debug, Default, Deserialize)]
 struct WireOutcome {
     #[serde(default)]
@@ -76,7 +43,6 @@ struct WireArtifactState {
 }
 
 impl WireOutcome {
-    /// Keep the rows that carry a version; warn about the rest.
     fn into_outputs(self, sink: &Arc<dyn EventSink>, step: &str) -> Vec<ArtifactState> {
         let mut out = Vec::with_capacity(self.outputs.len());
         for row in self.outputs {
@@ -250,7 +216,6 @@ fn forward_text(sink: &Arc<dyn EventSink>, ctx: &StepCtx, line: &str) {
     });
 }
 
-/// Replace whatever step id the child claimed with the real one.
 fn retag(ev: Event, id: &str) -> Event {
     let id = id.to_string();
     match ev {
@@ -275,12 +240,6 @@ fn retag(ev: Event, id: &str) -> Event {
 }
 
 // ── Child registry + signal forwarding ───────────────────────────────
-//
-// Terminal Ctrl-C reaches the whole foreground process group, but a
-// programmatic cancel (the http worker killing the runner) signals
-// only the runner. The registry lets the runner's signal handler
-// forward SIGINT to every live child so steps get their chance to
-// checkpoint-commit before exiting.
 
 static CHILD_PIDS: std::sync::Mutex<Option<std::collections::HashSet<u32>>> =
     std::sync::Mutex::new(None);
@@ -306,8 +265,6 @@ impl Drop for RegisteredChild {
     }
 }
 
-/// Send SIGINT to every live step subprocess (best effort). Unix only;
-/// elsewhere a no-op.
 pub fn interrupt_children() {
     #[cfg(unix)]
     {

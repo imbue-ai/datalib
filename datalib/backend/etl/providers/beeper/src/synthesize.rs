@@ -1,8 +1,4 @@
 //! HTTP playback fixture synthesis for the Beeper provider.
-//!
-//! Placeholder: synth is only needed when we wire Beeper into the
-//! hermetic Bazel genrule path. Until then the trait impl just reports
-//! zero fixtures so the orchestrator can iterate over us harmlessly.
 
 use std::path::{Path, PathBuf};
 

@@ -4,38 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live Gmail REST API download test.
-//!
-//! Mirrors ONE label out of a real Gmail account into a hermetic
-//! tempdir, then asserts against the **doltlite store the run wrote** —
-//! not against log lines, per AGENTS.md ("a log line tells you what the
-//! code *said*, the store tells you what it *did*").
-//!
-//! Tagged `manual` + `external` + `no-sandbox` in Bazel and `#[ignore]`
-//! in cargo, so it stays out of `bazelisk test //...`. Run it with:
-//!
-//! ```sh
-//! bazelisk test //datalib/backend/etl/providers/email:gmail_live \
-//!     --test_arg=--ignored --test_arg=--nocapture --test_output=all \
-//!     --test_env=PATH --test_env=HOME --test_env=USER
-//! ```
-//!
-//! Prerequisites: `latchkey auth browser google-gmail` has been run, and
-//! the account has a label named by `$DATALIB_GMAIL_TEST_LABEL`
-//! (default `datalib`). The label's *contents* are the test author's, so
-//! nothing here asserts on specific subjects or senders — only on
-//! invariants that must hold for any label:
-//!
-//!   * every message carries the label we filtered on;
-//!   * every message has a `.eml` blob in the CAS, byte-identical to
-//!     what its `blake3` says;
-//!   * every message belongs to a thread row that lists it;
-//!   * a second run is a no-op that spends almost no quota;
-//!   * a budget-limited backfill makes progress across runs.
-//!
-//! Those last two are the point of a live test: incremental correctness
-//! and multi-run resume are what unit tests over canned JSON cannot
-//! check. Both were broken in the first cut and neither failure would
-//! have been visible from a single run.
 
 use std::collections::BTreeSet;
 
@@ -43,8 +11,6 @@ use datalib_etl_email::download::gmail_api::{self, FetchOptions};
 use datalib_etl_email::download::{db_path_for, RawDb};
 use datalib_etl_email_config::EmailGmailApi;
 
-/// Which label to mirror. Overridable so this is runnable against an
-/// account that spells it differently.
 fn test_label() -> String {
     std::env::var("DATALIB_GMAIL_TEST_LABEL").unwrap_or_else(|_| "datalib".to_string())
 }
@@ -94,11 +60,6 @@ async fn gmail_live_one_label_roundtrip() {
     let db = RawDb::open(&db_path_for(&tmp)).await.expect("open raw db");
 
     // ── the label filter actually filtered ──────────────────────────
-    //
-    // This is the assertion that would have caught the original bug,
-    // where the filter was applied client-side after paying for every
-    // message in the account. If enumeration ever stops being narrowed
-    // server-side, `emails` fills with the whole mailbox and this fails.
     let email_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM emails")
         .fetch_one(db.pool())
         .await
@@ -209,11 +170,6 @@ async fn gmail_live_one_label_roundtrip() {
     drop(db);
 
     // ── run 2: incremental, and a no-op ─────────────────────────────
-    //
-    // The assertion that earns this test its keep. A second run must not
-    // re-fetch: it should take the history path, find nothing new, and
-    // spend a trivial amount of quota. The original code passed the first
-    // run and would have quietly re-downloaded everything here.
     let second = gmail_api::fetch(opts(&tmp, &label))
         .await
         .expect("second gmail fetch failed");
@@ -251,7 +207,6 @@ async fn gmail_live_one_label_roundtrip() {
     eprintln!("[test] ok: {email_count} messages under {label:?}, second run was a no-op");
 }
 
-/// The `mailboxes` row id for a label name, by canonical name.
 async fn mailbox_id_for(db: &RawDb, label: &str) -> String {
     let rows: Vec<(String, Option<String>)> = sqlx::query_as("SELECT id, name FROM mailboxes")
         .fetch_all(db.pool())
@@ -266,18 +221,6 @@ async fn mailbox_id_for(db: &RawDb, label: &str) -> String {
 }
 
 /// A budget-limited backfill must **walk forward** across runs.
-///
-/// This is the regression test for the subtlest bug in the first cut.
-/// That version saved the `historyId` cursor even when the run stopped at
-/// `message_budget`, so run 2 took the incremental path, found nothing
-/// new, and declared victory — permanently abandoning every message the
-/// budget had cut off. A single run looked perfect; the mailbox was
-/// silently truncated.
-///
-/// The fix is two-part and this exercises both: hold the cursor when the
-/// budget is spent, and skip already-mirrored Gmail ids before paying
-/// `messages.get`'s 20 quota units. Without the second half the run would
-/// re-fetch the same prefix forever and never reach the tail.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn gmail_live_budget_limited_backfill_makes_progress() {

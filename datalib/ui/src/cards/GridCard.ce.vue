@@ -6,14 +6,6 @@
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-//
-// Persistence: the card owns an opaque state string (see
-// HostCommands.setState) holding URLSearchParams of
-//   q    — the search query
-//   sel  — the selected row uuid
-//   cols — AG Grid column state, base64url-encoded JSON
-// The host puts it in this column's URL segment; on load it comes
-// back via ctx.initialState.
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
@@ -108,14 +100,6 @@ const rows = ref<SearchRow[]>([]);
 // The query whose results are actually painted right now — not `query`
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
-//
-// The grid deliberately keeps the previous result set on screen while a
-// query is in flight, so "still the old rows" and "the new rows happen
-// to look like the old ones" are indistinguishable from the DOM. This
-// makes them distinguishable: it changes exactly once per completed
-// search, when the rows it describes go up. `null` until the first
-// result set lands. Surfaced as `data-shown-query` for the e2e suite,
-// which otherwise has to poll cell contents and race the repaint.
 const shownQuery = ref<string | null>(null);
 const total = ref(0);
 const loading = ref(false);
@@ -127,20 +111,6 @@ const qmdError = ref<string | null>(null);
 const accounts = ref<AccountsMap>({});
 
 // --- qmd index state (the Indexed / Embedded columns) ---------------
-//
-// Kept in a Map OUTSIDE `rows`, keyed by markdown_uuid, and read by the
-// two columns' valueGetters. Deliberately not merged into the row
-// objects: index state changes on a different clock from search results
-// (it moves while an indexing run is in flight), and reassigning
-// `rows` to carry it would blow away selection, scroll position, and
-// the adaptive column pass on every refresh. `refreshCells` on two
-// columns is the whole update.
-// Source id → the `name` its steps declare in config.toml, for the
-// "Source" column. Config-side, not index-side, and deliberately so: a
-// name is free text a person edits at any time, while the index is
-// rebuilt by a pipeline step. Baking names into `grid_rows` would make
-// renaming a source a re-indexing job. Sources with no name are simply
-// absent here and the column falls back to the id.
 const sourceNames = ref<Map<string, string>>(new Map());
 
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
@@ -499,22 +469,6 @@ function formatSlugUuid(slug: string, uuid: string): string {
 }
 
 /// Put one id per target on the clipboard, comma-separated.
-///
-/// `pick` selects WHICH id space. The grid offers two separate actions
-/// rather than one that guesses, because the two ids are not
-/// interchangeable and are often both UUID-shaped: `uuid` is what
-/// resolves inside datalib (chat URLs, `feedback.target_uuids`, `id:`
-/// filters), while `upstream_id` is what resolves upstream
-/// (claude.ai, the GitHub API, `conversations.replies`). A single
-/// action returning whichever happened to exist would leave no way to
-/// tell which one you were holding.
-///
-/// This used to be moot: claude, chatgpt and notion passed the
-/// upstream id straight through as their primary key, so "Copy UUIDs"
-/// yielded a native id for those three and ours for the other
-/// thirteen — by accident, not by design. Porting them onto
-/// `datalib_id` turns `uuid` into a minted v5 and would have silently
-/// dropped the native id from the UI entirely.
 async function copyIds(targets: SearchRow[], pick: (r: SearchRow) => string) {
   const text = targets
     .map(pick)
@@ -848,12 +802,6 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   },
   // The configured source, as opposed to the provider icon left of it:
   // two Slack workspaces are one "Provider" and two of these.
-  //
-  // `field` and `valueGetter` disagree on purpose. The cell shows the
-  // name from config.toml, but `buildFilterCtx` reads `row[colId]` off
-  // the raw row, so right-click "Keep only" emits the source *id* —
-  // which is what `source_name:` matches. Filtering on a name would be
-  // wrong twice over: names are mutable, and two sources may share one.
   {
     field: "source_name",
     colId: "source_name",
@@ -876,23 +824,6 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   // "reachable by semantic search" are genuinely different facts, and
   // the gap between them is exactly what a user hunting a missing
   // result needs to see.
-  //
-  // Hidden by default: this answers "why didn't search find X?", which
-  // is a question you go looking for, not one worth two columns of
-  // width on every ordinary search. Turn them on in the Columns tool
-  // panel; the choice persists in the card's URL state like any other
-  // column. The summary line under the grid stays visible either way,
-  // so the index's health is still on screen — and is how you find out
-  // the columns exist.
-  //
-  // Visibility also gates the work: `refreshQmdState` skips the
-  // per-document half of the request while both are hidden, so a grid
-  // nobody has asked doesn't pay for a file read + SHA-256 per document
-  // on every search.
-  //
-  // Not `field`-backed — the value comes from `qmdState`, keyed by the
-  // row's markdown_uuid — so `colId` is set explicitly for
-  // refreshCells / column state.
   {
     colId: "qmd_indexed",
     headerName: "Indexed",

@@ -1,68 +1,9 @@
 //! The one place datalib mints an entity id.
 //!
-//! Every `grid_rows.uuid`, `markdown_uuid`, and `data-section-uuid`
-//! anchor in the system is a UUIDv5 derived here, under a single root
-//! namespace, from an explicit four-part recipe. The point is not the
-//! hashing — sixteen providers were already doing that — it is that the
-//! question *"could these two ids collide?"* now has one answer, read
-//! off one file, instead of sixteen hand-rolled recipes each with its
-//! own frozen namespace constant and its own idea of what an id is
-//! scoped to.
-//!
-//! # What went wrong without it
-//!
-//! Before this crate, providers split four ways with no shared rule:
-//!
-//! * **Foreign string verbatim** — claude, chatgpt and notion used
-//!   the upstream's own id as our primary key. 12% of the fixture's
-//!   `grid_rows.uuid` values were consequently not UUIDs at all
-//!   (`tu-{tool_use_id}`, `th-{msg_uuid}-{idx}`, ChatGPT's
-//!   `msg-…` ids). Nothing parses the column as a UUID today, so this
-//!   was benign — but it put a foreign namespace inside ours, where a
-//!   single upstream id-reuse becomes our collision.
-//! * **Provider namespace + upstream account scope** — slack, email,
-//!   github, gitlab, beeper and friends. This is the shape that was
-//!   right, and [`Scope::Upstream`] is it.
-//! * **Provider namespace + our config's source name** — signal,
-//!   whatsapp, yolink, and (via a caller passing it into a parameter
-//!   literally named `account_id`) contacts. When that string was also
-//!   the editable display name, renaming a source silently re-keyed
-//!   every row it ever produced. Config now has two names (#201) and
-//!   only the stable `id` reaches a renderer, so the rename hazard is
-//!   gone and [`Scope::SourceInstance`] makes this expressible — as a
-//!   last resort, since such ids are a function of configuration
-//!   rather than of data.
-//! * **Content-addressed** — pdf (blake3), perseus (canonical work
-//!   id). Deliberately source-independent, so two sources finding one
-//!   file collapse to one row. [`Scope::Content`] keeps that explicit
-//!   rather than accidental.
-//!
-//! # Why not `source_type` either
-//!
-//! The source *type* is already the first recipe component: `provider`
-//! is a hardcoded `&'static str` per provider (`"slack"`, `"openai"`,
-//! `"jmap"`), never a config string. So "use the type instead" was
-//! never the missing piece — the type was always there, and what was
-//! missing is instance-level discrimination.
-//!
-//! The type alone cannot supply it: signal's `chat_id` is an
-//! autoincrement local to one backup file, and yolink's `device` is a
-//! user-typed label like `"fridge"`, so two configured accounts of
-//! either type would collide on every row. That needs either a stable
-//! *upstream* identity ([`Scope::Upstream`]) or, where the entity is
-//! one datalib invented and no upstream object exists,
-//! [`Scope::SourceInstance`].
-//!
-//! # Why not mint opaque random ids
-//!
-//! Tempting, and it does make collisions impossible. It also costs
-//! idempotent re-ingest: a v4 has to be looked up through a
-//! backpointer table on every render, and a fresh data root
-//! re-ingesting the same upstream data produces *different* ids. The
-//! fixture suite asserts byte-stable convergence across three runs and
-//! the insta goldens pin rendered output, both of which rest on ids
-//! being a pure function of upstream data. Determinism is the property
-//! to keep; uniqueness is the property to fix.
+//! Every `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` anchor is
+//! a UUIDv5 derived here from one four-part recipe under one root namespace,
+//! so "could these two ids collide?" has one answer read off one file.
+//! Choosing a scope, and what each choice costs, is `docs/dev/entity_ids.md`.
 
 use uuid::Uuid;
 
@@ -70,82 +11,33 @@ use uuid::Uuid;
 /// changing these bytes re-keys every row in every data root that has
 /// ever existed, and orphans every `feedback.target_uuids` entry
 /// pointing into the old keyspace.
-///
-/// Generated once as a v4 and hard-coded; it is a namespace, not a
-/// secret, and it must never be regenerated.
 pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
     0x64, 0x61, 0x74, 0x61, 0x6c, 0x69, 0x62, 0x2d, 0x69, 0x64, 0x2d, 0x6e, 0x73, 0x2d, 0x76, 0x31,
 ]);
 
 /// The space an entity id is unique within.
-///
-/// This is the decision that used to be implicit in each provider's
-/// recipe string, and the one that determines whether two configured
-/// sources can collide. Making it a type means a new provider has to
-/// answer the question rather than copy whichever neighbour it read
-/// first.
-///
-/// The variant to reach for last is [`Scope::SourceInstance`]: it keys
-/// on configuration rather than on data, so two roots ingesting the
-/// same upstream data under different step ids get different ids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope<'a> {
     /// Unique within one upstream account / workspace / organization,
     /// identified by a **provider-issued** id: an Anthropic
     /// `org_uuid`, a Slack `team_id`, a JMAP `account_id`, a Signal
     /// account identifier, a YoLink `family_device_id`.
-    ///
-    /// The default choice, and the only one that safely lets a user
-    /// configure the same provider twice. The value must come from
-    /// upstream data, never from our config: config strings are
-    /// user-editable and re-keying on an edit is the failure mode this
-    /// whole type exists to prevent.
     Upstream(&'a str),
 
     /// The natural key is already unique across the entire provider,
     /// so no further scoping is needed: a GitHub `{repo}:pr:{number}`,
     /// a Notion `page_id`, a WhatsApp `chat_jid`, an Anthropic
     /// `conversation_uuid`.
-    ///
-    /// Use only when the upstream genuinely guarantees this. "Probably
-    /// unique" is [`Scope::Upstream`] with the account id, which costs
-    /// nothing extra and cannot be wrong.
     ProviderGlobal,
 
     /// The configured source itself, identified by its **step id** —
     /// the stable half of a source's identity, not its display name.
-    ///
-    /// For entities that have no upstream identity at all because
-    /// datalib invented them: yolink's per-source timeseries page is a
-    /// document we compose for a configured source, and there is no
-    /// YoLink-side object it corresponds to.
-    ///
-    /// This variant only became safe to offer when config grew two
-    /// names (#201). A step's `id` is path-safe, unique, and forms the
-    /// directory structure — changing it is a migration, and the
-    /// wizard makes it read-only on edit — while `name` is the free
-    /// text people retype at will and never reaches an id. Before that
-    /// split there was one editable string doing both jobs, and
-    /// scoping on it meant a rename silently re-keyed every row a
-    /// source ever produced.
-    ///
-    /// Still the last resort. Ids scoped this way are a function of
-    /// *configuration* rather than of data, so two roots ingesting the
-    /// same upstream data under different step ids get different
-    /// uuids. Reach for [`Scope::Upstream`] whenever the provider
-    /// gives you anything at all to key on.
     SourceInstance(&'a str),
 
     /// Identity is the content itself, so two sources that find the
     /// same bytes deliberately produce one row — a PDF discovered
     /// under two scanned trees, the same canonical text from two
     /// corpora.
-    ///
-    /// This *will* make two overlapping sources contend for one id.
-    /// That is the intended behaviour, and `IdClaims` in
-    /// `datalib_etl::grid_index` turns the contention into an error
-    /// naming both sources rather than letting one silently erase the
-    /// other.
     Content,
 }
 
@@ -165,23 +57,14 @@ impl Scope<'_> {
 
 /// Mint the id for one entity.
 ///
-/// * `provider` — the `grid_rows.provider` tag (`"claude"`,
-///   `"slack"`, …). Namespaces every id by provider, so two providers
-///   can never collide however similar their natural keys look.
-/// * `scope` — see [`Scope`].
-/// * `entity_kind` — what *sort* of thing this is within the provider
-///   (`"chat"`, `"message"`, `"thinking_block"`, `"tool_use"`). Two
-///   entities with the same natural key but different kinds must get
-///   different ids: this is the field that keeps a Slack thread root
-///   distinct from the message at the same `ts`, which the old
-///   documented Slack recipe got wrong.
-/// * `natural_key` — the upstream's own identifier for the entity,
-///   within `scope`.
+/// Components are joined with `\x1f` (ASCII unit separator), which cannot
+/// appear in any upstream id we ingest. Joining with `:` or `-` — as most of
+/// the recipes this replaced did — makes `("a:b", "c")` and `("a", "b:c")`
+/// hash identically.
 ///
-/// Components are joined with `\x1f` (ASCII unit separator), which
-/// cannot appear in any upstream id we ingest. Joining with `:` or `-`
-/// — as most of the replaced recipes did — makes
-/// `("a:b", "c")` and `("a", "b:c")` hash identically.
+/// **Feed the same `natural_key` string to `grid_rows.upstream_id`.** Using
+/// one spelling to derive the id and storing another produces a backpointer
+/// that looks plausible and regenerates nothing.
 pub fn entity_id(provider: &str, scope: Scope<'_>, entity_kind: &str, natural_key: &str) -> Uuid {
     let (scope_tag, scope_val) = scope.tag();
     let recipe = format!(
@@ -190,28 +73,13 @@ pub fn entity_id(provider: &str, scope: Scope<'_>, entity_kind: &str, natural_ke
     Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
 }
 
-/// Join the parts of a **composite natural key**.
+/// Join the parts of a **composite natural key** — an Anthropic
+/// `(message_uuid, tool_use_id)`, a Slack `(channel_id, ts)`.
 ///
-/// A natural key is one recipe component; when the upstream identity is
-/// a tuple — an Anthropic `(message_uuid, tool_use_id)`, a Slack
-/// `(channel_id, ts)` — this is how the parts are joined.
-///
-/// Uses `#`, not the `\x1f` that separates recipe *components*,
-/// because this exact string is also what `grid_rows.upstream_id`
-/// stores and what the grid's "Copy source ID(s)" action puts on a
-/// user's clipboard. A control character there would be user-hostile.
-///
-/// **Feed the same string to [`entity_id`] and to
-/// `upstream_id`.** Building the key once and using it twice is
-/// what makes the round-trip
-/// (`entity_id(provider, scope, kind, upstream_id) == uuid`) hold;
-/// deriving the id from one spelling and storing another produces a
-/// backpointer that looks plausible and regenerates nothing.
-/// `//tests/fixtures:ingested_tng_test` reimplements the recipe and
-/// checks exactly this.
-///
-/// Parts must not contain `#`. Debug builds assert it; in release a
-/// violating part would make the join ambiguous rather than unsafe.
+/// Uses `#`, not the `\x1f` that separates recipe *components*, because this
+/// exact string is also what `grid_rows.upstream_id` stores and what the
+/// grid's "Copy source ID(s)" action puts on a clipboard. Parts must not
+/// contain `#`; debug builds assert it.
 pub fn composite_key(parts: &[&str]) -> String {
     debug_assert!(
         parts.iter().all(|p| !p.contains('#')),
@@ -220,7 +88,6 @@ pub fn composite_key(parts: &[&str]) -> String {
     parts.join("#")
 }
 
-/// [`entity_id`] as the hyphenated string the schema columns store.
 pub fn entity_id_str(
     provider: &str,
     scope: Scope<'_>,
@@ -234,11 +101,10 @@ pub fn entity_id_str(
 
 /// Id for one `edges` row, from the directed tuple it connects.
 ///
-/// Split out from [`entity_id`] because an edge is not scoped to a
-/// provider — it may join two documents from different ones — and its
-/// natural key is the tuple itself. Producers must derive edge ids
-/// this way so a re-render replaces its edges instead of duplicating
-/// them.
+/// Separate from [`entity_id`] because an edge is not scoped to a provider —
+/// it may join two documents from different ones — and its natural key is the
+/// tuple itself. Producers must derive edge ids this way, so a re-render
+/// replaces its edges instead of duplicating them.
 pub fn edge_id(
     src_markdown_uuid: &str,
     src_anchor_uuid: Option<&str>,

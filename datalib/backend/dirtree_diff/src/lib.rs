@@ -1,29 +1,4 @@
 //! A move-aware diff of two `fsindex` directory scans.
-//!
-//! `fsindex` records one row per file and directory — path, kind, size,
-//! blake3 — into a doltlite store. This crate turns two such scans into
-//! a single self-contained HTML page: the two trees side by side, with
-//! **moves reported as moves** rather than as a delete plus an
-//! unrelated create.
-//!
-//! That falls out of infrastructure the provider already has. A
-//! directory's blake3 covers a canonical encoding of its children, so a
-//! directory's digest covers its whole subtree; move it and the digest
-//! is unchanged, and the prolly diff reports the same digest as a
-//! `removed` row and an `added` row at two different paths. Pairing
-//! those is the whole trick. See the crate's `README.md`.
-//!
-//! The code has a deliberate seam:
-//!
-//! ```text
-//! doltlite ──▶ Inputs ──▶ analyze() ──▶ DiffResult ──▶ HTML
-//!  (store)     (model)     (analyze)     (model)    └─▶ JSON
-//! ```
-//!
-//! [`store`] is the only module that talks to a database, [`analyze`]
-//! is pure, and both the page and `--json` are projections of
-//! [`model::DiffResult`]. Everything worth testing is asserted against
-//! the result with no doltlite and no browser in the way.
 
 pub mod analyze;
 pub mod model;
@@ -33,7 +8,6 @@ pub mod store;
 pub use analyze::analyze;
 pub use model::{DiffResult, Inputs, Side, SideInput, Status};
 
-/// Parse a byte threshold, accepting `4096`, `64K`, `1M`, `2G`.
 pub fn parse_size(text: &str) -> anyhow::Result<i64> {
     let raw = text.trim().to_ascii_uppercase();
     let raw = raw.strip_suffix('B').unwrap_or(&raw);

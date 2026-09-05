@@ -1,25 +1,4 @@
 //! Snapshot of the TNG fixture's `backend_index.doltlite_db` contents.
-//!
-//! Catches silent data regressions in the load pipeline. Most recently
-//! the "WAL not checkpointed at sync close" bug, where the genrule
-//! shipped a 4 KB empty `backend_index.doltlite_db` while all the
-//! actual rows sat in the discarded `backend_index.doltlite_db-wal` —
-//! every e2e test got back zero rows
-//! and we only noticed via the UI failures. A snapshot at the SQL
-//! level fails immediately on that kind of drift, and shows a
-//! reviewable diff of exactly what changed.
-//!
-//! Snapshot contents: `grid_rows`, `documents`, and `markdowns_loaded`
-//! tables, each dumped as one JSON object per row, sorted by their
-//! primary key for stability. Long `text` bodies are truncated +
-//! hashed to keep the snapshot diff-friendly (a one-character change
-//! in a chat body changes one digest, not 50 lines). The fixture
-//! genrule is deterministic given a fixed `--now`, so every column
-//! including timestamps is reproducible run-to-run.
-//!
-//! How to update: change something that affects the output, then run
-//! `cargo insta review` (or just delete `tests/snapshots/*.snap.new`
-//! to discard).
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -29,24 +8,6 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-/// Locate `backend_index.doltlite_db`. Two paths into this resolution:
-///
-/// 1. **Under bazel test**: the fixture is in the test's runfiles tree,
-///    declared as a `data` dep in BUILD.bazel. We resolve it via the
-///    `runfiles` crate's `rlocation()` lookup, which is portable across
-///    compilation modes (fastbuild/opt) and operating systems and
-///    doesn't depend on the test's CWD or workspace-relative
-///    `$(rootpath ...)` resolution against an inconsistent base. (An
-///    earlier version of this code used `FW_FIXTURE_DB=$(rootpath ...)`
-///    and worked locally under fastbuild but broke on CI under opt —
-///    the path was workspace-relative but the test's CWD wasn't the
-///    workspace root.)
-///
-/// 2. **Under plain `cargo test`**: no runfiles tree exists. Fall back
-///    to the workspace's `bazel-bin/` convenience symlink — the
-///    developer must have run `bazelisk build //tests/fixtures:ingested_tng`
-///    at least once. Panics with a clear message if the file isn't
-///    there, instead of silently snapshotting an empty DB.
 fn fixture_db_path() -> PathBuf {
     if let Ok(r) = runfiles::Runfiles::create() {
         if let Some(candidate) =
@@ -75,15 +36,6 @@ async fn open_readonly(path: &std::path::Path) -> SqlitePool {
     // open machinery in general) — the prolly chunk store doesn't
     // model a frozen-bytes view the way stock SQLite's pager does. So
     // we open with `read_only=true` only.
-    //
-    // We canonicalize the path before passing it to sqlx because
-    // doltlite's chunk_store does NOT resolve symlinks — it stat()s
-    // the path the caller passed and fails with SQLITE_CANTOPEN when
-    // that path is a symlink (even one pointing at a perfectly valid
-    // doltlite file). Bazel's runfiles tree is entirely symlinks, so
-    // every test that opens a `data`-dep'd doltlite file would fail
-    // without this. `canonicalize` follows the symlinks at the OS
-    // level so doltlite sees the real on-disk path.
     let real = path
         .canonicalize()
         .unwrap_or_else(|e| panic!("canonicalize {}: {e}", path.display()));
@@ -120,18 +72,6 @@ impl<'a> std::fmt::LowerHex for BytesAsHex<'a> {
     }
 }
 
-/// Snapshot-stable rendering of `grid_rows.source_url`.
-///
-/// Web URLs pass through unchanged. `file://` URLs do NOT: a local
-/// corpus is addressed by absolute path, so under Bazel the value
-/// embeds the sandbox root — a username, a workspace hash, and a
-/// per-run sandbox number. Snapshotting that verbatim passes on the
-/// machine that generated it and fails on every other one, CI
-/// included.
-///
-/// We keep the scheme and the final path segment, which is what the
-/// assertion is actually about (this row points at *that document*, as
-/// a file URL) and drop the part that is a property of the machine.
 fn stable_source_url(v: Option<String>) -> Option<String> {
     let u = v?;
     let Some(rest) = u.strip_prefix("file://") else {
@@ -141,25 +81,6 @@ fn stable_source_url(v: Option<String>) -> Option<String> {
     Some(format!("file://…/{tail}"))
 }
 
-/// Snapshot-stable rendering of `markdowns.row_set_hash`.
-///
-/// The hash is a SHA-256 over the document's grid rows. For a local
-/// corpus one of those fields is `source_url`, an ABSOLUTE `file://`
-/// URL — so under Bazel the hash folds in the sandbox root and differs
-/// on every machine. Normalizing the displayed `source_url` (see
-/// [`stable_source_url`]) is not enough: the hash is computed from the
-/// real value, which is how CI caught this after the display fix looked
-/// like it had solved it.
-///
-/// Redacting costs very little coverage here, because `row_set_hash` is
-/// derived entirely from rows this same snapshot already records
-/// field-by-field — uuid, kind, author, text_sha, and the rest. What is
-/// lost is only the absolute path prefix, which is a property of the
-/// machine rather than of the code.
-///
-/// Keyed on provider rather than on the hash's shape, so a second
-/// local-file source has to opt in deliberately instead of silently
-/// inheriting a redaction.
 fn stable_row_set_hash(provider: Option<&str>, v: Option<String>) -> Option<String> {
     match provider {
         Some("pdf") => Some("<machine-specific: rows embed an absolute path>".to_string()),
@@ -274,36 +195,6 @@ async fn snapshot_grid_rows_and_documents() {
     // that, plus doltlite's own "Initialize data repository" boot
     // commit, is what we expect to see here. Snapshotting the
     // commit-message column catches:
-    //
-    //   * Regression to the per-doc commit pattern we removed — the
-    //     log would balloon from 2 entries to hundreds.
-    //   * The orchestrator silently skipping the commit (e.g. if a
-    //     future refactor drops the closing commit) — the log
-    //     would shrink to 1 entry.
-    //   * Format drift in the commit-message template (the stats
-    //     string would change shape).
-    //
-    // We don't snapshot the commit hashes themselves — they're
-    // content-addressed and would change on any byte-level data
-    // change. Author/email is also not snapshotted: it comes from
-    // host `git config` which differs between dev machines and CI.
-    //
-    // Tiebreak by `message`, NOT by `commit_hash`. With the fixture's
-    // fixed `--now`, the boot "Initialize data repository" commit and
-    // the sync stats commit land with identical `date` values, and
-    // SQLite's ordering on ties is unspecified — without an explicit
-    // tiebreaker, small unrelated changes (e.g. adding a provider) can
-    // flip the order and produce spurious snapshot churn. An earlier
-    // version of this test reached for `commit_hash` as the tiebreak,
-    // but doltlite's hashes are content-addressed and change between
-    // doltlite versions (0.11.4 → 0.11.5 silently swapped the order),
-    // so they're the wrong axis to anchor a snapshot on. `message` is
-    // stable across doltlite bumps and a real change to either commit
-    // message is something we'd want the snapshot to surface anyway.
-    // If two distinct commits ever produce truly identical messages
-    // (e.g. two back-to-back empty-stats sync runs), the snapshot will
-    // start being order-unstable on `message` too and the test author
-    // will pick a better discriminator at that point.
     let log_rows = sqlx::query("SELECT message FROM dolt_log() ORDER BY date ASC, message ASC")
         .fetch_all(&pool)
         .await

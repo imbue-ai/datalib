@@ -3,16 +3,6 @@
 //! so `bazel test //...` stays green for everyone. Under Bazel this
 //! test is also `tags = ["manual"]` to belt-and-suspenders avoid
 //! incidental runs without the env wired in.
-//!
-//! Run locally with:
-//!
-//!   SIGNAL_BACKUP_AEP=...secret... \
-//!   SIGNAL_BACKUP_SNAPSHOT=~/backups/SignalBackups/signal-backup-... \
-//!   bazel test //datalib/backend/signal-backup:signal_backup_e2e \
-//!     --test_env=SIGNAL_BACKUP_AEP \
-//!     --test_env=SIGNAL_BACKUP_SNAPSHOT
-//!
-//! Never log the AEP — only counts.
 
 // Tests print diagnostics to stderr for the manual `bazel test
 // --test_output=streamed` flow; the workspace's library-level lint
@@ -113,9 +103,6 @@ struct Counts {
     chat_item: usize,
 }
 
-/// Pull `(local_key, plaintext_hash)` out of the first attachment we
-/// find on a chat item — checks both standardMessage attachments and
-/// stickerMessage.sticker.data.
 fn first_attachment_key(item: &backup::ChatItem) -> Option<([u8; 64], Vec<u8>)> {
     use backup::chat_item;
     match item.item.as_ref()? {

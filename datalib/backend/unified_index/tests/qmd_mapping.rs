@@ -1,25 +1,4 @@
 //! Hermetic equivalent of the Python `test_qmd_bridge_integration.py`.
-//!
-//! The Python test ran the live `qmd` CLI against an ingested fixture and
-//! loaded grid rows out of a SQL dump. The same hit↔row mapping
-//! invariants are exercised here without either:
-//!
-//!   1. Build the rows a render would emit, plus the `.md` files the
-//!      line resolver reads.
-//!   2. Project them to `GridRowRef`.
-//!   3. Feed canned qmd stdout fixtures through `runner::parse_stdout`.
-//!   4. Assert the strict mapping invariants on the resulting hits.
-//!
-//! The rows used to be round-tripped through `*.grid_rows.json` files on
-//! the way, back when that was how a render published them. The subject
-//! here is the mapping, not the transport, so they are held in memory.
-//!
-//! Covers the spiritual equivalents of the Python tests:
-//!   * thread-hit → comment rows (uuid-anchored)
-//!   * path-fallback → every row for the doc
-//!   * `hits_for_row` reverse mapping
-//!   * bidirectional coverage: every indexed path resolves to ≥1 row,
-//!     every row's qmd_path matches an indexed path.
 
 use std::fs;
 use std::path::Path;
@@ -29,9 +8,7 @@ use datalib_unified_index::qmd::mapping::norm_path;
 use datalib_unified_index::qmd::runner::parse_stdout;
 use datalib_unified_index::qmd::{GridIndex, GridRowRef, QmdHit};
 
-// ---------------------------------------------------------------------------
 // Fixture construction
-// ---------------------------------------------------------------------------
 
 fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
     GridRow {
@@ -65,10 +42,6 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
 }
 
 /// The rows one rendered document would publish.
-///
-/// Accumulated in a `Vec` rather than written to a file: the renderer
-/// hands its rows straight to the index now, and this test is about what
-/// the mapping does with them.
 #[derive(Default)]
 struct Rendered {
     rows: Vec<GridRow>,
@@ -189,9 +162,7 @@ fn fake_stdout(hits: &[(&str, &str)]) -> String {
     )
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[test]
 fn sidecar_walk_builds_grid_index() {

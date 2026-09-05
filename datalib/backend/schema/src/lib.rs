@@ -1,19 +1,5 @@
 //! Datalib **render schema** crate — the "universal schema" for the
 //! denormalized tables that back the grid / UI.
-//!
-//! Each module is one hand-written row struct whose `CREATE TABLE` DDL
-//! and column metadata are derived from the struct by
-//! `#[derive(PortableTable)]` (see `datalib_etl_macros`). The struct
-//! is the single source of truth — there is no code generation step.
-//!
-//!   * `grid_rows` — the union table (one row per displayable entity)
-//!   * `edges`     — directed links between rendered documents / anchors
-//!   * `markdowns` — per-rendered-`.md` metadata + render bookkeeping
-//!   * `render_problems` — what render could not do, beside what it did
-//!   * `source_cursors` — how far the index has consumed each source
-//!
-//! App-state tables that are *not* part of the render schema
-//! (`feedback`, `sync_jobs`) live in the separate `app_schema` crate.
 
 // So the `PortableTable` derive can emit `impl
 // ::datalib_schema::bulk::BulkUpsertable` for structs defined *inside*

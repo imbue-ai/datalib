@@ -1,13 +1,4 @@
 //! Program-A `DataProcessor`s for the Claude source types.
-//!
-//! Two source types, one renderer. `claude_api` downloads from the live
-//! claude.ai API ([`plan_download`]); `claude_export` ingests an
-//! unpacked bulk export off disk ([`plan_export_download`]). Both write
-//! the *same six tables* of the same raw store, which is what lets
-//! [`plan_render`] serve either one with a single parser.
-//!
-//! The source owns its raw store (open/commit/checkpoint); the
-//! orchestrator only drives `run`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,9 +13,6 @@ use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig, ClaudeExportConfig}
 
 use crate::download;
 
-/// `claude_api` download wave: empty unless a `sync:` block says what
-/// to fetch. Absent `sync:` means "no download this run" — render still
-/// reads whatever an earlier run left in the raw store.
 pub fn plan_download(
     ctx: PlanContext,
     config: ClaudeConfig,
@@ -195,8 +183,6 @@ impl DataProcessor for ClaudeRender {
         &self.id
     }
 
-    /// The value every document this processor writes carries: the render
-    /// path stamps `profile.render_version`, which is this constant.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

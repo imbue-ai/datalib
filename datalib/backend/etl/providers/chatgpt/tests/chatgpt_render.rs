@@ -1,8 +1,4 @@
 //! Golden test for ChatGPT render::render against the TNG fixture.
-//!
-//! The expected snapshot is byte-equal to what `src/ingest/render.py`
-//! produces for the same fixture; the .snap was seeded from a Python
-//! render pass and the Rust port is expected to converge on it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -76,17 +72,6 @@ fn renders_tng_fixture() {
     insta::assert_snapshot!("tng_rendered_docs", docs_bundle(&docs));
 }
 
-/// The documents the renderer emitted, as a reviewable bundle.
-///
-/// Snapshots what `render_all` *produces* — the `RenderedMarkdown`
-/// values it hands to its callback — rather than the
-/// `*.grid_rows.json` files it used to also write. That serialization
-/// is going away; the emitted document is the renderer's actual
-/// contract, and it is what both the store and the unified index
-/// consume.
-///
-/// Keyed by `markdown_uuid` and sorted, so the bundle is stable
-/// regardless of the order documents happen to be rendered in.
 fn docs_bundle(docs: &[datalib_etl::grid_index::RenderedMarkdown]) -> String {
     let mut sorted: Vec<&datalib_etl::grid_index::RenderedMarkdown> = docs.iter().collect();
     sorted.sort_by(|a, b| a.markdown_uuid.cmp(&b.markdown_uuid));

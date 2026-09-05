@@ -1,24 +1,4 @@
 //! Parsers for the Google Voice takeout HTML.
-//!
-//! Google Voice exports two XHTML shapes (both under `Voice/Calls/` and
-//! `Voice/Spam/`), plus a single `Bills.html` table:
-//!
-//!   * **`hChatLog`** (Text / Group Conversation) — a `<div class="hChatLog">`
-//!     holding N `<div class="message">` blocks, each with an
-//!     `<abbr class="dt" title="<rfc3339>">`, a
-//!     `<cite class="sender vcard"><a class="tel" href="tel:+…"><span class="fn">Name</span></a>`
-//!     (sent messages use `fn="Me"`), a `<q>body</q>`, and optional
-//!     `<img src="…">` attachment refs.
-//!   * **`haudio`** (Voicemail / Missed / Placed / Received / Recorded) —
-//!     a `<div class="contributor vcard">` for the other party, an
-//!     `<abbr class="published" title=…>`, and — for voicemails — a
-//!     `<span class="full-text">transcript</span>`, `<audio src="…mp3">`,
-//!     and `<abbr class="duration" title="PT…S">`.
-//!
-//! The files declare XHTML 1.0 Strict but use bare `<br>` in message
-//! bodies, which is not well-formed XML; we pre-pass `<br>`→newline so
-//! `quick-xml` (XML pull mode) parses cleanly. Entity decoding (`&#39;`,
-//! `&#8239;`, …) is handled by quick-xml's `unescape`.
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -89,7 +69,6 @@ pub struct ParsedEvent {
     pub duration: Option<String>,
 }
 
-/// `tel:+16506463903` → `+16506463903`; empty / `tel:` → `None`.
 pub fn tel_from_href(href: &str) -> Option<String> {
     let t = href.trim().strip_prefix("tel:").unwrap_or(href).trim();
     (!t.is_empty()).then(|| t.to_string())
@@ -237,7 +216,6 @@ pub fn parse_chat_log(html: &str) -> Vec<ParsedMessage> {
     msgs
 }
 
-/// Parse an `haudio` (Voicemail / call) file into its single event.
 pub fn parse_haudio(html: &str) -> ParsedEvent {
     let pre = preprocess(html);
     let mut r = reader(&pre);
@@ -324,7 +302,6 @@ pub fn parse_haudio(html: &str) -> ParsedEvent {
     ev
 }
 
-/// Parse `Bills.html`'s single table into (headers, rows-of-cells).
 pub fn parse_bills(html: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let pre = preprocess(html);
     let mut r = reader(&pre);

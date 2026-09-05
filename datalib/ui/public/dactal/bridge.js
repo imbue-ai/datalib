@@ -1,20 +1,6 @@
 // Bridge: Datalib `grid_rows` (the denormalized union table served by
 // `/applet/unified_index/search`) -> DACTAL datasets.
 //
-// Datalib deliberately denormalizes everything onto one row per
-// displayable thing (see docs/dev/grid_rows.md). DACTAL, by contrast,
-// shines when entities cross-reference each other by id: given a dataset
-// named `author` whose ids are author names, DACTAL's `autoresolve`
-// feature turns `rows.author` into a JOIN to the author entity, so you can
-// write `rows.author.team` or `rows.conversation.channel`.
-//
-// So this bridge does two things:
-//   1. Loads the flat rows as the `rows` dataset (1:1 with grid_rows).
-//   2. Re-normalizes a handful of facet columns back into entity datasets
-//      (author, channel, source, account, project, conversation, org) whose
-//      id == the facet value. That re-lights DACTAL's relational joins on
-//      top of a table that was flattened for Datalib's own SQL path.
-//
 // After loading you MUST call `dactal.survey()` — DACTAL caches the set of
 // known dataset names ("destinations") and only refreshes it in survey().
 // Without it, autoresolve never fires and `rows.author` stays a bare string.

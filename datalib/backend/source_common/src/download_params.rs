@@ -1,10 +1,4 @@
 //! Cross-source download give-up bounds.
-//!
-//! Lives in this schema-only foundation crate (depends on nothing but serde) so
-//! both the shared HTTP retry chokepoint *below* the providers
-//! (`datalib_etl::retry`) and the orchestrator config *above* them can name
-//! it without either pulling the other's code. Relocated here from
-//! `datalib_etl::download_params` (which now re-exports it).
 
 use serde::{Deserialize, Serialize};
 
@@ -12,11 +6,6 @@ use serde::{Deserialize, Serialize};
 /// gives up on it. The shared HTTP chokepoint respects `Retry-After` on 429s
 /// and otherwise backs off exponentially; these two knobs decide *when to
 /// stop*. Both default when unset.
-///
-/// Settable globally (top-level `defaults.download_params:`) and/or per-source
-/// (`common.download_params:`); the load-time `normalize()` folds the global
-/// base into each source (source's `Some` fields win, `None` falls through),
-/// and an unset field falls through to the built-in default.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DownloadParams {
@@ -34,8 +23,6 @@ impl DownloadParams {
     pub const DEFAULT_MAX_MINUTES_NO_PROGRESS: u64 = 30;
     pub const DEFAULT_MAX_SEQUENTIAL_FAILURES: u64 = 50;
 
-    /// Merge `self` (a global base) with a per-source override. Source-level
-    /// `Some(...)` wins; `None` falls through.
     pub fn merge(&self, source: &DownloadParams) -> DownloadParams {
         DownloadParams {
             maximum_time_without_progress_in_minutes: source
@@ -47,7 +34,6 @@ impl DownloadParams {
         }
     }
 
-    /// Resolved "max time without progress", applying the default.
     pub fn max_time_without_progress(&self) -> std::time::Duration {
         let mins = self
             .maximum_time_without_progress_in_minutes
@@ -55,7 +41,6 @@ impl DownloadParams {
         std::time::Duration::from_secs(mins.saturating_mul(60))
     }
 
-    /// Resolved "max sequential failed requests", applying the default.
     pub fn max_sequential_failures(&self) -> u64 {
         self.maximum_sequential_failed_requests
             .unwrap_or(Self::DEFAULT_MAX_SEQUENTIAL_FAILURES)

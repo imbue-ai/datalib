@@ -1,9 +1,4 @@
 // Catalog icon name → bundled asset URL.
-//
-// `ui/src/assets/` carries brand marks for twelve services; the rest of
-// the catalog has none, so `iconUrl` returns null and callers render a
-// per-kind glyph. Used nominatively to identify a service — don't
-// restyle or recolor them.
 
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import claudeIconUrl from "@/assets/claude.svg";

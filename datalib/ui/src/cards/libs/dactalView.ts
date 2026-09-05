@@ -2,25 +2,6 @@
 // explorer — query your grid_rows with DACTAL's query language and table
 // UI (https://dactal.org). It sits alongside gridView/documentView as a
 // view the user can open in any card; it does not touch the default grid.
-//
-// Unlike gridView (a Vue custom element mounted straight into the card's
-// ShadowRoot), DACTAL ships as classic scripts that attach to `window`
-// globals, assume a single engine instance per page, and emit inline
-// `onclick=` handlers that resolve against the top-level window. Mounting
-// that into a ShadowRoot would (a) break the inline handlers and (b) cap
-// us at one DACTAL card per app (they'd share globals). So we mount it in
-// an iframe: each card gets its own window/engine/storage, isolating those
-// globals from the Vue app and from each other.
-//
-// That is isolation of JS *globals*, NOT a security boundary — the frame
-// has no `sandbox` attribute and is same-origin, so its scripts can call
-// /api/* directly with the session cookie. What actually constrains the
-// page is its own CSP (public/dactal/index.html) and the API token; see
-// docs/dev/dactal.md caveats 5 and 4. Sandboxing it for real needs the
-// postMessage bridge that would replace same-origin access.
-//
-// The page lives in public/dactal/ and calls the same search endpoint the
-// grid uses.
 import type { CardCtx, CardRender } from "../types";
 
 // Served verbatim from ui/public/dactal/ in dev (vite) and prod (vite

@@ -1,16 +1,5 @@
 //! The `pdf` render side: convert each identified document to markdown
 //! and emit it with its `grid_rows`.
-//!
-//! Only documents with at least one readable page are read here — see
-//! `RawDb::convertible_documents` for the rule. A document nothing can
-//! be read from (a scan, or one whose fonts decode to mojibake) already
-//! has a row in `pdf_documents`; it simply produces no markdown yet.
-//!
-//! Within a document that does render, a page we could not read still
-//! appears in the markdown, as the note `convert::note_for_page` writes.
-//! It gets no `grid_rows` row and no section anchor — there is nothing
-//! to navigate to — so page rows are a subset of the pages in the file,
-//! not a bijection.
 
 pub mod convert;
 pub mod grid_rows;
@@ -28,43 +17,14 @@ use datalib_etl::section::{msg_div_open, MSG_DIV_CLOSE};
 use crate::download::{RawDb, RenderTarget};
 pub use convert::RENDER_VERSION;
 
-/// Rendered files live at `<root>/<stanza>/rendered_md/docs/<blake3>.md`.
-///
-/// Named by content hash rather than by source filename, which is the
-/// visible consequence of content identity: two copies of one paper
-/// produce one file, and renaming the PDF does not orphan it. The
-/// human-readable title rides in the frontmatter and the grid row.
 fn md_path_for(out_dir: &Path, blake3: &str) -> PathBuf {
     out_dir.join("docs").join(format!("{blake3}.md"))
 }
 
-/// The same file's path relative to the **data root**:
-/// `<stanza>/rendered_md/docs/<blake3>.md`.
-///
-/// This is what belongs in `grid_rows.qmd_path`, and it must be
-/// byte-equal to what `grid_index::apply_one` stamps into
-/// `markdowns.md_path` for the same document. `GridIndex::new` keys
-/// grid rows by `norm_path(row.qmd_path)` while `rows_for_hit` looks up
-/// `norm_path(hit.path)`, and qmd's hit paths are rooted at the data
-/// root — so stamping the shorter out-dir-relative form here (which is
-/// what this used to do, by stripping `out_dir` off `md_path`) makes
-/// every qmd hit inside a PDF resolve to zero grid rows. The applet
-/// logs `qmd hit resolved to no grid rows` and the user simply sees
-/// PDFs missing from free-text search.
 pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
     format!("{stanza}/rendered_md/docs/{blake3}.md")
 }
 
-/// The render cache key for one document: its content hash *and* the
-/// renderer that would produce the output.
-///
-/// Content alone is not enough. A change to the markdown or to the
-/// `grid_rows` projection leaves every document's bytes untouched, so a
-/// pure-blake3 fingerprint would skip them all and an existing install
-/// would keep pre-change output indefinitely. Folding
-/// [`RENDER_VERSION`] in is what makes bumping it mean something — see
-/// that constant's docs for why the framework's `renderer_version`
-/// column cannot be relied on for this.
 pub fn render_fingerprint(blake3: &str) -> String {
     format!("{blake3}.v{RENDER_VERSION}")
 }
@@ -79,10 +39,6 @@ pub struct RenderSummary {
 /// database work finishes before the non-`Send` document sink enters
 /// scope — otherwise the whole render future is non-`Send` and cannot
 /// be driven by the `#[async_trait]` processor.
-///
-/// The scan root comes from `pdf_scan_meta`, not from render config:
-/// render converts exactly the tree the download step walked, and the
-/// two cannot drift.
 pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
     let db_path = crate::download::db_path_for(raw_dir);
     if !db_path.exists() {
@@ -96,8 +52,6 @@ pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
     db.convertible_documents(&root).await
 }
 
-/// Convert every target and emit it. Synchronous: conversion is
-/// CPU-bound and there is nothing to await.
 pub fn render_targets(
     targets: &[RenderTarget],
     out_dir: &Path,
@@ -264,7 +218,6 @@ fn render_one(
     })
 }
 
-/// Minimal YAML scalar quoting for frontmatter values.
 fn yaml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }

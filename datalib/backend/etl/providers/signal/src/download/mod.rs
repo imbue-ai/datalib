@@ -1,14 +1,4 @@
 //! Signal download entry point.
-//!
-//! Discovers the latest `signal-backup-*` snapshot under
-//! `opts.snapshot_root`, decrypts it with the AEP read from
-//! `opts.aep_env_var` (default `SIGNAL_BACKUP_PASSPHRASE`), iterates frames,
-//! and UPSERTs them into the doltlite raw store. One backup snapshot
-//! per fetch — older snapshots are ignored; cleaning them up is the
-//! user's problem.
-//!
-//! The AEP never lands on disk: we read it from the env at call time,
-//! pass it through the [`Snapshot::open`] derivation, and drop it.
 
 pub mod db;
 pub mod schema_raw;
@@ -366,14 +356,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// Hash the three on-disk files of a Signal snapshot directory
-/// (`metadata || main || files`) into a single Blake3 hex string,
-/// alongside the total byte count.
-///
-/// See `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC` for the canonical
-/// statement of the recipe. Streams each file in 64 KiB chunks so we
-/// don't materialize the whole thing in memory — `main` can be tens
-/// of MB.
 fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
     use std::io::Read;
     let mut hasher = blake3::Hasher::new();
@@ -430,14 +412,6 @@ struct DecryptedCas {
 /// `<files_root>/XX/<media_name>` tree and queue them for batched
 /// CAS + entity-table writes via the `PendingAttachments`
 /// accumulator.
-///
-/// Quietly does nothing when the attachment doesn't carry the
-/// fields we need to locate it on disk (no `LocatorInfo`, no
-/// `local_key`, integrity check is `encrypted_digest` rather than
-/// `plaintext_hash`, …). Signal's wire format permits all of those
-/// states for valid attachments — they just mean we don't have the
-/// local plaintext to surface, so the Render pass renders the
-/// message text without an inline link.
 #[allow(clippy::too_many_arguments)]
 fn ingest_attachment(
     files_root: &Path,
@@ -577,9 +551,6 @@ async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()
     .await
 }
 
-/// Pick the newest `signal-backup-*` subdir under `root`. Signal's
-/// dirname format is `signal-backup-YYYY-MM-DD-HH-MM-SS`, which sorts
-/// lexicographically the same as chronologically.
 fn pick_latest_snapshot(root: &Path) -> Result<PathBuf> {
     let mut best: Option<(String, PathBuf)> = None;
     let entries =

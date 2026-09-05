@@ -1,33 +1,5 @@
 //! `pdf` — scan a directory tree for PDFs, convert the readable ones to
 //! markdown, and index the result.
-//!
-//! ## Relationship to `fsindex`
-//!
-//! Both providers scan a local tree, and they share the primitives that
-//! make that fast and correct — blake3 leaf hashing and Unison's
-//! `(mtime, size, inode, dev)` rescan cursor — via
-//! [`datalib_etl::fswalk`], which was factored out of fsindex for this
-//! purpose.
-//!
-//! They are separate sources because they answer different questions.
-//! fsindex answers "what is in this tree?" at tens-of-millions-of-rows
-//! scale, keys everything on path, tree-hashes directories, and has no
-//! render side. `pdf` answers "what documents do I have?" at
-//! thousands-of-rows scale, keys content on `blake3` so duplicates
-//! collapse and moves are free, carries a render side, and needs real
-//! per-document retry state because conversion can fail in ways a
-//! `read(2)` cannot.
-//!
-//! ## What this build does not do
-//!
-//! **No OCR.** Pages that carry no extractable text are classified and
-//! counted (`pdf_documents.ocr_page_count`), never converted. A
-//! document made only of such pages produces no markdown; one that also
-//! has readable pages renders those, with a note in the markdown where
-//! each unreadable page would have been. See `DOWNLOAD.md` §"Why no OCR
-//! yet" for the measurements behind that choice, and its subsection
-//! §"`needs_ocr` is a work list, not a verdict on the document" for why
-//! the two are separate questions.
 
 pub mod download;
 pub mod processor;

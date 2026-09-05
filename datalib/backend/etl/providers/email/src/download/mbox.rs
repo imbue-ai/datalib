@@ -1,51 +1,7 @@
-//! mbox extractor. Walks a Google Takeout `.mbox` file (RFC 4155
-//! mboxrd framing, with `X-GM-THRID` / `X-Gmail-Labels` Gmail
-//! extensions) and lands every message into the shared email raw
-//! store as if it had come off a JMAP server — typed envelope
-//! columns + join rows + the RFC 5322 `.eml` bytes in the blob CAS.
-//! No body parsing, no html2md, no JMAP-shape payload synthesis;
-//! render handles all of that downstream off the `.eml` blob.
-//!
-//! ## Stable identifiers
-//!
-//! Re-ingesting the same mbox produces byte-identical rows. All ids
-//! derive from the message contents or its mbox-level location:
-//!
-//!   * `account_id` — file stem of the mbox (e.g.
-//!     `all_mail_including_spam_and_trash`), or the caller-supplied
-//!     override.
-//!   * `email_id` (= `emails.id`) — the `Message-Id` header verbatim
-//!     (angle brackets stripped), falling back to
-//!     `sha256(raw_eml_bytes)` hex when the header is missing.
-//!   * `thread_id` — `X-GM-THRID` verbatim. Falls back to the email's
-//!     own id (a single-message thread) when absent.
-//!   * `mailbox_id` — short hex `sha256("mbox:" + account + ":" +
-//!     label_name)`.
-//!   * `email.blob_id` — `sha256(raw_eml_bytes)` hex; same value the
-//!     blob CAS uses as its ref_id.
-//!   * `attachment.part_id` — the dotted MIME part path
-//!     (`"2"`, `"2.1"`, …); deterministic from the message tree.
-//!   * `attachment.blob_id` — `sha256(bytes)` hex.
-//!
-//! ## Gmail label → JMAP `role` / keyword mapping
-//!
-//! Google Takeout writes a comma-separated `X-Gmail-Labels` header
-//! per message. We line them up with JMAP's standard mailbox roles
-//! where possible:
-//!
-//! | Gmail label                  | JMAP mailbox role / keyword |
-//! |------------------------------|-----------------------------|
-//! | `Inbox`                      | role=`inbox`                |
-//! | `Sent`                       | role=`sent`                 |
-//! | `Drafts` / `Draft`           | role=`drafts`               |
-//! | `Trash`                      | role=`trash`                |
-//! | `Spam`                       | role=`junk`                 |
-//! | `Archived`                   | (no mailbox — absence)      |
-//! | `Unread`                     | (absence of `$seen`)        |
-//! | `Opened` / `Read`            | keyword `$seen`             |
-//! | `Starred`                    | keyword `$flagged`          |
-//! | `Important`                  | keyword `$important`        |
-//! | (any other user label)       | role=`null`, name kept      |
+//! mbox extractor. Walks a Google Takeout `.mbox` file (RFC 4155 mboxrd
+//! framing, plus Gmail's `X-GM-THRID` / `X-Gmail-Labels`) and lands every
+//! message into the shared email raw store as if it had come off a JMAP
+//! server. No body parsing here — render handles that off the `.eml` blob.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
@@ -76,29 +32,9 @@ use super::schema_raw::{
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
 /// per-transaction manifest-mutation cost across many rows.
-///
-/// Each entity-pool flush is one `BEGIN ... COMMIT` containing chunked
-/// multi-row `INSERT`s for `emails` + each join table + `blob_refs` +
-/// bookkeeping. The matching CAS-pool flush is one `BEGIN ... COMMIT`
-/// containing chunked multi-row `INSERT`s for `cas_objects`. Two
-/// transactions per batch instead of ~7 per email — at 17k emails
-/// that's ~30 transactions instead of ~120k.
 const FLUSH_BATCH: usize = 2000;
 
 /// Account-row data the orchestrator pipes in from the source YAML.
-///
-/// Mbox files don't carry an account identity inside them — the file
-/// stem is the only thing we can derive from the file alone, and even
-/// that is brittle. The sync YAML names the account (display name,
-/// canonical email address, personal-vs-shared flag), and this struct
-/// carries that information into the mbox download so the synthesized
-/// `accounts` row matches the shape JMAP would produce.
-///
-/// All fields are optional so the download still runs against a
-/// loose `.mbox` with no configured account (e.g. a one-off
-/// fixture). Defaults: `account_id` ← mbox file stem (or
-/// `account_id_override`); `display_name` ← `account_id`; `is_personal`
-/// ← `true`.
 #[derive(Debug, Clone, Default)]
 pub struct MboxAccountConfig {
     pub account_id: Option<String>,
@@ -123,12 +59,9 @@ pub struct FetchOptions {
     /// Account-row config from the source YAML (display name, email,
     /// is_personal flag). See [`MboxAccountConfig`].
     pub account_config: MboxAccountConfig,
-    /// When non-empty, only ingest messages carrying at least one
-    /// `X-Gmail-Labels` label whose full path (POSIX-like, e.g.
-    /// `Work/Projects`) exactly matches one of these. Empty = ingest
-    /// every message. Mirrors the JMAP `only_mailbox_labels` filter;
-    /// Gmail nested labels are already stored as `Parent/Child` strings
-    /// so the match is a direct string compare against the raw label.
+    /// When non-empty, only ingest messages carrying an `X-Gmail-Labels` label
+    /// whose full path exactly matches one of these. Gmail nested labels are
+    /// already stored as `Parent/Child`, so this is a direct string compare.
     pub only_labels: Vec<String>,
     /// Skip attachment bytes whose size exceeds this. The
     /// `email_attachments` row still lands (so we record what was
@@ -176,12 +109,6 @@ const K_ONLY_LABELS: &str = "only_extract_labels";
 const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 const K_ACCOUNT: &str = "account";
 
-/// The subset of [`FetchOptions`] that decides which data lands on disk.
-///
-/// The per-file `(size, mtime)` checkpoint answers "did the input
-/// change?", which is all it can answer. It cannot answer "is the output
-/// already correct?" — and those diverge the moment config participates
-/// in the transformation. This record covers the difference.
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = opts.only_labels.iter().map(String::as_str).collect();
@@ -201,13 +128,6 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 }
 
 /// What a config change since the last satisfying run requires.
-///
-/// Only *widenings* need the files re-read; a narrowed filter or a
-/// tightened cap leaves an on-disk superset, and nothing in the
-/// pipeline deletes. The account fields are separable: they feed
-/// `flush_account_and_lookups`, which is independent of message ingest,
-/// so editing an `mbox:` block costs one UPSERT rather than a re-read of
-/// a multi-gigabyte export.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Adjustments {
     /// Ignore the per-file checkpoints and re-read every mbox.
@@ -278,9 +198,6 @@ impl Adjustments {
     }
 }
 
-/// Walk `opts.input_path` and land every message into the raw store
-/// via in-memory accumulation + chunked multi-row `INSERT`s — see
-/// [`FLUSH_BATCH`] for the per-batch-flush shape.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,
@@ -310,12 +227,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let known_blobs = db.loaded_blob_ids().await?;
 
-    // Per-file (size, mtime_ns) fingerprints. Files whose stamped
-    // checkpoint still matches the current fingerprint are skipped
-    // outright — mail clients only append to mbox, so `(size, mtime)`
-    // is a sufficient unchanged-ness signal without re-hashing
-    // contents. Files that can't be stat'd or canonicalized fall
-    // through to the process bucket and fail loudly downstream.
+    // Mail clients only append to an mbox, so a matching `(size, mtime_ns)`
+    // is a sufficient unchanged-ness signal without re-hashing. A file that
+    // can't be stat'd falls through and fails loudly downstream.
     let stamped = load_mbox_checkpoints(&db).await?;
     let mut to_process: Vec<MboxJob> = Vec::with_capacity(mbox_paths.len());
     let mut skipped_total_bytes: u64 = 0;
@@ -346,13 +260,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         to_process.push(job);
     }
 
-    // Progress bar runs over bytes-consumed-from-mbox-files (a known
-    // total from the filesystem, so it has a real endpoint and ETA)
-    // rather than emails-processed (which we don't know up front and
-    // would only resolve at EOF). Per-batch `set_message` reports the
-    // running email count as supplemental progress info. Skipped
-    // files' bytes are baked into `set_length` and pre-incremented
-    // up front so the bar reflects "100% means done with this run."
+    // The bar runs over bytes consumed rather than emails processed, because
+    // the filesystem gives a real total up front and an email count only
+    // resolves at EOF. Skipped files' bytes are pre-incremented, so 100% means
+    // done with this run.
     let total_bytes: u64 = to_process
         .iter()
         .map(|j| j.size_bytes)
@@ -415,12 +326,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     flush_batch(&db, &mut batch, &mut summary).await?;
 
-    // Account + mailboxes + threads + matching bookkeeping all land
-    // in one closing transaction. Skip it entirely when nothing was
-    // processed — the accumulator is empty, and even the no-op
-    // upserts (which are idempotent ON CONFLICT chains, not
-    // delete-then-insert) aren't worth the round-trip when every
-    // file was a cache hit.
+    // Account, mailboxes, threads and bookkeeping land in one closing
+    // transaction — skipped entirely when nothing was processed, since even
+    // idempotent no-op upserts aren't worth the round-trip.
     if files_processed > 0 || adjust.refresh_account {
         // With no files processed the accumulator is empty, so this
         // writes the account row and nothing else — which is exactly
@@ -523,28 +431,21 @@ async fn upsert_mbox_checkpoint(db: &RawDb, job: &MboxJob) -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Streaming mbox iterator
-// ─────────────────────────────────────────────────────────────────────
 
-/// Iterate `path` yielding one RFC 5322 message at a time. Each yield
-/// also reports the number of mbox-stream bytes consumed since the
-/// previous yield, so the caller can advance a byte-keyed progress
-/// bar against the known file size. The mbox envelope `From ` line is
-/// stripped; `>From `-style escapes are unquoted. Streams off disk via
-/// `BufReader` so peak RSS stays bounded regardless of file size.
+/// Iterate `path` yielding one RFC 5322 message at a time, reporting the mbox
+/// bytes consumed since the previous yield so a caller can drive a byte-keyed
+/// progress bar. Envelope `From ` lines are stripped and `>From ` escapes
+/// unquoted. Streams via `BufReader`, so peak RSS stays bounded.
 fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8>, u64)>>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut reader = BufReader::with_capacity(1 << 16, file);
     let mut pending: Option<Vec<u8>> = None;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
-    // `bytes_since_yield` accumulates every byte read from the file
-    // (including the envelope `From ` lines, blank separators, and any
-    // pre-first-message junk) and resets at each yield. The caller
-    // sums these into a "bytes processed" progress increment, which
-    // ends up matching the file's `metadata().len()` once iteration
-    // finishes — regardless of how many emails ended up in the file.
+    // Accumulates every byte read from the file and resets at each yield, so
+    // the caller's increments sum to the file's `metadata().len()` however many
+    // emails it held.
     let mut bytes_since_yield: u64 = 0;
     let it = std::iter::from_fn(move || loop {
         buf.clear();
@@ -594,7 +495,6 @@ fn is_from_line(line: &[u8]) -> bool {
     line.len() >= 5 && &line[..5] == b"From "
 }
 
-/// Strip one leading `>` from `>From ` (and `>>From `, etc).
 fn unescape_from_line(line: &[u8]) -> Vec<u8> {
     let n = line.iter().take_while(|b| **b == b'>').count();
     if n >= 1 && line.len() >= n + 5 && &line[n..n + 5] == b"From " {
@@ -604,9 +504,7 @@ fn unescape_from_line(line: &[u8]) -> Vec<u8> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Per-message envelope extraction
-// ─────────────────────────────────────────────────────────────────────
 
 struct Accumulator {
     account_id: String,
@@ -750,9 +648,6 @@ impl Accumulator {
         Ok(true)
     }
 
-    /// Walk Gmail label strings, building/looking-up mailbox rows and
-    /// computing the JMAP keyword set. Returns
-    /// `(mailbox_ids, keywords)`.
     fn resolve_labels(&mut self, labels: &[String]) -> (Vec<String>, Vec<String>) {
         let mut mailbox_ids: Vec<String> = Vec::new();
         let mut keywords: BTreeSet<String> = BTreeSet::new();
@@ -800,16 +695,12 @@ impl Accumulator {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Bulk-write flush path
-// ─────────────────────────────────────────────────────────────────────
 
-/// Everything the next flush will hand to doltlite. Accumulating in
-/// memory and then flushing as one entity-pool transaction + one
-/// CAS-pool transaction is dramatically cheaper than per-row writes:
-/// doltlite charges a prolly-tree manifest mutation per `BEGIN ...
-/// COMMIT`, so going from ~7 transactions per email to ~2 per
-/// `FLUSH_BATCH` cuts orders of magnitude off ingest time.
+/// Everything the next flush will hand to doltlite. Accumulating in memory
+/// and flushing as one entity-pool transaction plus one CAS-pool transaction
+/// is dramatically cheaper than per-row writes: doltlite charges a prolly-tree
+/// manifest mutation per `BEGIN … COMMIT`.
 #[derive(Default)]
 struct PendingBatch {
     emails: Vec<EmailRow>,
@@ -818,12 +709,10 @@ struct PendingBatch {
     /// each edge's `blake3` off them at flush time — see
     /// [`datalib_etl::blob_cas::CasEdgeAccumulator`].
     cas: CasEdgeAccumulator,
-    /// In-run dedupe of blob ref ids. JMAP `Email.blobId` is server-
-    /// opaque (different per email), but for mbox sources the ref_id
-    /// is `sha256(bytes)` — identical bodies / attachments collapse
-    /// to a single row, and this set keeps the edge list itself
-    /// dedup-free so doltlite never sees a conflicting bind pair
-    /// inside one multi-row statement.
+    /// In-run dedupe of blob ref ids. For mbox the ref_id is
+    /// `sha256(bytes)`, so identical bodies collapse to one row and
+    /// doltlite never sees a conflicting bind pair inside one multi-row
+    /// statement.
     seen_blob_ids: std::collections::HashSet<String>,
 }
 
@@ -841,9 +730,6 @@ impl PendingBatch {
 /// transaction (emails + join tables + emails bookkeeping), then the
 /// shared CAS-edge flush ([`CasEdgeAccumulator::flush`]) which does
 /// the CAS `put_many` + `email_blobs` edge upsert + edge bookkeeping.
-///
-/// No JSONL wire-tape: mbox is a file on disk, not a wire — there
-/// are no upstream events to mirror.
 async fn flush_batch(
     db: &RawDb,
     batch: &mut PendingBatch,
@@ -878,9 +764,6 @@ async fn flush_batch(
     Ok(())
 }
 
-/// Flush the account row, the per-label mailbox rows, and the per-
-/// thread rows once the message walk is done. Three small tables;
-/// one transaction.
 async fn flush_account_and_lookups(
     db: &RawDb,
     account_id: &str,
@@ -1101,13 +984,9 @@ async fn bulk_insert_threads(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Label mapping
-// ─────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────
 // Path + hash helpers
-// ─────────────────────────────────────────────────────────────────────
 
 fn default_account_id(input_path: &Path) -> String {
     input_path
@@ -1177,9 +1056,7 @@ pub fn is_mbox_input(input_path: &Path) -> bool {
     false
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Tests
-// ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1355,9 +1232,6 @@ mod tests {
         assert_eq!(stamped, 1);
     }
 
-    /// Run `fetch` once against `path`, opening and closing its own
-    /// pool so the next run sees a clean connection. Mirrors
-    /// `re_running_is_idempotent`.
     async fn run_once(db_path: &Path, path: &Path, opts: FetchOptions) -> FetchSummary {
         let db = RawDb::open(db_path).await.unwrap();
         let pool = db.pool().clone();

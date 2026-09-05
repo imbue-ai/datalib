@@ -1,34 +1,4 @@
 //! End-to-end tests for the Lightroom→doltlite mirror.
-//!
-//! The contract under test is the one that makes this an *incremental
-//! backup* rather than a repeated full copy:
-//!
-//! 1. A first ingest lands every table and row (`first_ingest_*`).
-//! 2. Re-ingesting an unchanged catalog produces **no commit at all** —
-//!    the ingester deletes and rewrites every row, and doltlite's
-//!    content-addressed storage recognises every one of them as already
-//!    at HEAD (`unchanged_source_produces_no_commit`).
-//! 3. Inserts, updates and deletes in the catalog show up in the mirror,
-//!    and in `dolt_diff_<table>` with the right `diff_type`
-//!    (`insert_update_and_delete_*`).
-//! 4. History survives: after a row is edited and another deleted, the
-//!    *earlier* values are still readable from `dolt_history_<table>`
-//!    (`history_is_preserved_*`).
-//!
-//! Plus the two things the design notes claim and would otherwise be
-//! unverified prose: that the stable-key rewrite turns an `id_local`
-//! renumbering into a modification rather than a delete+add
-//! (`id_local_renumbering_*`), and that source schema changes reconcile
-//! (`source_gaining_a_column_*`, `source_dropping_a_column_*`).
-//!
-//! ## Why the fixture is built by Python
-//!
-//! Every Rust binary here links doltlite as its `sqlite3`. It reads and
-//! writes plain SQLite files transparently — which is why these tests can
-//! mutate the catalog with `sqlx` — but any file it *creates* is in
-//! doltlite's own format. So the plain-SQLite catalog is minted by
-//! `//tests/fixtures:make_lightroom_catalog.py` in a genrule and staged
-//! as test data.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -42,9 +12,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_lightroom::download::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
 use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
 
-// ─────────────────────────────────────────────────────────────────────
 // Harness
-// ─────────────────────────────────────────────────────────────────────
 
 /// A catalog + mirror pair in a tempdir, with the fixture already copied
 /// in so tests can edit it freely.
@@ -89,9 +57,6 @@ impl Fixture {
         }
     }
 
-    /// One ingest run: mirror, then commit exactly as the CLI and the
-    /// orchestrator's `RawStoreSession::finish` do. `None` means nothing
-    /// changed — that is the deduplication signal these tests turn on.
     async fn ingest_with(&self, opts: MirrorOptions) -> Result<(MirrorStats, Option<String>)> {
         let pool = mirror::open_mirror(&self.mirror).await?;
         let stats = download::fetch(FetchOptions {
@@ -110,9 +75,6 @@ impl Fixture {
         self.ingest_with(self.options()).await
     }
 
-    /// Run statements against the *catalog* — i.e. play the part of
-    /// Lightroom editing the library. The pool is closed before
-    /// returning so the next ingest gets an unlocked file.
     async fn edit_catalog(&self, stmts: &[&str]) -> Result<()> {
         let pool = mirror::open_sqlite(&self.catalog, false).await?;
         for s in stmts {
@@ -131,7 +93,6 @@ impl Fixture {
     }
 }
 
-/// The genrule-built catalog, staged as `data`.
 fn fixture_catalog() -> PathBuf {
     let p = std::env::var("LIGHTROOM_TNG_CATALOG")
         .expect("LIGHTROOM_TNG_CATALOG must point at the generated .lrcat fixture");
@@ -160,7 +121,6 @@ async fn commit_count(pool: &SqlitePool) -> i64 {
     scalar_i64(pool, "SELECT COUNT(*) FROM dolt_log").await
 }
 
-/// `diff_type`s recorded for `table` at commit `commit`, sorted.
 async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String> {
     let sql =
         format!("SELECT diff_type FROM dolt_diff_{table} WHERE to_commit = ? OR from_commit = ?");
@@ -178,7 +138,6 @@ async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String>
     v
 }
 
-/// Column names present on a mirror table.
 async fn mirror_columns(pool: &SqlitePool, table: &str) -> Vec<String> {
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "PRAGMA table_xinfo(\"{table}\")"
@@ -219,9 +178,7 @@ const CATALOG_TABLES: &[&str] = &[
     "MigrationSchemaVersion",
 ];
 
-// ─────────────────────────────────────────────────────────────────────
 // 1. First ingest
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn first_ingest_lands_every_table_and_row() -> Result<()> {
@@ -259,10 +216,6 @@ async fn indexes_and_triggers_are_not_mirrored() -> Result<()> {
     // implicit index for every non-INTEGER primary key, the way stock
     // SQLite always has. It did not before 0.11.54's SQLite-compatibility
     // work, so this assertion used to be able to say "zero of anything".
-    //
-    // GLOB rather than LIKE: `_` is a single-character wildcard to LIKE,
-    // and being sloppy about that in the pattern that decides what this
-    // test ignores is how it would go quietly toothless.
     const NAMED_INDEXES_AND_TRIGGERS: &str = "SELECT COUNT(*) FROM sqlite_master \
            WHERE type IN ('index', 'trigger') \
              AND name NOT GLOB 'sqlite_autoindex_*'";
@@ -320,17 +273,6 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
     // whose primary key is not a rowid alias silently corrupted every
     // value over ~4 KB, giving each row after the first the *first*
     // row's bytes truncated to its own length.
-    //
-    // Every ingredient matters, which is why it went unnoticed at first:
-    // `Adobe_AdditionalMetadata` is keyed on `id_global` (a UUID, not a
-    // rowid alias) precisely because of this provider's stable-key
-    // rewrite, and its `xmp` packets are tens of KB. Row counts,
-    // lengths, and `typeof()` all still come out right — only the bytes
-    // are wrong — so nothing else in this file catches it.
-    //
-    // We carried a keyless-staging-table detour until the fix landed;
-    // this test is what let us delete it, and what would catch the
-    // shape coming back.
     let f = Fixture::new();
     f.ingest().await?;
 
@@ -377,9 +319,7 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 2. Deduplication — the whole premise
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn unchanged_source_produces_no_commit() -> Result<()> {
@@ -416,9 +356,7 @@ async fn unchanged_source_produces_no_commit() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 3. Insert / update / delete
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn insert_update_and_delete_are_reflected_in_the_mirror() -> Result<()> {
@@ -532,9 +470,7 @@ async fn edits_to_a_keyless_table_are_reflected() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 4. History
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn history_is_preserved_across_runs() -> Result<()> {
@@ -609,9 +545,7 @@ async fn history_is_preserved_across_runs() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 5. Key stability
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Result<()> {
@@ -705,9 +639,7 @@ async fn a_non_integer_primary_key_mirrors_as_the_key() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 6. Filters
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn skip_xmp_removes_the_column_rather_than_blanking_it() -> Result<()> {
@@ -804,9 +736,7 @@ async fn a_table_dropped_from_the_selection_is_dropped_from_the_mirror() -> Resu
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 7. Schema evolution
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn source_gaining_a_column_is_mirrored_with_history_intact() -> Result<()> {
@@ -880,11 +810,6 @@ async fn a_table_the_source_dropped_is_dropped_from_the_mirror() -> Result<()> {
     // does NOT cover: that loop only visits tables the source still has,
     // so a table the catalog dropped would otherwise sit frozen at HEAD
     // forever. `drop_stale_tables` is the separate pass that catches it.
-    //
-    // Distinct from `a_table_dropped_from_the_selection_*`, which
-    // exercises the same pass via the `exclude_tables` filter: this one
-    // drops the table from the catalog itself, which is what actually
-    // happens on a Lightroom upgrade.
     let f = Fixture::new();
     let (before, _) = f.ingest().await?;
     let first = f.ingest().await?;
@@ -969,13 +894,6 @@ async fn a_dropped_columns_values_survive_at_their_commit() -> Result<()> {
     // — so the column is absent from *those* views too. It is NOT gone:
     // branching at an earlier commit restores the old schema and the old
     // values.
-    //
-    // This test exists because the design notes assert that, and an
-    // unverified "don't worry, it's still in history" is exactly the
-    // kind of claim that is comfortable to believe and expensive to be
-    // wrong about. It cannot pass vacuously: the recovery SELECT names a
-    // column HEAD does not have, so a checkout that silently did nothing
-    // would fail the query rather than the assertion.
     let f = Fixture::new();
     let (_, before) = f.ingest().await?;
     let before = before.expect("first commit");
@@ -1023,9 +941,7 @@ async fn a_dropped_columns_values_survive_at_their_commit() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // 8. Snapshot
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn snapshot_yields_the_same_mirror_as_reading_in_place() -> Result<()> {
@@ -1064,9 +980,7 @@ async fn snapshot_is_a_separate_readable_copy() -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Hostile catalogs
-// ─────────────────────────────────────────────────────────────────────
 
 /// SQLite lets a column's declared *type* be a quoted name holding
 /// anything, and `PRAGMA table_xinfo` reports it back with the quotes

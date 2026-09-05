@@ -101,8 +101,6 @@ impl DataProcessor for ChatgptRender {
         &self.id
     }
 
-    /// The value every document this processor writes carries: the render
-    /// path stamps `profile.render_version`, which is this constant.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

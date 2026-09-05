@@ -1,10 +1,5 @@
 //! Thin `RawDb` wrapper around the shared bulk/CAS/file-checkpoint
 //! helpers.
-//!
-//! Owns the entity-db pool + sibling CAS handle; all writes go
-//! through [`datalib_etl::bulk`] /
-//! [`datalib_etl::blob_cas`] from the per-feed walkers. The
-//! provider has no SQL of its own.
 
 use std::path::Path;
 

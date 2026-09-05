@@ -6,12 +6,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_MUTATING } from "./tests/e2e/config-mutating";
 
-// Ask the kernel for a free ephemeral port. Shells out to a tiny Node
-// one-liner so we stay synchronous (Playwright's config module isn't
-// async). There's a small race between close() here and the real
-// listener binding, but it's the standard ephemeral-port pattern and
-// lets `bazel test --runs_per_test=N` (and parallel local runs) coexist
-// without colliding on fixed dev ports.
+  // Ask the kernel for a free ephemeral port, via a Node one-liner so we stay
+  // synchronous (Playwright's config module isn't async). The small race
+  // between close() here and the real listener binding is the standard
+  // ephemeral-port pattern, and it lets parallel runs coexist.
 function freePort(): number {
   const out = execFileSync("node", [
     "-e",
@@ -36,13 +34,6 @@ function cachedPort(envVar: string): number {
 // Tests share the resulting data root via FW_E2E_FIXTURE_ROOT — cached
 // in env so worker subprocesses (which re-import this config) don't
 // each rebuild the fixture into a fresh temp dir.
-//
-// The materializer is the same script `bazelisk run
-// //datalib:dev_tng` uses, so this test and that command produce
-// byte-identical data roots. Under `bazel test` run_e2e.sh resolves the
-// runfiles path and passes it via FW_E2E_MATERIALIZE_TNG_ROOT;
-// interactive `pnpm exec playwright test` falls back to the source-tree
-// bazel-bin symlink.
 const here = path.dirname(fileURLToPath(import.meta.url));
 // `datalib/ui/..` — the workspace root, for the `bazel-bin/...`
 // fallbacks used when this config is loaded outside bazel.
@@ -66,27 +57,17 @@ const fixtureRoot = ensureFixtureRoot();
 
 // Ephemeral port so concurrent runs (`bazel test --runs_per_test=N`,
 // two devs on one machine) don't collide on a fixed port.
-//
-// The Vite dev server used to be a second webServer here, with the UI
-// loaded from source and `/api/*` proxied to the backend. Now the
-// backend binary embeds the Vite-built SPA (see
-// datalib/backend/http/src/embed.rs) and serves it at `/`, so
-// Playwright drives the *packaged artifact* against the same origin —
-// closer to what users run.
 const BACKEND_PORT = cachedPort("FW_E2E_BACKEND_PORT");
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
-// A second backend, on an empty data root, for the first-run
-// onboarding spec. It has to be its own server: the onboarding screen
-// is gated on the data root having no `config.toml`, and the fixture
-// root above has one — there is no way to reach the empty-root state
-// from a server already pointed at a populated one.
-//
-// Fresh `mkdtemp` per config load, so the spec that initializes it
-// still sees an uninitialized root on the next run (including
-// `--runs_per_test=N`, where bazel re-launches this process per run).
-// Cached in env for the same reason the ports are: worker subprocesses
-// re-import this file and must not mint a second directory.
+  // A second backend on an empty data root, for the first-run onboarding spec.
+  // It has to be its own server: the onboarding screen is gated on the root
+  // having no `config.toml`, and there is no way back to that state from a
+  // populated one.
+  //
+  // Fresh `mkdtemp` per config load, so the spec that initializes it still
+  // sees an uninitialized root next run. Cached in env because worker
+  // subprocesses re-import this file and must not mint a second directory.
 function emptyRoot(): string {
   const existing = process.env.FW_E2E_EMPTY_ROOT;
   if (existing) return existing;
@@ -99,20 +80,9 @@ const EMPTY_PORT = cachedPort("FW_E2E_EMPTY_PORT");
 const EMPTY_URL = `http://127.0.0.1:${EMPTY_PORT}`;
 process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
 
-// ── the onboarding spec's world ──────────────────────────────────────
-//
-// A third backend, on a third empty root. `first-run.spec.ts` already
-// owns EMPTY_ROOT and initializes it, and the onboarding state is
-// one-shot: a root with a config can never go back to having none. So a
-// second spec that starts from scratch needs a second scratch root.
-//
-// What makes this one different from EMPTY_ROOT is its PATH. The
-// scaffold `POST /api/config/init` writes names its binaries bare
-// (`datalib-step grid_index`, `datalib-applet unified_index`) — the way
-// an installed user's config does — so this backend, and the
-// `datalib-dag` it spawns, need a directory of dash-named binaries to
-// resolve them against. run_e2e.sh stages one; outside bazel the
-// `//datalib/backend:bin` output directory is the same layout.
+  // A third backend on a third empty root: `first-run.spec.ts` already owns
+  // EMPTY_ROOT and initializes it, and onboarding is one-shot — a root with a
+  // config can never go back to having none.
 function onboardingRoot(): string {
   const existing = process.env.FW_E2E_ONBOARDING_ROOT;
   if (existing) return existing;
@@ -134,11 +104,6 @@ const binDir =
 // filesystem: it is a *copy* of part of the checked-in corpus, because
 // the spec adds a file to it partway through and the corpus itself is a
 // bazel input shared with every other test.
-//
-// One document is deliberately held back — `engineering/warp_core_manual.pdf`,
-// which is the corpus's only renderable document with distinctive text
-// of its own. The spec copies it in to make "a new file appears in the
-// folder" a real event, and asserts on the words it contains.
 const PDF_CORPUS =
   process.env.FW_E2E_PDF_FIXTURE_DIR ||
   path.join(workspaceDir, "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng");
@@ -159,22 +124,6 @@ function pdfScanDir(): string {
 pdfScanDir();
 
 // The Signal backup the onboarding spec's second source points at.
-//
-// Nothing to copy here, unlike the PDF corpus: a Signal backup is an
-// encrypted blob, so the checked-in fixture is a JSON *spec* and
-// `signal_make_fixture` expands it into a real snapshot directory —
-// the same binary and the same spec `//tests/fixtures:ingested_tng`
-// uses, so the e2e and the golden pipeline mirror one backup.
-//
-// Generated here rather than in the spec for the same reason the PDF
-// tree is: a spec that touches the filesystem is a spec that can leave
-// one behind. Cached in env across config reloads, so Playwright's
-// worker subprocesses reuse the one the parent made instead of each
-// minting (and re-encrypting) their own.
-//
-// The AEP is 64 zeros — the fixture passphrase, public by design, and
-// documented as such in the signal-backup crate. It is what makes a
-// credentialed provider's decrypt path runnable in a test at all.
 export const FIXTURE_SIGNAL_AEP = "0".repeat(64);
 const SIGNAL_MAKE_FIXTURE = process.env.FW_E2E_SIGNAL_MAKE_FIXTURE;
 const SIGNAL_SPEC = process.env.FW_E2E_SIGNAL_SPEC;
@@ -193,34 +142,6 @@ function signalBackupDir(): string | undefined {
 signalBackupDir();
 
 // ── the config-mutating specs, one data root each ────────────────────
-//
-// **This is what lets the suite run in parallel.** Five specs rewrite
-// `config.toml` and restore it afterwards. On one shared data root that
-// forces `workers: 1` on the whole suite — not only because those five
-// conflict with each other, but because while one of them holds a
-// rewritten config every *read-only* spec is looking at a different
-// library than it expects: `grid-source-name` renames a source and the
-// Source column moves under `grid-fixture-golden`; `manager2-sync`
-// replaces the config wholesale and `manager2-grid` paints a different
-// Pipeline table.
-//
-// #235 has a worked example of the same collision in its slowest form:
-// `manager2-sync` replacing the config restarted the `unified_index`
-// applet and tore down the resident qmd daemon, so an unrelated later
-// spec paid a second model load. It fixed that by carrying the
-// `[[applets]]` stanza forward. Moving the spec onto a root of its own
-// removes the reach entirely — it can no longer restart the applet the
-// other specs are using, whatever it writes.
-//
-// So each gets its own materialized root, its own backend, and a
-// project whose `use.baseURL` points at it. The specs need no change:
-// they navigate relatively, and the project decides where "/" is. A
-// root is 4.5 MB and materializes in ~0.33s, so five of them cost about
-// 1.7s and buy the other twenty specs the right to run concurrently.
-//
-// Adding a spec that writes the config means adding its basename to
-// `tests/e2e/config-mutating.ts`. Leaving it out is not silent —
-// `global-setup.ts` fails the run and names the file.
 type Sandbox = { spec: string; root: string; port: number; url: string };
 
 /// Cached in env like the ports and the fixture root: worker
@@ -243,14 +164,11 @@ function sandboxes(): Sandbox[] {
 }
 const SANDBOXES = sandboxes();
 
-// The backend requires its API token on every route (see
-// datalib/backend/http/src/auth.rs). Pin one via DATALIB_TOKEN rather
-// than letting the binary mint a random one we'd have to read back out
-// of the data root. `use.extraHTTPHeaders` then authenticates the
-// `request` fixture *and* every navigation and subresource the browser
-// context issues, so the specs stay unaware that auth exists. Cached in
-// env for the same reason the ports are: this config is re-imported in
-// each worker subprocess.
+  // The backend requires its API token on every route, so pin one via
+  // DATALIB_TOKEN rather than reading back a random one. `use.extraHTTPHeaders`
+  // then authenticates the `request` fixture and every navigation the browser
+  // context issues, so the specs stay unaware that auth exists. Cached in env
+  // because each worker subprocess re-imports this file.
 function cachedToken(): string {
   const existing = process.env.DATALIB_TOKEN;
   if (existing) return existing;
@@ -262,19 +180,6 @@ const API_TOKEN = cachedToken();
 
 // Locate the bazel-built http binary. Built via:
 //   bazelisk build //datalib/backend/http:datalib_http_bin
-//
-// DATALIB_HTTP_BIN is set by datalib/ui/run_e2e.sh (the sh_test
-// wrapper used by `bazel test //datalib/ui:e2e_test` and
-// `bazel run //datalib/ui:e2e`). That wrapper resolves the binary
-// out of the test's runfiles via `rlocation` — the only stable way to
-// find it under `bazel test`, since the runfiles path isn't computable
-// from this file. The fallback to the source-workspace `bazel-bin`
-// symlink is for interactive use outside bazel (plain `pnpm exec
-// playwright test`), where the developer is expected to have run
-// `bazelisk build //datalib/backend/http:datalib_http_bin`
-// beforehand. We avoid the symlink under bazel because it isn't a
-// declared input of e2e_test and races with parallel actions under
-// `bazel test //...`.
 const backendBin =
   process.env.DATALIB_HTTP_BIN ||
   path.join(
@@ -283,30 +188,6 @@ const backendBin =
   );
 
 // ── where the recordings go ──────────────────────────────────────────
-//
-// Playwright's per-test artifacts — video, trace, screenshots — plus
-// the HTML report that embeds them.
-//
-// Under `bazel test`, TEST_UNDECLARED_OUTPUTS_DIR is a directory bazel
-// zips into
-// `bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip`
-// and uploads alongside the invocation, so anything written here
-// survives the sandbox and is downloadable from BuildBuddy's Artifacts
-// tab. That is the whole reason artifacts are addressed through this
-// variable rather than the default `test-results/`: written anywhere
-// else they exist only inside a sandbox bazel deletes.
-//
-// Outside bazel (plain `pnpm exec playwright test`) it falls back to
-// Playwright's usual location, next to the specs.
-//
-// Only the *report* is an undeclared output. The report embeds a copy
-// of every video and trace it references, so shipping `outputDir` as
-// well would put the same 13 MB trace in the zip twice — measured, and
-// it doubled the artifact.
-//
-// So `outputDir` goes to the test's scratch directory, which bazel
-// cleans up on its own, and exists only long enough for the reporter
-// to copy out of it.
 const REPORT_DIR = process.env.TEST_UNDECLARED_OUTPUTS_DIR
   ? path.join(process.env.TEST_UNDECLARED_OUTPUTS_DIR, "playwright-report")
   : path.join(here, "playwright-report");
@@ -321,11 +202,6 @@ export default defineConfig({
   // order. That is the right split: several specs are written as a
   // sequence (write the config, sync, assert on what the sync did),
   // while no two files share state any more — see `SANDBOXES`.
-  //
-  // Four rather than "as many as the box has": past four the suite is
-  // bounded by its longest single file rather than by how many run at
-  // once, so more workers only add browsers and memory. Measured on a
-  // 10-core machine.
   fullyParallel: false,
   workers: 4,
   globalSetup: "./tests/e2e/global-setup.ts",
@@ -339,20 +215,10 @@ export default defineConfig({
     ["list"],
     ["html", { outputFolder: REPORT_DIR, open: "never" }],
   ],
-  // Drop Playwright's default `-{projectName}-{platform}` suffix on
-  // snapshot filenames. Our snapshots today are text dumps of API
-  // payloads (see grid-fixture-golden.spec.ts) — identical on every
-  // OS, so the platform suffix is meaningless churn. If we ever
-  // add screenshot snapshots (which legitimately differ per
-  // platform because of font hinting + anti-aliasing), opt those
-  // back in by passing `snapshotPathTemplate` per
-  // `toMatchSnapshot()` call.
-  //
-  // Playwright's default template is
-  // `{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{-platform}{ext}`;
-  // we drop the last two `-…` segments. The `{snapshotDir}` anchor
-  // is required — without it `{testFileDir}` evaluates to a bare
-  // relative path that mkdir interprets as absolute (rooted at `/`).
+    // Drop Playwright's default `-{projectName}-{platform}` snapshot suffix:
+    // ours are text dumps of API payloads, identical on every OS. Screenshot
+    // snapshots would legitimately differ per platform — opt those back in per
+    // `toMatchSnapshot()` call.
   snapshotPathTemplate:
     "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
@@ -386,33 +252,18 @@ export default defineConfig({
     // One project per config-mutating spec, doing one job: pointing
     // `baseURL` at that spec's own backend, so the spec itself can go
     // on saying `page.goto("/sources2")`.
-    //
-    // No `dependencies: ["warmup"]` — that project warms the *shared*
-    // backend's qmd daemon, and nothing on a sandbox root issues a
-    // free-text query. Their applets are spawned by `global-setup.ts`.
     ...SANDBOXES.map((s) => ({
       name: `chromium-${s.spec}`,
       testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
       use: { browserName: "chromium" as const, baseURL: s.url },
     })),
     {
-      // The desktop app runs in a WKWebView, not Chromium, and WebKit's
-      // layout differs in ways that have twice shipped an invisible AG
-      // Grid: it resolves a child's percentage `height` against the
-      // parent's *specified* height, so `height: 100%` under a
-      // flex-sized parent with no `height` of its own computes to
-      // `auto` and the grid collapses to its border. Rows and headers
-      // stay in the DOM, so every locator-and-count assertion in this
-      // suite passes while nothing is painted (see `expectGridPainted`
-      // in tests/e2e/grid-helpers.ts, which is the assertion shape that
-      // does catch it).
-      //
-      // Only the grid-bearing specs are re-run here — this project
-      // exists to cover layout the engines disagree about, not to
-      // double-run application logic that is engine-independent.
-      // `first-run.spec.ts` is excluded for a second reason: it
-      // initializes the empty data root, which is minted once per
-      // config load, so it cannot run twice in one session.
+        // The desktop app runs in a WKWebView, and WebKit's layout has twice
+        // shipped an invisible AG Grid: it resolves a child's percentage
+        // `height` against the parent's *specified* height, so `height: 100%`
+        // under a flex-sized parent computes to `auto` and the grid collapses.
+        // Rows stay in the DOM, so every count assertion passes while nothing
+        // is painted — see `expectGridPainted`.
       name: "webkit",
       use: { browserName: "webkit" },
       dependencies: ["warmup"],
@@ -437,13 +288,9 @@ export default defineConfig({
   ],
   webServer: [
     {
-      // Backend takes the data root as its only positional arg; bind
-      // address comes from DATALIB_BIND so each test run claims its
-      // own ephemeral port. The fixture root produced by
-      // materialize_tng_root.sh IS the data root.
-      // `--no-open` skips the default browser auto-open; Playwright
-      // drives chromium itself, we don't want a second tab fighting
-      // for focus every test run.
+        // The data root is the only positional arg; the bind address comes
+        // from DATALIB_BIND so each run claims its own port. `--no-open` keeps
+        // a second browser tab from fighting Playwright's for focus.
       command: `${JSON.stringify(backendBin)} ${JSON.stringify(fixtureRoot)} --no-open`,
       // Playwright's own readiness probe doesn't go through
       // `use.extraHTTPHeaders`, so the token rides the query string here.
@@ -453,12 +300,9 @@ export default defineConfig({
       env: {
         DATALIB_BIND: `127.0.0.1:${BACKEND_PORT}`,
         DATALIB_TOKEN: API_TOKEN,
-        // The sync worker shells out to `datalib-dag`. Under bazel it
-        // lives in the runfiles, not beside the server binary, so the
-        // worker's directory-then-PATH fallbacks both miss it and every
-        // sync dies at startup with "datalib-dag binary not found".
-        // run_e2e.sh resolves it; passed through here because this
-        // `env` block is what the child actually gets.
+          // The sync worker shells out to `datalib-dag`, which under bazel
+          // lives in the runfiles rather than beside the server binary, so the
+          // worker's own fallbacks both miss it. run_e2e.sh resolves it.
         ...(process.env.DATALIB_DAG_BIN
           ? { DATALIB_DAG_BIN: process.env.DATALIB_DAG_BIN }
           : {}),
@@ -478,14 +322,11 @@ export default defineConfig({
       },
     },
     {
-      // The onboarding backend: a third empty root, and the one server
-      // here whose PATH carries the dash-named binaries. Everything the
-      // onboarding spec runs — the `datalib-dag` the sync worker
-      // spawns, the steps that runner spawns, the `unified_index`
-      // applet the gateway spawns — is named bare by the scaffold
-      // config, so PATH is how all three are found. That is the
-      // installed-user arrangement; the other two servers here never
-      // exercise it because their configs use absolute paths.
+        // The onboarding backend: a third empty root, and the one server here
+        // whose PATH carries the dash-named binaries. The scaffold config names
+        // `datalib-dag`, its steps and the `unified_index` applet bare, so PATH
+        // is how all three are found — the installed-user arrangement, which
+        // the other two servers never exercise.
       command: `${JSON.stringify(backendBin)} ${JSON.stringify(ONBOARDING_ROOT)} --no-open`,
       url: `${ONBOARDING_URL}/api/health?token=${API_TOKEN}`,
       reuseExistingServer: false,
@@ -505,11 +346,6 @@ export default defineConfig({
     // A backend apiece for the config-mutating specs. Same binary and
     // same token as the shared one; the data root is the only thing
     // that differs, which is the whole point.
-    //
-    // `DATALIB_DAG_BIN` rides along because `manager2-sync` runs real
-    // syncs, and under bazel the runner sits in the runfiles rather
-    // than beside the server — the env var is the only one of the sync
-    // worker's three lookups that finds it there.
     ...SANDBOXES.map((s) => ({
       command: `${JSON.stringify(backendBin)} ${JSON.stringify(s.root)} --no-open`,
       url: `${s.url}/api/health?token=${API_TOKEN}`,

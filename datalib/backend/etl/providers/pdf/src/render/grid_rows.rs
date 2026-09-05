@@ -1,20 +1,4 @@
 //! `grid_rows` projection for PDF documents.
-//!
-//! PDFs are not chat-shaped, which is the open question fsindex punted
-//! on ("filesystem entries aren't chat-shaped… closer to
-//! contacts-shaped"). The mapping we settle on here is
-//! **document ≈ conversation, page ≈ message**:
-//!
-//! - one `kind = "PDF Document"` row per document, carrying the whole
-//!   text in `entire_chat`-adjacent fields, and
-//! - one `kind = "PDF Page"` row per page, so a search hit resolves to
-//!   a page anchor rather than dumping the reader at the top of a
-//!   200-page file.
-//!
-//! That is the same shape every chat provider already produces, so the
-//! grid, the preview pane's scroll-to-section, and per-section feedback
-//! all work with no UI change — the page `uuid` is byte-equal to the
-//! `data-section-uuid` the renderer emits.
 
 use std::path::Path;
 
@@ -45,13 +29,10 @@ pub fn ns_id(recipe: &str) -> String {
     Uuid::new_v5(&pdf_ns(), recipe.as_bytes()).to_string()
 }
 
-/// The document's stable id. Derived from content hash, so the same
-/// PDF found at a new path keeps its identity and its feedback history.
 pub fn document_uuid(blake3: &str) -> String {
     ns_id(&format!("doc:{blake3}"))
 }
 
-/// A page's stable id, likewise content-derived.
 pub fn page_uuid(blake3: &str, page: u32) -> String {
     ns_id(&format!("page:{blake3}:{page}"))
 }
@@ -92,25 +73,6 @@ pub fn display_title(title: Option<&str>, rel_path: &str) -> String {
     }
 }
 
-/// Absolute path → `file://` URL for `grid_rows.source_url`.
-///
-/// `source_url` is documented as "canonical URL pointing back to the
-/// original source"; for a local corpus that source is a file, and
-/// `file://` is the URL form of one. Keeping the column a real URL —
-/// rather than smuggling a bare path into it — is what lets the UI
-/// branch on **scheme** instead of provider, so any future local-file
-/// source inherits the same "reveal in the file manager" behavior.
-///
-/// Built with `Url::from_file_path` rather than string concatenation.
-/// Percent-encoding is not optional here: a real filename in the corpus
-/// this was tested against is
-/// `Imbue Mail - 7-Eleven SpeakOut_ New Order # 101445654.pdf`, and a
-/// raw `#` would truncate the URL at the fragment. Spaces, non-ASCII,
-/// and Windows drive letters have the same problem.
-///
-/// Returns `None` for a non-absolute path, which `Url::from_file_path`
-/// rejects — the caller then leaves `source_url` NULL rather than
-/// emitting something unusable.
 pub fn file_url(abs: &Path) -> Option<String> {
     url::Url::from_file_path(abs).ok().map(|u| u.to_string())
 }
@@ -119,21 +81,6 @@ pub fn file_url(abs: &Path) -> Option<String> {
 /// under it — see [`display_author`].
 const AUTHOR_MAX: usize = 120;
 
-/// Shorten a PDF's author string for the grid.
-///
-/// The full value stays in `pdf_documents.author` and in the markdown
-/// frontmatter; this is only the grid projection. Two real shapes from
-/// a 20-document sample drove it:
-///
-/// * A 14-author physics paper produced a 165-character semicolon-
-///   separated list. That fits `VARCHAR(255)` today but a 30-author
-///   paper would not, and as a grid cell it is unreadable either way.
-///   Semicolon-separated lists collapse to `First Author et al.`
-/// * Everything else is short and passes through. We do NOT split on
-///   commas: `Lo, Kyle` is one person, and guessing wrong turns a name
-///   into a surname.
-///
-/// Anything still over the limit is truncated on a character boundary.
 pub fn display_author(author: Option<&str>) -> Option<String> {
     let a = author.map(str::trim).filter(|s| !s.is_empty())?;
     if let Some((first, _rest)) = a.split_once(';') {

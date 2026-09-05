@@ -4,24 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live Claude single-conversation download test.
-//!
-//! Hits real `claude.ai/api` via `latchkey curl` (and the
-//! `latchkey-curl-impersonate` Rust shim that injects a Chrome TLS
-//! fingerprint), downloads ONE known conversation into a hermetic
-//! tempdir, and insta-snapshots a curated stable view of what came
-//! back. Serves as both an integration smoke test and a piece of
-//! documentation showing what a Claude export looks like end-to-end.
-//!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo; run with:
-//!
-//! ```sh
-//! export LATCHKEY_CURL=$(pwd)/datalib/backend/target/debug/latchkey-curl-impersonate
-//! cargo test -p datalib-etl-claude --test claude_live -- --ignored
-//! ```
-//!
-//! The target conversation is real and tied to the test author's
-//! claude.ai account; if its title/content changes, accept the new
-//! snapshot via `cargo insta review`.
 
 use std::time::Duration;
 

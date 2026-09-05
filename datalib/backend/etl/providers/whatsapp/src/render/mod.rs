@@ -1,15 +1,4 @@
 //! WhatsApp render stage.
-//!
-//! Reads the `wa_*` tables the download stage built and emits one
-//! markdown document per `(chat, period_key)` bucket via
-//! [`datalib_etl_chat_common::render::render_all`]. Reactions
-//! (the `wa_message_add_on` / `wa_message_add_on_reaction` pair)
-//! render inline under their target message.
-//!
-//! Scope (first pass): text messages + image-like attachments +
-//! reactions. Mentions, vCards, locations, quotes, system events are
-//! left in the raw store unrendered until either real data drives
-//! the schema work or we get a test fixture for them.
 
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not

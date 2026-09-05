@@ -1,18 +1,4 @@
 //! Render Notion pages (mirrored by the official API) to markdown.
-//!
-//! Port of `src/ingest/render_notion_official.py`. Pages land under the
-//! stanza's rendered-markdown tree at
-//! `<stanza>/rendered_md/pages/<page_id>/index.md`; sub-pages render as
-//! sibling directories. Comment threads land under
-//! `<page-dir>/threads/<discussion_id>.md`, deep-linked to the anchor
-//! block via `<a id="b-…">` markers emitted around each block.
-//!
-//! When debugging "what is this block type supposed to render as?", a
-//! useful cross-reference is the actively-maintained Node renderer at
-//! <https://github.com/souvikinator/notion-to-md>. We don't shell out
-//! to it (we need our own QMD-with-section-divs shape + grid_rows
-//! grid rows, neither of which it produces), but its block handlers
-//! are a good "is our output reasonable?" oracle.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -913,13 +899,6 @@ fn render_one_page(
     // Materialize every blob that hangs off a block on this page.
     // Files land in `<page_dir>/blobs/<short-b3>.<ext>`; the relative
     // path `blobs/<file>` is the one we splice into the markdown.
-    //
-    // The per-page `BlobBundle` already carries every image block's
-    // bytes (loaded once in `block_on_load_all` via
-    // `notion_image_attachments` + the sibling CAS), so this is just
-    // a `materialize_to_dir` + a per-block ref_id lookup — no SQL,
-    // no `BlobReader` indirection. Slack / whatsapp / email use the
-    // identical shape.
     let mut local_blob_paths: HashMap<String, String> = HashMap::new();
     if !blobs.is_empty() {
         if let Some(blocks) = children_by_parent.get(pid) {
@@ -956,8 +935,6 @@ fn render_one_page(
     Ok(target)
 }
 
-/// Walk every block reachable from `roots` via `children_by_parent`,
-/// collecting block ids. Used to find candidates in `blobs_by_owner`.
 fn collect_block_ids(
     roots: &[Value],
     children_by_parent: &HashMap<String, Vec<Value>>,
@@ -1071,9 +1048,6 @@ fn render_thread(
     Ok(Some(target))
 }
 
-/// Markdown-root-relative `pages` dir for a stanza:
-/// `<stanza>/rendered_md/pages`. Mirrors the absolute path built in
-/// `render_notion_official` via `datalib_etl::layout::rendered_md_root`.
 pub fn pages_subdir(stanza: &str) -> PathBuf {
     PathBuf::from(stanza).join("rendered_md").join("pages")
 }

@@ -1,26 +1,6 @@
 //! Email (JMAP) render: convert parsed threads into the shared
 //! `chat-common` normalized model and delegate markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
-//!
-//! One thread → one [`NormalizedChat`] (single `"all"` bucket);
-//! `chat_uuid`/`markdown_uuid` are the existing `thread_uuid`, so page
-//! identities / links stay stable. Each email → one
-//! [`NormalizedChatItem`]: the From line is the author, the mailbox
-//! labels it's filed under render as a chips line, the body is the
-//! mail-parsed `.eml` (HTML → markdown via htmd, `cid:` images
-//! rewritten to materialized blobs), and the **quoted reply history is
-//! folded into a `<details>`** so each message shows only its new text —
-//! a markdown knock-off of Gmail's trimmed-quote view.
-//!
-//! Attachment + inline-image bytes (the latter extracted from the
-//! `.eml` MIME tree) are injected into a per-thread [`BlobBundle`] that
-//! chat-common materializes into the page's `blobs/` dir; the raw `.eml`
-//! source blobs are deliberately NOT included so they don't litter the
-//! output.
-//!
-//! Incrementality is unchanged and still dolt-diff driven: `parse`
-//! narrowed to changed threads, so we pass an empty `prior_fingerprints`
-//! map and advance the cursor on success.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -57,8 +37,6 @@ pub enum OutlinkFormat {
     Fastmail,
 }
 
-/// Build the public webmail URL for one email, if the format and the
-/// required identifiers are present.
 fn email_outlink(
     fmt: Option<OutlinkFormat>,
     em: &LoadedEmail,
@@ -74,9 +52,6 @@ fn email_outlink(
     }
 }
 
-/// `#search/rfc822msgid:` lands on the message from its `Message-ID`
-/// alone — robust across Takeout exports where the opaque permalink id
-/// isn't available.
 fn gmail_outlink(message_id: &str) -> Option<String> {
     let id = message_id
         .trim()
@@ -99,8 +74,6 @@ fn fastmail_outlink(mailbox: &str, email_id: &str, thread_id: &str) -> String {
     )
 }
 
-/// Pick the mailbox name to put in a Fastmail path: prefer "Inbox", else
-/// the first label, else "Inbox".
 fn primary_mailbox(labels: &[String]) -> &str {
     labels
         .iter()
@@ -110,7 +83,6 @@ fn primary_mailbox(labels: &[String]) -> &str {
         .unwrap_or("Inbox")
 }
 
-/// Percent-encode everything but RFC 3986 unreserved chars.
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -267,9 +239,6 @@ pub fn render_all(
     Ok(())
 }
 
-/// One thread → its [`NormalizedChat`] plus the per-thread
-/// [`BlobBundle`] of attachment + inline-image bytes for chat-common to
-/// materialize.
 fn build_chat(
     bucket: &super::parse::EmailThreadBucket,
     mailbox_name: &HashMap<String, String>,
@@ -308,7 +277,6 @@ fn build_chat(
             .get(&em.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        //
         // `listed_hashes` holds only the ones that reach the "###
         // Attachments" list below — inline-dispositioned attachments are
         // filtered out of that list, so their bytes still need a body
@@ -477,7 +445,6 @@ fn build_chat(
     (chat, render_bundle)
 }
 
-/// Mailbox/label display names this email is filed under, sorted.
 fn labels_for_email(
     em: &LoadedEmail,
     bucket: &super::parse::EmailThreadBucket,
@@ -508,32 +475,18 @@ fn labels_for_email(
 /// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
 /// unparseable.
-///
-/// Goes through `datalib-time` rather than calling `chrono` directly:
-/// timestamps are a cross-source concept, so exactly one crate decides
-/// how a string becomes an instant (rule P3 in
-/// `docs/dev/data_architecture_parse_and_render.md`). `parse_strict`
-/// is the right member of that family here — `received_at` is written
-/// by our own downloader and always carries an explicit offset.
 fn iso_to_ms(s: &str) -> Option<i64> {
     datalib_time::parse_strict(s)
         .ok()
         .map(|t| t.to_unix_millis())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Quoted-text folding (the Gmail-style trimmed-quote view)
-// ─────────────────────────────────────────────────────────────────────
 
 /// Split a rendered email body into (fresh, quoted) where `quoted` is
 /// the reply history to collapse into a `<details>`. Conservative: only
 /// folds when a recognizable quote marker is found, and never when the
 /// fresh part would be empty (don't hide the whole message).
-///
-/// Recognized markers (covering Gmail, Apple Mail, Outlook):
-///   * an attribution line — `On <…> wrote:`, `Le <…> a écrit :`
-///   * `-----Original Message-----`
-///   * the start of a trailing run of `>`-quoted lines
 fn split_quoted(body: &str) -> (String, Option<String>) {
     let lines: Vec<&str> = body.lines().collect();
     let mut cut: Option<usize> = None;
@@ -592,9 +545,7 @@ fn split_quoted(body: &str) -> (String, Option<String>) {
     (fresh, Some(details))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // .eml parsing (mail-parser) — body, inline parts, addresses.
-// ─────────────────────────────────────────────────────────────────────
 
 /// A binary body part embedded in the `.eml` (cid-referenced inline
 /// image, or an Apple-Mail-style "loose" inline part).
@@ -692,8 +643,6 @@ fn format_address(addr: Option<&Address>) -> String {
     }
 }
 
-/// True if this attachment is an inline body part (`disposition ==
-/// "inline"` or carries a `Content-ID`).
 fn is_inline_attachment(a: &LoadedAttachment) -> bool {
     a.disposition.as_deref() == Some("inline") || a.cid.is_some()
 }
@@ -735,7 +684,6 @@ fn email_body_markdown(
     Some(autolink_bare_urls(&parsed.text_body))
 }
 
-/// Replace `src="cid:<id>"` in raw HTML with the materialized blob path.
 fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String {
     if cid_to_blob.is_empty() {
         return html.to_string();
@@ -774,7 +722,6 @@ fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String
     out
 }
 
-/// Minimal bare-URL autolinker for the plaintext-fallback path.
 fn autolink_bare_urls(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
@@ -810,9 +757,7 @@ fn autolink_bare_urls(s: &str) -> String {
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // UUID recipes (stable across the migration).
-// ─────────────────────────────────────────────────────────────────────
 
 /// Namespace UUID for everything this provider emits — frozen forever.
 pub const JMAP_NS: Uuid = Uuid::from_bytes([

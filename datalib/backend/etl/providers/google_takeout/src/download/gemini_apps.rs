@@ -1,9 +1,4 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
-//!
-//! Same MDL `outer-cell` shape as YouTube watch-history, but the
-//! cell carries `prompt_text`, `response_html`, and `attached_files`
-//! references to sibling files in the same directory. PK recipe:
-//! `uuidv5(NS, "gemini:" + blake3_hex(prompt + "\0" + when_str))`.
 
 use std::path::{Path, PathBuf};
 

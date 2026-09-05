@@ -1,65 +1,4 @@
 //! Raw-store schema for the `media` provider.
-//!
-//! # Content on one side, locations on the other
-//!
-//! Same split as `pdf`, motivated the same way. The question is "what
-//! media do I have?", not "what files are on this disk" — and in a
-//! personal library the same song or photo exists several times over:
-//! the album ripped once and synced twice, the picture in the camera
-//! import and again in an exported album. Keying on path would count
-//! each copy as its own item and turn a `mv` into a delete plus an add.
-//!
-//! So content is keyed on `blake3(bytes)` and locations hang off it:
-//!
-//! - [`MEDIA_ITEMS_DDL`] — PK `blake3`. One row per distinct file's
-//!   worth of bytes: class, container, codec, duration, and the
-//!   metadata-excluding [`MediaItemRow::payload_blake3`].
-//! - [`MEDIA_FILES_DDL`] — PK `id` (root-relative path), FK `blake3`.
-//!   Where copies live, plus Unison's `(mtime, size, inode, dev)`
-//!   rescan cursor so an unchanged file skips the read.
-//!
-//! # Two class tables, not three
-//!
-//! The obvious split is music / photos / video, one table each. The
-//! split that actually falls out of the data is **audio versus
-//! visual**, because the line that matters is not the medium but the
-//! kind of metadata:
-//!
-//! - [`MEDIA_AUDIO_DDL`] holds *tags describing a recording* — artist,
-//!   album, track number. Typed by a person or a database, and they
-//!   describe the work, not the capture.
-//! - [`MEDIA_VISUAL_DDL`] holds *EXIF describing a capture* — camera,
-//!   lens, exposure, GPS, the moment the shutter opened. Written by a
-//!   device.
-//!
-//! Video sits squarely on the EXIF side. A phone's `.mov` carries the
-//! same make, model, capture time and coordinates as the `.heic` shot
-//! beside it, and a Live Photo is literally the two together. Giving
-//! video its own table would mean duplicating a dozen capture columns
-//! to express that a video was taken by a camera in a place at a time
-//! — and then joining them back together for every "what did I shoot
-//! on this trip?" query. The handful of genuinely video-only fields
-//! (`frame_rate`, the two codec columns) are nullable columns on the
-//! shared table instead. Duration belongs to both, so it lives on
-//! `media_items`.
-//!
-//! # Playlists get their own two tables
-//!
-//! A playlist is not an item — it has no payload and no capture — and
-//! its content *is* an ordered list of references. That does not fit
-//! either class table, so [`MEDIA_PLAYLISTS_DDL`] and
-//! [`MEDIA_PLAYLIST_ENTRIES_DDL`] carry it. See [`super::playlist`] for
-//! why the unresolved entries are the valuable ones.
-//!
-//! # Every metadata column is a hint
-//!
-//! Nothing here is keyed on, joined through, or trusted. Tags are
-//! wrong at a rate that would startle anyone who has not looked: clocks
-//! set to the wrong year, `album_artist` differing across one album,
-//! GPS from a phone that had not got a fix yet. We store what the file
-//! says. The same position `pdf` takes on its `author` column, for the
-//! same reason — a heuristic clean enough to drop the junk eventually
-//! drops something real.
 
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
@@ -72,34 +11,6 @@ use super::kind::{Container, MediaClass};
 
 /// Path-keyed tables, reconciled at the **end** of a scan rather than
 /// truncated at the start.
-///
-/// The obvious implementation is `DELETE FROM …` up front and let the
-/// rebuild re-add whatever is still there, which is what `fsindex` and
-/// `pdf` do. It has a cost those two can live with and this provider
-/// cannot: a scan killed halfway has already discarded the rescan
-/// cursors for every file it had not reached, so the next run re-reads
-/// them from disk although nothing changed. On a library measured in
-/// terabytes that is the difference between resuming a scan and
-/// restarting one.
-///
-/// So nothing is deleted up front. Instead the walk *consumes* the
-/// in-memory cache — each visited path is removed from it — and
-/// whatever is left at the end is, exactly, the set of paths that
-/// disappeared. Those rows are deleted by id.
-///
-/// That formulation is also why the reconciliation is not a
-/// `WHERE last_seen_at <> <this run>` sweep, which would be simpler:
-/// `DATALIB_DAG_NOW` is pinned per run, so two runs sharing a pinned
-/// `now` — a retry, a test — would sweep nothing and quietly keep rows
-/// for deleted files. Set difference has no clock in it.
-///
-/// See `DOWNLOAD.md` §"Interrupting a scan".
-///
-/// The content-keyed tables (`media_items`, `media_audio`,
-/// `media_visual`) are deliberately absent: content has no notion of
-/// "no longer present", and dropping them would lose `first_seen_at`
-/// and force a re-parse of every item whose path merely moved. See
-/// `DOWNLOAD.md` §"Orphaned items".
 pub const DATA_TABLES: &[&str] = &["media_files", "media_playlists", "media_playlist_entries"];
 
 /// All tables, for DDL.
@@ -245,12 +156,6 @@ pub const MEDIA_PLAYLIST_ENTRIES_INDEXES: &[&str] = &[
 ];
 
 /// Where the scan actually ran.
-///
-/// `media_files.id` is root-relative — that is what keeps a moved data
-/// root from rewriting every row — so something has to remember the
-/// absolute root. Keyed on the **source name** from config rather than
-/// on the path, exactly as `fsindex` and `pdf` do, so the row survives
-/// a move of the root.
 pub const MEDIA_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS media_scan_meta (
     id           TEXT PRIMARY KEY,
     abs_root     TEXT NOT NULL,
@@ -294,12 +199,6 @@ pub struct MediaItemRow {
     /// tags, EXIF, XMP, ICC profiles and embedded previews left out.
     /// So retagging an MP3 or re-rendering a DNG's preview moves
     /// `blake3` while this holds.
-    ///
-    /// `None` for containers we have no recipe for, and for files past
-    /// the configured `payload_max_bytes`. Deliberately **not** a
-    /// fallback to the file hash: NULL says "we did not compute one",
-    /// where a fallback would claim a metadata-independence the format
-    /// never gave it. See [`super::payload`] for the full argument.
     pub payload_blake3: Option<String>,
     /// Which recipe produced [`Self::payload_blake3`], e.g.
     /// `mp3.frames.v1`. Two payload hashes are only comparable under
@@ -604,14 +503,6 @@ pub struct MediaPlaylistEntryRow {
     /// Root-relative path this entry points at, when it points inside
     /// the scanned tree. NULL for URLs, absolute paths, and traversals
     /// that climb out of the root.
-    ///
-    /// Computed from the raw target and the playlist's own path — pure
-    /// string work, no I/O and no database. Whether a *file* is there
-    /// is deliberately **not** stored: that is
-    /// `JOIN media_files ON media_files.id = resolved_path`, and a
-    /// stored answer would be a cached join that goes stale the moment
-    /// a track is added or removed without the playlist being
-    /// rescanned. See `DOWNLOAD.md` §"Playlists".
     pub resolved_path: Option<String>,
     pub ext_title: Option<String>,
     pub ext_duration_s: Option<i64>,

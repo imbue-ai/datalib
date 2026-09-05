@@ -4,17 +4,6 @@
 //! preserve the user's original input until the moment we actually
 //! need a normalized token to hit the API.
 
-/// Strip a paste-able URL down to its trailing id token.
-///
-/// - Not `http(s)://`: returned unchanged (trim only).
-/// - http(s) URL: query/fragment dropped, then the last path segment
-///   is examined. If it ends in a 32-hex run (Notion's `Title-<hex32>`
-///   shape), return just that trailing token. Otherwise return the
-///   whole last segment (covers `claude.ai/chat/<uuid>` and
-///   `chatgpt.com/c/<uuid>` where the segment is already a dashed UUID).
-///
-/// The normalized string is fed unchanged to the provider; Notion's
-/// `format_uuid` further expands undashed hex into dashed UUID form.
 pub fn normalize_id_token(s: &str) -> String {
     let trimmed = s.trim();
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {

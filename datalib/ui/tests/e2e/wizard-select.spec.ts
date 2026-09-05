@@ -1,15 +1,5 @@
 // A field whose backend type is a closed enum is a dropdown, not a text
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
-//
-// Signal's "Document span" is the one such field today: it fills
-// `SignalRenderConfig::period`, which `Period::from_config` parses
-// against exactly four spellings. As a text box it was a place to
-// mistype `weekly` and find out at sync time; as a dropdown the four
-// options are both the input and the documentation, which is why the
-// help text underneath is one clause shorter than it was.
-//
-// The fixture root's config.toml is shared by every spec in the run
-// (workers: 1), so it is restored in afterEach — including on failure.
 import { test, expect, type Page } from "@playwright/test";
 
 const wizard = (page: Page) => page.getByRole("dialog");

@@ -1,53 +1,13 @@
 //! What is wrong with a config file, and how much of the file it costs.
 //!
-//! The loader used to answer that question with `Result`: the first
-//! problem it met became an `Err` and the whole config was gone. One
-//! stray key in one step took down the grid, search, the document view
-//! and every applet, because the applets are declared in the same file
-//! (#209 — `00633dd5` is the commit where it actually happened, and the
-//! e2e suite went from 25 passing to 5).
+//! A list rather than an `Err`, because first-problem-wins meant one stray
+//! key in one step took down the grid, search, the document view and every
+//! applet — they are all declared in the same file. Severity is blast
+//! radius, not mood; the crate README has the table.
 //!
-//! So the loader returns *diagnostics* instead: a list, one entry per
-//! problem, each carrying how much it costs. The caller decides what to
-//! do with a partial config; the loader's job is to say precisely what
-//! it dropped and why.
-//!
-//! ## The severities are a blast radius, not a mood
-//!
-//! [`Severity`] is the whole point of this module, so it is worth being
-//! precise about what separates the levels. They are not "how bad is
-//! this" — they are "what does this cost you":
-//!
-//! * [`Severity::Fatal`] — *the file is not a config.* Malformed TOML,
-//!   an unknown top-level key, `steps` that isn't an array. There is
-//!   nothing to salvage and nothing runs. This is the only severity
-//!   that blocks the app.
-//! * [`Severity::Rejected`] — *this entry is unusable.* An unknown key
-//!   on one step, a malformed id, a duplicate. That entry is dropped;
-//!   every other entry loads.
-//! * [`Severity::Blocked`] — *this entry is fine, and cannot run
-//!   anyway.* Its input names a step that does not exist, or that was
-//!   itself rejected, or it sits in a cycle. Dropped too — but the
-//!   distinction is the whole message: the fix is somewhere else in
-//!   the file, so pointing the user at this entry alone would send
-//!   them to the wrong line.
-//! * [`Severity::Warning`] — *valid, and probably not what was meant.*
-//!   Nothing is dropped.
-//!
-//! `Rejected` and `Blocked` have the same consequence for the
-//! scheduler — the entry does not reach the graph — and deliberately
-//! different consequences for what the user is told. Merging them
-//! would be the cheaper code and the worse error message.
-//!
-//! ## Locations are byte spans, and the derived line/column rides along
-//!
-//! Every located diagnostic carries a `span` into the config text,
-//! because that is what the two consumers actually want: the terminal
-//! wants `file:line:col` plus an excerpt, and the UI's editor wants a
-//! selection range. Deriving the span from a line number loses the
-//! column and the length; deriving line/column from the span is exact.
-//! So the span is stored and the rest is computed from it once, at
-//! construction, while the text is still in hand.
+//! Locations are byte spans, because the terminal wants `file:line:col` and
+//! an excerpt while the UI editor wants a selection range. A span yields
+//! both exactly; a line number yields neither.
 
 use std::fmt;
 use std::path::Path;
@@ -56,9 +16,6 @@ use serde::Serialize;
 
 /// How much of the config one problem costs. See the module docs for
 /// why these four and not two.
-///
-/// Ordered by blast radius, so `diagnostics.iter().max()` is "how bad
-/// is this file".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -112,26 +69,16 @@ impl EntryKind {
 }
 
 /// The entry a diagnostic is about.
-///
-/// `id` is `Option` because the id is one of the things that can be
-/// wrong: an entry whose `id` key is missing or is not a string still
-/// has to be nameable, and `index` is what names it then.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EntryRef {
     pub kind: EntryKind,
     /// Position in the `[[steps]]` / `[[applets]]` array, 0-based —
     /// the only identity a malformed entry has.
-    ///
-    /// `None` for a diagnostic raised *after* loading, where a step is
-    /// known by its id and the array position has already shifted:
-    /// graph assembly works on the entries that survived, so its index
-    /// 2 is not the file's `[[steps]]` #2.
     pub index: Option<usize>,
     pub id: Option<String>,
 }
 
 impl EntryRef {
-    /// A step being read out of the file, at a known array position.
     pub fn step(index: usize, id: Option<String>) -> Self {
         EntryRef {
             kind: EntryKind::Step,
@@ -139,7 +86,6 @@ impl EntryRef {
             id,
         }
     }
-    /// A step known only by id — see [`EntryRef::index`].
     pub fn step_id(id: impl Into<String>) -> Self {
         EntryRef {
             kind: EntryKind::Step,
@@ -219,27 +165,15 @@ impl Diagnostic {
         self
     }
 
-    /// Attach a location, computing line and column from the text.
-    ///
-    /// Takes the text rather than a precomputed line so there is one
-    /// place that knows how an offset becomes a position, and no
-    /// caller can disagree with it.
     pub fn at_span(mut self, text: &str, span: std::ops::Range<usize>) -> Self {
         self.set_span(text, span);
         self
     }
 
-    /// The step or applet id this is about, if it has one.
     pub fn id(&self) -> Option<&str> {
         self.entry.as_ref().and_then(|e| e.id.as_deref())
     }
 
-    /// Attach a location after the fact.
-    ///
-    /// Diagnostics from graph assembly know the step id but not where
-    /// it sits in the file — the graph is built from specs, which carry
-    /// no spans. The loader, which holds both, closes that gap here
-    /// rather than threading the text through graph assembly.
     pub fn set_span(&mut self, text: &str, span: std::ops::Range<usize>) {
         self.line = Some(line_of(text, span.start));
         self.column = Some(column_of(text, span.start));
@@ -248,11 +182,6 @@ impl Diagnostic {
 
     /// One line, no file and no excerpt: what a strict caller puts in
     /// its `Err`.
-    ///
-    /// The location is included because it is the most useful half of
-    /// the message, but the file name is not — a strict caller is
-    /// usually about to wrap this in a `context("parse {path}")`, and
-    /// two copies of the path in one error reads like a bug.
     pub fn describe(&self) -> String {
         let mut s = String::new();
         if let Some(line) = self.line {
@@ -268,11 +197,6 @@ impl Diagnostic {
         s
     }
 
-    /// Render for a terminal: `file:line:col: severity: entry: message`,
-    /// then an excerpt with a caret, then `help:`.
-    ///
-    /// The first line is the shape every editor's jump-to-error and
-    /// every agent already parses, which is the whole reason for it.
     pub fn render(&self, file: &Path, text: &str) -> String {
         let mut s = file.display().to_string();
         if let Some(line) = self.line {
@@ -296,16 +220,6 @@ impl Diagnostic {
         s
     }
 
-    /// The source line the span falls on, with a caret under it:
-    ///
-    /// ```text
-    ///    12 | title = "Grid"
-    ///       | ^^^^^
-    /// ```
-    ///
-    /// Drawn here rather than taken from the TOML parser's own
-    /// rendering, so a diagnostic the parser never saw (a duplicate id,
-    /// an input naming no step) looks exactly like one it did.
     fn excerpt(&self, text: &str) -> Option<String> {
         let (start, end) = self.span?;
         let line_no = self.line?;
@@ -334,20 +248,11 @@ impl Diagnostic {
     }
 }
 
-/// The 1-based line a byte offset falls on.
-///
-/// Offsets come from the TOML parser (`Error::span`, `Spanned::span`),
-/// which reports them into the same `&str` we were handed, so this is
-/// a plain count of newlines before the offset. An offset past the end
-/// clamps to the last line rather than panicking — a diagnostic is not
-/// worth crashing a load over.
 pub fn line_of(text: &str, offset: usize) -> usize {
     let end = offset.min(text.len());
     text[..end].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
-/// The 1-based column a byte offset falls on, counted in bytes from
-/// the start of its line. Matches what the TOML parser prints.
 pub fn column_of(text: &str, offset: usize) -> usize {
     let end = offset.min(text.len());
     match text[..end].rfind('\n') {

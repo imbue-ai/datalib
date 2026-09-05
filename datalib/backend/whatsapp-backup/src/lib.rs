@@ -1,37 +1,5 @@
 //! `datalib-whatsapp-backup` — decrypt WhatsApp-Android crypt15
 //! `msgstore.db.crypt15` backups into plaintext SQLite bytes.
-//!
-//! Scope is intentionally narrow: the base `msgstore.db.crypt15` file only.
-//! No crypt12/14 support, no increment-file replay
-//! (`msgstore-increment-N.db.crypt15`), no wa.db contacts DB — those
-//! are separate format variants and the upstream reverse-engineering
-//! tool (`wa-crypt-tools`) covers them if we need them later.
-//!
-//! Crypt15 format (base file):
-//!
-//! ```text
-//! [ 1 byte  ] protobuf_size (big-endian u8 — yes, just one byte; max 255)
-//! [ 0..1 B  ] optional msgstore-features flag: present iff next byte == 0x01
-//! [ N bytes ] BackupPrefix protobuf (length = protobuf_size)
-//!     field 1 (varint)             — key_type
-//!     field 2 (length-delimited)   — submessage with the IV (c15_iv):
-//!         field 1 (length-delimited) — 16-byte IV (GCM nonce)
-//!     field 3 (length-delimited)   — version_info / device info (ignored)
-//!     field 5 (length-delimited)   — feature flags (ignored)
-//! [ M bytes ] AES-256-GCM ciphertext (zlib-deflated SQLite)
-//! [ 16 bytes ] GCM auth tag
-//! [ 16 bytes ] MD5 checksum over (size_prefix || features_flag || protobuf
-//!              || ciphertext || tag). Optional integrity check; not
-//!              cryptographic. Trailing on single-file backups only;
-//!              omitted in multifile / incremental backups.
-//! ```
-//!
-//! Decryption: AES-256-GCM with the raw 32-byte key (as a hex string in
-//! `WHATSAPP_BACKUP_DECRYPTION_KEY`) and the 16-byte IV from the header.
-//! Output is a zlib-compressed stream; inflate to get the SQLite bytes.
-//!
-//! The key is passed in by the caller — this crate never reads env or
-//! files holding the key.
 
 mod crypto;
 mod header;
@@ -51,11 +19,6 @@ use anyhow::{Context, Result};
 /// from `encrypted_backup.key` or its hex representation in
 /// `WHATSAPP_BACKUP_DECRYPTION_KEY`) and return the plaintext SQLite
 /// bytes (after zlib inflate).
-///
-/// The root key is *not* the AES key — WhatsApp derives the AES-256
-/// GCM key from it via a one-shot HMAC-SHA256 KDF
-/// ([`derive_backup_encryption_key`]). This function applies that
-/// derivation internally.
 pub fn decrypt_file(path: &Path, root_key: &[u8; 32]) -> Result<Vec<u8>> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let header = parse_header(&bytes).context("parse crypt15 header")?;
@@ -81,9 +44,6 @@ pub fn decrypt_file(path: &Path, root_key: &[u8; 32]) -> Result<Vec<u8>> {
     Ok(sqlite_bytes)
 }
 
-/// Decode `hex_key` (64 hex chars, optional whitespace) into a 32-byte
-/// AES-256 key. Intended for callers reading the key out of the
-/// `WHATSAPP_BACKUP_DECRYPTION_KEY` env var; rejects anything else.
 pub fn decode_hex_key(hex_key: &str) -> Result<[u8; 32]> {
     let trimmed: String = hex_key.chars().filter(|c| !c.is_whitespace()).collect();
     if trimmed.len() != 64 {

@@ -1,18 +1,4 @@
 //! ChatGPT HTTP fixture synthesizer.
-//!
-//! Reads the snapshot layout the live downloader writes
-//! (`<api_dir>/me.json`, `conversations.json`,
-//! `conversations/<id>.json`) and emits playback fixtures matching
-//! every request [`crate::download::api::ChatGPTClient`] would issue:
-//!
-//! * `GET /backend-api/me`
-//! * `GET /backend-api/conversations?offset=N&limit=100&order=updated`
-//!   — one fixture per page slice plus a terminating empty page so the
-//!   listing loop converges even when `total` is missing.
-//! * `GET /backend-api/conversation/{id}` — one per id, with the two
-//!   downloader-side synthetic keys (`_fetched_at`,
-//!   `_listing_update_time`) stripped so the response looks like the
-//!   live API rather than the on-disk cache.
 
 use std::fs;
 use std::path::{Path, PathBuf};

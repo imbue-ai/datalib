@@ -1,10 +1,5 @@
 //! [`IndexRepo`] — the seam to the grid index: `grid_rows`,
 //! `markdowns`, `edges`.
-//!
-//! Reads only, because the `grid_index` step is the file's only writer.
-//! The application stores live behind `datalib_core::repo::AppRepo`,
-//! which is a different file with a different writer; the two share
-//! [`RepoError`] and nothing else.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,13 +14,8 @@ use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
 
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
-///
-/// Nothing here writes. The `grid_index` step is the index's only
-/// writer, which is what lets any number of readers open the file at
-/// once — see `DoltRepo::open` for the constraint that forces it.
 #[async_trait]
 pub trait IndexRepo: Send + Sync {
-    /// Run a grid-search query and return rows for the UI.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
 
     /// Fetch the per-markdown header data (title, account, channel, …)
@@ -50,19 +40,11 @@ pub trait IndexRepo: Send + Sync {
     /// come back absolute — but in one round trip, because the grid's
     /// index-state columns ask about every markdown behind the current
     /// result set.
-    ///
-    /// UUIDs with no `markdowns` row, or whose row has no `md_path`
-    /// (rendered nothing yet), are simply absent from the returned map
-    /// rather than mapped to `None`: "we have no file for this" is one
-    /// state, however it arose.
     async fn md_paths_for(
         &self,
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
 
-    /// Fetch every row's `(uuid, kind, qmd_path, provider)` tuple. Used to
-    /// build a `GridIndex` so qmd-routed search can map hits → grid rows.
-    /// Returning an empty list is acceptable for an empty / missing store.
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError>;
 
     /// Same shape as [`search`](Self::search), but with a caller-supplied

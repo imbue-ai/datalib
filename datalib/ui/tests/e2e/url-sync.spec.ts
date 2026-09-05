@@ -9,10 +9,6 @@ import { selectRowByUuid } from "./grid-helpers";
 // `documentView(…)` column and lands the selection in the grid's
 // state — so the URL is a reload-stable deeplink to the user's
 // current view.
-//
-// This is a black-box contract: the test asserts the URL changes in
-// response to user actions and that a reload restores the view. It
-// does not pin the state-string serialization.
 
 // Resolve a stable target row by its `row-id` (AG Grid's per-row UUID
 // attribute — `getRowId` in GridCard returns `data.uuid`). `.first()` in

@@ -3,23 +3,6 @@ import { contextMenuRowByUuid, stubClipboard } from "./grid-helpers";
 
 // Two copy actions, two id spaces, and the user must be able to tell
 // which one they got.
-//
-// `grid_rows.uuid` is ours: it resolves inside datalib (chat URLs,
-// `feedback.target_uuids`, `id:` filters). `upstream_id` is the
-// upstream's: it resolves at claude.ai, in the GitHub API, in
-// `conversations.replies`. They are usually BOTH UUID-ish strings, so
-// nothing about the copied text tells you which space it belongs to —
-// which is why this is two menu items rather than one action that
-// returns whichever exists.
-//
-// The regression this pins is specific. Before `datalib_id`, claude,
-// chatgpt and notion passed the upstream id straight through as their
-// primary key, so "Copy UUID(s)" happened to yield a native id for
-// those three and ours for the other thirteen. Nothing in the code
-// chose that; it fell out of the schema. Porting those providers onto
-// minted v5 ids silently turns `uuid` into a value with no route back
-// upstream, and without a second action the native id becomes
-// unreachable from the UI entirely.
 
 type Row = {
   uuid: string;

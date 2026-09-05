@@ -1,22 +1,4 @@
 //! Shared infrastructure for **HTTP fixture synthesizers**.
-//!
-//! A synthesizer reads a provider's event-store JSONL (the same trees
-//! the Render step consumes) and writes pre-recorded `HttpResponse`
-//! fixtures into a playback root. When playback mode (`DATALIB_HTTP_PLAYBACK`
-//! <dir>` later drives that provider's Download step, the shared
-//! [`crate::http::latchkey_curl`] transport looks each request up under
-//! `<dir>/<provider>/<key>.json` and replays the synthesized response —
-//! no network, no API credentials, fully deterministic.
-//!
-//! Each provider crate implements [`Synthesizer`] over its own input
-//! shape; the `datalib-step synthesize` driver runs them all in turn.
-//! Helpers in this module keep on-disk format consistent so the playback
-//! transport's `fixture_key` keying stays in lockstep with the writers.
-//!
-//! Fixtures are intentionally **synthetic** rather than recorded live —
-//! we never commit real API responses to the repo. The synthesizer's job
-//! is to produce a response *shaped like* what the live API would emit,
-//! drawn from the same `raw` payloads the event store already holds.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -32,9 +14,6 @@ use crate::http::{fixture_key, HttpRequest, HttpResponse};
 /// Slack's per-channel JSONL, etc.) and emit the fixture files the
 /// provider's Download step would otherwise fetch from the live API.
 pub trait Synthesizer {
-    /// Short provider tag, matching `HttpRequest::provider` (`"notion"`,
-    /// `"github"`, …). Used for logging only; fixture paths are derived
-    /// from the request itself.
     fn name(&self) -> &'static str;
 
     /// Write every fixture this provider's Download step would need into

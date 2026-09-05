@@ -1,17 +1,4 @@
 //! `GET /api/dag` carries the runner's own per-step run record.
-//!
-//! Why the endpoint and not the job queue: `sync_jobs` records whole
-//! *runs*, and a run routinely names several steps, so the table could
-//! only ever attribute one timestamp and one status to all of them —
-//! which is what the `~` marker beside "Last status" used to be
-//! apologizing for. The runner knows per step, writes it to
-//! `system/dag_state.json`, and this is how that reaches the UI.
-//!
-//! The other half of the point is that the *runner* writes it. A sync
-//! started from a terminal leaves the same record as one the app kicked
-//! off, so both show up in the table. That is not directly assertable
-//! here — it follows from reading the file rather than the queue, which
-//! is what these tests pin.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

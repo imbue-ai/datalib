@@ -1,8 +1,4 @@
 //! End-to-end over the fixture corpus: scan → store → render.
-//!
-//! Asserts against the raw store and the emitted markdown rather than
-//! against log lines, per AGENTS.md §"Inspecting doltlite stores" — a
-//! log line says what the code *said*, the store says what it *did*.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -165,13 +161,6 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
 
 /// Regression for #173: a `Mixed` document — some pages readable, some
 /// not — must render the pages that are.
-///
-/// The rule used to be `needs_ocr = 0`, and a Mixed document always has
-/// a non-empty `pages_needing_ocr` (that is what makes it Mixed), so no
-/// Mixed document ever rendered. On the fixture corpus that cost one
-/// page; on a 200-page report with three scanned inserts it costs 197.
-/// The corpus had no Mixed document at all, which is why nothing caught
-/// it — hence `engineering/hull_survey.pdf`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     let h = Harness::new();
@@ -519,16 +508,6 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
 /// Regression: `grid_rows.qmd_path` must be the *data-root*-relative
 /// path, byte-equal to what `grid_index::apply_one` stores in
 /// `markdowns.md_path` for the same file.
-///
-/// It used to be the out-dir-relative `docs/<blake3>.md`, which is what
-/// `GridIndex::new` keyed its rows by while `rows_for_hit` looked hits
-/// up by their data-root-relative path. The two could never match, so
-/// every qmd hit inside a PDF resolved to zero grid rows and was
-/// dropped — PDFs were simply absent from free-text search, with only
-/// an applet-side `qmd hit resolved to no grid rows` error to show for
-/// it. Comparing against the path derived from `md_path` (rather than
-/// against a hardcoded string) is the point: it is the same derivation
-/// the index performs, so the two cannot drift apart again.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
     let h = Harness::new();

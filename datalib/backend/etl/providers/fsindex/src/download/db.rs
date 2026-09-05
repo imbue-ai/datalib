@@ -1,39 +1,4 @@
 //! Doltlite-backed raw store for the `fsindex` provider.
-//!
-//! `open` runs the full DDL via [`dr::open`], `reset` truncates the
-//! entity tables, and writes go through
-//! [`datalib_etl::bulk::bulk_upsert_entity_in_tx`] — the
-//! bookkeeping-free write path, since fsindex has no `_bookkeeping`
-//! sidecars (see [`super::schema_raw::full_ddl`]).
-//!
-//! Branch handling: dolt is single-active-branch per connection, so
-//! [`Self::checkout_branch`] switches the pool's one connection. It
-//! tries `dolt_checkout(branch)` and falls back to
-//! `dolt_checkout('-b', branch)` when that reports no such branch.
-//!
-//! Spelling matters here: doltlite exposes the dolt procedures as SQL
-//! **functions**, so it is `SELECT dolt_checkout(?)`, never MySQL's
-//! `CALL DOLT_CHECKOUT(?)` — the latter is a parse error
-//! (`near "CALL": syntax error`) and, because both the primary and the
-//! `-b` fallback used it, `--branch` failed outright rather than
-//! degrading. `//datalib/backend/core/src/app_store.rs` documents the
-//! same distinction for `dolt_commit`.
-//!
-//! The order is load-bearing in both directions: a plain checkout of a
-//! branch that does not exist errors with `no such branch or table`,
-//! and `-b` on one that does errors with `branch already exists`. So
-//! the fallback has to be tried in that order, and neither call may be
-//! treated as idempotent.
-//!
-//! Because a fresh connection starts on `main`, the checkout is only
-//! true for as long as the pool keeps this connection. [`dr::open`]
-//! pins `max_connections(1)` and disables connection recycling for
-//! exactly that reason — see its "Connection pool size" docs.
-//!
-//! See [`super::schema_raw`] for the table shapes and
-//! [`EXTRACT.md`](../../EXTRACT.md) §"Multi-root via doltlite branches"
-//! for why the orchestrator may checkout a non-`main` branch before
-//! the scan.
 
 use std::path::Path;
 
@@ -96,11 +61,6 @@ impl RawDb {
     /// Switch the open connection's active branch, creating it if it
     /// doesn't exist. See the module docs for the spelling and the
     /// ordering, both of which are load-bearing.
-    ///
-    /// Verifies the switch by reading `active_branch()` back. A
-    /// checkout that returned `Ok` without moving would be the
-    /// dangerous shape — the scan would go on to write every row to
-    /// whatever branch it was already on and report success.
     pub async fn checkout_branch(&self, branch: &str) -> Result<()> {
         // `dolt_checkout(branch)` errors when the branch is absent, so
         // the error is the signal to create it rather than a failure.
@@ -172,12 +132,6 @@ impl RawDb {
     /// so `dolt diff HEAD^ HEAD` is exactly "what this scan changed,"
     /// and — crucially — the next [`RawDb::open`] sees a clean tree and
     /// skips the rescue commit. Returns the wall time.
-    ///
-    /// Cheap now that the bookkeeping schema no longer carries a
-    /// `DEFAULT` clause (which made `dolt_commit` super-linear in
-    /// doltlite v0.11.x — see `bookkeeping_ddl_for`): committing an
-    /// unchanged rescan is a near-empty diff, and even a first scan of
-    /// a million rows commits in a few seconds.
     pub async fn commit(&self, msg: &str) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
         sqlx::query("SELECT dolt_commit('-Am', ?)")
@@ -201,12 +155,6 @@ impl RawDb {
         Ok(ids)
     }
 
-    /// Every entry id this scan wrote, root-relative.
-    ///
-    /// After the truncate-and-rebuild, `files` is exactly what the walk
-    /// visited. Used to name *candidates* for cache removal — not to
-    /// remove them: an entry missing here may simply have been filtered
-    /// out, so each candidate is `lstat`ed before anything is dropped.
     pub async fn all_entry_ids(&self) -> Result<std::collections::BTreeSet<String>> {
         use futures::TryStreamExt;
         let mut out = std::collections::BTreeSet::new();
@@ -238,10 +186,6 @@ impl RawDb {
     /// hashes to the same prolly-tree entry and shows as `unchanged`
     /// (so it isn't counted) — only genuinely changed files surface as
     /// added/modified/removed.
-    ///
-    /// Returns `None` when there's no parent commit to diff against
-    /// (the very first scan) or the diff can't otherwise be resolved.
-    /// Best-effort — never fails the run.
     pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
         let rows = sqlx::query(
             "SELECT diff_type, COUNT(*) AS n FROM dolt_diff_files \
@@ -265,7 +209,6 @@ impl RawDb {
         Some(c)
     }
 
-    /// Upsert the (single) `scan_meta` row for the source.
     pub async fn write_scan_meta(&self, row: &ScanMetaRow, _now: &str) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
         bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row)).await?;

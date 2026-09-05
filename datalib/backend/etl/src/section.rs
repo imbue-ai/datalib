@@ -1,30 +1,4 @@
 //! Shared "section anchor" helpers for provider renderers.
-//!
-//! Every grid row this codebase produces points at a `data-section-uuid`
-//! in the rendered markdown. The frontend keys selection,
-//! scroll-to-on-row-click, and copy-uuid off those attributes; if the
-//! attribute is missing the row looks like data loss (the chat-preview
-//! pane has no anchor to navigate to). Caught in production once for
-//! signal — see commit `d828394` and
-//! `row-click-scroll-position.spec.ts`.
-//!
-//! Two granularities ship here:
-//!
-//! * [`section_attrs`] — the bare attribute fragment
-//!   `id="m-{uuid}" data-section-uuid="{uuid}"`. Drop into any element
-//!   the renderer wants. Use this when the section needs to ride inside
-//!   a markdown bullet or other inline shape (signal's per-item
-//!   `<span>`, beeper's per-reaction `<span>`).
-//! * [`msg_div_open`] / [`MSG_DIV_CLOSE`] — full `<div>` wrapper with
-//!   the standard `class="msg msg--{provider}"` tag. Use this when each
-//!   message renders as its own "card" block (chatgpt, claude, slack,
-//!   beeper messages).
-//!
-//! The `data-section-uuid` MUST be byte-equal to the matching
-//! `grid_row.uuid` so the row→preview navigation can resolve. Both
-//! providers and the grid_rows builder compute the same UUID from the
-//! same upstream identifiers — see each provider's `*_message_uuid()`
-//! helper.
 
 /// HTML attribute fragment that anchors a navigable section.
 /// Identical shape across providers: `id="m-{uuid}"` for in-page

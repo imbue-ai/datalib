@@ -3,17 +3,6 @@
 //! (`<out>/<stanza>/rendered_md/indexed_markdown.doltlite_db`, written
 //! by that source's render step) into the doltlite file at
 //! `<out>/unified_index/grid/db.doltlite_db`.
-//!
-//! Incremental twice over: the index remembers, per source, the store
-//! commit it last consumed (`source_cursors`) and asks that store's
-//! `dolt_diff` what moved since; a document that does surface is still
-//! skipped if its `source_fingerprint` already matches what the index
-//! holds.
-//!
-//! ```sh
-//! grid-rows-load --out ~/mirror
-//! grid-rows-load --out ~/mirror --otlp-endpoint http://localhost:4317
-//! ```
 
 use std::path::PathBuf;
 use std::str::FromStr;

@@ -1,44 +1,5 @@
 //! LinkedIn data-export ("takeout") ingester — dead simple, one table
 //! per file.
-//!
-//! We walk the export directory, and for every `*.csv` we find we make a
-//! `(id, payload)` raw table named after the file, drop its rows, and
-//! re-insert one row per CSV record with the entire record captured as a
-//! JSON `payload`. A LinkedIn export is a complete snapshot, so
-//! "drop-all-and-reinsert every present file" is the whole incremental
-//! story — no cursors, no diffing. The user's published articles
-//! (`Articles/**/*.html`) are the one non-CSV feed; they land in the
-//! [`schema_raw::ARTICLES_TABLE`] table one row per file.
-//!
-//! ## What we ingest
-//!
-//! [`schema_raw::KNOWN_FILES`] enumerates every file a *complete* export
-//! can contain. That list is documentation, not a gate: any CSV we find
-//! is ingested whether listed or not (an unlisted one earns a WARN so we
-//! notice new export shapes), and every listed file is optional — a
-//! missing file simply yields no table. So running on a partial export
-//! (deleted, never-exported, or privacy-excluded files) is always safe.
-//!
-//! ## Identity
-//!
-//! Most LinkedIn CSVs carry no per-row id, so the default PK is a
-//! uuidv5 over the table name + the row's contents: stable across
-//! re-exports and self-deduping. [`schema_raw::KNOWN_FILES`] names the
-//! natural-key column(s) for the handful of files that have one (e.g.
-//! Connections' profile `URL`); when those columns are all empty for a
-//! row we fall back to the row hash. Table names come from
-//! [`schema_raw::canonical_table`], which strips LinkedIn's per-member
-//! numeric filename suffix (`Comments_17529409.csv` → `comments`).
-//!
-//! ## Quirks handled
-//!
-//!   * A leading `Notes:` preamble block (Connections.csv) is stripped
-//!     before parsing.
-//!   * Duplicate header names (Ad_Targeting.csv has `Company Names` ×3)
-//!     are disambiguated with a ` (2)`, ` (3)` suffix so no cell is
-//!     lost.
-//!   * Multi-line quoted fields (Learning.csv course descriptions) parse
-//!     correctly because we hand the byte stream to the `csv` crate.
 
 pub mod photos;
 pub mod schema_raw;
@@ -81,8 +42,6 @@ impl RawDb {
         &self.pool
     }
 
-    /// Load every row's `payload` JSON from one table (used by the
-    /// render/render side).
     pub async fn load_payloads(&self, table: &str) -> Result<Vec<Value>> {
         dr::load_payloads(&self.pool, table).await
     }
@@ -116,9 +75,6 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
-/// Run one download pass: ingest every `*.csv` (plus `Articles/**/*.html`)
-/// under `input_path`. Files absent from [`schema_raw::KNOWN_FILES`] are
-/// still ingested — they just log a WARN so new export shapes surface.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,
@@ -204,7 +160,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// Parse one CSV file and replace its table's contents.
 async fn ingest_one(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -264,9 +219,6 @@ async fn ingest_articles(
     Ok(rows.len())
 }
 
-/// CREATE the `(id, payload)` table if needed, clear it, and bulk-insert
-/// `rows` (id, payload-JSON). A LinkedIn export is a full snapshot, so
-/// every table is replaced wholesale.
 async fn replace_table(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -330,8 +282,6 @@ fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
         .to_string()
 }
 
-/// Recursively collect every `*.csv` under `root`, sorted for stable
-/// ordering.
 fn discover_csvs(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -352,8 +302,6 @@ fn discover_csvs(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Recursively collect every `*.html` under an `Articles/` directory in
-/// the export, sorted. Empty when the export has no articles.
 fn discover_articles(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -394,9 +342,6 @@ fn table_name(root: &Path, path: &Path) -> String {
     canonical_table(&stem.to_string_lossy())
 }
 
-/// Drop a leading `Notes:` preamble (a `Notes:` line, an explanatory
-/// paragraph, then a blank line) so the real header is row 1. No-op when
-/// the file doesn't start with `Notes:`.
 pub(crate) fn strip_notes_preamble(text: &str) -> String {
     let trimmed = text.trim_start_matches('\u{feff}');
     if !trimmed.trim_start().starts_with("Notes:") {
@@ -412,8 +357,6 @@ pub(crate) fn strip_notes_preamble(text: &str) -> String {
     lines.collect::<Vec<_>>().join("\n")
 }
 
-/// Disambiguate duplicate header names with a ` (2)`, ` (3)` … suffix,
-/// and give empty headers a positional `column_<i>` name.
 fn dedup_headers(headers: &csv::StringRecord) -> Vec<String> {
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut out = Vec::with_capacity(headers.len());

@@ -1,55 +1,4 @@
 //! `datalib-step` — the step-type host binary for the DAG runner.
-//!
-//! Each subcommand is one step type under the DAG step contract (see
-//! `datalib_dag` and docs/dev/step_protocol.md): it reads
-//! artifacts under the data root, writes its declared outputs,
-//! streams NDJSON progress events on stdout, and finishes with one
-//! `{"event":"outcome",…}` line reporting per-output change status.
-//! The DAG config invokes it as an ordinary step `command:`
-//! (`command: datalib-step download slack_api`); the runner appends
-//! the entry's declared `params`/`inputs`/`outputs` as
-//! `--params`/`--inputs`/`--outputs` JSON flags.
-//!
-//! Step types:
-//!
-//! * `download <source_type>` — one source's download wave, via the
-//!   provider's own `DataProcessor`s. Writes the tree its step id
-//!   names, which the runner passes in `DATALIB_DAG_STEP`
-//!   (`slack/raw`). `--params` is the provider's own download config
-//!   subtree (no `type:` tag — the subcommand names the provider, no
-//!   `name:` — the id carries it).
-//! * `render <source_type>` — the source's render wave. `--params`
-//!   here is the provider's slim render config (render knobs only —
-//!   the per-phase params split; see `dispatch.rs`).
-//!   Writes the tree its id names: the `.md` files, plus every
-//!   document's rows into that source's own
-//!   `rendered_md/indexed_markdown.doltlite_db`.
-//!   Incremental: docs whose fingerprint is unchanged are skipped,
-//!   reading the prior fingerprints back out of that same store (no
-//!   index-DB peeking — that's the un-fused contract).
-//! * `grid_index` — refresh the unified grid table
-//!   (`unified_index/grid`) by stacking every source's render store,
-//!   asking each one `dolt_diff` since the commit the index last
-//!   consumed, then `dolt_commit`. This is the load step un-fused
-//!   from render.
-//! * `qmd_index` — the qmd search index over every rendered_md tree,
-//!   writing `unified_index/qmd`.
-//! * `probe <source_type>` — utility, not a pipeline step: ask a
-//!   provider what a set of credentials can reach (the account, its
-//!   labels), and print one JSON object. Backs the wizard's "Test
-//!   connection" button; see `probe.rs`.
-//! * `synthesize` — dev utility, not a pipeline step: build HTTP
-//!   playback fixtures for one source from its `input_path` raw
-//!   fixture tree (the `--synthesize-playback-root` mode of the old
-//!   sync binary, one source per invocation). Takes an explicit
-//!   `--name` (there is no step id to take it from).
-//!
-//! Identity comes from the runner via `DATALIB_DAG_STEP` /
-//! `DATALIB_DAG_DATA_ROOT` (falling back to the CWD, which the
-//! runner also sets to the data root); run-wide settings via
-//! `DATALIB_DAG_NOW` and the reset env vars (each overridable by
-//! the corresponding flag for standalone runs). Tracing goes to
-//! stderr; stdout carries only the event stream.
 
 mod dispatch;
 mod download;
@@ -173,7 +122,6 @@ enum Cmd {
     },
 }
 
-/// Truthy run-wide env flag exported by the runner.
 fn env_flag(name: &str) -> bool {
     matches!(
         std::env::var(name).ok().as_deref(),

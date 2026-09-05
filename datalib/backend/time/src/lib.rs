@@ -1,41 +1,19 @@
 //! Timestamp utilities for the datalib workspace.
 //!
-//! Every `now()` and every inbound-timestamp parse funnels through this
-//! crate. The point is to land two architectural rules in exactly one
-//! place each, instead of re-litigating them at every callsite:
+//! Every `now()` and every inbound-timestamp parse funnels through here, so
+//! two rules land in one place each instead of being re-litigated at every
+//! callsite.
 //!
-//! 1. **Generated timestamps carry the generating system's local-tz
-//!    offset, not UTC.** A timestamp with offset is strictly more
-//!    information than the same instant in UTC: you can recover UTC
-//!    from `-07:00`, but you can't recover `-07:00` from `Z`. Useful
-//!    for forensics ("where was this run?") and for showing the user
-//!    their own local time without a separate "where was this
-//!    generated" field.
-//! 2. **We never fabricate values.** [`parse_strict`] requires the
-//!    upstream string to carry an explicit offset.
-//!    [`parse_with_assumed_utc`] and its custom-format sibling
-//!    [`parse_custom_strftime_assumed_utc`] are the **only two
-//!    functions in the whole repo** where "assume UTC because upstream
-//!    gave us no offset" is legal — and they should be used sparingly,
-//!    only when we've audited the upstream and confirmed
-//!    naive-means-UTC. A provider that reaches for
-//!    `NaiveDateTime::parse_from_str(..).and_utc()` locally is making
-//!    that same assumption where nobody can see it.
+//! **Generated timestamps carry the generating system's local offset, not
+//! UTC.** An offset is strictly more information than the same instant in
+//! UTC: you can recover UTC from `-07:00`, but not `-07:00` from `Z`.
 //!
-//!    Every parse helper here returns a `Result`, and every caller is
-//!    expected to let the failure become a *null* — a `when_ts` of
-//!    `None`, a `date_ms` of `None`. An `unwrap_or(0)` on the way out
-//!    of one of these functions puts a real-looking
-//!    `1970-01-01T00:00:00+00:00` into the grid, where it sorts into a
-//!    real position and answers `before:` / `after:` queries it should
-//!    not. See
-//!    [`docs/dev/data_architecture_parse_and_render.md`](/docs/dev/data_architecture_parse_and_render.md)
-//!    §6.
-//!
-//! See [`docs/dev/archived/data_architecture_plan.md`](/docs/dev/archived/data_architecture_plan.md)
-//! §P0.5 for the architectural backstory, and
-//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! for the "no fabricated values" principle.
+//! **A timestamp we cannot parse becomes a null, never a stand-in.** Every
+//! parse helper returns a `Result`, and callers are expected to let the
+//! failure become a `None`. An `unwrap_or(0)` on the way out of one of these
+//! puts a real-looking `1970-01-01T00:00:00+00:00` into the grid, where it
+//! sorts into a real position and answers `before:` / `after:` queries it
+//! should not.
 
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -43,14 +21,6 @@ use std::fmt;
 use std::str::FromStr;
 
 /// An RFC 3339 timestamp that carries an **explicit** UTC offset.
-///
-/// Constructable only through the helpers in this crate — there is no
-/// public `new(DateTime<FixedOffset>)`. Callers that want a "now"
-/// stamp call [`now_local`]; callers parsing upstream strings go
-/// through [`parse_strict`] or (rarely) [`parse_with_assumed_utc`].
-///
-/// Serializes as the RFC 3339 string (so it round-trips through JSON
-/// and through `sqlx` `TEXT` columns cleanly).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IsoOffsetTimestamp(DateTime<FixedOffset>);
 
@@ -66,10 +36,6 @@ impl IsoOffsetTimestamp {
     /// upstreams: Signal, Beeper, Slack `ts`) into an offsetted
     /// timestamp. Returns `None` for absurdly out-of-range values that
     /// chrono can't represent.
-    ///
-    /// The result carries `+00:00` because Unix epoch values are
-    /// upstream-stamped in UTC by definition; nothing the local
-    /// system knows about offset is relevant to interpreting them.
     pub fn from_unix_millis(ms: i64) -> Option<Self> {
         DateTime::<Utc>::from_timestamp_millis(ms).map(|dt| Self(dt.fixed_offset()))
     }
@@ -89,36 +55,22 @@ impl IsoOffsetTimestamp {
         self.0.to_rfc3339_opts(SecondsFormat::AutoSi, false)
     }
 
-    /// Render as RFC 3339 with seconds-precision and explicit offset.
-    /// Use for cursor-like values where sub-second precision is noise.
     pub fn to_rfc3339_secs(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::Secs, false)
     }
 
-    /// Render as RFC 3339 with microsecond-precision and explicit offset.
     pub fn to_rfc3339_micros(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::Micros, false)
     }
 
-    /// Render as RFC 3339 with millisecond-precision and explicit offset.
     pub fn to_rfc3339_millis(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::Millis, false)
     }
 
-    /// The same instant as Unix epoch milliseconds — the inverse of
-    /// [`Self::from_unix_millis`].
-    ///
-    /// Exists so a caller that needs an integer timestamp (chat-common's
-    /// `date_ms`, a sort key, a period bucket) can get one *after*
-    /// parsing through this crate, instead of reaching for
-    /// `chrono::DateTime::parse_from_rfc3339(..).timestamp_millis()` and
-    /// re-deciding the parse rules locally.
     pub fn to_unix_millis(&self) -> i64 {
         self.0.timestamp_millis()
     }
 
-    /// Borrow the underlying `chrono` type. Use sparingly — preferring
-    /// crate methods keeps the policy enforceable.
     pub fn inner(&self) -> DateTime<FixedOffset> {
         self.0
     }
@@ -175,12 +127,6 @@ pub enum TimestampParseError {
     },
 }
 
-/// Parse an RFC 3339 / ISO 8601 string that **already carries an
-/// explicit offset** (e.g. `2026-06-10T14:23:00-07:00`,
-/// `2026-06-10T21:23:00+00:00`, or `2026-06-10T21:23:00Z`).
-///
-/// This is the right helper for parsing values you've just written
-/// yourself or that upstream guarantees to deliver with an offset.
 pub fn parse_strict(s: &str) -> Result<IsoOffsetTimestamp, TimestampParseError> {
     DateTime::parse_from_rfc3339(s)
         .map(IsoOffsetTimestamp)
@@ -190,18 +136,12 @@ pub fn parse_strict(s: &str) -> Result<IsoOffsetTimestamp, TimestampParseError> 
         })
 }
 
-/// Parse a timestamp that **might** have an explicit offset; if not,
-/// assume UTC.
+/// Parse a timestamp that **might** have an explicit offset; if not, assume
+/// UTC.
 ///
-/// This is the **only** place in the repo where "assume UTC" is
-/// allowed. Use it only for upstream feeds we've audited and confirmed
-/// naive-means-UTC (some flawed exports, some older APIs). Any other
-/// fallback path — local time, midnight, run start — is wrong.
-///
-/// Accepts:
-/// - explicit-offset RFC 3339 (`...+00:00`, `...-07:00`, `...Z`)
-/// - naive ISO 8601 with seconds (`2026-06-10T21:23:00`) → assumed UTC
-/// - naive ISO 8601 with sub-seconds (`2026-06-10T21:23:00.123`) → assumed UTC
+/// The **only** place in the repo where assuming UTC is allowed, and only for
+/// upstream feeds we have audited and confirmed naive-means-UTC. Any other
+/// fallback — local time, midnight, run start — is wrong.
 pub fn parse_with_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, TimestampParseError> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(IsoOffsetTimestamp(dt));
@@ -220,10 +160,6 @@ pub fn parse_with_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, TimestampPa
 /// format **must** include `%z` / `%:z` / `%#z` so the result carries
 /// an explicit offset — that's the contract we enforce on every
 /// parsed timestamp in the workspace.
-///
-/// Use this only for upstream feeds that ship a non-RFC 3339 shape
-/// (e.g. yolink's CSV: `"2026/06/10 14:23:00-0700"`). For RFC 3339
-/// inputs prefer [`parse_strict`].
 pub fn parse_custom_strftime(
     s: &str,
     fmt: &str,
@@ -241,27 +177,15 @@ pub fn parse_custom_strftime(
         })
 }
 
-/// Parse a timestamp in an arbitrary `chrono` strftime format that
-/// carries **no offset**, assuming UTC.
+/// Parse a timestamp in an arbitrary `chrono` strftime format that carries
+/// **no offset**, assuming UTC.
 ///
-/// The custom-format sibling of [`parse_with_assumed_utc`], and it
-/// inherits that function's restriction: "assume UTC" is only legal for
-/// an upstream feed we have audited and confirmed naive-means-UTC. Use
-/// [`parse_custom_strftime`] whenever the format *can* carry an offset.
-///
-/// It exists because some exports state their zone as a **literal word**
-/// rather than a numeric offset — Google Chat's
-/// `"Tuesday, February 11, 2025 at 11:33:35 AM UTC"` and LinkedIn's
-/// `"2026-06-16 22:11:33 UTC"` both do. chrono cannot turn the trailing
-/// `UTC` into a `FixedOffset` (`%Z` parses a zone *name* and then
-/// discards it), so the choice is between this function and every
-/// provider re-hand-rolling `NaiveDateTime::parse_from_str(..).and_utc()`
-/// — which is exactly the bypass this crate exists to stop. The audit
-/// here is the literal word in the source string.
-///
-/// The format must **not** contain an offset spec: if the input can
-/// carry a real offset, nothing should be assumed and
-/// [`parse_custom_strftime`] is the right call.
+/// Inherits [`parse_with_assumed_utc`]'s restriction: only for a feed we have
+/// audited. It exists because some exports state their zone as a literal word
+/// rather than a numeric offset (Google Chat's `"… AM UTC"`, LinkedIn's
+/// `"2026-06-16 22:11:33 UTC"`), which chrono cannot turn into a
+/// `FixedOffset`. The format must not contain an offset spec — if the input
+/// can carry a real offset, use [`parse_custom_strftime`].
 pub fn parse_custom_strftime_assumed_utc(
     s: &str,
     fmt: &str,
@@ -284,17 +208,9 @@ pub fn parse_custom_strftime_assumed_utc(
 
 /// Parse a bare `YYYY-MM-DD` date as **midnight UTC** of that day.
 ///
-/// This is the one helper whose explicit purpose is to fabricate the
-/// missing time-of-day + offset components. It exists for human-facing
-/// CLI inputs (slack's `--since 2026-01-15`) where the user clearly
-/// meant "the start of that day, somewhere reasonable" and the
-/// alternative is rejecting friendly input. The fabrication is loud
-/// in the name so reviewers see the cost.
-///
-/// Do **not** use this to translate upstream-provided values. Reach
-/// for [`parse_strict`] (the upstream guaranteed an offset) or
-/// [`parse_with_assumed_utc`] (the upstream lacks one and we've
-/// audited what that means).
+/// The one helper whose purpose is to fabricate the missing time-of-day and
+/// offset, for human-typed CLI input (`--since 2026-01-15`) where rejecting
+/// friendly input is the only alternative. Never for upstream values.
 pub fn parse_yyyy_mm_dd_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, TimestampParseError> {
     let naive = NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|source| {
         TimestampParseError::Invalid {
@@ -312,13 +228,6 @@ pub fn parse_yyyy_mm_dd_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, Times
 
 /// Coerce an upstream ISO-8601 timestamp into a grid-ready `when_ts`:
 /// RFC 3339 with an explicit offset.
-///
-/// Some feeds ship *basic* ISO 8601 — no `-`/`:` separators, e.g. the
-/// vCard `REV` Fastmail exports (`20260605T191839Z`). That form is valid
-/// Precision for a rendered `when_ts`. Per-provider, and **not** a free
-/// choice: the value goes into `source_fingerprint`, so changing a
-/// provider's precision re-cuts every fingerprint it has and re-renders
-/// its whole tree. Existing providers keep what they already emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhenTsPrecision {
     /// `2026-06-05T19:18:39+00:00` — chat-common, signal.
@@ -327,32 +236,17 @@ pub enum WhenTsPrecision {
     Millis,
 }
 
-/// An upstream epoch-millis stamp as a grid-ready `when_ts`, or `None`
-/// when there is no answer.
+/// An upstream epoch-millis stamp as a grid-ready `when_ts`, or `None` when
+/// there is no answer.
 ///
-/// **Both ways of having no answer land on `None`, and that is the
-/// point.** An item upstream never stamped (`ms == None`) and one whose
-/// stamp is not a representable instant are equally "we do not know when
-/// this happened", and
-/// [§6](/docs/dev/data_architecture_parse_and_render.md#6-timestamps)
-/// says that is a null column, never a stand-in. `GridRow.when_ts` is
-/// already `Option<String>` and [`split_when_ts`] already leaves the
-/// index columns NULL, so `None` needs nothing else built to receive it.
+/// **Both ways of having no answer land on `None`, and that is the point.**
+/// A stamp upstream never set and one that is not a representable instant are
+/// equally "we do not know when this happened", which is a null column rather
+/// than a stand-in.
 ///
-/// This lives here rather than in each provider because it *is* the
-/// timestamp policy, and three copies of it had already drifted: two
-/// rendered seconds and one millis, two logged the discard and one
-/// silently returned a marker string that `GridRow::build` then
-/// rejected, failing the whole step on one bad row.
-///
-/// TODO(problem-sink): an unrepresentable stamp is currently only
-/// `warn!`d, which on the render path reaches nobody — `RunCtx` drops
-/// its diagnostics buffer there. When R1's problem sink exists
-/// (`docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
-/// this should record `{field: "when_ts", reason: CoercionFailed,
-/// sample: ms}` against the row instead of logging into the void. Every
-/// `TODO(problem-sink)` in the tree marks a drop that is currently
-/// silent; grep for them when wiring the sink up.
+/// `precision` is per-provider and not a free choice: the value reaches
+/// `source_fingerprint`, so changing it re-cuts every fingerprint that
+/// provider has and re-renders its whole tree.
 pub fn when_ts_from_unix_millis(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
     let ms = ms?;
     match IsoOffsetTimestamp::from_unix_millis(ms) {
@@ -373,17 +267,13 @@ pub fn when_ts_from_unix_millis(ms: Option<i64>, precision: WhenTsPrecision) -> 
 
 /// Human-readable timestamp for a rendered markdown body.
 ///
-/// Three cases, deliberately spelled differently so a reader can tell
-/// them apart:
+/// Three cases, deliberately spelled differently: a real instant renders
+/// normally; an item upstream never stamped says so in words; and a stamp
+/// that exists but is not representable keeps its raw value on screen, because
+/// "we have a number and it is nonsense" is a different fact from "we have
+/// nothing", and the number is the only lead a reader has.
 ///
-/// * a real instant renders normally;
-/// * an item upstream never stamped says so in words;
-/// * a stamp that exists but is not representable keeps its raw value on
-///   screen (`@{ms}ms`), because "we have a number and it is nonsense"
-///   is a different fact from "we have nothing", and the number is the
-///   only lead a reader has.
-///
-/// Display-only. Nothing derived from this reaches the index, so unlike
+/// Display only — nothing derived from this reaches the index, so unlike
 /// [`when_ts_from_unix_millis`] the formatting here is safe to change.
 pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
     let Some(ms) = ms else {
@@ -399,13 +289,6 @@ pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
 /// `.grid_rows.json`. This normalizes it; already-valid values pass
 /// through **verbatim** so callers that persist them don't churn
 /// historical strings.
-///
-/// - Already RFC 3339 with an offset (incl. bare `Z`) → returned as-is.
-/// - **Basic** ISO 8601 (`YYYYMMDDTHHMMSS[.fff]` + `Z` / numeric offset)
-///   → canonicalized to seconds precision with an explicit offset
-///   (`2026-06-05T19:18:39+00:00`).
-/// - Anything else → `None` (the caller drops the timestamp rather than
-///   emit one the grid would reject).
 pub fn coerce_when_ts(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
@@ -430,23 +313,6 @@ pub fn coerce_when_ts(s: &str) -> Option<String> {
     None
 }
 
-/// Split a stored `when_ts` (RFC 3339 with an explicit offset;
-/// tolerates `Z`) into the two values the `grid_rows` index needs:
-///
-/// * `.0` — the same instant normalized to **UTC**, rendered with fixed
-///   microsecond precision and a `Z` suffix (the `Z` states "this is
-///   UTC", not a local zone that happens to sit at zero offset). Because
-///   every value shares one zone and one width, lexical ordering of this
-///   column matches true chronological order — which a column of mixed
-///   local-offset `when_ts` strings does *not*: `2026-01-01T09:00:00+00:00`
-///   sorts before `2026-01-01T10:00:00-08:00` as text, yet is nine hours
-///   *earlier* in absolute time.
-/// * `.1` — the original UTC offset (`+05:30`, `-07:00`, `+00:00`),
-///   preserved so the UI can re-render the instant in the wall-clock
-///   zone it was recorded in.
-///
-/// Returns `None` on empty input or parse failure, so the caller can
-/// leave both index columns NULL rather than fabricate a value.
 pub fn split_when_ts(s: &str) -> Option<(String, String)> {
     if s.is_empty() {
         return None;
@@ -475,30 +341,16 @@ fn utc_micros(dt: DateTime<FixedOffset>) -> String {
         .to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
-/// Normalize a user-typed time bound (the value behind a `before:` /
-/// `after:` search filter) into the **same canonical UTC form** as the
-/// `when_ts_utc` index column, so the two compare correctly as plain
-/// strings.
+/// Normalize a user-typed time bound (the value behind a `before:` / `after:`
+/// search filter) into the **same canonical UTC form** as the `when_ts_utc`
+/// index column, so the two compare correctly as plain strings.
 ///
-/// Policy: **a user-typed timestamp with no offset means local machine
-/// time.** People type wall-clock times in the zone they're sitting in,
-/// not UTC, so `before:2026-01-15` means "before midnight here" and
-/// `after:2026-01-15T09:00` means "after 9am here" — and we convert that
-/// to UTC before comparing against the (UTC) index. An input that
-/// *does* carry an explicit offset is honored as written. This is the
-/// query-side mirror of [`parse_with_assumed_utc`] (which assumes UTC
-/// for audited *upstream* feeds): here the human is the source, so local
-/// time is the right assumption, not UTC.
-///
-/// Accepts:
-/// - bare date `YYYY-MM-DD` → local midnight that day
-/// - naive date-time `YYYY-MM-DDTHH:MM:SS[.fff]` → that local wall-clock
-/// - explicit-offset RFC 3339 (`...-07:00`, `...Z`) → honored as-is
-///
-/// Returns `None` when the input matches none of those shapes, so the
-/// caller can drop the bound rather than compare against a garbage
-/// string. During a spring-forward gap the wall-clock instant doesn't
-/// exist locally; we take the earlier of the two candidate instants.
+/// **A user-typed timestamp with no offset means local machine time**, since
+/// people type wall-clock times in the zone they are sitting in. An explicit
+/// offset is honored as given. `None` when the input matches no accepted
+/// shape, so the caller drops the bound rather than comparing against
+/// garbage. During a spring-forward gap the wall-clock instant does not exist
+/// locally; we take the earlier candidate.
 pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
@@ -526,9 +378,6 @@ pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
     None
 }
 
-/// Cheap structural check that `s` is RFC 3339 with an explicit
-/// offset. Useful in translate-time validators that want to assert
-/// without keeping the parsed value.
 pub fn validate_iso_offset(s: &str) -> Result<(), TimestampParseError> {
     parse_strict(s).map(|_| ())
 }

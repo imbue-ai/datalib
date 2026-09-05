@@ -1,18 +1,5 @@
 //! Render LinkedIn's message-shaped feeds into markdown via the shared
 //! chat renderer.
-//!
-//! Conversations are the only LinkedIn feeds we render; every other CSV
-//! lands in the raw store for query and stops there. Several files share
-//! the `messages.csv` schema (`CONVERSATION ID, FROM, TO, DATE, CONTENT,
-//! …`): the primary `messages` direct-message feed plus the AI-coach
-//! transcripts (`guide_messages`, `learning_coach_messages`, …). We
-//! render every one of them — see [`schema_raw::message_tables`]. For
-//! each present, non-empty table we group rows by `CONVERSATION ID`, map
-//! each into a [`NormalizedChatItem`], and hand the lot to
-//! [`datalib_etl_chat_common::render::render_all`], which owns all
-//! the markdown / grid-row / fingerprint plumbing. Chat/message ids are
-//! namespaced by table so feeds can't collide on a shared conversation
-//! id.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -32,19 +19,6 @@ use crate::download::schema_raw::{message_tables, ns_id as uuid5};
 use crate::download::{db_path_for, RawDb};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
-///
-/// Covers all three of this provider's render paths — messages here,
-/// `connections`, and `posts` — because they write into one
-/// `rendered_md` tree and the version is a property of that tree: it is
-/// what tells the render step whether the tree on disk is one this
-/// build produced. Three independently-bumped constants (which is what
-/// this was) cannot answer that question, since a tree carrying two of
-/// them is indistinguishable from a stale one.
-///
-/// v2: a `DATE` / `Date` column we cannot parse gets a null `when_ts`
-///     instead of a real-looking `1970-01-01T00:00:00`, which used to
-///     sort those rows to the top of the grid. See
-///     `docs/dev/data_architecture_parse_and_render.md` §6.
 pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
@@ -103,9 +77,6 @@ pub fn render(
     Ok(())
 }
 
-/// One [`NormalizedChat`] per `CONVERSATION ID` in a single message
-/// table, single `all` bucket, items sorted oldest-first. Ids are
-/// namespaced by `table` so two feeds can't clash on a conversation id.
 fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
     // BTreeMap keeps conversation order stable across runs.
     let mut by_conv: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
@@ -208,23 +179,6 @@ fn nonempty(s: &str) -> Option<&str> {
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis,
 /// or `None` on any shape we don't recognize.
-///
-/// **The one place a LinkedIn date is interpreted** — `posts.rs` calls
-/// this rather than keeping the second copy it used to have.
-///
-/// **Assume-UTC is legal here and the audit is in the string.** LinkedIn
-/// states the zone as the literal trailing word `UTC`, which chrono
-/// cannot turn into an offset, so this is a naive parse plus a UTC
-/// assumption. That assumption is only permitted inside `datalib-time`
-/// (see its module docs), which is why this calls
-/// `parse_custom_strftime_assumed_utc` instead of doing
-/// `NaiveDateTime::parse_from_str(..).and_utc()` locally. The trailing
-/// ` UTC` is optional in the `posts` feed, so it is trimmed first rather
-/// than baked into the format.
-///
-/// It used to return `0` on an unexpected shape — its own doc comment
-/// noted that "sorts such rows to the top." `None` now reaches `when_ts`
-/// as a null instead.
 pub(crate) fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().trim_end_matches(" UTC").trim();
     datalib_time::parse_custom_strftime_assumed_utc(s, "%Y-%m-%d %H:%M:%S")

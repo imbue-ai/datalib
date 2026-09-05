@@ -1,15 +1,4 @@
 //! End-to-end test for the LinkedIn export ingester.
-//!
-//! Builds a small synthetic export in a tempdir that exercises every
-//! interesting path — a `Notes:`-preamble file, a member-id-suffixed
-//! filename, an `Articles/` HTML file, two message-shaped feeds, a
-//! Shares + Comments pair that group into per-post threads, and a CSV
-//! that isn't in the manifest — then runs `download::fetch` and the
-//! render paths against it and asserts the landed raw tables and
-//! rendered chats / post threads.
-//!
-//! Self-contained: the fixture is written by the test, so there are no
-//! checked-in fixture files and nothing to stage via Bazel `data`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -28,7 +17,6 @@ use datalib_etl_linkedin::posts;
 use datalib_etl_linkedin::render;
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
 
-/// Write the synthetic export tree under `root`.
 fn build_export(root: &Path) -> Result<()> {
     // Connections.csv with the Notes: preamble we strip, and the real
     // column shape (URL is the natural key → uuid identity).
@@ -271,14 +259,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // Thread D: the undated comment. Every row it produces — the
         // chat-level row, the placeholder for the missing original, and
         // the comment itself — must carry NO timestamp.
-        //
-        // This is the regression the fixtures could not previously
-        // catch. `when_ts` used to be `1970-01-01T00:00:00+00:00` here,
-        // which is worse than null in three specific ways: it sorts into
-        // a real position in the grid, it is indistinguishable from a
-        // genuine 1970 record, and it matches `before:` / `after:`
-        // queries it should not. See
-        // `docs/dev/data_architecture_parse_and_render.md` §6.
         let undated_urn =
             "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567999";
         let thread_d = post_docs

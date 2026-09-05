@@ -73,9 +73,6 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<usiz
     Ok(n)
 }
 
-/// Saved-place URLs sometimes carry an `!1s<ftid>` segment (same
-/// shape as a review URL) and sometimes a `cid=<digits>` query
-/// parameter (older entries). Prefer the ftid when present.
 fn extract_ftid_or_cid(url: &str) -> Option<&str> {
     if let Some(rest) = url.find("!1s").map(|i| &url[i + 3..]) {
         let end = rest.find('!').unwrap_or(rest.len());

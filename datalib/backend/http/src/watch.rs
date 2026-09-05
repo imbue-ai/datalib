@@ -1,43 +1,8 @@
 //! What changed in the data root, pushed instead of polled.
 //!
-//! The sync-job stream (`worker::ProgressEvent`, fanned out by
-//! `GET /api/sync/stream`) carries exactly one thing: the state of a job
-//! *this server* queued. Everything else the UI shows moves without a
-//! job — an agent PUTs `config.toml`, a `datalib-dag` started from a
-//! terminal writes `system/dag_state.json`, an applet drops a component
-//! into `system/frontend/` — and none of it had a channel. So every
-//! surface that displayed one of those grew a `setInterval`: five
-//! endpoints every 5 s in the Pipeline table, the whole config text
-//! every 2 s in the Manage tab, the component manifest every 4 s for
-//! the life of the page. An idle tab asked ~75 questions a minute and
-//! the answer was "nothing" every time.
-//!
-//! This is the missing channel. One watcher per server process replaces
-//! all of it: the filesystem tells us, we tell every subscriber.
-//!
-//! ## Watch directories, not files
-//!
-//! Both files that matter here are written the same careful way —
-//! `write(tmp)` then `rename(tmp, real)` ([`datalib_dag::state::DagState::save`],
-//! `put_config`) — so the path keeps pointing at a *new inode* each
-//! time. A watch registered on the file itself follows the old inode
-//! and goes silent after the first write, which is the classic way this
-//! is gotten wrong. Watching the containing directory and filtering by
-//! filename sees the rename, every time.
-//!
-//! That filtering is not optional either: `system/` also holds
-//! `jobs.doltlite_db`, which is written on every job state change. A
-//! directory watch that reported everything would fire `DagChanged` on
-//! traffic that has nothing to do with the runner.
-//!
-//! ## Debounce
-//!
-//! A single logical change is several filesystem events (create the
-//! temp file, write it, rename it), and a run in flight rewrites the
-//! progress bus continuously. Events are coalesced over a 300 ms
-//! window, so a burst becomes one message per *kind* and a busy run
-//! settles at ~3 updates a second — faster than the 2 s poll it
-//! replaces, and free when nothing is happening.
+//! Rides the same SSE connection as job progress, as named `root` frames, so
+//! a client has one connection, one reconnect policy, and one heartbeat to
+//! judge liveness by.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -52,25 +17,9 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// How often to publish a [`RootEvent::Heartbeat`] on an otherwise
 /// silent stream.
-///
-/// `EventSource` cannot tell an idle connection from a dead one, and
-/// the browser only auto-reconnects when it *notices* a drop — a proxy
-/// that silently stops forwarding looks exactly like a quiet server.
-/// Every consumer used to hedge against that with a slow unconditional
-/// poll. A heartbeat turns the question into one a client can answer:
-/// no frame in several beats means the stream is gone, so reconnect and
-/// reconcile once, rather than refetching forever on the chance.
 pub const HEARTBEAT: Duration = Duration::from_secs(10);
 
 /// Something in the data root moved, or the stream is still alive.
-///
-/// Deliberately contentless. Every consumer in the UI already diffs
-/// what it fetches against what it holds — `sameManifest` in
-/// `frontendRegistry.ts`, the `cfg.text === serverText` guard in
-/// `SourcesView.vue` — so a payload here would be a second, weaker copy
-/// of a comparison that already exists, with a new way to disagree with
-/// it. The event says "ask again"; the client decides whether the
-/// answer changed anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RootEvent {
@@ -94,9 +43,6 @@ pub enum RootEvent {
 /// `GET /api/sync/stream` alongside the job channel.
 pub type RootTx = broadcast::Sender<RootEvent>;
 
-/// Classify one changed path. `None` for the many paths under `system/`
-/// that no UI surface reads — the doltlite stores, the job logs, the
-/// API token.
 fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
     // The atomic-write temp files are the same change reported twice;
     // the rename that follows is the one worth reporting.
@@ -121,11 +67,6 @@ fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
     None
 }
 
-/// Start watching `root` and publishing to `tx`, plus the heartbeat.
-///
-/// Errors are reported and swallowed: a data root on a filesystem that
-/// cannot be watched should degrade to "the UI updates when you touch
-/// it" rather than refuse to serve.
 pub fn spawn(root: PathBuf, tx: RootTx) {
     let heartbeat_tx = tx.clone();
     tokio::spawn(async move {
@@ -150,16 +91,6 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     let _ = std::fs::create_dir_all(&frontend);
 
     // Resolve symlinks once, and classify against the resolved form.
-    //
-    // This is not tidiness. The platform reports the *canonical* path
-    // of whatever changed, and data roots behind a symlink are the
-    // normal case rather than the exotic one — `/tmp` is `/private/tmp`
-    // on macOS, `/var` is `/private/var`, and a root under a synced
-    // folder or a home-directory symlink resolves elsewhere too.
-    // Comparing an unresolved root against a resolved event path
-    // matches nothing, and the failure is silent: the watch is
-    // registered, events arrive, every one of them classifies as
-    // "nothing we care about", and the UI simply never updates.
     let root = std::fs::canonicalize(&root).unwrap_or(root);
     let system = std::fs::canonicalize(&system).unwrap_or(system);
     let frontend = std::fs::canonicalize(&frontend).unwrap_or(frontend);
@@ -174,23 +105,6 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             // Reading something is not changing it, and on Linux this is
             // not a nicety — it is the difference between a push channel
             // and a feedback loop.
-            //
-            // inotify reports `IN_OPEN` / `IN_ACCESS`, which notify
-            // surfaces as `EventKind::Access`; macOS's FSEvents has no
-            // equivalent and reports content changes only. So on Linux,
-            // *reading* `system/frontend/` looks exactly like writing to
-            // it — and `GET /api/frontend` reads that directory on every
-            // call (`rescan_if_store_changed`). Left in, one request would
-            // publish `FrontendChanged`, the UI would refetch, that
-            // refetch would read the directory again, and the two would
-            // drive each other at the debounce interval for as long as the
-            // page stayed open. Poll replaced by something worse than a
-            // poll, on the platform CI and the container image run.
-            //
-            // Blacklisting `Access` rather than whitelisting the kinds we
-            // want: an access is definitively not a change, while the
-            // remaining kinds vary per backend (some report `Any`), and a
-            // whitelist would silently drop a platform's real events.
             if matches!(ev.kind, EventKind::Access(_)) {
                 return;
             }
@@ -313,18 +227,6 @@ mod tests {
         );
     }
 
-    /// Wait for `want` to arrive, re-performing `stimulus` until it
-    /// does or the deadline passes.
-    ///
-    /// The re-stimulation is not belt-and-braces. `watcher.watch()`
-    /// returns before the platform's watch is necessarily delivering —
-    /// macOS FSEvents in particular arms a stream asynchronously — and
-    /// there is no observable "armed" state to wait on. A single write
-    /// immediately after `spawn` can therefore land in the gap and be
-    /// genuinely missed, which would make this test flaky about the
-    /// platform rather than about our code. Writing again until we are
-    /// heard tests what we mean: that a change to this file, once the
-    /// watch is up, reaches a subscriber.
     async fn heard(
         rx: &mut broadcast::Receiver<RootEvent>,
         want: RootEvent,
@@ -347,10 +249,6 @@ mod tests {
     /// `config.toml` by *someone else* — an agent, an editor, a
     /// `datalib-migrate-config` — reaches a subscriber without anyone
     /// having asked.
-    ///
-    /// Written through the same tmp-then-rename dance the real writers
-    /// use, because watching the file rather than its directory would
-    /// pass a naive `write()` test and fail this one.
     #[tokio::test]
     async fn an_external_config_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
@@ -389,16 +287,6 @@ mod tests {
     }
 
     /// A data root reached through a symlink still reports.
-    ///
-    /// The case that caught this: `tempfile::tempdir()` on macOS hands
-    /// back `/var/folders/…`, which is a symlink to `/private/var/…`,
-    /// and the platform reports the resolved path. Comparing the
-    /// unresolved root against a resolved event path matched nothing —
-    /// silently, because a watch that classifies every event as
-    /// uninteresting looks exactly like a quiet filesystem. Symlinked
-    /// roots are ordinary (`/tmp`, a synced folder, a home-directory
-    /// link), so this is a real arrangement and not just a test
-    /// artifact.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_root_behind_a_symlink_still_reports() {
@@ -425,17 +313,6 @@ mod tests {
     }
 
     /// Reading the component store is not a change to it.
-    ///
-    /// The loop this prevents is specific and was live on Linux only.
-    /// inotify reports opens and reads (`IN_OPEN` / `IN_ACCESS`);
-    /// FSEvents does not, which is why it passed on macOS and failed in
-    /// CI. `GET /api/frontend` reads `system/frontend/` on every call,
-    /// so a read publishing `FrontendChanged` meant: one request →
-    /// event → the UI refetches → another read → another event, at the
-    /// debounce interval, for as long as the page was open.
-    ///
-    /// Reads the directory the way the gateway's rescan does, and
-    /// listens for the silence that should follow.
     #[tokio::test]
     async fn reading_the_component_store_is_not_a_change_to_it() {
         let td = tempfile::tempdir().unwrap();
@@ -462,12 +339,6 @@ mod tests {
 
     /// The control for the filter, and the reason `classify` is not
     /// simply "anything under `system/`".
-    ///
-    /// `jobs.doltlite_db` is written on every job state change — the
-    /// traffic the *job* stream already carries. If this fired
-    /// `DagChanged`, every sync would refetch the runner's record
-    /// several times per job, which is the poll this module replaces.
-    /// Asserted by writing it many times and hearing nothing.
     #[tokio::test]
     async fn writes_to_the_job_store_are_not_reported() {
         let td = tempfile::tempdir().unwrap();

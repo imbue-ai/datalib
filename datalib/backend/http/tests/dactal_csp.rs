@@ -1,22 +1,4 @@
 //! CI-visible guard for the DACTAL page's CSP (issue #138, mitigation 4).
-//!
-//! `datalib/ui/tests/e2e/dactal-csp.spec.ts` is the real test: it drives
-//! a browser and proves the policy both blocks dactal.org and leaves the
-//! engine working. But `//datalib/ui:e2e_test` is excluded from the CI
-//! merge gate today (see the `FIXME(e2e)` in
-//! `.github/workflows/test.yml` — the devcontainer image lacks rsync and
-//! a Chromium cache until the next `v*` republish). So on a pull request
-//! nothing currently catches a deleted or gutted CSP.
-//!
-//! This closes that window with checks that need no browser: the policy
-//! is present with its two load-bearing directives, and the page still
-//! has no inline script for `'unsafe-inline'` to be demanded for. It
-//! asserts the *shape* of the defense, not its behavior — when the e2e
-//! suite is back in the gate, that one supersedes this and this can go.
-//!
-//! It reads the page out of the embedded UI bundle through the real
-//! router, so it also proves the file survives the vite/bazel build into
-//! what we actually ship.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -122,8 +104,6 @@ fn csp_of(html: &str) -> String {
     rest.split('"').next().unwrap_or_default().to_string()
 }
 
-/// One directive out of that policy, whitespace-normalized — the source
-/// spreads the policy over several lines for readability.
 fn directive(html: &str, name: &str) -> String {
     let csp = csp_of(html);
     csp.split(';')

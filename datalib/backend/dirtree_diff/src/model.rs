@@ -1,15 +1,4 @@
 //! The plain data the tool moves around.
-//!
-//! Two shapes matter. [`Inputs`] is everything that was *read* from a
-//! doltlite store, before anything is interpreted. [`DiffResult`] is
-//! everything that was *concluded*. [`crate::analyze::analyze`] is the
-//! pure function between them, and both the HTML page and `--json` are
-//! projections of the result rather than things the analysis knows
-//! about.
-//!
-//! Every type here derives `Serialize` + `Deserialize`, so the JSON is
-//! the representation rather than a debug dump: a run captured with
-//! `--json` deserializes straight back into a `DiffResult`.
 
 use serde::{Deserialize, Serialize};
 
@@ -124,13 +113,6 @@ pub struct Node {
     pub diff_entries: u32,
 
     /// Bytes affected at or under this node.
-    ///
-    /// Counted from **maximal** findings only — a finding whose subtree
-    /// contains no other finding. A directory's size is the recursive
-    /// sum of its contents, so counting a new directory *and* the new
-    /// files inside it would count those bytes twice; counting only the
-    /// outermost avoids that while still giving a rolled-up move (whose
-    /// interior is absent) its full weight.
     #[serde(default, rename = "db", skip_serializing_if = "is_zero_i64")]
     pub diff_bytes: i64,
 }
@@ -172,7 +154,6 @@ pub struct DupGroup {
 }
 
 impl DupGroup {
-    /// Bytes that would come back if every copy but one went away.
     pub fn wasted(&self) -> i64 {
         (self.paths.len() as i64 - 1) * self.size
     }
@@ -259,7 +240,6 @@ pub struct DiffResult {
 }
 
 impl DiffResult {
-    /// The node at `path` on one side. For tests and probes.
     pub fn node(&self, side: Side, path: &str) -> Option<&Node> {
         self.side(side).nodes.iter().find(|n| n.path == path)
     }
@@ -271,8 +251,6 @@ impl DiffResult {
         }
     }
 
-    /// path -> status for one side, ignoring structural filler and
-    /// untouched entries. What most assertions want.
     pub fn statuses(&self, side: Side) -> std::collections::BTreeMap<String, Status> {
         self.side(side)
             .nodes

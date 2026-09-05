@@ -1,8 +1,4 @@
 // Two things that have to be true before any worker starts.
-//
-// Runs in the process that loaded `playwright.config.ts`, after
-// `webServer` has every backend up, and before the `warmup` setup
-// project — so the env that config cached is here to read.
 import { request } from "@playwright/test";
 import { CONFIG_MUTATING } from "./config-mutating";
 import { readFileSync, readdirSync } from "node:fs";
@@ -16,12 +12,6 @@ declare const process: { env: Record<string, string | undefined> };
 /// to every other spec running beside it. The symptom is some unrelated
 /// spec failing intermittently, which is worth catching by name here
 /// rather than by bisecting a flake later.
-///
-/// The tells are the two ways a spec can change the file: the config
-/// editor (`.m2-editor`, the Pipeline screen's Advanced pane, or the
-/// older Sources screen's save banner), and a direct `writeFileSync` —
-/// which `config-error.spec.ts` uses because the states it exercises
-/// are ones `PUT /api/config` refuses to produce.
 function assertOnlyKnownSpecsWriteTheConfig(dir: string): void {
   const offenders: string[] = [];
   for (const file of readdirSync(dir)) {
@@ -50,12 +40,6 @@ function assertOnlyKnownSpecsWriteTheConfig(dir: string): void {
 /// Spawn each sandbox backend's `unified_index` applet before its spec
 /// asks for it.
 ///
-/// The gateway starts an applet on the first request that needs one,
-/// and `/api/health` — which is what `webServer` waits on — answers
-/// before any of that has happened, so the first `/applet/...` request
-/// can land on a 502. `qmd-warmup.setup.ts` absorbs that for the shared
-/// backend; these are the other five.
-///
 /// An empty `q` is answered from SQL and never reaches qmd, which is
 /// what is wanted: no spec on a sandbox root issues a free-text query,
 /// so none of them should pay a model load.
@@ -81,12 +65,6 @@ export default async function globalSetup(): Promise<void> {
   // with ENOENT. Only bites when cwd is the workspace — i.e. under
   // `bazel run`, which is how the snapshot-update workflow is invoked, so
   // `bazel test` never saw it.
-  //
-  // `fileURLToPath` from `node:url` is the more standard spelling and is
-  // what `playwright.config.ts` uses; it is avoided here because this
-  // file's tsconfig deliberately carries no `@types/node` (see
-  // `node-fs.d.ts`), and one decode is not worth a second ambient module
-  // declaration.
   assertOnlyKnownSpecsWriteTheConfig(
     decodeURIComponent(new URL(".", import.meta.url).pathname),
   );

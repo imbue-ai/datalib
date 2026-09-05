@@ -7,15 +7,6 @@
 //! comparing keystreams byte-for-byte against pycryptodome's output on
 //! a real msgstore.db.crypt15 backup. Rather than chase that
 //! incompatibility, we compose GCM ourselves from the primitive parts:
-//!
-//! * `aes::Aes256` for E_K (block encrypt of `J0` and the `H` subkey)
-//! * `ctr::Ctr32BE<Aes256>` for the keystream — counter increments the
-//!   low 32 bits as a big-endian u32, per NIST.
-//! * `ghash::GHash` for the universal hash, both in J0 derivation and
-//!   the auth tag computation.
-//!
-//! Scope: decrypt-and-verify only. Empty AAD (WhatsApp doesn't use AAD
-//! for crypt15). The full encrypt direction isn't needed by ingest.
 
 use aes::cipher::{BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::Aes256;
@@ -104,9 +95,6 @@ pub(crate) fn compute_h(aes: &Aes256) -> [u8; 16] {
     h
 }
 
-/// J0 per NIST SP 800-38D §7.1: when `len(IV) != 96` bits,
-/// `J0 = GHASH(H, IV || 0^s || len(IV)_bits_64_BE)` where `s` zero-pads
-/// `IV` to a 128-bit boundary and an extra 64 bits.
 pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
     let mut ghash = GHash::new(h.into());
     // Pad IV to a multiple of 16 bytes.
@@ -121,8 +109,6 @@ pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
     j0
 }
 
-/// Update GHASH with `data`, zero-padding the final partial block out to
-/// 16 bytes. Empty input contributes nothing.
 fn update_padded(ghash: &mut GHash, data: &[u8]) {
     // `as_chunks` returns exactly the (whole blocks, remainder) split
     // this used to compute by hand off `data.len() / 16`. Rust 1.98's
@@ -138,8 +124,6 @@ fn update_padded(ghash: &mut GHash, data: &[u8]) {
     }
 }
 
-/// Increment the low 32 bits of a 128-bit big-endian counter block,
-/// wrapping. The high 96 bits stay fixed.
 fn incr_u32_be_lsb(block: &mut [u8; 16]) {
     let c = u32::from_be_bytes([block[12], block[13], block[14], block[15]]);
     let c = c.wrapping_add(1);
@@ -153,13 +137,6 @@ mod tests {
     /// NIST SP 800-38D Appendix B, **Test Case 18** — AES-256-GCM with a
     /// 60-byte IV, which is what exercises the GHASH-based J0 derivation
     /// this module exists for.
-    ///
-    /// This was labelled "Test Case 16" until #258. It never was: TC16 is
-    /// the 12-byte-IV vector, which takes the `len(IV) == 96` shortcut and
-    /// would not touch `compute_j0` at all. The vector below (and the
-    /// assertions on it) were always TC18's; only the citation was wrong,
-    /// and it mattered because looking up TC16 to check this code hands you
-    /// a vector that cannot match it.
     #[test]
     fn nist_test_case_18() {
         // Key, IV, P, A, C, T from the official "GCM Test Vectors" PDF,

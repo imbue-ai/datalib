@@ -1,16 +1,4 @@
 //! Per-method response-shape knowledge for raw-API capture.
-//!
-//! [`items_in_response`] is the single place that knows how to download
-//! `(item_key, item_value)` pairs from a Slack response. Used at both
-//! save time (to decide whether a page is a content-dup) and at startup
-//! (to rebuild the dedup index from the on-disk JSONL).
-//!
-//! Item-key namespaces:
-//!   * `conversations.list`    `<channel_id>`
-//!   * `users.list`            `<user_id>`
-//!   * `conversations.history` `<channel_param>\t<msg.ts>`
-//!   * `conversations.replies` `<channel_param>\t<thread_ts_param>\t<msg.ts>`
-//!   * `auth.test`             `<response.user_id>`
 
 use std::collections::BTreeMap;
 
@@ -76,9 +64,6 @@ fn array_items(
         .unwrap_or_default()
 }
 
-/// Walk all `conversations.replies` keys, projecting out
-/// `(channel, thread_ts) -> max(reply_ts)`. Used to skip threads whose
-/// latest reply we've already captured.
 pub fn latest_reply_by_thread<'a, I: Iterator<Item = &'a str>>(
     keys: I,
 ) -> BTreeMap<(String, String), String> {

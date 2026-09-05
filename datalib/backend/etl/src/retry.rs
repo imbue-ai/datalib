@@ -1,33 +1,4 @@
 //! Orchestrator-enforced give-up policy for the shared HTTP chokepoint.
-//!
-//! The mechanics of *waiting out* a rate limit live in
-//! [`crate::http::latchkey_curl`]: it respects `Retry-After` on a 429 and
-//! otherwise backs off exponentially. This module owns the orthogonal
-//! question of *when to stop trying* — bounded by two knobs the
-//! orchestrator resolves from config (`DownloadParams`) and installs once
-//! per source:
-//!
-//!   - `maximum_sequential_failed_requests` — give up after this many
-//!     consecutive retryable failures with no success in between.
-//!   - `maximum_time_without_progress_in_minutes` — give up once this long
-//!     passes with no successful request.
-//!
-//! It works exactly like [`crate::download_metrics`]: a [`tokio::task_local`]
-//! holds a [`RetryGuard`] for the duration of one source's download
-//! (installed by [`scope`]). The chokepoint resolves the ambient guard with
-//! [`current_or_default`] and reports every attempt's outcome into it
-//! ([`RetryGuard::on_progress`] / [`RetryGuard::on_failure`]). Providers
-//! whose rate-limit signal the chokepoint can't see by status code (Slack's
-//! HTTP-200 `error:"ratelimited"` body, GitHub's `403 + x-ratelimit-remaining:0`)
-//! don't run their own loops — they hand the chokepoint a custom response
-//! classifier (see [`crate::http::latchkey_curl_classified`]) so their quirk
-//! flows through the *same* guard. The give-up policy thus lives in one
-//! place rather than re-implemented per provider.
-//!
-//! Outside any `scope` (tests, standalone CLIs, the render phase)
-//! [`current_or_default`] hands back a fresh guard seeded from the built-in
-//! defaults, so a single chokepoint call is still bounded and can never spin
-//! forever.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -72,9 +43,6 @@ impl RetryGuard {
     /// Ceiling the exponential backoff doubles up to.
     pub const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-    /// Construct directly from resolved durations/counts. `from_params` is
-    /// the normal path; this is exposed for tests that need sub-minute time
-    /// budgets and near-zero backoff.
     pub fn new(
         max_time_without_progress: Duration,
         max_sequential_failures: u64,
@@ -91,9 +59,6 @@ impl RetryGuard {
         })
     }
 
-    /// Build a guard from a source's resolved [`DownloadParams`], applying
-    /// the built-in defaults for any unset field and the default backoff
-    /// schedule.
     pub fn from_params(p: &DownloadParams) -> Arc<Self> {
         Self::new(
             p.max_time_without_progress(),
@@ -111,16 +76,11 @@ impl RetryGuard {
         self.max_backoff
     }
 
-    /// Record a successful (or definitive) request: reset the failure
-    /// streak and restart the no-progress clock.
     pub fn on_progress(&self) {
         self.sequential_failures.store(0, Ordering::Relaxed);
         *self.last_progress.lock().unwrap() = Instant::now();
     }
 
-    /// Record a retryable failure and decide whether to keep going. Gives
-    /// up when either the sequential-failure count or the
-    /// time-without-progress budget is exhausted.
     pub fn on_failure(&self) -> GuardVerdict {
         let failures = self.sequential_failures.fetch_add(1, Ordering::Relaxed) + 1;
         if failures >= self.max_sequential_failures {

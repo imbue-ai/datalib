@@ -1,21 +1,4 @@
 //! Doltlite-backed raw store for the GitHub provider.
-//!
-//! Replaces the event-store tree of `<entity>/{created,updated}/events.jsonl`
-//! files with a single sqlite database at
-//! `<data_root>/<name>/raw/entities.doltlite_db`. Shared bookkeeping tables
-//! (`blobs`, `sync_runs`) and the open / blob
-//! plumbing live in [`datalib_etl::doltlite_raw`]; the primary-key
-//! policy that governs every object table here is documented there.
-//!
-//! Tables:
-//! - `self_identity` — PK is the upstream user id (numeric, stringified).
-//!   Single-row identity capture from `GET /user`.
-//! - `pull_requests` — PK is `"<repo_full_name>#<pr_number>"`. The
-//!   composite key is upstream-stable and known before the detail fetch
-//!   (discovery surfaces it from the search results).
-//! - `issue_comments` / `pr_reviews` / `pr_review_comments` — PK is the
-//!   stringified GitHub-global numeric id. Those id spaces are disjoint
-//!   per endpoint, so no namespacing prefix is needed.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,9 +35,6 @@ impl RawDb {
         &self.pool
     }
 
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything from upstream. See
-    /// [`datalib_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }

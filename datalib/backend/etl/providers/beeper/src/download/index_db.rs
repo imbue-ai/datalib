@@ -1,32 +1,5 @@
 //! Reader for `~/Library/Application Support/BeeperTexts/index.db` —
 //! the Beeper desktop app's unified per-account cache.
-//!
-//! ## Why this module shells out to `sqlite3` instead of using sqlx
-//!
-//! Our workspace links `sqlx` against doltlite (a SQLite fork with
-//! extensions to the record format). Beeper Texts' on-disk SQLite
-//! files are written by stock SQLite, and doltlite misreads columns
-//! that stock SQLite has stored using newer/different type codes —
-//! we empirically observed `typeof(accountID)` returning `"integer"`
-//! to doltlite while stock SQLite (CLI on the same file) reports
-//! `"text"`. Forcing a CAST/snapshot didn't help.
-//!
-//! We can't easily add `rusqlite` or another `libsqlite3-sys`-linked
-//! crate to the binary, because Cargo's `links = "sqlite3"` rule
-//! refuses two copies of the native library in one graph.
-//!
-//! Easiest robust fix: shell out to the system `sqlite3` CLI, which
-//! is stock SQLite on macOS, and parse its JSON output. Slower than
-//! an in-process query but correct, and the query volume is small
-//! enough (a few hundred threads, a few thousand messages) that
-//! latency doesn't matter.
-//!
-//! Despite the "Matrix-flavored" column names (`mx_room_messages`,
-//! `eventID`, `roomID`), index.db is the desktop app's
-//! bridge-agnostic message store: rows from every Beeper backend
-//! (cloud bridges like Slack / Google Chat, local megabridges like
-//! Signal) land here in a shared schema. We re-shape that into our
-//! `rooms` / `users` / `events` / `blobs` doltlite tables.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -56,15 +29,10 @@ struct PendingBatch {
 /// destination doltlite can hold both without UUID collisions.
 pub const SOURCE: &str = "beeper_index";
 
-/// Path to the SQLite CLI. Overridable via `BEEPER_SQLITE3` for
-/// hermetic builds; defaults to the macOS system binary.
 fn sqlite3_bin() -> String {
     std::env::var("BEEPER_SQLITE3").unwrap_or_else(|_| "sqlite3".to_string())
 }
 
-/// Maps a configured canonical network name (what the user puts in
-/// `sources:`) to the set of `accountID` prefixes index.db uses to
-/// tag rows from that network.
 fn account_patterns_for(network: &str) -> &'static [&'static str] {
     match network {
         "signal" => &["local-signal"],
@@ -546,8 +514,6 @@ async fn ingest_reactions(
     Ok(())
 }
 
-/// Parse an attachment.id (mxc:// or localmxc://) into the on-disk
-/// directory under `media_root` Beeper Texts stores the file at.
 fn parse_attachment_id(att_id: &str) -> Option<(&'static str, &str, &str, String)> {
     if let Some(rest) = att_id.strip_prefix("mxc://") {
         let (server, id) = rest.split_once('/')?;

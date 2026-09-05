@@ -1,23 +1,5 @@
 //! Embeds the Vite-built UI into the binary via `rust-embed`, then
 //! serves it through axum.
-//!
-//! Folder path is `$DATALIB_UI_DIST`, set at proc-macro time by:
-//!   - Bazel (`rust_library.rustc_env`) — points at the bazel-out
-//!     directory produced by `//datalib/ui:dist`.
-//!   - Cargo — caller must export it explicitly (cargo isn't used to
-//!     build the http crate today because the workspace's sqlx-sqlite
-//!     `unbundled` feature wants Bazel-built doltlite headers; if that
-//!     changes, add a `build.rs` that sets a sensible default).
-//!
-//! The rust-embed `interpolate-folder-path` feature does the env-var
-//! substitution; `debug-embed` ensures bytes are baked into the binary
-//! even in debug builds (otherwise debug mode reads files from the
-//! compile-time path at runtime, which fails outside the sandbox).
-//!
-//! SPA fallback: any GET that doesn't match a static asset returns
-//! `index.html` (200), so client-side routing works. API routes are
-//! matched first in the router, so this only runs for genuinely
-//! unmatched paths.
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode, Uri};

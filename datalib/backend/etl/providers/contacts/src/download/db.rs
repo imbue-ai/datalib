@@ -1,15 +1,4 @@
 //! Doltlite-backed raw store for the CardDAV provider.
-//!
-//! Shared bookkeeping tables (`sync_runs`) plus the open / read
-//! plumbing live in [`datalib_etl::doltlite_raw`]. Tables, row
-//! types, and PK recipes live next door in [`super::schema_raw`];
-//! this file is the manipulation layer — open, reset, the
-//! sync-token cursor, deletes, and the etag-map probe.
-//!
-//! Contacts doesn't open a sibling CAS file: vCard `PHOTO` bytes
-//! ride inline (base64) in the payload column rather than being
-//! lifted out, so there's no `*_attachments` edge table either.
-//! See `super::schema_raw` for the per-table docstrings.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -64,9 +53,6 @@ impl RawDb {
 
     // ── accounts ────────────────────────────────────────────────────
 
-    /// Upsert the account row. `principal_href` and
-    /// `addressbook_home_set` are filled in from PROPFIND results;
-    /// either can be NULL on the first insert and back-filled later.
     pub async fn upsert_account(
         &self,
         account_id: &str,
@@ -144,9 +130,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// `(id, href, display_name)` for every addressbook we've ever
-    /// recorded under this account, optionally filtered by display
-    /// name.
     pub async fn addressbooks_for_fetch(
         &self,
         account_id: &str,
@@ -288,9 +271,6 @@ impl RawDb {
         Ok(out)
     }
 
-    /// `{href -> etag}` for every contact we already have in the
-    /// addressbook. Used by the etag-walk fallback to decide which
-    /// hrefs are stale and need re-fetching.
     pub async fn contact_etags_by_href(
         &self,
         addressbook_id: &str,

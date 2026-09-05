@@ -1,14 +1,4 @@
 // The two halves of an entry's identity: `id` and `name`.
-//
-// `id` is the directory under the data root, the stem of the step ids,
-// and the prefix inside every `qmd_path` the grid index recorded — so
-// it is fixed once written. `name` is the part a person rewrites at
-// will. These tests pin the properties that make offering that safe:
-//
-//   1. a name round-trips through the config text,
-//   2. an entry without one reads and writes exactly as before,
-//   3. a name full of TOML metacharacters still parses back,
-//   4. slugify + suggestId turn a typed name into a usable id.
 import { describe, expect, it } from "vitest";
 import {
   appendSource,
@@ -82,11 +72,6 @@ describe("names on the other kinds of entry", () => {
   // applets. A name is a property of a *step*, so the fan-ins carry one
   // too; applets cannot — `AppletEntry` is deny_unknown_fields with no
   // `name` key.
-  //
-  // Neither falls back to its bare id, though. The three entries every
-  // config ships get a readable default label from `DEFAULT_NAMES`,
-  // which is UI-side precisely because the applet has nowhere in the
-  // config to put one. A `name =` someone did write still wins.
   const OTHER = `data_root = "/tmp/data"
 
 [[steps]]

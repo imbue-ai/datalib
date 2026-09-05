@@ -72,9 +72,6 @@ function snapshotWatched(source: string) {
 // comes back as a source-prop change, which re-runs the card). A
 // tombstone holds no component, so following it is the only way the
 // card keeps working.
-//
-// Renames stay inside one namespace, which is what makes the rewrite a
-// safe textual substitution: only the member after the namespace moves.
 function applyRenames(): boolean {
   let src = props.source;
   for (const qualified of referencedComponents(props.source)) {

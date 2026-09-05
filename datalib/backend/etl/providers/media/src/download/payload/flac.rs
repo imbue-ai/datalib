@@ -1,26 +1,4 @@
 //! FLAC payload: the audio frames, past every metadata block.
-//!
-//! FLAC keeps its metadata in a clean prefix — a chain of typed blocks
-//! between the `fLaC` magic and the first audio frame — so the split is
-//! unusually crisp. `VORBIS_COMMENT` (the tags), `PICTURE` (cover art,
-//! often the largest thing in the file), `SEEKTABLE`, `PADDING` and
-//! `CUESHEET` all live there and all get skipped; the frames are
-//! everything after.
-//!
-//! # The `STREAMINFO` MD5 we deliberately do not use
-//!
-//! FLAC files already carry an identity hash: `STREAMINFO` holds an MD5
-//! of the *decoded* samples, which survives re-encoding at a different
-//! compression level — something [`SCHEME`] does not. It is tempting.
-//!
-//! We do not use it, for one reason: it would put a different digest
-//! algorithm, over a different input, into the same
-//! `media_items.payload_blake3` column as every other container. Two
-//! rows in one column have to mean the same kind of thing, or
-//! `GROUP BY payload_blake3` quietly stops being a valid query. If we
-//! ever want decoded-sample identity it belongs in its own column,
-//! populated for the formats that can supply it — which is a real
-//! follow-up, not a rejection.
 
 use anyhow::Result;
 

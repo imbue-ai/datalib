@@ -1,51 +1,4 @@
 //! ISO base media payload: MP4, M4A, MOV, HEIC.
-//!
-//! One container covers most of a modern library — every iPhone photo
-//! and video, every AAC or ALAC track, every screen recording — and it
-//! stores metadata in two places that both get rewritten constantly:
-//! `moov/udta/meta/ilst` (the iTunes-style tags) and, for HEIF, `Exif`
-//! and `mime` (XMP) items sitting alongside the picture.
-//!
-//! # Sample bytes, not the `mdat` box
-//!
-//! The naive recipe is "hash the `mdat` box". It is wrong because
-//! `mdat` is a bag of bytes whose *layout* the muxer chooses: chunk
-//! interleave, padding, and where in the file the box sits are all
-//! muxer decisions that a `faststart` rewrite or a remux can change
-//! without touching a single coded sample.
-//!
-//! So the sample tables (`stsc`/`stsz`/`stco`) are walked to find where
-//! each track's samples actually are, and only those bytes are hashed —
-//! grouped per track and ordered by **track id** rather than by
-//! position in the file.
-//!
-//! **Changing any track changes the file's payload hash.** The groups
-//! are combined into one digest, so this is not a way to keep a video
-//! edit from registering, and it should not be: a clip with different
-//! pictures is a different clip.
-//!
-//! What the grouping buys is that the digest is a function of the
-//! tracks' *contents* and nothing else. Reordering the `trak` boxes,
-//! moving `moov` ahead of `mdat`, inserting `free` padding, or
-//! re-interleaving the chunks all leave it alone, because none of those
-//! change any track's sample bytes and none of them are hashed.
-//!
-//! (Per-track digests are computed and then discarded. Storing them —
-//! a `media_streams` table keyed on `(item, track_id)` — would make
-//! "which files share this audio track?" a real query. It is not built;
-//! nothing today reads a group digest on its own.)
-//!
-//! Samples within a chunk are contiguous by definition, so the plan
-//! carries one range per chunk rather than one per sample. A
-//! two-hour film is a few thousand ranges instead of a million.
-//!
-//! # HEIF still images have no tracks
-//!
-//! A HEIC photo stores its picture as *items* in a `meta` box, with no
-//! `moov` at all, so the track walk finds nothing. Those files get
-//! [`ITEMS_SCHEME`] instead: every item's extents, **except** the
-//! `Exif` and `mime` items, which are precisely the metadata. Grouped
-//! per item and ordered by item ID.
 
 use std::collections::BTreeMap;
 
@@ -75,11 +28,6 @@ pub(crate) struct Atom {
     pub body_len: u64,
 }
 
-/// Iterate the boxes directly inside `[at, end)`.
-///
-/// Stops rather than errors on a malformed length: files truncated
-/// mid-download are common, and the boxes before the damage are still
-/// perfectly readable.
 pub(crate) fn atoms(src: &mut Src, at: u64, end: u64) -> Result<Vec<Atom>> {
     let mut out = Vec::new();
     let mut cur = at;
@@ -117,8 +65,6 @@ pub(crate) fn find<'a>(list: &'a [Atom], btype: &[u8; 4]) -> Option<&'a Atom> {
     list.iter().find(|a| &a.btype == btype)
 }
 
-/// Descend a chain of single-child box types, e.g.
-/// `mdia/minf/stbl`.
 pub(crate) fn descend(src: &mut Src, start: Atom, path: &[&[u8; 4]]) -> Result<Option<Atom>> {
     let mut cur = start;
     for (depth, want) in path.iter().enumerate() {
@@ -165,7 +111,6 @@ pub fn plan(src: &mut Src) -> Result<Option<Plan>> {
     Ok(None)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Tracks
 
 fn track_groups(src: &mut Src, moov: Atom) -> Result<Vec<Vec<Range>>> {
@@ -204,7 +149,6 @@ fn track_id(src: &mut Src, trak: Atom) -> Result<Option<u32>> {
     Ok(be_u32(&b, at))
 }
 
-/// Walk `stsc`/`stsz`/`stco` into one range per chunk.
 fn sample_ranges(src: &mut Src, stbl: Atom) -> Result<Vec<Range>> {
     let kids = atoms(src, stbl.body_at, stbl.body_at + stbl.body_len)?;
 
@@ -281,7 +225,6 @@ fn coalesce(mut ranges: Vec<Range>) -> Vec<Range> {
     out
 }
 
-/// `(first_chunk, samples_per_chunk)` runs, ascending by first_chunk.
 fn samples_in_chunk(stsc: &[(u32, u32)], chunk_no: u32) -> Option<u32> {
     let mut answer = None;
     for &(first, per) in stsc {
@@ -371,7 +314,6 @@ fn read_u64_table(src: &mut Src, a: Atom) -> Result<Vec<u64>> {
         .collect())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // HEIF items
 
 /// Item types that ARE the metadata, and so are excluded. Stated as an
@@ -473,7 +415,6 @@ fn read_iloc(src: &mut Src, a: Atom, idat: Option<Atom>) -> Result<BTreeMap<u32,
     };
     anyhow::ensure!(count <= MAX_TABLE_ENTRIES, "iloc claims {count} items");
 
-    /// Read a big-endian integer of `n` bytes (0, 4 or 8 in practice).
     fn uint(b: &[u8], at: usize, n: usize) -> u64 {
         let mut v = 0u64;
         for i in 0..n {
@@ -560,8 +501,6 @@ mod tests {
         full(b"tkhd", 0, &b)
     }
 
-    /// A minimal `stbl` for one track: `n` samples of `size` bytes,
-    /// one chunk at `offset`.
     fn stbl(offset: u32, sizes: &[u32]) -> Vec<u8> {
         let mut stsz = 0u32.to_be_bytes().to_vec(); // non-uniform
         stsz.extend_from_slice(&(sizes.len() as u32).to_be_bytes());
@@ -593,14 +532,10 @@ mod tests {
     const AUDIO: &[u8] = b"aaaaaaaaaaaaaaaaaaaaaaaa";
     const VIDEO: &[u8] = b"vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv";
 
-    /// `ftyp`, `moov` (with `udta` metadata), then `mdat`.
-    /// Returns the file and the byte offset of `mdat`'s body.
     fn mp4(udta: &[u8], tracks: &[(u32, &[u8])]) -> Vec<u8> {
         mp4_padded(udta, tracks, 0)
     }
 
-    /// As [`mp4`], with `pad` bytes of `free` box between `moov` and
-    /// `mdat` so every chunk offset shifts.
     fn mp4_padded(udta: &[u8], tracks: &[(u32, &[u8])], pad: usize) -> Vec<u8> {
         // Build moov twice: once to learn its length, once with the
         // real chunk offsets folded in.
@@ -687,11 +622,6 @@ mod tests {
 
     /// Changing a track changes the file's digest — the behavior we
     /// want — while that track's own group digest is what moved.
-    ///
-    /// The second half is a property of the *plan*, not of anything
-    /// stored: no group digest is written to the database today. It is
-    /// asserted here so that a future `media_streams` table has a test
-    /// already standing behind the thing it would expose.
     #[test]
     fn a_changed_track_moves_the_file_digest_and_only_its_own_group() {
         let a = mp4(b"", &[(1, VIDEO), (2, AUDIO)]);
@@ -819,7 +749,6 @@ mod tests {
 
     // ── HEIF items ───────────────────────────────────────────────────
 
-    /// A HEIF still: `ftyp`, `meta` (iinf + iloc), `mdat`.
     fn heic(items: &[(u16, &[u8; 4], &[u8])]) -> Vec<u8> {
         let ftyp = atom(b"ftyp", b"heic\x00\x00\x00\x00heicmif1");
 

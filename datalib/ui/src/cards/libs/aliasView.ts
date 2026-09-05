@@ -3,10 +3,6 @@
 // store draws no distinction. Each row shows the qualified name
 // (`comp.<ns>.<name>`) and a short content hash; clicking opens a card
 // rendering it with its own stored arguments.
-//
-// Plain-DOM (no Vue): it just paints a list and re-paints when the
-// reactive manifest changes. `vue`'s `watch` works fine outside a
-// component as long as we dispose it in the teardown.
 import { watch } from "vue";
 import type { CardRender } from "../types";
 import {

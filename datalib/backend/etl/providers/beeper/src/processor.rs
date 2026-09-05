@@ -3,11 +3,6 @@
 //! SQLite stores) when `sync:` is present, plus an always-present
 //! **render** processor ([`BeeperRender`]). [`plan_download`] /
 //! [`plan_render`] build the per-wave processors the orchestrator drives.
-//!
-//! Storage ownership lives here, not in the orchestrator: [`BeeperDownload`]
-//! opens its own raw doltlite store, registers an opaque [`PoolCheckpoint`]
-//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
-//! orchestrator never sees a pool or a commit.
 
 use std::path::PathBuf;
 
@@ -45,9 +40,6 @@ pub fn plan_download(
     Ok(procs)
 }
 
-/// Render wave. The period is parsed from the render step's params
-/// once, at plan time, and baked into the render processor (defaults
-/// to month when absent).
 pub fn plan_render(
     ctx: PlanContext,
     config: BeeperRenderConfig,
@@ -119,8 +111,6 @@ impl DataProcessor for BeeperRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

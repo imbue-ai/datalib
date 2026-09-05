@@ -1,35 +1,5 @@
 //! The Slack applet: browse a mirrored workspace the way the Slack app
 //! is laid out.
-//!
-//! Three levels, because that is the shape both Slack and the rendered
-//! data have:
-//!
-//! ```text
-//! channels                    every channel, with counts
-//!   └ one channel             each thread, showing its opening message
-//!       └ one thread          the whole conversation
-//! ```
-//!
-//! The middle level is the one worth getting right. Slack's channel
-//! view shows a *thread's opening message*, not a thread's title, with
-//! replies collapsed behind a "N replies" affordance. The data is
-//! shaped for that already: the renderer emits one document per thread,
-//! and every message in it carries that thread's `markdown_uuid` plus a
-//! `message_index`, so the opening message is simply index 0.
-//!
-//! The third level is the rendered document itself, opened as a card
-//! through `documentView`. Re-rendering messages here would mean
-//! reimplementing markdown, media and edge handling that the document
-//! view already does properly.
-//!
-//! ## Why it reads the render store rather than Slack
-//!
-//! It queries `grid_rows` in the source's own
-//! `<tree>/indexed_markdown.doltlite_db` — the cross-provider table
-//! every render step already writes (see
-//! `datalib/backend/etl/src/indexed_markdown.rs`). That keeps it
-//! independent of the Slack provider crates and, incidentally, means
-//! the same code would work over any source's render store.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -49,9 +19,7 @@ const COMPONENT_JS: &str = include_str!("component.js");
 /// no other applet can collide with it.
 const COMPONENT_NAME: &str = "channels";
 
-// ---------------------------------------------------------------------------
 // Write mode
-// ---------------------------------------------------------------------------
 
 /// A `<name>.json` in a namespace directory. The same document a person
 /// would write by hand into `system/frontend/user/`.
@@ -63,8 +31,6 @@ struct ComponentMeta {
     component_args: Vec<String>,
 }
 
-/// Write this instance's namespace: the component, and the metadata
-/// naming it.
 pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
     // The namespace is the directory's own name.
     let namespace = dir
@@ -120,9 +86,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     s
 }
 
-// ---------------------------------------------------------------------------
 // The data
-// ---------------------------------------------------------------------------
 
 #[derive(Serialize, Default)]
 struct ChannelsResponse {
@@ -181,12 +145,6 @@ struct ThreadData {
     messages: usize,
 }
 
-/// `when_ts` as a comparable instant.
-///
-/// The field is offset-bearing RFC 3339, so string comparison is wrong:
-/// `…T10:00:00+05:00` sorts after `…T08:00:00+00:00` while actually
-/// being two hours earlier. Unparseable stamps sort before everything,
-/// so a malformed row never displaces a good one.
 fn when_key(when_ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(when_ts)
         .ok()
@@ -195,18 +153,6 @@ fn when_key(when_ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 
 type Channels = BTreeMap<String, BTreeMap<String, ThreadData>>;
 
-/// Walk the rendered tree, grouping documents by channel and then by
-/// thread.
-///
-/// Two levels because that is how the data is shaped: Slack renders one
-/// document per thread, and every message in a thread carries that
-/// thread's `markdown_uuid`. Collapsing straight to "a document per
-/// channel" — which an earlier version did — picks one arbitrary thread
-/// and makes a busy channel look like it holds a single message.
-///
-/// Returns the channels it could read plus the paths it could not, so
-/// the caller can say the listing is partial. A silently truncated list
-/// reads as authoritative, which is the worse failure.
 fn scan(tree: &Path) -> (Channels, Vec<String>) {
     let mut by_channel: Channels = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -216,12 +162,6 @@ fn scan(tree: &Path) -> (Channels, Vec<String>) {
     // JSON. The renderer writes its rows into the source's
     // `indexed_markdown.doltlite_db` now, so the six columns this card
     // needs are a `SELECT`.
-    //
-    // The columns are still read defensively — a NULL `channel` or
-    // `markdown_uuid` skips the row rather than failing the card — but
-    // they are typed on the way out, so a shape change is a decode
-    // error naming the column instead of a silent `None` from
-    // `as_str()`.
     let store_path = datalib_etl::indexed_markdown::path_for(tree);
     if !store_path.is_file() {
         // No store: either nothing has rendered yet (the card shows its
@@ -269,11 +209,6 @@ fn scan(tree: &Path) -> (Channels, Vec<String>) {
     (by_channel, warnings)
 }
 
-/// The six `grid_rows` columns this card groups by, for one source.
-///
-/// Rows with a NULL `channel` or `markdown_uuid` are filtered in SQL:
-/// they cannot be placed in the two-level channel→thread shape, and
-/// dropping them here keeps the grouping loop free of the checks.
 #[allow(clippy::type_complexity)]
 fn read_rows(
     store: &Path,
@@ -374,9 +309,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Serve mode
-// ---------------------------------------------------------------------------
 
 pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let tree = str_param(params, "tree")
@@ -515,13 +448,6 @@ fn query_param(query: &str, key: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// One document per thread, with the thread row and its messages
-    /// all carrying the same markdown_uuid — the real Slack shape.
-    ///
-    /// Written through the store, because that is what the card reads
-    /// now. Building the fixture the same way production does is the
-    /// point: a fixture that hand-wrote rows could drift from what a
-    /// renderer actually emits and the card would still pass.
     fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
         use datalib_etl::grid_index::RenderedMarkdown;
         use datalib_etl::indexed_markdown::IndexedMarkdownStore;

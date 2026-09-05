@@ -1,36 +1,8 @@
 //! Shared building blocks for chunked multi-row INSERT / UPSERT
 //! against doltlite raw stores.
 //!
-//! See `docs/dev/data_architecture_ingestion.md` §"One writer per row"
-//! and §"Bulk-upsert as the standard write path" for the principle
-//! this module enforces:
-//!
-//!   - **Every entity table** uses the same UPSERT shape:
-//!     `INSERT INTO <t> (id, …cols) VALUES (...)  ON CONFLICT(id)
-//!     DO UPDATE SET <every non-id col> = excluded.<col>`. No
-//!     `COALESCE`-style per-column policies; each write is complete.
-//!   - **Provider code** declares its row struct and a [`BulkUpsertable`]
-//!     impl next to the DDL constant in `schema_raw.rs`, then calls
-//!     the generic [`bulk_upsert_in_tx`] helper to write a batch.
-//!     There should be no provider-side hand-written bulk UPSERT SQL.
-//!
-//! Module surface:
-//!
-//!   - [`BulkUpsertable`] — the row-struct contract.
-//!   - [`bulk_upsert_in_tx`] — the one generic UPSERT helper.
-//!   - [`SQL_CHUNK`], [`push_placeholders`], [`push_placeholder_list`]
-//!     — chunking utilities the helper uses (and which a few
-//!     transitional callsites still touch directly).
-//!   - [`bulk_upsert_bookkeeping`] — bumps `<table>_bookkeeping`
-//!     rows for a list of ids inside an open tx. Mirror of the per-row
-//!     [`crate::doltlite_raw::record_object_attempt`] for the
-//!     bulk-success case. Called from inside [`bulk_upsert_in_tx`];
-//!     also exposed for transitional callsites that aren't yet on
-//!     the trait.
-//!
-//! The chokepoint that pairs entity-side UPSERT bookkeeping with the
-//! post-commit JSONL wire-tape append lives in
-//! [`crate::doltlite_raw::bulk_upsert_events`].
+//! One UPSERT shape for every entity table — see the crate README, and
+//! [`insert_sql`] for the one path that deliberately does not upsert.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -42,10 +14,6 @@ use sqlx::{Sqlite, Transaction};
 /// payload may be ignored — only the id drives bookkeeping) and the
 /// tape-side [`crate::event_tape::EventTape::append_batch`] mirror
 /// (where the payload becomes the JSONL line).
-///
-/// Lives here in the bulk module rather than alongside the tape
-/// because it is the primary load-bearing shape; the tape is a
-/// best-effort sidecar built on top.
 pub struct EventBatch<'a> {
     pub table: &'a str,
     pub rows: &'a [(&'a str, &'a Value)],
@@ -57,9 +25,6 @@ pub struct EventBatch<'a> {
 /// unusually wide rows should chunk smaller.
 pub const SQL_CHUNK: usize = 400;
 
-/// Push `count` copies of `(?, ?, …)` (each tuple has `cols` placeholders),
-/// comma-separated. Used to construct the VALUES list for a chunked
-/// multi-row INSERT.
 pub fn push_placeholders(sql: &mut String, count: usize, cols: usize) {
     for i in 0..count {
         if i > 0 {
@@ -76,8 +41,6 @@ pub fn push_placeholders(sql: &mut String, count: usize, cols: usize) {
     }
 }
 
-/// Push `count` comma-separated `?` placeholders (no surrounding
-/// parens). Used for `WHERE id IN (?, ?, …)` lists.
 pub fn push_placeholder_list(sql: &mut String, count: usize) {
     for i in 0..count {
         if i > 0 {
@@ -87,13 +50,6 @@ pub fn push_placeholder_list(sql: &mut String, count: usize) {
     }
 }
 
-/// Bulk-upsert one row into `<table>_bookkeeping` per id, stamping
-/// `fetched_at = now`, `attempt_count += 1`, `last_error = NULL`.
-/// No-op if `ids` is empty.
-///
-/// This is the success-side bulk counterpart to the per-row
-/// [`crate::doltlite_raw::record_object_attempt`]. Use it after the
-/// matching entity-table INSERT inside the same tx.
 pub async fn bulk_upsert_bookkeeping<'a, I>(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
@@ -138,33 +94,8 @@ where
     Ok(())
 }
 /// The row-struct write contract.
-///
-/// Defined in [`datalib_schema::bulk`] and re-exported here, because
-/// `datalib_etl` depends on `datalib_schema` — so the render-schema
-/// structs could not implement a trait that lived in this crate. Every
-/// existing `datalib_etl::bulk::BulkUpsertable` path keeps working
-/// through this re-export.
 pub use datalib_schema::bulk::BulkUpsertable;
 
-/// SQL for a plain single-row `INSERT` built from a
-/// [`BulkUpsertable`]'s generated column list — **no `ON CONFLICT`**.
-///
-/// The bulk helper below upserts, which is right for raw entity tables
-/// (the newest upstream state is by definition the truth). It is wrong
-/// where a primary-key collision is a *finding* rather than an update:
-/// two sources minting the same `grid_rows.uuid` is a correctness
-/// emergency, and `grid_index` deliberately lets that error surface so
-/// it can name the other document. Upserting there would silently
-/// overwrite one row with the other.
-///
-/// So this exists to give that path the generated column list and binds
-/// without also giving it upsert semantics. Pair it with
-/// [`BulkUpsertable::bind_into`]:
-///
-/// ```ignore
-/// let sql = insert_sql::<GridRow>();
-/// let q = row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)));
-/// ```
 pub fn insert_sql<T: BulkUpsertable>() -> String {
     let mut cols = String::from(T::ID_COLUMN);
     for c in T::TYPED_COLUMNS {
@@ -187,21 +118,6 @@ pub fn insert_sql<T: BulkUpsertable>() -> String {
     )
 }
 
-/// Generic bulk-UPSERT for any [`BulkUpsertable`] row type. The one
-/// entity-table write path every provider should use.
-///
-/// Runs **inside an open `tx`** so the caller can batch multiple
-/// table upserts atomically. Per-batch behavior:
-///
-///   1. Chunks `rows` at [`SQL_CHUNK`] rows per statement.
-///   2. For each chunk, emits one
-///      `INSERT INTO <T::TABLE> (id, <typed_cols>, <payload>) VALUES
-///       (?,…,jsonb(?)),(?,…,jsonb(?)),… ON CONFLICT(id) DO UPDATE
-///       SET <every non-id col> = excluded.<col>`.
-///   3. After all chunks land, stamps `<T::TABLE>_bookkeeping` for
-///      every id via [`bulk_upsert_bookkeeping`] in the same tx.
-///
-/// The caller commits `tx`. No-op if `rows` is empty.
 pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
     tx: &mut Transaction<'_, Sqlite>,
     rows: &[T],

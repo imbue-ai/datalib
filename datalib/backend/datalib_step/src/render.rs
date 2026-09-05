@@ -1,20 +1,5 @@
 //! The render step driver: one source's render wave, un-fused from
 //! Load.
-//!
-//! The provider's translate `DataProcessor`s (planned per-provider by
-//! [`crate::dispatch`]) write the `.md` files themselves and hand every
-//! finished document back through `ctx.emit_doc`; this driver puts each
-//! one into the source's own
-//! [`IndexedMarkdownStore`](datalib_etl::indexed_markdown::IndexedMarkdownStore)
-//! at `<name>/rendered_md/indexed_markdown.doltlite_db`. Nothing here
-//! touches the unified index — `grid_index` stacks the per-source
-//! stores later.
-//!
-//! Incrementality comes from the same `prior_fingerprints` gate the
-//! processors already consult, read back from that store rather than
-//! from the index DB. The store is thus both the artifact and the
-//! resume state, which is exactly the "mechanics private to the node"
-//! contract.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -185,14 +170,6 @@ pub async fn run(
     }
 }
 
-/// A content version for a rendered tree, read back from the cursor the
-/// render just wrote.
-///
-/// The cursor records the raw store commit the tree was rendered from
-/// and the render params it was rendered under. Together those
-/// determine the tree's contents, so a render that found nothing new
-/// leaves the same version behind — no need to walk and hash the whole
-/// `rendered_md` tree to discover that.
 fn rendered_tree_version(rendered_root: &Path) -> Option<String> {
     let path = rendered_root.join("_render_cursor.json");
     let cursor = match datalib_etl::render_cursor::read(&path) {
@@ -222,32 +199,6 @@ fn rendered_tree_version(rendered_root: &Path) -> Option<String> {
     ))
 }
 
-/// Delete the whole rendered tree when it was written by a renderer
-/// other than the one about to run. Returns whether it did.
-///
-/// A bumped `RENDER_VERSION` already re-cuts every `source_fingerprint`,
-/// so the documents re-render on their own. That is enough only while a
-/// document's output *path* is stable. It is not: chat-common writes to
-/// `rendered_md/<chat_uuid>/<period>.md`, and `chat_uuid` is an id the
-/// renderer mints — so a change to the id recipe (#216 put claude,
-/// chatgpt and slack through `datalib_id`) writes every document to a
-/// new directory and leaves the old one sitting beside it. The index
-/// walks whatever it finds, so both copies load and every conversation
-/// appears twice, under two different uuids.
-///
-/// Replacing the tree wholesale is the only cheap way out: the step
-/// cannot tell an orphaned directory from a legitimately-untouched one,
-/// because "untouched" is exactly what the fingerprint skip produces on
-/// every healthy run. Everything under here is derived from the raw
-/// store, so the cost is one re-render — no re-download.
-///
-/// `_render_cursor.json` goes with it, deliberately. It records the raw
-/// commit the tree was rendered from, and the dolt-diff renderers ask
-/// it what changed since; leaving it behind would answer "nothing" and
-/// the emptied tree would stay empty until the next upstream write.
-///
-/// `current` is what [`declared_render_versions`] returned; `None`
-/// disables the check.
 fn tree_is_from_an_older_renderer(
     on_disk: &BTreeSet<u32>,
     current: Option<&BTreeSet<u32>>,
@@ -267,7 +218,6 @@ fn tree_is_from_an_older_renderer(
     true
 }
 
-/// Remove the whole rendered tree, store included.
 fn discard_tree(rendered_root: &Path) -> Result<()> {
     if !rendered_root.exists() {
         return Ok(());
@@ -276,32 +226,6 @@ fn discard_tree(rendered_root: &Path) -> Result<()> {
         .with_context(|| format!("remove stale rendered tree {}", rendered_root.display()))
 }
 
-/// Fail the step unless every `render_version` now on disk is one the
-/// source's processors declared.
-///
-/// This is what keeps [`DataProcessor::render_version`] from being
-/// advisory. The declaration decides whether a tree gets discarded, and
-/// there are two ways for it to be wrong, both of which are silent
-/// without this:
-///
-///   * **Absent.** A renderer that declares nothing opts its whole
-///     source out of the staleness check, so a future re-key writes each
-///     document into a new directory beside the old one and the index
-///     loads both. Nothing errors and every document appears twice. A
-///     provider added later inherits that by simply not overriding the
-///     default, which is exactly the failure mode "add one line to each
-///     provider" is bad at preventing — so a source that wrote documents
-///     and declared nothing is an error here.
-///   * **Wrong.** A processor that reports one version and writes
-///     another marks every tree stale, *including the one it just
-///     wrote*, and re-renders the source from scratch on every run.
-///     Correct output, unbounded cost, no symptom but a slow pipeline.
-///
-/// Checked against the versions in the store rather than against what the
-/// processors emitted through the doc callback, because the tree is what
-/// the next run reads. A declaration that agrees with the callback and
-/// disagrees with the file would still be wrong, and only this direction
-/// notices.
 fn every_stored_version_must_be_declared(
     source: &str,
     rendered_root: &Path,
@@ -344,17 +268,6 @@ fn every_stored_version_must_be_declared(
     Ok(())
 }
 
-/// The set of `render_version`s this wave will stamp onto its
-/// documents, or `None` when the declaration is incomplete.
-///
-/// `None` when **any** processor declines to declare one, because a
-/// partial set is worse than no set: that processor's own documents
-/// would look foreign against the versions its siblings reported, and
-/// the tree would be deleted and rebuilt on every run. So an incomplete
-/// declaration deletes nothing — and
-/// [`every_stored_version_must_be_declared`] then fails the step at the
-/// end of the wave, so "incomplete" is loud rather than silently
-/// unchecked.
 fn declared_render_versions(processors: &[Box<dyn DataProcessor>]) -> Option<BTreeSet<u32>> {
     let versions: BTreeSet<u32> = processors
         .iter()
@@ -424,15 +337,6 @@ mod tests {
 mod stale_tree_tests {
     //! A rendered tree written by a different renderer version is
     //! replaced, not updated.
-    //!
-    //! The failure this guards is quiet: a re-keyed provider writes each
-    //! document to a directory named for its *new* uuid, leaving the old
-    //! directory in place. Nothing errors — the index just loads both
-    //! and every conversation shows up twice under two different ids.
-    //!
-    //! These used to build the fixture by writing `.grid_rows.json`
-    //! files. The versions now come from the store, so they write real
-    //! documents through it.
 
     use std::collections::BTreeSet;
     use std::path::Path;
@@ -448,8 +352,6 @@ mod stale_tree_tests {
         tree_is_from_an_older_renderer,
     };
 
-    /// Write one document at `version` through the store — the shape
-    /// chat-common produces, where the directory name is the minted id.
     fn write_doc(root: &Path, chat_uuid: &str, version: u32) {
         let store = IndexedMarkdownStore::open(root).unwrap();
         let row = GridRow::builder()

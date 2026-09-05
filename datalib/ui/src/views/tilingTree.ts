@@ -5,32 +5,16 @@
 // (children side by side), vertical (children stacked), or tab (only
 // the `active` child shown, the rest behind a tab bar).
 //
-// The ROOT is always a split — it starts as one horizontal node with a
-// single child (one card). That single-child root is the *only*
-// exception to the collapse rule below; every other split holds two or
-// more children.
-//
-// Ways the tree changes:
-//   - openCards (a card spawning another): add it as a sibling of the
-//     caller — see addSibling.
-//   - the "add" button at a container's end: appendChild a blank tile.
-//   - drag a node onto a container's add area: moveNodeToContainer.
-//   - drag a node onto a card: dropOntoLeaf — the card is replaced by a
-//     new split (perpendicular to the card's parent) holding the card
-//     then the dragged node.
-//   - the per-container switch sets its arrangement (h/v/tab) directly
-//     in TilingView; that doesn't reshape the tree.
-//   - close a node: deleteNode.
-//
 // Collapse rule: deleting/moving a node out of a split that leaves it
 // with a single child collapses that split — the lone child is
 // promoted into its place, inheriting its size weight. The root never
 // collapses; emptying it yields a fresh blank tile so the tree is
 // never empty.
 //
-// Every node carries a `weight` (flex-grow relative to its siblings)
-// so dividers can resize tiles; the operations here only set sensible
-// defaults — TilingView mutates weights in place while dragging.
+// The ROOT is always a split — it starts as one horizontal node with a
+// single child (one card). That single-child root is the *only*
+// exception to the collapse rule below; every other split holds two or
+// more children.
 
 // A split's arrangement: horizontal, vertical, or tabbed. (Named
 // `Dir` for the tiling cases; "tab" rides along since the host model

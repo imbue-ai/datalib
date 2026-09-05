@@ -1,30 +1,5 @@
 //! Read-only account probe: "can these credentials reach this
 //! mailbox, and what labels does it have?"
-//!
-//! This is what the Add-a-source wizard's **Test connection** button
-//! runs, and what fills its label pickers. It exists as provider code
-//! rather than as something the HTTP server does itself for the same
-//! reason download does: the two ways to reach a mailbox (Gmail's REST
-//! API, a JMAP server) disagree about almost everything, and the one
-//! place that already knows how to reconcile them is here.
-//!
-//! Three properties are deliberate:
-//!
-//! * **It writes nothing.** No data root, no doltlite file, no
-//!   cursor. A probe is safe to run against a config that has never
-//!   synced, and safe to run repeatedly.
-//! * **It costs one or two HTTP calls**, never an enumeration. Gmail:
-//!   `users.getProfile` + `users.labels.list`. JMAP: session discovery
-//!   + one `Mailbox/get`.
-//! * **The label strings it returns are exactly the strings
-//!   `only_extract_labels` / `only_render_labels` accept.** That is the
-//!   whole point — a picker that offered a spelling the filter then
-//!   failed to match would be worse than a text box. For Gmail that
-//!   means [`labels::canonical_name`] is applied to system labels
-//!   (`INBOX` → `Inbox`) and user labels pass through with their full
-//!   `Parent/Child` name; for JMAP it means the path walk in
-//!   [`crate::mailbox_labels`], which is the same matcher the filters
-//!   themselves use.
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
@@ -79,14 +54,6 @@ pub struct ProbeLabel {
     pub path: String,
     /// `mailbox` — a folder emails are filed in, which both the
     /// download filter and the render filter can match.
-    ///
-    /// `keyword` — Gmail-only. `Starred`, `Important` and `Unread` are
-    /// labels on the wire but flags in the schema we store, so they
-    /// never become a mailbox row. The download filter still accepts
-    /// them (Gmail resolves them server-side), but the render filter
-    /// matches mailbox paths and would silently match nothing — so the
-    /// UI must not offer them there. That asymmetry is the reason this
-    /// field exists.
     pub kind: &'static str,
     /// JMAP role (`inbox`, `sent`, `archive`, …) when the mailbox has
     /// one. Used only for ordering and for a hint in the picker.
@@ -100,11 +67,6 @@ pub struct ProbeLabel {
 const KIND_MAILBOX: &str = "mailbox";
 const KIND_KEYWORD: &str = "keyword";
 
-/// Probe whichever live mode `config` selects.
-///
-/// A config with no live mode is an mbox source, which has no
-/// connection to test — the honest answer is an error naming what to
-/// do, not an empty report that reads like success.
 pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
     config.validate()?;
     match config.live_mode()? {
@@ -120,9 +82,7 @@ pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
     }
 }
 
-// ---------------------------------------------------------------------
 // Gmail
-// ---------------------------------------------------------------------
 
 async fn probe_gmail(
     user_id: &str,
@@ -181,9 +141,7 @@ async fn probe_gmail(
     })
 }
 
-// ---------------------------------------------------------------------
 // JMAP
-// ---------------------------------------------------------------------
 
 async fn probe_jmap(
     sync: &datalib_etl_email_config::EmailSync,
@@ -266,9 +224,6 @@ async fn probe_jmap(
     })
 }
 
-/// Roles first (Inbox before a user folder), then alphabetical by path.
-/// Two mailboxes can share a path — a re-used Gmail label, or sibling
-/// folders with one name — and the picker only needs the string once.
 fn dedupe_and_sort(labels: &mut Vec<ProbeLabel>) {
     labels.sort_by(|a, b| {
         b.role

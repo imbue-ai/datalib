@@ -1,48 +1,4 @@
 //! Single entrypoint for spawning the `latchkey` CLI.
-//!
-//! Every binary or test that runs `latchkey curl …` must construct its
-//! `Command` via [`latchkey_command`] / [`latchkey_tokio_command`] so
-//! that `LATCHKEY_CURL` is set exactly once, to the in-tree dispatch
-//! curl (`src/bin/latchkey_curl_dispatch.rs`). The dispatch curl routes
-//! requests carrying the `X-Imbue-Impersonate:` marker header to the
-//! Chrome-impersonating curl (`src/bin/latchkey_curl_impersonate.rs`,
-//! found as a sibling), and everything else to the system curl.
-//! Cloudflare-protected hosts (claude.ai, chatgpt.com, files.slack.com)
-//! reject vanilla curl's TLS fingerprint, so the providers that hit them
-//! add the marker to their requests (see `http::latchkey_curl`).
-//!
-//! **Except in gateway mode** (`$LATCHKEY_GATEWAY`, how minds workspaces
-//! reach third-party services), where we deliberately leave
-//! `LATCHKEY_CURL` alone. There, `latchkey curl` does not talk to the
-//! third party at all: it re-points the URL at the gateway, and the
-//! *gateway* rebuilds the invocation it hands to its own `LATCHKEY_CURL`,
-//! which is where impersonation belongs. Exporting ours would put a
-//! dispatch curl on the client hop instead, and that hop would consume
-//! the marker header and impersonate the connection to the gateway --
-//! leaving the hop that actually reaches the third party unimpersonated.
-//! Leaving it unset lets the system curl carry the marker to the gateway
-//! as an ordinary header, which is why the marker has a value (see
-//! `http::IMPERSONATE_MARKER_HEADER`).
-//!
-//! Resolution order for the dispatch-curl path (first hit wins):
-//!   1. `$LATCHKEY_CURL` — caller's explicit override; trusted as-is.
-//!   2. `$DATALIB_CURL_DISPATCH` — our own override (parallel to
-//!      `LATCHKEY_CURL` but specifically the in-tree binary, so Bazel can
-//!      inject the runfiles path without stomping a user-set
-//!      `LATCHKEY_CURL`).
-//!   3. Bazel runfiles lookup for `_main/datalib/backend/etl/latchkey-curl-dispatch`.
-//!   4. Cargo dev fallback: walk up from CWD and the etl crate dir
-//!      looking for `datalib/backend/target/{debug,release}/latchkey-curl-dispatch`
-//!      or `target/{debug,release}/latchkey-curl-dispatch`.
-//!   5. Sibling of `current_exe()` — installed releases drop the dispatch
-//!      curl (and the impersonator next to it) beside `datalib-step` (see
-//!      scripts/install.sh + .github/workflows/release.yml), so a user who
-//!      only has `~/.local/bin/{datalib-step,latchkey-curl-dispatch,latchkey-curl-impersonate}`
-//!      and never sets `LATCHKEY_CURL` still gets CF impersonation.
-//!   6. `which latchkey-curl-dispatch` on `$PATH`.
-//!
-//! On miss, the `Command` is still returned but a `warn!` is logged so
-//! the caller can see why CF-fronted endpoints are 403-ing.
 
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -96,20 +52,12 @@ pub fn ensure_curl_dispatch() -> Result<PathBuf, CurlDispatchNotFound> {
     }
 }
 
-/// Whether latchkey is configured to route requests through a gateway.
 fn is_gateway_mode(gateway: Option<&OsStr>) -> bool {
     matches!(gateway, Some(value) if !value.is_empty())
 }
 
 /// Whether [`ensure_curl_dispatch`] should point `LATCHKEY_CURL` at the
 /// dispatch curl it resolved. Two reasons not to:
-///
-///   * the caller already set it — their override wins, and it is the
-///     first thing `resolve` consults anyway;
-///   * latchkey is in gateway mode, where the request reaching the third
-///     party is made by the gateway's curl, not ours. See the module docs
-///     for why putting a dispatch curl on the client hop actively breaks
-///     impersonation rather than merely failing to help.
 fn should_export_curl_dispatch(existing_curl: Option<&OsStr>, gateway: Option<&OsStr>) -> bool {
     existing_curl.is_none() && !is_gateway_mode(gateway)
 }
@@ -240,16 +188,6 @@ const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// shim on first call. If the shim can't be found, logs a warning and
 /// returns the `Command` anyway — callers may still succeed against
 /// non-CF endpoints.
-///
-/// Resolution: the app-bundled Node runtime + latchkey tree when staged
-/// (Tauri bundles ship one — see `datalib_core::node_runtime`),
-/// else `npx -y latchkey@<pin>` (same pattern as qmd in
-/// `datalib_qmd_indexer::run_qmd`) so callers don't need a global
-/// install. Runtime overrides: `$DATALIB_RUNTIME_DIR` points at a
-/// staged runtime tree; `$NPX_BIN` lets a developer pin a specific npx
-/// when running outside bazel. Bazel actions don't get these vars
-/// forwarded (it would bust the action cache key per shell); they rely
-/// on the pinned `PATH` from `.bazelrc` instead.
 pub fn latchkey_command() -> std::process::Command {
     warn_if_missing();
     datalib_core::node_runtime::bundled_command("latchkey", LATCHKEY_VERSION, LATCHKEY_ENTRY_REL)
@@ -258,21 +196,10 @@ pub fn latchkey_command() -> std::process::Command {
         })
 }
 
-/// Tokio variant. Same resolution as [`latchkey_command`].
 pub fn latchkey_tokio_command() -> tokio::process::Command {
     tokio::process::Command::from(latchkey_command())
 }
 
-/// `latchkey [--account <acct>] curl` — a tokio `Command` with the
-/// account selector and the `curl` subcommand already pushed.
-///
-/// The ordering is the whole reason this exists: `--account` is a latchkey
-/// **global** option, so it must precede the subcommand. Two providers
-/// (slack's file fetch, chatgpt's image fetch) build their curl invocation
-/// by hand rather than going through [`crate::http::HttpRequest`], and a
-/// hand-rolled `--account` placed after `curl` is rejected by latchkey — so
-/// both they and [`crate::http`] come through here and the rule is written
-/// down once.
 pub fn latchkey_curl_command(
     settings: &datalib_source_common::LatchkeySettings,
 ) -> tokio::process::Command {

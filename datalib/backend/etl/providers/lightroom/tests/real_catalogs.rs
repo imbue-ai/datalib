@@ -1,30 +1,4 @@
 //! Stack four real Lightroom catalogs onto one doltlite store.
-//!
-//! The catalogs come from
-//! [github.com/thadd3us/lightroom_db_diff](https://github.com/thadd3us/lightroom_db_diff),
-//! fetched by Bazel (`http_file` in `MODULE.bazel`, pinned by commit sha
-//! and sha256) rather than vendored — ~7 MB of binary shouldn't live in
-//! this repo's history. They are a chronological progression of one
-//! library:
-//!
-//! | # | Catalog | What the author changed |
-//! | --- | --- | --- |
-//! | 00 | `fresh` | the starting point |
-//! | 01 | `gps_captions_collections_keywords` | GPS, captions, a collection, keywords |
-//! | 02 | `two_more_photos_and_edits` | imported two photos, edited others |
-//! | 03 | `more_face_tags_gps_edit` | more face tags, revised GPS |
-//!
-//! This is the test `mirror_roundtrip.rs` can't be: a synthetic fixture
-//! shows the mechanism works, but only a real catalog shows that the
-//! mechanism *pays* — that a day's worth of Lightroom editing touches 23
-//! of 113 tables rather than all of them, and that four 1.7 MB catalogs
-//! cost less stacked than stored side by side. It is also the only place
-//! a second real Lightroom schema version (115 tables here, vs the
-//! 133-table catalog the design was first checked against) gets
-//! exercised.
-//!
-//! Tagged `requires-network`: once Bazel has fetched the catalogs the
-//! test is hermetic and cached, but a cold cache has to reach github.com.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -47,11 +21,6 @@ const CATALOG_TABLES: usize = 113;
 /// small library (38, 46, 43, 45 non-empty across the four catalogs), so
 /// the first commit's *schema* diff covers all 113 tables while its
 /// *data* diff covers only these.
-///
-/// doltlite reported `data_change = 1` for a newly created empty table
-/// through v0.11.51 and 0 from v0.11.52 on. 0 is the right answer —
-/// there is no data to have changed — which is why this is 38 and not
-/// [`CATALOG_TABLES`].
 const CATALOG_TABLES_WITH_ROWS: i64 = 38;
 
 /// The four catalogs in the order the author edited them. Bazel stages
@@ -75,7 +44,6 @@ impl Store {
         Self { _dir: dir, path }
     }
 
-    /// Mirror one catalog and commit, exactly as the CLI does.
     async fn ingest(&self, catalog: &Path) -> Result<(MirrorStats, Option<String>)> {
         let pool = mirror::open_mirror(&self.path).await?;
         let stats = download::fetch(FetchOptions {
@@ -126,7 +94,6 @@ async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
         .get::<i64, _>(0)
 }
 
-/// Tables whose *data* changed in one commit.
 async fn tables_changed(pool: &SqlitePool, commit: &str) -> i64 {
     scalar_i64(
         pool,
@@ -137,13 +104,6 @@ async fn tables_changed(pool: &SqlitePool, commit: &str) -> i64 {
     .await
 }
 
-/// `diff_type -> count` for the changes one commit introduced.
-///
-/// Filtered on `to_commit` alone. `dolt_diff_<table>` holds one row per
-/// change between a commit and its parent, so also matching
-/// `from_commit` would fold in the *next* commit's changes and roughly
-/// double every count — a mistake worth naming, because the resulting
-/// numbers still look plausible.
 async fn diffs(pool: &SqlitePool, table: &str, commit: &str) -> BTreeMap<String, i64> {
     let sql = format!(
         "SELECT diff_type, COUNT(*) AS n FROM dolt_diff_{table} \
@@ -184,8 +144,6 @@ async fn ingest_sequence(store: &Store) -> Result<Vec<String>> {
     }
     Ok(commits)
 }
-
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn four_catalogs_stack_into_one_store_with_incremental_commits() -> Result<()> {

@@ -1,79 +1,6 @@
 //! Perseus Digital Library provider for [`datalib_etl`]: renders
 //! the TEI editions of classical works into the stanza's
 //! `<stanza>/rendered_md/` tree + its render store.
-//!
-//! Today this is wired for **Thucydides' Histories** (`tlg0003.tlg001`)
-//! only — the Greek (`perseus-grc2`) and the English (`1st1K-eng1`)
-//! sides aligned by book/chapter/section. Other Perseus editions
-//! follow the same TEI shape; when we add a second work we'll move the
-//! work-specific constants ([`TLG0003_TLG001`] + `WORK_TITLE`) into a
-//! per-work struct on the source config rather than hard-coding.
-//!
-//! ## Why a provider crate and not a one-off script
-//!
-//! The corpus itself never changes — Perseus TEI files are
-//! version-controlled upstream — so we don't get any benefit from the
-//! sync orchestrator's incremental-fetch machinery. We do get:
-//!
-//!   * **Typed schema coupling.** Grid rows go through the
-//!     [`datalib_schema::grid_rows::GridRow`] struct, so a column
-//!     rename in `schemas/grid_rows.schema.json` breaks the build
-//!     instead of silently producing stale sidecars.
-//!   * **The same UX as every other source.** Add a perseus step
-//!     pair to `config.toml` and one command renders + loads +
-//!     qmd-indexes.
-//!   * **A real Bazel test target** ([rust_test
-//!     `perseus_translate_test`]) that catches regressions before they
-//!     reach a user's data root.
-//!
-//! ## Configuration
-//!
-//! ```toml
-//! [[steps]]
-//! id = "perseus.download"
-//! command = "datalib-step download perseus"
-//! outputs = ["perseus/raw"]
-//! [steps.params]
-//! sync = {}            # default: Thucydides Histories (grc + eng)
-//! ```
-//!
-//! With an empty `sync` block, the download step
-//! fetches the default Thucydides pair from
-//! `PerseusDL/canonical-greekLit` (master branch) to
-//! `<data_root>/perseus/raw/`, and Render + Load + qmd-index pick
-//! them up on the same run. **No latchkey registration is required**
-//! — these URLs are public, so [`download`] shells out to `curl`
-//! directly rather than threading through the shared `latchkey_curl`
-//! HTTP path (every other provider uses that path for credential
-//! injection — Perseus has nothing to inject).
-//!
-//! ### Customizing the files list
-//!
-//! ```toml
-//! [[steps]]
-//! id = "perseus.download"
-//! command = "datalib-step download perseus"
-//! outputs = ["perseus/raw"]
-//! [steps.params.sync]
-//! files = [
-//!   "tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml",
-//!   "tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml",
-//! ]
-//! ```
-//!
-//! Each entry is a subpath under
-//! `https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data/`
-//! and gets fetched verbatim to `<input_path>/<basename>`. Omit
-//! `sync:` entirely to skip the fetch and render whatever XMLs you
-//! have pre-staged at `input_path`.
-//!
-//! ### Render is Thucydides-specific for now
-//!
-//! The [`crate::render`] path is hardcoded to the Thucydides
-//! Histories shape — it looks for the two basenames the default
-//! `files` list resolves to. Pointing `files:` at a different work
-//! will Download cleanly but Render will not find anything to
-//! render. Multi-work render is a follow-up.
 
 use std::sync::OnceLock;
 
@@ -100,7 +27,6 @@ pub const WORK_URN: &str = "urn:cts:greekLit:tlg0003.tlg001";
 /// `.xml` suffix) to recover the edition id.
 pub const TLG_FILE_PREFIX: &str = "tlg0003.tlg001.";
 
-/// The CTS work URN, used by the parser to strip edition `urn`s.
 pub fn cts_urn() -> &'static str {
     WORK_URN
 }
@@ -122,7 +48,6 @@ pub fn perseus_uuid_ns() -> &'static Uuid {
     })
 }
 
-/// PK for one Thucydides book.
 pub fn book_uuid(book_n: &str) -> String {
     let name = format!("{TLG0003_TLG001}:book{book_n}");
     Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
@@ -162,12 +87,6 @@ pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, version: &str) -> S
 /// bilingual-alignment `edges` rows reference these as
 /// `src_anchor_uuid` / `dst_anchor_uuid` so the UI can highlight the
 /// aligned sentence on the other-language side when one is clicked.
-///
-/// `sent_idx` is 0-based, matching the order the splitter emits.
-/// Derivation includes the sentence index so a section with N
-/// sentences gets N distinct anchor UUIDs; reordering / re-splitting
-/// the same section would shift them, which is exactly what we want
-/// — the alignment edges would have to be re-derived alongside.
 pub fn paragraph_sentence_uuid(
     book_n: &str,
     ch_n: &str,

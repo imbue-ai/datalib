@@ -1,40 +1,4 @@
 //! Raw-store schema for the Google Takeout provider.
-//!
-//! Declarations-only. All row structs derive
-//! [`datalib_etl_macros::WirePayloadRow`] (entity tables) or
-//! [`datalib_etl_macros::CasEdgeRow`] (per-provider CAS edge
-//! tables), so the DDL + `BulkUpsertable` plumbing comes from the
-//! macros and this file is just the schema description.
-//!
-//! ## Tables
-//!
-//! Entity (wire-payload) tables — each gets a `_bookkeeping` sidecar
-//! courtesy of [`datalib_etl::doltlite_raw::bookkeeping_ddl_for`]:
-//!
-//!   - `maps_reviews`, `maps_saved_places`, `maps_photos`
-//!   - `youtube_watch_history`, `youtube_subscriptions`
-//!   - `chat_groups`, `chat_users`, `chat_messages`
-//!   - `gemini_activity`
-//!
-//! CAS-edge tables — each maps `(owning_id, ref_id) → blake3`:
-//!
-//!   - `chat_attachments`     — owning `message_id`,  ref `export_name`
-//!   - `gemini_attachments`   — owning `activity_id`, ref `filename`
-//!
-//! `maps_photos` is structurally an attachment but conceptually a
-//! first-class entity (the photo *is* the row), so it lives as a
-//! wire-payload entity table with a `blake3` column rather than a
-//! separate edge table. The bytes still ride through the shared
-//! `cas_objects` CAS the same way.
-//!
-//! ## Identity
-//!
-//! See `docs/dev/archived/google_takeout_ingestion.md` § "Identity / Ship-of-Theseus"
-//! for the per-table PK recipes. Where Google gives us a stable id
-//! (Chat `message_id`, YouTube `Channel Id`, photo file-stem) we use
-//! it verbatim; where it doesn't we synthesize a uuidv5 from the
-//! most stable available fields, namespaced under
-//! [`google_takeout_ns`].
 
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
@@ -75,9 +39,6 @@ pub fn google_takeout_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"google-takeout.datalib")
 }
 
-/// Build a uuidv5-derived id string for a recipe under the
-/// provider's namespace. The recipe is the only spec-stable input;
-/// callers should document the shape next to the call site.
 pub fn ns_id(recipe: &str) -> String {
     Uuid::new_v5(&google_takeout_ns(), recipe.as_bytes())
         .as_hyphenated()
@@ -87,11 +48,6 @@ pub fn ns_id(recipe: &str) -> String {
 // ── Maps ────────────────────────────────────────────────────────────
 
 /// `maps_reviews` — one row per review the user wrote.
-///
-/// PK recipe: `uuidv5(NS, "maps_review:{ftid}:{date}")` where `ftid`
-/// is the hex id after `!1s` in the place's `google_maps_url`. A
-/// user can review the same place twice; `(ftid, date)` is the
-/// smallest natural key.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "maps_reviews")]
 pub struct MapsReviewRow {
@@ -110,10 +66,6 @@ pub struct MapsSavedPlaceRow {
 }
 
 /// `maps_photos` — one row per photo the user uploaded to a place.
-///
-/// PK is the photo file-stem (e.g. `2026-06-04-af8bb6e0`). Bytes
-/// land in `cas_objects` keyed by `blake3`; `blake3` here is the
-/// content hash of the JPEG bytes.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "maps_photos")]
 pub struct MapsPhotoRow {
@@ -125,12 +77,6 @@ pub struct MapsPhotoRow {
 // ── YouTube ─────────────────────────────────────────────────────────
 
 /// `youtube_watch_history` — one row per video watched.
-///
-/// PK recipe: `uuidv5(NS, "youtube:watch:{video_id}:{iso_ts}")`. The
-/// payload carries the parsed cell fields (`video_url`, `video_id`,
-/// `video_title`, `channel_*`, raw `when_str`). The original cell's
-/// HTML is *not* retained per row — it's the same MDL boilerplate
-/// for every entry; the full file lives on disk at `input_path`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "youtube_watch_history")]
 pub struct YoutubeWatchRow {
@@ -173,11 +119,6 @@ pub struct ChatUserRow {
 }
 
 /// `chat_messages` — one row per chat message.
-///
-/// PK is the upstream `message_id` verbatim (it's globally unique:
-/// `{group}/{topic}/{msg}`). `group_id` references the owning
-/// `chat_groups.id`. `sender_email` is promoted off the payload so
-/// per-sender queries don't have to crack the JSON.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "chat_messages")]
 pub struct ChatMessageRow {
@@ -203,12 +144,6 @@ pub struct ChatAttachmentRow {
 // ── Gemini Apps ─────────────────────────────────────────────────────
 
 /// `gemini_activity` — one row per Gemini Apps conversation cell.
-///
-/// PK recipe: `uuidv5(NS, "gemini:" + blake3_hex(prompt + "\0" +
-/// when_str))`. The MDL HTML has no machine id per entry; the cell
-/// timestamp + prompt text is the smallest natural key. blake3 is
-/// stable across re-exports and matches the rest of the codebase's
-/// content-hash discipline.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "gemini_activity")]
 pub struct GeminiActivityRow {
@@ -230,9 +165,6 @@ pub struct GeminiAttachmentRow {
 
 // ── DDL composition ────────────────────────────────────────────────
 
-/// Full DDL list passed to [`datalib_etl::doltlite_raw::open`].
-/// Composes every table + its bookkeeping sidecar, plus the shared
-/// `ingested_files` cursor table.
 pub fn full_ddl() -> Vec<String> {
     use datalib_etl::blob_cas::CasEdgeRow as _;
     let mut out: Vec<String> = vec![

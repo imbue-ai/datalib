@@ -1,18 +1,4 @@
 //! Map qmd search hits to grid rows and back.
-//!
-//! Hit→row finds the hit's document by normalized `qmd_path`, then reads that
-//! rendered markdown and maps the hit's matched line (parsed from the snippet's
-//! `@@ -N,M @@` diff header) to the enclosing `data-section-uuid` — i.e. the
-//! exact message. When the line can't be pinned (no header, file unreadable,
-//! or the section isn't a grid row) it falls back to every row of the
-//! document; when the document matches no rows at all it returns nothing.
-//! qmd lowercases paths and collapses runs of `_`/`-` to a single `-` in its
-//! internal docid URI, so the same normalization applies on the grid side.
-//!
-//! `parse_query` recognizes `qmd:"…"` and `qmd_vsearch:"…"` as predicates
-//! over the search-bar string; anything else is treated as bare hybrid
-//! query text. The broader search-bar parser in `crate::query` calls
-//! this after handling structured `field:value` filters.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -26,10 +12,6 @@ pub enum QueryMode {
 }
 
 /// One result from a `qmd query` / `qmd vsearch` run.
-///
-/// `path` is the file path qmd reports inside its `qmd://<collection>/…`
-/// URI, already stripped of the URI prefix and normalized (lowercased,
-/// `[_-]+` collapsed to `-`). Compare against `norm_path(row.qmd_path)`.
 #[derive(Debug, Clone)]
 pub struct QmdHit {
     pub path: String,
@@ -48,7 +30,6 @@ pub struct GridRowRef {
     pub provider: String,
 }
 
-/// qmd's path normalization: lowercase + collapse runs of `_`/`-` to `-`.
 pub fn norm_path(p: &str) -> String {
     let lower = p.to_lowercase();
     let mut out = String::with_capacity(lower.len());
@@ -67,9 +48,6 @@ pub fn norm_path(p: &str) -> String {
     out
 }
 
-/// Pull the `data-section-uuid="…"` value out of one rendered-markdown line,
-/// if present. Every message / thinking / tool block opens with such a div,
-/// and the value is exactly the `grid_rows.uuid` for that section.
 pub fn parse_section_uuid(line: &str) -> Option<&str> {
     const KEY: &str = "data-section-uuid=\"";
     let start = line.find(KEY)? + KEY.len();
@@ -106,12 +84,6 @@ fn take_leading_usize(s: &str) -> Option<usize> {
         .ok()
 }
 
-/// `qmd:"foo"` / `qmd_vsearch:"foo"` / bare text → (mode, inner).
-///
-/// Whitespace around the predicate keyword and value is tolerated.
-/// Quotes are required for the predicate form (matches the Python
-/// implementation). Anything that doesn't match the predicate shape is
-/// treated as a bare hybrid query.
 pub fn parse_qmd_predicate(raw: &str) -> (QueryMode, String) {
     let trimmed = raw.trim();
     for (prefix, mode) in [
@@ -160,18 +132,6 @@ impl GridIndex {
         }
     }
 
-    /// Resolve a single hit to the grid row for the message it matched.
-    ///
-    /// The hit's document is found via `by_norm_path` (which carries the real,
-    /// un-normalized `qmd_path`); that rendered markdown is then read so the
-    /// hit's matched line can be mapped to the enclosing `data-section-uuid`.
-    /// Degrades in steps:
-    ///   * line pinned to a section that is a grid row → just that one row;
-    ///   * line can't be pinned (no diff header, file unreadable, or the
-    ///     section isn't a grid row) → every row of the document, so it still
-    ///     surfaces — just without the precise message;
-    ///   * the hit's file matches no grid rows at all → empty. Every indexed
-    ///     doc should have rows, so callers treat this as an error.
     pub fn rows_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
         let Some(file_rows) = self.by_norm_path.get(&norm_path(&hit.path)) else {
             return Vec::new();
@@ -234,10 +194,6 @@ impl GridIndex {
     /// lower-ranked hits from the same document are dropped to keep the result
     /// list concise. Returns `(row, score)` in rank order, each row carrying
     /// the score of the hit that produced it.
-    ///
-    /// `on_orphan` is invoked for any hit that resolves to no rows (a path the
-    /// grid doesn't know about) so the caller can log it; such hits contribute
-    /// nothing to the output.
     pub fn ranked_rows_one_per_doc(
         &self,
         hits: &[QmdHit],
@@ -364,9 +320,6 @@ mod tests {
         );
     }
 
-    /// Write a two-message rendered chat under `<root>/<rel>` and return the
-    /// two grid rows (User Input, LLM Response) keyed to its section anchors.
-    /// Anchor lines: `m-AAA…` at line 7, `m-BBB…` at line 13.
     fn write_two_message_doc(root: &std::path::Path, rel: &str) -> Vec<GridRowRef> {
         let body = "---\n\
                     provider: claude\n\
@@ -534,27 +487,6 @@ mod tests {
     /// Regression: the genuinely-relevant Claude chat — qmd's #1 hit (score
     /// 1.0) — must outrank a poorly-matched Slack post that merely mentions
     /// "rust" (qmd's #2 hit, score 0.5) in the grid.
-    ///
-    /// Live failure for `q="claude chat about rust dag runner"` (msg 6d10c99d
-    /// shown above msg 019e2d00…), from two compounding bugs, both now fixed:
-    ///
-    ///   1. Title-chunk snippets carry NO `m-{uuid}` anchor, so EVERY hit fell
-    ///      through to the path-fallback branch and fanned out to the whole
-    ///      file with one shared score — per-message ranking was lost. Fixed
-    ///      by the line-based resolver (a title-region hit now pins the first
-    ///      message instead of fanning out).
-    ///   2. The same conversation was indexed under two qmd paths: a stale
-    ///      nested render (`…/<other>/llm_chats/<id>`) left over from a layout
-    ///      change, alongside the canonical `…/llm_chats/<id>`. grid_rows
-    ///      stored only the nested variant, so qmd's #1 hit (canonical path,
-    ///      score 1.0) resolved to ZERO rows and its score was dropped; the
-    ///      chat re-entered only via the duplicate hit at 0.33 — below the
-    ///      Slack post's 0.5 — so a score-desc sort floated the spam to the
-    ///      top. Fixed by deleting the stale render: the grid now stores the
-    ///      canonical path, so qmd's #1 hit resolves straight to the chat.
-    ///
-    /// With both fixed, the canonical #1 hit lands on the chat, that message
-    /// carries 1.0, and it sorts above the spam.
     #[test]
     fn relevant_chat_outranks_spam_with_canonical_path() {
         // The stale nested render is gone, so the grid stores the CANONICAL

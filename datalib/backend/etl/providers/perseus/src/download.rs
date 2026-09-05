@@ -1,29 +1,5 @@
 //! Download configured TEI XML files from `PerseusDL/canonical-greekLit`
 //! (master branch) to `<input_path>/<basename>`.
-//!
-//! There's no auth, no rate limit, no pagination, no incrementality —
-//! every entry in [`PerseusSync::files`](datalib_core::config::PerseusSync)
-//! is one GET to raw.githubusercontent.com. We deliberately bypass
-//! the shared `latchkey_curl` HTTP layer here: that layer's value-add
-//! is credential injection + per-host rate limiting + playback
-//! fixtures, none of which apply to public-URL static-file fetches,
-//! and requiring `latchkey services register …` + a dummy `auth set`
-//! header on the user just to satisfy latchkey's "creds must be
-//! set" check would be all-cost-no-benefit ceremony.
-//!
-//! Instead we shell out to `curl` directly via `tokio::process`.
-//! `curl` is present on every reasonable dev host (macOS built-in,
-//! standard Linux installs, the project devcontainer, every CI
-//! runner we use). If we ever need playback fixtures here, the
-//! shell-out is one function and easy to swap.
-//!
-//! The render path under [`crate::render`] currently expects
-//! the **Thucydides Histories** pair specifically — `perseus-grc2.xml`
-//! and `1st1K-eng1.xml`. The default [`PerseusSync::files`] list
-//! ([`DEFAULT_FILES`]) matches that, so an empty / `sync: {}` block
-//! does the right thing. If you point `files:` at a different work,
-//! Download will happily fetch it but Render will fail to find the
-//! basenames it expects — multi-work render is a follow-up.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

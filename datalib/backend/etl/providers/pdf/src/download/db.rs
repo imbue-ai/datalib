@@ -13,8 +13,6 @@ use datalib_etl::fswalk::{StampCursor, StampKind};
 
 use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
 
-/// Conventional filename of this provider's entity store under
-/// `<name>/raw/`.
 pub fn db_path_for(raw_dir: &Path) -> PathBuf {
     datalib_etl::raw_layout::entities_db(raw_dir)
 }
@@ -84,13 +82,6 @@ impl RawDb {
 
     /// Truncate the **path** table so deletions fall out naturally: a
     /// path present last scan and absent now is simply not re-inserted.
-    ///
-    /// `pdf_documents` is deliberately left intact. It is keyed on
-    /// content, not location, so it has no notion of "no longer
-    /// present" — and dropping it would lose `first_seen_at` and force
-    /// a full re-convert of every document whose path merely moved.
-    /// Documents whose last path disappears become unreferenced rows;
-    /// see `DOWNLOAD.md` §"Orphaned documents".
     pub async fn reset_paths(&self) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin truncate tx")?;
         for table in DATA_TABLES {
@@ -116,8 +107,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// The absolute scan root recorded by the last download. `None`
-    /// when no scan has run yet.
     pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
         let row = sqlx::query("SELECT abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1")
             .fetch_optional(&self.pool)
@@ -138,22 +127,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Everything the render side needs, joined: one row per document
-    /// that is convertible, with a representative path to read from.
-    ///
-    /// `MIN(p.id)` makes the choice deterministic when a document has
-    /// several copies, so two runs render byte-identical output.
-    ///
-    /// The `WHERE` clause is the render gate, and it is per *page*, not
-    /// per document: anything with at least one readable page is worth
-    /// converting, and the pages we could not read are noted in the
-    /// markdown and counted in `ocr_page_count`. It used to read
-    /// `d.needs_ocr = 0`, which skipped a document entirely if any one
-    /// of its pages was a scan — so every `Mixed` document, the exact
-    /// case the classification exists to describe, rendered nothing
-    /// (issue #173). `has_encoding_issues` still suppresses the whole
-    /// document; see [`super::schema_raw::document_is_renderable`],
-    /// which this mirrors, for why that one is all-or-nothing.
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
         let rows = sqlx::query(
             "SELECT d.blake3      AS blake3,
@@ -261,11 +234,6 @@ mod tests {
     }
 
     /// The render gate, exercised through the query that actually runs.
-    ///
-    /// The bug this pins (#173) lived in the `WHERE` clause, so a test
-    /// of any Rust-side predicate could not have caught it — the one
-    /// that existed asserted `PdfKind::Mixed` was convertible and passed
-    /// happily while the query skipped every Mixed document.
     #[tokio::test(flavor = "multi_thread")]
     async fn renders_only_documents_with_readable_pages() -> Result<()> {
         let tmp = tempfile::tempdir()?;

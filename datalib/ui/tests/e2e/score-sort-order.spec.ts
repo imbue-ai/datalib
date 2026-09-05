@@ -14,16 +14,6 @@ import { searchAndSettle } from "./grid-helpers";
 //    The fix added a Score column with `sort: "desc", sortIndex: 0`;
 //    this assertion reads the visible Score cells in DOM order and
 //    asserts non-increasing.
-//
-// 2. **Scroll to top**: the default empty-query sort is time-asc and
-//    `applyDefaultSort` scrolls the viewport to the *bottom* so the
-//    user lands on the most recent rows. Issuing a qmd query has to
-//    flip the viewport back to row 0 so the highest-ranked hits are
-//    immediately visible — otherwise the user sees row N+1 of the
-//    qmd-sorted set with no signal that the sort changed.
-//    `applyDefaultSort` hooks AG Grid's `rowDataUpdated` event +
-//    a double-rAF fallback to land the scroll write after the
-//    virtualizer ingests the new rowData.
 
 test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
   // The `warmup` project pays the qmd cold start before any spec runs,
@@ -74,13 +64,6 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     //    `ensureIndexVisible(0, "top")` writes scrollTop near 0 (browser
     //    may add a sub-pixel for alignment). Poll briefly to absorb
     //    the post-sort layout settle.
-    //
-    //    Asserted BEFORE the score column, and the order is the point.
-    //    This scroll is the last thing `applyDefaultSort` does — it
-    //    hooks `rowDataUpdated` and a double rAF — so a viewport that
-    //    has landed at the top is the signal that the sort pipeline has
-    //    finished and the rendered window is final. Reading the column
-    //    first meant reading it *through* that re-render.
     await expect
       .poll(async () => viewport.evaluate((el) => el.scrollTop), {
         timeout: 5_000,
@@ -91,14 +74,6 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     // 4. Score column values are non-increasing in DOM order.
     //    Virtualization means we only see the on-screen window, but a
     //    non-increasing prefix is enough to assert the sort direction.
-    //
-    //    Read in ONE page evaluation rather than `cells.nth(i)` in a
-    //    loop. Eighteen round trips take long enough for the grid to
-    //    re-render between them, and a walk that spans a re-render
-    //    splices cells from two different renders — which is how a
-    //    descending column read `0.13, 0.14` in CI (webkit, run
-    //    33871259668). One evaluation is one DOM state, so the sequence
-    //    it returns is a sequence that actually existed.
     const cells = page.locator(
       '.ag-grid-scrolling-rows [role="row"] [col-id="score"]',
     );

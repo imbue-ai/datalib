@@ -1,46 +1,4 @@
 //! Claude entity ids.
-//!
-//! Every id this provider mints goes through
-//! [`datalib_id::entity_id_str`]. See `docs/dev/entity_ids.md` for the
-//! rule; the provider-specific decisions are here.
-//!
-//! ## Scope
-//!
-//! [`Scope::ProviderGlobal`], not `Upstream`. Anthropic issues real
-//! UUIDs for conversations, messages and projects, unique across the
-//! whole service, so no further scoping is needed.
-//!
-//! The tempting alternative — scoping on `org_uuid` — is a trap here:
-//! that column is `Option`, empty when orgs aren't mirrored
-//! (`sync.projects = false`, or an older ingest). A scope value that can
-//! *become* populated later would silently re-key every row the next
-//! time it appeared, which is precisely the failure this crate exists to
-//! prevent. A scope component has to be present-or-never, and
-//! `org_uuid` is neither.
-//!
-//! ## What the old recipes got wrong
-//!
-//! The upstream ids were previously used verbatim as our primary keys,
-//! and the structural blocks got hand-rolled prefixes on top:
-//!
-//! ```text
-//! tu-{tool_use_id}          tr-{tool_use_id}
-//! th-{message_uuid}-{index} blk-{message_uuid}-{index}
-//! pdesc-{project_uuid}      pinst-{project_uuid}
-//! ```
-//!
-//! Two problems, both fixed below.
-//!
-//! **`tu-` / `tr-` were scoped to nothing but the tool-use id.** Every
-//! other row this provider emits is at least conversation-scoped; these
-//! two were global on a value we don't control. `parent_message_uuid` is
-//! parsed but never used, so branch siblings all render flat into one
-//! keyspace. They are now keyed on `(message_uuid, tool_use_id)`.
-//!
-//! **`-` is both the separator and a character inside a UUID.**
-//! `th-{msg}-{idx}` cannot be unambiguously split: message `M` block `0`
-//! and a message named `M-0` produce the same string. `entity_id` joins
-//! on `\x1f`, which no upstream id contains.
 
 use datalib_id::{composite_key, entity_id_str, Scope};
 
@@ -63,14 +21,6 @@ pub const KIND_PROJECT_DOCUMENT: &str = "project_document";
 
 /// An entity's identity: the id we mint, and the upstream natural key
 /// it was minted from.
-///
-/// Returned as a pair rather than two functions because the two must
-/// not drift: `natural_key` is what the renderer stores in
-/// `grid_rows.upstream_id`, and `uuid` is derived from that exact
-/// string. Deriving from one spelling and storing another yields a
-/// backpointer that regenerates nothing — which is precisely the bug
-/// `//tests/fixtures:ingested_tng_test`'s round-trip check caught when
-/// the thinking-block key was built two different ways.
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub uuid: String,
@@ -86,13 +36,10 @@ fn identity(entity_kind: &'static str, natural_key: String) -> Identity {
     }
 }
 
-/// One conversation — its grid row, its `markdown_uuid`, and the
-/// `conversation_uuid` every child row carries.
 pub fn conversation(conversation_uuid: &str) -> Identity {
     identity(KIND_CONVERSATION, conversation_uuid.to_string())
 }
 
-/// One message's own item (its text blocks + attachments).
 pub fn message(message_uuid: &str) -> Identity {
     identity(KIND_MESSAGE, message_uuid.to_string())
 }
@@ -116,8 +63,6 @@ pub fn tool_use(message_uuid: &str, tool_use_id: &str) -> Identity {
     identity(KIND_TOOL_USE, composite_key(&[message_uuid, tool_use_id]))
 }
 
-/// A `tool_result` block, keyed on `(message_uuid, tool_use_id)` — the
-/// id of the `tool_use` it answers, which is how Anthropic links them.
 pub fn tool_result(message_uuid: &str, tool_use_id: &str) -> Identity {
     identity(
         KIND_TOOL_RESULT,
@@ -125,9 +70,6 @@ pub fn tool_result(message_uuid: &str, tool_use_id: &str) -> Identity {
     )
 }
 
-/// Fallback for a structural block with no usable upstream id — a
-/// `tool_use` missing its `id`, or a `tool_result` missing
-/// `tool_use_id`. Position within the message is all that is left.
 pub fn block_fallback(message_uuid: &str, block_index: usize) -> Identity {
     identity(
         KIND_BLOCK,
@@ -135,22 +77,18 @@ pub fn block_fallback(message_uuid: &str, block_index: usize) -> Identity {
     )
 }
 
-/// A project page.
 pub fn project(project_uuid: &str) -> Identity {
     identity(KIND_PROJECT, project_uuid.to_string())
 }
 
-/// The synthesized "description" section of a project page.
 pub fn project_description(project_uuid: &str) -> Identity {
     identity(KIND_PROJECT_DESCRIPTION, project_uuid.to_string())
 }
 
-/// The synthesized "custom instructions" section of a project page.
 pub fn project_instructions(project_uuid: &str) -> Identity {
     identity(KIND_PROJECT_INSTRUCTIONS, project_uuid.to_string())
 }
 
-/// One knowledge document attached to a project.
 pub fn project_document(doc_uuid: &str) -> Identity {
     identity(KIND_PROJECT_DOCUMENT, doc_uuid.to_string())
 }

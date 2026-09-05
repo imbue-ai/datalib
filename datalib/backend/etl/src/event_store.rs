@@ -1,22 +1,13 @@
 //! Per-entity append-only event store shared by provider downloaders
 //! that mirror many entities (notion, github, gitlab).
 //!
-//! Layout:
-//! ```text
-//! <out_dir>/<entity>/<stream>/events.jsonl
-//! ```
-//! where `stream` is either:
+//! Records are JSON objects with a `_recorded_at` stamp, the caller's key
+//! fields spread at the top level so the files are greppable without `jq`,
+//! and a nested `raw` carrying the full upstream payload. Two streams per
+//! entity: `created` (first sightings) and `updated` (first sightings plus
+//! every change, so tailing it yields the latest snapshot per key).
 //!
-//! - `created` — append-only first-sightings of each key.
-//! - `updated` — every first-sighting plus every subsequent change
-//!   (so tailing `updated` yields the latest snapshot per key).
-//!
-//! Records are JSON objects with a `_recorded_at` ISO-8601 stamp, the
-//! caller's denormalized key fields spread at the top level (so the
-//! files are `grep`-pable without `jq`), and a nested `raw` carrying
-//! the full upstream payload.
-//!
-//! Port of `src/event_store.py`.
+//! Read order is part of the contract — see [`load_latest_by_key`].
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -27,13 +18,10 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// Path to the events.jsonl for one (entity, stream) pair.
 pub fn events_path(out_dir: &Path, entity: &str, stream: &str) -> PathBuf {
     out_dir.join(entity).join(stream).join("events.jsonl")
 }
 
-/// Append a batch of records to `path`. Creates parent dirs as needed.
-/// No-op if `records` is empty.
 pub fn append_jsonl(path: &Path, records: &[Value]) -> Result<()> {
     if records.is_empty() {
         return Ok(());
@@ -55,15 +43,10 @@ pub fn append_jsonl(path: &Path, records: &[Value]) -> Result<()> {
     Ok(())
 }
 
-/// Current local-time ISO-8601 with explicit offset, matching Python's
-/// `datetime.now().astimezone().isoformat()` shape. Funnels through
-/// `datalib-time` so the local-offset policy lives in one place.
 pub fn now_iso() -> String {
     datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_micros()
 }
 
-/// Wrap an upstream payload with its denormalized key + a `_recorded_at`
-/// stamp. Key fields are spread at the top level alongside `raw`.
 pub fn make_record(key: Map<String, Value>, raw: Value) -> Value {
     let mut obj = Map::new();
     obj.insert("_recorded_at".into(), Value::String(now_iso()));
@@ -81,11 +64,6 @@ pub struct DiffCounts {
     pub updated: usize,
 }
 
-/// Append new records to `created/` and (new + changed) to `updated/`.
-///
-/// `key_of` extracts the dedup key from each fresh record (typically by
-/// reading a top-level field). `existing_by_key` is the snapshot returned
-/// from a prior `load_latest_by_key` call.
 pub fn diff_and_save<F>(
     out_dir: &Path,
     entity: &str,
@@ -123,46 +101,16 @@ where
 /// keyed by `key_of`. `updated/` entries shadow `created/` entries for
 /// the same key.
 ///
-/// # Order is part of the contract
+/// Returns a `Vec` in **first-seen order**, with an `updated/` record
+/// replacing its predecessor in place rather than moving it to the end. That
+/// is document order for an append-only stream, and a synthesizer replaying
+/// a listing endpoint has to reproduce it. A `HashMap` here silently cost
+/// the notion fixture its reproducibility; a `BTreeMap` would reshape the
+/// page. Callers wanting a lookup table should build one.
 ///
-/// Returns a `Vec` in **first-seen order** — the order records appear in
-/// `created/`, with an `updated/` record replacing its predecessor *in
-/// place* rather than moving it to the end. For an append-only event
-/// stream that is document order, which is what a synthesizer replaying
-/// a listing endpoint has to reproduce.
-///
-/// This used to return a `HashMap`, and the ordering was silently
-/// whatever Rust's per-process hash seed produced. It cost the notion
-/// fixture its reproducibility: the synthesizer packs these records into
-/// `results` arrays, so the replayed `/children` listing came back
-/// shuffled, the downloader's BFS assigned different `blocks.page_order`
-/// values every run, and the rendered markdown emitted the same blocks
-/// in a different order each time — visible in the preview pane and in
-/// what qmd indexes. Found 2026-08-20 by diffing two fixture builds.
-///
-/// A `Vec` rather than a `BTreeMap` because sorting by key is *not* the
-/// same as document order and would silently reshape the page: in
-/// `tests/fixtures/notion_web` the block ids diverge from file order at
-/// index 34. Callers that want a lookup table should build one; callers
-/// that want a canonical order should sort explicitly.
-///
-/// # An unkeyable record is an error, not a skip
-///
-/// Every `key_of` in this tree is built from `unwrap_or_default()` over
-/// a few field lookups, so a record whose fields don't match what the
-/// key function expects yields `""`. Tolerating that loses data twice:
-/// every unkeyable record collapses onto the same `""` entry, and
-/// callers then skip the empty key — so a whole entity stream reads as
-/// "no records", the synthesizer writes no fixtures, the downloader
-/// replays an empty listing, nothing renders, and every step reports
-/// success.
-///
-/// That is not hypothetical. `tests/fixtures/gitlab_api` spelled the
-/// project path `project_path` while every consumer had moved to
-/// `project_full_path`; gitlab contributed zero rows to the fixture
-/// pipeline for three months without one failing test. The error below
-/// names the file, the line, and the fields the record actually has,
-/// which is enough to spot a renamed field on sight.
+/// An unkeyable record is an error, not a skip: every `key_of` is built from
+/// `unwrap_or_default()`, so a record whose fields don't match yields `""`,
+/// and tolerating that reads a whole entity stream as "no records".
 pub fn load_latest_by_key<F>(
     out_dir: &Path,
     entity: &str,
@@ -296,21 +244,6 @@ mod tests {
 
     /// `load_latest_by_key` must hand records back in the order the
     /// stream recorded them.
-    ///
-    /// This is a regression test with a specific bug behind it. The
-    /// function returned a `HashMap`, so iteration order was whatever
-    /// Rust's per-process hash seed produced. notion's synthesizer packs
-    /// these records into `results` arrays, so its replayed `/children`
-    /// listing came back shuffled, the downloader's BFS wrote different
-    /// `blocks.page_order` values every run, and the rendered markdown
-    /// emitted the same blocks in a different order each time.
-    ///
-    /// Twenty keys, in an order that is neither sorted nor reverse
-    /// sorted: a `HashMap` reproducing this exact sequence by chance is
-    /// a 1-in-20! event. Note the bug is invisible *within* one process
-    /// — the seed is fixed per process, so a "render twice and compare"
-    /// test would have passed. Asserting the order explicitly is what
-    /// catches it.
     #[test]
     fn records_come_back_in_stream_order() {
         let dir = tempdir().unwrap();
@@ -340,10 +273,6 @@ mod tests {
     }
 
     /// An `updated/` record replaces its predecessor **in place**.
-    ///
-    /// Appending it instead would reorder the document every time any
-    /// one block was edited — a subtler version of the same bug, and one
-    /// that only shows up on the second sync.
     #[test]
     fn an_update_does_not_move_its_record_to_the_end() {
         let dir = tempdir().unwrap();

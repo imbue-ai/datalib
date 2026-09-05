@@ -1,59 +1,5 @@
 //! Ingest an unpacked Claude **bulk export** into this provider's raw
 //! store — the download wave of the `claude_export` source type.
-//!
-//! The export is a small tree of JSON files sitting wherever the user
-//! unzipped it:
-//!
-//! ```text
-//! <input_path>/
-//!   users.json            # array of accounts (optional)
-//!   conversations.json    # array of conversations, in export shape
-//!   projects/*.json       # one Claude Project per file, `docs` nested
-//! ```
-//!
-//! Every row lands in the same six tables the live-API downloader
-//! writes (`crate::download::db`), so the render step has exactly one
-//! input shape to be correct against. Before this existed, the renderer
-//! read the export tree in place and had a second parser for it; that
-//! branch is gone.
-//!
-//! ## What the columns mean here
-//!
-//! `conversations.org_uuid` / `org_name` stay **NULL**: an export
-//! carries no organization anywhere, and only the API walk (which
-//! learns the org from `/organizations`) can fill them. The renderer
-//! reads that NULL as "this payload is already export-shaped, don't run
-//! it through `normalize_to_export_shape`" — see
-//! [`crate::render::parse::parse_loaded`]. A conversation whose payload
-//! happens to carry its own `_source.org_uuid` (because the export was
-//! produced from our own API mirror) still gets its org onto the grid
-//! row: that field is read from the payload, not from the column.
-//!
-//! `projects.org_uuid` / `org_name` are the other way round — the
-//! render side reads a project's org from the **column** — so we lift
-//! `_source.org_uuid` / `_source.org_name` out of the project payload
-//! at ingest time when the file has them.
-//!
-//! ## Snapshot semantics
-//!
-//! A bulk export is a complete snapshot of the account, so what it does
-//! not contain has been deleted. After upserting everything the export
-//! holds, [`prune_to`] drops the rows for ids the export no longer
-//! mentions — which is the deletion detection reading the tree in place
-//! could never give us. Pruning is per-table and only runs when that
-//! table's source file was actually present, so pointing the source at
-//! a partially-unpacked export can't wipe the store.
-//!
-//! ## Why there is no blob CAS here
-//!
-//! A Claude bulk export ships JSON only. `chat_messages[*].files[]`
-//! entries name a `preview_url` back on claude.ai, and fetching that
-//! needs the credentials this source type deliberately does not have;
-//! `chat_messages[*].attachments[]` carry their text inline and have no
-//! bytes to fetch at all (see DOWNLOAD.md, "Attachments"). So there is
-//! nothing on disk to content-address and `claude_attachments` stays
-//! empty for an export-backed store. If Anthropic ever starts shipping
-//! the binaries inside the export, this is where the CAS walk goes.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -103,7 +49,6 @@ pub struct IngestSummary {
     pub pruned: usize,
 }
 
-/// Ingest the export at `opts.input_path` into the raw store.
 #[instrument(skip_all, fields(export = %opts.input_path.display()))]
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     let db_path = db_path_for(&opts.db_path);
@@ -137,15 +82,6 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     // handed us a `db` owns its lifetime (the processor shares one pool
     // with its `RawStoreSession`, which closes it in `finish`); a
     // caller that did not gets a pool nothing would ever close.
-    //
-    // That mattered: doltlite's HEAD, working set and active branch are
-    // per-connection, so two live connections to one file are two
-    // writers, and the second one's `dolt_commit` can fail with
-    // `commit conflict: another connection committed to this branch`.
-    // sqlx does not close a dropped pool's connections synchronously,
-    // so "it goes out of scope here" is not the same as "it is closed"
-    // — and the next `open` of the same file may race the one we left
-    // behind.
     if owned {
         db.pool().close().await;
     }
@@ -255,7 +191,6 @@ fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
     Ok(Some(out))
 }
 
-/// The `uuid` of every entry that has one, as a set.
 fn ids_of(items: &[Value], key: &str) -> HashSet<String> {
     items
         .iter()
@@ -264,7 +199,6 @@ fn ids_of(items: &[Value], key: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Every knowledge-document uuid across every project.
 fn project_doc_ids(projects: &[Value]) -> HashSet<String> {
     let mut out = HashSet::new();
     for p in projects {
@@ -277,8 +211,6 @@ fn project_doc_ids(projects: &[Value]) -> HashSet<String> {
     out
 }
 
-/// A project's nested knowledge documents. The bulk export nests them
-/// under `docs`; the live API serves them from a separate endpoint.
 fn docs_of(project: &Value) -> &[Value] {
     project
         .get("docs")
@@ -402,12 +334,6 @@ async fn upsert_projects(
 
 /// Delete every row of `table` (and its bookkeeping sidecar row) whose
 /// id is not in `keep`. Returns how many rows went.
-///
-/// Only correct because a bulk export is a complete snapshot: an id the
-/// export omits is an entity the user deleted upstream. The API walk
-/// deliberately does *not* do this — a listing can omit a conversation
-/// for reasons other than deletion (permissions, `since`) — which is
-/// why this lives here rather than in the shared store helpers.
 async fn prune_to(
     tx: &mut Transaction<'_, Sqlite>,
     table: &'static str,
@@ -454,7 +380,6 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
-    /// `(id → payload)` for one table.
     async fn dump(pool: &sqlx::SqlitePool, table: &str) -> HashMap<String, Value> {
         let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT id, json(payload) FROM {table}"

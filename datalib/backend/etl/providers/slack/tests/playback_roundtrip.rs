@@ -1,10 +1,4 @@
 //! Slack synth → playback → download round-trip.
-//!
-//! Uses the in-tree synthesizer to turn JSONL envelope fixtures into
-//! HTTP playback bodies, then runs download against the playback root.
-//! Asserts on the populated doltlite DB rather than on a JSONL
-//! disk tree — the doltlite store is the entire output of the
-//! download stage post-port.
 
 use std::fs;
 use std::path::Path;

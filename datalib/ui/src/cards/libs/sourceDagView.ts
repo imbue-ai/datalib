@@ -1,19 +1,4 @@
 // Builtin view: visualize the sync pipeline's step DAG.
-//
-// Structure comes from `GET /api/dag` — the same load → to_specs →
-// Graph::build chain the runner executes, so the picture can't drift
-// from what actually runs. Steps are laid out in dependency layers
-// (left → right) with edges drawn between boxes.
-//
-// Live state rides the existing sync-progress SSE stream: the worker's
-// task board is keyed by step id, so while a job runs each node is
-// tinted by its task state (flashing yellow running, green done /
-// skipped, red failed, muted blocked, dashed not-in-this-sync) — the DAG itself becomes the
-// progress display. States are cleared when the next job starts and
-// kept after a terminal event so the last run's outcome stays visible.
-//
-// Plain-DOM + SVG (no Vue, no chart lib): a handful of rects and
-// bezier edges.
 import type { CardRender } from "../types";
 import {
   fetchActiveJobs,

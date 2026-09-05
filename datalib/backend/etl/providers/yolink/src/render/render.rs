@@ -1,23 +1,4 @@
 //! Turn a whole YoLink raw store into one markdown page plus its plots.
-//!
-//! The document has three parts, in order:
-//!
-//! 1. **Plots** — one `<iframe>` per physical quantity, each frame a
-//!    standalone Plotly page under `plots/`. Every device is a series.
-//! 2. **Devices** — the non-timeseries half: what each device is, what
-//!    it has reported, and the per-metric extent/statistics. Each device
-//!    gets an `id="m-<uuid>" data-section-uuid="<uuid>"` wrapper, which
-//!    is what the UI's per-section feedback and copy-id affordances hang
-//!    off, and what the device's grid row addresses.
-//! 3. **Store** — provenance: the configured fetch scope, plus counts of
-//!    commits, readings and recorded fetch errors. Deliberately no
-//!    doltlite HEAD and no commit log; see `render_store_section` for
-//!    why those two stay out of the rendered page.
-//!
-//! Secrets never reach the page: `family_device_id` and the device UDID
-//! are a per-device read credential for the device's entire history (see
-//! `download/schema_raw.rs`), so the device table names the device and
-//! its kind and stops there.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -56,7 +37,6 @@ pub fn document_uuid(source_name: &str) -> String {
     .to_string()
 }
 
-/// A device's section/grid-row uuid within the page.
 pub fn device_uuid(source_name: &str, device: &str) -> String {
     Uuid::new_v5(
         &YOLINK_UUID_NS,
@@ -65,16 +45,6 @@ pub fn device_uuid(source_name: &str, device: &str) -> String {
     .to_string()
 }
 
-/// What goes into the render cursor's `params` slot.
-///
-/// YoLink has no render knobs, so the natural value is
-/// `render_cursor::no_params()`. We record `RENDER_VERSION` instead,
-/// because the cursor here is the *entire* skip decision: with a bare
-/// `{}`, bumping `RENDER_VERSION` would change nothing for any mirror
-/// whose store hadn't moved, and the new layout would reach it only
-/// whenever the next reading happened to land. `read_for_params` treats
-/// any difference as "re-render everything", which for a one-page
-/// provider is precisely right.
 pub fn cursor_params() -> serde_json::Value {
     serde_json::json!({ "render_version": RENDER_VERSION })
 }
@@ -88,7 +58,6 @@ pub struct RenderSummary {
     pub plots: usize,
 }
 
-/// Render the page, its plots, and its rows; advance the cursor.
 pub fn render_all(
     parsed: &ParsedYolink,
     root: &Path,
@@ -177,9 +146,6 @@ struct PlotFacts {
     span: Option<(i64, i64)>,
 }
 
-/// Write one quantity's plot. `Ok(None)` when no series in the store
-/// belongs to this quantity — a store with only THSensors has no volume
-/// plot, and an empty frame is worse than no frame.
 fn render_plot(
     parsed: &ParsedYolink,
     quantity: &Quantity,
@@ -249,29 +215,6 @@ fn metric_spec(metric: &str) -> Result<&'static units::MetricSpec> {
     })
 }
 
-/// The document's `source_fingerprint` — a hash of the readings this
-/// document was built from, plus the render version.
-///
-/// Deliberately **not** the store's HEAD, though HEAD is right there and
-/// we only get here because it moved. Two reasons:
-///
-/// 1. The cross-provider contract (the `markdowns` row the store keeps)
-///    is that this hashes *the upstream payload that produced the
-///    document*. A commit hash is a property of the store, not of the
-///    content: two stores holding identical readings would disagree, and
-///    a commit that changed nothing this page renders would look like a
-///    change.
-/// 2. It is the difference between a reproducible `markdowns` row and
-///    one that moves every time the store is rebuilt from scratch. The
-///    doltlite *file* can't be byte-stable — doltlite's own bootstrap
-///    commit and `doltlite_raw::open`'s "schema: apply DDL" both take
-///    the wall clock, and hashes chain — but the table contents can, and
-///    this was the only field standing in the way.
-///
-/// Hashing every sample rather than just the per-series shape is
-/// deliberate: yolink re-fetches overlapping windows, and a corrected
-/// historical value changes no count and no timestamp. A shape-only
-/// hash would let the Load step skip a document that genuinely changed.
 fn compute_fingerprint(parsed: &ParsedYolink) -> String {
     let mut h = Sha256::new();
     h.update(RENDER_VERSION.to_be_bytes());
@@ -373,13 +316,6 @@ fn render_plot_sections(out: &mut String, plots: &[(&Quantity, PlotFacts)]) {
         // under a static file server; the UI rewrites it to
         // `/api/asset/<markdown_uuid>/plots/<file>` when it renders the
         // body (see ChatBody.ce.vue).
-        //
-        // `sandbox` without `allow-same-origin` gives the frame an opaque
-        // origin: in the app the plot is served from the same origin as
-        // the UI, and there is no reason a chart should be able to reach
-        // `parent.document`. `allow-scripts` is what Plotly needs;
-        // `allow-downloads` keeps its "save as PNG" toolbar button
-        // working.
         let _ = writeln!(
             out,
             "<iframe src=\"plots/{}\" title=\"{}\" width=\"100%\" height=\"520\" \
@@ -503,17 +439,6 @@ fn render_metric_table(out: &mut String, series: &[&Series]) {
 /// The store's own provenance — the doltlite HEAD hash and the per-commit
 /// hashes and wall-clock dates — is deliberately NOT rendered here, only
 /// the counts.
-///
-/// Two reasons, and the second is the one that bites. It is storage-layer
-/// bookkeeping rather than anything the user's sensors recorded, so
-/// putting it in a vector index buys noise; and it changes on every
-/// single run, because doltlite stamps its bootstrap commits with the
-/// wall clock and the hashes follow from those timestamps. That made
-/// this one file the reason a whole rendered markdown tree was never
-/// byte-identical to its previous self, which in turn re-ran the ~90s
-/// CPU-only embed on CI for changes that altered nothing it reads (see
-/// `tests/fixtures/tar_qmd.py`). `dolt_log` still has all of it — read
-/// it with the doltlite CLI, per docs/dev/doltlite.md.
 fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
@@ -628,15 +553,10 @@ fn page_title(source_name: &str) -> String {
     format!("YoLink sensors — {source_name}")
 }
 
-/// Unix ms → the repo's ISO-8601-with-offset convention. The stored
-/// value came from a unix-epoch number, so per the convention in
-/// AGENTS.md it renders as UTC with an explicit `+00:00`.
 fn iso(ms: i64) -> Option<String> {
     datalib_time::IsoOffsetTimestamp::from_unix_millis(ms).map(|t| t.to_rfc3339())
 }
 
-/// `YYYY-MM-DD HH:MM` — the table/subtitle form. Same instant as
-/// [`iso`], just short enough to read in a cell.
 fn short(ms: i64) -> Option<String> {
     datalib_time::IsoOffsetTimestamp::from_unix_millis(ms)
         .map(|t| t.inner().format("%Y-%m-%d %H:%M").to_string())
@@ -688,9 +608,6 @@ fn thousands(n: i64) -> String {
     }
 }
 
-/// Re-indent a stored JSON blob for display; pass it through unchanged
-/// if it isn't JSON after all (the column is TEXT, and a display helper
-/// is no place to start failing renders).
 fn pretty_json(raw: &str) -> String {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| raw.to_string()),
@@ -706,9 +623,6 @@ fn yaml_safe(s: &str) -> String {
     }
 }
 
-/// Where the page and its plots land, relative to a data root. Exposed
-/// for tests and for anything that needs to find the page without
-/// re-deriving the layout.
 pub fn output_paths(root: &Path, source_name: &str) -> (PathBuf, PathBuf) {
     let dir = datalib_etl::layout::rendered_md_root(root, source_name);
     (dir.join("index.md"), dir.join("plots"))

@@ -1,42 +1,4 @@
 //! One writer per data root, enforced.
-//!
-//! `system/` is this server's own state: the feedback and job stores,
-//! the API token, the job logs, and — through the sync worker —
-//! `system/dag_state.json` and every raw store the runner it spawns
-//! writes into. All of that assumes a single owner.
-//!
-//! Two `datalib-http` processes on one data root break that quietly
-//! rather than loudly:
-//!
-//!   * **doltlite's working set is per file and shared across
-//!     processes** (see AGENTS.md). Two writers on
-//!     `system/jobs.doltlite_db` commit each other's in-flight rows —
-//!     the same failure that moved feedback into its own file.
-//!   * **The API token is published, not negotiated.** The second
-//!     server overwrites `system/api-token` with its own, so anything
-//!     reading the file — an agent following `/agent/config.md`, a
-//!     script — now authenticates against a server that isn't the one
-//!     the user is looking at.
-//!   * **Two sync workers** can run `datalib-dag` concurrently on one
-//!     root, and the scheduler's persisted state is a single JSON file.
-//!
-//! None of those announces itself. The lock turns all three into one
-//! refusal at startup, naming the process that already holds the root.
-//!
-//! `flock(2)` rather than a pid file, because the kernel releases it
-//! when the holder dies — a crashed server leaves no stale lock to
-//! reason about, which is the failure mode pid files are famous for.
-//! The file's *contents* are advisory: they exist so the refusal can
-//! say where the other server is listening, and are never trusted to
-//! decide whether the lock is held.
-//!
-//! The mechanism itself lives in [`datalib_dag::lock`], because the
-//! runner needs the same thing for its own invariant (one runner per
-//! root) and this crate already depends on that one. What stays here is
-//! the part that is about *servers*: which file, and what the refusal
-//! says. The two locks are deliberately different files — this process
-//! spawns the runner, so sharing one would deadlock the server against
-//! its own child.
 
 use std::path::{Path, PathBuf};
 
@@ -93,11 +55,6 @@ impl std::error::Error for LockError {}
 pub struct DataRootLock(FileLock);
 
 impl DataRootLock {
-    /// Claim `root` exclusively, or fail saying who holds it.
-    ///
-    /// Call this before anything writes under `system/` — in
-    /// particular before the API token is minted, so a refused server
-    /// never clobbers the running one's token on its way out.
     pub fn acquire(root: &Path) -> Result<Self, LockError> {
         FileLock::acquire(&datalib_core::layout::lock_file(root))
             .map(Self)

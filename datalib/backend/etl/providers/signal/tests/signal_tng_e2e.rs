@@ -3,11 +3,6 @@
 //! [`datalib_etl_signal::download::fetch`] over it, then drive the
 //! render path, and assert on both the doltlite row counts and the
 //! rendered markdown.
-//!
-//! Uses the published fixture AEP (64 zeros) — the same one the
-//! checked-in `tests/fixtures/signal_tng/tng.json` spec carries — so
-//! the crypto path runs exactly as it would against a real backup;
-//! we just publish the key.
 
 use std::path::Path;
 
@@ -66,9 +61,6 @@ fn write_test_attachment(files_root: &Path) -> Result<(String, Vec<u8>)> {
     Ok((media_name, plaintext_hash))
 }
 
-/// Build a `MessageAttachment` (the `repeated MessageAttachment
-/// attachments` slot on `StandardMessage`) whose `LocatorInfo`
-/// points at the encrypted bytes we wrote into `files/`.
 fn png_attachment(plaintext_hash: &[u8]) -> backup::MessageAttachment {
     use backup::file_pointer::locator_info::IntegrityCheck;
     backup::MessageAttachment {
@@ -280,13 +272,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
 
     // ── Second pass: prove the docs_skipped path works ─────────────
-    //
-    // Read the render cursor that the first pass wrote, hand its
-    // commit hash to `parse`, and assert: zero docs in the bucket set
-    // (no chats changed since the cursor), one chat counted as
-    // skipped, no on_doc_complete calls. The load-bearing assertion
-    // for the incremental story: dolt_diff says "nothing changed" →
-    // we render nothing.
     let cursor_path = render_cursor::cursor_path(&data_root, "signal-tng");
     let cursor =
         render_cursor::read(&cursor_path)?.expect("first render should have written the cursor");

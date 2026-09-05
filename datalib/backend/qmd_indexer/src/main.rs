@@ -6,11 +6,6 @@
 //! CLI entry point. The actual work lives in the library
 //! (`datalib_qmd_indexer::run_index`) so other crates (notably
 //! `datalib-etl`'s loader) can drive it in-process.
-//!
-//! Usage:
-//!   datalib-qmd-indexer --root <DIR> [--no-embed] [--qmd-version <V>]
-//!                           [--collection-name <N>] [--mask <GLOB>]
-//!                           [--models-dir <DIR>] [--no-pull]
 
 use std::ffi::OsString;
 use std::path::PathBuf;

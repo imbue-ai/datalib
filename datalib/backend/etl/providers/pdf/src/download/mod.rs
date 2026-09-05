@@ -1,18 +1,5 @@
 //! The `pdf` download side: walk a tree, identify the PDFs in it, and
 //! record what each one *is* — without converting anything.
-//!
-//! Splitting identification from conversion is what lets the first pass
-//! ship without an OCR engine. Classification is cheap and total: every
-//! PDF gets a row, including the scanned ones we cannot read yet, which
-//! land with `needs_ocr = 1`. Adding an engine later is then a pure
-//! addition — the work list already exists as a SQL query
-//! (`SELECT … WHERE needs_ocr = 1`) instead of needing a re-scan.
-//!
-//! `needs_ocr = 1` means *some* page is unreadable, not that the
-//! document is. A report with three scanned inserts among 200 pages is
-//! on the OCR work list and is also rendered today, for the 197 pages
-//! that convert. What renders is
-//! [`schema_raw::document_is_renderable`].
 
 pub mod content_hash;
 pub mod db;
@@ -255,13 +242,6 @@ fn identify(path: &Path, size: i64, now: &str) -> Result<PdfDocumentRow> {
     // its own column: a scanned page yields nothing and can simply be
     // noted, while a page whose text decodes to garbage would be indexed
     // as if it meant something.
-    //
-    // Derived from the per-page reasons rather than from
-    // `det.has_encoding_issues`, which is **always false here**:
-    // pdf-inspector only computes that field after extracting markdown,
-    // and this call is detect-only (see `process_document`'s DetectOnly
-    // early return). The detector does flag undecodable fonts per page,
-    // which is the signal we can get without paying for a conversion.
     let has_encoding_issues = det.ocr_reasons_by_page.iter().any(|p| {
         p.reasons
             .iter()

@@ -1,25 +1,4 @@
 //! Doltlite-backed raw store for the Claude provider.
-//!
-//! Six tables — `users`, `orgs`, `projects`, `project_docs`,
-//! `conversations`, `claude_attachments` — shared bookkeeping
-//! (`<table>_bookkeeping`, `sync_runs`, …) lives in
-//! [`datalib_etl::doltlite_raw`].
-//!
-//! ## One reader per table
-//!
-//! Every table's read lives once, as a `*_from(&SqlitePool)` free
-//! function; the [`RawDb`] methods are one-line delegations. Render
-//! opens its own read-only pool (`render::parse`) and calls the same
-//! free functions, so the download-side and render-side reads of a
-//! table cannot drift — which they had, for `conversations` and
-//! `first_user_uuid`, until this was made the rule.
-//!
-//! Per the dolt_diff + per-provider CAS edge migration: attachment
-//! bytes still ride in the shared `cas_objects`, but the (file_uuid →
-//! blake3) mapping lives on `claude_attachments` rather than the
-//! shared `blob_refs`. Conversation payloads are stored as the **raw**
-//! `/api/...` response, post-normalization happening at read time in
-//! `render`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -90,13 +69,6 @@ impl RawDb {
         Ok(row.is_some())
     }
 
-    /// Age of the most recent successful sweep for `key`.
-    ///
-    /// Same shape as slack's manifest-sweep marker (see
-    /// `providers/slack/src/download/db.rs`): a row in the shared
-    /// `sync_scope_state` table under a provider-namespaced `scope`, so no
-    /// extra schema is needed. `None` when the sweep has never completed —
-    /// which is what keeps a cold store doing the real call.
     pub async fn sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
         let scope = format!("claude:sweep:{key}");
         let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
@@ -115,9 +87,6 @@ impl RawDb {
         Ok(Some(chrono::Utc::now() - dt))
     }
 
-    /// Stamp `key`'s sweep as completed at `now()`. Call only after the
-    /// sweep's rows have been written, so an interrupted sweep doesn't
-    /// poison the TTL check.
     pub async fn record_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("claude:sweep:{key}");
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
@@ -143,8 +112,6 @@ impl RawDb {
         dr::load_payloads(&self.pool, "users").await
     }
 
-    /// First user's uuid, used to fill the `account.uuid` field on
-    /// normalized conversations.
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {
         first_user_uuid_from(&self.pool).await
     }
@@ -174,7 +141,6 @@ impl RawDb {
         self.existing_updated_at_in("projects", ids).await
     }
 
-    /// Shared body of the two `existing_*_updated_at` skip-checks.
     async fn existing_updated_at_in(
         &self,
         table: &str,
@@ -210,13 +176,10 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Every stored project, with the org columns the render step needs
-    /// to stamp on the project's grid rows.
     pub async fn load_projects(&self) -> Result<Vec<LoadedProject>> {
         load_projects_from(&self.pool).await
     }
 
-    /// Every stored knowledge document, keyed by its owning project.
     pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
         load_project_docs_from(&self.pool).await
     }
@@ -270,7 +233,6 @@ pub struct LoadedProjectDoc {
     pub payload: Value,
 }
 
-/// Read `conversations` off any pool.
 pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
@@ -296,7 +258,6 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
     Ok(out)
 }
 
-/// First user's uuid off any pool.
 pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
     let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
         .fetch_optional(pool)
@@ -305,9 +266,6 @@ pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
     Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
 }
 
-/// Read `projects` off any pool — the writable one [`RawDb`] holds and
-/// the read-only one `render::parse` opens both go through here, so the
-/// two can't drift.
 pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
     let rows = sqlx::query(
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects \
@@ -331,8 +289,6 @@ pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>>
     Ok(out)
 }
 
-/// Read `project_docs` off any pool. Rows whose `project_uuid` is null
-/// are dropped: a doc with no owning project has nowhere to render.
 pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProjectDoc>> {
     let rows = sqlx::query(
         "SELECT id, project_uuid, json(payload) AS payload FROM project_docs \
@@ -358,9 +314,6 @@ pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProje
     Ok(out)
 }
 
-/// Decode the `json(payload)` column of a row, or `None` when it is
-/// missing or unparseable. Skipping a corrupt row beats failing a whole
-/// render over one.
 fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Option<Value> {
     let s: String = r.try_get("payload").ok()?;
     serde_json::from_str(&s).ok()
@@ -370,13 +323,6 @@ fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Option<Value> {
 pub struct LoadedConversation {
     pub id: String,
     /// Owning Anthropic organization, or `None`.
-    ///
-    /// **`None` is load-bearing**, not just missing data: only the live
-    /// API walk learns an org (from `/organizations`), so a NULL column
-    /// means this row was ingested from a bulk export by
-    /// [`crate::download::export`] and its payload is therefore
-    /// *already* in export shape. `render::parse::parse_loaded` keys
-    /// its `normalize_to_export_shape` call off exactly that.
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
     pub payload: Value,

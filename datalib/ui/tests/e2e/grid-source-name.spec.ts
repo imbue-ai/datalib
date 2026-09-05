@@ -9,11 +9,6 @@
 // client-side. That join is the thing worth an end-to-end test — it
 // crosses the backend, the config file and the grid, and it is the
 // reason renaming a source never needs a re-index.
-//
-// The fixture data root's config.toml declares no sources, so the
-// column shows raw ids until this spec adds one. It restores the file
-// in afterEach: the root is shared by every spec in the run
-// (workers: 1, fullyParallel: false).
 import { test, expect, type Page } from "@playwright/test";
 import { searchAndSettle } from "./grid-helpers";
 
@@ -111,24 +106,6 @@ inputs = ["slack/raw"]
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
-  //
-  // The name is quoted because it contains a space. Unquoted, the
-  // parser takes `source_name:Work` and leaves `Slack` as a bare term
-  // (`tokenize` splits on unquoted whitespace, `split_field` only
-  // claims up to the first unquoted `:`) — and a bare term is free
-  // text, which routes through qmd. This spec sorts long before
-  // `search-qmd-routing`, so that stray word made it the session's
-  // *first* qmd call and it silently paid the model load the `warmup`
-  // project now owns. It read as a flake — fine on a warm idle machine,
-  // dead under `--runs_per_test=N` where every sandbox pays at once —
-  // and it weakened the assertion too, since zero rows could have come
-  // from the free-text clause rather than from `source_name:`. Quoted,
-  // this is one structured filter and no qmd at all.
-  //
-  // A flat `toHaveCount(0)` is safe here only because `searchAndSettle`
-  // has already established that the grid is painting *this* query —
-  // otherwise it would race the repaint and pass or fail on how fast
-  // the search came back.
   await searchAndSettle(page, 'source_name:"Work Slack" type:all');
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

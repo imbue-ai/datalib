@@ -6,16 +6,6 @@ use std::str::FromStr;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-/// Open (or create) one doltlite file with the settings every store in
-/// this codebase uses.
-///
-/// Pool size 1: doltlite's per-connection HEAD pointer means a pool
-/// wider than one connection produces silent `dolt_log` dropouts and
-/// `commit conflict` errors on interleaved writes. See
-/// `datalib_etl::doltlite_raw` module docs for the full story
-/// (dolt-team-confirmed advice). Splitting one database into three does
-/// not relax it: the working set is shared, so two connections on one
-/// file are no safer than they were.
 pub async fn open_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Error> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);

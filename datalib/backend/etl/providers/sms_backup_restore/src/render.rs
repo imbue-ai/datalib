@@ -1,13 +1,5 @@
 //! Render the SMS/MMS texts and calls into markdown via the shared chat
 //! renderer.
-//!
-//! One [`NormalizedChat`] per phone number, periodized by month. Texts
-//! (`<sms>`) render as messages; MMS render as messages carrying their
-//! image/audio attachments; calls fold into the same conversation as
-//! inline system notes — mirroring how Google Voice merges calls and
-//! texts for a contact. Each row maps into a [`NormalizedChatItem`] and
-//! the lot is handed to
-//! [`datalib_etl_chat_common::render::render_all`].
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -65,8 +57,6 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render the texts + calls under `raw_dir`. No-op when the raw store is
-/// absent or empty.
 pub fn render(
     raw_dir: &Path,
     out_root: &Path,
@@ -106,8 +96,6 @@ pub fn render(
     Ok(())
 }
 
-/// One [`BlobBundle`] per conversation (`chat.id`), holding every
-/// attachment its MMS reference. Keyed to match [`build_chats`]' `chat.id`.
 async fn load_blobs(db: &RawDb, messages: &[Value]) -> Result<HashMap<String, BlobBundle>> {
     let mut refs_by_chat: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for m in messages {
@@ -132,8 +120,6 @@ async fn load_blobs(db: &RawDb, messages: &[Value]) -> Result<HashMap<String, Bl
     Ok(out)
 }
 
-/// The `NormalizedChat.id` (and `blobs_by_chat` key) for a row: its
-/// conversation_key, namespaced.
 fn chat_id(v: &Value) -> String {
     let key = v
         .get("conversation_key")
@@ -142,7 +128,6 @@ fn chat_id(v: &Value) -> String {
     format!("sms:{key}")
 }
 
-/// Attachment ref names referenced by one message row.
 fn attachment_refs(v: &Value) -> Vec<String> {
     v.get("attachments")
         .and_then(Value::as_array)
@@ -154,8 +139,6 @@ fn attachment_refs(v: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// One [`NormalizedChat`] per conversation, month-bucketed, merging
-/// texts and calls keyed on the same phone number.
 fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
     let mut by_chat: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for v in messages.iter().chain(calls.iter()) {
@@ -218,7 +201,6 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
     chats
 }
 
-/// Map one row (sms/mms message or call) into a normalized item.
 fn item(v: &Value) -> NormalizedChatItem {
     let kind = v.get("kind").and_then(Value::as_str).unwrap_or("sms");
     let message_uuid = v
@@ -322,7 +304,6 @@ fn item(v: &Value) -> NormalizedChatItem {
     }
 }
 
-/// A human-readable system note for a call.
 fn call_note(call_type: &str, duration_s: i64, display: &str) -> String {
     let label = match call_type {
         "incoming" => "Incoming call",
@@ -340,7 +321,6 @@ fn call_note(call_type: &str, duration_s: i64, display: &str) -> String {
     }
 }
 
-/// `m:ss` (or `h:mm:ss`) for a call duration in seconds.
 fn fmt_duration(s: i64) -> String {
     let (h, m, sec) = (s / 3600, (s % 3600) / 60, s % 60);
     if h > 0 {
@@ -350,15 +330,6 @@ fn fmt_duration(s: i64) -> String {
     }
 }
 
-/// `YYYY-MM` (UTC) bucket key for a unix-millis timestamp.
-///
-/// An undated item still has to be filed somewhere or it vanishes from
-/// the rendered tree, so it keeps filing under the epoch bucket —
-/// exactly where it has always gone. That is a filing decision, not a
-/// claim about when the message happened; its `when_ts` is null. See
-/// [`datalib_etl::periodize::Period::key_for_undated`] for the full
-/// reasoning (chiefly: `period_key` feeds `markdown_uuid`, so a new key
-/// would retire the page's identity).
 fn month_of(ms: Option<i64>) -> String {
     use chrono::TimeZone;
     chrono::Utc
@@ -368,7 +339,6 @@ fn month_of(ms: Option<i64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Basename of a `{message_id}/{partname}` ref.
 fn basename(ref_name: &str) -> &str {
     ref_name
         .rsplit_once('/')
@@ -376,8 +346,6 @@ fn basename(ref_name: &str) -> &str {
         .unwrap_or(ref_name)
 }
 
-/// MIME guess from an attachment filename's extension, so chat-common
-/// can pick `<img>` / `<audio>` / `<video>` / link rendering.
 fn mime_for(name: &str) -> Option<String> {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
     let ct = match ext.as_str() {

@@ -1,17 +1,4 @@
 //! Bertalign-style DP over very small sentence counts.
-//!
-//! Given pre-normalized sentence embeddings on both sides (shape
-//! `[N, D]` each) plus character counts (for the length penalty),
-//! returns a Pareto-optimal sequence of `(grc_indices, eng_indices)`
-//! groups covering all sentences in order. Allowed transitions:
-//!
-//!   1:1, 1:2, 2:1, 1:3, 3:1
-//!
-//! This is enough for Smith's translation style (1 grc sentence
-//! sometimes maps to 2-3 eng; the reverse is rare but supported).
-//!
-//! Cost per pair = `(1 - cos) + 0.1 * |ln((sum_grc_chars+1) /
-//! (sum_eng_chars+1))|`. Matches the Python reference.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Group {

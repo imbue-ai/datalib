@@ -7,33 +7,6 @@
 //! `latchkey-curl-impersonate` — minimal curl-CLI-compatible front-end backed
 //! by `wreq`'s Chrome TLS impersonation. Mirror of
 //! `src/download/latchkey_curl_impersonate.py`.
-//!
-//! Latchkey's `LATCHKEY_CURL` env var lets us substitute our own curl.
-//! Point it at this binary and Cloudflare-protected hosts (claude.ai,
-//! chatgpt.com, ...) see a Chrome JA3/JA4 instead of plain curl.
-//!
-//! Supports just the flags latchkey + our downloaders actually emit:
-//!
-//! ```text
-//! -X / --request          method
-//! -H / --header           "Name: value" (repeatable)
-//! -d / --data / --data-raw / --data-binary
-//! -o / --output           write body here ("-" = stdout)
-//! -D / --dump-header      write response headers here ("-" = stdout)
-//! -w / --write-out        only %{http_code} is interpreted
-//! -s / --silent           accepted, no-op
-//! -S / --show-error       accepted, no-op
-//! -L / --location         enable redirect following
-//! -f / --fail             exit 22 on HTTP >= 400 (no body to -o)
-//! --compressed            accepted, no-op
-//! -v / --verbose          accepted, no-op
-//! ```
-//!
-//! Combined short flags (`-sSL`, `-sSLo`) are exploded; a value-taking
-//! short must be last in the bundle.
-//!
-//! Two request headers are dropped rather than forwarded, whatever the
-//! caller passed — see [`is_suppressed_header`].
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -63,39 +36,14 @@ fn die(msg: impl AsRef<str>) -> ! {
 }
 
 /// Headers a caller may not set on an impersonated request.
-///
-/// * `User-Agent` — the entire point of this binary is to look like
-///   Chrome, and the emulation profile supplies the matching UA. A
-///   caller-supplied one silently wins over it, which is worse than not
-///   impersonating at all: a Chrome TLS fingerprint announcing itself as
-///   `curl/8.7.1` is a louder signal than either alone. The latchkey
-///   gateway forwards its client's `User-Agent` into every curl
-///   invocation it builds, so this is the normal case, not a corner one.
-/// * `X-Imbue-Impersonate` — the dispatch curl's routing marker
-///   (`src/bin/latchkey_curl_dispatch.rs`). That binary routes on it and
-///   forwards it to us untouched, so this is the one place it is removed:
-///   whether we were reached through the dispatch curl or used as
-///   `LATCHKEY_CURL` directly, the private marker never reaches the wire.
 const SUPPRESSED_HEADERS: &[&str] = &["User-Agent", "X-Imbue-Impersonate"];
 
 /// Env var overriding the Chrome emulation profile.
 const PROFILE_ENV: &str = "DATALIB_IMPERSONATE_PROFILE";
 
 /// Profile used when [`PROFILE_ENV`] is unset.
-///
-/// Bumping this changes the TLS fingerprint every impersonated provider
-/// sees, so it stays a deliberate edit rather than tracking whatever the
-/// pinned `wreq-util` happens to ship. The env var exists so the value
-/// can be moved without a rebuild — to chase a Chrome release, or to back
-/// out fast if a provider starts rejecting the current one.
 const DEFAULT_PROFILE: &str = "chrome_131";
 
-/// The profiles we accept, spelled exactly as `wreq-util` names them.
-///
-/// The pinned `wreq-util` exposes `chrome_100`..=`chrome_147`; only the
-/// recent range is listed, because an older fingerprint is strictly worse
-/// at the one job this binary has. Adding a newer Chrome means bumping
-/// `wreq-util`, which is a code change anyway.
 fn emulation_from_name(name: &str) -> Option<Emulation> {
     Some(match name {
         "chrome_131" => Emulation::Chrome131,

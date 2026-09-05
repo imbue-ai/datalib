@@ -1,8 +1,5 @@
 //! Read the `wa_*` tables out of the raw doltlite store and assemble
 //! `Vec<NormalizedChat>` for chat-common's renderer.
-//!
-//! Pulls all rows up-front (the raw stores in scope here are tens of
-//! MB at most) so the renderer can walk in memory without re-querying.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -48,14 +45,6 @@ pub struct ParsedWhatsApp {
     pub blobs_by_chat: HashMap<String, BlobBundle>,
 }
 
-/// Open the raw store and build the normalized chat tree.
-///
-/// `raw_dir` is the source's `input_path` (sync sets it to
-/// `<data_root>/whatsapp/raw/`); the doltlite file is found via
-/// `doltlite_raw::db_path_for`. `period` controls how items are
-/// bucketed into rendered .md files.
-/// `source_name` is the YAML source name; goes into every UUID seed
-/// so two YAML sources backed by different phones don't collide.
 pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
@@ -470,9 +459,6 @@ struct ChatHeader {
     _subject_kept_for_search: Option<String>,
 }
 
-/// Pull a short human label out of a JID. "17015550101@s.whatsapp.net"
-/// → "+17015550101"; "bridge-crew@g.us" → "bridge-crew@g.us" (kept
-/// verbatim so the group's stable id is visible to the reader).
 fn label_from_jid(jid: &str) -> String {
     if let Some((user, server)) = jid.split_once('@') {
         if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us"))

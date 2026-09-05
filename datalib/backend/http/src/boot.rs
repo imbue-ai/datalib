@@ -1,16 +1,6 @@
 //! Backend assembly: everything derived from a data root — the stores
 //! this server owns, where the config lives, the sync worker, the disk
 //! usage sampler — in one place, so every packaging boots identically.
-//!
-//! The grid and qmd indexes are not here. They belong to the
-//! `unified_index` applet, which the gateway spawns from `config.toml`
-//! like any other; this process never opens them.
-//! The `datalib-http` binary calls this directly; the Tauri shell
-//! runs that same binary as a child process, so this is the single
-//! boot path for both front doors. (History: the Tauri shell used to
-//! link the backend in-process and duplicate this setup, kept the
-//! pre-`system/` DB path when the layout moved, and silently served an
-//! empty grid from a fresh, dataless DB.)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,11 +19,6 @@ use crate::{auth::ApiToken, usage, worker, AppState};
 /// UI-triggered syncs fail fast with a clear message while reads and
 /// search still work. Presentation concerns (browser opening, the
 /// `--url-file` handshake) live in the binary's main, not here.
-///
-/// `api_token` is minted by the caller rather than here because the
-/// launch URL — announced through `--url-file` before this (slow)
-/// assembly runs — has to carry it. We publish it to the data root
-/// once the root exists, which is the first thing below.
 pub async fn build_state(
     root: PathBuf,
     dag_bin: Option<PathBuf>,
@@ -154,13 +139,6 @@ mod tests {
     }
 
     /// The server does not touch the search indexes.
-    ///
-    /// This is the whole point of the `unified_index` applet: booting
-    /// the server must not open — or create — the grid index, because
-    /// the applet owns it and the pipeline writes it. A regression here
-    /// would be invisible in behaviour (the file would just exist
-    /// again) and would quietly restore the two-writer arrangement the
-    /// store split removed.
     #[tokio::test]
     async fn build_state_never_touches_the_index() {
         use datalib_core::layout;

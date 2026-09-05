@@ -1,24 +1,5 @@
 //! `whatsapp-make-fixture <spec.json> <out_dir>` — produces an encrypted
 //! WhatsApp-Android backup directory from a TNG-themed JSON spec.
-//!
-//! Output layout matches what `whatsapp::download::ingest` expects:
-//!
-//! ```text
-//! <out_dir>/<backup_dir_name>/
-//!   Databases/
-//!     msgstore.db.crypt15
-//!   Media/
-//!     <relative_path>...
-//! ```
-//!
-//! `root_key_hex` defaults to all zeros (the fixture key, deliberately
-//! weak so it's obvious in code review). `iv_hex` defaults to all
-//! zeros too — that plus the deterministic SQLite generation makes
-//! the produced `msgstore.db.crypt15` byte-stable across runs, which
-//! the genrule caching depends on.
-//!
-//! Spec shape: see
-//! `datalib/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

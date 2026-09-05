@@ -1,24 +1,4 @@
 //! Resolve human-facing mailbox **label paths** to JMAP mailbox ids.
-//!
-//! Mailboxes (Fastmail "folders"/labels, Gmail labels) are a tree: each
-//! has a display `name` and an optional `parentId`. A mailbox's full
-//! *path* is the chain of `name`s from the root joined with `/`
-//! (`Work`, `Work/Projects`, `Work/Projects/Q3`). Fastmail forbids `/`
-//! inside a single label name, so a `/` in a configured path is
-//! unambiguously a parent/child separator.
-//!
-//! This is the single matcher shared by the download-time and
-//! render-time label filters, and it is source-agnostic: a JMAP account
-//! exposes the tree via `Mailbox/get` (`parentId`), while a Google
-//! Takeout `.mbox` stores each Gmail label as a flat mailbox whose
-//! `name` is already the full `Parent/Child` string with no parent — so
-//! the same walk yields the same path for both, and the same configured
-//! labels mean the same thing regardless of which backend produced the
-//! raw store.
-//!
-//! Matching is **exact** on the full path: a configured `Work` matches
-//! only the mailbox at `Work`, never `Work/Projects`. List nested
-//! mailboxes explicitly to include them.
 
 use std::collections::{HashMap, HashSet};
 
@@ -36,9 +16,6 @@ pub struct MailboxNode {
 }
 
 impl MailboxNode {
-    /// Pull `(id, name, parentId)` out of a stored JMAP mailbox payload
-    /// (the shape returned by `RawDb::load_mailboxes` / held in
-    /// `ParsedEmail::mailboxes`). Returns `None` when there's no `id`.
     pub fn from_payload(v: &serde_json::Value) -> Option<Self> {
         let id = v.get("id")?.as_str()?.to_string();
         let name = v
@@ -58,7 +35,6 @@ impl MailboxNode {
     }
 }
 
-/// Build the full `Parent/Child` path for every mailbox, keyed by id.
 pub fn paths_by_id(nodes: &[MailboxNode]) -> HashMap<String, String> {
     let by_id: HashMap<&str, &MailboxNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut out = HashMap::with_capacity(nodes.len());
@@ -95,12 +71,6 @@ pub struct Resolved {
     pub unmatched: Vec<String>,
 }
 
-/// Resolve `labels` (exact full-path match) against `nodes` to the set
-/// of matching mailbox ids, plus any labels that matched nothing.
-///
-/// Leading/trailing whitespace on each requested label is trimmed (so
-/// YAML list entries needn't be fussy); the stored mailbox paths are
-/// matched verbatim and case-sensitively.
 pub fn resolve(nodes: &[MailboxNode], labels: &[String]) -> Resolved {
     let paths = paths_by_id(nodes);
     // path -> ids. A path *should* be unique, but two sibling mailboxes

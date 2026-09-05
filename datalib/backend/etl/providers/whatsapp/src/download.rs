@@ -1,17 +1,4 @@
 //! Decrypt → mirror → commit for a single WhatsApp backup directory.
-//!
-//! Entry point is [`ingest`]: given `backup_dir`
-//! (containing `Databases/msgstore.db.crypt15` and `Media/`), the
-//! 32-byte root key, and a target `wa_raw.doltlite_db` path, decrypts
-//! the message store to a tempfile, walks the curated tables into the
-//! target db (drop-and-rebuild), registers media files by sha256, and
-//! issues a single `dolt_commit`.
-//!
-//! The decrypted msgstore lives in a `tempfile::NamedTempFile` and is
-//! dropped at the end of `ingest`; the plaintext never touches a
-//! user-visible path. Media files are read directly from
-//! `backup_dir/Media/` (WhatsApp stores them in the clear) so no
-//! plaintext copy of those is ever made.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -78,14 +65,6 @@ impl RawDb {
     }
 }
 
-/// Full pipeline: decrypt, mirror, commit.
-///
-/// `backup_dir` must contain `Databases/msgstore.db.crypt15`. If a
-/// sibling `Media/` directory exists, every file under it is registered
-/// in `wa_media_files`; absent silently means "no media to register".
-///
-/// `target_db_path` is the doltlite file to populate. Created if absent;
-/// extended in-place if present (drop-and-rebuild of the `wa_*` tables).
 pub async fn ingest(
     backup_dir: &Path,
     root_key: &[u8; 32],
@@ -95,9 +74,6 @@ pub async fn ingest(
     fetch(backup_dir, root_key, &db).await
 }
 
-/// Variant of [`ingest`] that takes an already-open [`RawDb`]. Used by
-/// the sync orchestrator, which opens the pool up front (so SIGINT can
-/// flush) and threads it through.
 pub async fn fetch(backup_dir: &Path, root_key: &[u8; 32], db: &RawDb) -> Result<IngestSummary> {
     fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.db_path()).await
 }
@@ -174,8 +150,6 @@ async fn fetch_with_pool(
     Ok(summary)
 }
 
-/// Sqlite source-side pool (the decrypted msgstore.db). Read-only,
-/// single connection.
 async fn open_source_sqlite(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
         .with_context(|| format!("sqlite uri for {}", path.display()))?
@@ -203,12 +177,8 @@ async fn truncate_wa_tables(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Per-table mirrors
-// ─────────────────────────────────────────────────────────────────────
 
-/// jid: source `_id` → raw_string lookup table for rekey of every
-/// `*_jid_row_id` column the other tables carry.
 async fn mirror_jid(
     src: &SqlitePool,
     dst: &SqlitePool,
@@ -252,7 +222,6 @@ async fn mirror_jid(
     Ok(map)
 }
 
-/// chat: source `_id` → chat_jid (= jid_map[chat.jid_row_id]).
 async fn mirror_chat(
     src: &SqlitePool,
     dst: &SqlitePool,
@@ -766,9 +735,6 @@ async fn mirror_message_add_on_reaction(
 /// and put its bytes into the sibling blob_cas keyed by blake3. Render
 /// resolves attachments by joining `wa_message_media.file_path` →
 /// `wa_media_files.sha256` → `wa_media_files.blake3` → `cas_objects.bytes`.
-///
-/// Skips dot-prefixed dirs (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`,
-/// …) — those are local WhatsApp scratch state, not message media.
 async fn mirror_media_files(
     dst: &SqlitePool,
     target_db_path: &Path,

@@ -1,9 +1,6 @@
 //! GitLab REST API client (`gitlab.com/api/v4`). Every request goes
 //! through [`datalib_etl::http::latchkey_curl`]. Latchkey injects
 //! `PRIVATE-TOKEN: <token>` for the `gitlab` service.
-//!
-//! Port of `_call_gitlab_once` + `call_gitlab` + `paginate` in
-//! `src/download/gitlab_web.py`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,8 +47,6 @@ impl GitLabClient {
         Self::default()
     }
 
-    /// Build a client that authenticates as the source's configured
-    /// latchkey identity. Every request it issues carries the settings.
     pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
         Self {
             latchkey,
@@ -105,8 +100,6 @@ impl GitLabClient {
         )))
     }
 
-    /// Walk `Link: rel=next` pagination. GitLab returns top-level arrays
-    /// for list endpoints and a single object for `/user` and similar.
     pub async fn paginate(&self, start_url: &str) -> Result<Vec<Value>, GitLabError> {
         let mut url = start_url.to_string();
         let mut out: Vec<Value> = Vec::new();

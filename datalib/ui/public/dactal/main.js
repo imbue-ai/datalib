@@ -1,11 +1,5 @@
 // The DACTAL explorer page's own logic — the query bar, the render loop,
 // and the wiring of the globals DACTAL's vendored renderer expects.
-//
-// This lives in its own file rather than inline in index.html so that the
-// page's CSP can be `script-src 'self' 'unsafe-eval'` with no
-// `'unsafe-inline'`. That matters: `'unsafe-inline'` would re-open the
-// exact hole the CSP is there to close, since the vendored engine
-// reaches dactal.org at runtime (see index.html's CSP comment).
 import { loadSearchIntoDactal, fetchSearch } from "./bridge.js";
 
 // --- Wire up the globals DACTAL's renderer expects -------------------------

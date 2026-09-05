@@ -14,10 +14,6 @@ import { clickRowByUuid } from "./grid-helpers";
 // card highlights the section whose `data-section-uuid` matches. The
 // invariant: whichever section ends up with `.selected`, its
 // `data-section-uuid` must equal the clicked row's `uuid`.
-//
-// This test is independent of the specific fixture conversation — it
-// scans every non-Chat row whose corresponding section actually exists
-// in the rendered body, sampling one row per conversation.
 
 type Row = {
   uuid: string;
@@ -112,13 +108,6 @@ test("clicked grid row highlights the section with the matching uuid", async ({
     // test exists to *report*, not to time out on. So the wait is
     // swallowed, and a card that never gets a selection falls through
     // to the null case below.
-    //
-    // The pause used to be an unconditional `waitForTimeout(150)`,
-    // which is a real cost here rather than a rounding error: this
-    // loop runs once per conversation in the fixture (44 of them), so
-    // the sleep alone was ~6.6s per engine and made this the slowest
-    // spec in the suite. Paying only on the failing rows takes it to
-    // roughly nothing.
     await card
       .locator(".msg.selected")
       .first()

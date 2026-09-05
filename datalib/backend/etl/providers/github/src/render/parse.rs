@@ -91,13 +91,6 @@ pub enum CommentSection {
 }
 
 impl CommentSection {
-    /// The raw-store entity name this section corresponds to — also
-    /// the `grid_rows.upstream_entity_kind` the render step stamps.
-    ///
-    /// GitHub numbers issue comments, reviews and review comments in
-    /// three independent sequences that overlap freely, and each is
-    /// fetched from a different API path. `upstream_id` alone is
-    /// therefore ambiguous; this is what disambiguates it.
     pub fn entity(self) -> &'static str {
         match self {
             CommentSection::Review => ENTITY_PR_REVIEW,
@@ -156,9 +149,6 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedGithubApi> {
     Ok(parse_loaded(raw))
 }
 
-/// Build a [`ParsedGithubApi`] from a snapshot already loaded out of the
-/// doltlite DB. Public so callers that already hold a [`LoadedRaw`] (e.g.
-/// in-process pipelines) can skip the open + load round-trip.
 pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
     let mut out = ParsedGithubApi::default();
 

@@ -1,16 +1,9 @@
 //! The doltlite side, against real stores.
-//!
-//! `analyze_test.rs` covers the interpretation with no database in the
-//! way; this covers the half that only a real doltlite file can prove —
-//! that two independent scan files unify through `file://` remotes and
-//! that the prolly diff then works across them.
 
 use std::path::Path;
 
 use datalib_dirtree_diff::store::{self, Commit};
 
-/// Build a scan-shaped store: `files` as fsindex declares it, one
-/// commit, and return its HEAD.
 async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {
     let pool = store::open(path).await.unwrap();
     sqlx::query(
@@ -99,15 +92,6 @@ async fn two_independent_files_unify_and_diff() {
 
 /// The trap that made the first Rust port fail, recorded so it cannot
 /// come back silently.
-///
-/// doltlite registers the per-table `dolt_diff_<table>` /
-/// `dolt_at_<table>` vtabs when a **connection is opened**, from the
-/// tables present at that moment. A scratch database is empty when we
-/// open it to add remotes, so that connection never learns about
-/// `files` — and every query on it fails — while a fresh connection to
-/// the very same file works. If doltlite ever starts refreshing the
-/// registry, this test fails and `store::unify` can stop closing its
-/// pool.
 #[tokio::test]
 async fn the_fetching_connection_cannot_see_what_it_fetched() {
     let tmp = tempfile::tempdir().unwrap();

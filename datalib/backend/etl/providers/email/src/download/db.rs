@@ -1,19 +1,4 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
-//!
-//! [`RawDb`] owns the entity-db pool and the (currently-shared)
-//! blob_refs surface plus the sibling CAS handle. The schema itself —
-//! every table DDL, every wire-payload row struct + its derived
-//! `BulkUpsertable` impl, the envelope-shaped `EmailRow` with its
-//! hand-written `BulkUpsertable` impl, and the per-table commentary
-//! — lives next door in [`super::schema_raw`].
-//!
-//! What's here is the small set of things `schema_raw` can't be:
-//! `RawDb::open`, `reset`, the JMAP-specific state-token plumbing
-//! (`load_state` / `save_state`), the load helpers render consumes,
-//! and the join-table refresh helper that fires alongside email
-//! bulk-upserts. Entity-table writes go through the generic
-//! `datalib_etl::bulk::bulk_upsert_in_tx<T>` helper from the
-//! caller (`super::mod`), not via methods on `RawDb`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -32,22 +17,13 @@ pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-// ─────────────────────────────────────────────────────────────────────
 // State-token namespacing
-// ─────────────────────────────────────────────────────────────────────
-//
-// JMAP's incremental sync is driven by opaque per-type `state` tokens
-// returned by `Foo/get` and consumed by `Foo/changes`. We persist them
-// in the shared `sync_scope_state` table under provider-namespaced keys
-// so multiple JMAP accounts in the same doltlite file don't collide.
 
 pub fn state_scope(account_id: &str, type_name: &str) -> String {
     format!("jmap:{account_id}:state:{type_name}")
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // RawDb
-// ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -114,11 +90,6 @@ impl RawDb {
     }
 
     /// Read a cursor under a caller-supplied scope key.
-    ///
-    /// [`load_state`](Self::load_state) hard-codes the `jmap:` prefix;
-    /// the other live modes own their own namespaces (`gmail:`) so
-    /// several accounts and several transports can share one raw store
-    /// without stepping on each other's cursors.
     pub async fn load_scope(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
             .bind(scope)
@@ -146,9 +117,6 @@ impl RawDb {
         dr::load_payloads(&self.pool, "threads").await
     }
 
-    /// `id → email_count` for every thread we've persisted. The
-    /// render-side cheap probe uses this to skip re-rendering
-    /// threads whose membership hasn't changed.
     pub async fn thread_email_counts(&self) -> Result<HashMap<String, i64>> {
         let rows = sqlx::query("SELECT id, email_count FROM threads")
             .fetch_all(&self.pool)
@@ -209,9 +177,6 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Snapshot every email's mailbox + keyword joins, keyed by
-    /// `email_id`. (No attachments join after the eml-as-canonical
-    /// port — render mail-parses the `.eml` for parts.)
     pub async fn load_email_joins(&self) -> Result<EmailJoins> {
         let mut mailboxes: HashMap<String, Vec<String>> = HashMap::new();
         for r in sqlx::query("SELECT email_id, mailbox_id FROM email_mailboxes")
@@ -244,8 +209,6 @@ impl RawDb {
         })
     }
 
-    /// Every persisted email id — for a quick set-membership check
-    /// during incremental sync ("do we already have this id?").
     pub async fn known_email_ids(&self) -> Result<HashSet<String>> {
         let rows = sqlx::query("SELECT id FROM emails WHERE blob_id != ''")
             .fetch_all(&self.pool)
@@ -287,9 +250,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Hard-delete one email plus its joins + bookkeeping. Blobs are
-    /// untouched — another email may share the same `.eml` blob.
-    /// Dolt history preserves the pre-delete state.
     pub async fn delete_emails(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -356,22 +316,13 @@ impl RawDb {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Email join-table refresh
-// ─────────────────────────────────────────────────────────────────────
 
 /// Refresh the two email-side join tables (`email_mailboxes`,
 /// `email_keywords`) for one email. Delete-then-insert because the
 /// join tables mirror current upstream state — anything we
 /// previously had for this id that's no longer present must
 /// disappear.
-///
-/// Runs inside the same transaction as the parent email's
-/// `bulk_upsert_in_tx` call so failure during the refresh rolls the
-/// envelope row back too. Caller is responsible for committing. The
-/// `mailboxIds` / `keywords` come straight off the email's stored
-/// envelope payload; the join rows go through the generic
-/// bulk-upsert path.
 pub async fn refresh_email_joins(tx: &mut Transaction<'_, Sqlite>, row: &EmailRow) -> Result<()> {
     let email_id = row.id();
 
@@ -406,9 +357,7 @@ pub async fn refresh_email_joins(tx: &mut Transaction<'_, Sqlite>, row: &EmailRo
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Loaded shapes (consumed by render)
-// ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct LoadedEmail {
@@ -434,13 +383,6 @@ pub struct LoadedEmail {
 }
 
 /// One attachment part extracted from a `.eml` at parse time.
-///
-/// **Not** loaded from a DB table — the eml IS the canonical body,
-/// and `parse_doltlite_async` mail-parses each loaded `.eml` to
-/// populate this list. `blob_id` is the synthesized content hash of
-/// the attachment bytes (added to the per-bucket [`BlobBundle`]
-/// under that key) so render's `bucket.blobs.get(&att.blob_id)`
-/// resolves uniformly across truly-attached and inline parts.
 #[derive(Debug, Clone)]
 pub struct LoadedAttachment {
     pub part_id: String,
@@ -492,9 +434,7 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     })
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Tests
-// ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

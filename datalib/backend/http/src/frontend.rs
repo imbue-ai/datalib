@@ -1,46 +1,4 @@
 //! The frontend store: every custom component the app can render.
-//!
-//! One mechanism, and the filesystem is the source of truth. Under
-//! `<root>/system/frontend/` sits one directory per **namespace**, and
-//! a namespace holds exactly two kinds of file:
-//!
-//! ```text
-//! system/frontend/
-//!   user/                        components a person or an agent wrote
-//!     9f2a1c….js                 a component, named by the sha256 of its bytes
-//!     tetris.json                metadata: what `comp.user.tetris` is
-//!   slack_work/                  written by the `slack_work` applet
-//!     7ae808….js
-//!     channels.json
-//! ```
-//!
-//! Nothing in this module knows what an applet is. An applet's only
-//! privilege is that the gateway *calls* it to write its directory
-//! (see [`crate::applets`]); once the files are there they are read,
-//! validated and served exactly like the ones a user dropped in by
-//! hand. That is the whole point of the layout: there is no second
-//! code path for "applet components", so there is nothing for the two
-//! to disagree about.
-//!
-//! # Why the filename is the hash
-//!
-//! A component is addressed by content, which buys two things at once.
-//! The browser keeps one module instance per resolved URL, so two
-//! namespaces shipping byte-identical code resolve to the same
-//! `/modules/<hash>` and are evaluated once — sharing falls out with no
-//! bookkeeping. And because a name (`tetris.json`) points *at* a hash
-//! rather than being a filename itself, editing a component is an
-//! ordinary write of a new file plus a one-line metadata update: the
-//! old bytes stay addressable for any card still mid-render, and the
-//! URL changes, which is the only way a module registry that never
-//! evicts will re-evaluate anything.
-//!
-//! # Why metadata is a separate file
-//!
-//! The `.js` on disk must stay byte-identical to what the browser
-//! evaluates, or its name stops being a content hash. So title,
-//! description and arguments live in `<name>.json` beside it rather
-//! than as frontmatter.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::sha256_hex;
 
-/// `<root>/system/frontend` — the parent of every namespace directory.
 pub fn frontend_dir(data_root: &Path) -> PathBuf {
     datalib_core::layout::system_dir(data_root).join("frontend")
 }
@@ -60,17 +17,9 @@ pub fn frontend_dir(data_root: &Path) -> PathBuf {
 /// ([`datalib_dag::config::RESERVED_APPLET_ID`]).
 pub const USER_NAMESPACE: &str = "user";
 
-// ---------------------------------------------------------------------------
 // On-disk metadata
-// ---------------------------------------------------------------------------
 
 /// What a `<name>.json` says.
-///
-/// Untagged, with [`Meta::Component`] first: a component document has
-/// required fields a rename document lacks, so a rename can only match
-/// the second arm. Anything matching neither is reported rather than
-/// silently ignored — a typo in a metadata file should be visible, not
-/// a component that quietly stops existing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Meta {
@@ -93,9 +42,7 @@ pub enum Meta {
     Renamed { renamed_to: String },
 }
 
-// ---------------------------------------------------------------------------
 // What the UI is told
-// ---------------------------------------------------------------------------
 
 /// One namespace as `GET /api/frontend` reports it.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -122,15 +69,6 @@ pub struct FrontendStore {
 
 /// A cheap fingerprint of the frontend tree, for deciding whether a
 /// rescan is needed.
-///
-/// Directory mtimes catch a file appearing or disappearing; the
-/// per-metadata-file size and mtime catch a `<name>.json` rewritten in
-/// place, which does not touch its directory's mtime. Component files
-/// need no entry of their own: they are named by their content, so new
-/// bytes always mean a new filename, which the directory mtime sees.
-///
-/// Deliberately `stat`-only — no file is read — so this can sit on a
-/// polled endpoint.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct StoreStamp(Vec<(String, u64, Option<std::time::SystemTime>)>);
 
@@ -298,7 +236,6 @@ impl FrontendStore {
         std::fs::read(self.content.get(hash)?).ok()
     }
 
-    /// Every namespace's view, for `GET /api/frontend`.
     pub fn view(&self) -> &BTreeMap<String, NamespaceView> {
         &self.namespaces
     }

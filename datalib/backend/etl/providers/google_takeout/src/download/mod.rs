@@ -1,9 +1,4 @@
 //! Google Takeout extractor entry point.
-//!
-//! Walks the on-disk Takeout tree under [`FetchOptions::input_path`]
-//! and dispatches each enabled sub-feed walker. Sub-feeds are opted
-//! in individually via [`SyncFlags`] so a fresh user has to enable
-//! each one consciously.
 
 pub mod attachment_path;
 pub mod db;
@@ -51,7 +46,6 @@ pub struct SyncFlags {
 }
 
 impl SyncFlags {
-    /// Convenience: every feed enabled. Tests use this.
     pub fn all() -> Self {
         Self {
             maps_reviews: true,
@@ -119,7 +113,6 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
-/// Run one download pass.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,

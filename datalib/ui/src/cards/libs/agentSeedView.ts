@@ -1,14 +1,5 @@
 // Builtin view: the body of a freshly minted, agent-bound component.
 //
-// The gallery's "new component, built by an agent" entry seeds the new
-// alias with `() => agentSeedView("<name>")` (see handoff.ts), so until
-// the agent overwrites the alias, the card itself shows the hand-off
-// instructions — an ordered list with the copy-the-prompt button as
-// step 1. Living in the card body (not a popup) means the instructions
-// survive reloads, travel with the card's URL, and disappear exactly
-// when they're obsolete: the agent's first save replaces the alias and
-// the card re-renders into the real component.
-//
 // The wayfinder is rebuilt on every render (not baked into the stored
 // seed) so it always carries the origin the card is being viewed on.
 import type { CardRender } from "../types";

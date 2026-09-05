@@ -170,24 +170,6 @@ fn missing_blob_falls_back_to_upstream_url() {
 /// `364a550f-af95-80de-829f-c5fccb3021fd` (Project Data Liberation
 /// test page), where an image block rendered as the `*(image: image)*`
 /// fallback instead of a real markdown image link.
-///
-/// The reproducer is a `file_upload`-typed image block — same shape
-/// the Notion API returns for images that users upload through the
-/// browser UI. That payload carries no `external.url` and no
-/// `file.url`; without those, our render's `media_url` helper returns
-/// empty, and (in the buggy state) we fall through to the
-/// `*(image: …)*` placeholder.
-///
-/// This test FAILS today: it asserts the rendered md contains a real
-/// `![…](…)` image link and not the placeholder. The fix likely lives
-/// in the notion extractor (handle `file_upload`-typed image blocks
-/// by fetching their bytes the same way `external`/`file` blocks are
-/// already handled), at which point this assertion starts passing.
-///
-/// Marked `#[ignore]` so the rest of the suite stays green; run with
-/// `cargo test -- --ignored` (or `bazelisk test
-/// //datalib/backend/etl/providers/notion:notion_blob_render
-/// --test_arg=--ignored`) to see the actual failure.
 #[test]
 #[ignore = "BUG: image renders as *(image: image)* fallback for file_upload-typed blocks"]
 fn file_upload_image_renders_as_real_image_not_fallback() {
@@ -264,11 +246,6 @@ fn file_upload_image_renders_as_real_image_not_fallback() {
 /// Incrementality canary for notion: two pages, render once to seed
 /// the prior_fingerprints map, then mutate page B (add a paragraph
 /// block) and render again. Only page B should re-render.
-///
-/// Mirrors the slack canary
-/// (`renders_only_changed_and_new_threads_on_resync`) but for
-/// notion's distinct doc shape — page-with-blocks rather than
-/// thread-of-messages.
 #[test]
 fn incremental_renders_only_changed_page() {
     let d = tempdir().unwrap();

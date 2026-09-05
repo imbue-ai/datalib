@@ -1,12 +1,5 @@
 //! Gmail REST API transport: the handful of endpoints we call, plus the
 //! client-side quota throttle.
-//!
-//! Auth needs no configuration at all. latchkey ships a built-in
-//! `google-gmail` service whose `baseApiUrls` is
-//! `https://gmail.googleapis.com/`, and it routes by URL host — so the
-//! ordinary [`latchkey_curl`] path every other HTTP provider in this tree
-//! uses injects the bearer token, and refreshes it when it has expired.
-//! That is the whole auth story for this mode.
 
 use std::time::Duration;
 
@@ -35,12 +28,6 @@ pub const UNITS_GET_PROFILE: u32 = 1;
 
 /// Client-side quota throttle: a leaky bucket over Gmail's per-user
 /// "quota units per minute" limit.
-///
-/// Google's limit is 6000 units/minute per user, and `messages.get` costs
-/// 20 — so the real ceiling on a backfill is ~300 messages/minute no
-/// matter how much concurrency we throw at it. Throttling ourselves is
-/// better than discovering the limit as a 429 storm: we keep the request
-/// pattern polite, and the run's pace is predictable enough to report.
 #[derive(Debug)]
 pub struct QuotaThrottle {
     units_per_minute: u32,
@@ -68,7 +55,6 @@ impl QuotaThrottle {
         self.spent_total
     }
 
-    /// Wait until `cost` units are available, then spend them.
     pub async fn acquire(&mut self, cost: u32) {
         // A single request costing more than the whole per-minute budget
         // would never be satisfiable; let it through rather than hang.
@@ -101,12 +87,6 @@ impl QuotaThrottle {
     }
 }
 
-/// How long to wait before `cost` units are available, given `available`
-/// now and a refill rate of `units_per_minute`.
-///
-/// Split out from [`QuotaThrottle::acquire`] so the arithmetic can be
-/// checked without a clock — the alternative is `tokio`'s `test-util`
-/// paused-time, which this crate does not compile with.
 fn wait_seconds(available: f64, cost: f64, units_per_minute: u32) -> f64 {
     let deficit = cost - available;
     if deficit <= 0.0 {
@@ -115,7 +95,6 @@ fn wait_seconds(available: f64, cost: f64, units_per_minute: u32) -> f64 {
     deficit * 60.0 / f64::from(units_per_minute.max(1))
 }
 
-/// One authenticated GET against the Gmail API, returning parsed JSON.
 async fn get_json(url: &str, latchkey: &LatchkeySettings) -> Result<Value> {
     let req = HttpRequest::get(PROVIDER, url)
         .timeout(REQUEST_TIMEOUT)
@@ -164,8 +143,6 @@ pub enum GmailApiError {
     HistoryTooOld,
 }
 
-/// `users.getProfile` — the account address and the mailbox's current
-/// `historyId`, which is the cursor a first full sync will store.
 pub async fn get_profile(user_id: &str, latchkey: &LatchkeySettings) -> Result<Profile> {
     let v = get_json(&format!("{BASE}/{user_id}/profile"), latchkey).await?;
     Ok(Profile {
@@ -183,8 +160,6 @@ pub struct Profile {
     pub messages_total: Option<u64>,
 }
 
-/// `users.labels.list` — every label, so `labelIds` on a message can be
-/// resolved to names.
 pub async fn list_labels(user_id: &str, latchkey: &LatchkeySettings) -> Result<Vec<Label>> {
     let v = get_json(&format!("{BASE}/{user_id}/labels"), latchkey).await?;
     Ok(v.get("labels")
@@ -219,17 +194,6 @@ pub struct MessagePage {
     pub next_page_token: Option<String>,
 }
 
-/// `users.messages.list` — ids only. `include_spam_trash` is on: the
-/// point of a mirror is everything, and the render-side label filter is
-/// where a user narrows what they actually look at.
-///
-/// `label_ids` restricts the enumeration **server-side** (Gmail ANDs
-/// them). That is not an optimization, it is the difference between
-/// usable and not: `messages.get` costs 20 quota units against a
-/// 6000/minute ceiling, so filtering client-side means paying for the
-/// whole mailbox to keep a subset. Mirroring one 8-message label out of
-/// a 26k-message account would take ~105 minutes of throttled fetching
-/// instead of seconds.
 pub async fn list_messages(
     user_id: &str,
     latchkey: &LatchkeySettings,
@@ -257,12 +221,6 @@ pub async fn list_messages(
     })
 }
 
-/// `users.messages.get?format=RAW` — the metadata plus the complete
-/// RFC 5322 source.
-///
-/// `format=RAW` is what makes this mode line up with every other one: the
-/// `raw` field is byte-identical to what the mbox path stores, so the two
-/// share one envelope-synthesis path and one CAS entry per message.
 pub async fn get_message_raw(
     user_id: &str,
     latchkey: &LatchkeySettings,
@@ -331,14 +289,6 @@ pub struct HistoryPage {
     pub history_id: Option<String>,
 }
 
-/// `users.history.list` — the incremental cursor.
-///
-/// Deletions are reported explicitly, which is what makes an incremental
-/// run cheap: there is no need to re-enumerate the mailbox to discover
-/// what went away.
-///
-/// Returns [`GmailApiError::HistoryTooOld`] when `start_history_id` has
-/// aged out; the caller must fall back to a full sync.
 pub async fn list_history(
     user_id: &str,
     latchkey: &LatchkeySettings,
@@ -380,8 +330,6 @@ pub fn parse_history(v: &Value) -> HistoryPage {
     page
 }
 
-/// Each history record type wraps its messages as
-/// `[{ "message": { "id": … } }, …]`.
 fn collect_ids(record: &Value, key: &str, out: &mut Vec<String>) {
     let Some(items) = record.get(key).and_then(Value::as_array) else {
         return;
@@ -398,9 +346,6 @@ fn dedupe(ids: &mut Vec<String>) {
     ids.retain(|id| seen.insert(id.clone()));
 }
 
-/// Percent-encode a query-parameter value. Gmail label ids are
-/// `[A-Za-z0-9_-]` in practice, but page tokens are opaque and nothing
-/// we interpolate should be able to inject a second parameter.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {

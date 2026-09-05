@@ -1,15 +1,4 @@
 //! End-to-end over the fixture corpus: scan → store.
-//!
-//! Asserts against the raw store rather than against log lines, per
-//! AGENTS.md §"Inspecting doltlite stores" — a log line says what the
-//! code *said*, the store says what it *did*.
-//!
-//! The corpus is built around metadata-only variants (see
-//! `//tests/fixtures/make_media_fixtures.py`), so most of what is
-//! checked here is one claim in two directions: **`blake3` differs and
-//! `payload_blake3` does not**. That pair is the provider's central
-//! promise, and a test that only asserted the first half would pass
-//! against a `payload_blake3` that was silently NULL everywhere.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -88,7 +77,6 @@ impl Harness {
     }
 }
 
-/// `path -> blake3` for every indexed file.
 async fn files(db: &RawDb) -> Result<HashMap<String, String>> {
     let rows = sqlx::query("SELECT id, blake3 FROM media_files")
         .fetch_all(db.pool())
@@ -99,7 +87,6 @@ async fn files(db: &RawDb) -> Result<HashMap<String, String>> {
         .collect())
 }
 
-/// `blake3 -> (payload_blake3, payload_scheme, class, container)`.
 async fn items(
     db: &RawDb,
 ) -> Result<HashMap<String, (Option<String>, Option<String>, String, String)>> {
@@ -124,7 +111,6 @@ async fn items(
         .collect())
 }
 
-/// The payload hash and scheme of the item at one path.
 async fn payload_of(db: &RawDb, path: &str) -> Result<(Option<String>, Option<String>)> {
     let row = sqlx::query(
         "SELECT i.payload_blake3 AS p, i.payload_scheme AS s
@@ -137,7 +123,6 @@ async fn payload_of(db: &RawDb, path: &str) -> Result<(Option<String>, Option<St
     Ok((row.get("p"), row.get("s")))
 }
 
-/// Assert that two paths hold different bytes but the same signal.
 async fn assert_metadata_only_variant(db: &RawDb, a: &str, b: &str, scheme: &str) -> Result<()> {
     let f = files(db).await?;
     let (ha, hb) = (
@@ -821,13 +806,6 @@ async fn a_rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
 }
 
 /// A scan that dies partway must leave its rescan cursors behind.
-///
-/// This is the difference between resuming and restarting on a large
-/// library, and it is why the path tables are reconciled at the end of
-/// a scan rather than truncated at the start. The failure is induced
-/// with a malformed ignore glob, which makes `walk_files` error at
-/// exactly the point an interrupt would — after the cache is loaded,
-/// before any row is written.
 #[tokio::test]
 async fn a_failed_scan_leaves_the_rescan_cursors_intact() -> Result<()> {
     let h = Harness::new();
@@ -990,12 +968,6 @@ async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() ->
 
 /// One scan, six kinds of edit, one rescan — and an exact accounting of
 /// what moved.
-///
-/// The individual behaviors have their own tests above; this one exists
-/// because they interact, and because the numbers are the claim. If
-/// unchanged files were quietly being re-read, or a retag were creating
-/// a second payload group, every narrower test would still pass and
-/// only the arithmetic here would break.
 #[tokio::test]
 async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -1152,11 +1124,6 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     Ok(())
 }
 
-/// A minimal ID3v2.4 tag carrying one `TIT2` frame.
-///
-/// Sizes are *syncsafe* — seven bits per byte — which is the detail
-/// that makes a hand-built tag either work or land the reader in the
-/// middle of the audio.
 fn id3v2_with_title(title: &str) -> Vec<u8> {
     fn syncsafe(n: u32) -> [u8; 4] {
         [

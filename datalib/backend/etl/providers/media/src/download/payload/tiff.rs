@@ -1,42 +1,5 @@
 //! TIFF and DNG payload: the strips and tiles the IFDs point at,
 //! excluding embedded previews.
-//!
-//! # Why this one matters most for a Lightroom-shaped library
-//!
-//! A DNG is a TIFF holding several images: the raw sensor data in one
-//! IFD, and one or more rendered JPEG **previews** in others. Lightroom
-//! rewrites the preview every time you move a develop slider, and
-//! writes the develop settings themselves into the EXIF/XMP block while
-//! it is there. So the file hash of an actively-edited DNG moves
-//! constantly while the sensor data — the irreplaceable part, the thing
-//! you would call "the photograph" — has not changed since the shutter
-//! closed.
-//!
-//! Excluding the preview IFDs is what makes `payload_blake3` answer
-//! "is this the same exposure?" instead of "has anyone touched this
-//! file?".
-//!
-//! # Which IFDs count
-//!
-//! An IFD is a preview if `NewSubfileType` (254) has bit 0 set
-//! (reduced-resolution) or `SubfileType` (255) is 2. Thumbnails reached
-//! through `JPEGInterchangeFormat` (513) are likewise skipped — that
-//! tag is how the classic 6×4 TIFF thumbnail is stored.
-//!
-//! A plain scanned TIFF carries no `NewSubfileType` at all, so it is
-//! included: absent means "the full image", per the TIFF 6.0 default.
-//!
-//! **If nothing qualifies**, every image-bearing IFD is used instead.
-//! A file whose only images are all flagged reduced is strange, but
-//! hashing the strange thing beats returning NULL and pretending we
-//! could not read it.
-//!
-//! # A false split we accept
-//!
-//! Groups are emitted in IFD traversal order, so a rewriter that
-//! reorders IFDs — or promotes a SubIFD — changes the digest without
-//! changing a pixel. Consistent with the rest of the module: a false
-//! split costs a duplicate row.
 
 use std::collections::HashSet;
 
@@ -114,13 +77,6 @@ struct Entry {
     value: u32,
 }
 
-/// Parse the header and collect every IFD: the top-level chain, plus
-/// each one's SubIFDs. Depth is one level, which is what DNG uses.
-///
-/// Shared by [`plan`] and [`dimensions`] so the two cannot disagree
-/// about which IFD is the real image — the whole point of
-/// [`dimensions`] is that it reports the same one the payload hash
-/// covers.
 fn collect_ifds(src: &mut Src) -> Result<(Endian, Vec<u64>)> {
     let head = src.read_upto(0, 8)?;
     anyhow::ensure!(head.len() == 8, "truncated TIFF header");
@@ -150,22 +106,6 @@ fn collect_ifds(src: &mut Src) -> Result<(Endian, Vec<u64>)> {
     Ok((endian, ifds))
 }
 
-/// The full-resolution image's pixel dimensions.
-///
-/// This exists because a DNG's *primary* IFD is usually the embedded
-/// preview, so the EXIF reader — which only ever looks at IFD0 —
-/// reports the preview's size. That is the wrong number for anything a
-/// person would ask ("how big is this photograph?"), and it is wrong by
-/// a factor of five or more.
-///
-/// The IFD chosen here is the same one [`plan`] hashes: the first that
-/// carries image data and is not flagged reduced-resolution.
-///
-/// `DefaultCropSize` wins when present. A RAW sensor reads out slightly
-/// larger than the visible frame — the margin feeds demosaicing at the
-/// edges — so `ImageWidth`/`ImageLength` are a few dozen pixels bigger
-/// than what every RAW tool, and the photographer, calls the image
-/// size.
 pub fn dimensions(src: &mut Src) -> Result<Option<(i64, i64)>> {
     let (endian, ifds) = collect_ifds(src)?;
     let mut fallback = None;
@@ -195,14 +135,6 @@ pub fn dimensions(src: &mut Src) -> Result<Option<(i64, i64)>> {
     Ok(fallback)
 }
 
-/// `DefaultCropSize` as `(width, height)`, when it is stored as an
-/// integer pair.
-///
-/// The tag also permits RATIONAL, which [`read_offsets`] would decode
-/// as a single 64-bit integer — garbage. Rather than teach that decoder
-/// about fractions for one tag, an unexpected type falls through to
-/// `ImageWidth`/`ImageLength`, which is a correct answer, just a
-/// slightly larger one.
 fn crop_size(src: &mut Src, endian: Endian, entries: &[Entry]) -> Result<Option<(i64, i64)>> {
     let Some(e) = entries.iter().find(|e| e.tag == TAG_DEFAULT_CROP_SIZE) else {
         return Ok(None);
@@ -339,7 +271,6 @@ fn read_offsets(src: &mut Src, endian: Endian, entries: &[Entry], tag: u16) -> R
     Ok(out)
 }
 
-/// A single scalar tag value, read from the inline field.
 fn scalar(entries: &[Entry], tag: u16, endian: Endian) -> Option<u64> {
     let e = entries.iter().find(|e| e.tag == tag)?;
     Some(match type_size(e.field_type)? {
@@ -366,8 +297,6 @@ fn is_reduced(_src: &mut Src, endian: Endian, entries: &[Entry]) -> Result<bool>
     Ok(false)
 }
 
-/// The image byte ranges of one IFD: strips, or tiles, whichever it
-/// uses.
 fn image_ranges(src: &mut Src, endian: Endian, entries: &[Entry]) -> Result<Vec<Range>> {
     for (off_tag, len_tag) in [
         (TAG_STRIP_OFFSETS, TAG_STRIP_BYTE_COUNTS),
@@ -415,7 +344,6 @@ mod tests {
             Self { ifds: Vec::new() }
         }
 
-        /// `extra` are `(tag, type, value)` triples written verbatim.
         fn ifd(mut self, extra: &[(u16, u16, u32)], image: &[u8]) -> Self {
             self.ifds.push((extra.to_vec(), image.to_vec()));
             self

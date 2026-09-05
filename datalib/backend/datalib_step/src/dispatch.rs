@@ -1,16 +1,4 @@
 //! `(source type, phase)` → provider dispatch.
-//!
-//! With per-provider step types (`download slack_api`,
-//! `render slack_api`, …) the params carry no `type:` tag — the
-//! nested subcommand names the provider, and the `--params` subtree
-//! deserializes straight into that provider's own **per-phase**
-//! config struct: the full `<P>Config` for download (normalized like
-//! the old `Config::normalize` — fold built-in defaults, resolve
-//! paths, validate), the slim `<P>RenderConfig` for render (just the
-//! `RenderCommon` envelope plus any render knobs — `deny_unknown`, so
-//! each step's params carry only what that wave reads). Each arm then
-//! calls the provider's per-wave entry point
-//! (`plan_download` / `plan_render`).
 
 use std::path::{Path, PathBuf};
 

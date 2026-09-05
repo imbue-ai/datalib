@@ -4,36 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Integration test for `--reset-and-redownload`.
-//!
-//! Verifies the PK-stability claim of the sidecar-bookkeeping
-//! design: running `download::fetch` twice against the same playback
-//! fixtures, with the second run setting
-//! `control.reset_and_redownload`, must produce byte-identical
-//! data-table contents — proving that every object table's PK
-//! correctly identifies upstream rows, so a wipe + re-fetch lands
-//! every row back at the same primary-key.
-//!
-//! Strategy:
-//!   1. Synthesize a playback fixture from a small Claude snapshot.
-//!   2. Run download → snapshot every data-table row keyed by PK.
-//!      Commit via `dolt_commit('-Am', 'first')`.
-//!   3. Run download again with `control.reset_and_redownload = true`
-//!      → snapshot data-table rows again. Commit again.
-//!   4. Assert per-table row counts match and every (id → row)
-//!      mapping is byte-identical between the two runs.
-//!   5. Assert at least one `dolt_log()` entry per commit lands.
-//!
-//! Covers the project tables too: a reset has to land `projects` and
-//! `project_docs` back on the same PKs, and — because `reset()`
-//! truncates data tables but not the sweep markers in
-//! `sync_scope_state` — has to refetch the knowledge docs despite a
-//! still-fresh docs TTL.
-//!
-//! Bookkeeping sidecars (`*_bookkeeping`, `blobs_bookkeeping`) are
-//! intentionally NOT asserted — they carry `fetched_at` /
-//! `last_attempt_at` / `attempt_count` which churn on every fetch.
-//! The whole point of the column split is that those changes don't
-//! show up in any data-table diff.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -289,27 +259,6 @@ async fn reset_and_redownload_preserves_data_tables() {
     // Second commit + dolt_log assertion. Only meaningful when the
     // build is actually linked against doltlite (stock libsqlite3
     // returns NULL from dolt_commit).
-    //
-    // What success looks like: this is the user-facing "did anything
-    // change?" question. After a reset + re-fetch from the same
-    // upstream, the answer should be NO — and dolt itself should
-    // recognize that. There are two acceptable shapes:
-    //
-    //   (a) `dolt_commit` is a no-op: the second hash equals the
-    //       first, and dolt_log carries only one user commit. This
-    //       is the strongest possible signal — dolt looked at the
-    //       working set, saw zero diff against HEAD, and refused to
-    //       advance. The user's stated goal verbatim.
-    //
-    //   (b) The bookkeeping sidecars do carry a per-row diff
-    //       (fresh `fetched_at` etc.), so dolt creates a new commit.
-    //       That's fine too — the strong assertion is the
-    //       data-table row equality we already verified above. We
-    //       just require the dolt_log shows both commit messages.
-    //
-    // Either way, the row-equality assertions above are what prove
-    // PK stability. The dolt_log assertion is a secondary
-    // "doltlite is wired in and seeing what we expect" sanity check.
     if let Some(first_hash) = first_hash {
         configure_committer(&pool).await;
         let second_hash: Option<String> =
@@ -376,9 +325,6 @@ async fn reset_and_redownload_preserves_data_tables() {
     }
 }
 
-/// Doltlite requires a user.name / user.email session config before
-/// `dolt_commit` will stamp authorship. Best-effort: silently no-op
-/// on stock libsqlite3 (where `dolt_config` doesn't exist).
 async fn configure_committer(pool: &sqlx::SqlitePool) {
     let _ = sqlx::query("SELECT dolt_config('user.name', 'reset-test')")
         .execute(pool)

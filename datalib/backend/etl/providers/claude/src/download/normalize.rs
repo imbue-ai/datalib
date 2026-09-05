@@ -3,9 +3,6 @@
 //!   - omits `account` (we synthesize from a known account_uuid)
 //!   - leaves `message.text` empty and puts prose in `content[].text`
 //!   - drops `flags` from content blocks (export has `flags: null`)
-//!
-//! We're only generous enough to make the parser happy; we leave
-//! every other upstream field alone.
 
 use serde_json::{json, Map, Value};
 

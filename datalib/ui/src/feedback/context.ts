@@ -1,20 +1,5 @@
 // Producer-side helpers for `FeedbackContext` — the shape the HTTP layer
 // stores in `feedback.context_json` (see schemas/feedback.schema.json).
-//
-// Two responsibilities:
-//   1. Walk the DOM from a right-clicked element up to the nearest
-//      `[data-feedback-root]` (or `<body>`) so a future maintainer can
-//      reconstruct what the user was pointing at even if the DOM
-//      structure shifts.
-//   2. Build the typed per-surface `payload` for each call site — the
-//      surface discriminator + payload shape mirror the
-//      x-tagged-union in the schema.
-//
-// Read-back is out of scope for v0 — these types describe what we
-// *write*. The codegen'd FeedbackContext type lives at
-// //schemas:feedback_ts; once we wire it into the Vite build, this file
-// will import that union instead of redeclaring it. For now we keep a
-// shape-compatible hand-rolled mirror so the UI compiles standalone.
 
 export type FeedbackSurface =
   | "grid_cell"

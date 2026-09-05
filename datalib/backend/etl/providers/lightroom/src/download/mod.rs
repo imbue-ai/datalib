@@ -1,9 +1,4 @@
 //! Download (ingest) side of the `lightroom` source.
-//!
-//! [`plan`] introspects the catalog's schema and decides what the mirror
-//! should look like; [`mirror`] does the copy. This module is just the
-//! `fetch` entry point both the orchestrator's processor and the
-//! standalone CLI go through.
 
 pub mod mirror;
 pub mod plan;
