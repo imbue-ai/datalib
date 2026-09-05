@@ -497,3 +497,56 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
         "the previously-ignored file had to be rehashed"
     );
 }
+
+/// The scan reports which cache it used and how much moved through it.
+///
+/// The cache lives outside both the data root and the scan store, so it
+/// is the one input a reader cannot infer from the command line — and
+/// "why did this rescan hash everything?" is unanswerable without the
+/// read/write counts.
+#[tokio::test]
+async fn the_summary_accounts_for_the_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("tree");
+    std::fs::create_dir_all(&root).unwrap();
+    for i in 0..5 {
+        std::fs::write(root.join(format!("f{i}.txt")), format!("body {i}")).unwrap();
+    }
+    let cache_path = tmp.path().join("fingerprints.sqlite");
+    let cache = FingerprintCache::open(&cache_path).await.unwrap();
+    let db_path = tmp.path().join("s.doltlite_db");
+
+    // Cold: nothing to read, everything written (5 files + the root).
+    let cold = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(cold.cache_entries_loaded, 0);
+    assert_eq!(cold.cache_entries_written, 6);
+    assert_eq!(cold.cache_entries_forgotten, 0);
+    assert_eq!(
+        cold.cache_path,
+        cache_path.canonicalize().unwrap(),
+        "the reported path must be the resolved one, not as typed"
+    );
+
+    // Warm: everything read back, everything rewritten.
+    let warm = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(warm.cache_entries_loaded, 6);
+    assert_eq!(warm.cache_entries_written, 6);
+    assert_eq!(warm.cache_entries_forgotten, 0);
+
+    // Delete two: read the old six, write the surviving four, forget two.
+    std::fs::remove_file(root.join("f0.txt")).unwrap();
+    std::fs::remove_file(root.join("f1.txt")).unwrap();
+    let after = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(after.cache_entries_loaded, 6);
+    assert_eq!(after.cache_entries_written, 4);
+    assert_eq!(
+        after.cache_entries_forgotten, 2,
+        "the two deleted paths should have been forgotten"
+    );
+}

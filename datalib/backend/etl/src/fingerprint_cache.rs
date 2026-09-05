@@ -281,6 +281,11 @@ fn connect_string(path: &Path) -> String {
 #[derive(Debug, Clone)]
 pub struct FingerprintCache {
     pool: SqlitePool,
+    /// Where this cache actually lives, absolute. Kept so a caller can
+    /// report it: the cache sits outside both the data root and the
+    /// scan store, so it is the one input a reader cannot infer from
+    /// the command line.
+    path: PathBuf,
 }
 
 impl FingerprintCache {
@@ -311,11 +316,20 @@ impl FingerprintCache {
             .execute(&pool)
             .await
             .context("create fingerprints table")?;
-        Ok(Self { pool })
+        // Absolute, and resolved after creation so the file exists to
+        // canonicalize. A relative `--cache-db fp.sqlite` otherwise
+        // reports "fp.sqlite", which does not say where.
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        Ok(Self { pool, path })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// Where this cache lives, absolute.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Every cached entry at or under `root`, keyed root-relative.
@@ -420,6 +434,37 @@ impl FingerprintCache {
         }
         tx.commit().await.context("commit forget tx")?;
         Ok(removed)
+    }
+
+    /// The cache's footprint on disk, in bytes.
+    ///
+    /// Sums the database and its `-wal` / `-shm` sidecars, because in
+    /// WAL mode recent writes live in the sidecar and the main file
+    /// alone would under-report — a scan could write thousands of rows
+    /// and appear to have grown by nothing.
+    pub fn disk_bytes(&self) -> u64 {
+        let mut total = 0u64;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = self.path.clone().into_os_string();
+            p.push(suffix);
+            if let Ok(md) = std::fs::metadata(PathBuf::from(p)) {
+                total += md.len();
+            }
+        }
+        total
+    }
+
+    /// Fold the WAL back into the database and truncate it.
+    ///
+    /// Best-effort: a concurrent scan holding the file makes this fail,
+    /// which costs nothing. Worth doing at the end of a run so the
+    /// footprint reported is a settled number rather than one that
+    /// depends on when SQLite last checkpointed, and so the sidecar
+    /// does not grow across runs.
+    pub async fn checkpoint(&self) {
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await;
     }
 
     /// Total rows, for diagnostics.

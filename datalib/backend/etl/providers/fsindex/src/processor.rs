@@ -79,6 +79,12 @@ impl DataProcessor for FsindexDownload {
         // machine's cache directory — never in the data root, which may
         // be synced or copied between machines.
         let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+        tracing::info!(
+            event = "fsindex_cache_open",
+            path = %cache.path().display(),
+            "reading this host's fingerprint cache from {}",
+            cache.path().display(),
+        );
         let s = download::fetch(download::FetchOptions {
             // Unused when `db` is Some (fetch reuses the open handle); kept for
             // the standalone-open path's signature.
@@ -96,7 +102,8 @@ impl DataProcessor for FsindexDownload {
         })
         .await?;
         let summary = format!(
-            "entries={} files_hashed={} files_reused={} dirs={} symlinks={} stamped={} errors={}",
+            "entries={} files_hashed={} files_reused={} dirs={} symlinks={} stamped={} \
+             errors={} cache_read={} cache_wrote={} cache_forgot={} cache_bytes={}",
             s.entries_scanned,
             s.files_hashed,
             s.files_reused,
@@ -104,6 +111,10 @@ impl DataProcessor for FsindexDownload {
             s.symlinks,
             s.stamped_directories,
             s.errors,
+            s.cache_entries_loaded,
+            s.cache_entries_written,
+            s.cache_entries_forgotten,
+            download::human_growth(s.cache_bytes_before, s.cache_bytes_after),
         );
         Ok(session.finish(ctx, summary).await)
     }

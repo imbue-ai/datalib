@@ -95,6 +95,29 @@ pub struct FetchSummary {
     pub symlinks: usize,
     pub stamped_directories: usize,
     pub errors: usize,
+    /// Absolute path of the fingerprint cache this scan used. Worth
+    /// reporting because it is host state living outside both the data
+    /// root and the scan store, so it is the one input a reader cannot
+    /// infer from the command line.
+    pub cache_path: PathBuf,
+    /// Entries this host had already cached for the scan root.
+    pub cache_entries_loaded: usize,
+    /// Fingerprints written back — one per entry the walk visited.
+    pub cache_entries_written: u64,
+    /// Cache entries dropped because their paths are gone from disk.
+    pub cache_entries_forgotten: u64,
+    /// The cache's on-disk footprint before this scan, in bytes —
+    /// database plus its `-wal` / `-shm` sidecars.
+    pub cache_bytes_before: u64,
+    /// And after, once the WAL has been folded back in.
+    ///
+    /// Note this does **not** shrink when entries are forgotten:
+    /// SQLite returns freed pages to its own freelist, not to the
+    /// filesystem, so a scan reporting `cache_forgot=4000` will still
+    /// show no change. The space is reused by the next insert. Only
+    /// `VACUUM` hands it back, which rewrites the whole file and is not
+    /// worth doing on a cache.
+    pub cache_bytes_after: u64,
     /// Total bytes fed through blake3 this scan — i.e. the content of
     /// the `files_hashed` files only.
     pub bytes_hashed: u64,
@@ -163,6 +186,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let opts = FetchOptions { root, ..opts };
 
     let load_start = Instant::now();
+    let cache_bytes_before = opts.cache.disk_bytes();
+    let mut cache_entries_loaded = 0usize;
     let prev = if opts.control.reset_and_redownload {
         CachedTree::default()
     } else {
@@ -180,6 +205,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.root.display()
         ));
         let cached = opts.cache.load_under(&opts.root).await?;
+        cache_entries_loaded = cached.len();
         info!(
             event = "fsindex_load_cache_done",
             entry_rows = cached.len(),
@@ -205,7 +231,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
 
-    let (mut summary, walker_errors, counters, phase_walk, phase_write_total) = streaming_pipeline(
+    let (
+        mut summary,
+        walker_errors,
+        counters,
+        phase_walk,
+        phase_write_total,
+        cache_entries_written,
+    ) = streaming_pipeline(
         opts.root.clone(),
         default_stamp_kind,
         prev,
@@ -245,19 +278,33 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Cheap because the candidate set is small: on an unchanged tree it
     // is empty, and otherwise it is the deletions plus whatever this
     // scan ignored.
+    let mut cache_entries_forgotten = 0u64;
     match forget_deleted(&opts.cache, &opts.root, &db).await {
         Ok((0, _)) => {}
-        Ok((gone, kept)) => info!(
-            event = "fsindex_cache_forgot_deleted",
-            removed = gone,
-            kept_present = kept,
-            "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
+        Ok((gone, kept)) => {
+            cache_entries_forgotten = gone;
+            info!(
+                event = "fsindex_cache_forgot_deleted",
+                removed = gone,
+                kept_present = kept,
+                "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
              scan did not look at but which still exist"
-        ),
+            );
+        }
         // A cache that cannot be tidied is still a correct cache.
         Err(e) => warn!(event = "fsindex_cache_forget_failed", error = %e,
                         "could not tidy the fingerprint cache: {e}"),
     }
+
+    // Settle the WAL before measuring, or the footprint depends on
+    // when SQLite last checkpointed rather than on what we wrote.
+    opts.cache.checkpoint().await;
+    summary.cache_path = opts.cache.path().to_path_buf();
+    summary.cache_bytes_before = cache_bytes_before;
+    summary.cache_bytes_after = opts.cache.disk_bytes();
+    summary.cache_entries_loaded = cache_entries_loaded;
+    summary.cache_entries_written = cache_entries_written;
+    summary.cache_entries_forgotten = cache_entries_forgotten;
 
     // ── scan_meta ────────────────────────────────────────────────────
     let root_cascade = build_root_cascade(&opts.root);
@@ -369,6 +416,8 @@ async fn streaming_pipeline(
     Arc<WalkerCounters>,
     Duration,
     Duration,
+    // Fingerprints written back to the host cache.
+    u64,
 )> {
     let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
     let counters = Arc::new(WalkerCounters::default());
@@ -390,15 +439,21 @@ async fn streaming_pipeline(
     let writer_handle = tokio::spawn(async move {
         let mut total_write = Duration::ZERO;
         let mut batches_written: u64 = 0;
+        let mut fingerprints_written: u64 = 0;
         while let Some((files, fingerprints)) = rx.recv().await {
             // Two destinations, deliberately: content to the versioned
             // store, host observations to the unversioned cache.
             let took = writer_db.write_batch(&files, &writer_now).await?;
+            fingerprints_written += fingerprints.len() as u64;
             writer_cache.store(&fingerprints).await?;
             total_write += took;
             batches_written += 1;
         }
-        Ok::<(Duration, u64), anyhow::Error>((total_write, batches_written))
+        Ok::<(Duration, u64, u64), anyhow::Error>((
+            total_write,
+            batches_written,
+            fingerprints_written,
+        ))
     });
 
     // ── Progress task ────────────────────────────────────────────────
@@ -520,7 +575,7 @@ async fn streaming_pipeline(
     // walker's `blocking_send` then fails with a generic "channel
     // closed". That masks the real cause. So if the writer errored,
     // surface the writer's error regardless of what the walker said.
-    let (phase_write_total, _batches_written) = match writer_join {
+    let (phase_write_total, _batches_written, fingerprints_written) = match writer_join {
         Ok(v) => v,
         Err(writer_err) => {
             return Err(writer_err.context("doltlite writer task failed"));
@@ -553,6 +608,7 @@ async fn streaming_pipeline(
         counters,
         phase_walk,
         phase_write_total,
+        fingerprints_written,
     ))
 }
 
@@ -615,6 +671,22 @@ fn new_uuid() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
+/// A cache footprint as `before->after (H -> H, ±H)`, raw bytes first
+/// so the line stays greppable and the human form right after so it is
+/// readable without arithmetic.
+pub fn human_growth(before: u64, after: u64) -> String {
+    let delta = if after >= before {
+        format!("+{}", human_bytes(after - before))
+    } else {
+        format!("-{}", human_bytes(before - after))
+    };
+    format!(
+        "{before}->{after} ({} -> {}, {delta})",
+        human_bytes(before),
+        human_bytes(after)
+    )
+}
+
 /// Human-readable byte count, decimal (1000-based) units to match the
 /// `MB/s` throughput readouts (which divide by 1_000_000).
 pub fn human_bytes(n: u64) -> String {
@@ -659,3 +731,34 @@ fn build_dir_cascade(root: &std::path::Path, dir: &std::path::Path) -> OptionsCa
 // Keep types referenced even if not used at the module surface.
 const _: Option<EffectiveOptions> = None;
 const _: Option<FsindexYaml> = None;
+
+#[cfg(test)]
+mod growth_tests {
+    use super::human_growth;
+
+    #[test]
+    fn growth_shows_raw_bytes_then_the_human_form() {
+        assert_eq!(
+            human_growth(12_288, 475_136),
+            "12288->475136 (12.3 KB -> 475.1 KB, +462.8 KB)"
+        );
+    }
+
+    #[test]
+    fn no_change_is_plus_zero_not_a_blank() {
+        assert_eq!(
+            human_growth(4096, 4096),
+            "4096->4096 (4.1 KB -> 4.1 KB, +0 B)"
+        );
+    }
+
+    /// A cache can shrink — `VACUUM`, or a fresh file — so the delta
+    /// has to carry a sign rather than underflowing.
+    #[test]
+    fn a_shrink_is_reported_as_negative() {
+        assert_eq!(
+            human_growth(1_000_000, 400_000),
+            "1000000->400000 (1.0 MB -> 400.0 KB, -600.0 KB)"
+        );
+    }
+}
