@@ -9,7 +9,6 @@ use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::fswalk::{StampCursor, StampKind};
 
 use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
 
@@ -23,10 +22,9 @@ pub fn db_path_for(raw_dir: &Path) -> PathBuf {
 /// so the walk never touches the database.
 #[derive(Default)]
 pub struct PrevCache {
-    /// Per-path rescan cursor plus the hash we recorded for it. When
-    /// the cursor still matches, we reuse the hash instead of reading
-    /// the file.
-    pub paths: HashMap<String, (StampCursor, String)>,
+    /// Which path held which content, last time. The caller's half of
+    /// "what changed since I last looked".
+    pub paths: HashMap<String, String>,
     /// Documents already in `pdf_documents`, by hex blake3. A path
     /// whose hash we reused *and* whose document row exists needs no
     /// work at all.
@@ -50,26 +48,24 @@ impl RawDb {
         &self.pool
     }
 
-    /// Load the rescan cache. Must run **before** [`Self::reset`].
+    /// What this source already ingested. Must run **before**
+    /// [`Self::reset`].
+    ///
+    /// Only the caller's half: which path held which content. The stat
+    /// cursor is host state and lives in the shared
+    /// [`datalib_etl::fingerprint_cache`], which
+    /// [`datalib_etl::fsscan`] consults on our behalf.
     pub async fn load_prev(&self) -> Result<PrevCache> {
         let mut cache = PrevCache::default();
 
-        let rows =
-            sqlx::query("SELECT id, blake3, mtime_ns, size, stamp_kind, inode, dev FROM pdf_paths")
-                .fetch_all(&self.pool)
-                .await
-                .context("load pdf_paths cache")?;
+        let rows = sqlx::query("SELECT id, blake3 FROM pdf_paths")
+            .fetch_all(&self.pool)
+            .await
+            .context("load pdf_paths")?;
         for r in rows {
-            let id: String = r.get("id");
-            let blake3: String = r.get("blake3");
-            let cursor = StampCursor {
-                mtime_ns: r.get("mtime_ns"),
-                size: r.get("size"),
-                stamp_kind: StampKind::from_str_or_rescan(&r.get::<String, _>("stamp_kind")),
-                inode: r.get("inode"),
-                dev: r.get("dev"),
-            };
-            cache.paths.insert(id, (cursor, blake3));
+            cache
+                .paths
+                .insert(r.get("id"), r.get::<String, _>("blake3"));
         }
 
         let docs = sqlx::query("SELECT blake3 FROM pdf_documents")
@@ -251,11 +247,6 @@ mod tests {
         PdfPathRow {
             id: id.to_string(),
             blake3: blake3.to_string(),
-            mtime_ns: 0,
-            size: 1,
-            stamp_kind: StampKind::from_str_or_rescan("rescan"),
-            inode: None,
-            dev: None,
             last_seen_at: NOW.to_string(),
         }
     }
