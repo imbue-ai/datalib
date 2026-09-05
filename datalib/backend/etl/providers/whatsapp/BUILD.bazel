@@ -35,7 +35,6 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",

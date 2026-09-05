@@ -12,12 +12,13 @@
 //! (the per-provider CAS edge) + `cas_objects` via the shared
 //! `CasEdgeAccumulator` / `flush_cas_edges` primitives.
 
+use datalib_etl::fsscan;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
@@ -40,186 +41,158 @@ pub struct ChatSummary {
     pub blobs_stored: usize,
 }
 
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<ChatSummary> {
-    let chat_root = root.join("Google Chat");
-    if !chat_root.exists() {
-        return Ok(ChatSummary::default());
-    }
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
+/// The name of the directory a scanned file sits in — a Chat user id
+/// or group id, which is how the export names them.
+fn parent_dir_name(f: &fsscan::ScannedFile) -> Option<String> {
+    let name = f
+        .path
+        .parent()?
+        .file_name()
+        .and_then(|s| s.to_str())?
+        .to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<ChatSummary> {
+    let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
+    let changes = scan.changes_since(&prev);
     let mut summary = ChatSummary::default();
 
     // ── Users ──────────────────────────────────────────────────────
-    let users_dir = chat_root.join("Users");
     let mut user_rows: Vec<ChatUserRow> = Vec::new();
-    let mut user_fps: Vec<FileFingerprint> = Vec::new();
-    if users_dir.exists() {
-        for entry in std::fs::read_dir(&users_dir)
-            .with_context(|| format!("read_dir {}", users_dir.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let info = path.join("user_info.json");
-            if !info.exists() {
-                continue;
-            }
-            let fp = FileFingerprint::of(&info)?;
-            if file_checkpoint::should_skip(&stamped, &fp) {
-                continue;
-            }
-            let dir_name = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if dir_name.is_empty() {
-                continue;
-            }
-            let bytes = std::fs::read(&info)?;
-            let payload: Value = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parse {}", info.display()))?;
-            user_rows.push(ChatUserRow {
-                id_and_payload: WirePayload {
-                    id: dir_name,
-                    payload: payload.to_string(),
-                },
-            });
-            user_fps.push(fp);
+    let mut user_files: Vec<&fsscan::ScannedFile> = Vec::new();
+    for f in changes.needs_reading_under("Google Chat/Users") {
+        if f.path.file_name().and_then(|s| s.to_str()) != Some("user_info.json") {
+            continue;
         }
+        let Some(dir_name) = parent_dir_name(f) else {
+            continue;
+        };
+        let bytes = std::fs::read(&f.path)?;
+        let payload: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse {}", f.path.display()))?;
+        user_rows.push(ChatUserRow {
+            id_and_payload: WirePayload {
+                id: dir_name,
+                payload: payload.to_string(),
+            },
+        });
+        user_files.push(f);
     }
 
     // ── Groups + messages ──────────────────────────────────────────
-    let groups_dir = chat_root.join("Groups");
     let mut group_rows: Vec<ChatGroupRow> = Vec::new();
-    let mut group_fps: Vec<FileFingerprint> = Vec::new();
+    let mut group_files: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut message_rows: Vec<ChatMessageRow> = Vec::new();
-    let mut messages_fps: Vec<FileFingerprint> = Vec::new();
+    let mut messages_files: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut n_attachments: usize = 0;
-    if groups_dir.exists() {
-        for entry in std::fs::read_dir(&groups_dir)
-            .with_context(|| format!("read_dir {}", groups_dir.display()))?
-        {
-            let entry = entry?;
-            let dir = entry.path();
-            if !dir.is_dir() {
-                continue;
+
+    // A group is a directory holding `group_info.json` and
+    // `messages.json`. Both are just changed files in the scan, so
+    // dispatch on which one this is rather than walking the tree.
+    for f in changes.needs_reading_under("Google Chat/Groups") {
+        let Some(dir_name) = parent_dir_name(f) else {
+            continue;
+        };
+        let Some(group_dir) = f.path.parent() else {
+            continue;
+        };
+        match f.path.file_name().and_then(|s| s.to_str()) {
+            Some("group_info.json") => {
+                let bytes = std::fs::read(&f.path)?;
+                let payload: Value = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("parse {}", f.path.display()))?;
+                group_rows.push(ChatGroupRow {
+                    id_and_payload: WirePayload {
+                        id: dir_name.clone(),
+                        payload: payload.to_string(),
+                    },
+                });
+                group_files.push(f);
             }
-            let dir_name = dir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if dir_name.is_empty() {
-                continue;
-            }
-            // group_info.json (small; one row per dir)
-            let info = dir.join("group_info.json");
-            if info.exists() {
-                let fp = FileFingerprint::of(&info)?;
-                if !file_checkpoint::should_skip(&stamped, &fp) {
-                    let bytes = std::fs::read(&info)?;
-                    let payload: Value = serde_json::from_slice(&bytes)
-                        .with_context(|| format!("parse {}", info.display()))?;
-                    group_rows.push(ChatGroupRow {
-                        id_and_payload: WirePayload {
-                            id: dir_name.clone(),
-                            payload: payload.to_string(),
-                        },
-                    });
-                    group_fps.push(fp);
-                }
-            }
-            // messages.json (one entry per message)
-            let messages = dir.join("messages.json");
-            if messages.exists() {
-                let fp = FileFingerprint::of(&messages)?;
-                if !file_checkpoint::should_skip(&stamped, &fp) {
-                    let bytes = std::fs::read(&messages)?;
-                    let parsed: Value = serde_json::from_slice(&bytes)
-                        .with_context(|| format!("parse {}", messages.display()))?;
-                    let arr = parsed
-                        .get("messages")
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    for msg in arr {
-                        if let Some(row) = build_message_row(&dir_name, &msg) {
-                            // Attachments: walk msg.attached_files[].
-                            if let Some(files) =
-                                msg.get("attached_files").and_then(|v| v.as_array())
-                            {
-                                for f in files {
-                                    let export_name = f
-                                        .get("export_name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    if export_name.is_empty() {
-                                        continue;
-                                    }
-                                    n_attachments += 1;
-                                    let owning = row.id_and_payload.id.clone();
-                                    // Google truncates long on-disk names
-                                    // while keeping the full name in the
-                                    // JSON, so resolve via prefix match
-                                    // rather than an exact join (issue #64).
-                                    let resolved =
-                                        match attachment_path::resolve(&dir, &export_name) {
-                                            attachment_path::Resolved::Exact(p)
-                                            | attachment_path::Resolved::Truncated(p) => p,
-                                            attachment_path::Resolved::Missing => {
-                                                warn!(
-                                                    event = "chat_attachment_missing",
-                                                    message_id = %owning,
-                                                    export_name = %export_name,
-                                                );
-                                                acc.add_failed(
-                                                    &owning,
-                                                    &export_name,
-                                                    "attachment file missing on disk",
-                                                );
-                                                continue;
-                                            }
-                                        };
-                                    match std::fs::read(&resolved) {
-                                        Ok(bytes) => {
-                                            // Content type from the resolved
-                                            // file's extension (truncation
-                                            // preserves it).
-                                            let ct = guess_content_type(&resolved);
-                                            acc.add_fetched(
-                                                &owning,
-                                                &export_name,
-                                                bytes,
-                                                ct,
-                                                Some(export_name.clone()),
-                                            );
-                                        }
-                                        Err(e) => {
+            Some("messages.json") => {
+                let bytes = std::fs::read(&f.path)?;
+                let parsed: Value = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("parse {}", f.path.display()))?;
+                let arr = parsed
+                    .get("messages")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                for msg in arr {
+                    if let Some(row) = build_message_row(&dir_name, &msg) {
+                        // Attachments: walk msg.attached_files[].
+                        if let Some(files) = msg.get("attached_files").and_then(|v| v.as_array()) {
+                            for f in files {
+                                let export_name = f
+                                    .get("export_name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                if export_name.is_empty() {
+                                    continue;
+                                }
+                                n_attachments += 1;
+                                let owning = row.id_and_payload.id.clone();
+                                // Google truncates long on-disk names
+                                // while keeping the full name in the
+                                // JSON, so resolve via prefix match
+                                // rather than an exact join (issue #64).
+                                let resolved =
+                                    match attachment_path::resolve(group_dir, &export_name) {
+                                        attachment_path::Resolved::Exact(p)
+                                        | attachment_path::Resolved::Truncated(p) => p,
+                                        attachment_path::Resolved::Missing => {
                                             warn!(
-                                                event = "chat_attachment_unreadable",
+                                                event = "chat_attachment_missing",
                                                 message_id = %owning,
                                                 export_name = %export_name,
-                                                error = %e,
                                             );
                                             acc.add_failed(
                                                 &owning,
                                                 &export_name,
-                                                "attachment unreadable",
+                                                "attachment file missing on disk",
                                             );
+                                            continue;
                                         }
+                                    };
+                                match std::fs::read(&resolved) {
+                                    Ok(bytes) => {
+                                        // Content type from the resolved
+                                        // file's extension (truncation
+                                        // preserves it).
+                                        let ct = guess_content_type(&resolved);
+                                        acc.add_fetched(
+                                            &owning,
+                                            &export_name,
+                                            bytes,
+                                            ct,
+                                            Some(export_name.clone()),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            event = "chat_attachment_unreadable",
+                                            message_id = %owning,
+                                            export_name = %export_name,
+                                            error = %e,
+                                        );
+                                        acc.add_failed(
+                                            &owning,
+                                            &export_name,
+                                            "attachment unreadable",
+                                        );
                                     }
                                 }
                             }
-                            message_rows.push(row);
                         }
+                        message_rows.push(row);
                     }
-                    messages_fps.push(fp);
                 }
+                messages_files.push(f);
             }
+            _ => {}
         }
     }
 
@@ -235,12 +208,12 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
     bulk_upsert_in_tx(&mut tx, &group_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &user_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
-    for fp in user_fps
+    for f in user_files
         .iter()
-        .chain(group_fps.iter())
-        .chain(messages_fps.iter())
+        .chain(group_files.iter())
+        .chain(messages_files.iter())
     {
-        file_checkpoint::record_finished(&mut tx, SCOPE, fp).await?;
+        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit google_chat tx")?;
 

@@ -25,7 +25,7 @@
 //!   time by joining the source's `parent_message_row_id` → `message`
 //!   → `(chat_jid, key_id, from_me)`. add-ons in WhatsApp model
 //!   reactions, polls, pinned-in-chat markers, etc.
-//! - `wa_media_files` is keyed by sha256 of the file bytes. Multiple
+//! - `wa_media_files` is keyed by blake3 of the file bytes. Multiple
 //!   `wa_message_media` rows can point at the same file (forwards,
 //!   re-sends); the registry is the dedup.
 
@@ -231,18 +231,24 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
     PRIMARY KEY (chat_jid, key_id, from_me)
 );";
 
-/// Catalog of plaintext media files from the source backup. Bytes
-/// live in the sibling CAS file (managed by `datalib_etl::blob_cas`);
-/// `wa_media_files.blake3` is the CAS key. `sha256` stays as the
-/// upstream identifier (matches `wa_message_media.file_hash`).
+/// Catalog of plaintext media files from the source backup. Bytes live
+/// in the sibling CAS file (managed by `datalib_etl::blob_cas`), and
+/// `blake3` is both this table's key and the CAS key.
+///
+/// It used to carry a second hash, `sha256`, described as "the upstream
+/// identifier (matches `wa_message_media.file_hash`)". Nothing ever
+/// joined on that: the shipped join is
+/// `wa_media_files.relative_path = wa_message_media.file_path`, and
+/// `file_hash` is stored and never read back. So the sha256 was a
+/// second digest of the same bytes serving as the `blob_refs.ref_id` —
+/// a job blake3 already does for every other provider, and one that
+/// forced a full re-read of every media file on every run to compute.
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
-    sha256 TEXT PRIMARY KEY,
+    blake3 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
-    mtime_unix INTEGER,
     mime_type TEXT,
-    blake3 TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
+    CHECK (length(blake3) = 64)
 );";
 
 /// All DDL statements in dependency-safe creation order.

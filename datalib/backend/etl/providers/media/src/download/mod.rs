@@ -22,7 +22,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fswalk::{self, StampDecision};
+use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
+use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
@@ -48,6 +50,9 @@ pub struct FetchOptions {
     /// Tree to scan.
     pub root: PathBuf,
     pub ignore: Vec<String>,
+    /// This host's shared fingerprint cache. Host state, so it lives
+    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    pub cache: FingerprintCache,
     pub max_bytes: Option<u64>,
     pub payload_max_bytes: Option<u64>,
     pub playlists: bool,
@@ -63,11 +68,18 @@ pub struct FetchOptions {
 
 #[derive(Debug, Default, Clone)]
 pub struct FetchSummary {
+    /// Everything the walk covered, playlists included. `hashed +
+    /// reused` accounts for exactly this — which `files_seen` does not,
+    /// since it excludes playlists.
+    pub entries_scanned: usize,
     /// Media files visited (playlists excluded).
     pub files_seen: usize,
-    /// Files whose bytes we actually read and hashed.
+    /// Files whose bytes were actually read and hashed — playlists
+    /// among them. They are hashed once, by the scan, rather than again
+    /// when they are parsed.
     pub hashed: usize,
-    /// Files skipped via the `(mtime, size, inode, dev)` cursor.
+    /// Files whose digest came from this host's fingerprint cache, so
+    /// no bytes were read.
     pub reused: usize,
     /// Distinct items (by content) behind those paths.
     pub items: usize,
@@ -117,13 +129,41 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await
         .context("record scan root")?;
 
-    let (files, walk_errors) = fswalk::walk_files(&opts.root, &opts.ignore, kind::accept)
-        .with_context(|| format!("walk {}", opts.root.display()))?;
-    summary.errors += walk_errors.len();
-    for e in &walk_errors {
+    // One walk, hashing only what this host's shared cache cannot
+    // vouch for. `scan_with` rather than `scan` because a dataless file
+    // — evicted to iCloud — must not be read at all: it has a size and
+    // an mtime, and touching a byte silently pulls the whole thing back
+    // over the network.
+    let dataless_skipped = std::sync::atomic::AtomicUsize::new(0);
+    let scan = fsscan::scan_with(
+        &opts.cache,
+        &opts.root,
+        &fsscan::ScanOptions {
+            ignore: opts.ignore.clone(),
+            max_bytes: opts.max_bytes,
+            force_rehash: opts.force_rehash,
+        },
+        kind::accept,
+        |path, meta| {
+            if opts.skip_dataless && is_dataless(meta) {
+                dataless_skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(path = %path.display(), "media_skipped_dataless");
+                return false;
+            }
+            true
+        },
+    )
+    .await?;
+    summary.errors += scan.errors.len();
+    for e in &scan.errors {
         tracing::warn!(path = %e.path.display(), error = %e.error, "media_walk_error");
     }
-    opts.progress.set_length(Some(files.len() as u64));
+    summary.dataless_skipped = dataless_skipped.into_inner();
+    summary.entries_scanned = scan.files.len();
+    summary.too_large = scan.stats.too_large;
+    summary.hashed = scan.stats.hashed;
+    summary.reused = scan.stats.reused;
+    opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut playlist_files = Vec::new();
     let mut batch = WriteBatch::default();
@@ -131,74 +171,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // parsed once rather than N times.
     let mut seen_items: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for f in files {
+    for f in &scan.files {
         opts.progress.inc(1);
 
         if kind::is_playlist_extension(&f.path) {
-            playlist_files.push(f);
+            playlist_files.push(f.clone());
             continue;
         }
         summary.files_seen += 1;
-
-        let fresh = fswalk::fresh_stat(&f.meta);
-        if opts.skip_dataless && is_dataless(&f.meta) {
-            summary.dataless_skipped += 1;
-            tracing::info!(path = %f.rel, size = fresh.size, "media_skipped_dataless");
-            continue;
-        }
-        if let Some(max) = opts.max_bytes {
-            if fresh.size as u64 > max {
-                summary.too_large += 1;
-                tracing::info!(path = %f.rel, size = fresh.size, "media_skipped_too_large");
-                continue;
-            }
-        }
-
-        // ── Reuse or rehash ──────────────────────────────────────────
-        // `remove` rather than `get`: taking the entry out is also how
-        // this path is marked as still indexed, so what remains in
-        // `prev.paths` at the end is the set of rows to delete. One
-        // pass, no second bookkeeping structure.
-        //
-        // Note this sits *after* the dataless and size guards, so a
-        // file that got evicted to the cloud or grew past `max_bytes`
-        // keeps its stale entry and loses its row. That is right: we
-        // did not index it this run, and while it is evicted we cannot
-        // verify what it holds. It comes back on the scan after it
-        // does.
-        let cached = prev.paths.remove(&f.rel);
-        let decision = if opts.force_rehash {
-            StampDecision::Rehash
-        } else {
-            fswalk::decide(cached.as_ref().map(|(c, _)| c), &fresh)
-        };
-
-        let hash_hex = match decision {
-            StampDecision::ReuseHash => {
-                // Only safe when the item row survives too; otherwise
-                // we would record a path pointing at nothing.
-                let (_, h) = cached.as_ref().expect("ReuseHash implies a cache entry");
-                if prev.known_items.contains(h) || seen_items.contains(h) {
-                    summary.reused += 1;
-                    h.clone()
-                } else {
-                    match hash_and_count(&f.path, fresh.size as u64, &mut summary) {
-                        Some(h) => h,
-                        None => continue,
-                    }
-                }
-            }
-            StampDecision::Rehash => {
-                match hash_and_count(&f.path, fresh.size as u64, &mut summary) {
-                    Some(h) => h,
-                    None => continue,
-                }
-            }
-        };
+        let hash_hex = fswalk::to_hex(&f.blake3);
+        // Taking the entry out is how this path is marked as still
+        // indexed; what remains in `prev.paths` at the end is the set
+        // of rows to delete.
+        prev.paths.remove(&f.rel);
 
         // ── Identify, once per distinct content ──────────────────────
         if !prev.known_items.contains(&hash_hex) && !seen_items.contains(&hash_hex) {
-            match identify(&f.path, fresh.size, &hash_hex, &opts) {
+            match identify(&f.path, f.size, &hash_hex, &opts) {
                 Ok(id) => {
                     seen_items.insert(hash_hex.clone());
                     summary.items += 1;
@@ -231,11 +220,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         batch.files.push(MediaFileRow {
             id: f.rel.clone(),
             blake3: hash_hex,
-            mtime_ns: fresh.mtime_ns,
-            size: fresh.size,
-            stamp_kind: fswalk::stamp_kind_for(&fresh),
-            inode: fresh.inode,
-            dev: fresh.dev,
             last_seen_at: opts.now.clone(),
         });
 
@@ -283,6 +267,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// off. iCloud's `.icloud` eviction markers need no handling here —
 /// they are named `.track.mp3.icloud`, so `kind::accept` never visits
 /// them in the first place.
+///
+/// Consulted through [`fsscan::scan_with`]'s admit hook, which is the
+/// only place that sees a stat *before* anything reads the file.
 #[cfg(unix)]
 fn is_dataless(md: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -292,20 +279,6 @@ fn is_dataless(md: &std::fs::Metadata) -> bool {
 #[cfg(not(unix))]
 fn is_dataless(_md: &std::fs::Metadata) -> bool {
     false
-}
-
-fn hash_and_count(path: &Path, size: u64, summary: &mut FetchSummary) -> Option<String> {
-    match fswalk::hash_file(path, size) {
-        Ok(h) => {
-            summary.hashed += 1;
-            Some(fswalk::to_hex(&h))
-        }
-        Err(e) => {
-            summary.errors += 1;
-            tracing::warn!(path = %path.display(), error = %e, "media_hash_failed");
-            None
-        }
-    }
 }
 
 /// What one distinct item's worth of bytes turned out to be.
@@ -406,7 +379,7 @@ fn read_head(path: &Path) -> Result<Vec<u8>> {
 
 async fn scan_playlists(
     opts: &FetchOptions,
-    files: &[fswalk::WalkedFile],
+    files: &[fsscan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
 ) -> Result<()> {
@@ -414,14 +387,12 @@ async fn scan_playlists(
     let mut entries: Vec<MediaPlaylistEntryRow> = Vec::new();
 
     for f in files {
-        let size = f.meta.len();
+        let size = f.size as u64;
         if size == 0 || size > MAX_PLAYLIST_BYTES {
             continue;
         }
-        if opts.skip_dataless && is_dataless(&f.meta) {
-            summary.dataless_skipped += 1;
-            continue;
-        }
+        // No dataless check here: the scan's admit hook already refused
+        // to read those, so they never reached this list.
         let bytes = match std::fs::read(&f.path) {
             Ok(b) => b,
             Err(e) => {
@@ -454,7 +425,9 @@ async fn scan_playlists(
         // upsert keyed on `<path>#<position>` would leave behind.
         opts.db.clear_playlist_entries(&f.rel).await?;
 
-        let hash = fswalk::to_hex(&fswalk::hash_file(&f.path, size)?);
+        // Already hashed by the scan; re-reading would be a second
+        // pass over bytes we hold the digest for.
+        let hash = fswalk::to_hex(&f.blake3);
         for e in &parsed.entries {
             // `resolve` is pure string work against the playlist's own
             // path — no I/O, no database. Whether a file is actually

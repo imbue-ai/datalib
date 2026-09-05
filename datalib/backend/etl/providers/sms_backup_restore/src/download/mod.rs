@@ -20,6 +20,7 @@
 pub mod parse;
 pub mod schema_raw;
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -27,7 +28,8 @@ use datalib_etl::blob_cas::{self, BlobCas, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
+use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -100,6 +102,9 @@ pub struct FetchOptions {
     /// Root of the user's export (the directory holding `sms-*.xml` /
     /// `calls-*.xml`). A single file path is also accepted.
     pub input_path: PathBuf,
+    /// Host-wide fingerprint cache: the shared answer to "did this
+    /// file change?", so an unchanged export costs a `stat`.
+    pub cache: FingerprintCache,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -125,20 +130,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
 
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
+    // One scan answers what `.xml` files are there and which have
+    // changed since the last pass — walk, hash, and the decision not
+    // to re-hash what the host cache can vouch for, all in the utility.
+    let scan = fsscan::scan(
+        &opts.cache,
+        &opts.input_path,
+        &fsscan::ScanOptions::default(),
+        |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml")),
+    )
+    .await?;
+    let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
+    let changes = scan.changes_since(&prev);
 
     let mut message_rows: Vec<SmsMessageRow> = Vec::new();
     let mut call_rows: Vec<SmsCallRow> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
-    let mut fps: Vec<FileFingerprint> = Vec::new();
+    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut summary = FetchSummary::default();
 
-    for path in discover_xml(&opts.input_path) {
-        let fp = FileFingerprint::of(&path)?;
-        if file_checkpoint::should_skip(&stamped, &fp) {
-            continue;
-        }
-        let xml = match std::fs::read_to_string(&path) {
+    for f in changes.needs_reading() {
+        let path = &f.path;
+        let xml = match std::fs::read_to_string(path) {
             Ok(x) => x,
             Err(e) => {
                 warn!(event = "sms_file_unreadable", path = %path.display(), error = %e);
@@ -157,7 +170,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         ingest_mms(&m, &mut message_rows, &mut acc, &mut summary.attachments);
                         summary.mms += 1;
                     }
-                    fps.push(fp);
+                    done.push(f);
                     summary.files += 1;
                 }
                 Err(e) => {
@@ -171,7 +184,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         ingest_call(&c, &mut call_rows);
                         summary.calls += 1;
                     }
-                    fps.push(fp);
+                    done.push(f);
                     summary.files += 1;
                 }
                 Err(e) => {
@@ -200,8 +213,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .context("begin sms_backup_restore tx")?;
     bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &call_rows, &now).await?;
-    for fp in &fps {
-        file_checkpoint::record_finished(&mut tx, SCOPE, fp).await?;
+    for f in &done {
+        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
     tx.commit().await.context("commit sms_backup_restore tx")?;
 
@@ -363,31 +376,6 @@ fn ingest_call(c: &CallRecord, rows: &mut Vec<SmsCallRow>) {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
-
-/// Recursively collect every `*.xml` under `root` (or `root` itself if
-/// it's a file), sorted for stable ordering.
-fn discover_xml(root: &Path) -> Vec<PathBuf> {
-    if root.is_file() {
-        return vec![root.to_path_buf()];
-    }
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml")) {
-                out.push(p);
-            }
-        }
-    }
-    out.sort();
-    out
-}
 
 /// Canonicalize a phone number / address to `+` and digits so the same
 /// contact keys to one conversation regardless of source formatting.

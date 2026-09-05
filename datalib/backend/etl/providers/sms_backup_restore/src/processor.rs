@@ -8,6 +8,7 @@
 //! drives render alone. The source owns its raw store end to end
 //! (open/commit/checkpoint); the orchestrator only drives `run`.
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -68,6 +69,7 @@ impl DataProcessor for SmsDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
+            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             db: Some(db),
             input_path: self.input_path.clone(),
             progress: ctx.progress.clone(),
