@@ -22,11 +22,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 
 use super::api::{vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
@@ -83,55 +84,44 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.upsert_account(&account_id, &server_url, None, None)
         .await?;
 
-    let files = collect_vcf_files(&opts.input_path)?;
-    opts.progress.set_length(Some(files.len() as u64));
-
-    // Resume cursor: the blake3 of each already-ingested file. Same
-    // mechanism every other file-backed provider uses.
-    let stamped = file_checkpoint::load(db.pool(), CHECKPOINT_SCOPE).await?;
+    // One scan answers both questions at once: which `.vcf` files are
+    // there, and which have changed since this source last finished
+    // with them. The walk, the hashing, and the decision not to re-hash
+    // what the host cache can vouch for all live in the utility.
+    let scan = fsscan::scan(
+        &opts.cache,
+        &opts.input_path,
+        &fsscan::ScanOptions::default(),
+        |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("vcf")),
+    )
+    .await?;
 
     let mut summary = FetchSummary::default();
-    for path in &files {
-        // A `stat`, and a re-hash only if the cache cannot vouch for
-        // the bytes. A file we can't fingerprint is treated as changed
-        // (fall through to ingest, which surfaces the real read error
-        // if the path is genuinely broken).
-        let fingerprint = match FileFingerprint::of(&opts.cache, path).await {
-            Ok(fp) => fp,
-            Err(e) => {
-                warn!(event = "carddav_vcf_stat_failed", path = %path.display(), error = %e);
-                None
-            }
-        };
-        if let Some(fp) = &fingerprint {
-            if file_checkpoint::should_skip(&stamped, fp) {
-                info!(
-                    event = "carddav_vcf_skipped",
-                    path = %path.display(),
-                    size_bytes = fp.size_bytes,
-                    "fingerprint matches checkpoint; skipping re-ingest",
-                );
-                summary.files_skipped += 1;
-                opts.progress.inc(1);
-                continue;
-            }
-        }
+    summary.errors += scan.errors.len();
+    for e in &scan.errors {
+        warn!(event = "carddav_vcf_walk_error", path = %e.path.display(), error = %e.error);
+    }
 
+    let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
+    let changes = scan.changes_since(&prev);
+    summary.files_skipped = changes.unchanged;
+    opts.progress.set_length(Some(scan.files.len() as u64));
+    opts.progress.inc(changes.unchanged as u64);
+
+    for f in changes.needs_reading() {
         opts.progress
-            .set_message(&format!("ingesting {}", path.display()));
-        match ingest_one(&db, &opts.input_path, path, &account_id, &mut summary).await {
+            .set_message(&format!("ingesting {}", f.path.display()));
+        match ingest_one(&db, &opts.input_path, &f.path, &account_id, &mut summary).await {
             Ok(()) => {
                 // Stamp only after a clean ingest, so a crash mid-file
                 // leaves no cursor and the next run re-ingests it.
-                if let Some(fp) = &fingerprint {
-                    file_checkpoint::record_finished_pool(db.pool(), CHECKPOINT_SCOPE, fp).await?;
-                }
+                file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
             }
             Err(e) => {
                 summary.errors += 1;
                 warn!(
                     event = "carddav_vcf_ingest_failed",
-                    path = %path.display(),
+                    path = %f.path.display(),
                     error = %e,
                 );
             }
@@ -250,33 +240,6 @@ fn contact_uid(
         );
     }
     uid
-}
-
-fn collect_vcf_files(input: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    if input.is_file() {
-        if input.extension().and_then(|s| s.to_str()) == Some("vcf") {
-            out.push(input.to_path_buf());
-        }
-    } else if input.is_dir() {
-        walk(input, &mut out)?;
-    }
-    out.sort();
-    Ok(out)
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))?;
-    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
-    paths.sort();
-    for p in paths {
-        if p.is_dir() {
-            walk(&p, out)?;
-        } else if p.extension().and_then(|s| s.to_str()) == Some("vcf") {
-            out.push(p);
-        }
-    }
-    Ok(())
 }
 
 fn addressbook_label(path: &Path) -> String {

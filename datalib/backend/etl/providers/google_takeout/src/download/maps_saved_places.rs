@@ -3,8 +3,7 @@
 //! GeoJSON `FeatureCollection`; one feature per saved/starred place.
 //! PK recipe: `uuidv5(NS, "maps_saved:{ftid_or_cid}:{date}")`.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use std::path::Path;
+use datalib_etl::fsscan;
 
 use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self};
@@ -19,17 +18,11 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "Maps (your places)/Saved Places.json";
 const SCOPE: &str = "google_takeout/maps_saved_places";
 
-pub async fn ingest(
-    db: &RawDb,
-    cache: &FingerprintCache,
-    root: &Path,
-    progress: &Progress,
-) -> Result<usize> {
-    let path = root.join(FILE_REL);
-    let n = file_checkpoint::ingest_changed_file(cache, db.pool(), SCOPE, &path, |bytes| {
+pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
+    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(event = "maps_saved_no_features", path = %path.display());
+            warn!(event = "maps_saved_no_features", path = FILE_REL);
             return Ok(Vec::new());
         };
         let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
@@ -44,7 +37,7 @@ pub async fn ingest(
                 .unwrap_or("");
             let key = extract_ftid_or_cid(url).unwrap_or("");
             if key.is_empty() || date.is_empty() {
-                warn!(event = "maps_saved_missing_key", path = %path.display());
+                warn!(event = "maps_saved_missing_key", path = FILE_REL);
                 continue;
             }
             let id = ns_id(&format!("maps_saved:{key}:{date}"));

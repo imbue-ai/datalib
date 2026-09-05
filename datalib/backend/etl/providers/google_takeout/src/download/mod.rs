@@ -22,6 +22,7 @@ pub mod youtube_watch_history;
 pub use db::{db_path_for, RawDb};
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -128,10 +129,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let root = &opts.input_path;
     let progress = &opts.progress;
-    let cache = &opts.cache;
+    // One scan of the export, up front. Every feed works off it: the
+    // walk, the hashes, and the decision not to re-hash what the host
+    // cache can vouch for all happen once, here, rather than nine
+    // times in nine slightly different shapes.
+    //
+    // First run hashes the whole export. Later runs are `stat`-only,
+    // and a feed enabled later costs nothing extra because its files
+    // are already in the cache.
+    let scan = fsscan::scan(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
+    for e in &scan.errors {
+        warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error);
+    }
+    let scan = &scan;
 
     if opts.sync.maps_reviews {
-        match maps_reviews::ingest(&db, cache, root, progress).await {
+        match maps_reviews::ingest(&db, scan, progress).await {
             Ok(n) => summary.maps_reviews = n,
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "maps_reviews", error = %e);
@@ -140,7 +153,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.maps_saved_places {
-        match maps_saved_places::ingest(&db, cache, root, progress).await {
+        match maps_saved_places::ingest(&db, scan, progress).await {
             Ok(n) => summary.maps_saved_places = n,
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "maps_saved_places", error = %e);
@@ -149,7 +162,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.maps_photos {
-        match maps_photos::ingest(&db, cache, root, progress).await {
+        match maps_photos::ingest(&db, scan, progress).await {
             Ok((rows, blobs)) => {
                 summary.maps_photos = rows;
                 summary.blobs_stored += blobs;
@@ -161,7 +174,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.youtube_watch_history {
-        match youtube_watch_history::ingest(&db, cache, root, progress).await {
+        match youtube_watch_history::ingest(&db, scan, progress).await {
             Ok(n) => summary.youtube_watch_history = n,
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "youtube_watch_history", error = %e);
@@ -170,7 +183,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.youtube_subscriptions {
-        match youtube_subscriptions::ingest(&db, cache, root, progress).await {
+        match youtube_subscriptions::ingest(&db, scan, progress).await {
             Ok(n) => summary.youtube_subscriptions = n,
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "youtube_subscriptions", error = %e);
@@ -179,7 +192,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.google_chat {
-        match google_chat::ingest(&db, cache, root, progress).await {
+        match google_chat::ingest(&db, scan, progress).await {
             Ok(s) => {
                 summary.chat_groups += s.groups;
                 summary.chat_users += s.users;
@@ -194,7 +207,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.gemini_apps {
-        match gemini_apps::ingest(&db, cache, root, progress).await {
+        match gemini_apps::ingest(&db, scan, progress).await {
             Ok(s) => {
                 summary.gemini_activity += s.activity;
                 summary.gemini_attachments += s.attachments;
@@ -207,15 +220,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
     if opts.sync.google_voice {
-        match google_voice::ingest(
-            &db,
-            cache,
-            root,
-            opts.sync.google_voice_include_spam,
-            progress,
-        )
-        .await
-        {
+        match google_voice::ingest(&db, scan, opts.sync.google_voice_include_spam, progress).await {
             Ok(s) => {
                 summary.voice_messages += s.messages;
                 summary.voice_bills += s.bills;

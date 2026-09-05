@@ -5,8 +5,7 @@
 //! `uuidv5(NS, "maps_review:{ftid}:{date}")`, where `ftid` is the hex
 //! id after `!1s` in the feature's `google_maps_url`.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use std::path::Path;
+use datalib_etl::fsscan;
 
 use anyhow::{Context, Result};
 use datalib_etl::file_checkpoint::{self};
@@ -21,17 +20,11 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "Maps (your places)/Reviews.json";
 const SCOPE: &str = "google_takeout/maps_reviews";
 
-pub async fn ingest(
-    db: &RawDb,
-    cache: &FingerprintCache,
-    root: &Path,
-    progress: &Progress,
-) -> Result<usize> {
-    let path = root.join(FILE_REL);
-    let n = file_checkpoint::ingest_changed_file(cache, db.pool(), SCOPE, &path, |bytes| {
+pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
+    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(event = "maps_reviews_no_features", path = %path.display());
+            warn!(event = "maps_reviews_no_features", path = FILE_REL);
             return Ok(Vec::new());
         };
         let mut rows: Vec<MapsReviewRow> = Vec::with_capacity(features.len());
@@ -46,7 +39,7 @@ pub async fn ingest(
                 .and_then(extract_ftid)
                 .unwrap_or("");
             if ftid.is_empty() || date.is_empty() {
-                warn!(event = "maps_review_missing_key", path = %path.display());
+                warn!(event = "maps_review_missing_key", path = FILE_REL);
                 continue;
             }
             let id = ns_id(&format!("maps_review:{ftid}:{date}"));

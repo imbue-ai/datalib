@@ -8,7 +8,7 @@
 //!   every consumer, shared across scans, branches and providers, and
 //!   deliberately unversioned because it describes a machine rather
 //!   than a history.
-//! - **The caller's own [`Watermark`]** — what *this* source has
+//! - **The caller's own [`FileScanCursor`]** — what *this* source has
 //!   already ingested, which lives in that source's own store beside
 //!   its other ingestion state.
 //!
@@ -18,9 +18,9 @@
 //! particular looker.
 //!
 //! ```text
-//!     scan(cache, root, opts, accept)   →  Scan     "what is there now"
-//!     scan.changes_since(&watermark)    →  Changes  "what you have not dealt with"
-//!     scan.watermark()                  →  Watermark  persist this
+//!     scan(cache, root, opts, accept)  →  Scan            "what is there now"
+//!     scan.changes_since(&cursor)      →  Changes         "what you have not dealt with"
+//!     scan.cursor()                    →  FileScanCursor  persist this
 //! ```
 //!
 //! The walk itself hashes only what the cache cannot vouch for, so a
@@ -55,7 +55,37 @@ pub struct ScannedFile {
 /// index anyway, and a provider keyed only by content can hand back an
 /// empty map and rely on [`Changes::added`] plus its own
 /// "do I have this digest?" check.
-pub type Watermark = BTreeMap<String, Blake3>;
+/// What a consumer last saw under a root: every file it finished
+/// with, and what that file hashed to at the time.
+///
+/// A [`Scan`] is *now*; this is *then*; [`Scan::changes_since`] is the
+/// difference. Consumers persist one of these — the repo calls this
+/// shape a resume cursor wherever it appears, and this is that cursor
+/// for a file scan.
+pub type FileScanCursor = BTreeMap<String, Blake3>;
+
+/// Has this file changed since the cursor last saw it?
+pub fn is_unchanged(cursor: &FileScanCursor, f: &ScannedFile) -> bool {
+    cursor.get(&f.rel) == Some(&f.blake3)
+}
+
+/// Lowercase hex of a digest — the form a provider's own store keeps.
+pub fn hex(b: &Blake3) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Parse the hex form back. `None` for anything that is not 32 bytes
+/// of hex, which a caller reads as "no usable cursor entry here".
+pub fn from_hex(s: &str) -> Option<Blake3> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
@@ -143,6 +173,26 @@ impl Changes {
 
     /// Files whose **content** the caller must read: the added and the
     /// modified. A move is not here — the bytes are already known.
+    /// [`Self::needs_reading`], narrowed to one directory of the
+    /// scanned root. An export root holds several feeds' files side by
+    /// side, and each feed wants only what is under its own subtree.
+    ///
+    /// `rel_dir` is root-relative and may be several segments deep
+    /// (`"Maps/Photos and videos"`). Matching is case-insensitive,
+    /// because export trees are handed to us by other people's tools.
+    pub fn needs_reading_under<'a>(
+        &'a self,
+        rel_dir: &'a str,
+    ) -> impl Iterator<Item = &'a ScannedFile> + 'a {
+        let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
+        self.needs_reading().filter(move |f| {
+            f.rel.len() > prefix.len()
+                && f.rel
+                    .get(..prefix.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
+        })
+    }
+
     pub fn needs_reading(&self) -> impl Iterator<Item = &ScannedFile> {
         self.added.iter().chain(self.modified.iter())
     }
@@ -150,7 +200,7 @@ impl Changes {
 
 impl Scan {
     /// What this source has not dealt with, relative to what it had.
-    pub fn changes_since(&self, prev: &Watermark) -> Changes {
+    pub fn changes_since(&self, prev: &FileScanCursor) -> Changes {
         let mut changes = Changes::default();
         let now: BTreeSet<&str> = self.files.iter().map(|f| f.rel.as_str()).collect();
 
@@ -191,7 +241,14 @@ impl Scan {
     }
 
     /// The view to persist, once the caller has dealt with everything.
-    pub fn watermark(&self) -> Watermark {
+    /// The scanned file at this root-relative path, if the scan saw
+    /// one. The single-file feeds' whole question: "is my file there,
+    /// and what is in it?"
+    pub fn file(&self, rel: &str) -> Option<&ScannedFile> {
+        self.files.iter().find(|f| f.rel == rel)
+    }
+
+    pub fn cursor(&self) -> FileScanCursor {
         self.files
             .iter()
             .map(|f| (f.rel.clone(), f.blake3))
@@ -247,9 +304,24 @@ where
     // may have a trailing slash — and all of those must reach the same
     // cache rows. The unresolved form is kept on the `Scan` for callers
     // that record where they scanned.
-    let root = given
+    let resolved = given
         .canonicalize()
         .with_context(|| format!("resolve scan root {}", given.display()))?;
+
+    // A single file is a legitimate root. Every provider that takes
+    // "a file or a directory" from its config used to special-case
+    // this itself; the utility owns it now. Walking the parent and
+    // accepting only that one name keeps the rest of the function —
+    // and the cache keys — identical for both shapes.
+    let (root, only) = if resolved.is_file() {
+        let name = resolved.file_name().map(|n| n.to_os_string());
+        match (resolved.parent().map(Path::to_path_buf), name) {
+            (Some(parent), Some(name)) => (parent, Some(name)),
+            _ => (resolved.clone(), None),
+        }
+    } else {
+        (resolved, None)
+    };
 
     let cached = cache.load_under(&root).await?;
     let mut stats = ScanStats {
@@ -257,8 +329,12 @@ where
         ..ScanStats::default()
     };
 
-    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, accept)
-        .with_context(|| format!("walk {}", root.display()))?;
+    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, |p| {
+        only.as_ref()
+            .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
+            && accept(p)
+    })
+    .with_context(|| format!("walk {}", root.display()))?;
 
     let mut files = Vec::with_capacity(walked.len());
     let mut fresh_prints = Vec::with_capacity(walked.len());
@@ -467,7 +543,7 @@ mod tests {
         write(&root, "a.txt", b"aaa");
         let cache = fresh_cache(tmp.path()).await;
         let first = scan_all(&cache, &root).await;
-        let mark = first.watermark();
+        let mark = first.cursor();
 
         let second = scan_all(&cache, &root).await;
         let changes = second.changes_since(&mark);
@@ -482,7 +558,7 @@ mod tests {
         write(&root, "kept.txt", b"same");
         write(&root, "edited.txt", b"before");
         let cache = fresh_cache(tmp.path()).await;
-        let mark = scan_all(&cache, &root).await.watermark();
+        let mark = scan_all(&cache, &root).await.cursor();
 
         write(&root, "edited.txt", b"after!!");
         write(&root, "fresh.txt", b"new");
@@ -509,7 +585,7 @@ mod tests {
         write(&root, "stays.txt", b"a");
         write(&root, "goes.txt", b"b");
         let cache = fresh_cache(tmp.path()).await;
-        let mark = scan_all(&cache, &root).await.watermark();
+        let mark = scan_all(&cache, &root).await.cursor();
 
         std::fs::remove_file(root.join("goes.txt")).unwrap();
         let changes = scan_all(&cache, &root).await.changes_since(&mark);
@@ -526,7 +602,7 @@ mod tests {
         let root = tmp.path().join("tree");
         write(&root, "old/name.txt", b"the same bytes");
         let cache = fresh_cache(tmp.path()).await;
-        let mark = scan_all(&cache, &root).await.watermark();
+        let mark = scan_all(&cache, &root).await.cursor();
 
         std::fs::create_dir_all(root.join("new")).unwrap();
         std::fs::rename(root.join("old/name.txt"), root.join("new/name.txt")).unwrap();
@@ -552,7 +628,7 @@ mod tests {
         let root = tmp.path().join("tree");
         write(&root, "original.txt", b"shared bytes");
         let cache = fresh_cache(tmp.path()).await;
-        let mark = scan_all(&cache, &root).await.watermark();
+        let mark = scan_all(&cache, &root).await.cursor();
 
         write(&root, "copy.txt", b"shared bytes");
         let changes = scan_all(&cache, &root).await.changes_since(&mark);
@@ -565,7 +641,7 @@ mod tests {
     /// A caller with no prior state sees everything as new, which is
     /// what a first run should look like.
     #[tokio::test]
-    async fn an_empty_watermark_makes_everything_added() {
+    async fn an_empty_cursor_makes_everything_added() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("tree");
         write(&root, "a.txt", b"a");
@@ -574,13 +650,13 @@ mod tests {
 
         let changes = scan_all(&cache, &root)
             .await
-            .changes_since(&Watermark::new());
+            .changes_since(&FileScanCursor::new());
         assert_eq!(changes.added.len(), 2);
         assert_eq!(changes.unchanged, 0);
         assert!(changes.any());
     }
 
-    /// The watermark is the caller's, not the cache's: a second source
+    /// The cursor is the caller's, not the cache's: a second source
     /// that has never seen this tree still gets a full "added" list
     /// even though the cache is warm and reads nothing.
     #[tokio::test]
@@ -594,93 +670,11 @@ mod tests {
 
         let second = scan_all(&cache, &root).await;
         assert_eq!(second.stats.hashed, 0, "the cache should be warm");
-        let changes = second.changes_since(&Watermark::new());
+        let changes = second.changes_since(&FileScanCursor::new());
         assert_eq!(
             changes.added.len(),
             1,
-            "a consumer with no watermark still has everything to do"
+            "a consumer with no cursor still has everything to do"
         );
     }
-}
-
-/// One file's identity: where it is, what is in it, how big it is.
-#[derive(Debug, Clone)]
-pub struct FileHash {
-    /// Resolved absolute path, the form every cache key takes.
-    pub canonical: String,
-    pub blake3: Blake3,
-    pub size: i64,
-}
-
-impl FileHash {
-    /// Lowercase hex, the form a provider's own store keeps.
-    pub fn hex(&self) -> String {
-        self.blake3.iter().map(|b| format!("{b:02x}")).collect()
-    }
-}
-
-/// The blake3 of one named file, reusing the host cache when it can
-/// vouch for the bytes.
-///
-/// [`scan`] answers "what is in this tree". This answers the same
-/// question about a file whose name the caller already knows — the
-/// shape every export-shaped provider has, where the path is fixed and
-/// only the contents are in question.
-///
-/// Same cache, same Unison cursor, same reuse rule as a tree scan, so
-/// a file hashed here costs a later scan covering it nothing, and a
-/// file a scan has already hashed costs nothing here. That sharing is
-/// the point: the answer to "did it change?" should not depend on
-/// which caller is asking.
-///
-/// `None` when the path is not a readable file — callers read that as
-/// "nothing to ingest", which is what an absent export file means.
-pub async fn fingerprint_file(cache: &FingerprintCache, path: &Path) -> Result<Option<FileHash>> {
-    let Ok(canonical) = path.canonicalize() else {
-        return Ok(None);
-    };
-    let Ok(meta) = std::fs::metadata(&canonical) else {
-        return Ok(None);
-    };
-    if !meta.is_file() {
-        return Ok(None);
-    }
-
-    let fresh = fswalk::fresh_stat(&meta);
-    let cached = cache.load_under(&canonical).await?;
-    // `load_under` on a file returns that one row keyed at the empty
-    // relative path, so this is the same lookup a tree scan does.
-    let reusable = matches!(
-        fswalk::decide(cached.cursor(""), &fresh),
-        StampDecision::ReuseHash
-    )
-    .then(|| cached.blake3(""))
-    .flatten();
-
-    let blake3 = match reusable {
-        Some(hash) => hash,
-        None => fswalk::hash_file(&canonical, fresh.size as u64)
-            .with_context(|| format!("hash {}", canonical.display()))?,
-    };
-
-    cache
-        .store(&[Fingerprint {
-            abs_path: canonical.display().to_string(),
-            kind: EntryKind::File,
-            blake3,
-            cursor: fswalk::StampCursor {
-                mtime_ns: fresh.mtime_ns,
-                size: fresh.size,
-                stamp_kind: fswalk::stamp_kind_for(&fresh),
-                inode: fresh.inode,
-                dev: fresh.dev,
-            },
-        }])
-        .await?;
-
-    Ok(Some(FileHash {
-        canonical: canonical.display().to_string(),
-        blake3,
-        size: fresh.size,
-    }))
 }

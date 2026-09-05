@@ -3,8 +3,7 @@
 //! Three-column CSV: `Channel Id,Channel Url,Channel Title`. PK is
 //! `Channel Id` verbatim. Not event-shaped; `when_ts` stays NULL.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use std::path::Path;
+use datalib_etl::fsscan;
 
 use anyhow::Result;
 use datalib_etl::file_checkpoint::{self};
@@ -19,14 +18,8 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "YouTube and YouTube Music/subscriptions/subscriptions.csv";
 const SCOPE: &str = "google_takeout/youtube_subscriptions";
 
-pub async fn ingest(
-    db: &RawDb,
-    cache: &FingerprintCache,
-    root: &Path,
-    progress: &Progress,
-) -> Result<usize> {
-    let path = root.join(FILE_REL);
-    let n = file_checkpoint::ingest_changed_file(cache, db.pool(), SCOPE, &path, |bytes| {
+pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
+    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let text = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeSubscriptionRow> = Vec::new();
         for (i, line) in text.lines().enumerate() {

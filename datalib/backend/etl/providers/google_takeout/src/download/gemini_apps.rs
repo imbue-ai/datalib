@@ -5,13 +5,13 @@
 //! references to sibling files in the same directory. PK recipe:
 //! `uuidv5(NS, "gemini:" + blake3_hex(prompt + "\0" + when_str))`.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::fsscan;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
@@ -33,23 +33,18 @@ pub struct GeminiSummary {
     pub blobs_stored: usize,
 }
 
-pub async fn ingest(
-    db: &RawDb,
-    cache: &FingerprintCache,
-    root: &Path,
-    progress: &Progress,
-) -> Result<GeminiSummary> {
-    let path = root.join(FILE_REL);
-    let Some(fp) = FileFingerprint::of(cache, &path).await? else {
+pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<GeminiSummary> {
+    let Some(f) = scan.file(FILE_REL) else {
         return Ok(GeminiSummary::default());
     };
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
-    if file_checkpoint::should_skip(&stamped, &fp) {
+    let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
+    if prev.get(&f.rel) == Some(&f.blake3) {
         return Ok(GeminiSummary::default());
     }
     let html =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let cell_dir = path
+        std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
+    let cell_dir = f
+        .path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -137,7 +132,7 @@ pub async fn ingest(
     let now = IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin gemini_apps tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-    file_checkpoint::record_finished(&mut tx, SCOPE, &fp).await?;
+    file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     tx.commit().await.context("commit gemini_apps tx")?;
 
     let blobs_stored = acc.bundle_mut().cas_inserts().len();
