@@ -17,6 +17,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Parser;
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::progress::Progress;
 use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
@@ -55,6 +56,23 @@ struct Args {
     /// Directory root to scan.
     #[arg(long)]
     root: PathBuf,
+
+    /// Where this host keeps its fingerprint cache.
+    ///
+    /// The cache is what makes a rescan fast: it remembers each path's
+    /// `(mtime, size, inode, dev)` and the hash that went with them, so
+    /// an unchanged file is never re-read. It is host state and
+    /// deliberately *not* part of the scan store — inode numbers mean
+    /// nothing on another machine, a data root may be synced between
+    /// machines, and a fresh branch of the scan data should not cost
+    /// you a full rehash.
+    ///
+    /// Defaults to this machine's cache directory
+    /// (`$DATALIB_CACHE_DIR`, else `$XDG_CACHE_HOME/datalib`, else
+    /// `~/Library/Caches/datalib` or `~/.cache/datalib`). Deleting it
+    /// is always safe: the next scan rebuilds it, slowly.
+    #[arg(long)]
+    cache_db: Option<PathBuf>,
 
     /// Doltlite branch to write into. Defaults to whatever branch the
     /// db is currently on (`main` on first open).
@@ -95,6 +113,17 @@ async fn main() -> Result<()> {
     // Open the db ourselves so we can issue the single end-of-scan
     // commit after `fetch` returns.
     let db = RawDb::open(&args.db).await?;
+    let cache_path = match args.cache_db.clone() {
+        Some(p) => p,
+        None => fingerprint_cache::default_cache_path()?,
+    };
+    let cache = FingerprintCache::open(&cache_path).await?;
+    info!(
+        event = "fsindex_cache_open",
+        path = %cache_path.display(),
+        entries = cache.count().await.unwrap_or(-1),
+        "using this host's fingerprint cache",
+    );
     // Live terminal bar attached to obs's shared MultiProgress (same
     // wiring the pipeline gives each source). Falls back to
     // tracing-only when obs::init didn't publish a MultiProgress. Held
@@ -106,6 +135,7 @@ async fn main() -> Result<()> {
         source_id: source_id.clone(),
         root: args.root.clone(),
         target_doltlite_branch: args.branch.clone(),
+        cache,
         no_stamp: args.no_stamp,
         progress: progress.clone(),
         control: DownloadControl {

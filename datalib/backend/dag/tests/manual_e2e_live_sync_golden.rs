@@ -294,12 +294,17 @@ const VOLATILE_KEYS: &[&str] = &[
     // start/stop timestamps and content fields stay put.
     "elapsed_ms",
     "network_seconds",
-    // fsindex's `file_stats` rescan-cursor + `scan_meta` columns. The
-    // filesystem-mechanical fields (mtime/ctime, inode, dev) are per-checkout
-    // / per-machine, and `last_scan_at` is wall-clock — all churn run-to-run
-    // even when the scanned bytes are identical. The deterministic content
-    // (kind, size, blake3, path) lives in the `files` table and is preserved.
-    // `scanner_version` is redacted so a version bump doesn't churn the golden.
+    // fsindex's `scan_meta` columns. `last_scan_at` is wall-clock, so it
+    // churns run-to-run even when the scanned bytes are identical, and
+    // `scanner_version` is redacted so a version bump doesn't churn the
+    // golden.
+    //
+    // The per-machine fields (mtime/ctime, inode, dev) used to need
+    // redacting here too, because fsindex kept its rescan cursor in the
+    // scan store. It no longer does — that is host state and lives in
+    // `datalib_etl::fingerprint_cache` — so nothing machine-specific
+    // reaches the golden in the first place. The names below are kept
+    // because other providers' stores still carry them.
     "mtime_ns",
     "ctime_ns",
     "inode",

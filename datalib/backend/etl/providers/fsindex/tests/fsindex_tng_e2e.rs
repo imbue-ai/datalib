@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
@@ -80,12 +81,17 @@ async fn scans_tng_tree() {
     copy_deref(&staged, &root);
     let db_path = tmp.path().join("fsindex.doltlite_db");
 
+    // A temp cache: tests must never read or write this host's real one.
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
     let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
         db: None,
         source_id: "fsindex-tng".to_string(),
         root: root.clone(),
         target_doltlite_branch: None,
+        cache,
         // Read-only against the fixture — never write breadcrumbs into it.
         no_stamp: true,
         progress: Progress::noop(),

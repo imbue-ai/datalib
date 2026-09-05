@@ -36,7 +36,11 @@ split:
   (`kind`, `size`, `blake3`, `symlink_target`, `identity_uuid`)
   carry the semantic shape of the entry. Diff here is "what
   really changed."
-- `file_stats` — the **cursor** entity. PK=path; typed columns
+- *(the **cursor** used to be a `file_stats` table here. It is host
+  state — inodes mean nothing on another machine — so it now lives in
+  this machine's `datalib_etl::fingerprint_cache`, a plain-SQLite file
+  outside version control. See `STORAGE_NOTES.md` §3.)* The columns it
+  carried were:
   (`mtime_ns`, `size`, `stamp_kind`, `inode`, `dev`, `ctime_ns`)
   carry Unison's fast-rescan triple plus discriminator. Diff
   here is noisy by design and nobody reads it semantically.
@@ -44,7 +48,7 @@ split:
 This split is orthogonal to the framework's events-vs-bookkeeping
 split (see
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-§"Events vs bookkeeping"). Both `files` and `file_stats` are
+§"Events vs bookkeeping"). `files` is
 **entity** tables in the framework's sense, and each gets its own
 `<t>_bookkeeping` sidecar via `dr::bookkeeping_ddl_for` for
 attempt-tracking (`attempt_count`, `last_attempt_at`, `last_error`).
@@ -67,7 +71,7 @@ and stable.
 
 ### Truncate-and-rebuild on every scan
 
-Every scan starts by `DELETE FROM files; DELETE FROM file_stats;
+Every scan starts by `DELETE FROM files;
 DELETE FROM scan_meta;` (and their `_bookkeeping` sidecars), then
 walks the tree fresh. Two reasons this works:
 
@@ -84,7 +88,7 @@ walks the tree fresh. Two reasons this works:
    layer.
 
 The Unison-style fast-rescan cache survives the truncate by living
-**in memory**: the orchestrator loads the prior `file_stats` rows
+**in memory**: the orchestrator loads this host's prior fingerprints
 and the prior `files.blake3` for `kind='file'` rows BEFORE the
 truncate, so `stamp::decide` still has cached state to compare
 against and the reuse path still skips the `read(2)` + `blake3`
@@ -117,14 +121,21 @@ Cribbed from Unison's `src/fpcache.ml:243` (`dataClearlyUnchanged`).
 For each known path, before opening the file:
 
 1. Stat the path. Cheap on macOS/Linux — one syscall, no I/O.
-2. Read the cached `(mtime_ns, size, inode, dev, stamp_kind)` from
-   `file_stats`.
-3. If `stamp_kind = "inode"` and `(mtime, size, inode, dev)` all
-   match the live stat, the cached `files.blake3` is still valid —
-   no rehash, no row write. `attempt_count` does not bump (we
-   didn't attempt anything).
-4. If anything mismatched, open the file, rehash, write the new
-   `files` row and the new `file_stats` row in the same batch.
+2. Read the cached `(mtime_ns, size, inode, dev, stamp_kind)` and the
+   hash that went with them from this host's fingerprint cache.
+3. If `stamp_kind = inode` and `(mtime, size, inode, dev)` all match
+   the live stat, the cached digest is still valid — no rehash, no
+   file read. `attempt_count` does not bump (we didn't attempt
+   anything).
+4. If anything mismatched, open the file, rehash, and write the new
+   `files` row and the new cache entry.
+
+The cache holds the **hash as well as the stat**, which is what makes
+it work at all: a cursor that only said "unchanged" would still have to
+go to the scan store for the digest, and on a fresh branch there would
+be nothing there. Holding both means an unchanged tree scans fast into
+*any* branch, or into a database that has never seen it — measured at
+8000 files / 64 MB, 0.63s against the 1.6s a cold scan costs.
 
 `stamp_kind = "nostamp"` (some FUSE mounts, some network filesystems)
 drops the inode check and falls back to `(mtime, size)`. Less safe,
@@ -381,9 +392,9 @@ contract not a tease:
 
 - **Rescan-cache load is sqlx-bound, not engine-bound.** On a
   1.7 M-entry index the in-memory cache load takes ~29 s, but the
-  doltlite engine scans the same two tables in ~6 s (measured with
-  `SELECT COUNT(*), SUM(LENGTH(id)), … FROM file_stats` / `… FROM
-  files`). The ~4.5× gap is Rust-side per-row marshalling: sqlx
+  engine scans the same rows in ~6 s (measured with
+  `SELECT COUNT(*), SUM(LENGTH(id)), … FROM files`). The ~4.5× gap is
+  Rust-side per-row marshalling: sqlx
   allocates a `SqliteRow` and runs `try_get` type-dispatch per
   column (~10 M calls), plus a `String`/`Vec`/struct allocation and
   a `HashMap` insert per row. Cheap win: pre-size the maps from

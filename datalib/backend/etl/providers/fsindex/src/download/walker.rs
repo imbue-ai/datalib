@@ -1,4 +1,4 @@
-//! Bottom-up tree walker that produces one (FileRow, FileStatsRow)
+//! Bottom-up tree walker that produces one (FileRow, Fingerprint)
 //! pair per visible entry under a root.
 //!
 //! See [`EXTRACT.md`](../../EXTRACT.md) §"Why two entity tables" and
@@ -38,8 +38,11 @@ use tracing::warn;
 use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
 use super::options::{self, EffectiveOptions, FsindexYaml, OptionsCascade, BREADCRUMB_FILENAME};
-use super::schema_raw::{FileKind, FileRow, FileStatsRow, StampKind};
-use super::stamp::{self, FreshStat, StampDecision};
+use datalib_etl::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
+use datalib_etl::fswalk::{self, StampCursor, StampKind};
+
+use super::schema_raw::{FileKind, FileRow};
+use datalib_etl::fswalk::{FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
 /// flushes the batch via the callback when it reaches this many rows.
@@ -59,8 +62,10 @@ pub const BATCH_SIZE: usize = 100_000;
 /// post-order (children before their containing dir) so directory
 /// hashes can be folded up.
 pub struct ScanResult {
+    /// The content row, bound for the versioned store.
     pub file_row: FileRow,
-    pub stat_row: FileStatsRow,
+    /// The observation, bound for the host-local cache.
+    pub fingerprint: Fingerprint,
 }
 
 /// One unreadable entry. Surfaced to the caller so it can land in
@@ -78,25 +83,17 @@ pub struct WalkerSummary {
 
 pub struct Walker<'a> {
     root: &'a Path,
-    prev_stats: &'a HashMap<String, FileStatsRow>,
-    prev_file_blake3s: &'a HashMap<String, Blake3>,
-    prev_children: &'a HashMap<String, Vec<String>>,
+    /// What this host recorded for these paths last time. Host-local
+    /// and unversioned — see [`datalib_etl::fingerprint_cache`].
+    prev: &'a CachedTree,
     default_stamp_kind: StampKind,
 }
 
 impl<'a> Walker<'a> {
-    pub fn new(
-        root: &'a Path,
-        prev_stats: &'a HashMap<String, FileStatsRow>,
-        prev_file_blake3s: &'a HashMap<String, Blake3>,
-        prev_children: &'a HashMap<String, Vec<String>>,
-        default_stamp_kind: StampKind,
-    ) -> Self {
+    pub fn new(root: &'a Path, prev: &'a CachedTree, default_stamp_kind: StampKind) -> Self {
         Self {
             root,
-            prev_stats,
-            prev_file_blake3s,
-            prev_children,
+            prev,
             default_stamp_kind,
         }
     }
@@ -135,9 +132,7 @@ impl<'a> Walker<'a> {
     {
         let mut dfs = Dfs {
             root: self.root,
-            prev_stats: self.prev_stats,
-            prev_blake3s: self.prev_file_blake3s,
-            prev_children: self.prev_children,
+            prev: self.prev,
             default_stamp_kind: self.default_stamp_kind,
             counters,
             config_cache: HashMap::new(),
@@ -176,9 +171,7 @@ impl<'a> Walker<'a> {
 /// ignore set against every enumerated child).
 struct Dfs<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> {
     root: &'a Path,
-    prev_stats: &'a HashMap<String, FileStatsRow>,
-    prev_blake3s: &'a HashMap<String, Blake3>,
-    prev_children: &'a HashMap<String, Vec<String>>,
+    prev: &'a CachedTree,
     default_stamp_kind: StampKind,
     counters: &'a WalkerCounters,
     config_cache: HashMap<PathBuf, Option<FsindexYaml>>,
@@ -208,8 +201,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         Ok(())
     }
 
-    fn push_row(&mut self, file_row: FileRow, stat_row: FileStatsRow) -> Result<()> {
-        self.buf.push(ScanResult { file_row, stat_row });
+    fn push_row(&mut self, file_row: FileRow, fingerprint: Fingerprint) -> Result<()> {
+        self.buf.push(ScanResult {
+            file_row,
+            fingerprint,
+        });
         self.counters.rows_emitted.fetch_add(1, Ordering::Relaxed);
         if self.buf.len() >= BATCH_SIZE {
             self.counters
@@ -247,16 +243,16 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         // demonstrably the same directory, unmodified; otherwise via a
         // real readdir.
         let unchanged_names = self
-            .prev_stats
-            .get(dir_rel)
+            .prev
+            .cursor(dir_rel)
             .map(|p| same_dir_unmodified(p, &dir_fresh))
             .unwrap_or(false);
         let children: Vec<(String, String)> = if unchanged_names {
             self.counters
                 .dirs_readdir_skipped
                 .fetch_add(1, Ordering::Relaxed);
-            self.prev_children
-                .get(dir_rel)
+            self.prev
+                .children(dir_rel)
                 .map(|kids| {
                     kids.iter()
                         .map(|child_rel| {
@@ -343,10 +339,10 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             let (size, blake3, symlink_target): (i64, Blake3, Option<String>) = match kind {
                 FileKind::File => {
                     self.counters.files_visited.fetch_add(1, Ordering::Relaxed);
-                    let cached_hash = self.prev_blake3s.get(&child_rel);
+                    let cached_hash = self.prev.blake3(&child_rel);
                     let reuse = cached_hash.is_some()
                         && matches!(
-                            stamp::decide(self.prev_stats.get(&child_rel), &fresh),
+                            fswalk::decide(self.prev.cursor(&child_rel), &fresh),
                             StampDecision::ReuseHash
                         );
                     if reuse {
@@ -355,7 +351,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         self.counters
                             .bytes_skipped_cache
                             .fetch_add(meta.len(), Ordering::Relaxed);
-                        (meta.len() as i64, *cached_hash.unwrap(), None)
+                        (meta.len() as i64, cached_hash.unwrap(), None)
                     } else {
                         self.summary.rehashed += 1;
                         self.counters.files_rehashed.fetch_add(1, Ordering::Relaxed);
@@ -427,24 +423,13 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     symlink_target,
                     identity_uuid: None,
                 };
-                let stat_row = FileStatsRow {
-                    id: child_rel,
-                    mtime_ns: fresh.mtime_ns,
-                    size,
-                    stamp_kind,
-                    inode: if matches!(stamp_kind, StampKind::Inode) {
-                        fresh.inode
-                    } else {
-                        None
-                    },
-                    dev: if matches!(stamp_kind, StampKind::Inode) {
-                        fresh.dev
-                    } else {
-                        None
-                    },
-                    ctime_ns: fresh.ctime_ns,
+                let fingerprint = Fingerprint {
+                    abs_path: fp_abs(self.root, &child_rel),
+                    kind: fp_kind(kind),
+                    blake3,
+                    cursor: fp_cursor(stamp_kind, size, &fresh),
                 };
-                self.push_row(file_row, stat_row)?;
+                self.push_row(file_row, fingerprint)?;
             }
         }
 
@@ -468,24 +453,17 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         // directory that happens to share an mtime — see
         // [`same_dir_unmodified`].
         let stamp_kind = self.default_stamp_kind;
-        let stat_row = FileStatsRow {
-            id: dir_rel.to_string(),
-            mtime_ns: dir_fresh.mtime_ns,
-            size: dir_size,
-            stamp_kind,
-            inode: if matches!(stamp_kind, StampKind::Inode) {
-                dir_fresh.inode
-            } else {
-                None
-            },
-            dev: if matches!(stamp_kind, StampKind::Inode) {
-                dir_fresh.dev
-            } else {
-                None
-            },
-            ctime_ns: dir_fresh.ctime_ns,
+        let fingerprint = Fingerprint {
+            abs_path: fp_abs(self.root, dir_rel),
+            kind: EntryKind::Dir,
+            blake3: dir_hash,
+            // The directory's *content* size is its rolled-up total,
+            // which is not what a fresh stat reports — so the cursor
+            // carries it only for symmetry and `same_dir_unmodified`
+            // deliberately does not compare it.
+            cursor: fp_cursor(stamp_kind, dir_size, &dir_fresh),
         };
-        self.push_row(file_row, stat_row)?;
+        self.push_row(file_row, fingerprint)?;
 
         Ok((dir_hash, dir_size))
     }
@@ -575,6 +553,32 @@ fn cascade_for_dir(
     cascade
 }
 
+/// The cache key for a root-relative entry.
+fn fp_abs(root: &Path, rel: &str) -> String {
+    datalib_etl::fingerprint_cache::abs_key(root, rel)
+}
+
+fn fp_kind(kind: FileKind) -> EntryKind {
+    match kind {
+        FileKind::File => EntryKind::File,
+        FileKind::Dir => EntryKind::Dir,
+        FileKind::Symlink => EntryKind::Symlink,
+    }
+}
+
+/// The observation to cache, dropping the identity fields on
+/// filesystems where they mean nothing.
+fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor {
+    let inode_ok = matches!(stamp_kind, StampKind::Inode);
+    StampCursor {
+        mtime_ns: fresh.mtime_ns,
+        size,
+        stamp_kind,
+        inode: if inode_ok { fresh.inode } else { None },
+        dev: if inode_ok { fresh.dev } else { None },
+    }
+}
+
 /// Can this directory's cached child list stand in for a `readdir`?
 ///
 /// Only when the cached row describes *this* directory and nothing in
@@ -587,11 +591,11 @@ fn cascade_for_dir(
 /// `(inode, dev)` is the filesystem's own answer to "same directory",
 /// so it settles the question.
 ///
-/// Unlike [`datalib_etl::fswalk::decide`] this does not compare size:
-/// `file_stats.size` for a directory is the rolled-up size of its
-/// visible contents, computed by this walker, not the `st_size` a fresh
-/// stat reports.
-fn same_dir_unmodified(prev: &FileStatsRow, fresh: &FreshStat) -> bool {
+/// Unlike [`datalib_etl::fswalk::decide`] this does not compare size: a
+/// directory's cached size is the rolled-up size of its visible
+/// contents, computed by this walker, not the `st_size` a fresh stat
+/// reports.
+fn same_dir_unmodified(prev: &StampCursor, fresh: &FreshStat) -> bool {
     if matches!(prev.stamp_kind, StampKind::Rescan) {
         // A previous run was interrupted here; take the readdir.
         return false;
@@ -705,48 +709,22 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
-    /// Rebuild the in-memory rescan cache from a prior walk's results,
-    /// mirroring `db::load_prev_cache` so these tests exercise the
-    /// walker (and its readdir-skip) in isolation from the database.
-    #[allow(clippy::type_complexity)]
-    fn build_cache(
-        rows: &[ScanResult],
-    ) -> (
-        HashMap<String, FileStatsRow>,
-        HashMap<String, Blake3>,
-        HashMap<String, Vec<String>>,
-    ) {
-        let mut stats = HashMap::new();
-        let mut blake3s = HashMap::new();
-        let mut children: HashMap<String, Vec<String>> = HashMap::new();
-        for r in rows {
-            stats.insert(r.stat_row.id.clone(), r.stat_row.clone());
-            if matches!(r.file_row.kind, FileKind::File) {
-                blake3s.insert(r.file_row.id.clone(), r.file_row.blake3);
-            }
-        }
-        for id in stats.keys() {
-            if id.is_empty() {
-                continue;
-            }
-            let parent = match id.rfind('/') {
-                Some(i) => id[..i].to_string(),
-                None => String::new(),
-            };
-            children.entry(parent).or_default().push(id.clone());
-        }
-        for kids in children.values_mut() {
-            kids.sort();
-        }
-        (stats, blake3s, children)
+    /// Rebuild the prior view from a previous walk's results, the way
+    /// `fingerprint_cache` would have after storing them — so these
+    /// tests exercise the walker and its readdir-skip in isolation from
+    /// any database.
+    fn build_cache(rows: &[ScanResult]) -> CachedTree {
+        CachedTree::from_entries(rows.iter().map(|r| {
+            (
+                r.file_row.id.clone(),
+                fp_kind(r.file_row.kind),
+                r.file_row.blake3,
+                r.fingerprint.cursor,
+            )
+        }))
     }
 
-    fn walk(
-        root: &Path,
-        stats: &HashMap<String, FileStatsRow>,
-        blake3s: &HashMap<String, Blake3>,
-        children: &HashMap<String, Vec<String>>,
-    ) -> (Vec<ScanResult>, WalkerCounters) {
+    fn walk(root: &Path, prev: &CachedTree) -> (Vec<ScanResult>, WalkerCounters) {
         let stamp_kind = if cfg!(unix) {
             StampKind::Inode
         } else {
@@ -754,7 +732,7 @@ mod tests {
         };
         let counters = WalkerCounters::default();
         let mut out = Vec::new();
-        let walker = Walker::new(root, stats, blake3s, children, stamp_kind);
+        let walker = Walker::new(root, prev, stamp_kind);
         walker
             .collect_streaming(&counters, |b| {
                 out.extend(b);
@@ -785,7 +763,7 @@ mod tests {
         write(&root.join("sub/c.txt"), b"ccc");
 
         // Cold scan: no cache, so nothing can be skipped.
-        let (rows1, c1) = walk(root, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        let (rows1, c1) = walk(root, &CachedTree::default());
         assert_eq!(
             c1.dirs_readdir_skipped.load(Ordering::Relaxed),
             0,
@@ -797,11 +775,11 @@ mod tests {
             "root + sub are both visited"
         );
 
-        let (stats, blake3s, kids) = build_cache(&rows1);
+        let prev = build_cache(&rows1);
 
         // Unchanged rescan: both dirs match their cached mtime, so both
         // skip readdir, and every file reuses its cached hash.
-        let (rows2, c2) = walk(root, &stats, &blake3s, &kids);
+        let (rows2, c2) = walk(root, &prev);
         assert_eq!(
             c2.dirs_readdir_skipped.load(Ordering::Relaxed),
             2,
@@ -830,7 +808,7 @@ mod tests {
         // readdir is STILL skipped — yet the edit must be caught because
         // the skip path lstats every cached child.
         write(&root.join("a.txt"), b"aaaa-now-longer");
-        let (rows3, c3) = walk(root, &stats, &blake3s, &kids);
+        let (rows3, c3) = walk(root, &prev);
         assert_eq!(
             c3.dirs_readdir_skipped.load(Ordering::Relaxed),
             2,
@@ -877,18 +855,18 @@ mod tests {
 
         // Cold scan: hidden.secret is ignored, so it never enters the
         // cache we build from this scan.
-        let (rows1, _c1) = walk(root, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        let (rows1, _c1) = walk(root, &CachedTree::default());
         assert!(has(&rows1, "keep.txt"));
         assert!(
             !has(&rows1, "hidden.secret"),
             "hidden.secret is ignored on the cold scan"
         );
-        let (stats, blake3s, kids) = build_cache(&rows1);
+        let prev = build_cache(&rows1);
 
         // Loosen the rule by rewriting the EXISTING breadcrumb. This does
         // not change root's mtime, so the rescan takes the skip path.
         write(&root.join(".fsindex.yaml"), b"ignore: []\n");
-        let (rows2, c2) = walk(root, &stats, &blake3s, &kids);
+        let (rows2, c2) = walk(root, &prev);
         assert!(
             c2.dirs_readdir_skipped.load(Ordering::Relaxed) >= 1,
             "root's mtime is unchanged, so its readdir is skipped — the cause of the bug"
@@ -906,7 +884,7 @@ mod tests {
         // For contrast, the newly-*ignored* direction is handled correctly:
         // every enumerated child is re-tested against the current ignore set.
         write(&root.join(".fsindex.yaml"), b"ignore:\n  - 'keep.txt'\n");
-        let (rows3, _c3) = walk(root, &stats, &blake3s, &kids);
+        let (rows3, _c3) = walk(root, &prev);
         assert!(
             !has(&rows3, "keep.txt"),
             "a newly-ignored file IS correctly dropped, even on the skip path"
@@ -931,14 +909,14 @@ mod tests {
         write(&root.join("mid/m.txt"), b"m");
         write(&root.join("mid/inner/i.txt"), b"i");
 
-        let (rows1, _c1) = walk(root, &HashMap::new(), &HashMap::new(), &HashMap::new());
-        let (stats, blake3s, kids) = build_cache(&rows1);
+        let (rows1, _c1) = walk(root, &CachedTree::default());
+        let prev = build_cache(&rows1);
 
         // ── Structural change: add a file under `mid`. This bumps mid's
         // mtime, so mid is re-readdir'd and the new file is discovered.
         // `root` and `mid/inner` are untouched and skip their readdir.
         write(&root.join("mid/added.txt"), b"added");
-        let (rows_add, c_add) = walk(root, &stats, &blake3s, &kids);
+        let (rows_add, c_add) = walk(root, &prev);
         assert!(
             has(&rows_add, "mid/added.txt"),
             "a newly-added file under mid must be discovered (mid is re-readdir'd)"
@@ -961,14 +939,14 @@ mod tests {
 
         // Re-baseline the cache to the post-add state (a normal next scan),
         // so the following edit is measured against an up-to-date cache.
-        let (stats2, blake3s2, kids2) = build_cache(&rows_add);
+        let prev2 = build_cache(&rows_add);
 
         // ── Content edit: rewrite mid/m.txt in place. No directory's
         // mtime changes, so EVERY directory skips its readdir — yet the
         // edit is still caught because each cached child is lstat'd and
         // the moved (mtime,size) forces a re-hash.
         write(&root.join("mid/m.txt"), b"m-edited-and-longer");
-        let (rows_edit, c_edit) = walk(root, &stats2, &blake3s2, &kids2);
+        let (rows_edit, c_edit) = walk(root, &prev2);
         assert_eq!(
             c_edit.dirs_readdir_skipped.load(Ordering::Relaxed),
             3,
@@ -1010,23 +988,32 @@ mod tests {
     fn a_different_directory_with_the_same_mtime_is_not_skipped() {
         let a = tempfile::tempdir().unwrap();
         write(&a.path().join("only_a.txt"), b"aaa");
-        let (rows_a, _) = walk(a.path(), &HashMap::new(), &HashMap::new(), &HashMap::new());
-        let (mut stats, blake3s, kids) = build_cache(&rows_a);
-
+        let (rows_a, _) = walk(a.path(), &CachedTree::default());
         let b = tempfile::tempdir().unwrap();
         write(&b.path().join("nested/only_b.txt"), b"bbb");
 
         // Pretend the previous scan saw a root with B's mtime — so an
         // mtime-only check passes — but A's identity.
+        let a_root = fresh_stat_for(&std::fs::metadata(a.path()).unwrap());
         let b_root = fresh_stat_for(&std::fs::metadata(b.path()).unwrap());
-        let root_stat = stats.get_mut("").expect("the root row is cached");
-        root_stat.mtime_ns = b_root.mtime_ns;
         assert_ne!(
-            root_stat.inode, b_root.inode,
+            a_root.inode, b_root.inode,
             "the two temp roots must be distinct directories"
         );
+        let doctored = CachedTree::from_entries(rows_a.iter().map(|r| {
+            let mut cursor = r.fingerprint.cursor;
+            if r.file_row.id.is_empty() {
+                cursor.mtime_ns = b_root.mtime_ns;
+            }
+            (
+                r.file_row.id.clone(),
+                fp_kind(r.file_row.kind),
+                r.file_row.blake3,
+                cursor,
+            )
+        }));
 
-        let (rows_b, counters) = walk(b.path(), &stats, &blake3s, &kids);
+        let (rows_b, counters) = walk(b.path(), &doctored);
         let ids: Vec<&str> = rows_b.iter().map(|r| r.file_row.id.as_str()).collect();
         assert!(
             ids.contains(&"nested/only_b.txt"),

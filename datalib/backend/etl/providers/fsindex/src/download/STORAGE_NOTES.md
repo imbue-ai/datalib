@@ -20,7 +20,9 @@ doltlite version during this work: **v0.11.9 → v0.11.12**.
    [dolthub/doltlite#1424](https://github.com/dolthub/doltlite/issues/1424).
 2. **The path dominates the on-disk size**, and doltlite does not yet
    compress chunks, so a 60-char path costs ~181 B/row stored (~3×).
-3. **The two-table split (`files` vs `file_stats`) is load-bearing for
+   It used to be stored twice — `file_stats` keyed by path as well —
+   until the cursor moved out (§3).
+3. **The cursor lives outside this store entirely** (see §3), which is
    cross-tree dedup**, not just for clean `dolt diff`. Keep it.
 4. **`dolt_commit` must run before `dolt_gc`** on a connection, and gc
    needs ~2× the db size in free disk.
@@ -116,7 +118,7 @@ Reading this:
   size. Re-adding any is a one-line `CREATE INDEX` if a SQL-side,
   too-big-for-RAM workload ever materializes.
 
-The current fsindex schema (`files` + `file_stats`, no secondary indexes)
+The current fsindex schema (`files` + `scan_meta`, no secondary indexes)
 lands at **~340 B/file** on realistic paths → **~3.4 GB / 10M**.
 
 Net of all three storage changes (blake3 BLOB, no bookkeeping sidecars,
@@ -159,53 +161,54 @@ doing an app-level path-compression or tree-restructure now.
 proprietary, and `sqlite-zstd` is moot because doltlite isn't stock
 SQLite.)
 
-## 3. Why the `files` / `file_stats` split is load-bearing
+## 3. Why the cursor is not in this store at all
 
-The split (content in `files`, the Unison `(mtime, inode, …)` cursor in
-`file_stats`) was originally motivated by clean `dolt diff files`. We
-considered **merging** them to save the duplicated path (~32% smaller for
-a single root) — and it would have been a mistake.
+**Superseded.** This section used to argue that splitting the Unison
+cursor into a sibling `file_stats` table (rather than merging it into
+`files`) was load-bearing, because inodes in the content row would stop
+two scans of identical content from deduping. That reasoning was right
+and the conclusion has been taken further: the cursor now lives outside
+the doltlite store entirely, in a host-local plain-SQLite cache
+(`datalib_etl::fingerprint_cache`). `file_stats` is gone.
 
-**Two reasons not to merge:**
+The original measurement (300k rows, two commits with identical content
+and different inodes) still explains why:
 
-a. **You don't need the split for a clean diff.** `dolt_diff_<table>`
-   exposes `to_<col>`/`from_<col>` per column, so a content-only diff is
-   a projection, not a schema requirement:
+| | tree A | tree B (same content, diff inodes) | B added |
+|---|---|---|---|
+| **split** (`files` content + `file_stats` inode) | 72 MB | 99 MB | **27 MB** |
+| **merged** (inode in the content row) | 47 MB | 94 MB | **47 MB** |
 
-   ```sql
-   SELECT to_id, from_blake3, to_blake3 FROM dolt_diff_files
-   WHERE to_commit = ? AND (from_blake3 IS NOT to_blake3
-                            OR from_kind IS NOT to_kind
-                            OR from_size IS NOT to_size);
-   -- mtime-only changes are filtered out
-   ```
+Splitting kept `files` byte-identical across the two so its chunks
+deduped. Moving the cursor out completes that: nothing host-specific
+reaches the store, so **B adds nothing at all** beyond genuinely new
+content.
 
-b. **But the split is what enables cross-tree dedup** — the real reason
-   to keep it. Measured (300k rows, two commits = two "trees", same
-   content, *different inodes*, un-gc'd):
+It also removes the "remaining inefficiency" this section used to end
+on — `file_stats` re-storing the full path as its own primary key.
+Measured at 100k entries:
 
-   | | tree A | tree B (same content, diff inodes) | B added |
-   |---|---|---|---|
-   | **split** (`files` content + `file_stats` inode) | 72 MB | 99 MB | **27 MB** |
-   | **merged** (inode in the content row) | 47 MB | 94 MB | **47 MB** |
+| | gc'd size | per row |
+|---|---|---|
+| `files` + `file_stats` (before) | 29.1 MB | 291 B |
+| `files` alone (now) | 14.8 MB | **148 B** |
 
-   With the split, tree B's `files` rows are byte-identical → their
-   chunks dedup; only `file_stats` (the differing inodes) adds storage.
-   Merged, the inode sits in every row, so every row differs and
-   *nothing* dedups — tree B re-stores the full content. This is exactly
-   the "scan two roots into two branches and share the overlap" property
-   (inodes/mtimes are storage-specific, not content), so the split must
-   stay.
+**The cursor was 49% of the store.**
 
-   Crossover: single-root, merged is smaller (pays the path once);
-   multi-root, the split wins as trees accumulate (~3 trees breakeven).
+Three further reasons, none of them about size:
 
-**The remaining inefficiency** is that `file_stats` still carries the
-path (its PK), so it's the per-tree cost (~90 B/row, mostly path).
-Keying `file_stats` by a *path-derived surrogate int* instead of the
-path string would shrink that to ~16 B/row while keeping `files.id =
-path` (so content diff identity is preserved). Noted as a future lever;
-not done.
+- **An inode means nothing on another machine.** A branch fetched from
+  elsewhere carried a cursor that could never match, so every file
+  rehashed — and nothing recorded which host a cursor came from, so you
+  could not even detect it.
+- **Branching a cursor is a category error.** It describes the live
+  filesystem, which has no history; rolling a branch back does not
+  un-modify the disk.
+- **A fresh branch lost it.** Measured on 8000 files / 64 MB: a rescan
+  onto a brand-new branch used to rehash all 65.5 MB (1.6s) and now
+  reuses everything (0.63s) — as does a scan into an entirely different
+  `.doltlite_db` on the same host.
+
 
 ## 4. Commit / gc operational rules
 

@@ -35,41 +35,16 @@
 //! for why the orchestrator may checkout a non-`main` branch before
 //! the scan.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use futures::TryStreamExt;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::progress::Progress;
 
-use super::schema_raw::{full_ddl, FileRow, FileStatsRow, ScanMetaRow, StampKind, DATA_TABLES};
-
-/// The Unison fast-rescan cache, pulled **entirely into memory once**
-/// before truncate-and-rebuild so the walk never touches the database.
-/// Keyed by root-relative path. Carries **every** prior entry (files,
-/// dirs, symlinks): files so the rescan compare can reuse their hash,
-/// dirs so the walker can compare a directory's mtime and skip its
-/// `readdir`, and the full child listing so a skipped directory can
-/// enumerate its children from memory instead of the filesystem.
-#[derive(Default)]
-pub struct PrevCache {
-    /// Prior `(mtime, size, inode, dev, stamp_kind)` per path, for
-    /// every entry kind.
-    pub stats: HashMap<String, FileStatsRow>,
-    /// Prior raw 32-byte blake3 per *file* path, reused when the stat
-    /// triple matches.
-    pub blake3s: HashMap<String, super::hash::Blake3>,
-    /// Prior immediate children per directory: parent root-relative
-    /// path → sorted child root-relative paths. The root's children are
-    /// keyed by the empty string. Lets the walker enumerate an
-    /// unchanged directory's entries without a `readdir`.
-    pub children: HashMap<String, Vec<String>>,
-}
+use super::schema_raw::{full_ddl, FileRow, ScanMetaRow, DATA_TABLES};
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -158,128 +133,22 @@ impl RawDb {
         Ok(())
     }
 
-    /// Load the Unison fast-rescan cache fully into memory, as **two
-    /// plain single-table scans** (no JOIN).
-    ///
-    /// An earlier version did one `file_stats JOIN files` query. That
-    /// JOIN forces the engine to do a per-row lookup into the second
-    /// prolly tree for every row, which crawls on a multi-million-entry
-    /// prior scan (it is N tree-probes, not a sequential scan). Two
-    /// independent sequential scans — `file_stats` for the stat/cursor
-    /// columns and `files` for the file digests — are dramatically
-    /// cheaper and merge trivially by `id` in memory.
-    ///
-    /// We `fetch` a stream and consume by **column index**, not by name:
-    /// `fetch_all` would materialize every row into an owned
-    /// `Vec<SqliteRow>` first, and `try_get(name)` re-resolves the column
-    /// name per call. Streaming + positional access keeps each scan
-    /// linear and allocation-light.
-    ///
-    /// Loading dirs (not just files) is what lets the walker skip a
-    /// `readdir` on an unchanged directory: it needs the dir's prior
-    /// mtime to decide, and the child listing to enumerate from memory.
-    pub async fn load_prev_cache(&self, progress: &Progress) -> Result<PrevCache> {
-        let mut stats: HashMap<String, FileStatsRow> = HashMap::new();
-        let mut children: HashMap<String, Vec<String>> = HashMap::new();
-
-        // ── Scan 1: file_stats (every entry). Feeds `stats` (mtime for
-        // the dir-skip decision; the full cursor triple for file reuse)
-        // and the parent→children index. No JOIN. `ctime_ns` is omitted:
-        // nothing on the read path consults a prior ctime. ──
-        let mut rows =
-            sqlx::query("SELECT id, mtime_ns, size, stamp_kind, inode, dev FROM file_stats")
-                .fetch(&self.pool);
-        let mut n: u64 = 0;
-        while let Some(r) = rows.try_next().await.context("stream file_stats")? {
-            n += 1;
-            if n.is_multiple_of(100_000) {
-                progress.set_message(&format!("loading rescan cache: {n} entries …"));
-            }
-            let id: String = r.try_get(0).context("read id")?;
-            let mtime_ns: i64 = r.try_get(1).unwrap_or(0);
-            let size: i64 = r.try_get(2).unwrap_or(0);
-            let stamp_str: String = r.try_get(3).unwrap_or_else(|_| "rescan".to_string());
-            let inode: Option<i64> = r.try_get(4).ok();
-            let dev: Option<i64> = r.try_get(5).ok();
-            let stamp_kind = match stamp_str.as_str() {
-                "inode" => StampKind::Inode,
-                "nostamp" => StampKind::NoStamp,
-                _ => StampKind::Rescan,
-            };
-            if !id.is_empty() {
-                let parent = match id.rfind('/') {
-                    Some(i) => id[..i].to_string(),
-                    None => String::new(),
-                };
-                children.entry(parent).or_default().push(id.clone());
-            }
-            stats.insert(
-                id.clone(),
-                FileStatsRow {
-                    id,
-                    mtime_ns,
-                    size,
-                    stamp_kind,
-                    inode,
-                    dev,
-                    ctime_ns: None,
-                },
-            );
-        }
-        drop(rows);
-        // Stable child order for deterministic emission + tree-hash input.
-        for kids in children.values_mut() {
-            kids.sort();
-        }
-
-        // ── Scan 2: files digests, files only (dirs/symlinks recompute
-        // their hash every scan, so their digests are never reused). ──
-        let mut blake3s: HashMap<String, super::hash::Blake3> = HashMap::new();
-        let mut brows =
-            sqlx::query("SELECT id, blake3 FROM files WHERE kind = 'file'").fetch(&self.pool);
-        while let Some(r) = brows.try_next().await.context("stream files digests")? {
-            let id: String = r.try_get(0).context("read id")?;
-            let blake3: Option<Vec<u8>> = r.try_get(1).ok();
-            // Only a well-formed 32-byte digest is a reusable cache entry;
-            // anything else (NULL, wrong length) falls through to a rehash.
-            if let Some(b) = blake3.and_then(|v| <[u8; 32]>::try_from(v.as_slice()).ok()) {
-                blake3s.insert(id, b);
-            }
-        }
-
-        Ok(PrevCache {
-            stats,
-            blake3s,
-            children,
-        })
-    }
-
-    /// Producer-consumer write path: one batch of file+stat rows
-    /// (matched 1:1 by `id`) lands in a SINGLE sqlite transaction
-    /// covering both `files` and `file_stats` (no bookkeeping sidecars
-    /// — see the module docs). These are sqlite-level `BEGIN…COMMIT`s
+    /// Producer-consumer write path: one batch of content rows lands
+    /// in a SINGLE sqlite transaction (no bookkeeping sidecars — see
+    /// the module docs). The matching host observations go to the
+    /// fingerprint cache, not here. These are sqlite-level `BEGIN…COMMIT`s
     /// that flush the working set; the single version-control
     /// `dolt_commit` happens once at end of scan (see [`Self::commit`]).
     /// Per-batch flushing keeps both our Rust memory and doltlite's
     /// in-transaction buffer bounded on a tens-of-millions-of-rows
     /// scan. Returns the wall time.
-    pub async fn write_batch(
-        &self,
-        files: &[FileRow],
-        stats: &[FileStatsRow],
-        _now: &str,
-    ) -> Result<std::time::Duration> {
+    pub async fn write_batch(&self, files: &[FileRow], _now: &str) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
-        if files.is_empty() && stats.is_empty() {
+        if files.is_empty() {
             return Ok(started.elapsed());
         }
         let mut tx = self.pool.begin().await.context("begin batch tx")?;
-        if !files.is_empty() {
-            bulk_upsert_entity_in_tx(&mut tx, files).await?;
-        }
-        if !stats.is_empty() {
-            bulk_upsert_entity_in_tx(&mut tx, stats).await?;
-        }
+        bulk_upsert_entity_in_tx(&mut tx, files).await?;
         tx.commit().await.context("commit batch tx")?;
         Ok(started.elapsed())
     }
@@ -330,6 +199,23 @@ impl RawDb {
                 .await
                 .context("select dir ids")?;
         Ok(ids)
+    }
+
+    /// Every entry id this scan wrote, root-relative.
+    ///
+    /// After the truncate-and-rebuild the `files` table is exactly what
+    /// the walk saw, so this is the authoritative "still present" set —
+    /// which is what the fingerprint cache is pruned against. Streamed
+    /// rather than `fetch_all`ed so the row set is never materialised
+    /// twice.
+    pub async fn all_entry_ids(&self) -> Result<std::collections::BTreeSet<String>> {
+        use futures::TryStreamExt;
+        let mut out = std::collections::BTreeSet::new();
+        let mut rows = sqlx::query("SELECT id FROM files").fetch(&self.pool);
+        while let Some(r) = rows.try_next().await.context("stream file ids")? {
+            out.insert(sqlx::Row::try_get::<String, _>(&r, 0).context("read id")?);
+        }
+        Ok(out)
     }
 
     /// Stamp one already-written directory row with its breadcrumb

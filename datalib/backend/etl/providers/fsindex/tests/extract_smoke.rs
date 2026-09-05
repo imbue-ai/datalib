@@ -15,6 +15,8 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::{EntryKind, FingerprintCache};
+use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
 use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
@@ -64,61 +66,58 @@ async fn dump_files(db_path: &Path) -> String {
     out
 }
 
-/// Verify the Unison cursor was stored correctly: every FILE row's
-/// `file_stats` should carry `stamp_kind = 'inode'` on unix with
-/// non-NULL `inode` + `dev`. If this fails, the rescan compare in
-/// `stamp::decide` will never reuse anything regardless of how
-/// unchanged the file is.
+/// Verify the Unison cursor reached the host-local cache correctly:
+/// every FILE entry should carry `stamp_kind = inode` on unix with
+/// non-NULL `inode` + `dev`. If this fails, `fswalk::decide` will never
+/// reuse anything, however unchanged the file is.
 ///
-/// Dirs and symlinks deliberately get `stamp_kind = 'nostamp'`
-/// because they always rehash on every scan (no fast path), so
-/// there's no cache to consult for them.
-async fn assert_inode_stamp_kind(db_path: &Path) {
-    let db = RawDb::open(db_path).await.unwrap();
-    let rows = sqlx::query(
-        "SELECT file_stats.id, file_stats.stamp_kind, file_stats.inode, file_stats.dev \
-         FROM file_stats JOIN files ON files.id = file_stats.id \
-         WHERE files.kind = 'file'",
-    )
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
-    assert!(!rows.is_empty(), "no file-kind rows in file_stats");
-    for r in rows {
-        let id: String = r.try_get("id").unwrap();
-        let stamp_kind: String = r.try_get("stamp_kind").unwrap();
-        let inode: Option<i64> = r.try_get("inode").unwrap();
-        let dev: Option<i64> = r.try_get("dev").unwrap();
+/// The cursor lives in the fingerprint cache, not the scan store — it
+/// is host state, so it is deliberately not versioned or branched. See
+/// `datalib_etl::fingerprint_cache`.
+async fn assert_inode_stamp_kind(cache: &FingerprintCache, root: &Path) {
+    let tree = cache.load_under(root).await.unwrap();
+    let files: Vec<&String> = tree
+        .paths()
+        .filter(|rel| tree.kind(rel) == Some(EntryKind::File))
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "no file entries in the fingerprint cache"
+    );
+    for rel in files {
+        let cursor = tree.cursor(rel).expect("a cached entry has a cursor");
         #[cfg(unix)]
         {
             assert_eq!(
-                stamp_kind, "inode",
-                "file row id={id:?} stamp_kind={stamp_kind} — expected 'inode' on unix"
+                cursor.stamp_kind,
+                StampKind::Inode,
+                "file {rel:?} has stamp_kind={:?} — expected Inode on unix",
+                cursor.stamp_kind
             );
             assert!(
-                inode.is_some(),
-                "row id={id:?} has stamp_kind=inode but inode is NULL"
+                cursor.inode.is_some(),
+                "{rel:?} has stamp_kind=Inode but inode is NULL"
             );
             assert!(
-                dev.is_some(),
-                "row id={id:?} has stamp_kind=inode but dev is NULL"
+                cursor.dev.is_some(),
+                "{rel:?} has stamp_kind=Inode but dev is NULL"
             );
         }
         #[cfg(not(unix))]
         {
-            let _ = (inode, dev);
-            assert_eq!(stamp_kind, "nostamp", "row id={id:?} on non-unix");
+            assert_eq!(cursor.stamp_kind, StampKind::NoStamp, "{rel:?} on non-unix");
         }
     }
 }
 
-fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
+fn fetch_opts(db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
         db: None,
         source_id: "smoke".to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: None,
+        cache,
         no_stamp: true,
         progress: Progress::noop(),
         control: DownloadControl::default(),
@@ -144,10 +143,13 @@ async fn initial_scan_and_incremental_rescan() {
     let root = tmp.path().join("tree");
     fs::create_dir(&root).unwrap();
     let db_path = tmp.path().join("fsindex.doltlite_db");
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
     make_initial_tree(&root);
 
     // ── Phase A: initial scan ───────────────────────────────────────
-    let summary_a = download::fetch(fetch_opts(&db_path, &root))
+    let summary_a = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
         .await
         .expect("initial fetch");
     assert_eq!(summary_a.errors, 0, "no walker errors");
@@ -165,7 +167,7 @@ async fn initial_scan_and_incremental_rescan() {
     assert_eq!(summary_a.entries_scanned, 7);
     #[cfg(not(unix))]
     assert_eq!(summary_a.entries_scanned, 6);
-    assert_inode_stamp_kind(&db_path).await;
+    assert_inode_stamp_kind(&cache, &root).await;
 
     insta::assert_snapshot!("initial_scan", dump_files(&db_path).await);
 
@@ -174,7 +176,7 @@ async fn initial_scan_and_incremental_rescan() {
     // doing its job. All four FILE rows should reuse their cached
     // blake3 against the unchanged (mtime, size, inode) triple;
     // only the symlink and the two directories should rehash.
-    let summary_a2 = download::fetch(fetch_opts(&db_path, &root))
+    let summary_a2 = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
         .await
         .expect("unchanged rescan");
     assert_eq!(summary_a2.errors, 0);
@@ -211,7 +213,7 @@ async fn initial_scan_and_incremental_rescan() {
     // be gone from `files` (visible in the after_edits snapshot).
     fs::remove_file(root.join("empty.txt")).unwrap();
 
-    let summary_b = download::fetch(fetch_opts(&db_path, &root))
+    let summary_b = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
         .await
         .expect("incremental fetch");
     assert_eq!(summary_b.errors, 0);
@@ -256,6 +258,9 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     let root = tmp.path().join("tree");
     fs::create_dir(&root).unwrap();
     let db_path = tmp.path().join("fsindex.doltlite_db");
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
 
     // `subdir` opts into stamping via its own `.fsindex.yaml`; the rest
     // of the tree does not.
@@ -266,7 +271,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
     write(&root.join("subdir/nested.txt"), b"nested");
 
-    let mut opts = fetch_opts(&db_path, &root);
+    let mut opts = fetch_opts(&db_path, &root, cache.clone());
     opts.no_stamp = false;
     let summary = download::fetch(opts).await.expect("stamping fetch");
     assert_eq!(summary.errors, 0);
@@ -297,7 +302,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
 
     // Second scan: idempotent. No new breadcrumb, same UUID reused.
-    let mut opts2 = fetch_opts(&db_path, &root);
+    let mut opts2 = fetch_opts(&db_path, &root, cache.clone());
     opts2.no_stamp = false;
     let summary2 = download::fetch(opts2).await.expect("rescan");
     assert_eq!(

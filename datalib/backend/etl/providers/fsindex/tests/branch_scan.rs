@@ -14,6 +14,7 @@
 use std::path::Path;
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
@@ -24,13 +25,20 @@ fn write(root: &Path, rel: &str, body: &str) {
     std::fs::write(path, body).unwrap();
 }
 
-fn opts(db_path: &Path, root: &Path, id: &str, branch: Option<&str>) -> FetchOptions {
+fn opts(
+    db_path: &Path,
+    root: &Path,
+    id: &str,
+    branch: Option<&str>,
+    cache: FingerprintCache,
+) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
         db: None,
         source_id: id.to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: branch.map(str::to_string),
+        cache,
         no_stamp: true,
         progress: Progress::noop(),
         control: DownloadControl::default(),
@@ -40,12 +48,18 @@ fn opts(db_path: &Path, root: &Path, id: &str, branch: Option<&str>) -> FetchOpt
 /// Scan `root` into `db_path` on `branch`, then commit — mirroring what
 /// `bin/fsindex.rs` does, since `fetch` deliberately leaves the commit
 /// to its caller.
-async fn scan_and_commit(db_path: &Path, root: &Path, id: &str, branch: Option<&str>) {
+async fn scan_and_commit(
+    db_path: &Path,
+    root: &Path,
+    id: &str,
+    branch: Option<&str>,
+    cache: &FingerprintCache,
+) {
     let db = RawDb::open(db_path).await.unwrap();
     if let Some(branch) = branch {
         db.checkout_branch(branch).await.unwrap();
     }
-    let mut o = opts(db_path, root, id, branch);
+    let mut o = opts(db_path, root, id, branch, cache.clone());
     o.db = Some(db.clone());
     // `fetch` re-applies the checkout on the same pooled connection;
     // doing it here too matches the binary, which opens the db itself.
@@ -97,6 +111,10 @@ async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
 async fn two_roots_land_on_their_own_branches() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("scans.doltlite_db");
+    // A temp cache: never this host's real one.
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
 
     let alpha = tmp.path().join("alpha");
     write(&alpha, "shared.txt", "same in both trees\n");
@@ -107,8 +125,8 @@ async fn two_roots_land_on_their_own_branches() {
     write(&beta, "nested/only_beta.txt", "beta\n");
 
     // First root on the default branch, second on its own.
-    scan_and_commit(&db_path, &alpha, "alpha", None).await;
-    scan_and_commit(&db_path, &beta, "beta", Some("beta")).await;
+    scan_and_commit(&db_path, &alpha, "alpha", None, &cache).await;
+    scan_and_commit(&db_path, &beta, "beta", Some("beta"), &cache).await;
 
     // The branch was created.
     let db = RawDb::open(&db_path).await.unwrap();
@@ -146,12 +164,16 @@ async fn two_roots_land_on_their_own_branches() {
 async fn rescanning_an_existing_branch_reuses_it() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("scans.doltlite_db");
+    // A temp cache: never this host's real one.
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
     let root = tmp.path().join("tree");
     write(&root, "a.txt", "one\n");
 
-    scan_and_commit(&db_path, &root, "s", Some("work")).await;
+    scan_and_commit(&db_path, &root, "s", Some("work"), &cache).await;
     write(&root, "b.txt", "two\n");
-    scan_and_commit(&db_path, &root, "s", Some("work")).await;
+    scan_and_commit(&db_path, &root, "s", Some("work"), &cache).await;
 
     let on_work = files_on_branch(&db_path, "work").await;
     assert_eq!(

@@ -28,6 +28,7 @@ pub mod event_store;
 pub mod event_tape;
 pub mod events;
 pub mod file_checkpoint;
+pub mod fingerprint_cache;
 pub mod fswalk;
 pub mod grid_index;
 pub mod http;
