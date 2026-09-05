@@ -24,11 +24,11 @@ fn write(root: &Path, rel: &str, body: &str) {
     std::fs::write(path, body).unwrap();
 }
 
-fn opts(db_path: &Path, root: &Path, name: &str, branch: Option<&str>) -> FetchOptions {
+fn opts(db_path: &Path, root: &Path, id: &str, branch: Option<&str>) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
         db: None,
-        source_name: name.to_string(),
+        source_id: id.to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: branch.map(str::to_string),
         no_stamp: true,
@@ -40,17 +40,17 @@ fn opts(db_path: &Path, root: &Path, name: &str, branch: Option<&str>) -> FetchO
 /// Scan `root` into `db_path` on `branch`, then commit — mirroring what
 /// `bin/fsindex.rs` does, since `fetch` deliberately leaves the commit
 /// to its caller.
-async fn scan_and_commit(db_path: &Path, root: &Path, name: &str, branch: Option<&str>) {
+async fn scan_and_commit(db_path: &Path, root: &Path, id: &str, branch: Option<&str>) {
     let db = RawDb::open(db_path).await.unwrap();
     if let Some(branch) = branch {
         db.checkout_branch(branch).await.unwrap();
     }
-    let mut o = opts(db_path, root, name, branch);
+    let mut o = opts(db_path, root, id, branch);
     o.db = Some(db.clone());
     // `fetch` re-applies the checkout on the same pooled connection;
     // doing it here too matches the binary, which opens the db itself.
     download::fetch(o).await.unwrap();
-    db.commit(&format!("scan {name}")).await.unwrap();
+    db.commit(&format!("scan {id}")).await.unwrap();
 }
 
 /// Root-relative file paths committed on `branch`.

@@ -24,12 +24,10 @@ chunks, so the second one is nearly free.
 
 ```sh
 # 1. scan the first tree into scans.doltlite_db, on branch `before`
-datalib-fsindex --db scans.doltlite_db --source-name before \
-    --root ./tree1 --branch before
+datalib-fsindex --db scans.doltlite_db --root ./tree1 --branch before
 
 # 2. scan the second tree into the SAME file, on branch `after`
-datalib-fsindex --db scans.doltlite_db --source-name after \
-    --root ./tree2 --branch after
+datalib-fsindex --db scans.doltlite_db --root ./tree2 --branch after
 
 # 3. diff the two branches — no unification step, they already share
 #    a chunk store
@@ -136,11 +134,16 @@ file, which is the arrangement `schema_raw.rs` describes and what
 `demo.sh` case 2 uses:
 
 ```sh
-fsindex --db scans.doltlite_db --source-name before --root ./before --branch before
-fsindex --db scans.doltlite_db --source-name after  --root ./after  --branch after
+datalib-fsindex --db scans.doltlite_db --root ./before --branch before
+datalib-fsindex --db scans.doltlite_db --root ./after  --branch after
 ```
 
-That flag was broken until this change and is worth knowing about if you
+Each scan's `scan_meta.id` defaults to its root's directory name, so
+standalone runs need no identifier. Pass `--source-id` when you want to
+choose one — the pipeline does, because there a source's identity comes
+from its config entry and outlives any particular path.
+
+`--branch` was broken until recently and is worth knowing about if you
 are reading older notes. `RawDb::checkout_branch` issued MySQL's
 `CALL DOLT_CHECKOUT(?)`, which doltlite's parser rejects
 (`near "CALL": syntax error`); the `-b` fallback used the same spelling,

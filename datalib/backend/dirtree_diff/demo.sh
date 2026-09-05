@@ -63,8 +63,8 @@ cp after/media/pic.bin after/media/pic_backup.bin
 cp -R after/themes/dark after/themes/dark_backup
 
 echo "scanning…" >&2
-"$fsindex" --db before.doltlite_db --source-name before --root before --no-stamp >/dev/null 2>&1
-"$fsindex" --db after.doltlite_db  --source-name after  --root after  --no-stamp >/dev/null 2>&1
+"$fsindex" --db before.doltlite_db --root before --no-stamp >/dev/null 2>&1
+"$fsindex" --db after.doltlite_db  --root after  --no-stamp >/dev/null 2>&1
 
 # Case 1: two independent files, unified through file:// remotes.
 "$dirtree_diff" \
@@ -78,10 +78,8 @@ echo "scanning…" >&2
 # straight into it with `fsindex --branch`, then diffed directly — no
 # unification needed, because both commits already share a chunk store.
 rm -f branched.doltlite_db
-"$fsindex" --db branched.doltlite_db --source-name before --root before \
-    --branch before --no-stamp >/dev/null 2>&1
-"$fsindex" --db branched.doltlite_db --source-name after --root after \
-    --branch after --no-stamp >/dev/null 2>&1
+"$fsindex" --db branched.doltlite_db --root before --branch before --no-stamp >/dev/null 2>&1
+"$fsindex" --db branched.doltlite_db --root after --branch after --no-stamp >/dev/null 2>&1
 
 "$dirtree_diff" \
     --left "$out/branched.doltlite_db#before" \
