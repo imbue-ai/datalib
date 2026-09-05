@@ -177,7 +177,7 @@ Three checks stand between a bad recipe and silent data loss.
    fails an index run when two sources claim one `markdown_uuid` or one
    `grid_rows.uuid`, naming both. Scoped to a single run on purpose:
    the same ids arriving under a new `source_name` is a *rename*, which
-   is legitimate, whereas two sidecars claiming one id inside one walk
+   is legitimate, whereas two documents claiming one id inside one walk
    is always a misconfiguration or a recipe missing a discriminator.
 2. **`//tests/fixtures:ingested_tng_test`** asserts `grid_rows.uuid` is
    unique, that no `markdown_uuid` is claimed by two `source_name`s, and
@@ -307,15 +307,16 @@ compare row content rather than just the id.
 4. Bump the provider's `RENDER_VERSION`. A re-key moves `chat_uuid`,
    which *names the output directory*, so the new documents land beside
    the old ones rather than over them and the index loads both. The
-   render step handles that — a tree whose sidecars carry a version this
-   build doesn't produce is deleted and re-rendered from the raw store.
+   render step handles that — a store whose documents carry a version
+   this build doesn't produce is deleted and re-rendered from the raw
+   store.
    Skip the bump and the port silently does nothing to any data root
    that already exists: the fingerprints still match, so nothing
    re-renders and the old ids stay.
 
    Every render processor already returns its constant from
    `DataProcessor::render_version`, and the render step fails a source
-   that writes sidecars without declaring one — so a *new* provider
+   that writes documents without declaring one — so a *new* provider
    can't inherit the old behaviour by omission, and a wrong constant is
    caught by `//tests/fixtures:ingested_tng_test` rather than by a user
    noticing every conversation twice.
@@ -330,7 +331,8 @@ human to delete anything:
 
 - **The index.** `grid_index::init_schema` compares the on-disk
   `grid_rows` / `markdowns` / `edges` against their DDL and rebuilds all
-  three from the sidecars when they disagree. Before that, a root
+  three from the per-source render stores when they disagree. Before
+  that, a root
   predating the `external_id` → `upstream_id` rename answered every
   read *and* every write with `no such column: upstream_id`.
 - **The rendered tree.** The render step discards a tree stamped with a

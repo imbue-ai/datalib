@@ -1,6 +1,6 @@
 //! Render one `index.md` per book plus one `.md` per (chapter,
 //! edition) under `<out_dir>/<stanza>/rendered_md/thucydides/histories/`,
-//! each with a sibling `.grid_rows.json` sidecar carrying all rows for
+//! each emitting into the render store all rows for
 //! that doc.
 //!
 //! Per chapter/edition doc, we emit:

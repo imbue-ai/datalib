@@ -1,6 +1,6 @@
-//! Build the `grid_rows` sidecar for one GitHub PR document.
+//! Build the `grid_rows` for one GitHub PR document.
 //!
-//! Under the single-doc-per-PR model, every row in a PR's sidecar shares
+//! Under the single-doc-per-PR model, every row in a PR's row set shares
 //! the same `qmd_path` (the PR's `index.md`). Each individual comment is
 //! still its own row keyed by its provider-namespaced UUID — clicks in
 //! the grid scroll to `data-msg-index="N"` inside the unified doc, where

@@ -1,6 +1,5 @@
 //! ChatGPT Render: raw API capture → parsed rows → markdown +
-//! grid_rows sidecars. Stages 3-4 of the porting plan fill in the
-//! render + sidecar emit; `parse` is in place.
+//! grid_rows into the source's render store.
 
 /// Every entity id this provider mints. See `docs/dev/entity_ids.md`.
 pub mod ids;

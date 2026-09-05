@@ -41,7 +41,7 @@ pub struct ContactRenderProfile {
     /// Discriminator for the contact's grid row (e.g. `"Contact"`).
     pub contact_kind: String,
     /// Bumped by the provider when its contact rendering changes
-    /// meaningfully; stamped into the sidecar so a re-run invalidates
+    /// meaningfully; stamped into the store so a re-run invalidates
     /// stale docs.
     pub render_version: u32,
 }

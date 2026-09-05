@@ -70,10 +70,11 @@ Factored out and shared already:
   copies live. `fsindex` keys on path because *the tree* is its
   subject. Both available; the choice is explicit.
 - **The downstream is already provider-agnostic** —
-  `datalib_index_lib::emit_sidecar` is the render→index contract,
+  `RenderedMarkdown`, handed back through `ctx.emit_doc` and written
+  into the source's render store, is the render→index contract;
   `etl/src/title.rs` and `etl/src/section.rs` write the cross-provider
-  title block and anchors, and `grid_index` needs no per-provider
-  change to pick up a new sidecar tree.
+  title block and anchors; and `grid_index` needs no per-provider
+  change to pick up a new source's store.
 
 ### The scheduler already runs anything
 

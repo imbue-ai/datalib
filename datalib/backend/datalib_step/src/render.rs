@@ -39,7 +39,7 @@ pub async fn run(
     let rendered_root = data_root.join(&planned.name).join("rendered_md");
     // Skip state and renderer versions come from the store: two indexed
     // reads, where this used to walk the whole tree and parse every
-    // sidecar header to rebuild the same two answers.
+    // document's header to rebuild the same two answers.
     let declared = declared_render_versions(&planned.processors);
     let mut store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(now))
@@ -290,14 +290,14 @@ fn discard_tree(rendered_root: &Path) -> Result<()> {
 ///     loads both. Nothing errors and every document appears twice. A
 ///     provider added later inherits that by simply not overriding the
 ///     default, which is exactly the failure mode "add one line to each
-///     provider" is bad at preventing — so a source that wrote sidecars
+///     provider" is bad at preventing — so a source that wrote documents
 ///     and declared nothing is an error here.
 ///   * **Wrong.** A processor that reports one version and writes
 ///     another marks every tree stale, *including the one it just
 ///     wrote*, and re-renders the source from scratch on every run.
 ///     Correct output, unbounded cost, no symptom but a slow pipeline.
 ///
-/// Checked against the sidecars on disk rather than against what the
+/// Checked against the versions in the store rather than against what the
 /// processors emitted through the doc callback, because the tree is what
 /// the next run reads. A declaration that agrees with the callback and
 /// disagrees with the file would still be wrong, and only this direction
@@ -319,7 +319,7 @@ fn every_stored_version_must_be_declared(
                 "renderer must: it is what lets the next run tell a tree this build produced ",
                 "from one an older build left behind, and a tree whose ids were re-keyed cannot ",
                 "be merged into, only replaced. Return the same constant the render path passes ",
-                "to `emit_sidecar`."
+                "into each `RenderedMarkdown`."
             ),
             source = source,
             on_disk = on_disk,
@@ -329,7 +329,7 @@ fn every_stored_version_must_be_declared(
     if !undeclared.is_empty() {
         anyhow::bail!(
             concat!(
-                "source `{source}`: sidecars under {root} carry render_version {undeclared:?}, ",
+                "source `{source}`: documents under {root} carry render_version {undeclared:?}, ",
                 "which none of its processors declare (declared: {declared:?}). A processor ",
                 "that reports one version and writes another marks every tree stale — ",
                 "including the one it just wrote — and re-renders this source from scratch on ",
@@ -344,15 +344,15 @@ fn every_stored_version_must_be_declared(
     Ok(())
 }
 
-/// The set of `render_version`s this wave will stamp into sidecars, or
-/// `None` when the declaration is incomplete.
+/// The set of `render_version`s this wave will stamp onto its
+/// documents, or `None` when the declaration is incomplete.
 ///
 /// `None` when **any** processor declines to declare one, because a
-/// partial set is worse than no set: that processor's own sidecars would
-/// look foreign against the versions its siblings reported, and the tree
-/// would be deleted and rebuilt on every run. So an incomplete
+/// partial set is worse than no set: that processor's own documents
+/// would look foreign against the versions its siblings reported, and
+/// the tree would be deleted and rebuilt on every run. So an incomplete
 /// declaration deletes nothing — and
-/// [`every_sidecar_version_must_be_declared`] then fails the step at the
+/// [`every_stored_version_must_be_declared`] then fails the step at the
 /// end of the wave, so "incomplete" is loud rather than silently
 /// unchecked.
 fn declared_render_versions(processors: &[Box<dyn DataProcessor>]) -> Option<BTreeSet<u32>> {

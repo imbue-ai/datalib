@@ -14,7 +14,7 @@
 //!     (e.g. a LinkedIn profile) when the provider supplies one.
 //!   * The `| Field | Value |` detail table.
 //!   * Inline photo materialization into a sibling `blobs/` dir.
-//!   * One [`GridRow`] per contact + the `.grid_rows.json` sidecar.
+//!   * One [`GridRow`] per contact, into the source's render store.
 //!   * Fingerprint hashing for skip-if-unchanged.
 //!   * The `on_doc_complete` callback the sync orchestrator threads
 //!     through to drive its per-doc index update.

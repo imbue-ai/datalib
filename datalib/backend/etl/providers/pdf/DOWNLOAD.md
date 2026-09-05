@@ -197,7 +197,7 @@ what the UI needs to reveal a document in the platform file manager.
 Two things follow, both deliberate:
 
 - **PDF grid rows are machine-specific.** The backend index is a derived
-  artifact — rebuilt from the `*.grid_rows.json` sidecars by
+  artifact — rebuilt from the per-source render stores by
   `grid_index` — so this does not corrupt anything shared. But it does
   mean two machines indexing the same corpus produce different rows for
   the same document.

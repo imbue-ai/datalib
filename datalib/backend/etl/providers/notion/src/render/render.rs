@@ -11,7 +11,7 @@
 //! useful cross-reference is the actively-maintained Node renderer at
 //! <https://github.com/souvikinator/notion-to-md>. We don't shell out
 //! to it (we need our own QMD-with-section-divs shape + grid_rows
-//! sidecar, both of which it doesn't produce), but its block handlers
+//! grid rows, neither of which it produces), but its block handlers
 //! are a good "is our output reasonable?" oracle.
 
 use std::collections::{BTreeMap, HashMap};

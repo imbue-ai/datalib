@@ -151,7 +151,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         Some(changed) => {
             // Count "total threads that have any emails" so the
             // skipped count is meaningful; same denominator the
-            // sidecar/load progress bar uses.
+            // render/load progress bar uses.
             let total = load_all_thread_keys(&pool).await?;
             let skipped = total.difference(changed).count();
             let load: HashSet<(String, String)> = total.intersection(changed).cloned().collect();

@@ -67,7 +67,7 @@ pub struct RenderProfile {
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
-    /// into the sidecar so a re-run knows to invalidate stale docs.
+    /// into the store so a re-run knows to invalidate stale docs.
     pub render_version: u32,
 }
 
@@ -272,7 +272,7 @@ fn materialize_attachment_bytes(
 }
 
 /// `<out>/<stanza>/rendered_md/<chat_uuid>/<period>.md` plus the matching
-/// sidecar and parent dir. The directory is the chat's stable UUID — never a
+/// markdown and its parent dir. The directory is the chat's stable UUID — never a
 /// title-derived slug — so an upstream rename (channel/title change)
 /// re-renders in place instead of orphaning the old file at a stale path. The
 /// human title still lives in the markdown frontmatter and the grid_rows DB.

@@ -1,6 +1,6 @@
 //! Slack render: convert parsed thread buckets into the shared
 //! `chat-common` normalized model and delegate the markdown / grid-row /
-//! sidecar plumbing to [`datalib_etl_chat_common::render::render_all`].
+//! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 //!
 //! One Slack thread → one [`NormalizedChat`] with a single `"all"`
 //! bucket; `chat_uuid` and the bucket's `markdown_uuid` are the existing

@@ -75,8 +75,9 @@ sh_binary(
 # JSON and emits two outputs:
 #
 #   * backend_index.doltlite_db -- the doltlite (SQLite-compatible) file the backend reads.
-#   * qmd.tar    -- the rendered conversation tree (markdown, grid_rows
-#                   sidecars, render cursors, attachment blobs).
+#   * qmd.tar    -- the rendered conversation tree (markdown, each
+#                   source's indexed_markdown.doltlite_db, render
+#                   cursors, attachment blobs).
 #   * qmd_md.tar -- markdown alone, the sole input to :ingested_tng_qmd.
 #                   See tar_qmd.py for why the embedder gets its own
 #                   narrower archive.
@@ -111,7 +112,7 @@ filegroup(
 # runner (//datalib/backend/dag:datalib_dag_bin driving
 # //datalib/backend/datalib_step:datalib_step). The pipeline runs
 # every source's download+render step pair over the checked-in
-# fixtures and the index fan-in loads the resulting sidecars into
+# fixtures and the index fan-in stacks the resulting render stores into
 # `backend_index.doltlite_db` (the doltlite chunk store is linked
 # statically via `//third-party/doltlite:sqlite3`, so no host `dolt`
 # install is required). This rule then tars the rendered_md tree into

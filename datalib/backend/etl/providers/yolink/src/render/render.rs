@@ -88,7 +88,7 @@ pub struct RenderSummary {
     pub plots: usize,
 }
 
-/// Render the page, its plots, and its sidecar; advance the cursor.
+/// Render the page, its plots, and its rows; advance the cursor.
 pub fn render_all(
     parsed: &ParsedYolink,
     root: &Path,
@@ -249,7 +249,7 @@ fn metric_spec(metric: &str) -> Result<&'static units::MetricSpec> {
     })
 }
 
-/// The sidecar's `source_fingerprint` — a hash of the readings this
+/// The document's `source_fingerprint` — a hash of the readings this
 /// document was built from, plus the render version.
 ///
 /// Deliberately **not** the store's HEAD, though HEAD is right there and

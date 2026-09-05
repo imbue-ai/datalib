@@ -1,8 +1,8 @@
 # Notion Translate
 
 `notion-translate` reads the event-store JSONL written by
-`notion-download` and emits one CommonMark file per Notion page plus a
-co-located `*.grid_rows.json` sidecar per document.
+`notion-download` and emits one CommonMark file per Notion page plus
+that document's rows in the source's render store.
 
 ```
 <out>/
@@ -11,7 +11,8 @@ co-located `*.grid_rows.json` sidecar per document.
     notion/
       <title-slug>__<short-id>/
         index.md                                 # the page itself
-        index.grid_rows.json                     # one row: Notion Page
+                                                 # (its row, "Notion Page",
+                                                 #  goes to the render store)
         discussions/
           <discussion-short>__<snippet>.md       # one md per comment thread
           <discussion-short>__<snippet>.grid_rows.json
@@ -28,14 +29,14 @@ comment thread anchored to a block on that page) becomes a separate
 document, so an active thread doesn't churn the page-level fingerprint
 every time someone replies.
 
-| Document         | Page kind                      | Sidecar contents                              |
+| Document         | Page kind                      | Row set                                       |
 |------------------|--------------------------------|-----------------------------------------------|
 | Page             | one `Notion Page` row          | one row per page                              |
 | Discussion thread| one `Notion Comment Thread` row + N `Notion Comment` rows | one of each, plus the thread row             |
 
-Sidecars carry a `source_fingerprint` computed by hashing the
+Each document carries a `source_fingerprint` computed by hashing the
 canonicalized (recursively-sorted) rows. Reruns that don't change the
-content produce byte-equal sidecars; downstream importers can use the
+content produce an identical row set; downstream consumers use the
 fingerprint to skip unchanged documents.
 
 ## Block coverage

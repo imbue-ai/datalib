@@ -86,7 +86,7 @@ whole migration.
   §"No-preseed listing flow" for the rationale.
 
 **Kept (and load-bearing):**
-- Per-doc `source_fingerprint` field on the sidecar / `RenderedMarkdown`
+- Per-doc `source_fingerprint` field on `RenderedMarkdown` / the `markdowns` row
   — the grid_index step still reads it. It's now set to the markdown_uuid
   (or thread_uuid). Stable across re-renders of the same bucket,
   distinct across buckets; the skip decision happens elsewhere.
@@ -393,7 +393,7 @@ commit map roughly to:
    filtered down to changed buckets by the parse step. No
    `prior_fingerprints` arg; no fingerprint compare inside render.
 
-3. `source_fingerprint` on the sidecar / `RenderedMarkdown` is the
+3. `source_fingerprint` on `RenderedMarkdown` / the `markdowns` row is the
    bucket UUID itself (stable, distinct).
 
 4. On success, advance the render cursor:
@@ -624,7 +624,7 @@ non-negotiable for the upcoming ones:
    provider's port is its own commit; mixing two providers'
    migrations is asking for an awkward bisect later.
 
-7. **`source_fingerprint` on the sidecar is now the bucket UUID,
+7. **`source_fingerprint` on the document is now the bucket UUID,
    not a content hash.** The grid_index step still consumes the field
    for its `(qmd_path, source_fingerprint)` skip key; we're
    trading "fingerprint changes when content changes" for

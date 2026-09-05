@@ -2,11 +2,13 @@
 
 `claude-translate` reads a directory of conversations in
 export-shape JSON (written by `claude-download` or by an
-Anthropic bulk export) and emits, per conversation, a `.md` plus a
-co-located `.grid_rows.json` sidecar under
-`<out>/rendered_md/claude/<account>/llm_chats/<conv>__<slug>.md`.
+Anthropic bulk export) and emits, per conversation, a `.md` at
+`<out>/rendered_md/claude/<account>/llm_chats/<conv>__<slug>.md` plus
+that document's rows in the source's render store
+(`<out>/rendered_md/indexed_markdown.doltlite_db`).
 
-The Load step is provider-agnostic and lives in `datalib_etl::load`.
+The Load step is provider-agnostic and lives in
+`datalib_etl::grid_index`.
 
 ## What is a "document"?
 
@@ -50,11 +52,12 @@ The body is byte-stable against the Python `_render_one_claude`.
 
 ## Incrementality
 
-The sidecar header carries `source_fingerprint`, a 64-bit hash over
-the canonical JSON of the conversation, every message, every content
-block, and every attachment (sorted by `(message_uuid,
-block_index/attachment_index)`). The Load step uses this to dedup
-the sidecar against prior runs.
+The document's `markdowns` row carries `source_fingerprint`, a 64-bit
+hash over the canonical JSON of the conversation, every message, every
+content block, and every attachment (sorted by `(message_uuid,
+block_index/attachment_index)`). Render skips a document whose
+fingerprint already matches; the Load step uses the same value to
+dedup against prior runs.
 
 Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk
 render layout changes in a way that should invalidate stale `.md`

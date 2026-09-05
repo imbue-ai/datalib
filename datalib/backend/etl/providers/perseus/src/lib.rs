@@ -1,6 +1,6 @@
 //! Perseus Digital Library provider for [`datalib_etl`]: renders
 //! the TEI editions of classical works into the stanza's
-//! `<stanza>/rendered_md/` + `.grid_rows.json` tree.
+//! `<stanza>/rendered_md/` tree + its render store.
 //!
 //! Today this is wired for **Thucydides' Histories** (`tlg0003.tlg001`)
 //! only — the Greek (`perseus-grc2`) and the English (`1st1K-eng1`)

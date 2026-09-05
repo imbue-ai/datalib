@@ -4,12 +4,12 @@
 //! - One `Notion Comment Thread` row per discussion.
 //! - One `Notion Comment` row per individual comment.
 //!
-//! For sidecar emission we group rows per *document*. There are two
+//! We group rows per *document*. There are two
 //! kinds of documents on the Notion side:
 //!
-//! - A page → sidecar `<page_uuid>.grid_rows.json` carrying the single
+//! - A page → a document keyed `<page_uuid>` carrying the single
 //!   `Notion Page` row.
-//! - A discussion → sidecar `<discussion_uuid>.grid_rows.json` carrying
+//! - A discussion → a document keyed `<discussion_uuid>` carrying
 //!   the thread row + its comment rows.
 
 use std::collections::{BTreeMap, HashMap};

@@ -1,6 +1,6 @@
 //! Render stage: read the event-store JSONL written by
 //! [`crate::download`] and emit one markdown document per MR plus a
-//! co-located `.grid_rows.json` sidecar.
+//! rows in the source's render store.
 
 pub mod grid_rows;
 pub mod parse;

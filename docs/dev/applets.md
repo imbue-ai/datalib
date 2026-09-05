@@ -364,7 +364,7 @@ place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.
 
 The Slack applet reads the
-cross-provider `.grid_rows.json` sidecar contract as untyped JSON
+cross-provider `grid_rows` table in a source's render store
 rather than linking the schema or provider crates, which keeps an
 applet a small program. It ships in `//datalib/backend:dist` alongside
 `datalib-step`, so a config can name it bare. The store is

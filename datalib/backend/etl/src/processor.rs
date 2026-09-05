@@ -50,7 +50,7 @@ pub trait DataProcessor: Send + Sync {
     /// Program A keeps the string.)
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
 
-    /// The renderer version this processor stamps into every sidecar
+    /// The renderer version this processor stamps onto every document
     /// header it writes, when it writes sidecars at all.
     ///
     /// The render step uses it to tell a tree rendered by *this* build

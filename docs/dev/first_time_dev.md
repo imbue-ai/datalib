@@ -210,7 +210,7 @@ as a subprocess. The built-in steps live in the `datalib-step` binary
 (`//datalib/backend/datalib_step:datalib_step`): `download
 <source_type>` fetches a provider's raw dir (each provider crate under
 `datalib/backend/etl/providers/` also exposes a standalone
-`*_download` binary), `render <source_type>` renders markdown + sidecars,
+`*_download` binary), `render <source_type>` renders markdown + its store,
 and `grid_index` loads them into
 `<root>/unified_index/grid/db.doltlite_db`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and

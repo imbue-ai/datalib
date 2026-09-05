@@ -1,6 +1,6 @@
 //! End-to-end render test against the checked-in tiny TEI fixture.
 //! Feeds two TEI editions (Greek + English) through `parse + render_all`
-//! and asserts the rendered tree shape — file paths, sidecar JSON
+//! and asserts the rendered tree shape — file paths, emitted rows
 //! structure, key text fragments. This is the regression net for the
 //! multi-edition render path: if the parser silently drops a section
 //! or the renderer flips a UUID derivation, this fails before bad data
@@ -107,7 +107,7 @@ fn renders_all_books_chapters_and_editions() {
 }
 
 #[test]
-fn sidecars_carry_stable_uuids_and_provider_metadata() {
+fn documents_carry_stable_uuids_and_provider_metadata() {
     let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).unwrap();
     let (_summary, emitted) = render_fixture(&parsed, out.path());

@@ -14,8 +14,8 @@ so callers can extract with `--strip-components=1` to land
 
 TWO archives come out, and the split is a build-cache decision:
 
-  * `qmd.tar` — the whole rendered tree. Markdown, the `*.grid_rows.json`
-    sidecars, the `_render_cursor.json` bookkeeping files, and the
+  * `qmd.tar` — the whole rendered tree. Markdown, each source's
+    `indexed_markdown.doltlite_db`, the `_render_cursor.json` files, and the
     attachment blobs (images, audio, PDFs). This is what
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
@@ -29,8 +29,9 @@ its inputs, so any byte that can change without changing the action's
 OUTPUT is pure cache poison. The embedder opens nothing but `*.md`, and
 two of the excluded kinds change on literally every pipeline run —
 `_render_cursor.json` carries a wall-clock `last_render_at`, and the pdf
-provider's `*.grid_rows.json` carries a `source_url` holding the
-absolute bazel sandbox path (…/darwin-sandbox/4914/… vs …/5269/…). With
+provider's rows carry a `source_url` holding the absolute bazel sandbox
+path (…/darwin-sandbox/4914/… vs …/5269/…), which lands in that
+source's `indexed_markdown.doltlite_db`. With
 those in the archive the ~90s CPU-only embed on CI re-ran for every
 change anywhere upstream, including changes that left all 57 markdown
 files byte-identical.

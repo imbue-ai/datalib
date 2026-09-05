@@ -81,7 +81,7 @@ Reach for the simplest existing provider that's shaped like yours,
      ingestion shape (no auth, no live API, no token refresh, no rate-limit
      dance), so the auth and resume machinery you'd need to understand
      for live providers stays out of the way while you learn the
-     download / render / sidecar shape.
+     download / render / store shape.
   2. **`claude`** (Claude) — first choice if your provider *is* a
      live API. Single-account, simple bearer auth via latchkey, clean
      forward-walk cursor. Most of the "what does download / render /
@@ -104,8 +104,9 @@ Reach for the simplest existing provider that's shaped like yours,
    `datalib/backend/Cargo.toml` and to the `crate.from_cargo`
    manifest list in `MODULE.bazel`.
 4. Implement `download::fetch(...)` and `<name>::render::...`. The
-   render side must emit `*.grid_rows.json` sidecars matching
-   [`Sidecar`](../../datalib/backend/index_lib/src/lib.rs).
+   render side hands each finished document to `ctx.emit_doc` as a
+   [`RenderedMarkdown`](../../datalib/backend/etl/src/grid_index.rs);
+   the render step writes it into that source's store.
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Wire the provider's `processor.rs` (`plan_download` / `plan_render`)
@@ -120,7 +121,8 @@ Reach for the simplest existing provider that's shaped like yours,
 
 Grid index needs no per-provider changes — the `grid_index` step
 (`datalib-step grid_index`, `build_grid_index` in
-`etl/src/grid_index.rs`) picks up the new sidecars on its next run.
+`etl/src/grid_index.rs`) picks up the new source's store on its next
+run.
 
 ### Worked examples beyond the chat shape
 
@@ -149,7 +151,7 @@ asking them to refetch from upstream.
 Two halves to this:
 
   - **Our internal schema** — the typed columns on raw entity tables,
-    the `GridRow` struct, the sidecar `Sidecar` struct, the
+    the `GridRow` struct, the render store's tables, the
     `*_bookkeeping` sidecar tables, the per-provider CAS edge
     tables. Today's de facto answer to "I added a column" is
     `--reset-and-redownload`. That
@@ -193,7 +195,7 @@ Two halves to this:
 
 Both moved to
 [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md)
-— the sidecar contract and the aspired-to properties of the render
+— the render-store contract and the aspired-to properties of the render
 stage in its §2 and §5, the `GridRow` family taxonomy in its §3.
 
 ## Unresolved questions

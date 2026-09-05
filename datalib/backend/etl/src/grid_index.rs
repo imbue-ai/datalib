@@ -29,12 +29,12 @@
 //! }
 //! ```
 //!
-//! Skip logic: before applying we look up `documents.source_fingerprint`
-//! by `markdown_uuid`; if it matches the sidecar header we treat the
-//! document as up-to-date and leave `grid_rows` alone. Same delete-then-
-//! insert pattern as the Python `populate_grid_rows`, generalized so
-//! any provider's Render step can produce a sidecar tree this loader
-//! consumes verbatim.
+//! Skip logic: before applying we look up `markdowns.source_fingerprint`
+//! by `markdown_uuid`; if it matches the incoming document we treat it
+//! as up-to-date and leave `grid_rows` alone. Delete-then-insert, so a
+//! re-render replaces a document's rows rather than accumulating them,
+//! and any provider's render step can fill a store this loader consumes
+//! verbatim.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -345,7 +345,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// stores, deliberately, because the two hold different kinds of row.
 /// A raw store's rows cost a network fetch, so adding the column and
 /// keeping the rows is the cheap correct answer. Every row here is a
-/// pure function of a `.grid_rows.json` sidecar already on disk, so a
+/// pure function of a row already in a source's render store, so a
 /// rebuild costs one local scan — and it is the *only* answer that
 /// yields correct values: an `ADD COLUMN` leaves existing rows NULL in
 /// the new column, and `markdowns.source_fingerprint` then makes the
@@ -412,7 +412,8 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
     tracing::warn!(
         drift = %drift.join("; "),
         "grid_index: index schema predates this build; dropping and rebuilding \
-         every index table from the sidecar trees (no re-download, no re-render)"
+         every index table from the per-source render stores (no re-download, \
+         no re-render)"
     );
     for ddl in index_ddl() {
         let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
@@ -523,8 +524,8 @@ impl IdClaims {
     /// leaving the claim table in a usable state either way.
     ///
     /// Same-source re-claims are impossible by construction — one
-    /// sidecar owns one `markdown_uuid` and the walk visits each
-    /// sidecar once — so any repeat is a genuine cross-source clash and
+    /// document owns one `markdown_uuid` and the walk visits each
+    /// document once — so any repeat is a genuine cross-source clash and
     /// is reported even when both sides name the same source.
     pub fn claim(
         &mut self,
@@ -1120,7 +1121,7 @@ async fn apply_markdown(
     // outgoing edges whose `src_markdown_uuid` matches. Re-rendering a
     // markdown therefore replaces its outgoing-edge set. Incoming edges
     // (whose `dst_markdown_uuid` matches) are owned by the source
-    // markdown's sidecar, so they survive this delete.
+    // markdown's own row set, so they survive this delete.
     sqlx::query("DELETE FROM edges WHERE src_markdown_uuid = ?")
         .bind(&md.markdown_uuid)
         .execute(&mut **conn)
@@ -1425,7 +1426,7 @@ mod id_claim_tests {
     //! [`IdClaims`] is the tripwire for two configured sources minting
     //! the same id. Before it existed, a *full* overlap (same
     //! `markdown_uuid`) was silent — `apply_markdown`'s
-    //! DELETE-by-markdown_uuid meant the second sidecar erased the
+    //! DELETE-by-markdown_uuid meant the second document erased the
     //! first one's rows and the run reported success — while a
     //! *partial* overlap (same row uuid, different markdown) blew the
     //! whole batch up on `PRIMARY KEY (uuid)` with an error naming
@@ -1481,7 +1482,7 @@ mod id_claim_tests {
 
     /// The silent case: `claude_api` and `claude_export` over one
     /// account both key on Anthropic's `conversation_uuid`, so both
-    /// sidecars carry the same `markdown_uuid`. Whichever applied
+    /// documents carry the same `markdown_uuid`. Whichever applied
     /// second used to delete the other's rows and rewrite `md_path`
     /// and `source_name` to its own — no error, no row-count delta.
     #[test]

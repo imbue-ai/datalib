@@ -3,8 +3,9 @@
 The slack translate step is an in-process library (called from
 `datalib-sync`, no standalone bin) that reads the doltlite db at
 `<out>/raw/<name>/entities.doltlite_db` (written by `slack-download`) and
-emits, per Slack thread, a `.md` plus a `.grid_rows.json` sidecar
-under `<out>/rendered_md/slack/<team>/<channel>/threads/`.
+emits, per Slack thread, a `.md` under
+`<out>/rendered_md/slack/<team>/<channel>/threads/` plus that
+document's rows in the source's render store.
 
 ## What is a "document"?
 
@@ -41,14 +42,14 @@ swap, not a re-keying.
   * HTML entity decoding.
 
 `render.rs` composes those primitives into per-thread markdown with
-YAML frontmatter, then emits the sidecar.
+YAML frontmatter, then emits the document's rows.
 
 ## Incrementality
 
 Each `.md` carries `source_fingerprint` in its frontmatter, hashed
 from the canonical Slack JSON of every message in the thread. On the
 next run, if the existing `.md` already matches, the write is skipped
-and the sidecar is not regenerated.
+and the rows are not regenerated.
 
 Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
 layout changes in a way that should invalidate stale `.md` files even

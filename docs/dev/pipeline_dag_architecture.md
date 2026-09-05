@@ -272,7 +272,7 @@ So inside data\_root (or wherever), “artifacts can
 1. Define the node contract (NodeSpec, NodeOutcome, output-version hash) and have extract/translate/load implement it *in-process*, replacing the enum-dispatch match arms. No behavior change yet.  
 2. Write the scheduler: derive edges from input/output overlap, topologically order, run ready nodes, skip nodes whose input versions are unchanged (reusing the content-hash signal already in the tree).  
 3. Per-node commit: break whole-run atomicity into per-node atomic output commit; implement subtree-poisoning failure semantics.  
-4. Un-fuse Load from the translate callback into a first-class node that consumes the sidecar tree like any other.  
+4. Un-fuse Load from the translate callback into a first-class node that consumes render's output like any other.  
 5. Progress NDJSON: swap IndicatifSink for an NdjsonSink; move bar rendering into the orchestrator's ingest loop. (Independent of 1–4; can land any time.)  
 6. Subprocess execution (optional, last): flip NodeRun::InProcess to Subprocess. The contract is unchanged; this buys isolation and language-independence and can be deferred indefinitely.
 

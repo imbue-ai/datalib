@@ -229,7 +229,7 @@ const VOLATILE_KEYS: &[&str] = &[
     // Renderer-derived hash. Stable inputs produce a stable value, but
     // any volatile field upstream (which we redact above) would flip it,
     // so redact here too — a real algorithm change will surface as
-    // every sidecar/markdown header churning at once.
+    // every document's header churning at once.
     "source_fingerprint",
     // Per-row bookkeeping in the doltlite raw stores. Stamped to
     // "now" on every fetch attempt, so they churn on every run even

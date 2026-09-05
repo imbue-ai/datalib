@@ -1,4 +1,4 @@
-//! Build the `grid_rows` sidecar for one GitLab MR document.
+//! Build the `grid_rows` for one GitLab MR document.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};

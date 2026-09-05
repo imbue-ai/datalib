@@ -1,7 +1,7 @@
 //! End-to-end render test: build a tiny in-memory `ParsedEmail`
 //! whose per-bucket `BlobBundle` carries real RFC 5322 `.eml` bytes
 //! for each email, render it through `render_all`, and assert the
-//! on-disk layout + grid_rows sidecar shape. Doesn't need a real
+//! on-disk layout + emitted grid_rows shape. Doesn't need a real
 //! JMAP server or HTTP playback — exercises the renderer in
 //! isolation.
 
@@ -128,7 +128,7 @@ fn make_loaded() -> ParsedEmail {
 }
 
 #[test]
-fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
+fn render_smoke_produces_thread_dir_with_md_and_rows() {
     let parsed = make_loaded();
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();

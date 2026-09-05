@@ -1,5 +1,5 @@
 //! The `pdf` render side: convert each identified document to markdown
-//! and emit it with its `grid_rows` sidecar.
+//! and emit it with its `grid_rows`.
 //!
 //! Only documents with at least one readable page are read here — see
 //! `RawDb::convertible_documents` for the rule. A document nothing can

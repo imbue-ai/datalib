@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! index.md                  the document
-//! index.grid_rows.json      its sidecar (1 doc row + 1 row per device)
+//! (its rows go into the source's render store: 1 doc row + 1 per device)
 //! plots/temperature.html    standalone Plotly page, iframed from index.md
 //! plots/humidity.html
 //! plots/volume.html
@@ -43,7 +43,7 @@ pub mod units;
 
 /// Bump when the rendered markdown layout, the plot HTML, or the grid
 /// row shape changes enough that an existing `index.md` must be
-/// re-rendered. Stamped into the sidecar header AND into the render
+/// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params` (see [`render::cursor_params`]), so a bump
 /// invalidates the "HEAD unchanged → skip" fast path too.
 ///

@@ -14,7 +14,7 @@
 //! - 2364-04-09T12:01:00Z  Will Riker: All decks at green status, Captain.
 //! ```
 //!
-//! Sidecar carries: one chat-level grid_row (`Signal Chat`) per
+//! The row set carries: one chat-level grid_row (`Signal Chat`) per
 //! bucket plus one message-level grid_row (`Signal Message`) per
 //! chat item that surfaces in the search grid.
 
@@ -165,11 +165,11 @@ fn render_one(
     // computed by the parse-side bucket-fingerprint CTE. With
     // dolt_diff driving the skip decision, that compare doesn't
     // happen anymore — but the load path still wants *some* stable
-    // identifier in the sidecar. Use the markdown_uuid: stable across
+    // identifier in the row set. Use the markdown_uuid: stable across
     // re-renders of the same bucket, distinct between buckets,
     // already in scope. The orchestrator's prior_fingerprints map is
     // ignored by signal now (parse never reads it); this value just
-    // keeps the sidecar schema honest.
+    // keeps the row schema honest.
     let fingerprint = markdown_uuid.clone();
 
     let recipient_display = parsed
