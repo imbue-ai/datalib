@@ -28,7 +28,7 @@ use tracing::{debug, info, info_span};
 #[derive(Parser, Debug)]
 #[command(
     name = "grid-rows-load",
-    about = "Load `*.grid_rows.json` sidecars (any provider) into the doltlite file."
+    about = "Stack every source's render store into the unified doltlite index."
 )]
 struct Args {
     /// Input root. The loader reads

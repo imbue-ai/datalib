@@ -26,7 +26,6 @@ sha2 = { workspace = true }
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 uuid = { workspace = true }
 datalib-schema = { path = "../../../schema" }
-datalib-index-lib = { path = "../../../index_lib" }
 
 [dev-dependencies]
 tempfile = "3"

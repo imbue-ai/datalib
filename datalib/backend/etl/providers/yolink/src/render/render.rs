@@ -28,7 +28,6 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
@@ -134,15 +133,6 @@ pub fn render_all(
         .to_string_lossy()
         .into_owned();
     let rows = build_grid_rows(parsed, source_name, &m_uuid, &md_rel)?;
-
-    emit_sidecar(
-        &page_dir.join("index.grid_rows.json"),
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
@@ -263,7 +253,7 @@ fn metric_spec(metric: &str) -> Result<&'static units::MetricSpec> {
 /// Deliberately **not** the store's HEAD, though HEAD is right there and
 /// we only get here because it moved. Two reasons:
 ///
-/// 1. The cross-provider contract (`datalib_index_lib::SidecarHeader`)
+/// 1. The cross-provider contract (the `markdowns` row the store keeps)
 ///    is that this hashes *the upstream payload that produced the
 ///    document*. A commit hash is a property of the store, not of the
 ///    content: two stores holding identical readings would disagree, and

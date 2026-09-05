@@ -110,41 +110,41 @@ fn renders_all_books_chapters_and_editions() {
 fn sidecars_carry_stable_uuids_and_provider_metadata() {
     let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).unwrap();
-    render_fixture(&parsed, out.path());
+    let (_summary, emitted) = render_fixture(&parsed, out.path());
 
-    let sidecar_path = out.path().join(format!(
-        "perseus/rendered_md/thucydides/histories/book_01/chapter_001_{GRC}.grid_rows.json"
-    ));
-    let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
-
+    // Asserted on the emitted documents rather than on
+    // `*.grid_rows.json` files: the renderer stopped writing those, and
+    // the emitted document is what both the store and the index consume.
     let expected = chapter_uuid("1", "1", GRC);
-    assert_eq!(v["header"]["markdown_uuid"], expected);
-    assert!(v["header"]["source_fingerprint"].is_string());
-    assert!(v["header"]["render_version"].is_number());
+    let chapter = emitted
+        .iter()
+        .find(|d| d.markdown_uuid == expected)
+        .expect("the grc chapter was emitted");
+    assert!(!chapter.source_fingerprint.is_empty());
+    assert!(chapter.render_version > 0);
 
-    let row = &v["rows"][0];
-    assert_eq!(row["uuid"], expected);
-    assert_eq!(row["provider"], "perseus");
-    assert_eq!(row["kind"], format!("Chapter ({GRC})"));
-    assert_eq!(row["source_label"], "Perseus");
-    assert_eq!(row["markdown_uuid"], expected);
+    let row = &chapter.rows[0];
+    assert_eq!(row.uuid, expected);
+    assert_eq!(row.provider, "perseus");
+    assert_eq!(row.kind, format!("Chapter ({GRC})"));
+    assert_eq!(row.source_label, "Perseus");
+    assert_eq!(row.markdown_uuid.as_deref(), Some(expected.as_str()));
     // conversation_name carries the "<b>.<c> <edition-title>" form;
     // with no CTS the title is the short id.
-    assert_eq!(row["conversation_name"], "1.1 grc2");
-    assert!(row["text"].as_str().unwrap().contains("Θουκυδίδης"));
-    assert!(row["qmd_path"]
-        .as_str()
+    assert_eq!(row.conversation_name.as_deref(), Some("1.1 grc2"));
+    assert!(row.text.contains("Θουκυδίδης"));
+    assert!(row
+        .qmd_path
+        .as_deref()
         .unwrap()
         .ends_with(&format!("/chapter_001_{GRC}.md")));
 
-    let book_sidecar = out
-        .path()
-        .join("perseus/rendered_md/thucydides/histories/book_01/index.grid_rows.json");
-    let bv: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&book_sidecar).unwrap()).unwrap();
-    assert_eq!(bv["rows"][0]["uuid"], book_uuid("1"));
-    assert_eq!(bv["rows"][0]["kind"], "Book");
+    let book = emitted
+        .iter()
+        .find(|d| d.markdown_uuid == book_uuid("1"))
+        .expect("the book index was emitted");
+    assert_eq!(book.rows[0].uuid, book_uuid("1"));
+    assert_eq!(book.rows[0].kind, "Book");
 }
 
 #[test]

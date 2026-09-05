@@ -251,15 +251,6 @@ fn render_one(
     };
     let rows = grid_rows::rows_for_document(&meta, &page_rows);
 
-    datalib_index_lib::emit_sidecar(
-        &md_path.with_extension("grid_rows.json"),
-        doc_uuid,
-        &render_fingerprint(&t.blake3),
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
-
     Ok(RenderedMarkdown {
         markdown_uuid: doc_uuid.to_string(),
         source_name: source_name.to_string(),

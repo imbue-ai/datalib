@@ -39,9 +39,9 @@ fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
 fn renders_tng_fixture() {
     let parsed = parse(&fixture_root(), None).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
-    let mut completed = 0usize;
-    let mut on_done = |_doc: datalib_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
-        completed += 1;
+    let mut docs: Vec<datalib_etl::grid_index::RenderedMarkdown> = Vec::new();
+    let mut on_done = |doc: datalib_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
+        docs.push(doc);
         Ok(())
     };
     let summary = render_all(
@@ -57,7 +57,7 @@ fn renders_tng_fixture() {
     assert_eq!(summary.threads_total, 11);
     assert_eq!(summary.threads_rendered, 11);
     assert_eq!(summary.threads_skipped, 0);
-    assert_eq!(completed, 11);
+    assert_eq!(docs.len(), 11);
 
     let md_tree = collect_md(tmp.path());
     let mut bundle = String::new();
@@ -70,28 +70,16 @@ fn renders_tng_fixture() {
     }
     assert_snapshot!("tng_md_tree", bundle);
 
-    // Sidecar shape spot-check.
-    let mut sidecar_paths: Vec<PathBuf> = Vec::new();
-    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-        for e in fs::read_dir(dir).unwrap().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else if p.to_string_lossy().ends_with(".grid_rows.json") {
-                out.push(p);
-            }
-        }
-    }
-    walk(tmp.path(), &mut sidecar_paths);
-    // One sidecar per rendered thread — see the count above.
-    assert_eq!(sidecar_paths.len(), 11);
-    let one: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&sidecar_paths[0]).unwrap()).unwrap();
-    assert!(one
-        .get("header")
-        .and_then(|h| h.get("source_fingerprint"))
-        .is_some());
-    assert!(one.get("rows").and_then(|r| r.as_array()).is_some());
+    // Emitted-document spot-check. This used to walk the tree counting
+    // `*.grid_rows.json` files; the renderer no longer writes those, so
+    // it checks what it hands to its callback — which is what both the
+    // store and the index consume.
+    assert_eq!(docs.len(), 11, "one document per rendered thread");
+    assert!(
+        !docs[0].source_fingerprint.is_empty(),
+        "a document carries the fingerprint its skip check needs"
+    );
+    assert!(!docs[0].rows.is_empty(), "and the rows it projected");
 }
 
 #[test]

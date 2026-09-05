@@ -20,7 +20,6 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
         "//datalib/backend/time:datalib_time",
-        "//datalib/backend/index_lib:datalib_index_lib",
         "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",

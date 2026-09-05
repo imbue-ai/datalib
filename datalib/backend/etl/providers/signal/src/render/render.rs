@@ -28,7 +28,6 @@ use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::section::section_attrs;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
@@ -180,8 +179,7 @@ fn render_one(
     let chat_title = format!("Signal · {recipient_display}");
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let (md_path, json_path, page_dir) =
-        output_paths(out_dir, source_name, &chat_uuid, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, &chat_uuid, &doc.period_key);
 
     // No prior-fingerprint check here: parse already filtered out
     // unchanged buckets before they reach render. Reaching this
@@ -271,15 +269,6 @@ fn render_one(
         messages_rendered += 1;
     }
 
-    emit_sidecar(
-        &json_path,
-        &markdown_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
-
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
         source_name: source_name.to_string(),
@@ -304,14 +293,13 @@ fn output_paths(
     source_name: &str,
     chat_uuid: &str,
     period_key: &str,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     // One directory per chat keyed by the chat's stable UUID — never a
     // title-derived slug, so a contact/group rename re-renders in place.
     // period_key files live inside; mirrors beeper's `<room_uuid>/<period>.md`.
     let page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name).join(chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
-    let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 #[allow(clippy::too_many_arguments)]

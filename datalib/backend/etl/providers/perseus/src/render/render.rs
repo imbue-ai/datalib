@@ -31,7 +31,6 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::layout::rendered_md_root;
 use datalib_etl::progress::Progress;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 
@@ -161,7 +160,6 @@ fn render_book(
     let book_dir = rendered_md_root(out_dir, source_name).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
-    let sidecar_path = book_dir.join("index.grid_rows.json");
 
     if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -175,14 +173,6 @@ fn render_book(
 
     let rows = vec![book_grid_row(source_name, book, &m_uuid)?];
     let edges: Vec<EdgeRow> = Vec::new();
-    emit_sidecar(
-        &sidecar_path,
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &edges,
-    )?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -218,10 +208,6 @@ fn render_chapter(
     let fingerprint = compute_chapter_fingerprint(book, chapter, edition, alignments);
     let rel = chapter_md_rel(source_name, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
-    let sidecar_path = md_path.with_file_name(format!(
-        "{}.grid_rows.json",
-        md_path.file_stem().unwrap().to_string_lossy()
-    ));
 
     if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -252,14 +238,6 @@ fn render_chapter(
         idx += 1;
     }
     let edges = chapter_edges(book, chapter, edition, &m_uuid, alignments);
-    emit_sidecar(
-        &sidecar_path,
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &edges,
-    )?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {

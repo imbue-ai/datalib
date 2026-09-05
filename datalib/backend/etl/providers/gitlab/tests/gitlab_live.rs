@@ -53,13 +53,17 @@ async fn gitlab_live_single_mr_snapshot() {
 
     let render_root = tmp.clone();
     let stanza = "gitlab";
+    let mut docs: Vec<datalib_etl::grid_index::RenderedMarkdown> = Vec::new();
     render_gitlab(
         &parsed,
         &render_root,
         stanza,
         &datalib_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
-        &mut |_doc| Ok(()),
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
     )
     .expect("render_gitlab failed");
 
@@ -74,8 +78,12 @@ async fn gitlab_live_single_mr_snapshot() {
         "rendered md missing: {}",
         qmd_abs.display()
     );
-    let sidecar = qmd_abs.with_extension("grid_rows.json");
-    assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
+    // The projection rides on the emitted document now, not in a file
+    // beside the markdown.
+    assert!(
+        docs.iter().any(|d| !d.rows.is_empty()),
+        "render emitted no rows"
+    );
 
     let mut sections: Vec<&'static str> = Vec::new();
     use datalib_etl_gitlab::render::parse::NoteSection;
@@ -103,7 +111,7 @@ async fn gitlab_live_single_mr_snapshot() {
         "note_count": parsed.notes.len(),
         "sections_present": sections,
         "rendered_md_exists": qmd_abs.exists(),
-        "sidecar_exists": sidecar.exists(),
+        "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),
     });
 
     insta::with_settings!({ sort_maps => true }, {

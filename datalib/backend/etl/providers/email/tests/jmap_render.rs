@@ -153,7 +153,6 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     // (rendered_md/jmap/<source>/chat-<id>__<slug>__<short>/all.md); find
     // the single rendered doc by walking rather than hard-coding the slug.
     let md_path = find_one(tmp.path(), ".md");
-    let sidecar_path = find_one(tmp.path(), ".grid_rows.json");
     let page_dir = md_path.parent().unwrap();
 
     let blobs_dir = page_dir.join("blobs");
@@ -182,30 +181,28 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     );
 
     // The thread (chat) row and the root email row both carry the outlink.
-    let rows = {
-        let s: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
-        s["rows"].as_array().unwrap().clone()
-    };
+    // Asserted on the emitted document rather than a `*.grid_rows.json`
+    // file: the renderer no longer writes one.
+    let doc = &completed[0];
+    let rows = &doc.rows;
     assert_eq!(
-        rows[0]["source_url"], "https://app.fastmail.com/mail/Inbox/E1.T1",
+        rows[0].source_url.as_deref(),
+        Some("https://app.fastmail.com/mail/Inbox/E1.T1"),
         "thread row outlink"
     );
     assert_eq!(
-        rows[1]["source_url"], "https://app.fastmail.com/mail/Inbox/E1.T1",
+        rows[1].source_url.as_deref(),
+        Some("https://app.fastmail.com/mail/Inbox/E1.T1"),
         "root email row outlink"
     );
 
-    let sidecar: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
-    assert_eq!(sidecar["header"]["markdown_uuid"], tuid);
-    let rows = sidecar["rows"].as_array().unwrap();
+    assert_eq!(doc.markdown_uuid, tuid);
     assert_eq!(rows.len(), 3, "1 thread + 2 emails");
-    assert_eq!(rows[0]["kind"], "Email Thread");
-    assert_eq!(rows[1]["kind"], "Email");
-    assert_eq!(rows[2]["kind"], "Email");
-    assert_eq!(rows[0]["provider"], "jmap");
-    assert_eq!(rows[0]["source_label"], "Mail");
+    assert_eq!(rows[0].kind, "Email Thread");
+    assert_eq!(rows[1].kind, "Email");
+    assert_eq!(rows[2].kind, "Email");
+    assert_eq!(rows[0].provider, "jmap");
+    assert_eq!(rows[0].source_label, "Mail");
 }
 
 /// Find the single file under `root` whose name ends with `suffix`.

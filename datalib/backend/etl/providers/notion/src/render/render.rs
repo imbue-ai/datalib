@@ -22,7 +22,6 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -1186,16 +1185,6 @@ pub fn render_notion_official(
         // Sidecar + callback only fire if gather_documents knew about
         // this page (it should, for any page that produced rows).
         if let Some(pd) = page_doc_by_uuid.get(&pid) {
-            let sidecar_path = target.with_extension("grid_rows.json");
-            emit_sidecar(
-                &sidecar_path,
-                &pd.page_uuid,
-                &pd.source_fingerprint,
-                RENDER_VERSION,
-                &pd.rows,
-                &[],
-            )?;
-
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: pd.page_uuid.clone(),
                 source_name: String::new(),
@@ -1289,16 +1278,6 @@ pub fn render_notion_official(
         };
 
         if let Some(td) = thread_doc_by_uuid.get(&disc_id) {
-            let sidecar_path = p.with_extension("grid_rows.json");
-            emit_sidecar(
-                &sidecar_path,
-                &td.discussion_uuid,
-                &td.source_fingerprint,
-                RENDER_VERSION,
-                &td.rows,
-                &[],
-            )?;
-
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: td.discussion_uuid.clone(),
                 source_name: String::new(),

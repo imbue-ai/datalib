@@ -21,7 +21,6 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::section::msg_div_open;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
 use sha2::{Digest, Sha256};
 
@@ -152,7 +151,7 @@ fn render_one(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
     let fingerprint = compute_fingerprint(profile.render_version, chat, doc);
-    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
 
     if prior_fingerprints
         .get(&doc.markdown_uuid)
@@ -194,15 +193,6 @@ fn render_one(
         .into_owned();
 
     let rows = build_grid_rows(profile, chat, doc, &chat_title, &md_rel)?;
-
-    emit_sidecar(
-        &json_path,
-        &doc.markdown_uuid,
-        &fingerprint,
-        profile.render_version,
-        &rows,
-        &[],
-    )?;
 
     let items_rendered = doc
         .items
@@ -281,12 +271,11 @@ fn output_paths(
     source_name: &str,
     chat: &NormalizedChat,
     period_key: &str,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     let page_dir =
         datalib_etl::layout::rendered_md_root(out_dir, source_name).join(&chat.chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
-    let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 // ─────────────────────────────────────────────────────────────────────

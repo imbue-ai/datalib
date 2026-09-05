@@ -25,7 +25,6 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -310,18 +309,6 @@ fn render_one_pr(
         out.push('\n');
     }
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
-
-    // sidecar
-    let rows = rows_for_pr(pr, comments, stanza)?;
-    let sidecar_path = md_path.with_extension("grid_rows.json");
-    emit_sidecar(
-        &sidecar_path,
-        &pr.uuid,
-        &fingerprint_for_pr(pr, comments),
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
 
     Ok(md_path)
 }

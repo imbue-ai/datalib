@@ -21,7 +21,6 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
 use sha2::{Digest, Sha256};
 
@@ -119,7 +118,7 @@ fn render_one(
     let m_uuid = &contact.contact_uuid;
     let fingerprint = compute_fingerprint(profile.render_version, contact);
 
-    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, contact);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, contact);
     if prior_fingerprints.get(m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
     {
@@ -153,19 +152,8 @@ fn render_one(
 
     let row = build_grid_row(profile, contact, source_name, &md_rel)?;
 
-    // Sidecar `.grid_rows.json` next to the markdown, mirroring what
-    // every other provider writes. The orchestrator commits `rows` into
-    // the doltlite grid_rows table via `on_doc_complete`.
-    let rows = std::slice::from_ref(&row);
-    emit_sidecar(
-        &json_path,
-        m_uuid,
-        &fingerprint,
-        profile.render_version,
-        rows,
-        &[],
-    )?;
-
+    // `row` reaches the index through `on_doc_complete` below; the
+    // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_name: source_name.to_string(),
@@ -186,7 +174,7 @@ fn output_paths(
     out_dir: &Path,
     source_name: &str,
     contact: &NormalizedContact,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     // One directory per contact, keyed by the stable contact UUID — never a
     // name/group-label slug, so a rename or regrouping re-renders in place.
     // The contact's `blobs/` (photo) live inside this dir. Display name and
@@ -194,8 +182,7 @@ fn output_paths(
     let page_dir =
         datalib_etl::layout::rendered_md_root(out_dir, source_name).join(&contact.contact_uuid);
     let md_path = page_dir.join("index.md");
-    let json_path = page_dir.join("index.grid_rows.json");
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 fn display_or_id(contact: &NormalizedContact) -> &str {

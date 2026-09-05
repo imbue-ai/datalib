@@ -193,8 +193,8 @@ impl Problem {
 ///
 /// Rows are **overwritten or removed** as the underlying problem
 /// changes, rather than accumulated. See
-/// `datalib_index_lib::IndexedMarkdownStore` for the sweep rule, which
-/// is the subtle part: render is incremental, so "not re-emitted this
+/// `datalib_etl::indexed_markdown::IndexedMarkdownStore` for the sweep
+/// rule, which is the subtle part: render is incremental, so "not re-emitted this
 /// run" overwhelmingly means "not looked at", not "fixed".
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
 #[portable_table(table = "render_problems", primary_key = "uuid")]

@@ -12,7 +12,6 @@ path = "src/lib.rs"
 datalib-etl = { path = "../.." }
 datalib-time = { path = "../../../time" }
 datalib-schema = { path = "../../../schema" }
-datalib-index-lib = { path = "../../../index_lib" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

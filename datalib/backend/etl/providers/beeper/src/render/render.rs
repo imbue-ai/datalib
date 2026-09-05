@@ -17,7 +17,6 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::section::{msg_div_open, section_attrs};
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
 
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
@@ -103,7 +102,7 @@ fn render_one(
 ) -> Result<RenderOutcome> {
     let markdown_uuid = beeper_markdown_uuid(&room.room_uuid, &doc.period_key);
     let fingerprint = compute_fingerprint(doc);
-    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, room, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, room, &doc.period_key);
 
     if prior_fingerprints.get(&markdown_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -134,14 +133,6 @@ fn render_one(
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel)?;
-    emit_sidecar(
-        &json_path,
-        &markdown_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
@@ -176,13 +167,12 @@ fn output_paths(
     source_name: &str,
     room: &Room,
     period_key: &str,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     let page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name)
         .join(&room.network)
         .join(&room.room_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
-    let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 // ─────────────────────────────────────────────────────────────────────

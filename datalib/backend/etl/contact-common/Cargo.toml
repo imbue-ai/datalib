@@ -11,7 +11,6 @@ path = "src/lib.rs"
 [dependencies]
 datalib-etl = { path = ".." }
 datalib-schema = { path = "../../schema" }
-datalib-index-lib = { path = "../../index_lib" }
 anyhow = { workspace = true }
 sha2 = { workspace = true }
 tracing = "0.1"

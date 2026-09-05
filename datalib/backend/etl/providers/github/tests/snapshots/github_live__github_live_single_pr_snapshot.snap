@@ -15,6 +15,6 @@ expression: view
     "General",
     "Inline"
   ],
-  "sidecar_exists": true,
+  "rows_emitted": true,
   "state_known": true
 }
