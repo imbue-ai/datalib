@@ -70,7 +70,7 @@ impl RawDb {
                 .await
                 .with_context(|| format!("clear {prefix} scope state on reset"))?;
         }
-        sqlx::query("DELETE FROM mbox_files_checkpoint")
+        sqlx::query("DELETE FROM ingested_files")
             .execute(&mut *tx)
             .await
             .context("clear mbox file checkpoints on reset")?;
@@ -278,12 +278,9 @@ impl RawDb {
 
     // ── blob skip-check + refetch-blobs control ────────────────────
 
-    /// `(blob_id, blake3)` pairs for every `.eml` we've already
-    /// resolved to CAS bytes. Pre-loaded once at the top of
-    /// `sync_blobs` so the per-blob "do we already have this?"
-    /// decision is a `HashMap` hit instead of a SQLite round trip.
-    /// Replaces the older two-table union — after the eml-as-canonical
-    /// port we only fetch `.eml` blobs.
+    /// `(blob_id, blake3)` for every `.eml` already resolved to CAS bytes.
+    /// Pre-loaded once at the top of `sync_blobs`, so the per-blob "do we have
+    /// this?" decision is a `HashMap` hit rather than a SQLite round trip.
     pub async fn loaded_blob_ids(&self) -> Result<HashMap<String, String>> {
         let rows = sqlx::query(
             "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL",
@@ -574,12 +571,9 @@ mod tests {
         assert_eq!(joins.keywords["E1"], vec!["$flagged"]);
     }
 
-    /// Hard-delete cascades: the email row, its joins, and its
-    /// bookkeeping all disappear. CAS bytes are untouched —
-    /// `delete_emails` only touches `emails` + its joins +
-    /// `emails_bookkeeping`. The structural guarantee is verified
-    /// by stashing one `cas_objects` row directly, deleting the
-    /// owning email, then checking the bytes are still there.
+    /// Hard-delete cascades: the email row, its joins and its bookkeeping all
+    /// go. CAS bytes are untouched, verified by stashing a `cas_objects` row
+    /// directly, deleting the owning email, and checking the bytes survive.
     #[tokio::test]
     async fn delete_email_cascades_to_joins_and_bookkeeping() {
         let (_d, db) = tmp_db().await;

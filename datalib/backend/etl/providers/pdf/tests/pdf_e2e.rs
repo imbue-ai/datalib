@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::download::{self, RawDb};
 use datalib_etl_pdf::render;
 
@@ -63,11 +64,15 @@ impl Harness {
 
     async fn scan(&self) -> Result<download::FetchSummary> {
         let db = RawDb::open(&download::db_path_for(&self.raw_dir)).await?;
+        // A temp cache per harness: tests must never read or write this
+        // host's real one.
+        let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
         download::fetch(download::FetchOptions {
             db,
             source_name: STANZA.to_string(),
             root: self.root.clone(),
             ignore: vec![],
+            cache: cache.clone(),
             max_bytes: None,
             force_rehash: false,
             now: NOW.to_string(),
@@ -344,12 +349,10 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
         Some("2364-04-13T08:45:00-07:00")
     );
 
-    // The document with no Info dict, no /ID and no XMP: every
-    // *identity* column must come back NULL rather than the scan
-    // failing. `title` is deliberately not asserted NULL here — with no
-    // Info title, pdf-inspector may still infer one from the page's
-    // largest text, and that inferred value is a better grid label than
-    // nothing.
+    // The document with no Info dict, no /ID and no XMP: every *identity*
+    // column must come back NULL rather than the scan failing. `title` is
+    // deliberately not asserted NULL — pdf-inspector may infer one from the
+    // page's largest text, which is a better grid label than nothing.
     let u = sqlx::query(
         "SELECT d.author, d.pdf_id_permanent, d.xmp_document_id
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
@@ -411,16 +414,21 @@ async fn rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
     assert_eq!(first.reused, 0, "nothing to reuse on a cold scan");
 
     let second = h.scan().await?;
-    // Exactly one file is re-read: `holodeck/corrupt.pdf`, which failed
-    // to identify the first time and so never got a `pdf_documents`
-    // row. Re-reading it is deliberate — a file that could not be
-    // parsed (mid-write, partially synced) should be retried rather
-    // than cached as permanently broken.
+    // Nothing is re-read — the host fingerprint cache vouches for every
+    // byte, `holodeck/corrupt.pdf` included. That file is still *retried*,
+    // because the retry is gated on `pdf_documents` rather than on the hash
+    // being stale: it has no document row, so `identify` runs and fails
+    // again. A PDF that failed to parse must not be cached as permanently
+    // broken.
     assert_eq!(
-        second.hashed, 1,
-        "only the unidentifiable file should be re-read"
+        second.hashed, 0,
+        "the shared cache should vouch for every byte on a rescan"
     );
     assert!(second.reused > 0, "the rescan cursor should have hit");
+    assert!(
+        second.errors >= 1,
+        "the unparseable file must be retried, not cached as broken"
+    );
 
     // Row counts must not drift between identical scans.
     let db = h.db().await;
@@ -441,12 +449,10 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     h.scan().await?;
     let (s, emitted) = h.render(&HashMap::new()).await?;
 
-    // Exactly the four renderable documents, and 5 pages between
-    // them. Pinned rather than bounded: every page here is embedded by
-    // the qmd indexer on every full fixture build, so growth should be
-    // a deliberate edit, not a silent drift. The mixed survey's second
-    // page is deliberately not among them — it converts to a note in
-    // the markdown, which costs no row and no embedding.
+    // Exactly the four renderable documents, and 5 pages between them.
+    // Pinned rather than bounded: every page here is embedded by the qmd
+    // indexer on every full fixture build, so growth should be a deliberate
+    // edit rather than silent drift.
     assert_eq!(s.converted, 4, "four renderable documents");
     assert_eq!(s.failed, 0);
     let total_pages: usize = emitted

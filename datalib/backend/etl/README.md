@@ -213,3 +213,50 @@ key, so a whole entity stream reads as "no records". `tests/fixtures/gitlab_api`
 spelled the project path `project_path` while every consumer had moved to
 `project_full_path`; gitlab contributed zero rows for three months with no
 failing test.
+
+## Answering "did it change?" for a file-backed source
+
+`fsscan` walks a tree and hashes only what the host cache cannot vouch for;
+`file_checkpoint` stores what one feed already ingested. The split is the
+point:
+
+- the **fingerprint cache** is host-wide, shared and unversioned — expensive
+  to compute, identical for every consumer, and a description of a machine
+  rather than of a history;
+- the **cursor** is what *this* source already ingested, and lives in that
+  source's own store.
+
+The cache cannot answer "since I last looked" alone, and that is not a gap to
+close: it is shared, so another consumer's scan moves it. The question is only
+well-posed relative to a particular looker.
+
+```text
+let scan    = fsscan::scan(cache, root, opts, accept).await?;
+let changes = scan.changes_since(&load_cursor(pool, SCOPE).await?);
+for f in changes.needs_reading() { …; record_file(&mut tx, SCOPE, f).await?; }
+```
+
+A scope namespaces cursor rows per `(provider, feed)`, so two feeds can claim
+the same file without colliding. Stamping is per file and inside the caller's
+transaction, so a crash partway through keeps what landed and re-reads only
+the rest.
+
+**Why content and not `(size, mtime)`.** The stat pair was chosen when hashing
+every run was too expensive; the cache removed that cost. What the stat pair
+got wrong was the *false re-ingest* — touching a file (`rsync` without `-t`, a
+restore from backup, re-downloading the same export) re-read and re-parsed the
+whole thing though not one byte had moved.
+
+**What it does not fix**, because "content hash" invites the wrong assumption:
+the cache still decides whether to re-hash from Unison's
+`(mtime, size, inode, dev)` cursor, so an edit preserving all four is still
+invisible. That was equally true before — the gain is that the assumption
+lives in one place instead of once per provider.
+`an_edit_preserving_the_whole_stat_is_still_invisible` pins it.
+
+**Some files must not be read at all.** A macOS file evicted to iCloud is
+"dataless": it has a size and an mtime, and reading one byte silently pulls
+the whole thing back over the network. Only the stat can see that, so
+`scan_with` takes a veto consulted after the stat and before any read. A
+refused file is absent from the results and leaves the cache untouched, so
+nothing later mistakes "we declined to look" for "we looked and it was empty".

@@ -1,10 +1,9 @@
-//! End-to-end mbox-mode test: run the download::mbox extractor against
-//! the checked-in Star Trek mbox fixture, then read it back via the
-//! shared raw store and run it through `render::render::render_all`
-//! — exercises the file-based ingest path end-to-end. Same code path
-//! the sync orchestrator picks up when a `type: email` source has no
-//! `sync:` block and `input_path` points at an `.mbox` file.
+//! End-to-end mbox-mode test: run the mbox extractor against the checked-in
+//! Star Trek fixture, read it back through the shared raw store, and render
+//! it. The same path the orchestrator takes when a `type: email` source has
+//! no `sync:` block and `input_path` points at an `.mbox`.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -32,7 +31,11 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
         db: Some(db),
         input_path: mbox_path,
         account_id_override: Some("enterprise".to_string()),
-        ..Default::default()
+        ..mbox::FetchOptions::new(
+            FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+                .await
+                .unwrap(),
+        )
     })
     .await
     .expect("mbox download fetch");
@@ -122,7 +125,11 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
         db: Some(db2),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
-        ..Default::default()
+        ..mbox::FetchOptions::new(
+            FingerprintCache::open(&_tmp.path().join("fp.sqlite"))
+                .await
+                .unwrap(),
+        )
     })
     .await
     .unwrap();
@@ -151,7 +158,11 @@ async fn mbox_only_labels_filters_extraction() {
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         only_labels: vec!["Sent".to_string()],
-        ..Default::default()
+        ..mbox::FetchOptions::new(
+            FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+                .await
+                .unwrap(),
+        )
     })
     .await
     .expect("mbox download fetch with label filter");
@@ -183,12 +194,10 @@ async fn mbox_only_labels_filters_extraction() {
     }
 }
 
-/// Render-time label filter: download everything, then render only the
-/// threads touching a label. Thread-level inclusion — a whole thread
-/// renders if any of its emails is filed under an allowed mailbox. The
-/// expected thread set is computed from the parsed joins so the
-/// assertion stays correct regardless of fixture threading details; it
-/// must be a non-empty strict subset of the full set to be meaningful.
+/// Render-time label filter: download everything, render only the threads
+/// touching a label. Inclusion is thread-level. The expected set is
+/// computed from the parsed joins rather than hard-coded, so it stays
+/// correct regardless of fixture threading.
 #[tokio::test(flavor = "multi_thread")]
 async fn render_only_labels_filters_to_thread_subset() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
@@ -323,12 +332,11 @@ async fn star_trek_mbox_renders_through_render_all() {
         "expected html-rendered body in risa thread"
     );
 
-    // Bridge-status thread has a `multipart/related` with an inline
-    // PNG referenced as `<img src="cid:lcars-glyph@enterprise">`. The
-    // renderer should materialize the PNG (injected into the per-thread
-    // BlobBundle) and rewrite the cid to a `blobs/<hash>.png` link —
-    // regression test for the Fastmail JMAP case where the inline image
-    // isn't in the `attachments` array but is in the .eml MIME tree.
+    // A `multipart/related` with an inline PNG referenced as
+    // `<img src="cid:…">`: the renderer must materialize it and rewrite the
+    // cid to a `blobs/<hash>.png` link. Regression test for the Fastmail
+    // case where the inline image is absent from `attachments` but present
+    // in the .eml MIME tree.
     let bridge_tuid = thread_uuid("enterprise", "4000000000000000004");
     let bridge_dir = dir_for(&bridge_tuid);
     let bridge_md = std::fs::read_to_string(bridge_dir.join("all.md")).unwrap();

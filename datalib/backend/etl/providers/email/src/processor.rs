@@ -1,5 +1,6 @@
 //! Program A `DataProcessor`s for the email source.
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
@@ -204,6 +205,8 @@ impl DataProcessor for EmailDownload {
             } => {
                 let s = download::mbox::fetch(download::mbox::FetchOptions {
                     db_path: self.raw_path.clone(),
+                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
+                        .await?,
                     db: Some(db),
                     input_path: input_path.clone(),
                     account_id_override: account_config.account_id.clone(),

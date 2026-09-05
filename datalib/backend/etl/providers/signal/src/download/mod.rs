@@ -29,6 +29,9 @@ pub struct FetchOptions {
     /// snapshot subdirs. The newest (lexicographically — Signal's
     /// timestamps sort correctly) is the one we ingest.
     pub snapshot_root: PathBuf,
+    /// This host's shared fingerprint cache. Host state, so it lives
+    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    pub cache: datalib_etl::fingerprint_cache::FingerprintCache,
     /// Directory holding the encrypted attachment blobs (the shared
     /// `files/XX/<media_name>` tree). When `None`, defaults to
     /// `snapshot_root.join("files")` — the layout Signal Android
@@ -42,20 +45,6 @@ pub struct FetchOptions {
     pub aep_env_var: Option<String>,
     pub progress: Progress,
     pub control: DownloadControl,
-}
-
-impl Default for FetchOptions {
-    fn default() -> Self {
-        Self {
-            db_path: PathBuf::new(),
-            db: None,
-            snapshot_root: PathBuf::new(),
-            files_root: None,
-            aep_env_var: None,
-            progress: Progress::noop(),
-            control: DownloadControl::default(),
-        }
-    }
 }
 
 #[derive(Debug, Default, Serialize, Clone)]
@@ -94,12 +83,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     if opts.control.refetch_blobs {
-        // Wipe the attachment edge table + its bookkeeping so the
-        // next walk re-decrypts every attachment. `cas_objects`
-        // itself is never wiped — re-decrypted bytes hash to the
-        // same blake3 and the `INSERT OR IGNORE` on the CAS side
-        // is a no-op. This is the Signal-specific equivalent of the
-        // per-provider equivalent for `refetch_blobs`.
+        // Wipe the attachment edge table and its bookkeeping so the next
+        // walk re-decrypts. `cas_objects` is never wiped — re-decrypted
+        // bytes hash to the same blake3 and the CAS insert is a no-op.
         sqlx::query("DELETE FROM chat_item_attachments")
             .execute(db.pool())
             .await
@@ -138,11 +124,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         files_root = %files_root.display(),
     );
 
-    // Resume cursor — fast path. Build a stat-derived fingerprint
-    // (three `(mtime_ns, byte_size)` pairs joined by `:`) and look
-    // it up against `ingested_backups`. No body I/O on the skip,
-    // no crypto, no decrypt. See `schema_raw::snapshot_fingerprint`.
-    let fingerprint = schema_raw::snapshot_fingerprint(&snapshot_dir)
+    // Resume cursor, fast path: fingerprint the snapshot by the content of its
+    // three files and look it up in `ingested_backups`. No decrypt on the skip,
+    // and the digests come from this host's shared cache, so a snapshot
+    // something else already walked costs three stat calls.
+    let fingerprint = schema_raw::snapshot_fingerprint(&opts.cache, &snapshot_dir)
+        .await
         .with_context(|| format!("snapshot fingerprint {}", snapshot_dir.display()))?;
     if db.snapshot_already_ingested(&fingerprint).await? {
         info!(
@@ -193,29 +180,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         ..Default::default()
     };
 
-    // Accumulate entity rows in memory and bulk-upsert via the
-    // generic `bulk_upsert_in_tx` helper at the end. Every table
-    // (including singleton `account` and the new attachment table)
-    // goes through the same code path — see
-    // `docs/dev/data_architecture_ingestion.md` §"One writer per row"
-    // and §"Bulk-upsert as the standard write path". Attachment
-    // bytes are decrypted during the frame walk (per-attachment
-    // AES-256) but the CAS + entity-table writes are batched via
-    // `PendingAttachments` and flushed once at the end.
+    // Entity rows accumulate in memory and go out through the generic
+    // `bulk_upsert_in_tx` at the end — every table by the same path. Attachment
+    // bytes are decrypted during the frame walk but their CAS and entity writes
+    // are batched through `PendingAttachments`.
     let mut accounts: Vec<AccountRow> = Vec::new();
     let mut recipients: Vec<RecipientRow> = Vec::new();
     let mut chats: Vec<ChatRow> = Vec::new();
     let mut chat_items: Vec<ChatItemRow> = Vec::new();
     let mut pending_attachments = PendingAttachments::default();
 
-    // Skip-check map: pre-load `(media_name → blake3)` for every
-    // attachment we have already decrypted in a prior run. Lets us
-    // skip the AES decrypt step for media files that appear in this
-    // snapshot but were already processed in an earlier one (common
-    // when two snapshots share an unchanged photo). One query,
-    // O(N) memory, vs. N per-row queries during the walk. After
-    // `--refetch-blobs` the table is empty so the map is empty and
-    // every attachment gets re-decrypted.
+    // Pre-load `(media_name → blake3)` for everything decrypted in a prior
+    // run, so an attachment shared between two snapshots skips the AES
+    // step. One query and O(N) memory, against N per-row queries during
+    // the walk. Empty after `--refetch-blobs`, so everything re-decrypts.
     let already_decrypted: std::collections::HashMap<String, String> = {
         let rows = sqlx::query(
             "SELECT ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
@@ -277,13 +255,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
 
-                // Walk attachments: decrypt synchronously (AES-256
-                // can't be batched), then queue the entity-row +
-                // CAS bytes into `PendingAttachments` for the
-                // end-of-fetch bulk flush. Re-downloads skip cheaply
-                // via the new `chat_item_attachments` table's
-                // `(ref_id, blake3)` index — see
-                // [`schema_raw::CHAT_ITEM_ATTACHMENTS_DDL`].
+                // Decrypt synchronously (AES-256 can't be batched), then
+                // queue the entity row and CAS bytes for the end-of-fetch
+                // flush. Re-downloads skip cheaply via
+                // `chat_item_attachments`'s `(ref_id, blake3)` index.
                 if let Some(backup::chat_item::Item::StandardMessage(sm)) = &ci.item {
                     for (idx, att) in sm.attachments.iter().enumerate() {
                         ingest_attachment(

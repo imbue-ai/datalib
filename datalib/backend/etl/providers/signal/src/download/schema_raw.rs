@@ -61,12 +61,9 @@ pub const CHATS_BY_RECIPIENT_INDEX_DDL: &str =
 pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS chat_items_by_chat ON chat_items(chat_id, date_sent)";
 
-/// `chat_item_attachments` — N:M edge between one chat_item's
-/// attachment slot and a `cas_objects` blob. Universal CAS-edge
-/// shape (see [`datalib_etl::blob_cas::CasEdgeRow`]):
-/// `id` (synth PK) + `chat_item_id` (owning FK, indexed) +
-/// `ref_id` (= Signal `media_name`, indexed for the skip-check)
-/// + `blake3` (CAS hash, NULL until decrypt+store succeed).
+/// `chat_item_attachments` — the universal CAS-edge shape between one chat
+/// item's attachment slot and a `cas_objects` blob. `ref_id` is Signal's
+/// `media_name`, indexed for the skip-check.
 #[derive(Debug, Clone, CasEdgeRow)]
 #[cas_edge_row(table = "chat_item_attachments")]
 pub struct ChatItemAttachmentRow {
@@ -83,8 +80,23 @@ pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String
     format!("{chat_item_id}#{slot}")
 }
 
-/// `ingested_backups` — Signal's resume cursor. One row per Signal
-/// snapshot we have already processed.
+/// `ingested_backups` — Signal's resume cursor, one row per snapshot already
+/// processed.
+///
+/// Walking every frame in `main` is idempotent, but still decrypts and decodes
+/// tens of MB of protobuf for nothing. This lets fetch short-circuit before
+/// any of that work.
+///
+/// PK choice: `fingerprint`, the blake3 of `metadata`, `main` and `files`
+/// joined in that order and read through the host-wide cache, so an unchanged
+/// snapshot costs three `stat()`s and no reads. `blake3` is the digest of the
+/// three concatenated, computed only once the skip misses and kept purely so
+/// someone inspecting the table can verify which bytes these were — never read
+/// on the hot path. `snapshot_dir` and `total_byte_size` are informational.
+///
+/// A row exists only once ingestion finished successfully, and
+/// `--reset-and-redownload` wipes the table so an explicit reset re-processes
+/// even a snapshot already seen.
 pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_backups (
     fingerprint TEXT PRIMARY KEY,
     blake3 TEXT NOT NULL,
@@ -101,23 +113,42 @@ pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_back
 pub const SNAPSHOT_BLAKE3_RECIPE_DOC: &str =
     "blake3.hex(snapshot_dir/metadata || snapshot_dir/main || snapshot_dir/files)";
 
-/// Build the fingerprint string for a snapshot directory: three
-/// `(mtime_ns, byte_size)` pairs joined by `:`, in `(metadata, main,
-/// files)` order. Used as the [`INGESTED_BACKUPS_DDL`] PK.
-pub fn snapshot_fingerprint(snapshot_dir: &std::path::Path) -> anyhow::Result<String> {
+/// A content fingerprint for one Signal snapshot: the blake3 of each of its
+/// three files, joined in `(metadata, main, files)` order.
+///
+/// The digests come from this host's shared fingerprint cache, so a snapshot
+/// another scan already walked costs three stat calls.
+///
+/// Errors if any of the three is missing or unreadable — the same condition
+/// that would later fail the decrypt pass, so failing fast here is correct.
+pub async fn snapshot_fingerprint(
+    cache: &datalib_etl::fingerprint_cache::FingerprintCache,
+    snapshot_dir: &std::path::Path,
+) -> anyhow::Result<String> {
     use anyhow::Context;
-    let mut parts = Vec::with_capacity(6);
-    for name in ["metadata", "main", "files"] {
-        let path = snapshot_dir.join(name);
-        let meta = std::fs::metadata(&path)
-            .with_context(|| format!("stat {} for fingerprint", path.display()))?;
-        let mtime_ns = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        parts.push(format!("{}:{}", mtime_ns, meta.len()));
+    const PARTS: [&str; 3] = ["metadata", "main", "files"];
+
+    let scan = datalib_etl::fsscan::scan(
+        cache,
+        snapshot_dir,
+        &datalib_etl::fsscan::ScanOptions::default(),
+        |p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| PARTS.contains(&n))
+        },
+    )
+    .await
+    .with_context(|| format!("scan snapshot {}", snapshot_dir.display()))?;
+
+    let mut parts = Vec::with_capacity(PARTS.len());
+    for name in PARTS {
+        let f = scan
+            .files
+            .iter()
+            .find(|f| f.rel == name)
+            .with_context(|| format!("snapshot {} has no {name}", snapshot_dir.display()))?;
+        parts.push(datalib_etl::fswalk::to_hex(&f.blake3));
     }
     Ok(parts.join(":"))
 }

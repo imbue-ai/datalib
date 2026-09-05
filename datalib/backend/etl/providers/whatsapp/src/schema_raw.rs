@@ -1,4 +1,17 @@
 //! DDL for the curated `wa_*` mirror tables.
+//!
+//! Columns come verbatim from msgstore.db, with two changes: autoincrement
+//! `_id` / `*_row_id` columns become stable identifiers (the internal `_id` is
+//! dropped outright — it renumbers on phone restore, so it would be noise in
+//! every dolt diff), and a parent's `*_row_id` foreign key is resolved to that
+//! parent's stable PK columns.
+//!
+//! Two things a new reader trips over. `wa_message.text_data` holds the body
+//! only for simple text messages; for links, replies and media captions it is
+//! null and the body lives in `wa_message_text` / `wa_message_media` / the
+//! add-on tables. And `wa_media_files` is keyed by blake3, so several
+//! `wa_message_media` rows can point at one file — forwards and re-sends dedup
+//! through the registry.
 
 use uuid::Uuid;
 
@@ -202,18 +215,19 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
     PRIMARY KEY (chat_jid, key_id, from_me)
 );";
 
-/// Catalog of plaintext media files from the source backup. Bytes
-/// live in the sibling CAS file (managed by `datalib_etl::blob_cas`);
-/// `wa_media_files.blake3` is the CAS key. `sha256` stays as the
-/// upstream identifier (matches `wa_message_media.file_hash`).
+/// Catalog of plaintext media files from the source backup. Bytes live in the
+/// sibling CAS, and `blake3` is both this table's key and the CAS key.
+///
+/// Deliberately one digest: the shipped join is
+/// `wa_media_files.relative_path = wa_message_media.file_path`, so a second
+/// hash was stored and never read back — and computing it forced a full
+/// re-read of every media file on every run.
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
-    sha256 TEXT PRIMARY KEY,
+    blake3 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
-    mtime_unix INTEGER,
     mime_type TEXT,
-    blake3 TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
+    CHECK (length(blake3) = 64)
 );";
 
 /// All DDL statements in dependency-safe creation order.

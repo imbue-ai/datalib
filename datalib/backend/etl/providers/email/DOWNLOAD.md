@@ -166,3 +166,46 @@ No checked-in fixture tree yet — `tests/jmap_render.rs` builds a small
 fixture pair (matching the slack/notion pattern) is a planned
 follow-up; until then, the live test (`tests/jmap_live.rs`, currently
 a stub) is the only path that exercises the real wire format.
+
+## The raw store's shape
+
+One schema regardless of where the data came from — mbox and JMAP both
+populate it, and the mbox path synthesizes a JMAP-shaped envelope so the two
+are identical downstream.
+
+### The `.eml` is the canonical body
+
+The RFC 5322 `.eml` is the **complete backup** of a message: body, headers and
+every MIME part, attachments included. It rides in the shared per-source CAS
+keyed by `blob_id`, and everything else is metadata around it.
+
+Concretely, there is no `email_attachments` table. The parts inside an `.eml`
+are reachable by mail-parsing the bytes at render time, so we don't download
+them into separate CAS entries during ingest. Both mbox and JMAP land *only
+the `.eml`*.
+
+### `emails` carries the envelope as `payload`
+
+`EmailRow` is payload-shaped like every other entity table: the `id`/`payload`
+pair plus promoted columns (time, subject, from/to/cc, message-id, threading
+headers, the `.eml`'s blob ref). The payload is the JMAP `Email/get` envelope
+— envelope only, since the body comes back from the `.eml`. The promoted
+columns exist for indexing and cheap projection; the `mailboxIds` / `keywords`
+join inputs are read back out of the payload.
+
+### The `.eml` hash lives on `email_blobs`, not on `emails`
+
+That column has a second writer — the blob-download pass backfills it after
+the envelope row already exists — so it lives on its own CAS edge table, like
+every other provider's attachment edge. That keeps `emails` single-writer, so
+re-upserting a changed envelope (flag or move churn) never clobbers a stored
+hash.
+
+### Tables
+
+| table | shape |
+|---|---|
+| `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar |
+| `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars |
+| `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
+| `ingested_files` | the shared per-file resume cursor (`file_checkpoint`, scope `email/mbox`) |

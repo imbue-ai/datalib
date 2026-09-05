@@ -1,4 +1,11 @@
-//! Raw-store schema for the email provider.
+//! Raw-store schema for the email provider. One schema for both download
+//! modes — mbox synthesizes a JMAP-shaped envelope so the two are identical
+//! from here on.
+//!
+//! The `.eml` in the CAS is the canonical body; everything here is metadata
+//! around it, and there is deliberately no `email_attachments` table. What
+//! each table holds, and why the `.eml` hash lives on `email_blobs` rather
+//! than on `emails`, is in this provider's DOWNLOAD.md.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
@@ -373,33 +380,6 @@ impl EmlBlobRow {
 
 // ── cursor table ────────────────────────────────────────────────────
 
-/// `mbox_files_checkpoint` — Mbox-only resume cursor. One row per
-/// mbox file the extractor has fully ingested. Before opening a
-/// file, `mbox::fetch` checks the row: if `(size_bytes, mtime_ns)`
-/// match what's on disk, the file is skipped entirely. Mbox is
-/// append-only by convention (mail clients only ever append), so
-/// `(size, mtime)` is a sufficient fingerprint without re-hashing
-/// contents.
-#[derive(Debug, Clone, RawTable)]
-#[raw_table(table = "mbox_files_checkpoint", primary_key = "path")]
-pub struct MboxFilesCheckpointRow {
-    pub path: String,
-    pub size_bytes: i64,
-    pub mtime_ns: i64,
-    pub last_finished_at: String,
-}
-
-impl MboxFilesCheckpointRow {
-    pub fn new(path: &str, size_bytes: i64, mtime_ns: i64, last_finished_at: &str) -> Self {
-        Self {
-            path: path.to_string(),
-            size_bytes,
-            mtime_ns,
-            last_finished_at: last_finished_at.to_string(),
-        }
-    }
-}
-
 /// `gmail_messages` — Gmail's own message id → the row it produced.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
@@ -422,7 +402,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailMailboxRow::all_ddl());
     out.extend(EmailKeywordRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
-    out.extend(MboxFilesCheckpointRow::all_ddl());
+    out.push(datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out.extend(GmailMessageRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

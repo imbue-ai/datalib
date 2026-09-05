@@ -1,11 +1,12 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
 
+use datalib_etl::fsscan;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint::{self, FileFingerprint};
+use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
@@ -27,19 +28,18 @@ pub struct GeminiSummary {
     pub blobs_stored: usize,
 }
 
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<GeminiSummary> {
-    let path = root.join(FILE_REL);
-    if !path.exists() {
+pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<GeminiSummary> {
+    let Some(f) = scan.file(FILE_REL) else {
         return Ok(GeminiSummary::default());
-    }
-    let fp = FileFingerprint::of(&path)?;
-    let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
-    if file_checkpoint::should_skip(&stamped, &fp) {
+    };
+    let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
+    if prev.get(&f.rel) == Some(&f.blake3) {
         return Ok(GeminiSummary::default());
     }
     let html =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let cell_dir = path
+        std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
+    let cell_dir = f
+        .path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -86,16 +86,13 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Gemi
                 continue;
             }
             n_attachments += 1;
-            // Exact join, deliberately — NOT the truncation-tolerant
-            // `attachment_path::resolve` that Chat uses (issue #64).
-            // `file_name` here comes from an `href` Google wrote into the
-            // export HTML, which points at the file it actually wrote, so
-            // there's no full-vs-truncated mismatch to bridge. Chat's
-            // `export_name` is JSON metadata describing the *original*
-            // upload, which is where that mismatch comes from. If missing
-            // Gemini attachments ever show up, this is the line to
-            // re-examine first — unverified against an export with a
-            // long-enough filename to trigger the cap.
+            // Exact join, deliberately — NOT Chat's truncation-tolerant
+            // `attachment_path::resolve`. This `file_name` comes from an
+            // `href` Google wrote into the export HTML, pointing at the
+            // file it actually wrote, so there is no full-vs-truncated
+            // mismatch to bridge. Unverified against an export with a
+            // filename long enough to trigger the cap: if missing Gemini
+            // attachments show up, re-examine this line first.
             let sibling = cell_dir.join(&file_name);
             match std::fs::read(&sibling) {
                 Ok(bytes) => {
@@ -127,7 +124,7 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Gemi
     let now = IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin gemini_apps tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-    file_checkpoint::record_finished(&mut tx, SCOPE, &fp).await?;
+    file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     tx.commit().await.context("commit gemini_apps tx")?;
 
     let blobs_stored = acc.bundle_mut().cas_inserts().len();

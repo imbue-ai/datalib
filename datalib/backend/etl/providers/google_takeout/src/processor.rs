@@ -4,6 +4,7 @@
 //! the chat-shaped feeds (Google Chat / Google Voice). The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -78,6 +79,7 @@ impl DataProcessor for GoogleTakeoutDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
+            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             db: Some(db),
             input_path: self.input_path.clone(),
             sync: self.sync.clone(),
