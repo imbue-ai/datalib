@@ -1,6 +1,6 @@
 //! Email (JMAP) render: convert parsed threads into the shared
 //! `chat-common` normalized model and delegate markdown / grid-row /
-//! sidecar plumbing to [`datalib_etl_chat_common::render::render_all`].
+//! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 //!
 //! One thread → one [`NormalizedChat`] (single `"all"` bucket);
 //! `chat_uuid`/`markdown_uuid` are the existing `thread_uuid`, so page

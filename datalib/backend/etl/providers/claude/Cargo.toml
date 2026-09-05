@@ -19,7 +19,6 @@ datalib-etl-macros = { path = "../../macros" }
 datalib-obs = { path = "../../../obs" }
 datalib-time = { path = "../../../time" }
 datalib-schema = { path = "../../../schema" }
-datalib-index-lib = { path = "../../../index_lib" }
 datalib-id = { path = "../../../id" }
 serde = { workspace = true }
 serde_json = { workspace = true }

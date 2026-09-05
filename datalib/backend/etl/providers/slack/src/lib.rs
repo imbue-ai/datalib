@@ -1,5 +1,5 @@
 //! Slack provider for [`datalib_etl`]: Download (raw API capture)
-//! and Render (raw → markdown and grid_rows sidecars). The Load
+//! and Render (raw → markdown and grid_rows in the render store). The Load
 //! step is provider-agnostic and lives at [`datalib_etl::load`].
 
 pub mod download;

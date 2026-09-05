@@ -2,12 +2,13 @@
 
 `gitlab-translate` reads the event-store JSONL written by
 `gitlab-download` and emits **one markdown document per merge request**,
-plus a co-located `grid_rows` sidecar.
+plus that document's `grid_rows`.
 
 ```
 <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/
     index.md                # the unified MR doc
-    index.grid_rows.json     # sidecar: one row for the MR + one per note
+<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db
+                            # its rows: one for the MR + one per note
 ```
 
 ## Markdown layout
@@ -28,12 +29,13 @@ plus a co-located `grid_rows` sidecar.
 `system: true` notes (label add/remove, WIP toggles, etc.) are dropped
 — they're git audit log, not conversation.
 
-## Sidecar
+## Rows
 
-Same `Sidecar { header, rows }` shape as the other providers:
+Same `RenderedMarkdown { markdown_uuid, source_fingerprint, rows }`
+shape as the other providers:
 
-- `header.document_uuid` — UUIDv5 of `gitlab:{project}:mr:{iid}`.
-- `header.source_fingerprint` — DefaultHasher hash of `RENDER_VERSION`
+- `markdown_uuid` — UUIDv5 of `gitlab:{project}:mr:{iid}`.
+- `source_fingerprint` — DefaultHasher hash of `RENDER_VERSION`
   + canonicalized MR JSON + canonicalized note JSONs (sorted by note
   id). Stable across re-renders.
 - `rows[0]` — the MR row (kind = "GitLab MR").

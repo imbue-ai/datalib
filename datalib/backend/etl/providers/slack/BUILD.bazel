@@ -33,7 +33,6 @@ rust_library(
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/id:datalib_id",
-        "//datalib/backend/index_lib:datalib_index_lib",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

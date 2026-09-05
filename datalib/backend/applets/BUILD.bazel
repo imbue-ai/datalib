@@ -5,10 +5,9 @@ exports_files(["Cargo.toml"])
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
 # subcommand per applet, the same shape as `datalib-step`.
 #
-# Deliberately dependency-light: applets read the cross-provider
-# `.grid_rows.json` sidecar contract as untyped JSON rather than
-# linking the schema or provider crates, so writing one stays a small
-# job.
+# Deliberately dependency-light: applets query the cross-provider
+# `grid_rows` table in a source's own render store rather than linking
+# the provider crates, so writing one stays a small job.
 rust_binary(
     name = "datalib_applet",
     srcs = glob(["src/**/*.rs"]),
@@ -19,6 +18,8 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/unified_index:datalib_unified_index",
         "@datalib_crates//:anyhow",
@@ -27,6 +28,7 @@ rust_binary(
         "@datalib_crates//:clap",
         "@datalib_crates//:mime_guess",
         "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:tokio",

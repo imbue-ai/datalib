@@ -3,7 +3,7 @@
 //! `parse::parse` reads the two TEI XMLs (Greek + English) from a
 //! directory and aligns them by (book, chapter, section). `render`
 //! emits one markdown doc per book (`index.md`) and per (chapter ×
-//! language), plus a `.grid_rows.json` sidecar alongside each.
+//! language), plus each document's rows in the render store.
 
 pub mod align;
 pub mod parse;

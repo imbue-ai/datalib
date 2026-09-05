@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
+use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -311,18 +311,6 @@ fn render_one_pr(
     }
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
-    // sidecar
-    let rows = rows_for_pr(pr, comments, stanza)?;
-    let sidecar_path = md_path.with_extension("grid_rows.json");
-    emit_sidecar(
-        &sidecar_path,
-        &pr.uuid,
-        &fingerprint_for_pr(pr, comments),
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
-
     Ok(md_path)
 }
 
@@ -360,7 +348,8 @@ pub fn render_github(
         }
 
         render_one_pr(pr, &comments, root, stanza)?;
-        let rows = rows_for_pr(pr, &comments, stanza)?;
+        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let rows = rows_for_pr(pr, &comments, stanza, &mut problems);
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: pr.uuid.clone(),
             source_name: String::new(),
@@ -370,6 +359,7 @@ pub fn render_github(
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
+            problems,
         })?;
         summary.rendered += 1;
         progress.inc(1);

@@ -53,13 +53,17 @@ async fn github_live_single_pr_snapshot() {
 
     let render_root = tmp.clone();
     let stanza = "github_live";
+    let mut docs: Vec<datalib_etl::grid_index::RenderedMarkdown> = Vec::new();
     render_github(
         &parsed,
         &render_root,
         stanza,
         &datalib_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
-        &mut |_doc| Ok(()),
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
     )
     .expect("render_github failed");
 
@@ -75,8 +79,12 @@ async fn github_live_single_pr_snapshot() {
         "rendered md missing: {}",
         qmd_abs.display()
     );
-    let sidecar = qmd_abs.with_extension("grid_rows.json");
-    assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
+    // The projection rides on the emitted document now, not in a file
+    // beside the markdown.
+    assert!(
+        docs.iter().any(|d| !d.rows.is_empty()),
+        "render emitted no rows"
+    );
 
     let mut sections: Vec<&'static str> = Vec::new();
     use datalib_etl_github::render::parse::CommentSection;
@@ -111,7 +119,7 @@ async fn github_live_single_pr_snapshot() {
         "comment_count": parsed.comments.len(),
         "sections_present": sections,
         "rendered_md_exists": qmd_abs.exists(),
-        "sidecar_exists": sidecar.exists(),
+        "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),
     });
 
     insta::with_settings!({ sort_maps => true }, {

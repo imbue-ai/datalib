@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! <data_root>/<stanza>/raw/…           (download — see source_common)
-//! <data_root>/<stanza>/rendered_md/…   (render — markdown + sidecars)
+//! <data_root>/<stanza>/rendered_md/…   (render — markdown + its store)
 //! ```
 //!
 //! Cross-stanza aggregates (`unified_index/grid/db.doltlite_db`,

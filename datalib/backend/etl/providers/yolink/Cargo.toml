@@ -12,7 +12,6 @@ path = "src/lib.rs"
 datalib-etl = { path = "../.." }
 datalib-etl-macros = { path = "../../macros" }
 datalib-core = { path = "../../../core" }
-datalib-index-lib = { path = "../../../index_lib" }
 datalib-schema = { path = "../../../schema" }
 datalib-time = { path = "../../../time" }
 serde = { workspace = true }

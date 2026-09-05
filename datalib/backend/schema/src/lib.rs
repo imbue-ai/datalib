@@ -9,9 +9,20 @@
 //!   * `grid_rows` — the union table (one row per displayable entity)
 //!   * `edges`     — directed links between rendered documents / anchors
 //!   * `markdowns` — per-rendered-`.md` metadata + render bookkeeping
+//!   * `render_problems` — what render could not do, beside what it did
+//!   * `source_cursors` — how far the index has consumed each source
 //!
 //! App-state tables that are *not* part of the render schema
 //! (`feedback`, `sync_jobs`) live in the separate `app_schema` crate.
+
+// So the `PortableTable` derive can emit `impl
+// ::datalib_schema::bulk::BulkUpsertable` for structs defined *inside*
+// this crate: without the self-alias that absolute path does not
+// resolve here, and a relative one would not resolve in the provider
+// crates that also use the derive.
+extern crate self as datalib_schema;
+
+pub mod bulk;
 
 pub mod grid_rows {
     include!("grid_rows.rs");
@@ -25,6 +36,14 @@ pub mod edges {
 
 pub mod markdowns {
     include!("markdowns.rs");
+}
+
+pub mod render_problems {
+    include!("render_problems.rs");
+}
+
+pub mod source_cursors {
+    include!("source_cursors.rs");
 }
 
 #[cfg(test)]
@@ -50,6 +69,63 @@ mod tests {
         assert!(cols.contains(&"edge_uuid"));
         assert!(cols.contains(&"src_markdown_uuid"));
         assert!(cols.contains(&"dst_markdown_uuid"));
+    }
+
+    #[test]
+    fn render_problems_table_present() {
+        assert_eq!(super::render_problems::TABLES.len(), 1);
+        assert_eq!(super::render_problems::DDL.len(), 1);
+        let (_, cols) = super::render_problems::COLUMNS[0];
+        for want in ["uuid", "scope_key", "scope_kind", "outcome", "problems"] {
+            assert!(cols.contains(&want), "missing {want}: {cols:?}");
+        }
+    }
+
+    /// The `markdowns` DDL this struct derives is what `grid_index`
+    /// creates, so it must stay byte-equal to the string that lived
+    /// there before the two were consolidated. Three drifts had already
+    /// opened up while nothing read the struct: it was missing
+    /// `source_fingerprint` and `upstream_cursor`, it declared `title`
+    /// as `VARCHAR(512)` where production had `TEXT`, and it made
+    /// `row_set_hash` / `renderer_version` NOT NULL where production
+    /// allows NULL — the last of which fails a write rather than
+    /// merely reading wrong.
+    #[test]
+    fn markdowns_ddl_matches_what_the_index_has_always_created() {
+        const PRODUCTION: &str = r#"CREATE TABLE IF NOT EXISTS markdowns (
+    markdown_uuid VARCHAR(96) NOT NULL,
+    source_name VARCHAR(64) NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    kind VARCHAR(32) NOT NULL,
+    title TEXT,
+    created_at VARCHAR(40),
+    updated_at VARCHAR(40),
+    md_path VARCHAR(1024),
+    source_fingerprint VARCHAR(64),
+    upstream_cursor VARCHAR(64),
+    row_set_hash CHAR(64),
+    renderer_version VARCHAR(32),
+    rendered_at VARCHAR(40),
+    PRIMARY KEY (markdown_uuid)
+)"#;
+        let derived = super::markdowns::DDL[0].1;
+        let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            norm(derived),
+            norm(PRODUCTION),
+            "\nderived: {derived}\n\nproduction: {PRODUCTION}"
+        );
+    }
+
+    /// The columns `grid_index`'s hand-written `MARKDOWNS_DDL` writes
+    /// have to be on the struct, or the struct is not the schema.
+    /// `source_fingerprint` and `upstream_cursor` were absent for as
+    /// long as `MarkdownRow` went unused by anything.
+    #[test]
+    fn markdowns_covers_the_render_bookkeeping_columns() {
+        let (_, cols) = super::markdowns::COLUMNS[0];
+        assert!(cols.contains(&"source_fingerprint"), "{cols:?}");
+        assert!(cols.contains(&"upstream_cursor"), "{cols:?}");
     }
 
     #[test]

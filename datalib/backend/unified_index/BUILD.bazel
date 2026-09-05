@@ -133,3 +133,23 @@ insta_update(
     name = "fixture_db_snapshot_test.update",
     test = ":fixture_db_snapshot_test",
 )
+
+# The qmd hit↔row mapping invariants, exercised without the live `qmd`
+# CLI or an ingested fixture.
+#
+# This file sat in `datalib/backend/etl/tests/` with no BUILD target for
+# its whole life — never compiled, never run by `bazelisk test //...`.
+# It exercises `unified_index::qmd`, so it lives here now, and it has a
+# target.
+rust_test(
+    name = "qmd_mapping_test",
+    srcs = ["tests/qmd_mapping.rs"],
+    crate_name = "qmd_mapping",
+    edition = "2021",
+    deps = [
+        ":datalib_unified_index",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)

@@ -19,6 +19,7 @@ rust_binary(
         "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/etl/providers/claude:datalib_etl_claude",
         "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",

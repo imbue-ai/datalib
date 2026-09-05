@@ -33,6 +33,7 @@ pub mod fswalk;
 pub mod grid_index;
 pub mod http;
 pub mod ids;
+pub mod indexed_markdown;
 pub mod indicatif_progress;
 pub mod latchkey;
 pub mod layout;

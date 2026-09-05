@@ -1082,11 +1082,16 @@ pub struct FetchSummary {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path)
-            .await
-            .with_context(|| format!("open raw db {}", db_path.display()))?,
+    // `owned` is "we opened this pool, so we close it" — see the close
+    // below.
+    let (db, owned) = match opts.db.clone() {
+        Some(db) => (db, false),
+        None => (
+            RawDb::open(&db_path)
+                .await
+                .with_context(|| format!("open raw db {}", db_path.display()))?,
+            true,
+        ),
     };
 
     if opts.control.reset_and_redownload {
@@ -1285,6 +1290,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await;
     run.finish(&result, &grand).await;
+    // Close the pool if — and only if — we opened it. A caller that
+    // handed us a `db` owns its lifetime (the processor shares one pool
+    // with its `RawStoreSession`, which closes it in `finish`); a
+    // caller that did not gets a pool nothing would ever close.
+    //
+    // That mattered: doltlite's HEAD, working set and active branch are
+    // per-connection, so two live connections to one file are two
+    // writers, and the second one's `dolt_commit` can fail with
+    // `commit conflict: another connection committed to this branch`.
+    // sqlx does not close a dropped pool's connections synchronously,
+    // so "it goes out of scope here" is not the same as "it is closed"
+    // — and the next `open` of the same file may race the one we left
+    // behind.
+    if owned {
+        db.pool().close().await;
+    }
     result?;
 
     info!(

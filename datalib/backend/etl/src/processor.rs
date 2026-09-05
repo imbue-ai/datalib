@@ -50,7 +50,7 @@ pub trait DataProcessor: Send + Sync {
     /// Program A keeps the string.)
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
 
-    /// The renderer version this processor stamps into every sidecar
+    /// The renderer version this processor stamps onto every document
     /// header it writes, when it writes sidecars at all.
     ///
     /// The render step uses it to tell a tree rendered by *this* build
@@ -72,7 +72,7 @@ pub trait DataProcessor: Send + Sync {
     /// are the kind of failure nothing downstream complains about.
     ///
     /// Return the same constant the render path passes to
-    /// `datalib_index_lib::emit_sidecar` — one per source, since the
+    /// the store — one per source, since the
     /// thing being versioned is the whole `rendered_md` tree. The render
     /// step re-reads the tree afterwards and fails if it carries a
     /// version nobody declared, so reporting one number and writing

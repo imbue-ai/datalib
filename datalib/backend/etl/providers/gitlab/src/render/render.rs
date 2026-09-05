@@ -3,7 +3,6 @@
 //! Layout:
 //! ```text
 //! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.md
-//! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.grid_rows.json
 //! ```
 //!
 //! Section order in the doc:
@@ -21,7 +20,7 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
+use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -264,17 +263,6 @@ fn render_one_mr(
     }
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = rows_for_mr(stanza, mr, notes)?;
-    let sidecar_path = md_path.with_extension("grid_rows.json");
-    emit_sidecar(
-        &sidecar_path,
-        &mr.uuid,
-        &fingerprint_for_mr(mr, notes),
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
-
     Ok(md_path)
 }
 
@@ -311,7 +299,8 @@ pub fn render_gitlab(
         }
 
         render_one_mr(mr, &notes, root, stanza)?;
-        let rows = rows_for_mr(stanza, mr, &notes)?;
+        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let rows = rows_for_mr(stanza, mr, &notes, &mut problems);
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
             source_name: String::new(),
@@ -321,6 +310,7 @@ pub fn render_gitlab(
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
+            problems,
         })?;
         summary.rendered += 1;
         progress.inc(1);

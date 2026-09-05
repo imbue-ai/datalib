@@ -1,6 +1,6 @@
 //! ChatGPT render: convert parsed conversations into the shared
 //! `chat-common` normalized model and delegate markdown / grid-row /
-//! sidecar plumbing to [`datalib_etl_chat_common::render::render_all`].
+//! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 //!
 //! One conversation → one [`NormalizedChat`] with a single `"all"`
 //! bucket; `chat_uuid` and the bucket's `markdown_uuid` are the upstream

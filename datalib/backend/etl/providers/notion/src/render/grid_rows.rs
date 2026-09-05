@@ -4,12 +4,12 @@
 //! - One `Notion Comment Thread` row per discussion.
 //! - One `Notion Comment` row per individual comment.
 //!
-//! For sidecar emission we group rows per *document*. There are two
+//! We group rows per *document*. There are two
 //! kinds of documents on the Notion side:
 //!
-//! - A page → sidecar `<page_uuid>.grid_rows.json` carrying the single
+//! - A page → a document keyed `<page_uuid>` carrying the single
 //!   `Notion Page` row.
-//! - A discussion → sidecar `<discussion_uuid>.grid_rows.json` carrying
+//! - A discussion → a document keyed `<discussion_uuid>` carrying
 //!   the thread row + its comment rows.
 
 use std::collections::{BTreeMap, HashMap};
@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
 use super::parse::ParsedNotionOfficial;
@@ -182,12 +183,15 @@ fn short_author(uid: &str, user_names: &HashMap<String, String>) -> Option<Strin
     }
 }
 
+/// The page's own row, or `None` with the reason recorded on
+/// `problems` — see `GridRowBuilder::build_or_record`.
 fn page_row(
     page: &Value,
     title: &str,
     stanza: &str,
     user_names: &HashMap<String, String>,
-) -> Result<GridRow> {
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     let pid = page
         .get("id")
         .and_then(|v| v.as_str())
@@ -218,12 +222,12 @@ fn page_row(
         .qmd_path(Some(page_qmd_path_rel(stanza, &pid)))
         .source_url(Some(notion_url(&pid)))
         .notion_page_uuid(Some(pid.clone()))
-        .markdown_uuid(Some(pid))
-        .build()
-        .map_err(anyhow::Error::from)
+        .markdown_uuid(Some(pid.clone()))
+        .build_or_record(stanza, &pid, RENDER_VERSION, problems)
 }
 
 /// Rows for one discussion: the thread row + per-comment rows.
+#[allow(clippy::too_many_arguments)]
 fn thread_rows(
     disc_id: &str,
     members_sorted: &[Value],
@@ -232,9 +236,10 @@ fn thread_rows(
     stanza: &str,
     parent_block_id: Option<&str>,
     user_names: &HashMap<String, String>,
-) -> Result<Vec<GridRow>> {
+    problems: &mut Vec<RenderProblemRow>,
+) -> Vec<GridRow> {
     if members_sorted.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
     let thread_qmd = thread_qmd_path_rel(stanza, page_id, disc_id);
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
@@ -251,7 +256,7 @@ fn thread_rows(
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    rows.push(
+    rows.extend(
         GridRow::builder()
             .uuid(disc_id)
             .provider("notion")
@@ -273,7 +278,7 @@ fn thread_rows(
             .notion_page_uuid(Some(page_id.to_string()))
             .notion_block_uuid(parent_block_id.map(String::from))
             .markdown_uuid(Some(disc_id.to_string()))
-            .build()?,
+            .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
     );
     for (idx, c) in members_sorted.iter().enumerate() {
         let author_id = c
@@ -281,7 +286,7 @@ fn thread_rows(
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        rows.push(
+        rows.extend(
             GridRow::builder()
                 .uuid(c.get("id").and_then(|v| v.as_str()).unwrap_or(""))
                 .provider("notion")
@@ -303,10 +308,10 @@ fn thread_rows(
                 .notion_page_uuid(Some(page_id.to_string()))
                 .notion_block_uuid(parent_block_id.map(String::from))
                 .markdown_uuid(Some(disc_id.to_string()))
-                .build()?,
+                .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
         );
     }
-    Ok(rows)
+    rows
 }
 
 fn canonical_json(v: &Value) -> String {
@@ -368,6 +373,9 @@ pub struct PageDocument {
     pub page_title: String,
     pub rows: Vec<GridRow>,
     pub source_fingerprint: String,
+    /// What this document lost on the way here; travels with the rows
+    /// so both commit together.
+    pub problems: Vec<RenderProblemRow>,
 }
 
 pub struct ThreadDocument {
@@ -376,6 +384,8 @@ pub struct ThreadDocument {
     pub page_title: String,
     pub rows: Vec<GridRow>,
     pub source_fingerprint: String,
+    /// See [`PageDocument::problems`].
+    pub problems: Vec<RenderProblemRow>,
 }
 
 pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<DocumentRows> {
@@ -567,7 +577,8 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
             .cloned()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "(untitled)".into());
-        let row = page_row(page, &title, stanza, &parsed.user_names)?;
+        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let row = page_row(page, &title, stanza, &parsed.user_names, &mut problems);
         let empty: Vec<&Value> = Vec::new();
         let blocks = blocks_by_page.get(&pid).unwrap_or(&empty);
         let comments = comments_by_page.get(&pid).unwrap_or(&empty);
@@ -575,8 +586,9 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
         pages.push(PageDocument {
             page_uuid: pid,
             page_title: title,
-            rows: vec![row],
+            rows: row.into_iter().collect(),
             source_fingerprint: fp,
+            problems,
         });
     }
     tracing::debug!(
@@ -627,6 +639,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
         } else {
             None
         };
+        let mut problems: Vec<RenderProblemRow> = Vec::new();
         let rows = thread_rows(
             &disc_id,
             &members,
@@ -635,7 +648,8 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
             stanza,
             parent_block_id.as_deref(),
             &parsed.user_names,
-        )?;
+            &mut problems,
+        );
         // Fingerprint over sorted-by-id comments for stability.
         let mut for_fp: Vec<&Value> = members.iter().collect();
         for_fp.sort_by(|a, b| {
@@ -650,6 +664,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
             page_title,
             rows,
             source_fingerprint: fp,
+            problems,
         });
     }
 

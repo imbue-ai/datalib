@@ -36,6 +36,7 @@ since run 3 wipes the cursor and then re-creates it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -473,6 +474,82 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # ── pipeline driver ────────────────────────────────────────────
 
+    def _render_stores(self) -> dict[str, int]:
+        """Per-source render stores, as `source -> grid_rows count`.
+
+        Each source's render step writes
+        `<source>/rendered_md/indexed_markdown.doltlite_db` holding the
+        same rows that stack into the unified index — same derived DDL,
+        same writer (`grid_index::apply_one`). Asserted from the outside
+        with the doltlite CLI, so a store that exists but is empty, or
+        holds a shape the CLI cannot read, fails here rather than
+        silently indexing nothing.
+        """
+        out: dict[str, int] = {}
+        for store in sorted(
+            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+        ):
+            source = store.parent.parent.name
+            out[source] = self._count(store, "grid_rows")
+        return out
+
+    def _render_problems(self) -> dict[str, list[str]]:
+        """Per-source `render_problems` rows, as `source -> [summary…]`.
+
+        Each entry is `<outcome>|<uuid>|<problems-json>` so a failure
+        message names what was dropped rather than only how many.
+        """
+        out: dict[str, list[str]] = {}
+        for store in sorted(
+            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+        ):
+            rows = self._query(
+                store,
+                "SELECT outcome, uuid, problems FROM render_problems ORDER BY uuid;",
+            )
+            if rows:
+                out[store.parent.parent.name] = rows
+        return out
+
+    def _source_cursors(self) -> dict[str, str]:
+        """`source_name -> store_commit` from the index's cursor table."""
+        rows = self._query(
+            self._index_db,
+            "SELECT source_name, store_commit FROM source_cursors "
+            "ORDER BY source_name;",
+        )
+        out: dict[str, str] = {}
+        for line in rows:
+            name, _, commit = line.partition("|")
+            out[name] = commit
+        return out
+
+    def _store_heads(self) -> dict[str, str]:
+        """`source_name -> HEAD` of each source's render store."""
+        out: dict[str, str] = {}
+        for store in sorted(
+            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+        ):
+            out[store.parent.parent.name] = self._scalar(
+                store,
+                "SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1;",
+            )
+        return out
+
+    # The step's tracing event, as it reaches stderr: JSON nested inside
+    # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
+    _GRID_INDEX_READ = re.compile(r'build_grid_index done.*?\\?"read\\?":\s*(\d+)')
+
+    def _grid_index_reads(self, stderr: str) -> list[int]:
+        """How many documents each grid_index step in a run READ.
+
+        Not `loaded`: that was already 0 on a steady-state run before
+        the index kept cursors, because the fingerprint compare happened
+        after paying to read every document out of every source's store.
+        `read` is the number the cursors actually move.
+        """
+        return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
+
     def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
         env = {**os.environ}
         if reset:
@@ -586,6 +663,46 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "the qmd_path/md_path join must cover pdf rows",
         )
 
+        # ── the per-source render stores ────────────────────────
+        # Each source's render step writes its rows into
+        # `<source>/rendered_md/indexed_markdown.doltlite_db` — the same
+        # rows, same derived DDL and same writer as the unified index,
+        # so "what stacks into the index" needs no second projection to
+        # keep in step.
+        #
+        # Asserted against the index rather than against a number: a
+        # store that silently wrote nothing would still pass a
+        # "file exists" check, and a bare row count would drift with
+        # every fixture tweak.
+        stores = self._render_stores()
+        self.assertNotEqual(stores, {}, "every rendering source must write a store")
+        for source, rows in stores.items():
+            self.assertGreater(rows, 0, f"{source}'s render store holds no rows")
+        self.assertEqual(
+            sum(stores.values()),
+            self._count(self._index_db, "grid_rows"),
+            "the stores and the index must hold the same number of rows — "
+            f"per-source: {stores}",
+        )
+
+        # Nothing in the TNG fixture may land in the problem sink.
+        #
+        # This is the assertion that keeps the sink honest in both
+        # directions. Every renderer now drops-and-records a row it
+        # cannot build instead of failing the step, which is what stops
+        # one bad record from poisoning `grid_index` for every other
+        # source — but the same change means a projection that quietly
+        # started dropping rows would no longer show up as a failure
+        # anywhere. Here it does: the fixture is known-good, so any
+        # `render_problems` row is a regression, and the message names
+        # the row and the reason rather than just a count.
+        self.assertEqual(
+            self._render_problems(),
+            {},
+            "the TNG fixture must render clean; a row here means a "
+            "projection started dropping or nulling data",
+        )
+
         # ── id-space guardrails ─────────────────────────────────
         # Every row uuid is unique. The PK makes this true by
         # construction; asserting it from outside the writer is what
@@ -687,6 +804,30 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "handed out",
         )
         self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 2 providers")
+
+        # The index consumed each source's render store up to that
+        # store's current commit, and recorded where it got to.
+        self.assertEqual(
+            self._source_cursors(),
+            self._store_heads(),
+            "every source's index cursor must name that source's render "
+            "store HEAD; a source missing here is one the index will "
+            "re-read whole on every run",
+        )
+        # And the payoff: a steady-state run reads nothing out of those
+        # stores at all.
+        #
+        # `markdowns_read`, not `markdowns_loaded` — loaded was already
+        # 0 before the cursors existed, because the fingerprint compare
+        # happened *after* paying to read every document from every
+        # store. Asserting on it would pass either way and prove
+        # nothing.
+        self.assertEqual(
+            self._grid_index_reads(run2.stderr),
+            [0],
+            "run 2's grid_index must read 0 documents: nothing changed, "
+            "so every source's dolt_diff should have come back empty",
+        )
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
         )

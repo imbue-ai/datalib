@@ -1,6 +1,6 @@
 //! Claude render: convert parsed conversations into the
 //! shared `chat-common` normalized model and delegate markdown /
-//! grid-row / sidecar plumbing to
+//! grid-row plumbing to
 //! [`datalib_etl_chat_common::render::render_all`].
 //!
 //! One conversation → one [`NormalizedChat`] (single `"all"` bucket).
@@ -79,7 +79,7 @@ fn profile() -> RenderProfile {
 /// way chat-common already handles: a titled page whose body is a list
 /// of anchored sections, each with its own grid row. Reusing the same
 /// renderer gets the `id="m-{uuid}"` / `data-section-uuid` anchors, the
-/// sidecar, and the fingerprint skip for free — see docs/dev/cards.md
+/// rows, and the fingerprint skip for free — see docs/dev/cards.md
 /// for why those anchors are load-bearing.
 fn project_profile() -> RenderProfile {
     RenderProfile {

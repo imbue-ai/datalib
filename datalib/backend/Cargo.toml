@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "schema",
     "app_schema",
-    "index_lib",
     "unified_index",
     "core",
     "runtime",

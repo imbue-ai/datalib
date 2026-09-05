@@ -347,7 +347,7 @@ async fn the_fingerprint_hashes_the_readings_not_the_store() {
     // different `dolt_log()` HEADs, because doltlite stamps its bootstrap
     // commits with the wall clock and hashes chain.
     //
-    // The sidecar contract is that `source_fingerprint` hashes the
+    // The contract is that `source_fingerprint` hashes the
     // upstream payload, so these must agree. Folding HEAD in instead
     // (which is tempting, since HEAD is what gates the render) makes the
     // `markdowns` row move every time the store is rebuilt from scratch,

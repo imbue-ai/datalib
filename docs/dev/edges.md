@@ -47,9 +47,8 @@ list — they show as inline clickable spans inside the body — so
 their `label` is free to be metadata (`bilingual-alignment` for
 perseus today) without UI implications.
 
-Other providers leave the table empty; sidecars without an `edges`
-field load with zero edges (the serde `default` handles older
-sidecars).
+Other providers leave the table empty; a document that emits no edges
+simply contributes no rows here.
 
 ## Consumers today
 

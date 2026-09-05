@@ -272,7 +272,7 @@ So inside data\_root (or wherever), “artifacts can
 1. Define the node contract (NodeSpec, NodeOutcome, output-version hash) and have extract/translate/load implement it *in-process*, replacing the enum-dispatch match arms. No behavior change yet.  
 2. Write the scheduler: derive edges from input/output overlap, topologically order, run ready nodes, skip nodes whose input versions are unchanged (reusing the content-hash signal already in the tree).  
 3. Per-node commit: break whole-run atomicity into per-node atomic output commit; implement subtree-poisoning failure semantics.  
-4. Un-fuse Load from the translate callback into a first-class node that consumes the sidecar tree like any other.  
+4. Un-fuse Load from the translate callback into a first-class node that consumes render's output like any other.  
 5. Progress NDJSON: swap IndicatifSink for an NdjsonSink; move bar rendering into the orchestrator's ingest loop. (Independent of 1–4; can land any time.)  
 6. Subprocess execution (optional, last): flip NodeRun::InProcess to Subprocess. The contract is unchanged; this buys isolation and language-independence and can be deferred indefinitely.
 
@@ -346,10 +346,12 @@ rough dependency order:
   incremental step's reported partial outputs are still recorded.
 * **Load is un-fused by force, not choice.** The single-writer rule
   (no two steps' output trees may overlap) makes per-source writes into
-  the shared index impossible, so `grid_index` is one fan-in step driving
-  `load_all` over every `.grid_rows.json` sidecar tree. Render uses its
-  own sidecar tree as the prior-fingerprint store — the artifact is the
-  resume state, no index-DB peeking.
+  the shared index impossible, so `grid_index` is one fan-in step that
+  stacks every source's render store
+  (`<name>/rendered_md/indexed_markdown.doltlite_db`) into the unified
+  index, asking each store `dolt_diff` since the commit the index last
+  consumed. Render uses that same store as its own prior-fingerprint
+  store — the artifact is the resume state, no index-DB peeking.
 * **Everything goes into the NDJSON stream** (stderr of the runner):
   `run_plan` (all step ids, topo order) opens the run, then
   `step_start` / `progress_*` / `log` / `hint` / `step_finish`, closed

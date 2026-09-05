@@ -47,12 +47,15 @@ from the struct the `DDL`, `COLUMNS`, and `TABLES` module consts. The
 ## Producer side: per-provider `render/grid_rows.rs`
 
 Each provider crate under `datalib/backend/etl/providers/<p>/`
-emits `*.grid_rows.json` sidecars next to its rendered markdown. The
+writes its `GridRow`s into that source's own render store,
+`<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db`. The
 grid_index step (`datalib-step grid_index`; `build_grid_index` in
-`datalib/backend/etl/src/grid_index.rs`) walks every sidecar under
-`<root>/<stanza>/rendered_md/`, upserts each conversation's row set
-into Dolt, and stamps the corresponding `documents` row with the
-`row_set_hash` used to skip unchanged re-renders next time.
+`datalib/backend/etl/src/grid_index.rs`) stacks those stores into the
+unified index: it asks each one `dolt_diff` between the commit the
+index last consumed (`source_cursors`) and that store's HEAD, applies
+each changed document's row set, and stamps the corresponding
+`markdowns` row with the `row_set_hash` used to skip unchanged
+re-renders next time.
 
 ## Consumer side: `datalib/backend/core/src/dolt_repo.rs`
 
@@ -82,12 +85,12 @@ ahead of their messages. The row mapper translates each row into a
 1. Land a new crate under `datalib/backend/etl/providers/<p>/`
    with a `render/grid_rows.rs` emitting `GridRow`s with the right
    `provider` / `kind` / `source_label` strings, and a renderer that
-   writes the `*.grid_rows.json` sidecars alongside its markdown.
+   hands each finished document to `ctx.emit_doc`.
 2. Wire the new crate into `datalib-step`: add it to the deps of
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    download/render step pair in the config. The grid_index step picks
-   up its sidecars with no further wiring.
+   up its render store with no further wiring.
 3. Add the source label to the consuming bits as needed (icon
    resolution, etc.) — but the query path itself does not change.
 

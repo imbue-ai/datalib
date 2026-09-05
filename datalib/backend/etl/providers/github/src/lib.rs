@@ -1,6 +1,6 @@
 //! GitHub provider for [`datalib_etl`]: Download (raw API capture
 //! from `api.github.com`) and Render (event-store JSONL → one
-//! markdown document per PR + grid_rows sidecars). The Load step is
+//! markdown document per PR + rows in the render store). The Load step is
 //! provider-agnostic and lives at [`datalib_etl::load`].
 
 pub mod download;

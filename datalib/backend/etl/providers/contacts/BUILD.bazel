@@ -27,7 +27,6 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
-        "//datalib/backend/index_lib:datalib_index_lib",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

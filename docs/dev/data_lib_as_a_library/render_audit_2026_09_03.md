@@ -1,6 +1,17 @@
 # Render audit, 2026-09-03: measured against the two architecture docs
 
-> **Status: audit + proposal.** No code changed. This is passes A–D of
+> **Dated snapshot — parts of what it measures no longer exist.** Read
+> it as "what the tree did on 2026-09-03", not as current reference.
+> Since then the JSON sidecar tree it audits has been replaced by a
+> per-source doltlite render store, R1's problem sink is built and
+> every `GridRow` projection reports into it, and the unified index
+> consumes each store through a `dolt_diff` cursor rather than reading
+> it whole. The findings that drove those changes are still the best
+> record of *why*; the file/line references into the sidecar loader are
+> historical.
+>
+> **Status: audit + proposal.** No code changed *by this document*.
+> This is passes A–D of
 > [`data_handling_practices.md` §3](data_handling_practices.md#3-the-audit)
 > actually run against the tree, plus the design work the findings
 > imply.

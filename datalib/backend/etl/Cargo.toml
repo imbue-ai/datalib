@@ -34,7 +34,6 @@ datalib-core = { path = "../core" }
 datalib-obs = { path = "../obs" }
 datalib-time = { path = "../time" }
 datalib-schema = { path = "../schema" }
-datalib-index-lib = { path = "../index_lib" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
 serde = { workspace = true }
 serde_json = { workspace = true }

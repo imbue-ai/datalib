@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// carries a free-form discriminator (e.g. 'cross-language',
 /// 'url-target') that producers may set; the current UI does not render
 /// it.
-#[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
+#[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "edges", primary_key = "edge_uuid")]
 pub struct EdgeRow {
     /// Stable identifier for one edge. Producers SHOULD derive it as a

@@ -487,6 +487,21 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 // Open
 // ─────────────────────────────────────────────────────────────────────
 
+/// [`open`], but **without** the shared raw-store tables.
+///
+/// `SHARED_DDL` is `sync_runs` + the two scope-state tables: download
+/// bookkeeping, meaningful only for a store a downloader writes. A
+/// *derived* store — render output, an index — gets them as three empty
+/// tables that suggest a provenance it does not have.
+///
+/// Everything else `open` does is wanted here: the single-writer
+/// pragmas that keep the file byte-stable for golden snapshots, the
+/// idempotent DDL pass, the add-missing-column / recreate-on-removed
+/// migration, and the rescue commit.
+pub async fn open_derived(db_path: &Path, ddl: &[&str]) -> Result<SqlitePool> {
+    open_inner(db_path, ddl, false).await
+}
+
 /// Open (or create) the doltlite file and apply DDL idempotently.
 ///
 /// `extra_ddl` carries the provider-specific tables (and indexes). The
@@ -499,6 +514,14 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 ///   - `synchronous=Normal`: durability isn't critical; the upstream
 ///     API is the source of truth and we can always re-fetch.
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
+    open_inner(db_path, extra_ddl, true).await
+}
+
+async fn open_inner(
+    db_path: &Path,
+    extra_ddl: &[&str],
+    include_shared: bool,
+) -> Result<SqlitePool> {
     // Logged at every call so stray second-pool opens against an
     // already-open file are visible — max_connections=1 means a second
     // pool will surface as "database is locked" on dolt_commit, and
@@ -577,7 +600,8 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     // then unopenable.) `parse_create_table_name` returns `None` for
     // exactly the statements that must wait — indexes and anything else
     // that isn't a `CREATE TABLE`.
-    let ddl = || extra_ddl.iter().chain(SHARED_DDL.iter());
+    let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
+    let ddl = || extra_ddl.iter().chain(shared.iter());
     let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
     for stmt in ddl().filter(is_create_table) {
         // Audited per sqlx 0.9's `SqlSafeStr` bound. DDL is not `&'static str`: every

@@ -33,8 +33,10 @@ and what the tree actually does today is measured in the
 built in four places — while its **P-rules are mixed**, and P1 and P3
 are both currently violated. §2's
 ["Where this is heading"](#where-this-is-heading-the-artifact-becomes-a-database)
-is pure aspiration: it describes replacing the sidecar tree with
-doltlite tables, and none of it exists.
+is now **half built**: Step 1 shipped — the sidecar tree is gone and
+each source writes a doltlite database — and Step 2 (the markdown
+itself moving into a table) is still aspiration. That section says
+which is which.
 
 ## 1. Why there are three of these
 
@@ -62,7 +64,7 @@ behind at each old location: the backpointers bullet (§3), the
 `GridRow.when_ts` policy (§6 — the `datalib-time` crate contract stays
 in the ingestion doc, since download stamps its own `fetched_at` with
 it), the render cursor and the render-side progress question (§5), the
-sidecar contract (§2), and the `GridRow` family taxonomy (§3).
+render-store contract (§2), and the `GridRow` family taxonomy (§3).
 
 | doc | stage | contains |
 | --- | --- | --- |
@@ -86,51 +88,60 @@ parse/render defect is fixable by re-rendering.** That is what makes
 §4's rules affordable — we can be strict about correctness here
 precisely because being wrong here is cheap to correct.
 
-### The sidecar contract
+### The render-store contract
 
 After download, we run transformations for display and indexing —
 render to markdown with YAML frontmatter, index the markdown with qmd,
 derive `grid_rows` for the UI.
 
-The cross-provider contract is the **sidecar**: for every rendered
-document, Render emits two co-located files —
+The cross-provider contract is the **render store**: one doltlite
+database per source, at
+`<data_root>/<name>/rendered_md/indexed_markdown.doltlite_db`, holding
+four tables —
 
-  - `<id>.md` — human-readable, with YAML frontmatter.
-  - `<id>.grid_rows.json` — the
-    [`Sidecar`](../../datalib/backend/index_lib/src/lib.rs):
+  - `markdowns` — one row per rendered document: its `markdown_uuid`
+    (the primary key for the `.md`), its `source_fingerprint` (a hash
+    of the upstream payload), its `renderer_version`, its `md_path`,
+    and the `row_set_hash` over the rows below.
+  - `grid_rows` — the document's projected rows.
+  - `edges` — its outgoing links.
+  - `render_problems` — what render could not do getting there (§4).
 
-    ```jsonc
-    {
-      "header": {
-        "markdown_uuid": "…",       // primary key for the rendered .md
-        "source_fingerprint": "…",  // hash of upstream payload
-        "render_version": 1         // renderer-side schema stamp
-      },
-      "rows": [GridRow, …]
-    }
-    ```
+The human artifact stays a file: `<id>.md`, with YAML frontmatter,
+beside a `blobs/` directory for its attachments.
 
-Grid index reads the sidecar tree — **it never re-parses markdown**.
-The markdown is for humans; the JSON sidecar is the machine-readable
-projection.
+Every table's schema is a hand-written struct in `datalib_schema` with
+`#[derive(PortableTable)]` deriving the DDL, so the same struct defines
+what a renderer writes and what the index reads. This *was* a JSON
+sidecar file per document; see
+["Where this is heading"](#where-this-is-heading-the-artifact-becomes-a-database)
+for what the swap bought.
+
+Grid index reads that store — **it never re-parses markdown**. The
+markdown is for humans; the store is the machine-readable projection.
 
 This part of the pipeline aspires to the same properties as download:
 
   - **Monitorable**: same `obs` flags, same progress-bar contract.
-  - **Incremental**: the sidecar `source_fingerprint` short-circuits
-    re-render. Grid index reads `(markdown_uuid, source_fingerprint)`
-    from the `markdowns` table and skips unchanged sidecars.
-    (There is no `markdowns_loaded` table — an earlier one by that name
-    was folded into `documents`; the surviving `markdowns_loaded` is a
-    counter on `GridIndexSummary`.)
-  - **Resumable in the steady state**: a render pass that gets
-    re-run after producing N of M sidecars will skip those N via the
-    fingerprint check and continue from where it stopped. We do not,
-    however, guarantee crash-mid-write atomicity per file; a partial
-    `.md` left by a SIGKILL during a write may have a fingerprint that
-    no longer matches the file body and will be regenerated next run.
-    That's good enough for our use case but is not a separately
-    engineered property.
+  - **Incremental, twice.** Render skips a document whose
+    `source_fingerprint` already matches the one in its own store. The
+    index then asks each store `dolt_diff` between the commit it last
+    consumed (`source_cursors`, in the index database) and that store's
+    HEAD — so a steady-state run reads no documents at all, rather than
+    reading them and discarding them. The two are not redundant: the
+    cursor decides *which documents to read*, the fingerprint decides
+    *whether a document that was read needs writing*, and the cold path
+    (no cursor, or a cursor the store's history no longer holds) needs
+    the second one.
+  - **Resumable in the steady state**: a render pass re-run after
+    producing N of M documents skips those N via the fingerprint check
+    and continues. The rows are committed once per run, so a document's
+    rows and its `render_problems` can never disagree about which run
+    they came from — but the `.md` files are still plain files, so a
+    partial one left by a SIGKILL during a write may not match its
+    recorded fingerprint. It is regenerated next run. That is good
+    enough for our use case but is not a separately engineered
+    property.
 
 Less attention has been paid to render-side observability and to
 making partial-progress visible to the user than to the same on
@@ -139,20 +150,54 @@ principle.
 
 ### Where this is heading: the artifact becomes a database
 
-**Status: aspiration. Nothing below is built**, and it is recorded here
-rather than in a proposal file because it changes *this* contract — the
-sidecar is defined immediately above, and anyone reading that definition
-should know it is expected to be temporary.
+**Status: Step 1 is built; Step 2 is not.** The two steps looked
+similar when this was written and cost very different amounts, which is
+why they were separated — and that turned out to be the right split.
 
-The intent is to move render's output out of the file tree and into
-doltlite, in two steps that look similar and cost very different
-amounts.
+**Step 1 — the sidecar becomes a table. Done.** Each source writes its
+projected rows into
+`<name>/rendered_md/indexed_markdown.doltlite_db`: `grid_rows`,
+`markdowns`, `edges` and `render_problems`, already columnar and
+already in the shape the unified index stacks. There is no
+`<id>.grid_rows.json` anywhere in the tree any more, and
+`datalib-index-lib` — the crate that existed only to define that wire
+format — is deleted.
 
-**Step 1 — the sidecar becomes a table.** Instead of one
-`<id>.grid_rows.json` per document, each source writes its projected
-rows into a per-source doltlite database, already columnar and already
-in the shape the unified index concatenates. The grid index then reads
-tables rather than walking a tree of JSON.
+Everything the argument below predicted it would buy, it bought:
+
+- The two tree walks are two indexed queries
+  (`IndexedMarkdownStore::prior_fingerprints` / `render_versions`).
+- The unreadable-sidecar failure class is gone; there is no file to
+  fail to parse.
+- Render commits once per run, so a document's rows and its
+  `render_problems` land together or not at all.
+- **Deletion is expressible, and the index now uses it.** The grid
+  index keeps a per-source cursor (`source_cursors`, one commit hash
+  per source, in the index database) and asks each store
+  `dolt_diff` between that commit and its HEAD. A steady-state run
+  reads *nothing*: the TNG fixture's second run reads 0 documents
+  where the first read 58. And because a diff can name a row that
+  **left**, a document a source stops holding is finally deleted from
+  the index — re-reading whole stores could never see that, so before
+  this a deleted conversation stayed in the grid until someone wiped
+  the file.
+
+One thing the list below got wrong, worth recording because it is the
+kind of claim this repo warns about believing: the fingerprint compare
+did **not** get replaced by the cursor. Both are in the tree and both
+earn their place — the cursor decides *which documents to read*, the
+fingerprint decides *whether a document that was read needs writing*,
+and the cold path (no cursor, or a cursor the store's history no
+longer contains) still needs the second one.
+
+What Step 1 did *not* fix is deletion on the render side: nothing yet
+removes a document from a source's own store when it disappears
+upstream, because render is incremental and "not re-emitted this run"
+overwhelmingly means "not looked at". `IndexedMarkdownStore::remove_document`
+is the operation; no renderer calls it. That gap used to exist in two
+places and now exists in one.
+
+The original argument, which still reads correctly:
 
 The argument is that **the sidecar tree is a hand-rolled version of what
 doltlite already does for us one stage earlier.** Download → raw store
@@ -192,15 +237,16 @@ doltlite database with a single writer, the problem table belongs in
 dropped or nulled getting them there commit in one transaction, and can
 never disagree about which run they came from.
 
-Note this supersedes the reasoning in
-[`data_architecture_ingestion.md`](data_architecture_ingestion.md),
-which says the sidecar `source_fingerprint` compare stays. Under this
-design it does not: it is replaced by the same cursor pattern
-everywhere else already uses.
+[`data_architecture_ingestion.md`](data_architecture_ingestion.md) says
+the `source_fingerprint` compare stays, and this section used to claim
+it would be superseded by the cursor. **The ingestion doc was right.**
+Both shipped, and they answer different questions — see the correction
+above.
 
-Step 1 is close to free, and that is worth saying plainly: **nothing
-outside our own code reads a `.grid_rows.json`.** It is a machine
-format with exactly one producer and one consumer.
+Step 1 was close to free, and that is worth saying plainly: **nothing
+outside our own code ever read a `.grid_rows.json`.** It was a machine
+format with exactly one producer and one consumer, which is what made
+replacing it a local change.
 
 **Step 2 — the markdown moves too.** Longer-term, the rendered `.md`
 lives in a doltlite table rather than as a file on disk.
@@ -245,8 +291,9 @@ Three shapes, in order:
    `data_architecture_ingestion.md`, call this file
    `schema_translate.rs`. No provider has ever had one — the layer
    landed under the two names above.)
-3. **The rows** — `GridRow` + `EdgeRow`, emitted through
-   `datalib_index_lib::emit_sidecar`.
+3. **The rows** — `GridRow` + `EdgeRow`, handed back through
+   `ctx.emit_doc` as a `RenderedMarkdown` and written into the
+   source's render store.
 
 (1) → (2) is parse; (2) → (3) plus the markdown is render. Both are
 pure given the raw store, and both are the right place for §4's tests.
@@ -257,7 +304,7 @@ pure given the raw store, and both are the right place for §4's tests.
     - `uuid` — the Ship-of-Theseus identity, deterministic from upstream so re-ingest is idempotent.
     - `external_id` — the provider-native primary id (numeric GH/GL id, PR number, …) preserved alongside our UUID so we can round-trip back to the provider's API.
     - `source_url` — the canonical URL on the provider's web UI (e.g. `pull_request.html_url`, GitLab `note.web_url` with `#note_<id>` anchor), populated everywhere we can construct it.
-    - `qmd_path` — the path to the rendered markdown sidecar.
+    - `qmd_path` — the path to the rendered `.md`, relative to the data root.
     - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `slack_link`, `git_sha`, …) so the UI can link sideways as well as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
@@ -593,7 +640,7 @@ pre-chew for the next one.
 ### R7 — Bound what grows, and say so where it shows
 
 Everything render appends to grows across runs: `rendered_md/`, the
-sidecars, the problem log from R1. Give each a bound or an explicit
+render store, the problem log from R1. Give each a bound or an explicit
 "unbounded, because X" in its module doc — and enforce it **inside the
 run that writes, never as a separate cleanup chore someone must
 remember.** Where a bound exists, the status surface states it, so
@@ -627,8 +674,10 @@ Render skips what it can, by four mechanisms:
   [dolt_diff supersedes per-bucket fingerprints](data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).
   The per-source cursor stamps the doltlite HEAD into
   `_render_cursor.json`; the next run diffs from it.
-- **Whether a sidecar needs re-loading** — the `source_fingerprint` in
-  the sidecar header, honored by `grid_index`.
+- **Whether a document needs re-loading** — `source_cursors` in the
+  index database names the store commit `grid_index` last consumed, and
+  the `source_fingerprint` on the `markdowns` row settles anything the
+  diff surfaces.
 - **Forcing a rebake** — `RENDER_VERSION` in each provider's
   `render/render.rs`.
 - **When a render param changes** — below.
@@ -658,7 +707,7 @@ the full expected document set.
 
 **Desired principle**: a long-running render pass — first run after
 a big initial download, or a `RENDER_VERSION` bump that invalidates
-every sidecar — must be as monitorable and as stoppable-resumable as
+every document — must be as monitorable and as stoppable-resumable as
 download is. The user sees "rendered 12,347 / 89,201" with an ETA;
 ^C-then-rerun resumes from 12,347 not 0.
 

@@ -482,8 +482,9 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
                 m.md_path.display()
             );
         }
-        // The sidecar the grid_index step consumes rides alongside.
-        assert!(m.md_path.with_extension("grid_rows.json").exists());
+        // What the grid_index step consumes rides on the emitted
+        // document itself now, not in a file beside the markdown.
+        assert!(!m.rows.is_empty(), "{} projected no rows", m.markdown_uuid);
     }
 
     // The two-page v2 log specifically: it is the revision, so it has

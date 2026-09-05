@@ -17,8 +17,8 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::section::{msg_div_open, section_attrs};
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
 use super::{beeper_event_uuid, beeper_markdown_uuid};
@@ -103,7 +103,7 @@ fn render_one(
 ) -> Result<RenderOutcome> {
     let markdown_uuid = beeper_markdown_uuid(&room.room_uuid, &doc.period_key);
     let fingerprint = compute_fingerprint(doc);
-    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, room, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, room, &doc.period_key);
 
     if prior_fingerprints.get(&markdown_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -133,15 +133,15 @@ fn render_one(
     );
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel)?;
-    emit_sidecar(
-        &json_path,
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let rows = build_grid_rows(
+        room,
+        doc,
         &markdown_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
+        &md_rel,
+        source_name,
+        &mut problems,
+    );
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
@@ -158,6 +158,7 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
+        problems,
     })
     .with_context(|| format!("on_doc_complete {markdown_uuid}"))?;
 
@@ -175,13 +176,12 @@ fn output_paths(
     source_name: &str,
     room: &Room,
     period_key: &str,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     let page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name)
         .join(&room.network)
         .join(&room.room_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
-    let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -597,12 +597,19 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
 // GridRow
 // ─────────────────────────────────────────────────────────────────────
 
+/// Project one doc bucket into its `grid_rows`.
+///
+/// A row that will not validate is dropped and recorded on `problems`
+/// rather than failing the source's render — see
+/// `GridRowBuilder::build_or_record`.
 fn build_grid_rows(
     room: &Room,
     doc: &DocBucket,
     markdown_uuid: &str,
     md_rel: &Path,
-) -> Result<Vec<GridRow>> {
+    source_name: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Vec<GridRow> {
     let qmd_path = Some(md_rel.display().to_string());
     let entire_chat = format!("/beeper/{}/{}", room.network, room.room_uuid);
     let conversation_name = room.title.clone().or_else(|| room.external_room_id.clone());
@@ -619,7 +626,7 @@ fn build_grid_rows(
     let mut rows: Vec<GridRow> = Vec::with_capacity(doc.messages.len() + 1);
 
     // One "conversation" header row per doc.
-    rows.push(
+    rows.extend(
         GridRow::builder()
             .uuid(markdown_uuid.to_string())
             .provider("beeper")
@@ -648,11 +655,11 @@ fn build_grid_rows(
             .qmd_path(qmd_path.clone())
             .upstream_id(room.external_room_id.clone())
             .markdown_uuid(Some(markdown_uuid.to_string()))
-            .build()?,
+            .build_or_record(source_name, markdown_uuid, RENDER_VERSION, problems),
     );
 
     for (idx, m) in doc.messages.iter().enumerate() {
-        rows.push(
+        rows.extend(
             GridRow::builder()
                 .uuid(m.event_uuid.clone())
                 .provider("beeper")
@@ -672,7 +679,7 @@ fn build_grid_rows(
                 .source_url(m.blobs.first().and_then(|b| b.source_url.clone()))
                 .upstream_id(m.external_event_id.clone())
                 .markdown_uuid(Some(markdown_uuid.to_string()))
-                .build()?,
+                .build_or_record(source_name, markdown_uuid, RENDER_VERSION, problems),
         );
     }
 
@@ -684,7 +691,7 @@ fn build_grid_rows(
             // side (see megabridge enrichment), so we re-use it.
             let _ = target;
             let _ = beeper_event_uuid; // imported for future use
-            rows.push(
+            rows.extend(
                 GridRow::builder()
                     .uuid(r.event_uuid.clone())
                     .provider("beeper")
@@ -702,12 +709,12 @@ fn build_grid_rows(
                     .qmd_path(qmd_path.clone())
                     .upstream_id(r.external_event_id.clone())
                     .markdown_uuid(Some(markdown_uuid.to_string()))
-                    .build()?,
+                    .build_or_record(source_name, markdown_uuid, RENDER_VERSION, problems),
             );
         }
     }
 
-    Ok(rows)
+    rows
 }
 
 fn kind_for_conversation(network: &str) -> String {

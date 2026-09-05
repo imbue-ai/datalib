@@ -1,6 +1,6 @@
 //! Render one `index.md` per book plus one `.md` per (chapter,
 //! edition) under `<out_dir>/<stanza>/rendered_md/thucydides/histories/`,
-//! each with a sibling `.grid_rows.json` sidecar carrying all rows for
+//! each emitting into the render store all rows for
 //! that doc.
 //!
 //! Per chapter/edition doc, we emit:
@@ -31,9 +31,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::layout::rendered_md_root;
 use datalib_etl::progress::Progress;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 
 use super::super::{
     book_uuid, chapter_uuid, edge_uuid, paragraph_sentence_uuid, paragraph_uuid, TLG0003_TLG001,
@@ -161,7 +161,6 @@ fn render_book(
     let book_dir = rendered_md_root(out_dir, source_name).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
-    let sidecar_path = book_dir.join("index.grid_rows.json");
 
     if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -173,16 +172,11 @@ fn render_book(
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = vec![book_grid_row(source_name, book, &m_uuid)?];
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let rows: Vec<GridRow> = book_grid_row(source_name, book, &m_uuid, &mut problems)
+        .into_iter()
+        .collect();
     let edges: Vec<EdgeRow> = Vec::new();
-    emit_sidecar(
-        &sidecar_path,
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &edges,
-    )?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -194,6 +188,7 @@ fn render_book(
         render_version: RENDER_VERSION,
         rows,
         edges,
+        problems,
     })
     .with_context(|| format!("on_doc_complete book {}", book.n))?;
 
@@ -217,10 +212,6 @@ fn render_chapter(
     let fingerprint = compute_chapter_fingerprint(book, chapter, edition, alignments);
     let rel = chapter_md_rel(source_name, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
-    let sidecar_path = md_path.with_file_name(format!(
-        "{}.grid_rows.json",
-        md_path.file_stem().unwrap().to_string_lossy()
-    ));
 
     if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -236,8 +227,17 @@ fn render_chapter(
     let md = render_chapter_md(chapter, edition, alignments);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
-    rows.push(chapter_grid_row(book, chapter, edition, &m_uuid, &rel)?);
+    rows.extend(chapter_grid_row(
+        book,
+        chapter,
+        edition,
+        &m_uuid,
+        &rel,
+        source_name,
+        &mut problems,
+    ));
     let mut idx = 0i64;
     for sec in &chapter.sections {
         let text = sec.text(&edition.id);
@@ -245,20 +245,22 @@ fn render_chapter(
             continue;
         }
         let s_uuid = paragraph_uuid(&book.n, &chapter.n, &sec.n, &edition.id);
-        rows.push(section_grid_row(
-            book, chapter, sec, edition, &s_uuid, &m_uuid, &rel, text, idx,
-        )?);
+        rows.extend(section_grid_row(
+            book,
+            chapter,
+            sec,
+            edition,
+            &s_uuid,
+            &m_uuid,
+            &rel,
+            text,
+            idx,
+            source_name,
+            &mut problems,
+        ));
         idx += 1;
     }
     let edges = chapter_edges(book, chapter, edition, &m_uuid, alignments);
-    emit_sidecar(
-        &sidecar_path,
-        &m_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &edges,
-    )?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -270,6 +272,7 @@ fn render_chapter(
         render_version: RENDER_VERSION,
         rows,
         edges,
+        problems,
     })
     .with_context(|| {
         format!(
@@ -463,7 +466,14 @@ fn synth_when_ts(book_n: &str, ch_n: i64) -> String {
     render_synth_ts(ts_base() + Duration::seconds(offset))
 }
 
-fn book_grid_row(stanza: &str, book: &Book, bk_uuid: &str) -> Result<GridRow> {
+/// `None`, with the reason recorded on `problems`, when the row will
+/// not validate — see `GridRowBuilder::build_or_record`.
+fn book_grid_row(
+    stanza: &str,
+    book: &Book,
+    bk_uuid: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     GridRow::builder()
         .uuid(bk_uuid.to_string())
         .provider("perseus")
@@ -487,17 +497,21 @@ fn book_grid_row(stanza: &str, book: &Book, bk_uuid: &str) -> Result<GridRow> {
         )))
         .upstream_id(Some(book.n.clone()))
         .markdown_uuid(Some(bk_uuid.to_string()))
-        .build()
-        .map_err(anyhow::Error::from)
+        .build_or_record(stanza, bk_uuid, RENDER_VERSION, problems)
 }
 
+/// `None`, with the reason recorded on `problems`, when the row will
+/// not validate — see `GridRowBuilder::build_or_record`.
+#[allow(clippy::too_many_arguments)]
 fn chapter_grid_row(
     book: &Book,
     chapter: &Chapter,
     edition: &Edition,
     ch_uuid: &str,
     md_rel: &str,
-) -> Result<GridRow> {
+    stanza: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     let ci: i64 = chapter.n.parse().unwrap_or(0);
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci_u: u32 = ci as u32;
@@ -521,11 +535,12 @@ fn chapter_grid_row(
         )))
         .upstream_id(Some(format!("{bi}.{ci_u}")))
         .markdown_uuid(Some(ch_uuid.to_string()))
-        .build()
-        .map_err(anyhow::Error::from)
+        .build_or_record(stanza, ch_uuid, RENDER_VERSION, problems)
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `None`, with the reason recorded on `problems`, when the row will
+/// not validate — see `GridRowBuilder::build_or_record`.
 fn section_grid_row(
     book: &Book,
     chapter: &Chapter,
@@ -536,7 +551,9 @@ fn section_grid_row(
     md_rel: &str,
     text: &str,
     idx: i64,
-) -> Result<GridRow> {
+    stanza: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci: u32 = chapter.n.parse().unwrap_or(0);
     let si: u32 = sec.n.parse().unwrap_or(0);
@@ -567,8 +584,7 @@ fn section_grid_row(
         )))
         .upstream_id(Some(format!("{bi}.{ci}.{si}")))
         .markdown_uuid(Some(ch_uuid.to_string()))
-        .build()
-        .map_err(anyhow::Error::from)
+        .build_or_record(stanza, ch_uuid, RENDER_VERSION, problems)
 }
 
 /// Edges from this edition's chapter doc to its configured alignment

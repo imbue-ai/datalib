@@ -12,3 +12,5 @@ datalib-etl-macros = { path = "../etl/macros" }
 datalib-time = { path = "../time" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# For the `BulkUpsertable` trait this crate now owns (see src/bulk.rs).
+sqlx = { workspace = true }

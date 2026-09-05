@@ -13,7 +13,6 @@ datalib-etl = { path = "../.." }
 datalib-etl-chat-common = { path = "../../chat-common" }
 datalib-time = { path = "../../../time" }
 datalib-schema = { path = "../../../schema" }
-datalib-index-lib = { path = "../../../index_lib" }
 datalib-whatsapp-backup = { path = "../../../whatsapp-backup" }
 uuid = { workspace = true }
 anyhow = { workspace = true }

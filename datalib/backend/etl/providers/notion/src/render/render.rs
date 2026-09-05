@@ -11,7 +11,7 @@
 //! useful cross-reference is the actively-maintained Node renderer at
 //! <https://github.com/souvikinator/notion-to-md>. We don't shell out
 //! to it (we need our own QMD-with-section-divs shape + grid_rows
-//! sidecar, both of which it doesn't produce), but its block handlers
+//! grid rows, neither of which it produces), but its block handlers
 //! are a good "is our output reasonable?" oracle.
 
 use std::collections::{BTreeMap, HashMap};
@@ -22,7 +22,6 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -1183,19 +1182,9 @@ pub fn render_notion_official(
             &pages_root,
         )?;
 
-        // Sidecar + callback only fire if gather_documents knew about
-        // this page (it should, for any page that produced rows).
+        // The callback only fires if gather_documents knew about this
+        // page (it should, for any page that produced rows).
         if let Some(pd) = page_doc_by_uuid.get(&pid) {
-            let sidecar_path = target.with_extension("grid_rows.json");
-            emit_sidecar(
-                &sidecar_path,
-                &pd.page_uuid,
-                &pd.source_fingerprint,
-                RENDER_VERSION,
-                &pd.rows,
-                &[],
-            )?;
-
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: pd.page_uuid.clone(),
                 source_name: String::new(),
@@ -1205,6 +1194,7 @@ pub fn render_notion_official(
                 render_version: RENDER_VERSION,
                 rows: pd.rows.clone(),
                 edges: Vec::new(),
+                problems: pd.problems.clone(),
             })?;
         }
 
@@ -1288,16 +1278,6 @@ pub fn render_notion_official(
         };
 
         if let Some(td) = thread_doc_by_uuid.get(&disc_id) {
-            let sidecar_path = p.with_extension("grid_rows.json");
-            emit_sidecar(
-                &sidecar_path,
-                &td.discussion_uuid,
-                &td.source_fingerprint,
-                RENDER_VERSION,
-                &td.rows,
-                &[],
-            )?;
-
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: td.discussion_uuid.clone(),
                 source_name: String::new(),
@@ -1307,6 +1287,7 @@ pub fn render_notion_official(
                 render_version: RENDER_VERSION,
                 rows: td.rows.clone(),
                 edges: Vec::new(),
+                problems: td.problems.clone(),
             })?;
         }
 

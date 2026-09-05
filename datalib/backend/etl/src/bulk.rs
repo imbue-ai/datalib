@@ -34,8 +34,6 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::query::Query;
-use sqlx::sqlite::SqliteArguments;
 use sqlx::{Sqlite, Transaction};
 
 /// One table's worth of `(id, payload)` pairs to record in a single
@@ -139,89 +137,54 @@ where
     }
     Ok(())
 }
-
-/// Row-struct contract that lets the generic [`bulk_upsert_in_tx`]
-/// helper write a batch into a table.
+/// The row-struct write contract.
 ///
-/// **The universal entity-table shape.** Most raw entity tables are
-/// `(id, …typed_columns, payload)`:
-///
-///   - `id` — TEXT primary key, the upstream identifier (or a
-///     UUIDv5 synthesized from upstream-stable components when no
-///     stable id exists).
-///   - `…typed_columns` — zero or more writer-supplied fields that
-///     aren't in the payload (synthesized-PK components, FK
-///     references, namespace discriminators). Plain `?` binds.
-///   - `payload` — JSON text, stored as JSONB via `jsonb(?)` on
-///     write. The full upstream message, losslessly transcoded if
-///     necessary (see `docs/dev/data_architecture_ingestion.md`
-///     §"Wire-fidelity of the raw store").
-///
-/// **Some tables have no payload column** — N:M edge / attachment
-/// tables in particular (e.g. Signal's `chat_item_attachments`)
-/// just record the join. Set [`Self::PAYLOAD_COLUMN`] to `None` for
-/// those; the helper will emit a payload-less INSERT and
-/// `bind_into` should not bind anything past the typed columns.
-///
-/// **Where impls live.** By convention, the row struct and its
-/// `BulkUpsertable` impl live in the provider's `schema_raw.rs`,
-/// right next to the matching `CREATE TABLE` DDL constant, so that
-/// the rust struct's fields and the SQL columns are visibly aligned
-/// at the same vertical position in the file.
-///
-/// **Required correspondence.** [`Self::TYPED_COLUMNS`] must list
-/// the non-PK, non-payload columns in the same order as
-/// [`Self::bind_into`] binds them, and that order must match the
-/// DDL's column declarations between `id` and the payload column
-/// (if any). [`Self::bind_into`] binds id first, then each typed
-/// column in order, then the payload as a JSON text string (when
-/// [`Self::PAYLOAD_COLUMN`] is `Some`). Mismatch → mis-binding at
-/// runtime.
-///
-/// **One writer per row.** Per
-/// `docs/dev/data_architecture_ingestion.md` §"One writer per row," the
-/// ON CONFLICT clause is uniform across all tables: every non-PK
-/// column is set to `excluded.<col>`. There is no per-table or
-/// per-column override.
-pub trait BulkUpsertable: Sync {
-    /// Target table name. Must match the DDL.
-    const TABLE: &'static str;
+/// Defined in [`datalib_schema::bulk`] and re-exported here, because
+/// `datalib_etl` depends on `datalib_schema` — so the render-schema
+/// structs could not implement a trait that lived in this crate. Every
+/// existing `datalib_etl::bulk::BulkUpsertable` path keeps working
+/// through this re-export.
+pub use datalib_schema::bulk::BulkUpsertable;
 
-    /// Name of the single-column primary key, used as the `ON
-    /// CONFLICT(<id>)` target and as the first column in the INSERT.
-    /// Almost always `"id"` (the universal raw-entity PK name); a few
-    /// tables key on a different column (e.g. an mbox cursor keyed on
-    /// `path`). N:M join tables synthesize a single `id` from their
-    /// composite components rather than overriding this, so the
-    /// conflict target stays one column everywhere.
-    const ID_COLUMN: &'static str = "id";
-
-    /// Non-PK, non-payload columns, in bind order. These bind as
-    /// plain `?`. Empty slice for tables that are just `(id, payload)`
-    /// (e.g. Signal's `account`) or just `(id)` plus typed columns
-    /// with no payload (e.g. `chat_item_attachments`).
-    const TYPED_COLUMNS: &'static [&'static str];
-
-    /// JSON payload column name, bound as `jsonb(?)`. Almost always
-    /// `Some("payload")`. Set to `None` for tables that have no
-    /// payload column (e.g. attachment / N:M edge tables that just
-    /// record a join).
-    const PAYLOAD_COLUMN: Option<&'static str> = Some("payload");
-
-    /// PK value for this row. The PK column is always named `id` in
-    /// every raw entity table (see
-    /// `docs/dev/data_architecture_ingestion.md` §"Object identity").
-    fn id(&self) -> &str;
-
-    /// Bind the id, then each value in [`Self::TYPED_COLUMNS`] order,
-    /// then (if [`Self::PAYLOAD_COLUMN`] is `Some`) the payload as a
-    /// JSON text string. The helper has already emitted matching
-    /// placeholders (`?` for id and typed columns, `jsonb(?)` for
-    /// payload); this method just calls `q.bind(...)` once per column.
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments>,
-    ) -> Query<'q, Sqlite, SqliteArguments>;
+/// SQL for a plain single-row `INSERT` built from a
+/// [`BulkUpsertable`]'s generated column list — **no `ON CONFLICT`**.
+///
+/// The bulk helper below upserts, which is right for raw entity tables
+/// (the newest upstream state is by definition the truth). It is wrong
+/// where a primary-key collision is a *finding* rather than an update:
+/// two sources minting the same `grid_rows.uuid` is a correctness
+/// emergency, and `grid_index` deliberately lets that error surface so
+/// it can name the other document. Upserting there would silently
+/// overwrite one row with the other.
+///
+/// So this exists to give that path the generated column list and binds
+/// without also giving it upsert semantics. Pair it with
+/// [`BulkUpsertable::bind_into`]:
+///
+/// ```ignore
+/// let sql = insert_sql::<GridRow>();
+/// let q = row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)));
+/// ```
+pub fn insert_sql<T: BulkUpsertable>() -> String {
+    let mut cols = String::from(T::ID_COLUMN);
+    for c in T::TYPED_COLUMNS {
+        cols.push_str(", ");
+        cols.push_str(c);
+    }
+    let n = 1 + T::TYPED_COLUMNS.len();
+    let mut placeholders = String::with_capacity(n * 3);
+    for i in 0..n {
+        if i > 0 {
+            placeholders.push_str(", ");
+        }
+        placeholders.push('?');
+    }
+    format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        T::TABLE,
+        cols,
+        placeholders
+    )
 }
 
 /// Generic bulk-UPSERT for any [`BulkUpsertable`] row type. The one

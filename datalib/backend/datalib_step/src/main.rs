@@ -21,15 +21,17 @@
 //! * `render <source_type>` — the source's render wave. `--params`
 //!   here is the provider's slim render config (render knobs only —
 //!   the per-phase params split; see `dispatch.rs`).
-//!   Writes the tree its id names (`.md` files plus the
-//!   `.grid_rows.json` sidecars the providers already emit).
-//!   Incremental: docs whose sidecar fingerprint is unchanged are
-//!   skipped, using the sidecar tree itself as the prior-fingerprint
-//!   store (no index-DB peeking — that's the un-fused contract).
-//! * `grid_index` — rebuild/refresh the unified grid table
-//!   (`unified_index/grid`) from every source's sidecar tree
-//!   (`build_grid_index`, per-doc fingerprint skip), then `dolt_commit`. This
-//!   is the load step un-fused from render.
+//!   Writes the tree its id names: the `.md` files, plus every
+//!   document's rows into that source's own
+//!   `rendered_md/indexed_markdown.doltlite_db`.
+//!   Incremental: docs whose fingerprint is unchanged are skipped,
+//!   reading the prior fingerprints back out of that same store (no
+//!   index-DB peeking — that's the un-fused contract).
+//! * `grid_index` — refresh the unified grid table
+//!   (`unified_index/grid`) by stacking every source's render store,
+//!   asking each one `dolt_diff` since the commit the index last
+//!   consumed, then `dolt_commit`. This is the load step un-fused
+//!   from render.
 //! * `qmd_index` — the qmd search index over every rendered_md tree,
 //!   writing `unified_index/qmd`.
 //! * `probe <source_type>` — utility, not a pipeline step: ask a
@@ -137,8 +139,8 @@ enum Cmd {
     /// One source's render wave → `<name>/rendered_md`. Invoked
     /// `datalib-step render <source_type>`.
     Render { source_type: String },
-    /// Rebuild the unified grid table (`unified_index/grid`) from
-    /// every sidecar tree.
+    /// Refresh the unified grid table (`unified_index/grid`) from
+    /// every source's render store.
     #[command(name = "grid_index")]
     GridIndex,
     /// Build the qmd search index → `unified_index/qmd`.
@@ -313,7 +315,7 @@ async fn run(
                 data_root,
             )?;
             let type_str = planned.type_str;
-            let res = render::run(planned, data_root, emitter).await;
+            let res = render::run(planned, data_root, now, emitter).await;
             hints::emit_auth_hint_on_failure(emitter, type_str, &res);
             res
         }

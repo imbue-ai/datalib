@@ -21,8 +21,8 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 use sha2::{Digest, Sha256};
 
 use crate::types::{ContactPhoto, NormalizedContact};
@@ -41,7 +41,7 @@ pub struct ContactRenderProfile {
     /// Discriminator for the contact's grid row (e.g. `"Contact"`).
     pub contact_kind: String,
     /// Bumped by the provider when its contact rendering changes
-    /// meaningfully; stamped into the sidecar so a re-run invalidates
+    /// meaningfully; stamped into the store so a re-run invalidates
     /// stale docs.
     pub render_version: u32,
 }
@@ -119,7 +119,7 @@ fn render_one(
     let m_uuid = &contact.contact_uuid;
     let fingerprint = compute_fingerprint(profile.render_version, contact);
 
-    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, contact);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, contact);
     if prior_fingerprints.get(m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
     {
@@ -151,21 +151,11 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let row = build_grid_row(profile, contact, source_name, &md_rel)?;
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let row = build_grid_row(profile, contact, source_name, &md_rel, &mut problems);
 
-    // Sidecar `.grid_rows.json` next to the markdown, mirroring what
-    // every other provider writes. The orchestrator commits `rows` into
-    // the doltlite grid_rows table via `on_doc_complete`.
-    let rows = std::slice::from_ref(&row);
-    emit_sidecar(
-        &json_path,
-        m_uuid,
-        &fingerprint,
-        profile.render_version,
-        rows,
-        &[],
-    )?;
-
+    // `row` reaches the index through `on_doc_complete` below; the
+    // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_name: source_name.to_string(),
@@ -173,8 +163,9 @@ fn render_one(
         upstream_cursor: contact.when_ts.clone(),
         md_path,
         render_version: profile.render_version,
-        rows: vec![row],
+        rows: row.into_iter().collect(),
         edges: Vec::new(),
+        problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
@@ -185,7 +176,7 @@ fn output_paths(
     out_dir: &Path,
     source_name: &str,
     contact: &NormalizedContact,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     // One directory per contact, keyed by the stable contact UUID — never a
     // name/group-label slug, so a rename or regrouping re-renders in place.
     // The contact's `blobs/` (photo) live inside this dir. Display name and
@@ -193,8 +184,7 @@ fn output_paths(
     let page_dir =
         datalib_etl::layout::rendered_md_root(out_dir, source_name).join(&contact.contact_uuid);
     let md_path = page_dir.join("index.md");
-    let json_path = page_dir.join("index.grid_rows.json");
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 fn display_or_id(contact: &NormalizedContact) -> &str {
@@ -306,12 +296,15 @@ fn render_markdown(
     out
 }
 
+/// `None`, with the reason recorded on `problems`, when the row will
+/// not validate — see `GridRowBuilder::build_or_record`.
 fn build_grid_row(
     profile: &ContactRenderProfile,
     contact: &NormalizedContact,
     source_name: &str,
     md_rel: &str,
-) -> Result<GridRow> {
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     let title = display_or_id(contact).to_string();
     // Body the UI displays / qmd indexes — compact, single string:
     // the name followed by every field value.
@@ -338,8 +331,12 @@ fn build_grid_row(
         .source_url(contact.source_url.clone())
         .upstream_id(contact.external_id.clone())
         .markdown_uuid(Some(contact.contact_uuid.clone()))
-        .build()
-        .map_err(anyhow::Error::from)
+        .build_or_record(
+            source_name,
+            &contact.contact_uuid,
+            profile.render_version,
+            problems,
+        )
 }
 
 fn write_photo(page_dir: &Path, contact_uuid: &str, photo: &ContactPhoto) -> Result<String> {
@@ -439,8 +436,16 @@ mod tests {
 
     #[test]
     fn grid_row_carries_uuid_url_and_searchtext() {
-        let row = build_grid_row(&mk_profile(), &mk_contact(), "linkedin", "rendered_md/x.md")
-            .expect("valid contact grid row");
+        let mut problems = Vec::new();
+        let row = build_grid_row(
+            &mk_profile(),
+            &mk_contact(),
+            "linkedin",
+            "rendered_md/x.md",
+            &mut problems,
+        )
+        .expect("valid contact grid row");
+        assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(row.uuid, "11111111-1111-1111-1111-111111111111");
         assert_eq!(row.kind, "Contact");
         assert_eq!(

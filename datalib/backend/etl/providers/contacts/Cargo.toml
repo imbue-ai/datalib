@@ -14,7 +14,6 @@ datalib-etl-contact-common = { path = "../../contact-common" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-time = { path = "../../../time" }
 datalib-schema = { path = "../../../schema" }
-datalib-index-lib = { path = "../../../index_lib" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

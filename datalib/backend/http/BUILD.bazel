@@ -236,6 +236,8 @@ rust_test(
         "requires-network",
     ],
     deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
@@ -264,6 +266,8 @@ rust_test(
         "requires-network",
     ],
     deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",

@@ -14,7 +14,7 @@
 //! - 2364-04-09T12:01:00Z  Will Riker: All decks at green status, Captain.
 //! ```
 //!
-//! Sidecar carries: one chat-level grid_row (`Signal Chat`) per
+//! The row set carries: one chat-level grid_row (`Signal Chat`) per
 //! bucket plus one message-level grid_row (`Signal Message`) per
 //! chat item that surfaces in the search grid.
 
@@ -28,8 +28,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::section::section_attrs;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
 use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
@@ -165,11 +165,11 @@ fn render_one(
     // computed by the parse-side bucket-fingerprint CTE. With
     // dolt_diff driving the skip decision, that compare doesn't
     // happen anymore — but the load path still wants *some* stable
-    // identifier in the sidecar. Use the markdown_uuid: stable across
+    // identifier in the row set. Use the markdown_uuid: stable across
     // re-renders of the same bucket, distinct between buckets,
     // already in scope. The orchestrator's prior_fingerprints map is
     // ignored by signal now (parse never reads it); this value just
-    // keeps the sidecar schema honest.
+    // keeps the row schema honest.
     let fingerprint = markdown_uuid.clone();
 
     let recipient_display = parsed
@@ -180,8 +180,7 @@ fn render_one(
     let chat_title = format!("Signal · {recipient_display}");
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let (md_path, json_path, page_dir) =
-        output_paths(out_dir, source_name, &chat_uuid, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, &chat_uuid, &doc.period_key);
 
     // No prior-fingerprint check here: parse already filtered out
     // unchanged buckets before they reach render. Reaching this
@@ -239,15 +238,18 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
-    rows.push(chat_grid_row(
+    rows.extend(chat_grid_row(
         &markdown_uuid,
         &chat_uuid,
         &doc_title,
         &recipient_display,
         when_ts.clone(),
         &md_rel_path,
-    )?);
+        source_name,
+        &mut problems,
+    ));
 
     let mut messages_rendered = 0;
     for (idx, item) in doc.items.iter().enumerate() {
@@ -256,7 +258,7 @@ fn render_one(
         };
         let msg_uuid = signal_message_uuid(source_name, &chat.id, &item.author_id, item.date_sent);
         let author = author_display(parsed, item);
-        rows.push(message_grid_row(
+        rows.extend(message_grid_row(
             &msg_uuid,
             &markdown_uuid,
             &chat_uuid,
@@ -267,18 +269,11 @@ fn render_one(
             idx as i64,
             iso_ts(item.date_sent),
             &md_rel_path,
-        )?);
+            source_name,
+            &mut problems,
+        ));
         messages_rendered += 1;
     }
-
-    emit_sidecar(
-        &json_path,
-        &markdown_uuid,
-        &fingerprint,
-        RENDER_VERSION,
-        &rows,
-        &[],
-    )?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
@@ -289,6 +284,7 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
+        problems,
     })
     .with_context(|| format!("on_doc_complete {markdown_uuid}"))?;
 
@@ -303,14 +299,13 @@ fn output_paths(
     source_name: &str,
     chat_uuid: &str,
     period_key: &str,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     // One directory per chat keyed by the chat's stable UUID — never a
     // title-derived slug, so a contact/group rename re-renders in place.
     // period_key files live inside; mirrors beeper's `<room_uuid>/<period>.md`.
     let page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name).join(chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
-    let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -399,6 +394,7 @@ fn render_markdown(
     s
 }
 
+#[allow(clippy::too_many_arguments)]
 fn chat_grid_row(
     markdown_uuid: &str,
     chat_uuid: &str,
@@ -406,7 +402,9 @@ fn chat_grid_row(
     recipient_display: &str,
     when_ts: Option<String>,
     qmd_rel: &str,
-) -> Result<GridRow> {
+    stanza: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     base_row(
         markdown_uuid.to_string(),
         "Signal Chat".to_string(),
@@ -423,6 +421,8 @@ fn chat_grid_row(
         Some(recipient_display.to_string()),
         qmd_rel.to_string(),
         markdown_uuid.to_string(),
+        stanza,
+        problems,
     )
 }
 
@@ -438,7 +438,9 @@ fn message_grid_row(
     idx: i64,
     when_ts: Option<String>,
     qmd_rel: &str,
-) -> Result<GridRow> {
+    stanza: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     base_row(
         msg_uuid.to_string(),
         "Signal Message".to_string(),
@@ -454,9 +456,13 @@ fn message_grid_row(
         Some(recipient_display.to_string()),
         qmd_rel.to_string(),
         markdown_uuid.to_string(),
+        stanza,
+        problems,
     )
 }
 
+/// `None`, with the reason recorded on `problems`, when the row will
+/// not validate — see `GridRowBuilder::build_or_record`.
 #[allow(clippy::too_many_arguments)]
 fn base_row(
     uuid: String,
@@ -470,7 +476,9 @@ fn base_row(
     channel: Option<String>,
     qmd_path: String,
     markdown_uuid: String,
-) -> Result<GridRow> {
+    stanza: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
     GridRow::builder()
         .uuid(uuid)
         .provider(PROVIDER)
@@ -485,9 +493,8 @@ fn base_row(
         .entire_chat(format!("/chat/{markdown_uuid}"))
         .text(text)
         .qmd_path(Some(qmd_path))
-        .markdown_uuid(Some(markdown_uuid))
-        .build()
-        .map_err(anyhow::Error::from)
+        .markdown_uuid(Some(markdown_uuid.clone()))
+        .build_or_record(stanza, &markdown_uuid, RENDER_VERSION, problems)
 }
 
 fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {

@@ -1,14 +1,18 @@
-//! Sidecar-driven equivalent of the Python `test_qmd_bridge_integration.py`.
+//! Hermetic equivalent of the Python `test_qmd_bridge_integration.py`.
 //!
 //! The Python test ran the live `qmd` CLI against an ingested fixture and
-//! loaded grid rows out of a SQL dump. Now that every Render step emits
-//! a `<doc>.grid_rows.json` sidecar, the same hit↔row mapping invariants
-//! can be exercised hermetically:
+//! loaded grid rows out of a SQL dump. The same hit↔row mapping
+//! invariants are exercised here without either:
 //!
-//!   1. Materialize a small `rendered_md/` tree of sidecars in a tmpdir.
-//!   2. Walk it, deserialize each `Sidecar`, project to `GridRowRef`.
+//!   1. Build the rows a render would emit, plus the `.md` files the
+//!      line resolver reads.
+//!   2. Project them to `GridRowRef`.
 //!   3. Feed canned qmd stdout fixtures through `runner::parse_stdout`.
 //!   4. Assert the strict mapping invariants on the resulting hits.
+//!
+//! The rows used to be round-tripped through `*.grid_rows.json` files on
+//! the way, back when that was how a render published them. The subject
+//! here is the mapping, not the transport, so they are held in memory.
 //!
 //! Covers the spiritual equivalents of the Python tests:
 //!   * thread-hit → comment rows (uuid-anchored)
@@ -18,9 +22,8 @@
 //!     every row's qmd_path matches an indexed path.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use datalib_index_lib::{Sidecar, SidecarHeader};
 use datalib_schema::grid_rows::GridRow;
 use datalib_unified_index::qmd::mapping::norm_path;
 use datalib_unified_index::qmd::runner::parse_stdout;
@@ -52,28 +55,41 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         qmd_path: Some(qmd_path.into()),
         source_url: None,
         git_sha: None,
-        external_id: None,
+        upstream_id: None,
+        upstream_entity_kind: None,
+        upstream_scope: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(uuid.into()),
     }
 }
 
-fn write_sidecar(root: &Path, qmd_path: &str, rows: Vec<GridRow>) {
-    let doc_uuid = rows[0].markdown_uuid.clone().unwrap();
-    let sidecar = Sidecar {
-        header: SidecarHeader {
-            markdown_uuid: doc_uuid,
-            source_fingerprint: "deadbeef".into(),
-            render_version: 1,
-        },
-        rows,
-        edges: Vec::new(),
-    };
-    let md = root.join(qmd_path);
-    let sidecar_path = md.with_extension("grid_rows.json");
-    fs::create_dir_all(sidecar_path.parent().unwrap()).unwrap();
-    fs::write(&sidecar_path, serde_json::to_string(&sidecar).unwrap()).unwrap();
+/// The rows one rendered document would publish.
+///
+/// Accumulated in a `Vec` rather than written to a file: the renderer
+/// hands its rows straight to the index now, and this test is about what
+/// the mapping does with them.
+#[derive(Default)]
+struct Rendered {
+    rows: Vec<GridRow>,
+}
+
+impl Rendered {
+    fn push_doc(&mut self, rows: Vec<GridRow>) {
+        self.rows.extend(rows);
+    }
+
+    fn grid_rows(&self) -> Vec<GridRowRef> {
+        self.rows
+            .iter()
+            .map(|r| GridRowRef {
+                uuid: r.uuid.clone(),
+                kind: r.kind.clone(),
+                qmd_path: r.qmd_path.clone().unwrap_or_default(),
+                provider: r.provider.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Write a real rendered `.md` at `root/qmd_path` whose section divs carry the
@@ -98,97 +114,56 @@ fn write_md(root: &Path, qmd_path: &str, section_uuids: &[&str]) -> Vec<usize> {
         .collect()
 }
 
-fn collect_sidecars(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            collect_sidecars(&p, out);
-        } else if p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".grid_rows.json"))
-        {
-            out.push(p);
-        }
-    }
-}
-
-fn load_grid_rows(root: &Path) -> Vec<GridRowRef> {
-    let mut sidecars = Vec::new();
-    collect_sidecars(root, &mut sidecars);
-    let mut out = Vec::new();
-    for path in sidecars {
-        let bytes = fs::read(&path).unwrap();
-        let sidecar: Sidecar = serde_json::from_slice(&bytes).unwrap();
-        for r in sidecar.rows {
-            out.push(GridRowRef {
-                uuid: r.uuid,
-                kind: r.kind,
-                qmd_path: r.qmd_path.unwrap_or_default(),
-                provider: r.provider,
-            });
-        }
-    }
-    out
-}
-
 /// Synthesize a two-document fixture tree under `root/rendered_md/`:
 ///
 ///   * One claude chat doc (Chat row + 2 message rows).
 ///   * One github PR thread doc (3 PR Comment rows).
-fn make_fixture(root: &Path) {
+fn make_fixture(_root: &Path) -> Rendered {
+    let mut r = Rendered::default();
     let chat = "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md";
-    write_sidecar(
-        root,
-        chat,
-        vec![
-            row(
-                "c0000001-1701-4d00-8000-00000000c001",
-                "Chat",
-                chat,
-                "claude",
-            ),
-            row(
-                "30000001-1701-4d00-8000-000000030001",
-                "User Input",
-                chat,
-                "claude",
-            ),
-            row(
-                "30000002-1701-4d00-8000-000000030002",
-                "LLM Response",
-                chat,
-                "claude",
-            ),
-        ],
-    );
+    r.push_doc(vec![
+        row(
+            "c0000001-1701-4d00-8000-00000000c001",
+            "Chat",
+            chat,
+            "claude",
+        ),
+        row(
+            "30000001-1701-4d00-8000-000000030001",
+            "User Input",
+            chat,
+            "claude",
+        ),
+        row(
+            "30000002-1701-4d00-8000-000000030002",
+            "LLM Response",
+            chat,
+            "claude",
+        ),
+    ]);
 
     let pr_thread = "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
-    write_sidecar(
-        root,
-        pr_thread,
-        vec![
-            row(
-                "aaaaaaaa-bbbb-cccc-dddd-000000000001",
-                "GitHub PR Comment",
-                pr_thread,
-                "github",
-            ),
-            row(
-                "aaaaaaaa-bbbb-cccc-dddd-000000000002",
-                "GitHub Review Comment",
-                pr_thread,
-                "github",
-            ),
-            row(
-                "aaaaaaaa-bbbb-cccc-dddd-000000000003",
-                "GitHub PR Comment",
-                pr_thread,
-                "github",
-            ),
-        ],
-    );
+    r.push_doc(vec![
+        row(
+            "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+            "GitHub PR Comment",
+            pr_thread,
+            "github",
+        ),
+        row(
+            "aaaaaaaa-bbbb-cccc-dddd-000000000002",
+            "GitHub Review Comment",
+            pr_thread,
+            "github",
+        ),
+        row(
+            "aaaaaaaa-bbbb-cccc-dddd-000000000003",
+            "GitHub PR Comment",
+            pr_thread,
+            "github",
+        ),
+    ]);
+    r
 }
 
 /// Build a qmd stdout fixture that `parse_stdout` will consume.
@@ -221,9 +196,9 @@ fn fake_stdout(hits: &[(&str, &str)]) -> String {
 #[test]
 fn sidecar_walk_builds_grid_index() {
     let tmp = tempfile::tempdir().unwrap();
-    make_fixture(tmp.path());
+    let rendered = make_fixture(tmp.path());
 
-    let rows = load_grid_rows(tmp.path());
+    let rows = rendered.grid_rows();
     assert_eq!(rows.len(), 6);
     let kinds: std::collections::HashSet<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
     assert!(kinds.contains("Chat"));
@@ -236,7 +211,7 @@ fn line_resolves_to_single_message_row() {
     // only that row, even though the chat doc has three rows under one
     // qmd_path — no snippet anchor required.
     let tmp = tempfile::tempdir().unwrap();
-    make_fixture(tmp.path());
+    let rendered = make_fixture(tmp.path());
     let chat = "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md";
     let anchors = write_md(
         tmp.path(),
@@ -246,7 +221,7 @@ fn line_resolves_to_single_message_row() {
             "30000002-1701-4d00-8000-000000030002",
         ],
     );
-    let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
+    let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
     // `@@ -<second-anchor>,4 @@` → the matched line is on the 2nd message div.
     let snip = format!("@@ -{},4 @@ (0 before, 3 after)\n## Assistant", anchors[1]);
@@ -264,10 +239,10 @@ fn path_fallback_returns_all_rows_for_doc() {
     // normalized qmd_path matches the hit's path. The chat doc has 3
     // rows; all should come back.
     let tmp = tempfile::tempdir().unwrap();
-    make_fixture(tmp.path());
+    let rendered = make_fixture(tmp.path());
     // No real `.md` on disk for this doc → the line can't be pinned, so the
     // whole document surfaces.
-    let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
+    let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
     let stdout = fake_stdout(&[(
         "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md",
@@ -288,8 +263,8 @@ fn thread_hit_returns_comment_rows_not_container() {
     // thread should resolve to comment rows only — the strict v1
     // semantics the Python integration test asserts.
     let tmp = tempfile::tempdir().unwrap();
-    make_fixture(tmp.path());
-    let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
+    let rendered = make_fixture(tmp.path());
+    let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
     let stdout = fake_stdout(&[(
         "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
@@ -310,7 +285,7 @@ fn hits_for_row_reverse_mapping() {
     // Pick a known comment row; ask which of a set of hits resolve to it.
     // hits_for_row is defined in terms of the forward (line-based) mapping.
     let tmp = tempfile::tempdir().unwrap();
-    make_fixture(tmp.path());
+    let rendered = make_fixture(tmp.path());
     let pr_thread =
         "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
     let anchors = write_md(
@@ -322,7 +297,7 @@ fn hits_for_row_reverse_mapping() {
             "aaaaaaaa-bbbb-cccc-dddd-000000000003",
         ],
     );
-    let rows_vec = load_grid_rows(tmp.path());
+    let rows_vec = rendered.grid_rows();
     let idx = GridIndex::new(tmp.path(), rows_vec.clone());
 
     let target = rows_vec
@@ -359,20 +334,20 @@ fn bidirectional_coverage_every_indexed_path_resolves() {
     // set of qmd_paths we'd expect qmd to surface — i.e. one per
     // sidecar — and every grid row's qmd_path must match one of them.
     let tmp = tempfile::tempdir().unwrap();
-    make_fixture(tmp.path());
-    let rows_vec = load_grid_rows(tmp.path());
+    let rendered = make_fixture(tmp.path());
+    let rows_vec = rendered.grid_rows();
     let idx = GridIndex::new(tmp.path(), rows_vec.clone());
 
-    // Collect the on-disk paths of the rendered docs (one per sidecar).
-    let mut sidecars = Vec::new();
-    collect_sidecars(tmp.path(), &mut sidecars);
-    let indexed_paths: Vec<String> = sidecars
+    // The distinct documents the rows point at — what qmd would have
+    // indexed. Derived from the rows rather than from a directory walk,
+    // now that the rows are not published as files.
+    let mut indexed_paths: Vec<String> = rows_vec
         .iter()
-        .map(|p| {
-            let rel = p.strip_prefix(tmp.path()).unwrap();
-            rel.to_string_lossy().replace(".grid_rows.json", ".md")
-        })
+        .map(|r| r.qmd_path.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect();
+    indexed_paths.sort();
 
     // (1) Every indexed path resolves to at least one row via the
     //     path-fallback (empty snippet).

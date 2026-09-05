@@ -67,13 +67,17 @@ async fn renders_tng_fixture() {
     ingest_fixture(raw.path()).await;
     let parsed = parse(raw.path(), None).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
+    let mut docs = Vec::new();
     render_all(
         &parsed,
         tmp.path(),
         "claude_export",
         Default::default(),
         &datalib_etl::progress::Progress::noop(),
-        &mut |_doc| Ok(()),
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
     )
     .expect("render");
 
@@ -88,16 +92,7 @@ async fn renders_tng_fixture() {
     }
     insta::assert_snapshot!("tng_md_tree", bundle);
 
-    let sidecars = collect_by_ext(tmp.path(), ".grid_rows.json");
-    let mut sbundle = String::new();
-    for (path, body) in &sidecars {
-        sbundle.push_str("=== ");
-        sbundle.push_str(path);
-        sbundle.push_str(" ===\n");
-        sbundle.push_str(body);
-        sbundle.push('\n');
-    }
-    insta::assert_snapshot!("tng_sidecar_tree", sbundle);
+    insta::assert_snapshot!("tng_rendered_docs", docs_bundle(&docs));
 
     // The `stellar_cartography` project carries no `created_at` /
     // `updated_at` — a real shape, found in the live manual-e2e corpus,
@@ -111,23 +106,60 @@ async fn renders_tng_fixture() {
     // time" — someone re-baking it would carry a regression straight
     // through. See `docs/dev/data_architecture_parse_and_render.md` §6
     // and R5 in §4.
-    // Found by the upstream project uuid in the row bodies, not by path:
-    // the directory is named for the `markdown_uuid` the renderer mints,
-    // not for the id upstream gave us.
-    let undated = sidecars
-        .values()
-        .find(|body| body.contains("70000002-1701-4d00-8000-000000000702"))
-        .expect("the undated project rendered a sidecar");
-    let v: serde_json::Value = serde_json::from_str(undated).expect("sidecar parses");
-    let rows = v["rows"].as_array().expect("rows array");
-    assert!(!rows.is_empty(), "the undated project produced rows");
-    for r in rows {
+    // Found by the upstream project uuid in the row backpointers, not by
+    // document id: the `markdown_uuid` is one the renderer mints, not
+    // the id upstream gave us.
+    const PROJECT: &str = "70000002-1701-4d00-8000-000000000702";
+    let undated = docs
+        .iter()
+        .find(|d| {
+            d.rows
+                .iter()
+                .any(|r| r.upstream_id.as_deref() == Some(PROJECT))
+        })
+        .expect("the undated project rendered a document");
+    assert!(
+        !undated.rows.is_empty(),
+        "the undated project produced rows"
+    );
+    for r in &undated.rows {
         assert!(
-            r["when_ts"].is_null(),
+            r.when_ts.is_none(),
             "a project with no created_at/updated_at must leave when_ts null, \
-             never a fabricated epoch — got {} on kind={}",
-            r["when_ts"],
-            r["kind"]
+             never a fabricated epoch — got {:?} on kind={}",
+            r.when_ts,
+            r.kind
         );
     }
+}
+
+/// The documents the renderer emitted, as a reviewable bundle.
+///
+/// Snapshots what `render_all` *produces* — the `RenderedMarkdown`
+/// values it hands to its callback — rather than the
+/// `*.grid_rows.json` files it used to also write. That serialization
+/// is going away; the emitted document is the renderer's actual
+/// contract, and it is what both the store and the unified index
+/// consume.
+///
+/// Keyed by `markdown_uuid` and sorted, so the bundle is stable
+/// regardless of the order documents happen to be rendered in.
+fn docs_bundle(docs: &[datalib_etl::grid_index::RenderedMarkdown]) -> String {
+    let mut sorted: Vec<&datalib_etl::grid_index::RenderedMarkdown> = docs.iter().collect();
+    sorted.sort_by(|a, b| a.markdown_uuid.cmp(&b.markdown_uuid));
+    let mut out = String::new();
+    for d in sorted {
+        out.push_str("=== ");
+        out.push_str(&d.markdown_uuid);
+        out.push_str(" ===\n");
+        let v = serde_json::json!({
+            "source_fingerprint": d.source_fingerprint,
+            "render_version": d.render_version,
+            "rows": d.rows,
+            "edges": d.edges,
+        });
+        out.push_str(&serde_json::to_string_pretty(&v).unwrap());
+        out.push('\n');
+    }
+    out
 }

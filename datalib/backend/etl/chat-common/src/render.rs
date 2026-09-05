@@ -21,8 +21,8 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::section::msg_div_open;
 use datalib_etl::title::Title;
-use datalib_index_lib::emit_sidecar;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 use sha2::{Digest, Sha256};
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
@@ -67,7 +67,7 @@ pub struct RenderProfile {
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
-    /// into the sidecar so a re-run knows to invalidate stale docs.
+    /// into the store so a re-run knows to invalidate stale docs.
     pub render_version: u32,
 }
 
@@ -152,7 +152,7 @@ fn render_one(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
     let fingerprint = compute_fingerprint(profile.render_version, chat, doc);
-    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
 
     if prior_fingerprints
         .get(&doc.markdown_uuid)
@@ -193,16 +193,16 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let rows = build_grid_rows(profile, chat, doc, &chat_title, &md_rel)?;
-
-    emit_sidecar(
-        &json_path,
-        &doc.markdown_uuid,
-        &fingerprint,
-        profile.render_version,
-        &rows,
-        &[],
-    )?;
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let rows = build_grid_rows(
+        profile,
+        chat,
+        doc,
+        &chat_title,
+        &md_rel,
+        source_name,
+        &mut problems,
+    );
 
     let items_rendered = doc
         .items
@@ -220,6 +220,7 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         edges: Vec::new(),
+        problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
 
@@ -271,7 +272,7 @@ fn materialize_attachment_bytes(
 }
 
 /// `<out>/<stanza>/rendered_md/<chat_uuid>/<period>.md` plus the matching
-/// sidecar and parent dir. The directory is the chat's stable UUID — never a
+/// markdown and its parent dir. The directory is the chat's stable UUID — never a
 /// title-derived slug — so an upstream rename (channel/title change)
 /// re-renders in place instead of orphaning the old file at a stale path. The
 /// human title still lives in the markdown frontmatter and the grid_rows DB.
@@ -280,12 +281,11 @@ fn output_paths(
     source_name: &str,
     chat: &NormalizedChat,
     period_key: &str,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf) {
     let page_dir =
         datalib_etl::layout::rendered_md_root(out_dir, source_name).join(&chat.chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
-    let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
-    (md_path, json_path, page_dir)
+    (md_path, page_dir)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -508,13 +508,26 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
 // Grid rows
 // ─────────────────────────────────────────────────────────────────────
 
+/// Project one bucket into its `grid_rows`.
+///
+/// A row that will not validate is **dropped and recorded**, not
+/// propagated: `build_or_record` pushes a `render_problems` entry onto
+/// `problems` and returns `None`, and the rest of the document renders.
+/// This used to be `.build()?`, which meant one message with an
+/// unparseable timestamp failed the whole source's render — which the
+/// DAG then classified as a data failure and used to poison
+/// `grid_index`, so a single bad record out of forty thousand stopped
+/// the grid updating for every provider. R2's second category.
+#[allow(clippy::too_many_arguments)]
 fn build_grid_rows(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     chat_title: &str,
     md_rel: &str,
-) -> Result<Vec<GridRow>> {
+    source_name: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Vec<GridRow> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
     // The chat-level row is stamped with the earliest *real* timestamp
@@ -531,7 +544,7 @@ fn build_grid_rows(
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
 
-    rows.push(
+    rows.extend(
         GridRow::builder()
             .uuid(doc.markdown_uuid.clone())
             .provider(profile.provider)
@@ -560,7 +573,12 @@ fn build_grid_rows(
             .upstream_entity_kind(Some(profile.chat_entity_kind.to_string()))
             .upstream_scope(chat.upstream_scope.clone())
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
-            .build()?,
+            .build_or_record(
+                source_name,
+                &doc.markdown_uuid,
+                profile.render_version,
+                problems,
+            ),
     );
 
     let _ = chat_title; // reserved for future per-message title context
@@ -578,7 +596,7 @@ fn build_grid_rows(
                 .or_else(|| item.text.clone())
                 .unwrap_or_default(),
         };
-        rows.push(
+        rows.extend(
             GridRow::builder()
                 .uuid(item.message_uuid.clone())
                 .provider(profile.provider)
@@ -615,10 +633,15 @@ fn build_grid_rows(
                         .or_else(|| item.attachments.iter().find_map(|a| a.source_url.clone())),
                 )
                 .markdown_uuid(Some(doc.markdown_uuid.clone()))
-                .build()?,
+                .build_or_record(
+                    source_name,
+                    &doc.markdown_uuid,
+                    profile.render_version,
+                    problems,
+                ),
         );
         for r in &item.reactions {
-            rows.push(
+            rows.extend(
                 GridRow::builder()
                     .uuid(r.reaction_uuid.clone())
                     .provider(profile.provider)
@@ -640,11 +663,16 @@ fn build_grid_rows(
                     .text(r.emoji.clone())
                     .qmd_path(Some(md_rel.to_string()))
                     .markdown_uuid(Some(doc.markdown_uuid.clone()))
-                    .build()?,
+                    .build_or_record(
+                        source_name,
+                        &doc.markdown_uuid,
+                        profile.render_version,
+                        problems,
+                    ),
             );
         }
     }
-    Ok(rows)
+    rows
 }
 
 fn attachment_search_text(item: &NormalizedChatItem) -> String {
@@ -777,6 +805,25 @@ fn human_bytes(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_schema::render_problems::{Problem, Reason};
+
+    /// Project the first bucket and assert nothing was dropped. Tests
+    /// that *want* a drop call `build_grid_rows` directly and read the
+    /// problems out.
+    fn rows_of(profile: &RenderProfile, chat: &NormalizedChat) -> Vec<GridRow> {
+        let mut problems = Vec::new();
+        let rows = build_grid_rows(
+            profile,
+            chat,
+            &chat.buckets[0],
+            "Test",
+            "x.md",
+            "test_source",
+            &mut problems,
+        );
+        assert!(problems.is_empty(), "unexpected drops: {problems:?}");
+        rows
+    }
     use crate::types::{NormalizedAttachment, NormalizedReaction};
 
     fn mk_chat() -> NormalizedChat {
@@ -817,6 +864,101 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    /// One unusable message must cost that message and nothing else.
+    ///
+    /// This is the regression the problem sink exists for. Before it,
+    /// `build_grid_rows` propagated the first `GridRowError` with `?`,
+    /// so this chat rendered *zero* rows and failed the source's render
+    /// — which the DAG classifies as a data failure and uses to poison
+    /// `grid_index`, taking every other provider's grid update with it.
+    #[test]
+    fn an_unbuildable_message_is_dropped_and_recorded_not_propagated() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        // No `message_uuid` — nothing to key the row on. `build`
+        // rejects it as an empty required field.
+        chat.buckets[0].items[0].message_uuid = String::new();
+
+        let mut problems = Vec::new();
+        let rows = build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "x.md",
+            "test_source",
+            &mut problems,
+        );
+
+        // The chat row and the reaction row still made it: a bad
+        // message does not take its neighbours with it.
+        assert!(
+            rows.iter().any(|r| r.kind == profile.chat_kind),
+            "the chat-level row survives: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.kind == profile.reaction_kind),
+            "the reaction row survives"
+        );
+        assert!(
+            !rows.iter().any(|r| r.kind == profile.message_kind),
+            "…and the unbuildable message row is not among them"
+        );
+
+        assert_eq!(problems.len(), 1, "exactly one problem: {problems:?}");
+        let p = &problems[0];
+        assert_eq!(p.outcome, "dropped");
+        assert_eq!(p.stage, "grid_row");
+        assert_eq!(p.source_name, "test_source");
+        assert_eq!(
+            p.scope_key, chat.buckets[0].markdown_uuid,
+            "swept with the document it belongs to"
+        );
+        assert_eq!(p.scope_kind, "markdown");
+        assert_eq!(p.render_version, i64::from(profile.render_version));
+        // A row with no uuid gets the content-derived surrogate, so the
+        // same bad record does not accumulate a new row every run.
+        assert!(p.uuid.starts_with("noid:"), "{}", p.uuid);
+        // Never a count without a reason.
+        let parsed: Vec<Problem> = serde_json::from_str(&p.problems).expect("problems json");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].reason, Reason::NoIdentity);
+        assert_eq!(parsed[0].field.as_deref(), Some("uuid"));
+        // Stamping is the store's job, not the renderer's.
+        assert!(p.first_seen_at.is_empty() && p.last_seen_at.is_empty());
+    }
+
+    /// The surrogate is content-derived, so a record that stays broken
+    /// keeps one row across runs rather than growing one per run.
+    #[test]
+    fn the_same_bad_record_keys_to_the_same_surrogate_twice() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].message_uuid = String::new();
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        let args = ("Test", "x.md", "test_source");
+        build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            args.0,
+            args.1,
+            args.2,
+            &mut a,
+        );
+        build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            args.0,
+            args.1,
+            args.2,
+            &mut b,
+        );
+        assert_eq!(a[0].uuid, b[0].uuid);
     }
 
     #[test]
@@ -922,8 +1064,7 @@ mod tests {
         );
 
         // The chat-level grid row (first row) carries it too.
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         assert_eq!(rows[0].kind, profile.chat_kind);
         assert_eq!(
             rows[0].source_url.as_deref(),
@@ -1003,8 +1144,7 @@ mod tests {
         );
 
         // The message-level grid row (row[1], after the chat row) carries it.
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         let msg = rows
             .iter()
             .find(|r| r.kind == profile.message_kind)
@@ -1036,8 +1176,7 @@ mod tests {
         let mut chat = mk_chat();
         chat.buckets[0].items[0].kind_label = Some("LLM Response".to_string());
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         // The message row uses the override, not the profile default.
         assert!(rows.iter().any(|r| r.kind == "LLM Response"));
         assert!(!rows.iter().any(|r| r.kind == "Test Message"));
@@ -1072,8 +1211,7 @@ mod tests {
         chat.buckets[0].items[0].date_ms = None;
         chat.buckets[0].items[0].reactions[0].date_ms = None;
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         for r in &rows {
             assert_eq!(
                 r.when_ts, None,
@@ -1098,8 +1236,7 @@ mod tests {
         let mut chat = mk_chat();
         chat.buckets[0].items.clear();
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         assert_eq!(rows.len(), 1, "only the chat-level row");
         assert_eq!(rows[0].when_ts, None);
     }
@@ -1119,8 +1256,7 @@ mod tests {
         // (`None < Some`).
         chat.buckets[0].items = vec![undated, dated];
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         assert_eq!(
             rows[0].when_ts.as_deref(),
             Some("2364-04-11T00:00:00+00:00"),
@@ -1168,8 +1304,7 @@ mod tests {
         chat.org_uuid = Some("org-123".to_string());
         chat.org_name = Some("Starfleet".to_string());
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
-            .expect("valid grid rows");
+        let rows = rows_of(&profile, &chat);
         // chat, message, and reaction rows all carry org_uuid/org_name.
         assert!(rows.len() >= 3);
         for r in &rows {

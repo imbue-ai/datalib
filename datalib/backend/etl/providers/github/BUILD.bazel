@@ -19,7 +19,6 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
-        "//datalib/backend/index_lib:datalib_index_lib",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

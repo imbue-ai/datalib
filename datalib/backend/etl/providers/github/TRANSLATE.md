@@ -2,12 +2,13 @@
 
 `github-translate` reads the event-store JSONL written by
 `github-download` and emits **one markdown document per pull request**,
-plus a co-located `grid_rows` sidecar for the UI's flat-row view.
+plus that document's `grid_rows` for the UI's flat-row view.
 
 ```
 <root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/
     index.md                # the unified PR doc
-    index.grid_rows.json     # sidecar: one row for the PR + one per comment
+<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db
+                            # its rows: one for the PR + one per comment
 ```
 
 ## Markdown layout
@@ -31,16 +32,16 @@ plus a co-located `grid_rows` sidecar for the UI's flat-row view.
 Each comment block is blockquoted, with the header line spelling out
 `**@user** *(state)* *(reply)* @ <ts> — [link](...)`.
 
-## Sidecar
+## Rows
 
-The sidecar is the same `Sidecar { header, rows }` shape used by the
-other providers:
+The same `RenderedMarkdown { markdown_uuid, source_fingerprint, rows }`
+shape every provider emits:
 
-- `header.document_uuid` — UUIDv5 of `github:{repo}:pr:{num}`.
-- `header.source_fingerprint` — DefaultHasher hash of `RENDER_VERSION`
+- `markdown_uuid` — UUIDv5 of `github:{repo}:pr:{num}`.
+- `source_fingerprint` — DefaultHasher hash of `RENDER_VERSION`
   + canonicalized PR JSON + canonicalized comment JSONs (sorted by
-  `external_id`). Re-renders that didn't change content produce
-  byte-identical sidecars.
+  `upstream_id`). Re-renders that didn't change content produce an
+  identical row set, so the store's commit does not move.
 - `rows[0]` — the PR row itself (kind = "GitHub PR").
 - `rows[1..]` — one row per comment, in the same order as the rendered
   doc (Reviews → General → Inline-by-`(path, line)`). `message_index`
