@@ -83,7 +83,7 @@ async fn scans_tng_tree() {
     let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
         db: None,
-        source_name: "fsindex-tng".to_string(),
+        source_id: "fsindex-tng".to_string(),
         root: root.clone(),
         target_doltlite_branch: None,
         // Read-only against the fixture — never write breadcrumbs into it.

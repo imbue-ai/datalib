@@ -116,7 +116,7 @@ fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
         db: None,
-        source_name: "smoke".to_string(),
+        source_id: "smoke".to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: None,
         no_stamp: true,

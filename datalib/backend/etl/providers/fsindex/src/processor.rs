@@ -39,7 +39,7 @@ pub fn plan_download(
         id: format!("fsindex/{name}/download"),
         raw_path,
         root,
-        source_name: name,
+        source_id: name,
         stamp: config.stamp,
     })])
 }
@@ -60,7 +60,7 @@ struct FsindexDownload {
     id: String,
     raw_path: PathBuf,
     root: PathBuf,
-    source_name: String,
+    source_id: String,
     stamp: bool,
 }
 
@@ -79,7 +79,7 @@ impl DataProcessor for FsindexDownload {
             // the standalone-open path's signature.
             db_path: self.raw_path.clone(),
             db: Some(db),
-            source_name: self.source_name.clone(),
+            source_id: self.source_id.clone(),
             root: self.root.clone(),
             // Branch selection is the standalone CLI's concern; the
             // orchestrator scans the source's default branch.

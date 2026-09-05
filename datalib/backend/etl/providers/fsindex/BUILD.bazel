@@ -152,3 +152,16 @@ rust_test(
         "@datalib_crates//:tokio",
     ],
 )
+
+# Inline tests in the binary. `fsindex_unittests` covers the library
+# (`crate = ":datalib_etl_fsindex"`), whose glob excludes `src/bin/**`,
+# so without this target the binary's own tests would never run.
+rust_test(
+    name = "fsindex_bin_unittests",
+    size = "small",
+    crate = ":fsindex",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
