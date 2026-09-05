@@ -94,6 +94,12 @@ section { background: var(--bg); min-width: 0; }
 .note .jump { color: inherit; text-decoration: underline dotted; cursor: pointer; }
 .note .jump:hover { color: var(--fg); }
 .size { font-size: 10.5px; color: var(--muted); flex: none; padding-left: 4px; }
+.weight {
+  font-size: 10.5px; font-weight: 600; flex: none; padding-left: 4px;
+  color: var(--fg); opacity: .75; white-space: nowrap;
+}
+select { font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .kids { margin-left: 13px; border-left: 1px solid var(--line); padding-left: 3px; }
 .hidden { display: none; }
 .st-moved_out .name, .st-moved_in .name { color: var(--moved); }
@@ -123,6 +129,12 @@ footer { padding: 10px 18px 24px; color: var(--muted); font-size: 11.5px; border
   <div class="controls">
     <input type="search" id="q" placeholder="filter paths…" autocomplete="off">
     <label><input type="checkbox" id="onlyChanged"> only changed</label>
+    <label>sort
+      <select id="order">
+        <option value="weight">biggest diff first</option>
+        <option value="name">name</option>
+      </select>
+    </label>
     <button id="expandAll">expand all</button>
     <button id="collapseAll">collapse all</button>
   </div>
@@ -145,6 +157,18 @@ const BADGE = {
 const CHANGED = new Set(Object.keys(BADGE));
 
 // ---- build a tree from the flat, path-sorted node list ----
+// A directory is opened on load only while its subtree is small enough
+// to read inline. Without a ceiling, sorting the busiest directory to
+// the top and then expanding it fills the screen with one directory —
+// which is the opposite of what the ordering is for. Above this, the
+// row's own "N changed · size" is the summary and you open it yourself.
+const EXPAND_UNDER = 25;
+
+// How children are ordered under each directory. "weight" puts the
+// busiest subtree first, which is what you want when scanning a large
+// diff; "name" is the ordinary alphabetical tree.
+let ORDER = "weight";
+
 function buildTree(nodes) {
   const root = { name: "", path: "", kids: new Map(), node: null };
   for (const n of nodes) {
@@ -162,7 +186,36 @@ function buildTree(nodes) {
     cur.node = n;
   }
   markChanged(root);
+  rollWeight(root);
   return root;
+}
+
+// Mirror of the weights the analysis already computed, hoisted onto the
+// synthetic container nodes (an intermediate directory the diff never
+// mentioned has no node of its own).
+function rollWeight(t) {
+  let entries = (t.node && t.node.dn) || 0;
+  let bytes = (t.node && t.node.db) || 0;
+  for (const kid of t.kids.values()) {
+    rollWeight(kid);
+    if (!t.node) { entries += kid.entries; bytes += kid.bytes; }
+  }
+  t.entries = entries;
+  t.bytes = bytes;
+  return t;
+}
+
+function orderedKids(t) {
+  const kids = [...t.kids.values()];
+  if (ORDER === "weight") {
+    // Biggest diff first; ties fall back to name so the order is total
+    // and stable across renders.
+    kids.sort((a, b) =>
+      b.bytes - a.bytes || b.entries - a.entries || a.name.localeCompare(b.name));
+  } else {
+    kids.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  return kids;
 }
 
 // A directory is "interesting" when anything beneath it changed. Drives
@@ -172,7 +225,7 @@ function markChanged(t) {
   for (const kid of t.kids.values()) if (markChanged(kid)) below = true;
   const self = !!(t.node && (CHANGED.has(t.node.st) || t.node.dup));
   t.hasChange = self || below;   // drives the "only changed" filter
-  t.expand = below;              // drives the default expansion
+  t.below = below;               // is there anything worth opening for
   return t.hasChange;
 }
 
@@ -188,7 +241,7 @@ const rowIndex = { left: new Map(), right: new Map() };
 
 function renderTree(tree, side, host) {
   host.textContent = "";
-  const kids = [...tree.kids.values()];
+  const kids = orderedKids(tree);
   if (!kids.length) { host.innerHTML = '<div class="empty">nothing to show</div>'; return; }
   for (const kid of kids) host.appendChild(renderNode(kid, side));
 }
@@ -202,7 +255,7 @@ function renderNode(t, side) {
   row.dataset.status = n.st;
   row.dataset.changed = CHANGED.has(n.st) || n.dup ? "1" : "";
 
-  const kids = [...t.kids.values()];
+  const kids = orderedKids(t);
   const tw = document.createElement("span");
   tw.className = "tw" + (kids.length ? "" : " leaf");
   tw.textContent = "▾";
@@ -269,6 +322,14 @@ function renderNode(t, side) {
     });
     row.appendChild(d);
   }
+  // On a directory, what is underneath matters more than its own size.
+  if (kids.length && t.entries) {
+    const w = document.createElement("span");
+    w.className = "weight";
+    w.textContent = t.entries + " changed" + (t.bytes ? " · " + fmtSize(t.bytes) : "");
+    w.title = t.entries + " affected entries, " + t.bytes + " bytes, below this directory";
+    row.appendChild(w);
+  }
   const size = document.createElement("span");
   size.className = "size";
   size.textContent = fmtSize(n.s);
@@ -282,8 +343,9 @@ function renderNode(t, side) {
     box.className = "kids";
     for (const kid of kids) box.appendChild(renderNode(kid, side));
     // Collapse subtrees with nothing changed in them; keep the rest open.
-    if (!t.expand) box.classList.add("hidden");
-    tw.textContent = t.expand ? "▾" : "▸";
+    const open = t.below && t.entries <= EXPAND_UNDER;
+    if (!open) box.classList.add("hidden");
+    tw.textContent = open ? "▾" : "▸";
     tw.onclick = () => {
       const now = box.classList.toggle("hidden");
       tw.textContent = now ? "▸" : "▾";
@@ -374,7 +436,8 @@ document.getElementById("chips").innerHTML =
       : "in-tree duplicate scan off") +
   "</span>";
 
-for (const [side, subId, treeId] of [["left", "lsub", "ltree"], ["right", "rsub", "rtree"]]) {
+const PANES = [["left", "lsub", "ltree"], ["right", "rsub", "rtree"]];
+for (const [side, subId, treeId] of PANES) {
   const d = DATA[side];
   document.getElementById(subId).textContent =
     d.db + "  @" + d.ref + "  " + d.commit.slice(0, 12) +
@@ -387,6 +450,13 @@ for (const [side, subId, treeId] of [["left", "lsub", "ltree"], ["right", "rsub"
 
 document.getElementById("q").addEventListener("input", applyFilter);
 document.getElementById("onlyChanged").addEventListener("change", applyFilter);
+document.getElementById("order").addEventListener("change", (e) => {
+  ORDER = e.target.value;
+  for (const [side, , treeId] of PANES) {
+    renderTree(buildTree(DATA[side].nodes), side, document.getElementById(treeId));
+  }
+  applyFilter();
+});
 document.getElementById("expandAll").onclick = () => setAll(true);
 document.getElementById("collapseAll").onclick = () => setAll(false);
 document.getElementById("foot").textContent =

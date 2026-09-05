@@ -229,6 +229,42 @@ This costs one full scan per side — the `size >= threshold` filter cuts
 transfer and grouping work, not the scan, since `files` has no index on
 `size` either. It announces itself on stderr like the copy check does.
 
+## Finding where the diff actually is
+
+Every node carries the weight of the changes beneath it, and children
+are ordered by it, so the busiest directory is the first thing you see:
+
+```
+huge_churn   50 changed · 9.5M
+archive      32 changed · 1.4M
+medium        5 changed · 24K
+quiet
+```
+
+Two numbers, because they answer different questions and only one of
+them sums naively:
+
+- **entries** — every finding in the subtree, plus what its rollups
+  absorbed. A directory that moved with 10 000 files inside is one
+  finding but 10 001 affected entries, and the second number is the one
+  that says how much is going on.
+- **bytes** — counted from *maximal* findings only, meaning a finding
+  with no other finding beneath it. A directory's size is the recursive
+  sum of its contents, so a brand-new tree would otherwise count those
+  bytes twice: once for the directory and again for each file in it.
+  Taking only the outermost avoids that, and still gives a rolled-up
+  move — whose interior is absent from the page — its full weight.
+
+Both are computed in `analyze`, not in the page, so `--json` carries
+them and the arithmetic is asserted in `analyze_test.rs` rather than in
+a browser.
+
+A directory opens on load only while its subtree is small (25 affected
+entries). Without a ceiling, sorting the busiest directory to the top
+and then expanding it fills the screen with one directory — the
+opposite of what the ordering is for. `sort → name` restores the
+ordinary alphabetical tree.
+
 ## What the page tells you
 
 The question this was built to answer — *did this actually go away, or

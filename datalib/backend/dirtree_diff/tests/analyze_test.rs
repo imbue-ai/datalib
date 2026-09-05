@@ -614,3 +614,136 @@ fn the_status_strings_are_what_the_viewer_switches_on() {
         assert!(json.contains(expected), "missing {expected}");
     }
 }
+
+// ---------------------------------------------------------------------
+// diff weight, for sorting big changes to the top
+// ---------------------------------------------------------------------
+
+fn weight(r: &DiffResult, side: Side, path: &str) -> (u32, i64) {
+    let n = r.node(side, path).unwrap();
+    (n.diff_entries, n.diff_bytes)
+}
+
+#[test]
+fn a_directory_carries_the_weight_of_the_changes_beneath_it() {
+    let r = Case {
+        added: vec![
+            sized_file("busy/a.txt", ALPHA, 100),
+            sized_file("busy/b.txt", BETA, 200),
+            sized_file("quiet/c.txt", GAMMA, 5),
+        ],
+        ..Default::default()
+    }
+    .run();
+    assert_eq!(weight(&r, Side::Right, "busy"), (2, 300));
+    assert_eq!(weight(&r, Side::Right, "quiet"), (1, 5));
+    assert_eq!(weight(&r, Side::Right, "busy/a.txt"), (1, 100));
+}
+
+#[test]
+fn weight_accumulates_through_intermediate_directories() {
+    let r = Case {
+        added: vec![sized_file("a/b/c/deep.txt", ALPHA, 42)],
+        ..Default::default()
+    }
+    .run();
+    for dir in ["a", "a/b", "a/b/c"] {
+        assert_eq!(
+            weight(&r, Side::Right, dir),
+            (1, 42),
+            "{dir} did not inherit its descendant's weight"
+        );
+    }
+}
+
+/// A directory's `size` is the recursive sum of its contents, so a
+/// brand-new tree must not have those bytes counted twice — once for
+/// the directory and again for each file in it.
+#[test]
+fn a_new_directory_does_not_double_count_its_new_files() {
+    let r = Case {
+        added: vec![
+            sized_dir("fresh", ALPHA, 300),
+            sized_file("fresh/a.txt", BETA, 100),
+            sized_file("fresh/b.txt", GAMMA, 200),
+        ],
+        ..Default::default()
+    }
+    .run();
+    let (entries, bytes) = weight(&r, Side::Right, "fresh");
+    assert_eq!(
+        bytes, 300,
+        "the directory's own 300 bytes were counted on top of its files'"
+    );
+    assert_eq!(
+        entries, 3,
+        "the directory and both files are each an affected entry"
+    );
+}
+
+/// The mirror case: a rolled-up move has no findings beneath it — its
+/// interior is absent from the node set — so the directory itself must
+/// supply the weight, or a 10 GB move would read as zero.
+#[test]
+fn a_rolled_up_move_carries_its_whole_subtree_s_weight() {
+    let r = Case {
+        removed: vec![
+            sized_dir("docs", ALPHA, 5000),
+            sized_dir("docs/reports", BETA, 5000),
+            sized_file("docs/reports/q3.txt", GAMMA, 5000),
+        ],
+        added: vec![
+            sized_dir("archive", ALPHA, 5000),
+            sized_dir("archive/reports", BETA, 5000),
+            sized_file("archive/reports/q3.txt", GAMMA, 5000),
+        ],
+        ..Default::default()
+    }
+    .run();
+    let (entries, bytes) = weight(&r, Side::Right, "archive");
+    assert_eq!(bytes, 5000, "the moved subtree's bytes went missing");
+    assert_eq!(
+        entries, 3,
+        "one finding plus the two entries its rollup absorbed"
+    );
+}
+
+#[test]
+fn untouched_entries_weigh_nothing() {
+    let r = Case {
+        added: vec![sized_file("new.txt", ALPHA, 10)],
+        right_full: Some(vec![
+            sized_file("new.txt", ALPHA, 10),
+            sized_file("untouched.txt", BETA, 9999),
+        ]),
+        left_full: Some(vec![]),
+        ..Default::default()
+    }
+    .run();
+    assert_eq!(weight(&r, Side::Right, "untouched.txt"), (0, 0));
+    assert_eq!(weight(&r, Side::Right, "new.txt"), (1, 10));
+}
+
+/// The ordering the viewer defaults to has to be derivable from the
+/// result alone, so it is asserted here rather than in the page.
+#[test]
+fn the_busiest_directory_outweighs_the_others() {
+    let r = Case {
+        added: vec![
+            sized_file("small/a.txt", ALPHA, 1),
+            sized_file("huge/b.bin", BETA, 1_000_000),
+            sized_file("medium/c.txt", GAMMA, 500),
+        ],
+        ..Default::default()
+    }
+    .run();
+    let mut dirs: Vec<(&str, i64)> = ["small", "huge", "medium"]
+        .iter()
+        .map(|d| (*d, r.node(Side::Right, d).unwrap().diff_bytes))
+        .collect();
+    dirs.sort_by_key(|(_, b)| -b);
+    assert_eq!(
+        dirs.iter().map(|(d, _)| *d).collect::<Vec<_>>(),
+        vec!["huge", "medium", "small"]
+    );
+}

@@ -89,6 +89,10 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+fn is_zero_i64(n: &i64) -> bool {
+    *n == 0
+}
+
 /// A rendered tree node. The short field names are what the viewer
 /// reads; a page holds one of these per path per side, so the names
 /// are terse on purpose.
@@ -110,6 +114,25 @@ pub struct Node {
     pub rolled_up: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dup: Option<DupInfo>,
+
+    /// Entries affected at or under this node — every finding in the
+    /// subtree, plus whatever their rollups absorbed. A directory that
+    /// moved with 10 000 files inside is one finding but 10 001
+    /// affected entries, and it is the second number that says how much
+    /// is going on here.
+    #[serde(default, rename = "dn", skip_serializing_if = "is_zero")]
+    pub diff_entries: u32,
+
+    /// Bytes affected at or under this node.
+    ///
+    /// Counted from **maximal** findings only — a finding whose subtree
+    /// contains no other finding. A directory's size is the recursive
+    /// sum of its contents, so counting a new directory *and* the new
+    /// files inside it would count those bytes twice; counting only the
+    /// outermost avoids that while still giving a rolled-up move (whose
+    /// interior is absent) its full weight.
+    #[serde(default, rename = "db", skip_serializing_if = "is_zero_i64")]
+    pub diff_bytes: i64,
 }
 
 impl Node {
@@ -123,6 +146,8 @@ impl Node {
             note: String::new(),
             rolled_up: 0,
             dup: None,
+            diff_entries: 0,
+            diff_bytes: 0,
         }
     }
 }
