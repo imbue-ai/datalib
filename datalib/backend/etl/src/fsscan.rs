@@ -602,3 +602,85 @@ mod tests {
         );
     }
 }
+
+/// One file's identity: where it is, what is in it, how big it is.
+#[derive(Debug, Clone)]
+pub struct FileHash {
+    /// Resolved absolute path, the form every cache key takes.
+    pub canonical: String,
+    pub blake3: Blake3,
+    pub size: i64,
+}
+
+impl FileHash {
+    /// Lowercase hex, the form a provider's own store keeps.
+    pub fn hex(&self) -> String {
+        self.blake3.iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// The blake3 of one named file, reusing the host cache when it can
+/// vouch for the bytes.
+///
+/// [`scan`] answers "what is in this tree". This answers the same
+/// question about a file whose name the caller already knows — the
+/// shape every export-shaped provider has, where the path is fixed and
+/// only the contents are in question.
+///
+/// Same cache, same Unison cursor, same reuse rule as a tree scan, so
+/// a file hashed here costs a later scan covering it nothing, and a
+/// file a scan has already hashed costs nothing here. That sharing is
+/// the point: the answer to "did it change?" should not depend on
+/// which caller is asking.
+///
+/// `None` when the path is not a readable file — callers read that as
+/// "nothing to ingest", which is what an absent export file means.
+pub async fn fingerprint_file(cache: &FingerprintCache, path: &Path) -> Result<Option<FileHash>> {
+    let Ok(canonical) = path.canonicalize() else {
+        return Ok(None);
+    };
+    let Ok(meta) = std::fs::metadata(&canonical) else {
+        return Ok(None);
+    };
+    if !meta.is_file() {
+        return Ok(None);
+    }
+
+    let fresh = fswalk::fresh_stat(&meta);
+    let cached = cache.load_under(&canonical).await?;
+    // `load_under` on a file returns that one row keyed at the empty
+    // relative path, so this is the same lookup a tree scan does.
+    let reusable = matches!(
+        fswalk::decide(cached.cursor(""), &fresh),
+        StampDecision::ReuseHash
+    )
+    .then(|| cached.blake3(""))
+    .flatten();
+
+    let blake3 = match reusable {
+        Some(hash) => hash,
+        None => fswalk::hash_file(&canonical, fresh.size as u64)
+            .with_context(|| format!("hash {}", canonical.display()))?,
+    };
+
+    cache
+        .store(&[Fingerprint {
+            abs_path: canonical.display().to_string(),
+            kind: EntryKind::File,
+            blake3,
+            cursor: fswalk::StampCursor {
+                mtime_ns: fresh.mtime_ns,
+                size: fresh.size,
+                stamp_kind: fswalk::stamp_kind_for(&fresh),
+                inode: fresh.inode,
+                dev: fresh.dev,
+            },
+        }])
+        .await?;
+
+    Ok(Some(FileHash {
+        canonical: canonical.display().to_string(),
+        blake3,
+        size: fresh.size,
+    }))
+}

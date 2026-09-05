@@ -5,6 +5,7 @@
 //! references to sibling files in the same directory. PK recipe:
 //! `uuidv5(NS, "gemini:" + blake3_hex(prompt + "\0" + when_str))`.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -32,12 +33,16 @@ pub struct GeminiSummary {
     pub blobs_stored: usize,
 }
 
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<GeminiSummary> {
+pub async fn ingest(
+    db: &RawDb,
+    cache: &FingerprintCache,
+    root: &Path,
+    progress: &Progress,
+) -> Result<GeminiSummary> {
     let path = root.join(FILE_REL);
-    if !path.exists() {
+    let Some(fp) = FileFingerprint::of(cache, &path).await? else {
         return Ok(GeminiSummary::default());
-    }
-    let fp = FileFingerprint::of(&path)?;
+    };
     let stamped = file_checkpoint::load(db.pool(), SCOPE).await?;
     if file_checkpoint::should_skip(&stamped, &fp) {
         return Ok(GeminiSummary::default());

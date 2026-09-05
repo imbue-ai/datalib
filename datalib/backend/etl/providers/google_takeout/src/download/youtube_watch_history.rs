@@ -6,6 +6,7 @@
 //! timestamp Google rendered. PK recipe:
 //! `uuidv5(NS, "youtube:watch:{video_id}:{iso_ts}")`.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::Path;
 
 use anyhow::Result;
@@ -23,9 +24,14 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "YouTube and YouTube Music/history/watch-history.html";
 const SCOPE: &str = "google_takeout/youtube_watch_history";
 
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<usize> {
+pub async fn ingest(
+    db: &RawDb,
+    cache: &FingerprintCache,
+    root: &Path,
+    progress: &Progress,
+) -> Result<usize> {
     let path = root.join(FILE_REL);
-    let n = file_checkpoint::ingest_changed_file(db.pool(), SCOPE, &path, |bytes| {
+    let n = file_checkpoint::ingest_changed_file(cache, db.pool(), SCOPE, &path, |bytes| {
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
         for cell in mdl_html::iter_cells(&html) {

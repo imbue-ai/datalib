@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
@@ -128,6 +129,8 @@ impl DataProcessor for CarddavDownload {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     input_path: input_path.clone(),
+                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
+                        .await?,
                     account_id_override: account_id_override.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),

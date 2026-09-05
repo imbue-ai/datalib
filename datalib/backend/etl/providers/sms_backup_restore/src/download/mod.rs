@@ -20,6 +20,7 @@
 pub mod parse;
 pub mod schema_raw;
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -100,6 +101,9 @@ pub struct FetchOptions {
     /// Root of the user's export (the directory holding `sms-*.xml` /
     /// `calls-*.xml`). A single file path is also accepted.
     pub input_path: PathBuf,
+    /// Host-wide fingerprint cache: the shared answer to "did this
+    /// file change?", so an unchanged export costs a `stat`.
+    pub cache: FingerprintCache,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -134,7 +138,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     for path in discover_xml(&opts.input_path) {
-        let fp = FileFingerprint::of(&path)?;
+        let Some(fp) = FileFingerprint::of(&opts.cache, &path).await? else {
+            continue;
+        };
         if file_checkpoint::should_skip(&stamped, &fp) {
             continue;
         }

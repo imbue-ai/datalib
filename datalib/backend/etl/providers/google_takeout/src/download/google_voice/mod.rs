@@ -12,6 +12,7 @@
 pub mod parse;
 pub mod schema_raw;
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -50,6 +51,7 @@ pub struct VoiceSummary {
 /// [`schema_raw`]), so re-runs upsert in place.
 pub async fn ingest(
     db: &RawDb,
+    cache: &FingerprintCache,
     root: &Path,
     include_spam: bool,
     progress: &Progress,
@@ -84,7 +86,9 @@ pub async fn ingest(
             if !path.is_file() {
                 continue;
             }
-            let fp = FileFingerprint::of(&path)?;
+            let Some(fp) = FileFingerprint::of(cache, &path).await? else {
+                continue;
+            };
             if file_checkpoint::should_skip(&stamped, &fp) {
                 continue;
             }
@@ -107,8 +111,7 @@ pub async fn ingest(
 
     // ── Bills.html ──────────────────────────────────────────────────
     let bills_path = voice_root.join("Bills.html");
-    if bills_path.exists() {
-        let fp = FileFingerprint::of(&bills_path)?;
+    if let Some(fp) = FileFingerprint::of(cache, &bills_path).await? {
         if !file_checkpoint::should_skip(&stamped, &fp) {
             match std::fs::read_to_string(&bills_path) {
                 Ok(html) => {
@@ -145,7 +148,9 @@ pub async fn ingest(
             if !path.is_file() {
                 continue;
             }
-            let fp = FileFingerprint::of(&path)?;
+            let Some(fp) = FileFingerprint::of(cache, &path).await? else {
+                continue;
+            };
             if file_checkpoint::should_skip(&stamped, &fp) {
                 continue;
             }

@@ -6,6 +6,7 @@
 //! `maps_photos.blake3` column carries the hash so render can join
 //! back without a separate edge table.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -31,7 +32,12 @@ const SCOPE: &str = "google_takeout/maps_photos";
 type PendingCas = (String, Vec<u8>, Option<String>);
 
 /// `(rows_upserted, blobs_stored)`.
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<(usize, usize)> {
+pub async fn ingest(
+    db: &RawDb,
+    cache: &FingerprintCache,
+    root: &Path,
+    progress: &Progress,
+) -> Result<(usize, usize)> {
     let dir = root.join(DIR_REL);
     if !dir.exists() {
         return Ok((0, 0));
@@ -46,7 +52,9 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<(usi
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let json_fp = FileFingerprint::of(&path)?;
+        let Some(json_fp) = FileFingerprint::of(cache, &path).await? else {
+            continue;
+        };
         if file_checkpoint::should_skip(&stamped, &json_fp) {
             continue;
         }

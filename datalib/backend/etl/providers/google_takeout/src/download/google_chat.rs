@@ -12,6 +12,7 @@
 //! (the per-provider CAS edge) + `cas_objects` via the shared
 //! `CasEdgeAccumulator` / `flush_cas_edges` primitives.
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -40,7 +41,12 @@ pub struct ChatSummary {
     pub blobs_stored: usize,
 }
 
-pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<ChatSummary> {
+pub async fn ingest(
+    db: &RawDb,
+    cache: &FingerprintCache,
+    root: &Path,
+    progress: &Progress,
+) -> Result<ChatSummary> {
     let chat_root = root.join("Google Chat");
     if !chat_root.exists() {
         return Ok(ChatSummary::default());
@@ -62,10 +68,9 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
                 continue;
             }
             let info = path.join("user_info.json");
-            if !info.exists() {
+            let Some(fp) = FileFingerprint::of(cache, &info).await? else {
                 continue;
-            }
-            let fp = FileFingerprint::of(&info)?;
+            };
             if file_checkpoint::should_skip(&stamped, &fp) {
                 continue;
             }
@@ -117,8 +122,7 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
             }
             // group_info.json (small; one row per dir)
             let info = dir.join("group_info.json");
-            if info.exists() {
-                let fp = FileFingerprint::of(&info)?;
+            if let Some(fp) = FileFingerprint::of(cache, &info).await? {
                 if !file_checkpoint::should_skip(&stamped, &fp) {
                     let bytes = std::fs::read(&info)?;
                     let payload: Value = serde_json::from_slice(&bytes)
@@ -134,8 +138,7 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
             }
             // messages.json (one entry per message)
             let messages = dir.join("messages.json");
-            if messages.exists() {
-                let fp = FileFingerprint::of(&messages)?;
+            if let Some(fp) = FileFingerprint::of(cache, &messages).await? {
                 if !file_checkpoint::should_skip(&stamped, &fp) {
                     let bytes = std::fs::read(&messages)?;
                     let parsed: Value = serde_json::from_slice(&bytes)
