@@ -11,10 +11,10 @@
 //! framework's commit-lifecycle rule, while still leaving a clean
 //! working tree so the next open skips the rescue commit.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
@@ -33,11 +33,24 @@ struct Args {
     #[arg(long)]
     db: PathBuf,
 
-    /// Stable identifier for this scan source. Used as the
-    /// `scan_meta.id` PK and as the row identity if multiple scan
-    /// roots share one db (via `--branch`).
-    #[arg(long)]
-    source_name: String,
+    /// Stable identifier for this scan source, stored as the
+    /// `scan_meta.id` PK.
+    ///
+    /// An **id**, not a display name: nothing shows it to a person, and
+    /// re-scanning the same source must reuse it or the upsert writes a
+    /// second `scan_meta` row instead of updating the first.
+    ///
+    /// Defaults to the scan root's directory name, which is what you
+    /// want standalone. The flag is here for the pipeline's sake: there
+    /// a source's identity comes from its config entry
+    /// (`PlanContext::name`), which is chosen once and deliberately
+    /// outlives any particular path, so it cannot be derived from the
+    /// root.
+    ///
+    /// `--source-name` is accepted as an alias; it was this flag's name
+    /// when it was mandatory.
+    #[arg(long, alias = "source-name")]
+    source_id: Option<String>,
 
     /// Directory root to scan.
     #[arg(long)]
@@ -67,6 +80,13 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "fsindex")?;
 
+    // Resolve the source name before anything else touches the db, so
+    // a bad root fails here rather than after opening a store.
+    let source_id = match args.source_id.clone() {
+        Some(id) => id,
+        None => default_source_id(&args.root)?,
+    };
+
     let started = Instant::now();
     // Wall-clock start, in our canonical offset-bearing ISO format, for
     // the commit-message provenance block below.
@@ -79,11 +99,11 @@ async fn main() -> Result<()> {
     // wiring the pipeline gives each source). Falls back to
     // tracing-only when obs::init didn't publish a MultiProgress. Held
     // here so we can stamp a final summary line on it after the scan.
-    let progress = Progress::indicatif_message_only(args.source_name.clone());
+    let progress = Progress::indicatif_message_only(source_id.clone());
     let opts = FetchOptions {
         db_path: args.db.clone(),
         db: Some(db.clone()),
-        source_name: args.source_name.clone(),
+        source_id: source_id.clone(),
         root: args.root.clone(),
         target_doltlite_branch: args.branch.clone(),
         no_stamp: args.no_stamp,
@@ -116,7 +136,7 @@ async fn main() -> Result<()> {
     let scan_secs = started.elapsed().as_secs_f64();
     let commit_ms = db
         .commit(&commit_message(
-            &args.source_name,
+            &source_id,
             &args.root.display().to_string(),
             &started_at,
             &finished_at,
@@ -202,8 +222,26 @@ async fn main() -> Result<()> {
 /// from where, and how much moved." Diff counts (added/modified/etc.)
 /// are deliberately absent — they're only computable *after* this commit
 /// exists, so they live in the post-commit `fsindex_diff_summary` log.
+/// The scan root's own directory name, used when `--source-id` is not
+/// given.
+///
+/// The root is canonicalized first so `.`, `..` and a trailing slash
+/// all resolve to a real directory name rather than to an empty or
+/// misleading one. A root that *is* the filesystem root has no name to
+/// take, so it falls back to `root`.
+fn default_source_id(root: &Path) -> Result<String> {
+    let canonical = root
+        .canonicalize()
+        .with_context(|| format!("resolve scan root {}", root.display()))?;
+    Ok(canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "root".to_string()))
+}
+
 fn commit_message(
-    source_name: &str,
+    source_id: &str,
     root: &str,
     started_at: &str,
     finished_at: &str,
@@ -226,7 +264,7 @@ fn commit_message(
          skipped: {skipped} (reused from rescan cursor)\n\
          stamped_dirs: {stamped}\n\
          errors: {errors}\n",
-        source = source_name,
+        source = source_id,
         scanned = summary.entries_scanned,
         files_reused = summary.files_reused,
         files_hashed = summary.files_hashed,
@@ -267,4 +305,49 @@ fn username() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_source_id;
+    use std::path::Path;
+
+    #[test]
+    fn takes_the_root_directory_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("my_photos");
+        std::fs::create_dir(&root).unwrap();
+        assert_eq!(default_source_id(&root).unwrap(), "my_photos");
+    }
+
+    #[test]
+    fn a_trailing_slash_or_dot_dot_resolves_to_the_same_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("my_photos");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let plain = default_source_id(&root).unwrap();
+        let slashed = default_source_id(&root.join("")).unwrap();
+        let dotdot = default_source_id(&root.join("sub").join("..")).unwrap();
+        assert_eq!(plain, "my_photos");
+        assert_eq!(slashed, plain, "a trailing slash changed the name");
+        assert_eq!(dotdot, plain, "`..` changed the name");
+    }
+
+    #[test]
+    fn the_filesystem_root_has_no_name_to_take() {
+        // `/` canonicalizes to itself and has no final component, so
+        // there is nothing to name the scan after.
+        assert_eq!(default_source_id(Path::new("/")).unwrap(), "root");
+    }
+
+    #[test]
+    fn a_root_that_does_not_exist_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        let err = default_source_id(&missing).unwrap_err();
+        assert!(
+            format!("{err}").contains("resolve scan root"),
+            "unhelpful error: {err}"
+        );
+    }
 }

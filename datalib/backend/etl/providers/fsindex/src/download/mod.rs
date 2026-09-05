@@ -61,7 +61,7 @@ const PROGRESS_INTERVAL_MS: u64 = 500;
 pub struct FetchOptions {
     pub db_path: PathBuf,
     pub db: Option<RawDb>,
-    pub source_name: String,
+    pub source_id: String,
     pub root: PathBuf,
     pub target_doltlite_branch: Option<String>,
     pub no_stamp: bool,
@@ -195,7 +195,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // FIXME(inode_stable-heuristic): assumed true for now.
     let inode_stable = true;
     let scan_meta = ScanMetaRow {
-        id: opts.source_name.clone(),
+        id: opts.source_id.clone(),
         abs_path: opts.root.to_string_lossy().into_owned(),
         os,
         case_sensitive,

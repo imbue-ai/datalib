@@ -2,6 +2,26 @@ common --enable_bzlmod
 common --noenable_workspace
 test --test_output=errors
 
+# Opt out of Aspect's ruleset-usage telemetry. `aspect_rules_js` (and
+# everything else of theirs in our graph) pulls in the
+# `aspect_tools_telemetry` module, which by default POSTs a report of
+# which Bazel and module versions we build with to
+# telemetry.aspect.build — from every developer machine and every CI
+# runner, once per module resolution. The reports carry no user or org
+# identifier, but we don't need to send them, so we don't.
+#
+# It must be `--repo_env`, not `--action_env`: the value is read by a
+# repository rule during module resolution, not by a build action.
+#
+# `-all` is the documented off switch and is the one to use. The
+# tempting-looking `=none` is NOT an off switch: the extension parses
+# this as a set of feature names, so `none` reads as "collect the
+# feature called none" — it collects nothing, but leaves the send
+# guard truthy and still makes the network call, just with an empty
+# body. `-all` subtracts every feature, which empties the set and
+# skips the POST entirely.
+common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
+
 # Undeclared test outputs as one downloadable `outputs.zip` rather than
 # a loose directory tree.
 #

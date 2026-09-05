@@ -240,6 +240,18 @@ bazel_dep(name = "rules_python", version = "2.3.2")
 
 PYTHON_VERSION = "3.13"
 
+# Don't let rules_python synthesize `__init__.py` files into our
+# py_binary / py_test runfiles trees. The implicit behavior is
+# deprecated upstream (it printed a WARNING on every build of the six
+# Python targets in this repo), and it will be off by default in a
+# future release. Turning it off now is free here: every first-party
+# Python file we run is a single self-contained script that imports
+# only the standard library, so none of them relied on a generated
+# package marker. If you ever add a first-party Python *package*,
+# check in its `__init__.py` and list it in the target's `srcs`.
+rules_python_config = use_extension("@rules_python//python/extensions:config.bzl", "config")
+rules_python_config.explicit_init_py(default = True)
+
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     is_default = True,
@@ -476,11 +488,15 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 #   * `build_script_data` materializes the header + archive into the
 #     execroot the build script runs in, so $(BINDIR) paths resolve.
 #
-#   * `deps = ["//third-party/doltlite:sqlite3"]` threads the same
+#   * `link_deps = ["//third-party/doltlite:sqlite3"]` threads the same
 #     static archive into the rust_library link step as a native
 #     compile dep, so rustc's final link command actually has the
 #     `.a` available on the search path (the build script's emitted
 #     `cargo:rustc-link-search=` is redundant with this but harmless).
+#     It is `link_deps` and not `deps` because `deps` takes Rust
+#     targets only: a `cc_library` there still works, but rules_rust
+#     prints a deprecation warning on every build and says the support
+#     is going away.
 # Disable signal-backup's build.rs under Bazel. Cargo runs build.rs
 # to generate the prost modules into OUT_DIR; under Bazel the same
 # modules come from `rust_prost_library` (a separate crate). Without
@@ -512,7 +528,7 @@ crate.annotation(
     # required.
     patches = ["@@//third-party/doltlite:libsqlite3-sys.patch"],
     patch_args = ["-p1"],
-    deps = ["@@//third-party/doltlite:sqlite3"],
+    link_deps = ["@@//third-party/doltlite:sqlite3"],
     build_script_data = [
         "@@//third-party/doltlite:sqlite3.h",
         "@@//third-party/doltlite:sqlite3",
