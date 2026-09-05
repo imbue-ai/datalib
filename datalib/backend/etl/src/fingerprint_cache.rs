@@ -436,6 +436,37 @@ impl FingerprintCache {
         Ok(removed)
     }
 
+    /// The cache's footprint on disk, in bytes.
+    ///
+    /// Sums the database and its `-wal` / `-shm` sidecars, because in
+    /// WAL mode recent writes live in the sidecar and the main file
+    /// alone would under-report — a scan could write thousands of rows
+    /// and appear to have grown by nothing.
+    pub fn disk_bytes(&self) -> u64 {
+        let mut total = 0u64;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = self.path.clone().into_os_string();
+            p.push(suffix);
+            if let Ok(md) = std::fs::metadata(PathBuf::from(p)) {
+                total += md.len();
+            }
+        }
+        total
+    }
+
+    /// Fold the WAL back into the database and truncate it.
+    ///
+    /// Best-effort: a concurrent scan holding the file makes this fail,
+    /// which costs nothing. Worth doing at the end of a run so the
+    /// footprint reported is a settled number rather than one that
+    /// depends on when SQLite last checkpointed, and so the sidecar
+    /// does not grow across runs.
+    pub async fn checkpoint(&self) {
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await;
+    }
+
     /// Total rows, for diagnostics.
     pub async fn count(&self) -> Result<i64> {
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprints")
