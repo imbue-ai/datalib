@@ -11,8 +11,11 @@ rust_binary(
     srcs = ["src/main.rs"],
     edition = "2021",
     visibility = ["//visibility:public"],
+    # The doltlite static archive is a cc_library, so it goes in
+    # `link_deps` (manual FFI linkage) rather than `deps`, which takes
+    # Rust targets only.
+    link_deps = ["//third-party/doltlite:sqlite3"],
     deps = [
-        "//third-party/doltlite:sqlite3",
         "@datalib_crates//:clap",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
