@@ -58,10 +58,19 @@ integer in one row and a blob in the next, and both arrive intact.
 Marshalling through Rust would force a decision about what such a column
 "is" — and getting it wrong would silently corrupt the backup.
 
-The one thing doltlite *cannot* do is create a plain SQLite file: a
-database it creates is always in its own format. That's why the test
-fixture is minted by `//tests/fixtures:make_lightroom_catalog.py` in a genrule rather
-than by Rust.
+A database doltlite creates is in its own format *by default*, whatever
+the filename extension — but that is a default, not a limitation. The
+URI parameter `doltlite_engine=sqlite` selects the stock engine for a
+new empty file (it is read with `sqlite3_uri_parameter`, so the name has
+to be `file:`-shaped, and it is ignored once the file has content).
+`datalib/backend/progress/src/bus.rs` uses it, and
+`progress/tests/stock_sqlite_engine.rs` asserts the resulting magic
+bytes against a control that omits the parameter and gets `CTLD`.
+
+The test fixture is still minted by
+`//tests/fixtures:make_lightroom_catalog.py` in a genrule rather than by
+Rust, but for a better reason than "Rust can't": generating the input
+out of band keeps the fixture independent of the engine under test.
 
 ## What gets mirrored
 

@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Generate a small, Lightroom-shaped `.lrcat` fixture.
 
-Run as a Bazel genrule (`:tng_catalog`); the output is a **plain SQLite
-file**, which is the whole reason this is Python and not Rust. Every Rust
-binary in this tree statically links doltlite's amalgamation as its
-`sqlite3` (see `MODULE.bazel`), and while that library reads *and writes*
-ordinary SQLite files transparently, a file it *creates* is always in
-doltlite's own prolly-tree format. So a Rust test can mutate a catalog
-fixture but cannot mint one; Python's stdlib `sqlite3` can.
+Run as a Bazel genrule
+(`//datalib/backend/etl/providers/lightroom:tng_catalog`, which reaches
+this file across the package boundary); the output is a **plain SQLite
+file**.
+
+This is Python rather than Rust so that the fixture is minted
+independently of the engine under test. Rust *could* do it: every Rust
+binary here statically links doltlite as its `sqlite3` (see
+`MODULE.bazel`), and while a file doltlite creates is in its own
+prolly-tree format by default, the `doltlite_engine=sqlite` URI
+parameter selects the stock engine for a new empty file — see
+`datalib/backend/progress/src/bus.rs`. Generating the input with
+stdlib `sqlite3` keeps that choice out of the fixture entirely.
 
 The table definitions are copied verbatim from a real Lightroom Classic
 catalog (`sqlite_master.sql`), trimmed to the tables the mirror tests
