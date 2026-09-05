@@ -208,10 +208,12 @@ doltlite -readonly claude/raw/entities.doltlite_db \
   "SELECT * FROM dolt_at_conversations('HEAD^1') WHERE id = '<the id>';"
 ```
 
-Widen the window by walking further back (`HEAD~10`, or a hash out of
-`dolt_log`) rather than comparing adjacent commits — providers commit
-more than once per run, so `HEAD^1` is often mid-run rather than
-last-sync.
+A download normally makes exactly one commit, at the end
+(`download <name>: <summary>`), so `HEAD^1` is usually the previous
+sync. The exception is an interrupted run, which leaves a
+`download <name>: interrupted (Ctrl-C)` commit — check `dolt_log`
+messages before trusting `HEAD^1`, and walk further back (`HEAD~10`, or
+a hash from `dolt_log`) for a wider window.
 
 ### History of a single table
 

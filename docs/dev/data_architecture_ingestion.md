@@ -259,115 +259,89 @@ The skip-check is keyed by the **upstream identifier** (known before fetch), not
 
 The versioned raw store is usually argued for on incrementality — "what
 changed since commit X" is how render and the grid index avoid redoing
-work. But the same property answers a question a plain mirror cannot
-answer at all: **what did the provider quietly change or delete since we
-last looked?**
+work. The same property answers a question a plain mirror cannot answer
+at all: **what did the provider quietly change or delete since we last
+looked?**
 
-A conventional "download the latest state" mirror overwrites itself, so
-an upstream deletion is indistinguishable from a row that was never
-there. Here, every sync is a commit, so a row that vanished upstream
-shows up as a `removed` in `dolt_diff` and the old value is still on
-disk at the previous commit. This is worth stating plainly because it is
-close to the point of the whole project: the reason to keep your own copy
-is that the provider's copy is not under your control, and knowing *when
-they lost something* is a large part of the value of having noticed.
+A "download the latest state" mirror overwrites itself, so an upstream
+deletion is indistinguishable from a row that was never there. Here
+every sync is a commit, so a row that vanished upstream is a `removed`
+in `dolt_diff` with its last value still on disk. That is close to the
+point of the project: the reason to keep your own copy is that the
+provider's copy is not under your control.
 
-It is also the flattering side of a property we criticize elsewhere.
+It is also the good side of a property we criticize elsewhere.
 "doltlite never deletes anything" is a real cost for
-[derived intermediates](data_lib_as_a_library/toolchain_for_agents.md)
-— unbounded growth on artifacts we could always rebuild. On the raw
-store it is the feature: the irreplaceable copy keeps its history, so a
-deletion upstream costs you nothing locally.
+[derived intermediates](data_lib_as_a_library/toolchain_for_agents.md),
+which we could always rebuild. On the raw store it is the feature.
 
-### What is already built
+### What is on disk today
 
-Every download run records per-table row deltas with no per-provider
-plumbing. `DownloadRun::finish`
+The commits are the durable record: `dolt_diff` between any two refs
+answers this for any window, for every provider, and always will.
+
+There is also a precomputed per-run summary, and it is narrower than it
+looks. `DownloadRun::finish`
 ([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) reads
-`dolt_status` for dirty tables and `dolt_diff_<table>` for each one,
-and writes `{table: {added, modified, removed}}` into
-`sync_runs.summary.deltas`. Dolt is the ground truth, so this works
-identically for all ~18 providers.
+`dolt_status` for dirty tables, counts `dolt_diff_<table>` by
+`diff_type`, and writes `{table: {added, modified, removed}}` to
+`sync_runs.summary.deltas`. It runs before the store's end-of-run
+`dolt_commit` (`RawStoreSession::finish`), so the numbers cover the
+whole run rather than a tail.
 
-Two levels of signal, and it is worth keeping them apart. The
-**commits** are the complete and durable record — any window you like,
-recoverable at any time from `dolt_diff` between two refs.
-`summary.deltas` is a cheap precomputed summary of one run's tail, and
-is approximate for the reasons in "The gap" below. Either way the raw
-material for "12 conversations vanished from claude.ai this month" is on
-disk after every run today. What is missing is everything between it and
-a person seeing it.
+**Only 8 of the 20 providers with a download side use `DownloadRun`**
+(beeper, chatgpt, claude, email, github, gitlab, notion, slack; checked
+2026-09-05). The other twelve write no `sync_runs` row and no deltas at
+all — their history is still in the commits, but nothing precomputes it.
 
 One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
-for a provider that deletes on absence — which is the next point.
+for a provider that deletes on absence.
 
-### Three things that limit how far it goes
+### What limits it
 
-None of these are doltlite's doing — they are all about the downloaders
-and about what we display.
+**Detection needs a re-enumeration.** A downloader that walks forward
+from a cursor never asks about rows it already has, so a deletion never
+enters the diff. You need a periodic full listing or tombstones from the
+API. Verified to notice today: `email` (JMAP `Email/changes` `destroyed`
+and the Gmail path's `deleted`, both into `db.delete_emails`), `media`
+and `fsindex` (truncate-and-refill, asserted by `media`'s
+`deletions_are_reconciled_without_a_clock`), and `claude_export`
+(`prune_to`). The rest is an unwritten per-provider audit; assume a
+cursor-driven walker's deletions are invisible until someone checks.
 
-**1. Detection needs a re-enumeration.** A downloader that walks forward
-from a cursor never asks about the rows it already has, so a deletion
-simply never enters the diff. You need either a periodic full listing or
-explicit tombstones from the API. Which of those each provider does is a
-per-provider question, and this doc does not answer it for all of them.
-Three that verifiably do notice, by three different mechanisms:
+**The two lists barely overlap**, which is the awkward part. `media` and
+`fsindex` detect deletions structurally and record no deltas; most of
+the eight that record deltas are cursor-driven API walkers that may not
+detect deletions at all. Only `email` and `claude_export` currently sit
+in both.
 
-- `email` gets explicit tombstones — JMAP `Email/changes` `destroyed`
-  ids (and the Gmail API path's `deleted`) drive `db.delete_emails`.
-- `media` and `fsindex` re-enumerate by construction: a truncate-and-refill
-  scan makes deletions fall out for free (`media`'s
-  `deletions_are_reconciled_without_a_clock` e2e test asserts exactly
-  this).
-- `claude_export` prunes to the snapshot it just read (`prune_to` in
-  `download/export.rs`) — which is also why pointing it at a store the
-  API downloader has extended is destructive; see the provider's
-  `DOWNLOAD.md`.
-
-The cursor-driven API walkers are the ones to be skeptical of. Until a
-provider's behavior here is written down, assume its deletions are
-invisible.
-
-**2. `deleted_upstream_at` is designed but not built.** [Transient vs
+**`deleted_upstream_at` is specified but not built.** [Transient vs
 non-transient](#transient-vs-non-transient) below says a confirmed 404
-"should carry a distinct `deleted_upstream_at` marker." No column by
-that name exists anywhere in the tree (checked 2026-09-05). A provider
-that hard-deletes the row instead loses the distinction between "gone
-upstream" and "we never fetched it" in the *current* state — you can
-still recover it from history, but only by diffing commits.
+should carry that marker. No such column exists anywhere in the tree
+(checked 2026-09-05). A provider that hard-deletes the row instead keeps
+the fact only in history, not in current state.
 
-**3. The signal is only as clean as the canonicalization.** An unchanged
-record that serializes differently from itself manufactures a false
-`modified`. That is why [AGENTS.md's "give a bag an order before storing
-it"](/AGENTS.md) is load-bearing rather than tidy — claude.ai returning a
-project's `permissions` strings in a different order on different fetches
-is the worked example. False positives are worse for this use than for
-incrementality: a spurious re-render wastes CPU, a spurious "your
-provider changed this" wastes trust.
+**False positives track canonicalization.** An unchanged record that
+serializes differently from itself manufactures a `modified`. That is
+why [AGENTS.md's "give a bag an order before storing it"](/AGENTS.md) is
+load-bearing rather than tidy — claude.ai returning a project's
+`permissions` in a different order on different fetches is the worked
+example. A spurious re-render wastes CPU; a spurious "your provider
+changed this" wastes trust.
 
-### The gap: detection is available, not delivered
+### The gap
 
-Nothing reads `summary.deltas` back. Grep `datalib/backend/http` and
-`datalib/ui` for it and you get zero hits (checked 2026-09-05) — the
-only place any of this reaches a human today is `fsindex`'s standalone
-CLI, which prints `vs last scan: N added, M modified, K removed` and is
-one provider's local convenience rather than a product surface.
+Nothing reads `summary.deltas` back — zero hits in
+`datalib/backend/http` and `datalib/ui` (checked 2026-09-05). The only
+place any of this reaches a human is `fsindex`'s standalone CLI printing
+`vs last scan: N added, M modified, K removed`, which is one provider's
+local convenience rather than a product surface. `sync_runs` also
+records no commit hashes (`run_id`, `started_at`, `finished_at`,
+`config`, `status`, `summary`), so recovering the exact commit range for
+a past run means reading `dolt_log` by hand.
 
-Two known rough edges for whoever builds that surface:
-
-- **`summary.deltas` is a tail sample, not a run total.** It is computed
-  at `finish` against `to_commit = 'WORKING'`, i.e. only what is dirty
-  since the run's *last* `dolt_commit` — and several providers (slack,
-  yolink, lightroom, fsindex, claude_export) commit mid-run, so their
-  numbers undercount.
-- **`sync_runs` has no commit hashes.** The DDL is `run_id`,
-  `started_at`, `finished_at`, `config`, `status`, `summary`. Stamping
-  the HEAD hash at start and at finish would make the exact per-run diff
-  a two-value lookup instead of an archaeology exercise, and would fix
-  the previous bullet as a side effect.
-
-See [`TODO.md`](/TODO.md) for the UI side.
+Detection is available, not delivered. See [`TODO.md`](/TODO.md).
 
 ## Timestamps: one clock, no fabrication
 
