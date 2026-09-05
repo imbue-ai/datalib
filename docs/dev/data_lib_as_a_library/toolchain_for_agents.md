@@ -181,7 +181,12 @@ property, and should say so.
 
 **Nothing reclaims space.** doltlite never deletes, so every
 intermediate keeps its full history. That is exactly right for the raw
-store, which is the irreplaceable copy, and much harder to justify for
+store, which is the irreplaceable copy — and there it is not merely
+tolerable but the point, because keeping the old value is what lets us
+say *the provider deleted this*, which a plain overwrite-in-place mirror
+can never say (see
+[Noticing when the *upstream* loses data](/docs/dev/data_architecture_ingestion.md#noticing-when-the-upstream-loses-data)).
+It is much harder to justify for
 *derived* intermediates, where it means unbounded growth on the
 artifacts we care least about preserving. Iceberg has snapshot expiry
 and Delta has `VACUUM`; we have nothing.
