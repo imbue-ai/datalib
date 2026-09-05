@@ -39,11 +39,15 @@ and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
 [`datalib/backend/core/src/layout.rs`](/datalib/backend/core/src/layout.rs).
 
-Seven binaries ship in a release: `datalib-dag` (the sync runner),
+Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
 server + web UI), `datalib-applet` (the applet host, spawned on demand
 by the http gateway), `latchkey-curl-dispatch` +
 `latchkey-curl-impersonate` (Cloudflare-safe HTTP for downloaders),
+`datalib-doltlite` (the shell for reading and exporting the stores —
+see "Reading the mirrored data" below), `datalib-fsindex` (the
+directory-tree scanner, also reachable as a step) and
+`datalib-dirtree-diff` (diffs two of its scans into one HTML page),
 and `datalib-migrate-config` (one-shot conversion of a pre-TOML
 `config.yaml`; see below). The authoritative list is the `:dist`
 filegroup in
@@ -125,21 +129,35 @@ Pick the surface that fits the question:
   `unified_index/grid/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `when_ts`, `author`, `channel`, `conversation_uuid`, `text`,
-  `entire_chat`, etc. Any SQLite-shaped client can read it; the
-  `doltlite` CLI (a `sqlite3`-argv-compatible shell with the dolt
-  extensions) is the standard tool. **Always pass `-readonly`** —
-  a stray writer can wedge later syncs:
+  `entire_chat`, etc.
+
+  Read it with **`datalib-doltlite`**, which is in the release tarball
+  and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
+  `doltlite` in the docker image, and
+  `bazelisk build //third-party/doltlite:doltlite` from a checkout).
+  Its argv is `sqlite3`'s. **Always pass `-readonly`** — a stray writer
+  can wedge later syncs:
 
   ```sh
-  doltlite -readonly unified_index/grid/db.doltlite_db \
+  datalib-doltlite -readonly unified_index/grid/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
-  The CLI is **not** in the release tarball — it ships in the docker
-  image, and `bazelisk build //third-party/doltlite:doltlite` builds it
-  from a checkout. From a plain `install.sh` install, read the index
-  through `datalib-http`'s endpoints below instead. Stock `sqlite3`
-  cannot open these files.
+  Stock `sqlite3` **cannot** open the file itself — a `.doltlite_db` is
+  a prolly-tree store, not a SQLite file, and `sqlite3` says `file is
+  not a database`. But nothing is trapped in there: one pipe writes a
+  plain SQLite database with the same tables, schemas and indexes, for
+  any tool that speaks only SQLite.
+
+  ```sh
+  datalib-doltlite -readonly unified_index/grid/db.doltlite_db .dump \
+    | sqlite3 grid.sqlite
+  ```
+
+  The snapshot carries the data, not the commit history — see
+  [`docs/dev/doltlite.md`](dev/doltlite.md) for what that costs and for
+  a single-table variant. If you would rather not touch the store at
+  all, `datalib-http`'s endpoints below serve the same rows.
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).

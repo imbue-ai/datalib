@@ -46,7 +46,8 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-# Set of rust_binary targets bundled into the install.sh release tarball.
+# Set of binaries bundled into the install.sh release tarball (all of
+# them Rust, except the doltlite shell at the bottom of the list).
 # Adding a binary here gets it shipped to users on the next tagged release;
 # .github/workflows/release.yml renames each bazel output to its public
 # `datalib-<name>` form before tarring, and scripts/install.sh drops
@@ -95,6 +96,15 @@ filegroup(
         # `command = "datalib-applet slack"` entry would only work for
         # a user who installed the binary by hand.
         "//datalib/backend/applets:datalib_applet",
+        # The doltlite shell, installed as `datalib-doltlite`. Not a Rust
+        # binary and not part of the pipeline — it ships because without
+        # it a `curl | sh` install has nothing that can open its own
+        # stores: a `.doltlite_db` is a prolly-tree file, and stock
+        # `sqlite3` reports "file is not a database" on one. It is the
+        # tool the export recipe in docs/dev/doltlite.md pipes from, and
+        # linking the same amalgamation the pipeline writes with means
+        # the shell and the store can never disagree about the format.
+        "//third-party/doltlite:doltlite",
     ],
     visibility = ["//visibility:public"],
 )
@@ -143,6 +153,10 @@ copy_to_directory(
     srcs = [":dist"],
     replace_prefixes = {
         "dag/datalib_dag_bin": "datalib-dag",
+        # Reached under the second `root_paths` entry below, which is
+        # what makes this key `doltlite/doltlite` and not
+        # `third-party/doltlite/doltlite`.
+        "doltlite/doltlite": "datalib-doltlite",
         "dirtree_diff/dirtree_diff": "datalib-dirtree-diff",
         "etl/providers/fsindex/fsindex": "datalib-fsindex",
         "datalib_step/datalib_step": "datalib-step",
@@ -152,6 +166,11 @@ copy_to_directory(
         "etl/latchkey_curl_dispatch": "latchkey-curl-dispatch",
         "etl/latchkey_curl_impersonate": "latchkey-curl-impersonate",
     },
-    root_paths = ["datalib/backend"],
+    # Two roots because one shipped binary is not a Rust one: the
+    # doltlite shell is built under `third-party/`.
+    root_paths = [
+        "datalib/backend",
+        "third-party",
+    ],
     visibility = ["//visibility:public"],
 )

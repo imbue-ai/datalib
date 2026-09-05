@@ -343,7 +343,8 @@ jobs:
               bazel-bin/datalib/backend/dag/datalib_dag_bin \
               bazel-bin/datalib/backend/datalib_step/datalib_step \
               bazel-bin/datalib/backend/http/datalib_http_bin \
-              bazel-bin/datalib/backend/etl/latchkey_curl_impersonate; do
+              bazel-bin/datalib/backend/etl/latchkey_curl_impersonate \
+              bazel-bin/third-party/doltlite/doltlite; do
               echo "--- ${bin}"
               if readelf -l "${bin}" | grep -q 'INTERP'; then
                   echo "ERROR: ${bin} requests a dynamic loader (PT_INTERP) — not fully static." >&2

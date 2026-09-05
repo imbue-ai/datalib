@@ -237,8 +237,13 @@ schema one.
 
 **d. The queryable store isn't queryable from a released install.**
 `agent_user.md` tells an agent to run `doltlite -readonly …`. That CLI
-ships in the docker image and is **not** in `//datalib/backend:dist`,
-so it is not in the tarball `install.sh` unpacks.
+shipped in the docker image and was **not** in `//datalib/backend:dist`,
+so it was not in the tarball `install.sh` unpacks.
+
+*Fixed.* `//third-party/doltlite:doltlite` is now in `:dist` and
+installs as `datalib-doltlite`. The same shell is what exports a store
+to plain SQLite (`.dump | sqlite3`), which is the answer to the
+lock-in question this section leaves open.
 
 **e. No Python binding, and we should not build one.** The consuming
 skill's packaging rule is stdlib-only, no per-skill dependencies. A

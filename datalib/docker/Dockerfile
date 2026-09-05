@@ -1,7 +1,7 @@
 # Datalib — production runtime image.
 #
 # Ships the release binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
-# `datalib-migrate-config`, `datalib-applet`,
+# `datalib-migrate-config`, `datalib-applet`, `datalib-doltlite`,
 # `latchkey-curl-impersonate`) plus Node + `latchkey` so users can
 # register services and run syncs from a single container.
 #
@@ -28,8 +28,8 @@
 #
 # Devcontainer: `.devcontainer/Dockerfile` inherits from a published
 # version of THIS image via `FROM ghcr.io/imbue-ai/datalib:<tag>`,
-# so everything below (apt + Node + latchkey + doltlite CLI + qmd
-# models + bind-mount dirs) is carried into the devcontainer for free
+# so everything below (apt + Node + latchkey + qmd models +
+# bind-mount dirs) is carried into the devcontainer for free
 # — no Dockerfile mirroring, no double download. The devcontainer
 # just adds the Bazel build toolchain (clang/cmake/llvm/lld/bun/
 # bazelisk + the `ubuntu` non-root user) on top. When this Dockerfile
@@ -90,40 +90,6 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
 # this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
 ARG LATCHKEY_VERSION=3.8.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
-
-# Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
-# DB by hand. Lets users run `docker exec -it … doltlite
-# /data/backend_index.doltlite_db` and execute `SELECT * FROM
-# dolt_log()` etc. against the live store. Doltlite isn't in Ubuntu's
-# package repos, but `dolthub/doltlite` publishes signed per-arch
-# `.deb` packages on every GitHub release.
-#
-# Pin to the same version we statically link into the binary
-# (//third-party/doltlite + MODULE.bazel's `doltlite_amalgamation`), so
-# the SQL surface a user sees in the shell matches what the running
-# binary observes — drift here would be confusing without buying
-# anything. The `libdoltlite-dev` headers we don't want (no compilation
-# happens in this image); the `doltlite` CLI package pulls in its
-# `libdoltlite0 (= 0.11.53)` runtime as a hard dep, which is unavoidable
-# even though our binary doesn't dynamic-link against it (the .so just
-# sits there serving the CLI). Adds ~31 MB to the image — small price
-# for a real debug shell against the prolly store.
-#
-# public-release assets are reachable anonymously, so curl is fine here
-# (no gh CLI dep just for this step).
-ARG DOLTLITE_CLI_VERSION=0.50.3
-RUN arch="$(dpkg --print-architecture)" \
-    && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
-    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o /tmp/libdoltlite0.deb "${base}/libdoltlite0_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
-    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o /tmp/doltlite.deb "${base}/doltlite_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        /tmp/libdoltlite0.deb \
-        /tmp/doltlite.deb \
-    && rm -rf /tmp/libdoltlite0.deb /tmp/doltlite.deb /var/lib/apt/lists/* \
-    && doltlite --version
 
 # Install qmd globally and pre-fetch its three default models
 # (embedding + query-expansion + reranker, ~2.25 GB total). `qmd pull`
@@ -191,9 +157,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /root/.latchkey /data
 
 # === SHARED-WITH-DEVCONTAINER STATE ENDS HERE ===
-# Everything below is prod-only (the release binaries + entrypoint).
-# `.devcontainer/Dockerfile` inherits the image at this point and adds
-# the Bazel toolchain on top — see the top-of-file note.
+# Everything below is prod-only: the release binaries and the
+# entrypoint. `FROM ghcr.io/imbue-ai/datalib:<tag>` copies the finished
+# image, so the devcontainer physically gets these layers too — they
+# just aren't what it runs. A contributor there builds the binaries
+# from source with Bazel, and `bazelisk build
+# //third-party/doltlite:doltlite` is the shell they should use, so
+# that it matches the tree they are editing rather than the published
+# tag they inherited.
 
 # Stage the matching per-arch tarball. `TARGETARCH` is supplied
 # automatically by `docker buildx` (amd64 | arm64). The build context must
@@ -217,6 +188,19 @@ RUN set -eux; \
     install -m 0755 "$staged/datalib-http"                  /usr/local/bin/datalib-http; \
     install -m 0755 "$staged/latchkey-curl-dispatch"            /usr/local/bin/latchkey-curl-dispatch; \
     install -m 0755 "$staged/latchkey-curl-impersonate"         /usr/local/bin/latchkey-curl-impersonate; \
+    # The doltlite shell, for poking at a store by hand:
+    #   docker exec -it … doltlite -readonly \
+    #       /data/unified_index/grid/db.doltlite_db "SELECT * FROM dolt_log();"
+    # It used to be installed from dolthub's `.deb` a few layers up,
+    # which meant a second copy of the same engine (~31 MB, plus its
+    # `libdoltlite0` runtime) and a second version pin to keep in step
+    # with MODULE.bazel's amalgamation. The tarball's copy links that
+    # amalgamation, so the shell and the stores in /data cannot
+    # disagree about the format. The bare `doltlite` name stays as a
+    # symlink: it is what docs/dev/doltlite.md's recipes type, and what
+    # anyone with the old image in their fingers will type.
+    install -m 0755 "$staged/datalib-doltlite"                  /usr/local/bin/datalib-doltlite; \
+    ln -sfn /usr/local/bin/datalib-doltlite /usr/local/bin/doltlite; \
     rm -rf /tmp/release; \
     # Smoke: --version on the one binary that supports it. datalib-http
     # takes a positional DATA_ROOT and clap rejects --version before parsing
@@ -226,7 +210,8 @@ RUN set -eux; \
     test -x /usr/local/bin/datalib-applet; \
     test -x /usr/local/bin/datalib-http; \
     test -x /usr/local/bin/latchkey-curl-dispatch; \
-    test -x /usr/local/bin/latchkey-curl-impersonate
+    test -x /usr/local/bin/latchkey-curl-impersonate; \
+    doltlite --version
 
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a

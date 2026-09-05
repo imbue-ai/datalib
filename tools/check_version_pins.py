@@ -126,16 +126,17 @@ FAMILIES: list[Family] = [
         why=(
             "The amalgamation and autoconf archives must come from one "
             "release (:cli_version_test enforces that by running the built "
-            "CLI). This adds the two pins that check cannot see: the "
-            "Starlark constant it is handed, and the CLI version the prod "
-            "image installs from apt."
+            "CLI). This adds the pin that check cannot see: the Starlark "
+            "constant it is handed. The prod image used to carry a fourth "
+            "pin, `ARG DOLTLITE_CLI_VERSION`, for a `.deb` copy of the "
+            "shell; it now installs the one in the release tarball, which "
+            "is built from these same archives and so cannot drift."
         ),
         canonical="third-party/doltlite/BUILD.bazel",
         sites=[
             ("third-party/doltlite/BUILD.bazel", r'^DOLTLITE_VERSION = "([^"]+)"'),
             ("MODULE.bazel", r"doltlite-amalgamation-([\d.]+)\.zip"),
             ("MODULE.bazel", r"doltlite-autoconf-([\d.]+)\.tar\.gz"),
-            ("datalib/docker/Dockerfile", r"^ARG DOLTLITE_CLI_VERSION=(\S+)"),
         ],
     ),
     Family(

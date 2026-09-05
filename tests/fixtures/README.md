@@ -221,11 +221,18 @@ Bazel keys its action cache on *inputs*, so the residue costs
 reproducibility and cross-machine cache sharing, not day-to-day rebuild
 churn.
 
-**Reading the doltlite_db.** It's a SQLite-shaped file. Consumers that
-link doltlite (via `//third-party/doltlite:sqlite3`) get the full
-version-control surface; consumers that link stock libsqlite3 get the
-same table schemas without the `dolt_*` SQL functions. Either way, a
-plain `SELECT` works:
+**Reading the doltlite_db.** It is not a SQLite *file* — a
+`.doltlite_db` is a prolly-tree store, and a consumer linking stock
+libsqlite3 cannot open one at all (`file is not a database`). This
+paragraph used to say such a consumer "gets the same table schemas
+without the `dolt_*` SQL functions", which is false and was one of two
+places in the docs that told a reader stock SQLite would work.
+
+What is true: link doltlite (via `//third-party/doltlite:sqlite3`) and
+a plain `SELECT` works, alongside the full version-control surface. A
+consumer that can only speak stock SQLite wants an export instead —
+`doltlite -readonly <db> .dump | sqlite3 out.sqlite`, see
+[`docs/dev/doltlite.md`](/docs/dev/doltlite.md).
 
 ```rust
 let pool = sqlx::sqlite::SqlitePool::connect(

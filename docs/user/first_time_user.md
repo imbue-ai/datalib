@@ -51,8 +51,9 @@ curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/insta
 ```
 
 This downloads the latest release tarball, verifies its checksum, and drops
-`datalib-dag`, `datalib-step`, `datalib-http`, and the latchkey curl
-shim into `~/.local/bin`. If that directory isn't already on your `PATH`,
+`datalib-dag`, `datalib-step`, `datalib-http`, `datalib-doltlite` (the
+shell for reading and exporting your stores — see step 8), and the
+latchkey curl shim into `~/.local/bin`. If that directory isn't already on your `PATH`,
 the script prints the exact line to add to your `~/.zshrc` — add it and
 restart your shell so the installed commands resolve.
 
@@ -348,14 +349,15 @@ and should be faster.
 ├── fastmail/                       # (mbox source lands here too)
 │   └── …
 ├── …
+├── unified_index/                  # the shared indexes, rebuildable
+│   ├── grid/db.doltlite_db         #   grid rows + markdowns + edges
+│   └── qmd/index.sqlite            #   search index for hybrid / vector queries
 └── system/                         # everything that isn't a source
-    ├── backend_index/
-    │   └── db.doltlite_db          # doltlite SQL store (grid rows + audit log)
-    ├── qmd/
-    │   ├── index.sqlite            # search index hit by hybrid / vector queries
-    │   └── models -> ~/.cache/qmd/models
-    └── state/
-        └── dag_state.json          # scheduler state (which steps are up to date)
+    ├── dag_state.json              # scheduler state (which steps are up to date)
+    ├── api-token                   # the running server's bearer token
+    ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
+    ├── jobs.doltlite_db            # sync job queue + history
+    └── job-logs/                   # one log per sync job
 ```
 
 > **Backups:** the bulky **derived** artifacts — each `<name>/rendered_md/`
@@ -428,3 +430,49 @@ INDEX_PATH=~/datalib/unified_index/qmd/index.sqlite \
 
 Use `qmd status` against the same `INDEX_PATH` to confirm collections
 and document counts.
+
+## 8. Getting your data back out
+
+The point of mirroring your data locally is that it stays yours, so it
+is worth knowing the exit before you need it. Two of the three copies
+are already in open formats you can read with no datalib at all:
+
+- **The markdown.** `<name>/rendered_md/` is a tree of ordinary
+  UTF-8 `.md` files, one per conversation or document. Copy it
+  anywhere; every text editor and search tool on your machine already
+  reads it.
+- **The databases.** The `.doltlite_db` files are
+  [doltlite](https://github.com/dolthub/doltlite) stores — SQLite's SQL
+  engine over a versioned, content-addressed file format, which is what
+  lets datalib show you what a source *changed or deleted* between
+  syncs. The trade is that the file itself is not a SQLite file: point
+  stock `sqlite3` at one and it says `file is not a database`.
+
+  So export it. `datalib-doltlite` was installed alongside
+  `datalib-dag` in step 1, and one pipe writes a plain SQLite database
+  that every SQLite tool — `sqlite3`, Datasette, pandas, DB Browser,
+  your language's stdlib — opens directly:
+
+  ```sh
+  datalib-doltlite -readonly ~/datalib/unified_index/grid/db.doltlite_db .dump \
+    | sqlite3 ~/grid.sqlite
+
+  sqlite3 ~/grid.sqlite "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
+  ```
+
+  The same command works on any `.doltlite_db` under your data root,
+  including the raw per-source stores under `<name>/raw/`, whose
+  attachment bytes come across intact.
+
+  What the export gives you is the current state of every table, with
+  its schema and indexes. What it leaves behind is the version history
+  — the commit per sync that the diff-since-last-time answers come
+  from. Keep the original if you want that; the export is a snapshot
+  for other tools.
+
+`datalib-doltlite` is a `sqlite3`-compatible shell, so you can also
+just explore in place — `datalib-doltlite -readonly <file>` drops you
+in a REPL. Pass `-readonly` whenever you are only looking: a second
+writer against a live store can wedge your next sync. More recipes,
+including the commit history and per-sync diffs, are in
+[`docs/dev/doltlite.md`](/docs/dev/doltlite.md).

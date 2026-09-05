@@ -461,8 +461,23 @@ that only a doltlite-linked binary can read. Reaching for the system
 `sqlite3` and concluding the database is corrupt is a well-worn dead
 end.
 
-Use the Bazel-built shell, which links the same amalgamation the Rust
-binaries do:
+That is about the *file*, not about getting the data out — one pipe
+turns any store into a plain SQLite database that every SQLite tool
+reads, and a user has the shell to do it with, because
+`datalib-doltlite` ships in the release tarball:
+
+```sh
+datalib-doltlite -readonly <store>.doltlite_db .dump | sqlite3 out.sqlite
+```
+
+Say that alongside the warning whenever you write the warning down.
+Stating the limit without the escape hatch is what made a reviewer
+call the format a re-siloing of the data; the full recipe, and what
+the snapshot does and doesn't carry, is in
+[`docs/dev/doltlite.md`](docs/dev/doltlite.md).
+
+For work inside a checkout, use the Bazel-built shell, which links the
+same amalgamation the Rust binaries do:
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
@@ -510,9 +525,12 @@ it is `SELECT path, measured_at, bytes FROM disk_usage`; note it is
 compacted (no repeated value, nothing closer than five seconds), so
 carry the last value forward rather than assuming a fixed interval.
 
-There is also a host `/usr/local/bin/doltlite` on some machines. Prefer
-the Bazel target: it is version-locked to `MODULE.bazel`'s pin, so it
-can't silently disagree with what the pipeline wrote.
+Two other copies of the same shell exist. `datalib-doltlite` is the one
+a released install has (it is in `:dist`), and there is a host
+`/usr/local/bin/doltlite` on some machines. When you are working in a
+checkout, prefer the Bazel target over both: it is version-locked to
+`MODULE.bazel`'s pin, so it can't silently disagree with what the tree
+you are editing writes.
 
 **From a test**, take it as a `data` dep and pass `$(rootpath ...)`
 rather than shelling out to a host binary — that keeps the test
