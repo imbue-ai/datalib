@@ -351,7 +351,7 @@ so `WHERE from_kind = 'dir'` makes the query *slower* (0.56s vs 0.23s at
 50k) — it adds a predicate without avoiding the walk. Getting the cheap
 summary would mean either an index on `kind` or splitting directory rows
 into their own table, in the same spirit as the existing
-`files` / `file_stats` split.
+`files` / `scan_meta` split.
 
 Splitting directory rows into their own table is filed as
 [#276](https://github.com/imbue-ai/datalib/issues/276).

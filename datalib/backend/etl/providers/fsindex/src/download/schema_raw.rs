@@ -13,24 +13,29 @@
 //! Two design choices distinguish it from every other provider in
 //! the tree, and both are load-bearing for everything below:
 //!
-//! 1. **Content and cursor live in separate entity tables.** The
-//!    user explicitly does not want filesystem-side bookkeeping
-//!    (mtime, inode) to pollute `dolt diff` on file contents. So
-//!    `files` carries the semantic content (kind, size, blake3,
-//!    symlink target, optional identity uuid) and `file_stats`
-//!    carries the cursor data Unison uses for fast-rescan decisions
-//!    (mtime, inode, dev). Both are plain entity tables; fsindex runs
-//!    the bookkeeping-free write path (no `_bookkeeping` sidecars —
-//!    truncate-and-rebuild plus a single `dolt_commit` per scan is its
-//!    attempt model). Keeping the two tables *split* is also what
-//!    preserves cross-tree prolly dedup — see `STORAGE_NOTES.md` §3.
-//!    This split is orthogonal to the
-//!    framework's events-vs-bookkeeping split (which is about
-//!    attempt tracking, not about content-vs-cursor); see
+//! 1. **Content is here; the cursor is not.** `files` carries the
+//!    semantic content (kind, size, blake3, symlink target, optional
+//!    identity uuid) and nothing filesystem-mechanical, so `dolt diff`
+//!    on it is a diff of the bytes. The Unison fast-rescan cursor —
+//!    mtime, inode, dev, and the digest that went with them — is host
+//!    state, and lives in this machine's
+//!    [`datalib_etl::fingerprint_cache`], a plain-SQLite file outside
+//!    version control.
+//!
+//!    It used to be a sibling `file_stats` table here. Moving it out
+//!    is what stops an inode number — meaningless on any other machine
+//!    — from reaching a branch that may be fetched elsewhere, and it
+//!    halves the store: 291 B/row to 148 B/row at 100k entries, since
+//!    `file_stats` re-stored the whole path as its own primary key.
+//!    See `STORAGE_NOTES.md` §3.
+//!
+//!    fsindex runs the bookkeeping-free write path (no `_bookkeeping`
+//!    sidecars — truncate-and-rebuild plus a single `dolt_commit` per
+//!    scan is its attempt model). That is orthogonal to the
+//!    framework's events-vs-bookkeeping split (which is about attempt
+//!    tracking); see
 //!    [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//!    §"Events vs bookkeeping" for the framework's axis, and the
-//!    sibling [`EXTRACT.md`](../../EXTRACT.md) §"Why two entity tables"
-//!    for ours.
+//!    §"Events vs bookkeeping".
 //!
 //! 2. **Multi-root via doltlite branches, one db per source.** Per
 //!    §"Operating assumptions" we keep "one writer per doltlite
@@ -159,7 +164,7 @@ use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 
-pub const DATA_TABLES: &[&str] = &["files", "file_stats", "scan_meta"];
+pub const DATA_TABLES: &[&str] = &["files", "scan_meta"];
 
 // ─────────────────────────────────────────────────────────────────────
 // files
@@ -210,7 +215,7 @@ pub const FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS files (
 )";
 
 // fsindex carries ZERO secondary indexes — only the two path primary
-// keys (on `files` and `file_stats`), which in dolt are the clustered
+// key (on `files`), which in dolt is the clustered
 // storage order and the row identity, not optional indexes.
 //
 // The raw store's only jobs are durable content-addressed storage and
@@ -286,119 +291,6 @@ impl BulkUpsertable for FileRow {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// file_stats
-// ─────────────────────────────────────────────────────────────────────
-
-/// `file_stats` — one row per entry that appears in [`FILES_DDL`].
-///
-/// This is the **cursor entity**. Its columns carry the
-/// filesystem-mechanical state the scanner needs to decide whether
-/// to rehash an entry on the next pass — Unison's `(mtime, size,
-/// inode)` triple, plus a `dev` for cross-mount disambiguation and
-/// a `stamp_kind` discriminator for filesystems where inode is
-/// meaningless.
-///
-/// Rescans read `(file_stats.mtime_ns, file_stats.size,
-/// file_stats.inode, file_stats.dev, file_stats.stamp_kind)` for
-/// each known path, stat the path, and compare. Only on mismatch
-/// (or `stamp_kind = 'rescan'`, the sentinel meaning "previous run
-/// was interrupted before fingerprint completed") is the file
-/// reopened and rehashed. This is the fast-rescan property Unison
-/// gets out of `dataClearlyUnchanged` in `src/fpcache.ml:243`.
-///
-/// Columns:
-/// - `id` — root-relative posix path. Primary key. Always equals
-///   some `files.id`; we do not foreign-key the relationship in
-///   sqlite (no enforcement gain, and rescan needs to write into
-///   this table before the matching `files` row in some recovery
-///   paths). Maintained by writer discipline.
-/// - `mtime_ns` — modification time as integer nanoseconds since
-///   epoch. Filesystem-supplied; we do not normalize tz (it's an
-///   instant, not a wall-clock).
-/// - `size` — bytes. Mirrors `files.size` at the moment of the last
-///   stat; the duplication is deliberate so the rescan compare can
-///   read this row alone without joining `files`.
-/// - `stamp_kind` — `'inode'` | `'nostamp'` | `'rescan'`. Encodes
-///   Unison's `InodeStamp | NoStamp | RescanStamp` enum.
-///   `'nostamp'` is for filesystems where inode is unstable across
-///   re-stat (some FUSE mounts, network filesystems); the rescan
-///   compare drops the inode check on those entries. `'rescan'` is
-///   set when a prior run was interrupted mid-fingerprint and the
-///   next pass must rehash regardless of `(mtime, size, inode)`
-///   agreement.
-/// - `inode` — integer inode number from `stat`. NULL unless
-///   `stamp_kind = 'inode'`.
-/// - `dev` — integer device number from `stat`. NULL unless
-///   `stamp_kind = 'inode'`. `(dev, inode)` is the true filesystem
-///   identity on unix; `dev` matters when the scan root crosses
-///   mount points.
-/// - `ctime_ns` — change time as integer nanoseconds, captured
-///   opportunistically. NULL when not available. Not part of the
-///   fast-rescan compare; there for forensic reads.
-pub const FILE_STATS_DDL: &str = "CREATE TABLE IF NOT EXISTS file_stats (
-    id          TEXT PRIMARY KEY,
-    mtime_ns    INTEGER NOT NULL,
-    size        INTEGER NOT NULL,
-    stamp_kind  TEXT NOT NULL,
-    inode       INTEGER NULL,
-    dev         INTEGER NULL,
-    ctime_ns    INTEGER NULL
-)";
-
-/// One row in [`FILE_STATS_DDL`].
-#[derive(Debug, Clone)]
-pub struct FileStatsRow {
-    pub id: String,
-    pub mtime_ns: i64,
-    pub size: i64,
-    pub stamp_kind: StampKind,
-    pub inode: Option<i64>,
-    pub dev: Option<i64>,
-    pub ctime_ns: Option<i64>,
-}
-
-/// Discriminator for [`FileStatsRow::stamp_kind`]. Mirrors Unison's
-/// `InodeStamp | NoStamp | RescanStamp` enum from `src/fileinfo.mli`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StampKind {
-    Inode,
-    NoStamp,
-    Rescan,
-}
-
-impl StampKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StampKind::Inode => "inode",
-            StampKind::NoStamp => "nostamp",
-            StampKind::Rescan => "rescan",
-        }
-    }
-}
-
-impl BulkUpsertable for FileStatsRow {
-    const TABLE: &'static str = "file_stats";
-    const TYPED_COLUMNS: &'static [&'static str] =
-        &["mtime_ns", "size", "stamp_kind", "inode", "dev", "ctime_ns"];
-    const PAYLOAD_COLUMN: Option<&'static str> = None;
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments>,
-    ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(self.mtime_ns)
-            .bind(self.size)
-            .bind(self.stamp_kind.as_str())
-            .bind(self.inode)
-            .bind(self.dev)
-            .bind(self.ctime_ns)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────
 // scan_meta
 // ─────────────────────────────────────────────────────────────────────
 
@@ -422,7 +314,7 @@ impl BulkUpsertable for FileStatsRow {
 ///   change between scans if the user moves the data root; `id`
 ///   stays stable, this updates.
 /// - `os` — `'macos'` | `'linux'` | `'windows'` | ... at scan time.
-///   Drives `stamp_kind` defaults on `file_stats`.
+///   Drives `stamp_kind` defaults in the fingerprint cache.
 /// - `case_sensitive` — 0/1 bool. Captured at first scan; macOS's
 ///   default HFS+/APFS is case-insensitive, which matters for
 ///   collation when comparing branches across roots from different
@@ -523,9 +415,5 @@ impl BulkUpsertable for ScanMetaRow {
 /// stamp) and resets via a bookkeeping-free truncate (see
 /// `download::db::RawDb::reset`).
 pub fn full_ddl() -> Vec<String> {
-    vec![
-        FILES_DDL.to_string(),
-        FILE_STATS_DDL.to_string(),
-        SCAN_META_DDL.to_string(),
-    ]
+    vec![FILES_DDL.to_string(), SCAN_META_DDL.to_string()]
 }

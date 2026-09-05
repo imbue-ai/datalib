@@ -15,6 +15,8 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::{EntryKind, FingerprintCache};
+use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
 use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
@@ -64,61 +66,58 @@ async fn dump_files(db_path: &Path) -> String {
     out
 }
 
-/// Verify the Unison cursor was stored correctly: every FILE row's
-/// `file_stats` should carry `stamp_kind = 'inode'` on unix with
-/// non-NULL `inode` + `dev`. If this fails, the rescan compare in
-/// `stamp::decide` will never reuse anything regardless of how
-/// unchanged the file is.
+/// Verify the Unison cursor reached the host-local cache correctly:
+/// every FILE entry should carry `stamp_kind = inode` on unix with
+/// non-NULL `inode` + `dev`. If this fails, `fswalk::decide` will never
+/// reuse anything, however unchanged the file is.
 ///
-/// Dirs and symlinks deliberately get `stamp_kind = 'nostamp'`
-/// because they always rehash on every scan (no fast path), so
-/// there's no cache to consult for them.
-async fn assert_inode_stamp_kind(db_path: &Path) {
-    let db = RawDb::open(db_path).await.unwrap();
-    let rows = sqlx::query(
-        "SELECT file_stats.id, file_stats.stamp_kind, file_stats.inode, file_stats.dev \
-         FROM file_stats JOIN files ON files.id = file_stats.id \
-         WHERE files.kind = 'file'",
-    )
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
-    assert!(!rows.is_empty(), "no file-kind rows in file_stats");
-    for r in rows {
-        let id: String = r.try_get("id").unwrap();
-        let stamp_kind: String = r.try_get("stamp_kind").unwrap();
-        let inode: Option<i64> = r.try_get("inode").unwrap();
-        let dev: Option<i64> = r.try_get("dev").unwrap();
+/// The cursor lives in the fingerprint cache, not the scan store — it
+/// is host state, so it is deliberately not versioned or branched. See
+/// `datalib_etl::fingerprint_cache`.
+async fn assert_inode_stamp_kind(cache: &FingerprintCache, root: &Path) {
+    let tree = cache.load_under(root).await.unwrap();
+    let files: Vec<&String> = tree
+        .paths()
+        .filter(|rel| tree.kind(rel) == Some(EntryKind::File))
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "no file entries in the fingerprint cache"
+    );
+    for rel in files {
+        let cursor = tree.cursor(rel).expect("a cached entry has a cursor");
         #[cfg(unix)]
         {
             assert_eq!(
-                stamp_kind, "inode",
-                "file row id={id:?} stamp_kind={stamp_kind} — expected 'inode' on unix"
+                cursor.stamp_kind,
+                StampKind::Inode,
+                "file {rel:?} has stamp_kind={:?} — expected Inode on unix",
+                cursor.stamp_kind
             );
             assert!(
-                inode.is_some(),
-                "row id={id:?} has stamp_kind=inode but inode is NULL"
+                cursor.inode.is_some(),
+                "{rel:?} has stamp_kind=Inode but inode is NULL"
             );
             assert!(
-                dev.is_some(),
-                "row id={id:?} has stamp_kind=inode but dev is NULL"
+                cursor.dev.is_some(),
+                "{rel:?} has stamp_kind=Inode but dev is NULL"
             );
         }
         #[cfg(not(unix))]
         {
-            let _ = (inode, dev);
-            assert_eq!(stamp_kind, "nostamp", "row id={id:?} on non-unix");
+            assert_eq!(cursor.stamp_kind, StampKind::NoStamp, "{rel:?} on non-unix");
         }
     }
 }
 
-fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
+fn fetch_opts(db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
         db: None,
         source_id: "smoke".to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: None,
+        cache,
         no_stamp: true,
         progress: Progress::noop(),
         control: DownloadControl::default(),
@@ -144,10 +143,13 @@ async fn initial_scan_and_incremental_rescan() {
     let root = tmp.path().join("tree");
     fs::create_dir(&root).unwrap();
     let db_path = tmp.path().join("fsindex.doltlite_db");
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
     make_initial_tree(&root);
 
     // ── Phase A: initial scan ───────────────────────────────────────
-    let summary_a = download::fetch(fetch_opts(&db_path, &root))
+    let summary_a = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
         .await
         .expect("initial fetch");
     assert_eq!(summary_a.errors, 0, "no walker errors");
@@ -165,7 +167,7 @@ async fn initial_scan_and_incremental_rescan() {
     assert_eq!(summary_a.entries_scanned, 7);
     #[cfg(not(unix))]
     assert_eq!(summary_a.entries_scanned, 6);
-    assert_inode_stamp_kind(&db_path).await;
+    assert_inode_stamp_kind(&cache, &root).await;
 
     insta::assert_snapshot!("initial_scan", dump_files(&db_path).await);
 
@@ -174,7 +176,7 @@ async fn initial_scan_and_incremental_rescan() {
     // doing its job. All four FILE rows should reuse their cached
     // blake3 against the unchanged (mtime, size, inode) triple;
     // only the symlink and the two directories should rehash.
-    let summary_a2 = download::fetch(fetch_opts(&db_path, &root))
+    let summary_a2 = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
         .await
         .expect("unchanged rescan");
     assert_eq!(summary_a2.errors, 0);
@@ -211,7 +213,7 @@ async fn initial_scan_and_incremental_rescan() {
     // be gone from `files` (visible in the after_edits snapshot).
     fs::remove_file(root.join("empty.txt")).unwrap();
 
-    let summary_b = download::fetch(fetch_opts(&db_path, &root))
+    let summary_b = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
         .await
         .expect("incremental fetch");
     assert_eq!(summary_b.errors, 0);
@@ -256,6 +258,9 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     let root = tmp.path().join("tree");
     fs::create_dir(&root).unwrap();
     let db_path = tmp.path().join("fsindex.doltlite_db");
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
 
     // `subdir` opts into stamping via its own `.fsindex.yaml`; the rest
     // of the tree does not.
@@ -266,7 +271,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
     write(&root.join("subdir/nested.txt"), b"nested");
 
-    let mut opts = fetch_opts(&db_path, &root);
+    let mut opts = fetch_opts(&db_path, &root, cache.clone());
     opts.no_stamp = false;
     let summary = download::fetch(opts).await.expect("stamping fetch");
     assert_eq!(summary.errors, 0);
@@ -297,7 +302,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
 
     // Second scan: idempotent. No new breadcrumb, same UUID reused.
-    let mut opts2 = fetch_opts(&db_path, &root);
+    let mut opts2 = fetch_opts(&db_path, &root, cache.clone());
     opts2.no_stamp = false;
     let summary2 = download::fetch(opts2).await.expect("rescan");
     assert_eq!(
@@ -308,5 +313,187 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
         dir_identity_uuid(&db_path, "subdir").await,
         stamped,
         "rescan must keep the same identity_uuid"
+    );
+}
+
+/// The cache is keyed by ABSOLUTE path, which is what makes it one
+/// chain per host rather than one per root. A relative `--root` must
+/// not produce relative keys: the same relative name used from two
+/// directories would put two unrelated trees on one key.
+///
+/// Caught by running the real binary with `--root sub` from two
+/// different working directories and finding both trees stored under
+/// `sub/...`.
+#[tokio::test]
+async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+
+    // Two distinct trees that share a relative name.
+    for (tree, body) in [("one", "x"), ("two", "y")] {
+        let root = tmp.path().join(tree).join("sub");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("f.txt"), body).unwrap();
+
+        let mut opts = fetch_opts(
+            &tmp.path().join(format!("{tree}.doltlite_db")),
+            &root,
+            cache.clone(),
+        );
+        // A non-canonical root: the shape that broke it. The original
+        // bug was a *relative* `--root`, which cannot be exercised here
+        // without `set_current_dir` — racy under a threaded runner — but
+        // both go through the same `canonicalize`, and canonicalize
+        // always yields an absolute path.
+        opts.root = root.join("..").join("sub");
+        download::fetch(opts).await.unwrap();
+    }
+
+    let rows: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    assert!(!rows.is_empty(), "nothing reached the cache");
+    for path in &rows {
+        assert!(
+            path.starts_with('/'),
+            "relative key {path:?} in the cache — two trees could collide on it"
+        );
+    }
+    let unique: std::collections::BTreeSet<&String> = rows.iter().collect();
+    assert_eq!(
+        unique.len(),
+        rows.len(),
+        "two trees collided on one cache key"
+    );
+    // Both trees are present and distinct.
+    assert_eq!(
+        rows.iter().filter(|p| p.ends_with("/sub/f.txt")).count(),
+        2,
+        "expected one `sub/f.txt` per tree, got {rows:?}"
+    );
+}
+
+/// A symlinked route to a tree must share the cache with the real one.
+///
+/// The root is canonicalized, which resolves symlinks fully, so
+/// scanning `/x/link` and `/x/real` address one set of entries instead
+/// of hashing the same bytes twice. Entries *inside* the tree are
+/// deliberately NOT resolved: fsindex records a symlink as a symlink
+/// (hashing its target string), so canonicalizing it would conflate it
+/// with whatever it points at.
+#[tokio::test]
+async fn a_symlinked_root_shares_the_cache_with_its_real_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(real.join("sub")).unwrap();
+    std::fs::write(real.join("sub/f.bin"), b"content").unwrap();
+    // A symlink inside the tree, pointing at a sibling.
+    std::os::unix::fs::symlink(real.join("sub/f.bin"), real.join("inside.link")).unwrap();
+
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+
+    // Scan through the symlinked route first.
+    let via_link = download::fetch(fetch_opts(
+        &tmp.path().join("a.doltlite_db"),
+        &link,
+        cache.clone(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(via_link.files_hashed, 1, "the first scan should hash");
+    assert_eq!(via_link.symlinks, 1, "the in-tree symlink stays a symlink");
+
+    // The real route reuses all of it.
+    let via_real = download::fetch(fetch_opts(
+        &tmp.path().join("b.doltlite_db"),
+        &real,
+        cache.clone(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        via_real.files_hashed, 0,
+        "the real path rehashed what the symlinked path had already cached"
+    );
+    assert_eq!(via_real.files_reused, 1);
+
+    let keys: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    let canonical = real.canonicalize().unwrap();
+    for key in &keys {
+        assert!(
+            key.starts_with(canonical.to_str().unwrap()),
+            "entry {key:?} was keyed under the symlink rather than the real path"
+        );
+    }
+    // The in-tree symlink is keyed where it was walked, not where it points.
+    assert!(
+        keys.iter().any(|k| k.ends_with("/inside.link")),
+        "the in-tree symlink was resolved away instead of recorded: {keys:?}"
+    );
+}
+
+/// A path that is really gone leaves the cache; a path this scan merely
+/// filtered out does not.
+///
+/// Those look identical from inside one scan — neither wrote a row —
+/// and treating them the same is what let an early version evict a
+/// broad scan's work. One `lstat` tells them apart.
+#[tokio::test]
+async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("tree");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("kept.bin"), b"a").unwrap();
+    std::fs::write(root.join("doomed.bin"), b"b").unwrap();
+    std::fs::write(root.join("scratch.tmp"), b"c").unwrap();
+
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+    let db_path = tmp.path().join("s.doltlite_db");
+    download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(cache.count().await.unwrap(), 4, "root + three files");
+
+    // One file really goes; the other is merely filtered out.
+    std::fs::remove_file(root.join("doomed.bin")).unwrap();
+    std::fs::write(root.join(".fsindex.yaml"), "ignore:\n  - \"*.tmp\"\n").unwrap();
+    download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+
+    let keys: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    assert!(
+        !keys.iter().any(|k| k.ends_with("doomed.bin")),
+        "a deleted path stayed in the cache: {keys:?}"
+    );
+    assert!(
+        keys.iter().any(|k| k.ends_with("scratch.tmp")),
+        "an ignored-but-present path was evicted: {keys:?}"
+    );
+
+    // And the filtered file is still cheap when a later scan wants it.
+    std::fs::remove_file(root.join(".fsindex.yaml")).unwrap();
+    let after = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        after.files_hashed, 0,
+        "the previously-ignored file had to be rehashed"
     );
 }

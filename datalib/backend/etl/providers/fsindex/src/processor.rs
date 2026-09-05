@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_fsindex_config::FsindexConfig;
@@ -74,6 +75,10 @@ impl DataProcessor for FsindexDownload {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        // The fingerprint cache is host state, so it lives in this
+        // machine's cache directory — never in the data root, which may
+        // be synced or copied between machines.
+        let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
         let s = download::fetch(download::FetchOptions {
             // Unused when `db` is Some (fetch reuses the open handle); kept for
             // the standalone-open path's signature.
@@ -84,6 +89,7 @@ impl DataProcessor for FsindexDownload {
             // Branch selection is the standalone CLI's concern; the
             // orchestrator scans the source's default branch.
             target_doltlite_branch: None,
+            cache,
             no_stamp: !self.stamp,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),

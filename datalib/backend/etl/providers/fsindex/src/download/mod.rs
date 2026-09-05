@@ -23,10 +23,9 @@ pub mod hash;
 pub mod metrics;
 pub mod options;
 pub mod schema_raw;
-pub mod stamp;
 pub mod walker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,17 +35,20 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
+use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
 
 pub use db::RawDb;
 
 use metrics::WalkerCounters;
 use options::{EffectiveOptions, FsindexYaml, Identity, OptionsCascade};
-use schema_raw::{FileRow, FileStatsRow, ScanMetaRow, StampKind};
+use schema_raw::{FileRow, ScanMetaRow};
 
 /// One batch sent over the producer→consumer channel. files[i] and
-/// stats[i] always match by id; they're emitted as a pair.
-type Batch = (Vec<FileRow>, Vec<FileStatsRow>);
+/// fingerprints[i] always match by path; they're emitted as a pair,
+/// then split to their two destinations.
+type Batch = (Vec<FileRow>, Vec<Fingerprint>);
 
 /// Bounded channel between the walker (producer) and the doltlite
 /// writer (consumer). Small cap so backpressure shows up — if the
@@ -64,6 +66,10 @@ pub struct FetchOptions {
     pub source_id: String,
     pub root: PathBuf,
     pub target_doltlite_branch: Option<String>,
+    /// This host's fingerprint cache. Unversioned and disposable —
+    /// see [`datalib_etl::fingerprint_cache`] for why it is not a table
+    /// in the scan store.
+    pub cache: FingerprintCache,
     pub no_stamp: bool,
     pub progress: Progress,
     pub control: DownloadControl,
@@ -97,6 +103,40 @@ pub struct FetchSummary {
     pub bytes_skipped: u64,
 }
 
+/// Drop cache entries under `root` whose paths no longer exist.
+///
+/// Returns `(removed, kept_but_unvisited)`. The second number is the
+/// interesting one: those are paths this scan filtered out but which
+/// are still on disk, and keeping them is what stops a narrow scan from
+/// evicting a broad one's work.
+async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Result<(u64, u64)> {
+    let cached = cache.load_under(root).await?;
+    let visited = db.all_entry_ids().await?;
+
+    let mut gone: Vec<String> = Vec::new();
+    let mut still_present = 0u64;
+    for rel in cached.paths() {
+        if visited.contains(rel) {
+            continue;
+        }
+        let abs = root.join(rel);
+        // `symlink_metadata`, not `metadata`: a dangling symlink is
+        // still an entry that exists, and following it would delete a
+        // cache row for something that is really there.
+        match std::fs::symlink_metadata(&abs) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                gone.push(datalib_etl::fingerprint_cache::abs_key(root, rel));
+            }
+            // Present, or unreadable for some other reason (a
+            // permission change on a parent). Either way, not evidence
+            // of deletion — keep it.
+            _ => still_present += 1,
+        }
+    }
+    let removed = cache.forget(&gone).await?;
+    Ok((removed, still_present))
+}
+
 /// Run one download pass against `opts.root`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let total_start = Instant::now();
@@ -109,9 +149,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     let _ = opts.control.refetch_blobs;
 
+    // Canonicalize the root before anything keys off it. The
+    // fingerprint cache is keyed by ABSOLUTE path — that is what makes
+    // it one chain per host rather than one per root — so a relative
+    // `--root` would store relative keys, and the same relative name
+    // used from two directories would have two unrelated trees fighting
+    // over one key. It also collapses `.`, `..`, a trailing slash and a
+    // symlinked route to the same tree onto one set of entries.
+    let root = opts
+        .root
+        .canonicalize()
+        .with_context(|| format!("resolve scan root {}", opts.root.display()))?;
+    let opts = FetchOptions { root, ..opts };
+
     let load_start = Instant::now();
     let prev = if opts.control.reset_and_redownload {
-        db::PrevCache::default()
+        CachedTree::default()
     } else {
         // Loading the rescan cache for a large tree can take a while, and
         // it happens before the walk's per-entry progress bar exists — so
@@ -120,25 +173,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(
             event = "fsindex_load_cache_start",
             root = %opts.root.display(),
-            "loading rescan cache from prior scan (every entry + child index) before the walk",
+            "loading this host's fingerprint cache for the scan root before the walk",
         );
         opts.progress.set_message(&format!(
             "loading rescan cache for {} …",
             opts.root.display()
         ));
-        let cache = db.load_prev_cache(&opts.progress).await?;
+        let cached = opts.cache.load_under(&opts.root).await?;
         info!(
             event = "fsindex_load_cache_done",
-            entry_rows = cache.stats.len(),
-            cached_hashes = cache.blake3s.len(),
-            parent_dirs = cache.children.len(),
+            entry_rows = cached.len(),
             elapsed_ms = load_start.elapsed().as_millis() as u64,
-            "loaded {} prior entries ({} files with a reusable hash) and {} dir child-lists from the rescan cursor",
-            cache.stats.len(),
-            cache.blake3s.len(),
-            cache.children.len(),
+            "loaded {} prior entries for this host from the fingerprint cache",
+            cached.len(),
         );
-        cache
+        cached
     };
     let phase_load = load_start.elapsed();
 
@@ -161,6 +210,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         default_stamp_kind,
         prev,
         db.clone(),
+        opts.cache.clone(),
         now.clone(),
         opts.progress.clone(),
     )
@@ -182,6 +232,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
             );
         }
+    }
+
+    // ── forget what the filesystem forgot ─────────────────────────────
+    // Cache entries under this root that the walk did not write a row
+    // for are *candidates*, not casualties: the walk may simply have
+    // filtered them out, and this cache is shared with consumers whose
+    // filters differ. One `lstat` settles it — a path that is really
+    // gone is dropped, and anything still on disk is kept whatever this
+    // scan thought of it.
+    //
+    // Cheap because the candidate set is small: on an unchanged tree it
+    // is empty, and otherwise it is the deletions plus whatever this
+    // scan ignored.
+    match forget_deleted(&opts.cache, &opts.root, &db).await {
+        Ok((0, _)) => {}
+        Ok((gone, kept)) => info!(
+            event = "fsindex_cache_forgot_deleted",
+            removed = gone,
+            kept_present = kept,
+            "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
+             scan did not look at but which still exist"
+        ),
+        // A cache that cannot be tidied is still a correct cache.
+        Err(e) => warn!(event = "fsindex_cache_forget_failed", error = %e,
+                        "could not tidy the fingerprint cache: {e}"),
     }
 
     // ── scan_meta ────────────────────────────────────────────────────
@@ -283,8 +358,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn streaming_pipeline(
     root: PathBuf,
     default_stamp_kind: StampKind,
-    prev: db::PrevCache,
+    prev: CachedTree,
     db: RawDb,
+    cache: FingerprintCache,
     now: String,
     progress: Progress,
 ) -> Result<(
@@ -294,11 +370,6 @@ async fn streaming_pipeline(
     Duration,
     Duration,
 )> {
-    let db::PrevCache {
-        stats: prev_stats,
-        blake3s: prev_file_blake3s,
-        children: prev_children,
-    } = prev;
     let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
     let counters = Arc::new(WalkerCounters::default());
     let stop_progress = Arc::new(AtomicBool::new(false));
@@ -314,12 +385,16 @@ async fn streaming_pipeline(
     // after the single `dolt_commit`. `BATCH_SIZE` (see walker) is the
     // knob that trades memory against amplification.
     let writer_db = db.clone();
+    let writer_cache = cache.clone();
     let writer_now = now.clone();
     let writer_handle = tokio::spawn(async move {
         let mut total_write = Duration::ZERO;
         let mut batches_written: u64 = 0;
-        while let Some((files, stats)) = rx.recv().await {
-            let took = writer_db.write_batch(&files, &stats, &writer_now).await?;
+        while let Some((files, fingerprints)) = rx.recv().await {
+            // Two destinations, deliberately: content to the versioned
+            // store, host observations to the unversioned cache.
+            let took = writer_db.write_batch(&files, &writer_now).await?;
+            writer_cache.store(&fingerprints).await?;
             total_write += took;
             batches_written += 1;
         }
@@ -416,21 +491,15 @@ async fn streaming_pipeline(
     let walker_handle = tokio::task::spawn_blocking(
         move || -> Result<(Vec<walker::WalkerError>, walker::WalkerSummary, Duration)> {
             let started = Instant::now();
-            let walker = walker::Walker::new(
-                &walker_root,
-                &prev_stats,
-                &prev_file_blake3s,
-                &prev_children,
-                default_stamp_kind,
-            );
+            let walker = walker::Walker::new(&walker_root, &prev, default_stamp_kind);
             let (errs, summ) = walker.collect_streaming(&walker_counters, |batch| {
                 let mut files = Vec::with_capacity(batch.len());
-                let mut stats = Vec::with_capacity(batch.len());
+                let mut fingerprints = Vec::with_capacity(batch.len());
                 for r in batch {
                     files.push(r.file_row);
-                    stats.push(r.stat_row);
+                    fingerprints.push(r.fingerprint);
                 }
-                tx.blocking_send((files, stats))
+                tx.blocking_send((files, fingerprints))
                     .map_err(|e| anyhow::anyhow!("writer channel closed: {e}"))?;
                 Ok(())
             })?;
