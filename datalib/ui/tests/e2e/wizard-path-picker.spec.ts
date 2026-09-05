@@ -3,14 +3,6 @@
 // plain Chromium, which is the ONE host that cannot have one: the
 // browser never hands back a filesystem path, and the path the config
 // needs is one on the machine running the backend anyway.
-//
-// So what this pins is the fallback: the field is still usable by
-// typing, and the button is ABSENT rather than present-and-dead. A
-// button that renders here would be one that silently does nothing,
-// which is the exact failure the capability notes keep warning about.
-// The dialog itself is desktop-only and out of Playwright's reach; its
-// argument shape is covered by tests/desktop.test.ts, which asserts
-// through @tauri-apps/plugin-dialog.
 
 import { test, expect } from "@playwright/test";
 

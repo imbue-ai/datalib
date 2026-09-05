@@ -1,18 +1,5 @@
 //! Provider-owned config schema for the `email` source — Program A goal #1
 //! ("one config definition per source, adjacent to the source").
-//!
-//! This crate is **schema-only**: it depends on nothing but `serde`, so any
-//! consumer that needs to *name* the email config (the orchestrator's
-//! `ingest-config` oneof, the `http` backend) can do so without linking a
-//! line of extraction code. The email provider crate
-//! (`datalib_etl_email`) builds its [`DataProcessor`]s from these types;
-//! the orchestrator deserializes them and never destructures the internals.
-//!
-//! During the email pilot these types are deserialized from the YAML *stanza*
-//! the orchestrator already produces (`serde_yaml::to_value(source)`), so the
-//! crate stays free of any dependency on `datalib_core::config`. When the
-//! `ingest-config` oneof lands (Program A step 3), [`EmailConfig`] becomes the
-//! variant payload directly — same type, no reparse.
 
 use datalib_source_common::{LatchkeySettings, RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
@@ -21,18 +8,6 @@ use serde::{Deserialize, Serialize};
 /// (paths + cross-source knobs, composed from `source_common` and resolved by
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
-///
-/// Three download modes, at most one of which may be selected:
-///
-/// * `sync:` → JMAP server (Fastmail / any RFC 8620+8621 server);
-/// * `gmail_api:` → Gmail REST API (the path for a Gmail account);
-/// * neither, plus an `.mbox` at `common.input_path` → file-backed mbox
-///   mode (e.g. a Google Takeout export).
-///
-/// Setting more than one live block is a config error — see
-/// [`EmailConfig::live_mode`]. All three paths live in `datalib_etl_email`
-/// and write the same raw schema, so render is mode-agnostic and the same
-/// mailbox ingested two ways dedupes rather than doubling.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
@@ -109,13 +84,6 @@ pub enum EmailLiveMode<'a> {
 }
 
 impl EmailConfig {
-    /// Which live-server transport this source selected, or `None` for a
-    /// file-backed source.
-    ///
-    /// Errors when more than one is set. Mode selection used to be
-    /// inferable from `sync:` alone; with a third mode it has to be
-    /// explicit, and silently preferring one over the other would mirror
-    /// a mailbox the user didn't ask for.
     pub fn live_mode(&self) -> anyhow::Result<Option<EmailLiveMode<'_>>> {
         let mut selected: Vec<(&str, EmailLiveMode<'_>)> = Vec::new();
         if let Some(s) = &self.sync {
@@ -207,24 +175,6 @@ pub enum EmailOutlink {
 }
 
 /// Gmail REST API tunables. Mirrors the `gmail_api:` sub-stanza.
-///
-/// The mode for a Gmail account.
-///
-/// * **Credentials need no configuration at all.** latchkey ships a
-///   built-in `google-gmail` service and routes to it by URL host, so
-///   there is no service name to name — the ordinary `latchkey curl` path
-///   every other HTTP provider in this tree uses just works, refresh
-///   included. Set it up once with
-///   `latchkey auth browser google-gmail`.
-/// * **Incremental sync is explicit.** `users.history.list` reports
-///   `messagesAdded` / `messagesDeleted` / `labelsAdded` /
-///   `labelsRemoved`, so deletions arrive as events rather than having to
-///   be inferred by re-enumeration.
-/// * **Throughput is quota-limited, not byte-limited**: ~300
-///   messages/minute regardless of message size.
-///
-/// For a non-Gmail account, use the JMAP mode or a file export. See
-/// `docs/dev/email_download_modes.md` for why IMAP was tried and dropped.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
@@ -262,20 +212,10 @@ pub struct EmailGmailApi {
     #[serde(default)]
     pub request_concurrency: Option<usize>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
-    ///
-    /// Google's per-user limit is 6000 units/minute and `messages.get`
-    /// costs 20, so the ceiling is ~300 messages/minute. The default sits
-    /// below 6000 to leave headroom for retries; raising it past 6000
-    /// just moves the failure from our throttle to Google's 429.
     #[serde(default)]
     pub quota_units_per_minute: Option<u32>,
     /// Stop after fetching this many message bodies in one run, commit
     /// the cursor, and exit **successfully** with a partial result.
-    ///
-    /// A large mailbox is a multi-run backfill: at ~300 messages/minute a
-    /// 100k-message account takes about six hours. The honest way to model
-    /// that is a run that stops and says how far it got, not one that
-    /// fails and poisons the DAG subtree. `None` = no limit.
     #[serde(default)]
     pub message_budget: Option<usize>,
 }

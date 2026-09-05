@@ -1,31 +1,9 @@
 //! Graph assembly and validation.
 //!
-//! The DAG is **declared**, not derived: step A → step B iff B names
-//! A's id in its `inputs`. A step's id is also the one tree it writes,
-//! so an input is simultaneously a step reference and an artifact path
-//! and nothing has to be matched against anything.
-//!
-//! Validation is correspondingly small:
-//!
-//! * ids are unique — which is also what makes single-writer true, since
-//!   a step's id *is* its output tree;
-//! * every input names a declared step;
-//! * no step consumes its own output;
-//! * no cycles.
-//!
-//! A step that breaks one of those is *left out of the graph*, and
-//! [`Graph::build_graded`] says which and why (see
-//! `crate::diagnostics`). It is not carried in the graph with a failed
-//! status, and that is deliberate: the scheduler's invariant is that
-//! every artifact in the graph has exactly one producer, so a step
-//! whose input names nothing would make the runner invent a version for
-//! a tree nobody wrote. Excluding it keeps the invariant and is why
-//! none of #209 reached `scheduler.rs`.
-//!
-//! This module used to derive edges by testing every input pattern
-//! against every output path, and to synthesize source steps for
-//! producer-less inputs. Both are gone with the pattern machinery they
-//! rested on — see `docs/dev/step_identity.md`.
+//! The DAG is declared, not derived: A → B iff B names A's id in its
+//! `inputs`. A step that breaks a rule is left out of the graph rather than
+//! carried in it with a failed status, which is what keeps the scheduler's
+//! one-producer-per-artifact invariant true. See the crate README.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -75,11 +53,6 @@ impl Graph {
             .collect()
     }
 
-    /// Assemble the graph, strictly: the first problem is an `Err`.
-    ///
-    /// The strict view of [`Graph::build_graded`]. Kept for callers
-    /// that build specs by hand and want a bad one to be a loud failure
-    /// rather than a silently smaller graph.
     pub fn build(steps: Vec<StepSpec>) -> Result<Graph> {
         let (graph, diags) = Self::build_graded(steps, &BTreeSet::new());
         if let Some(d) = diags.first() {
@@ -90,33 +63,10 @@ impl Graph {
 
     /// Assemble what can be assembled, and say what could not.
     ///
-    /// Three rules live here, because all three need the full set of
-    /// ids and nothing earlier has it:
-    ///
-    ///   * every input names a declared step;
-    ///   * no step consumes its own output;
-    ///   * no cycles.
-    ///
-    /// A step that breaks one is left out of the graph entirely rather
-    /// than carried in it with a failed status. That is what keeps the
-    /// scheduler's invariant true — every artifact in the graph has
-    /// exactly one producer, so the runner never has to invent a
-    /// version for a tree nobody wrote — and it is why the scheduler
-    /// needed no changes for any of this.
-    ///
-    /// Dropping cascades, and the diagnostics say so. A step whose
-    /// input names a step that was itself dropped is
-    /// [`Severity::Blocked`], not `Rejected`: nothing is wrong with it,
-    /// and sending the user to its line would send them to the wrong
-    /// line. The message names the entry that actually needs the edit.
-    ///
-    /// `dropped_earlier` is what the *config* pass already threw out
-    /// before these specs were built. Without it this pass cannot tell
-    /// "you named a step that does not exist" from "the step you named
-    /// is broken" for the commonest case of all — a render step whose
-    /// fetch step was rejected for a bad key — and would send the user
-    /// to fix the wrong entry. Callers building specs by hand pass an
-    /// empty set; [`crate::config::check_text`] passes the real one.
+    /// `dropped_earlier` is what the config pass already threw out. Without
+    /// it this pass cannot tell "you named a step that does not exist" from
+    /// "the step you named is broken", and sends the reader to the wrong
+    /// entry. Callers building specs by hand pass an empty set.
     pub fn build_graded(
         steps: Vec<StepSpec>,
         dropped_earlier: &BTreeSet<String>,
@@ -150,12 +100,6 @@ impl Graph {
         // Then drop to a fixpoint. One pass is not enough: a step
         // dropped here can be the reason the next one has to go, and
         // that chain can run any length.
-        //
-        // `dropped` remembers which ids are gone, which is what lets a
-        // cascade diagnostic say "the thing you named is broken"
-        // instead of "the thing you named does not exist". They send
-        // the reader to different lines, so the difference is the whole
-        // point of tracking it.
         let mut dropped: BTreeSet<String> = dropped_earlier.clone();
         loop {
             let live: BTreeSet<&str> = kept.iter().map(|s| s.id.as_str()).collect();
@@ -332,11 +276,6 @@ impl Graph {
 
 /// Whether `start` is reachable from itself along dependent edges —
 /// i.e. it is in a cycle, rather than merely downstream of one.
-///
-/// Kahn's algorithm cannot tell those apart: it leaves behind
-/// everything it could not order, ring and tail alike. Telling the user
-/// a step three hops below a cycle is *in* the cycle sends them looking
-/// for an `inputs` entry that isn't there.
 fn reaches_itself(dependents: &[BTreeSet<usize>], start: usize) -> bool {
     let mut seen = BTreeSet::new();
     let mut stack = vec![start];
@@ -356,10 +295,6 @@ fn reaches_itself(dependents: &[BTreeSet<usize>], start: usize) -> bool {
 /// The declared step ids, for a diagnostic that has to say what the
 /// valid choices were — minus the step doing the asking, which is
 /// never the answer and reads as noise in its own error message.
-///
-/// Capped: a config with sixty steps would push the actual message off
-/// the screen, and the point is to jog a memory, not to dump the file
-/// back at the reader.
 fn id_list(ids: &BTreeSet<&str>, excluding: &str) -> String {
     const MAX: usize = 12;
     let all: Vec<&str> = ids.iter().copied().filter(|id| *id != excluding).collect();

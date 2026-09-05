@@ -1,53 +1,4 @@
 //! Raw-store schema for the ChatGPT provider.
-//!
-//! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! and [`docs/dev/archived/data_architecture_plan.md`](/docs/dev/archived/data_architecture_plan.md)
-//! §P0.1 for the conventions every `schema_raw.rs` follows.
-//!
-//! ChatGPT-specific notes: upstream supplies stable string ids for
-//! every entity (no UUIDv5 recipe needed); `GridRow.when_ts` comes
-//! from `conversations.update_time`.
-//!
-//! ## No listing pre-seed
-//!
-//! Earlier versions of this provider pre-seeded a stub row for every
-//! conversation surfaced by the `/backend-api/conversations` listing
-//! and only set `payload` once the detail fetch landed. That tri-state
-//! row shape (doesn't exist / pre-seeded / fully fetched) didn't fit
-//! `WirePayloadRow` and forced a parallel hand-rolled UPSERT path.
-//! We've dropped it: writes only happen post-detail-fetch, every write
-//! goes through `bulk_upsert_in_tx`. Skip-check on subsequent syncs
-//! compares the listing's `update_time` to the stored
-//! `conversations.update_time` — but the two endpoints disagree on
-//! shape (listing = ISO-8601 string, detail = Unix-epoch float), so the
-//! comparison canonicalizes both to whole-second epoch via
-//! `download::update_time_secs` rather than matching the JSON text. See
-//! `docs/dev/data_architecture_ingestion.md` §"No-preseed listing flow"
-//! for the rationale.
-//!
-//! ## Row structs and the bulk-upsert path
-//!
-//! Each wire-payload entity table is declared as a Rust row struct
-//! with `#[derive(WirePayloadRow)]` (`MeRow`, `ConversationRow`); the
-//! derive emits both the table's DDL and its
-//! [`datalib_etl::bulk::BulkUpsertable`] impl from the struct's
-//! field list, so the schema and the bind code can't drift. The N:M
-//! edge table (`ConversationAttachmentRow`) is hand-rolled since it
-//! doesn't fit the wire-payload shape. All three go through the
-//! generic [`datalib_etl::bulk::bulk_upsert_in_tx`] helper for
-//! writes — no table-specific bulk SQL anywhere in this provider's
-//! code.
-//!
-//! ## Attachment bytes
-//!
-//! Attachment bytes live in the sibling per-source CAS file managed
-//! by [`datalib_etl::blob_cas`]. The download path bulk-writes via
-//! [`datalib_etl::blob_cas::BlobCas::put_many`] paired with a
-//! bulk UPSERT into `chatgpt_attachments`. Render joins
-//! `chatgpt_attachments` → `cas_objects` on `blake3` via
-//! [`BlobBundle::load`](datalib_etl::blob_cas::BlobBundle::load),
-//! one bundle per rendered conversation bucket.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
@@ -55,10 +6,6 @@ use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
-///
-/// Used by `download::db::RawDb::reset` to wipe per-row state without
-/// touching blobs or bookkeeping. Also drives [`full_ddl`] when it
-/// asks the shared layer for paired `<table>_bookkeeping` DDLs.
 pub const DATA_TABLES: &[&str] = &["me", "conversations", "chatgpt_attachments"];
 
 /// `me` — the upstream `/backend-api/me` response.
@@ -74,22 +21,6 @@ pub struct MeRow {
 }
 
 /// `conversations` — one row per ChatGPT conversation id.
-///
-/// Stores the raw `/backend-api/conversation/{id}` response as
-/// received from the live API. **Rows only exist after a successful
-/// detail fetch** — no pre-seed stubs.
-///
-/// Columns:
-/// - `id` — upstream conversation id. Primary key.
-/// - `title` — denormalized conversation title for cheap listing
-///   queries; the payload remains authoritative.
-/// - `update_time` — the detail endpoint's `payload.update_time`
-///   (a Unix-epoch float), JSON-encoded. The skip-check compares it
-///   against the listing endpoint's value, which arrives as an
-///   ISO-8601 string, by canonicalizing both to whole-second epoch
-///   (`download::update_time_secs`) rather than matching JSON text. Also
-///   the source for `GridRow.when_ts` (render side).
-/// - `payload` — raw upstream conversation JSON (JSONB on disk).
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "conversations")]
 pub struct ConversationRow {
@@ -120,8 +51,6 @@ pub struct ConversationAttachmentRow {
     pub blake3: Option<String>,
 }
 
-/// Compose the full DDL list passed to
-/// [`datalib_etl::doltlite_raw::open`].
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         MeRow::ddl(),

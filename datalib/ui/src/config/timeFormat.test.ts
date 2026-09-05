@@ -1,10 +1,4 @@
 // The relative-time formatter behind the "Last synced" column.
-//
-// Mostly boundary cases, because that is the only place this kind of
-// function is ever wrong: one second either side of a unit change, the
-// jump from 59 minutes to 1 hour, and the two inputs a real data root
-// produces that a naive implementation mishandles — a stamp in a
-// different UTC offset, and a stamp slightly in the future.
 
 import { describe, expect, it } from "vitest";
 import { compareStamps, formatRelative, formatStamp } from "./timeFormat";

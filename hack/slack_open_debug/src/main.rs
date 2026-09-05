@@ -2,18 +2,6 @@
 //!   1. raw `sqlite3_open_v2` against our Bazel-built doltlite static archive
 //!      (no libsqlite3-sys, no sqlx, just `extern "C"` FFI)
 //!   2. the same archive via sqlx's pool open path
-//!
-//! Goal: definitively attribute the ~60s `datalib_etl::doltlite_raw::open`
-//! cost on the production slack.doltlite_db. If (1) is fast and (2) is slow,
-//! the slowness is in sqlx (worker-thread setup / pragmas / pool acquire). If
-//! (1) is also slow, the slowness is in the C library + our compile flags.
-//!
-//! Run:
-//!
-//!   bazelisk run //hack/slack_open_debug -- /path/to/slack.doltlite_db
-//!
-//! Optional: `--iters N` to repeat each measurement, `--sqlx-only` /
-//! `--raw-only` to isolate one side.
 
 // Standalone debug A/B benchmark. Doesn't run under datalib-sync,
 // has no indicatif progress bars to corrupt, and emits its

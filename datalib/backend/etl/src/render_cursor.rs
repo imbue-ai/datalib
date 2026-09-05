@@ -3,24 +3,6 @@
 //! doltlite commit hash the renderer successfully processed last time,
 //! plus the wall-clock cost of the most recent `dolt_diff_<table>`
 //! scan so we can see how the diff query scales as the raw store grows.
-//!
-//! Lives at `<data_root>/<stanza>/rendered_md/_render_cursor.json` — one
-//! cursor per stanza, at the root of that stanza's rendered-md tree.
-//! Assumes a single renderer process — no locking, no atomic-rename
-//! dance.
-//!
-//! The cursor is read at the top of a provider's `render_all`, used as
-//! `from_ref` for the per-provider `dolt_diff_<table>` union query, and
-//! re-written with the new HEAD + scan duration after `on_doc_complete`
-//! has succeeded for every doc the diff turned up.
-//!
-//! It also records the **render params** that produced those documents.
-//! Without that, a render knob only ever reaches documents the upstream
-//! diff happens to surface — widening `only_render_labels` renders
-//! nothing new, and changing `period` re-buckets only the chats that
-//! moved. [`read_for_params`] drops the cursor when the params differ,
-//! re-rendering the tree; providers with no knobs pass [`no_params`].
-//! Read through [`read_for_params`], not [`read`] — see both.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -55,18 +37,10 @@ pub struct RenderCursor {
     pub params: Option<serde_json::Value>,
 }
 
-/// Standard cursor path for a stanza: one cursor at the root of that stanza's
-/// rendered-md tree, `<data_root>/<stanza>/rendered_md/_render_cursor.json`.
 pub fn cursor_path(data_root: &Path, stanza: &str) -> PathBuf {
     crate::layout::rendered_md_root(data_root, stanza).join("_render_cursor.json")
 }
 
-/// Parse the cursor file, ignoring its recorded params.
-///
-/// Almost every caller wants [`read_for_params`] instead: this variant
-/// will happily hand back a cursor produced under a *different* render
-/// config, which is exactly the bug the params record exists to prevent.
-/// Kept public for tooling that wants to inspect a cursor as-is.
 pub fn read(path: &Path) -> Result<Option<RenderCursor>> {
     match std::fs::read_to_string(path) {
         Ok(s) => {
@@ -79,24 +53,6 @@ pub fn read(path: &Path) -> Result<Option<RenderCursor>> {
     }
 }
 
-/// [`read`], but treating a params change as "no cursor".
-///
-/// The cursor turns each render into a `dolt_diff` over what changed
-/// upstream, so a render param only ever reaches documents that happen
-/// to be in that diff. Widening `only_render_labels` surfaces nothing
-/// (no email in the newly-allowed mailbox changed), and changing
-/// `period` re-buckets only the chats that moved. Dropping the cursor
-/// re-renders the whole tree under the new params.
-///
-/// Unlike the download side — where a cursor guards rate-limited network
-/// calls and so earns a proportional response — render is local work
-/// over an on-disk store, so wholesale invalidation is the right trade
-/// and much easier to reason about.
-///
-/// `None` stored params means a cursor written before this field
-/// existed. That reads as "no information", never as "changed": every
-/// rendered tree in the field is in that state on first upgrade, and
-/// invalidating them all would re-render every mirror at once.
 pub fn read_for_params(path: &Path, current: &serde_json::Value) -> Result<Option<RenderCursor>> {
     let Some(cursor) = read(path)? else {
         return Ok(None);

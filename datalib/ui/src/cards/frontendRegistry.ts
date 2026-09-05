@@ -1,22 +1,4 @@
 // Custom components, client side.
-//
-// One mechanism, and the server's filesystem is the source of truth.
-// `GET /api/frontend` reports one **namespace** per directory under
-// `system/frontend/`: `user` for components a person or an agent wrote,
-// and one per applet for the ones an applet wrote. Nothing here can
-// tell the two apart, and nothing here needs to.
-//
-// A component is reached as `comp.<namespace>.<name>` — namespaced, not
-// flat. That is what lets two applet instances both offer `channels`
-// without competing for a name, and it means a user component can be
-// called `gridView` without shadowing the builtin of that name.
-//
-// Loading leans on the browser. Component code is fetched from
-// `/modules/<sha256>`, and the browser keeps at most one module
-// instance per resolved URL — so byte-identical components in two
-// namespaces are evaluated once, for free. There is deliberately no
-// module cache here; the one cache is over the *namespace objects*
-// built around those modules, which the platform knows nothing about.
 
 import { ref, type Ref } from "vue";
 import { fetchFrontend, type FrontendView, type Meta } from "@/api";
@@ -75,19 +57,6 @@ async function refresh(): Promise<void> {
 }
 
 /// Load the manifest once (awaitable) and keep it current. Idempotent.
-///
-/// It refetches when the server says `system/frontend/` moved, which is
-/// the only thing that can change the answer: an applet writing a
-/// component, an agent adding one, a rename tombstone appearing.
-///
-/// This used to be a 4-second `setInterval` — started by the first card
-/// control to mount, its handle discarded, so nothing could ever stop
-/// it. It asked fifteen times a minute for the life of the page and the
-/// answer changed perhaps twice in a session. The subscription is not
-/// torn down either, but for a better reason: the manifest is
-/// process-wide state that outlives every card holding a view of it,
-/// and `@/live` keeps one connection however many subscribers there
-/// are, so this costs a set entry rather than a socket.
 export function ensureFrontend(): Promise<void> {
   if (!firstLoad) {
     firstLoad = refresh();
@@ -96,15 +65,6 @@ export function ensureFrontend(): Promise<void> {
         // `config_changed` as well as `frontend_changed`, and the
         // config half is not belt-and-braces — without it, adding an
         // applet to the config would never take effect.
-        //
-        // The gateway reconciles its applet processes lazily, inside
-        // `GET /api/frontend` (`refresh_if_config_changed` in
-        // backend/http/src/applets.rs). A new applet writes nothing
-        // into `system/frontend/` until it has been *started*, and it
-        // is only started by that reconcile — so waiting for
-        // `frontend_changed` would be waiting for an effect of the
-        // thing we are trying to cause. The 4-second poll this
-        // replaced hid the ordering by asking constantly.
         if (e.kind === "frontend_changed" || e.kind === "config_changed") {
           void refresh();
         }
@@ -142,10 +102,6 @@ export function followRenames(ns: string, name: string): string | null {
 
 /// Build one namespace's object: each component name mapped to the
 /// module's default export, which is the factory card source calls.
-///
-/// A component that fails to load becomes a property that throws when
-/// called, so the failure surfaces as *that card's* error rather than
-/// breaking every card which merely mentions the namespace.
 async function resolveNamespace(ns: string): Promise<Record<string, unknown>> {
   const cached = nsCache.get(ns);
   if (cached) return cached;
@@ -185,12 +141,6 @@ async function resolveNamespace(ns: string): Promise<Record<string, unknown>> {
 
 /// The `comp.<ns>.<name>` references a piece of card source makes.
 ///
-/// A deliberately over-approximating scan, in the same spirit as the
-/// identifier scanner: it reads through strings and comments, so it may
-/// resolve a namespace that is only mentioned. That costs an extra
-/// import; missing a real reference would break the card, so the bias
-/// runs this way on purpose.
-///
 /// Only the dotted form is recognized. `comp["user"]["x"]` is legal
 /// JavaScript and will not be pre-resolved — the gallery always writes
 /// the dotted form, and a hand-written card can too.
@@ -219,10 +169,6 @@ export async function resolveCompScope(
 
 /// The card source a gallery entry expands to: the fully qualified name
 /// plus its stored arguments, serialized as JSON literals.
-///
-/// This is the whole reason arguments are *data* in the metadata rather
-/// than a pre-rendered string — the store holds what to pass, and the
-/// one place that knows how to spell a call builds it.
 export function gallerySource(
   ns: string,
   name: string,
@@ -247,11 +193,6 @@ export function freshUserName(): string {
 
 /// Fold a just-written `user` component into the local manifest without
 /// waiting for the server to report the write back.
-///
-/// The caller has the authoritative name and hash straight from the PUT
-/// response. Without this, a card repointed at the new component
-/// compiles against a manifest that does not know it yet — a blank or
-/// error flash until `frontend_changed` lands.
 export function noteUserComponent(name: string, meta: Meta): void {
   const next = new Map(frontendManifest.value);
   const user = new Map(next.get(USER_NAMESPACE) ?? []);

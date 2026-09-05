@@ -1,54 +1,30 @@
 //! Default artifact versioning: a content hash over the tree.
 //!
-//! Steps that know a cheaper or more meaningful version (row-set
-//! hash, dolt commit) report it in their [`crate::ArtifactState`];
-//! this is the fallback for everyone else. Content (not mtime) so a
-//! byte-identical rewrite doesn't cascade re-runs — that's the
-//! "content-stable outputs" half of the contract doing its job.
-//!
-//! [`tree_version`] has exactly one caller, and that is deliberate:
-//! `resolve_outputs`, once a step has run and reported no version of
-//! its own. The runner never hashes a tree on its own behalf. Versions
-//! are a step's to report, and the runner cannot know what is cheap for
-//! a given store — the raw stores are doltlite databases that can be
-//! asked for a HEAD commit in milliseconds, which the runner
-//! deliberately does not know. See [`UNKNOWN`] for what it uses instead
-//! when a step it did not run has no recorded version.
+//! The fallback, not the norm: a step reports its own content-derived
+//! version, and [`tree_version`] is only reached for a step that just ran and
+//! reported none. Content rather than mtime, so a byte-identical rewrite
+//! doesn't cascade re-runs. See the crate README.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// The version reported for an artifact that does not exist on disk.
-/// A real version is a 64-character blake3 digest, so this six-letter
-/// word cannot collide with one.
+/// The version reported for an artifact that does not exist on disk. A real
+/// version is a 64-character blake3 digest, so this cannot collide with one.
 ///
-/// The scheduler does not special-case it: it is compared for equality
-/// like any other version, which gives the right answer in both
-/// directions. A path that was never produced and still isn't compares
-/// equal to itself, so a consumer that already recorded it is not
-/// dirtied; a path that existed and was deleted moves from a real
-/// digest to this, which is a difference, so its consumers re-run.
+/// Compared for equality like any other version, which is right in both
+/// directions: a tree that was never produced compares equal to itself, so a
+/// consumer is not dirtied, and one that was deleted moves to a different
+/// string, so its consumers re-run.
 pub const ABSENT: &str = "absent";
 
-/// The version used for an artifact whose producer did not run this
-/// pass and has no version recorded from an earlier one: the runner
-/// genuinely does not know what the tree holds.
+/// The version for an artifact whose producer did not run this pass and has
+/// no version recorded from an earlier one: the runner genuinely does not
+/// know what the tree holds.
 ///
-/// Distinct from [`ABSENT`], which is a claim about the disk —
-/// "nothing was ever produced here". The runner cannot make that claim
-/// about a step it skipped without reading the tree, and in the case
-/// that motivated this (#225) it would have been false: the tree held
-/// 3.4 GB. Recording that we don't know is the honest answer, and it is
-/// the cheap one.
-///
-/// Like `ABSENT` it is compared for equality like any other version,
-/// which gives the right answer in both directions. Two runs that both
-/// know nothing about a tree agree, so a consumer that already recorded
-/// this is not dirtied every run; and a real version — always
-/// `<fingerprint>:<version>`, so always containing a colon — can never
-/// collide with it, so a producer that later runs does dirty its
-/// consumers.
+/// Also compared for equality, so two runs that both know nothing agree. A
+/// real version always contains a colon (`<fingerprint>:<version>`), so it
+/// can never collide with this.
 pub const UNKNOWN: &str = "unknown";
 
 /// Hash the tree (or single file) at `path`. Deterministic: files are

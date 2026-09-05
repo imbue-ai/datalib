@@ -1,15 +1,4 @@
 //! Doltlite-backed raw store for the Notion provider.
-//!
-//! Replaces the per-entity JSONL trees with a single sqlx-managed
-//! sqlite (eventually doltlite) file at `<data_root>/<name>/raw/entities.doltlite_db`.
-//! Schema is owned by this provider; the shared bookkeeping tables
-//! (`blobs`, `sync_runs`) and the open / start_run
-//! / blob plumbing live in [`datalib_etl::doltlite_raw`].
-//!
-//! See the module docs in `datalib_etl::doltlite_raw` for the
-//! primary-key policy that governs every object table here.
-//!
-//! See `DOLTLITE_RAW.md` next to this crate for the design rationale.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -61,7 +50,6 @@ pub struct BlockUpsert {
 }
 
 impl RawDb {
-    /// Open (or create) the file at `db_path`, apply DDL idempotently.
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
@@ -78,16 +66,10 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything from upstream. See
-    /// [`datalib_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
-    /// Snapshot every page's last_edited_time + payload-presence flag.
-    /// Used at the start of a sync to decide which detail fetches we can
-    /// skip.
     pub async fn page_states(&self) -> Result<std::collections::HashMap<String, PageState>> {
         let rows = sqlx::query(
             "SELECT id, last_edited_time, payload IS NOT NULL AS has_payload FROM pages",
@@ -169,8 +151,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Batch upsert blocks. Detail-only — list+detail in one shot since
-    /// Notion's `/blocks/{id}/children` returns full block bodies.
     pub async fn upsert_blocks(&self, rows: &[BlockUpsert]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
@@ -210,7 +190,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Batch upsert comments — also detail-in-list.
     pub async fn upsert_comments(
         &self,
         rows: &[(String, String, Option<String>, String)],

@@ -4,9 +4,6 @@
 // run, and updates state. Every state transition is committed via
 // `CALL DOLT_COMMIT('-Am', 'sync_job: <id> <state>')` so the full history
 // lives in `dolt log` next to the data it produced.
-//
-// Hand-written row struct; the `CREATE TABLE` DDL + column metadata are
-// derived from it by `#[derive(PortableTable)]`.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

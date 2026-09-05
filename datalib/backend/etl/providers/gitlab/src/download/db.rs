@@ -1,14 +1,4 @@
 //! Doltlite-backed raw store for the GitLab provider.
-//!
-//! Replaces the event-store tree of `<entity>/{created,updated}/events.jsonl`
-//! files with a single sqlite database at
-//! `<data_root>/<name>/raw/entities.doltlite_db`. Shared bookkeeping tables
-//! (`blobs`, `sync_runs`) and the open / blob plumbing live in
-//! [`datalib_etl::doltlite_raw`]; the primary-key policy that
-//! governs every object table here is documented there. The schema
-//! itself — DDL constants, table list, PK recipes — lives in the
-//! sibling [`super::schema_raw`] module; this file is the manipulation
-//! layer.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -43,9 +33,6 @@ impl RawDb {
         &self.pool
     }
 
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything from upstream. See
-    /// [`datalib_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
@@ -197,9 +184,6 @@ impl RawDb {
         Ok(row.is_some())
     }
 
-    /// Return `(proj, iid) → updated_at` for every MR we already have
-    /// the full payload for. Used by the download loop to skip detail
-    /// fetches when the listing's `updated_at` matches what's on disk.
     pub async fn merge_request_updated_ats(&self) -> Result<HashMap<(String, u32), String>> {
         let rows = sqlx::query(
             "SELECT project_full_path, mr_iid, updated_at

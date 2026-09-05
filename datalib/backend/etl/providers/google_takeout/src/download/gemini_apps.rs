@@ -1,9 +1,4 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
-//!
-//! Same MDL `outer-cell` shape as YouTube watch-history, but the
-//! cell carries `prompt_text`, `response_html`, and `attached_files`
-//! references to sibling files in the same directory. PK recipe:
-//! `uuidv5(NS, "gemini:" + blake3_hex(prompt + "\0" + when_str))`.
 
 use datalib_etl::fsscan;
 use std::path::{Path, PathBuf};
@@ -91,16 +86,13 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 continue;
             }
             n_attachments += 1;
-            // Exact join, deliberately — NOT the truncation-tolerant
-            // `attachment_path::resolve` that Chat uses (issue #64).
-            // `file_name` here comes from an `href` Google wrote into the
-            // export HTML, which points at the file it actually wrote, so
-            // there's no full-vs-truncated mismatch to bridge. Chat's
-            // `export_name` is JSON metadata describing the *original*
-            // upload, which is where that mismatch comes from. If missing
-            // Gemini attachments ever show up, this is the line to
-            // re-examine first — unverified against an export with a
-            // long-enough filename to trigger the cap.
+            // Exact join, deliberately — NOT Chat's truncation-tolerant
+            // `attachment_path::resolve`. This `file_name` comes from an
+            // `href` Google wrote into the export HTML, pointing at the
+            // file it actually wrote, so there is no full-vs-truncated
+            // mismatch to bridge. Unverified against an export with a
+            // filename long enough to trigger the cap: if missing Gemini
+            // attachments show up, re-examine this line first.
             let sibling = cell_dir.join(&file_name);
             match std::fs::read(&sibling) {
                 Ok(bytes) => {

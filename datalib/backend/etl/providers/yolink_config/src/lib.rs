@@ -2,10 +2,6 @@
 //! Schema-only (serde + anyhow), so the orchestrator can name `YolinkConfig`
 //! without linking the provider. Yolink is EXTRACT-ONLY: `sync:` present →
 //! live per-device CSV mirror; absent → nothing to do (no render path).
-//!
-//! These types are copied from `datalib_core::config` so this crate stays
-//! free of a core dependency. The provider's `processor` converts these into
-//! the core `YolinkSync`/`YolinkDevice` its `download::fetch` still expects.
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
@@ -117,9 +113,6 @@ impl YolinkConfig {
     }
 }
 
-/// Cheap `YYYY-MM-DD` shape check. Doesn't validate that the date is real
-/// (Feb 30 etc.) — the extractor's `NaiveDate::parse_from_str` catches that
-/// at runtime. We just want to bounce obvious typos at config-load time.
 fn is_yyyy_mm_dd(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.len() != 10 {

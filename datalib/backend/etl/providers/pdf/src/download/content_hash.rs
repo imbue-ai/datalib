@@ -1,105 +1,5 @@
 //! A content hash: what the document *is*, not what the file says
 //! about itself.
-//!
-//! # Why this exists next to `blake3`
-//!
-//! `pdf_documents.blake3` is the hash of the file's bytes, and it is
-//! the primary key for good reasons ([`super::schema_raw`] §"Why two
-//! tables"). But it moves for changes that alter nothing a reader would
-//! see. Retitle a PDF, add an XMP tag, let a tool regenerate the
-//! trailer `/ID`, and the byte hash says "new document" — a fresh row,
-//! a fresh `document_uuid`, a fresh markdown file, and (because
-//! `pdf_documents` is never truncated) the old row left behind forever.
-//!
-//! [`compute`] gives a second, coarser identity that survives exactly
-//! those edits, so "the same document, re-annotated" is answerable:
-//!
-//! ```sql
-//! SELECT blake3, title, doc_modified_at FROM pdf_documents
-//!  WHERE content_blake3 = ? ORDER BY doc_modified_at;
-//! ```
-//!
-//! Unlike `xmp_document_id` — which DOWNLOAD.md measured at 3/20
-//! populated and which `cp` happily duplicates — this is computed by
-//! us, so it is present for every parseable document and cannot be
-//! forged by copying. It is still **a hint, not a key**, for the
-//! reasons in §"What it does not survive".
-//!
-//! # How it works
-//!
-//! A PDF is not header-then-body: there is no offset where metadata
-//! ends and content begins. It is a flat bag of numbered objects plus
-//! an `xref` index recording where each one starts. Metadata is not a
-//! *region* — it is objects that the trailer and catalog point at by
-//! number. So instead of slicing a byte range, we pick objects:
-//!
-//! **Hash every object reachable from the document catalog, in object-id
-//! order, with the `/Metadata` key stripped wherever it appears.**
-//!
-//! Reachability from the catalog is doing most of the work, and it
-//! excludes three things for free:
-//!
-//! * **The Info dictionary** — `/Title`, `/Author`, `/CreationDate`,
-//!   `/ModDate`, `/Producer`. It hangs off the *trailer*, not the
-//!   catalog, so nothing reaches it. (Pinned by
-//!   `info_dictionary_is_unreachable_from_the_catalog`.)
-//! * **The trailer `/ID` array and the xref table**, which are not
-//!   objects at all.
-//! * **Orphans.** A tool that writes a metadata edit as an incremental
-//!   update with a *fresh* object number leaves the superseded Info
-//!   dict in the file, still live in the xref. Hashing "every object
-//!   except the metadata ones" would fold that corpse in as content;
-//!   reachability drops it.
-//!
-//! The one metadata object the catalog *does* point at is the XMP
-//! packet (`/Metadata`), so that key is stripped from every dictionary
-//! we serialize — which also means adding XMP to a file that had none
-//! is a no-op rather than a catalog change.
-//!
-//! Nothing is decompressed. [`encode`] writes `stream.content`
-//! verbatim, so page content streams, embedded font programs and image
-//! XObjects are hashed as the compressed bytes they already are. The
-//! only inflation is whatever `Document::load_mem` must do to read
-//! object streams, where PDF 1.5+ writers pack the catalog, the page
-//! tree and the Info dict together into one Flate blob — there, the
-//! metadata genuinely cannot be separated from the structure without
-//! inflating it, and lopdf does that as part of parsing regardless.
-//!
-//! # What it does not survive
-//!
-//! **Renumbering.** Object bodies carry literal cross-references
-//! (`/Contents 4 0 R`), so a writer that renumbers objects changes
-//! those bytes even when nothing visual moves. Acrobat "Save As",
-//! `qpdf --linearize` and Ghostscript all rewrite this way. The hash
-//! holds for append-style editors (`exiftool`, `pdftk update_info`),
-//! which is the common shape of "I edited the metadata".
-//!
-//! **Re-compression.** Streams are hashed compressed, so re-deflating
-//! at a different level changes the hash for identical pixels. Fixing
-//! that means inflating every image and font in the corpus; the cost is
-//! real and the win is narrow, since a tool that re-compresses is
-//! almost always one that also renumbers.
-//!
-//! Both failures are one-directional and that is the direction we want:
-//! it can report "different" for documents that look the same, never
-//! "same" for documents that differ. A false split costs a duplicate
-//! row. A false merge would hide a document.
-//!
-//! **Annotations are deliberately included.** Acrobat highlights and
-//! sticky notes live in each page's `/Annots`, which the catalog
-//! reaches, so marking a PDF up changes its content hash. That is the
-//! conservative reading: those marks are visible, and a hash that
-//! called a highlighted document identical to a clean one would be
-//! claiming something false about what a reader sees. Excluding them
-//! would be a defensible different choice — it would make the hash mean
-//! "the same underlying document, however marked up" — but it should be
-//! a decision, not an accident, so it is written down here.
-//!
-//! Encrypted documents get `None`: strings and streams are ciphertext
-//! keyed off the very `/ID` we are trying to ignore, so the bytes churn
-//! on every save. Unparseable ones get `None` too, matching
-//! [`super::identity`]'s policy — conversion is the job, lineage is a
-//! bonus.
 
 use std::collections::BTreeSet;
 
@@ -119,10 +19,6 @@ const HASH_RULE_VERSION: &[u8] = b"datalib.pdf.content.v1\n";
 const STRIPPED_KEY: &[u8] = b"Metadata";
 
 /// Nesting depth past which we give up and return `None`.
-///
-/// Real documents nest single digits deep. A file that exceeds this is
-/// malformed or hostile, and the safe answer is "no opinion" rather
-/// than either a blown stack or a hash over a truncated object.
 const MAX_DEPTH: u32 = 64;
 
 /// Content hash of one PDF, lowercase hex. `None` for anything we
@@ -177,7 +73,6 @@ pub fn from_doc(doc: &Document) -> Option<String> {
     Some(datalib_etl::fswalk::to_hex(hasher.finalize().as_bytes()))
 }
 
-/// The catalog's object id, via the trailer `/Root`.
 fn catalog_id(doc: &Document) -> Option<ObjectId> {
     match doc.trailer.get(b"Root").ok()? {
         Object::Reference(id) => Some(*id),
@@ -185,13 +80,6 @@ fn catalog_id(doc: &Document) -> Option<ObjectId> {
     }
 }
 
-/// Every object id reachable from the catalog, as a sorted set.
-///
-/// The set is collected by traversal but *hashed* in id order, so the
-/// result cannot depend on the order edges happen to be walked. The
-/// `seen` set doubles as cycle detection, which is not optional: every
-/// real PDF has a cycle, since each page's `/Parent` points back at the
-/// page-tree node that lists it in `/Kids`.
 fn reachable_from(doc: &Document, root: ObjectId) -> BTreeSet<ObjectId> {
     let mut seen = BTreeSet::new();
     let mut queue = vec![root];
@@ -206,11 +94,6 @@ fn reachable_from(doc: &Document, root: ObjectId) -> BTreeSet<ObjectId> {
     seen
 }
 
-/// Push every `Reference` inside one object onto `out`.
-///
-/// Iterative rather than recursive: nesting depth is producer-
-/// controlled, and a deeply nested array in a malformed file should not
-/// take the process down with a blown stack.
 fn collect_refs(obj: &Object, out: &mut Vec<ObjectId>) {
     let mut stack = vec![obj];
     while let Some(o) = stack.pop() {
@@ -232,25 +115,10 @@ fn dict_values(d: &Dictionary) -> impl Iterator<Item = &Object> {
         .map(|(_, v)| v)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Encoding
-// ─────────────────────────────────────────────────────────────────────
 
 /// Serialize one object into `out`. Returns `false` if it nests deeper
 /// than [`MAX_DEPTH`], which the caller turns into `None`.
-///
-/// This is **our** encoding, not PDF syntax, for two reasons. Borrowing
-/// `lopdf`'s writer would tie every stored hash to that crate's output
-/// bytes, so a routine version bump could silently make every row
-/// incomparable with every new scan. And PDF syntax is not canonical:
-/// dictionary key order is an artifact of how the producer happened to
-/// write the file, so [`encode_dict`] sorts keys and two files that
-/// differ only in key order hash alike.
-///
-/// It only has to be injective, not readable: every branch writes a
-/// distinct type tag, and every variable-length field is
-/// length-prefixed, so no two distinct objects can encode to the same
-/// bytes.
 fn encode(obj: &Object, out: &mut Vec<u8>, depth: u32) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -313,7 +181,6 @@ fn encode(obj: &Object, out: &mut Vec<u8>, depth: u32) -> bool {
     true
 }
 
-/// Tag 7. Keys are sorted and [`STRIPPED_KEY`] is dropped.
 fn encode_dict(d: &Dictionary, out: &mut Vec<u8>, depth: u32) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -336,9 +203,6 @@ fn encode_dict(d: &Dictionary, out: &mut Vec<u8>, depth: u32) -> bool {
     true
 }
 
-/// Length-prefixed bytes. The prefix is what makes the encoding
-/// injective: without it `/AB` followed by `/C` and `/A` followed by
-/// `/BC` would produce the same bytes.
 fn push_bytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(&(b.len() as u64).to_be_bytes());
     out.extend_from_slice(b);
@@ -348,9 +212,6 @@ fn push_bytes(out: &mut Vec<u8>, b: &[u8]) {
 mod tests {
     use super::*;
 
-    /// Assemble numbered objects into a parseable PDF with a correct
-    /// xref table — the same shape `//tests/fixtures/make_pdf_fixtures.py`
-    /// builds, in Rust so these tests need no fixture data dep.
     fn build(objects: &[Vec<u8>], trailer_extra: &str) -> Vec<u8> {
         let mut out: Vec<u8> = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
         let mut offsets = Vec::new();
@@ -384,8 +245,6 @@ mod tests {
         .into_bytes()
     }
 
-    /// A one-page document with parameterised metadata. Object numbers:
-    /// 1 catalog, 2 page tree, 3 page, 4 content stream, 5 XMP, 6 Info.
     fn doc(body: &str, title: &str, doc_id: &str, xmp_instance: Option<&str>) -> Vec<u8> {
         let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
         if xmp_instance.is_some() {

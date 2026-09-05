@@ -1,17 +1,5 @@
 // The page's one live connection to the server.
 //
-// `GET /api/sync/stream` carries two kinds of frame: unnamed ones for
-// sync-job progress, and `root` ones for everything that changes in the
-// data root without a job behind it — the config, the runner's record,
-// the component store — plus a heartbeat. The backend half is
-// `datalib/backend/http/src/watch.rs`, which explains why the second
-// kind exists at all.
-//
-// This module exists for three reasons, in ascending order of how much
-// trouble each was causing.
-//
-// ## One connection, not four
-//
 // Every consumer used to call `openJobStream` and get an `EventSource`
 // of its own. The header's sync indicator is always mounted, the open
 // view has one, and each `sourceDagView` card adds another — so three
@@ -20,29 +8,6 @@
 // connection never returns one. The app was two DAG cards away from
 // starving its own `fetch` calls with no symptom but hanging requests.
 // Here there is one connection however many subscribers there are.
-//
-// ## A stream that dies quietly
-//
-// `EventSource` reconnects on its own only when it *notices* a drop.
-// A proxy that stops forwarding, or a laptop that slept, looks exactly
-// like a server with nothing to say — and nothing here set `onerror`,
-// so a dead stream was indistinguishable from a quiet one, forever.
-// Every consumer hedged with an unconditional slow poll: 15 s in the
-// header, 15 s in Sources, 5 s in the Pipeline table, whether or not
-// anything was wrong.
-//
-// The server now sends a heartbeat every 10 s, which turns that into a
-// question with an answer: no frame for `STALL_MS` means the stream is
-// gone. So we reconnect and tell subscribers to reconcile *once*,
-// instead of refetching forever against the possibility.
-//
-// ## A backgrounded tab is not a stalled one
-//
-// Browsers throttle timers in hidden tabs to about once a minute, so a
-// watchdog running there would fire on its own throttling and reconnect
-// a perfectly healthy stream. The stall check is therefore suspended
-// while hidden, and becoming visible triggers one reconcile — which is
-// also what a tab that genuinely missed frames needs.
 
 import type { JobProgressEvent } from "@/api";
 

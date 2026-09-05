@@ -1,33 +1,6 @@
 //! The one place YoLink's per-metric unit policy lives: which physical
 //! quantity a metric belongs to, which axis it draws on, and how to get
 //! from the unit the downloader stored to the SI unit we plot.
-//!
-//! ## Why a table rather than per-call-site `if metric == …`
-//!
-//! `yolink_readings.metric` carries its unit in the tag
-//! (`temperature_c`, `water_meter_gal`) — the value column is a bare
-//! `REAL`. That makes "which unit is this?" a question only a lookup
-//! can answer, and answering it in more than one place is how a plot
-//! ends up with gallons and litres stacked on one axis. Every consumer
-//! goes through [`spec_for`].
-//!
-//! ## What today's downloader can actually emit
-//!
-//! Only four rows below are reachable from the current pipeline:
-//! `temperature_c`, `humidity_pct`, `water_meter_gal`, and
-//! `water_consumption_gal`. `download/mod.rs` pins each device kind to a
-//! fixed CSV header *and* checks every value's unit suffix, so a `℉`
-//! reading under a `℃` header is rejected at parse time rather than
-//! silently converted — there is no path that writes a `temperature_f`
-//! row today.
-//!
-//! The `_f` / `_l` rows are here anyway, and that is deliberate: they
-//! are the conversion *policy* for the day a device does report in
-//! imperial or metric-volume units, sitting next to the units they
-//! convert to, rather than a decision deferred to whoever hits the
-//! problem. They are covered by the unit tests at the bottom of this
-//! file; they are NOT covered by any end-to-end fixture, because no
-//! fixture can produce them.
 
 /// Which y-axis a metric draws on within its quantity's plot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,7 +169,6 @@ pub fn spec_for(metric: &str) -> Option<&'static MetricSpec> {
     METRICS.iter().find(|m| m.metric == metric)
 }
 
-/// Legend label for one (device, metric) series.
 pub fn series_label(device: &str, spec: &MetricSpec) -> String {
     match spec.series_suffix {
         Some(s) => format!("{device} ({s})"),

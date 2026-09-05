@@ -1,47 +1,5 @@
 //! Fetch each connection's profile photo and store it in the per-source
 //! CAS, mapped by a `contact_photos` edge row.
-//!
-//! Shape (kept consistent with the contacts provider, even though the
-//! code isn't shared — this is raw data, owned per-provider):
-//!
-//! ```sql
-//! CREATE TABLE contact_photos (
-//!     id        TEXT PRIMARY KEY,   -- "{owner_id}#{source_url}"
-//!     owner_id  TEXT NOT NULL,      -- the raw entity id (= connection_uuid)
-//!     source_url TEXT NOT NULL,     -- where the bytes came from (og:image URL)
-//!     blake3    TEXT NULL           -- CAS key; NULL = attempted, no photo
-//! )
-//! ```
-//!
-//! Bytes live in the sibling `blobs.doltlite_db` CAS keyed by
-//! blake3. The render side joins `contact_photos` → `cas_objects` to
-//! materialize the image next to the contact's markdown.
-//!
-//! ## Fetch path
-//!
-//! LinkedIn profile URLs are HTML pages, not images. We GET the public
-//! profile page, scrape its `og:image` meta tag, then GET that image —
-//! both via the shared curl chokepoint in **plain** mode
-//! ([`HttpRequest::plain`]): these are public, auth-free resources with
-//! no latchkey service, and we still get the chokepoint's retry/backoff
-//! and playback support.
-//!
-//! ## Idempotence & retry
-//!
-//! We only fetch for a connection that has **no** `contact_photos` row
-//! yet, and we persist a row only for *settled* outcomes:
-//!
-//!   * **success** — bytes stored, `blake3` set;
-//!   * **no public photo** — the profile page loaded (2xx) but advertised
-//!     no `og:image`; recorded with `blake3 = NULL` so we don't re-hammer
-//!     a connection that genuinely has no picture.
-//!
-//! A **transient** failure (LinkedIn's `HTTP 999` bot-block, a 429/5xx, a
-//! network error, or an image fetch that didn't return bytes) records
-//! *nothing* — so the next `fetch_photos` run retries that connection.
-//! That's what lets a rate-limited bulk run finish filling in photos over
-//! subsequent syncs, while a fully-fetched connection is still never
-//! re-fetched.
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{cas_path_for, BlobCas};
@@ -106,19 +64,6 @@ pub struct PhotoSummary {
     pub gave_up: bool,
 }
 
-/// Fetch-and-store photos for every connection that doesn't already have
-/// a `contact_photos` row. `db_path` is the resolved entity db path (its
-/// CAS sibling is derived via [`cas_path_for`]).
-///
-/// `max_consecutive_failures` bounds wasted effort when LinkedIn is hard-
-/// blocking us: once that many connections fail transiently *in a row*
-/// (with no success/no-photo in between to reset the streak) we stop for
-/// this run. It's resolved from the source's
-/// `download_params.maximum_sequential_failed_requests` (the same give-up
-/// knob the HTTP chokepoint uses; LinkedIn's `HTTP 999` is classified
-/// definitive there, so that guard never trips — this loop-level check is
-/// what actually bounds the photo sweep). The un-attempted connections
-/// have no row, so they just retry next run.
 pub async fn fetch_connection_photos(
     db: &RawDb,
     db_path: &std::path::Path,
@@ -353,15 +298,12 @@ fn extract_og_image(html: &str) -> Option<String> {
     None
 }
 
-/// Decode the handful of HTML entities that appear in og:image URLs.
 fn html_unescape(s: &str) -> String {
     s.replace("&amp;", "&")
         .replace("&#38;", "&")
         .replace("&#x26;", "&")
 }
 
-/// Read `name="value"` (or `name='value'`) out of a tag fragment,
-/// case-insensitive on the attribute name.
 fn attr_value(tag: &str, name: &str) -> Option<String> {
     let lower = tag.to_lowercase();
     let needle = format!("{name}=");

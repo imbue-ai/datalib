@@ -1,19 +1,6 @@
 //! ChatGPT render: convert parsed conversations into the shared
 //! `chat-common` normalized model and delegate markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
-//!
-//! One conversation → one [`NormalizedChat`] with a single `"all"`
-//! bucket; `chat_uuid` and the bucket's `markdown_uuid` are the upstream
-//! `conversation_id`, so page identities / links stay stable. Each
-//! message becomes one [`NormalizedChatItem`] whose `kind_label`
-//! carries the role-distinguished grid kind ("User Input" / "LLM
-//! Response" / "LLM Thinking" / "Tool Call"). The page title links out
-//! to `chatgpt.com/c/<id>`.
-//!
-//! Incrementality is unchanged and still dolt-diff driven: `parse`
-//! consulted `dolt_diff_<table>` against the render cursor and only
-//! loaded changed conversations, so we pass an empty `prior_fingerprints`
-//! map and advance the cursor on success.
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,7 +49,6 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render every conversation in `parsed` via the shared chat renderer.
 pub fn render_all(
     parsed: &ParsedChatGPTApi,
     root: &std::path::Path,
@@ -262,9 +248,6 @@ fn ordered_messages(shredded: &ShreddedConversation) -> Vec<&OAMessageRow> {
     path
 }
 
-/// Render a message's content parts into one markdown body: plain text,
-/// fenced code (with language), fenced execution output, and reasoning
-/// as a blockquote. Returns `None` when there's nothing to show.
 fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
     let mut blocks: Vec<String> = Vec::new();
     for p in parts {
@@ -288,8 +271,6 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
     (!body.trim().is_empty()).then_some(body)
 }
 
-/// ChatGPT file ref → normalized attachment. The bytes resolve via
-/// `ref_id` (the `file_id`) against the conversation's bundle.
 fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
     NormalizedAttachment {
         rel_path: None,

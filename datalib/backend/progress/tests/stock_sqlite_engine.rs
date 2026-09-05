@@ -1,11 +1,4 @@
 //! Does the bus still come out as an *ordinary* SQLite file?
-//!
-//! Every SQLite handle in this tree is doltlite, whose default for a new
-//! file is its own `CTLD` prolly-tree format. The bus opts out with
-//! doltlite's `doltlite_engine=sqlite` URI parameter, which has to
-//! survive sqlx passing our filename through verbatim. A sqlx upgrade
-//! could break that, and the symptom would not be an error — just a bus
-//! that works, slowly, in the wrong format. So: assert the first bytes.
 
 use datalib_progress::{open_or_create, progress_path, SCHEMA};
 
@@ -14,10 +7,6 @@ fn magic(path: &std::path::Path) -> Vec<u8> {
 }
 
 /// Create a bus, write to it, and read the header back off disk.
-///
-/// Kept on an unremarkable path on purpose: if the opt-out breaks, this
-/// fails on the magic bytes and says so, rather than on some path
-/// mangling that happens to break first.
 #[tokio::test]
 async fn the_bus_is_a_stock_sqlite_file() {
     let td = tempfile::tempdir().unwrap();
@@ -63,11 +52,6 @@ async fn without_the_parameter_doltlite_claims_the_file() {
 /// The other way this breaks: data roots have spaces and punctuation in
 /// them (this repo lives under "Imbue Dropbox"), and the path has to
 /// survive being spliced into a `file:` URI.
-///
-/// `%41` is the case with teeth — SQLite percent-decodes the path
-/// portion, so unescaped it becomes a literal `A` and we open a
-/// directory that does not exist. A bare `%` followed by a space would
-/// pass either way and prove nothing.
 #[tokio::test]
 async fn an_awkward_path_still_opens() {
     let td = tempfile::tempdir().unwrap();

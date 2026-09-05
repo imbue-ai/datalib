@@ -1,10 +1,5 @@
 //! [`AppRepo`] — the seam to the two stores this server owns: filed
 //! feedback and the sync job queue.
-//!
-//! The grid index is not here. It is read through
-//! `datalib_unified_index::repo::IndexRepo`, in the crate the applet
-//! links, because it is a different file with a different writer.
-//! [`RepoError`] stays shared: both seams report failures the same way.
 
 use std::sync::Arc;
 
@@ -26,10 +21,6 @@ pub enum RepoError {
 
 /// Writes and reads of the two application stores: filed feedback and
 /// the sync job queue.
-///
-/// Separate from [`IndexRepo`] because they are separate files with a
-/// different writer. One process owns both; the index is owned by the
-/// pipeline.
 #[async_trait]
 pub trait AppRepo: Send + Sync {
     /// Append a feedback row. The default impl returns
@@ -67,19 +58,11 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    /// Request cancellation of a pending/running job. Flips `state` to
-    /// `canceled` for pending/running rows; the worker observes the
-    /// state change on its next poll and SIGTERMs its child.
     async fn request_cancel_job(&self, _job_id: &str) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
 
     // --- Worker-side job lifecycle ------------------------------------
-    //
-    // These are the writes the in-process sync worker issues as it drains
-    // the queue. The HTTP request handlers never call them; only
-    // `worker::run` does. Default impls return [`RepoError::ReadOnly`] so
-    // a read-only backend simply never makes progress on jobs.
 
     /// Atomically claim the oldest `pending` job: flip it to `running`,
     /// stamp `started_at`, and return the updated row. Returns `Ok(None)`
@@ -90,8 +73,6 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    /// Record the OS pid of the child process driving a `running` job, so
-    /// a future worker restart can detect orphaned rows.
     async fn set_job_pid(&self, _job_id: &str, _pid: i64) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
@@ -108,9 +89,6 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    /// Move a job to a terminal state (`done` / `failed` / `canceled`),
-    /// stamping `finished_at`, clearing `pid`, and recording an optional
-    /// error summary.
     async fn finish_job(
         &self,
         _job_id: &str,
@@ -120,9 +98,6 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    /// Startup recovery: flip any rows still marked `running` (left over
-    /// from a previous backend process that died mid-job) to `failed`.
-    /// Returns the number of rows recovered.
     async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
         Err(RepoError::ReadOnly)
     }
@@ -132,17 +107,10 @@ pub trait AppRepo: Send + Sync {
     /// Append disk-usage samples. The caller has already applied the
     /// compaction rules (drop an unchanged value; never two samples for
     /// one series within five seconds) — this only writes.
-    ///
-    /// Deliberately not versioned: `disk_usage` rows *are* the history,
-    /// so a `dolt_commit` per sample would flood `dolt_log` and record
-    /// nothing the table doesn't already say.
     async fn record_disk_usage(&self, _rows: &[DiskUsageRow]) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
 
-    /// The newest `limit` disk-usage samples across every series,
-    /// newest first. Used to seed the in-memory window the sparklines
-    /// draw, so a server restart doesn't blank them for five minutes.
     async fn recent_disk_usage(&self, _limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
         Err(RepoError::ReadOnly)
     }

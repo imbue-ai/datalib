@@ -5,10 +5,6 @@
 // in the editor; the chips append a template step pair. Save PUTs the
 // text to /api/config, which validates with the real config loader
 // before persisting.
-//
-// The fixture root's config.toml starts as a single `data_root` line
-// with no sources. Specs that save restore the original file at the end
-// (the fixture root is shared by every spec in the run).
 
 import { test, expect, type Page } from "@playwright/test";
 import { writeFileSync } from "node:fs";

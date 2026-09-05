@@ -1,22 +1,12 @@
 //! Content-addressable blob store + per-bucket attachment bundle.
 //!
-//! Each raw source owns a directory holding two doltlite files:
+//! Bytes live once in `cas_objects`, keyed by blake3; each provider declares
+//! its own `(owning_id, ref_id, blake3)` edge table. Download fills a bundle,
+//! parse loads one document's refs in two queries, and render consumes an
+//! already-loaded bag of bytes. See the crate README.
 //!
-//!   `<data_root>/<name>/raw/entities.doltlite_db`  — entities + per-provider CAS edge table
-//!   `<data_root>/<name>/raw/blobs.doltlite_db`     — pure CAS (this module)
-//!
-//! Bytes are keyed by their blake3 hash and stored exactly once in
-//! `cas_objects`. Each provider declares its own `(<owning>, <ref>,
-//! blake3)` edge table via the [`CasEdgeRow`] derive — see
-//! `slack_attachments`, `wa_media_files`, `notion_image_attachments`,
-//! etc. for the per-provider names. The render side consumes
-//! attachments per bucket via [`BlobBundle::load`], which joins the
-//! edge table to `cas_objects` to assemble one bag of bytes per
-//! rendered doc.
-//!
-//! The legacy shared `blob_refs` table + its `RefStub` / `store_bytes`
-//! / `attach_hash` write API was retired once every provider moved
-//! to the per-provider edge shape; see git history for the old API.
+//! One payload can reach a bundle under two refs with different metadata, so
+//! filenames dedupe on the content hash rather than on the derived name.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -27,9 +17,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 
-// ─────────────────────────────────────────────────────────────────────
 // Schema
-// ─────────────────────────────────────────────────────────────────────
 
 /// Sole table in the per-source blobs database. Pure content-addressed
 /// storage: bytes keyed by their blake3, nothing source-specific.
@@ -42,9 +30,7 @@ pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
     CHECK (length(blake3) = 64)
 )";
 
-// ─────────────────────────────────────────────────────────────────────
 // Path helpers
-// ─────────────────────────────────────────────────────────────────────
 
 /// Given the entity db path (e.g. `/x/raw/slack/entities.doltlite_db`),
 /// return the sibling CAS path `/x/raw/slack/blobs.doltlite_db`. Both
@@ -55,9 +41,7 @@ pub fn cas_path_for(entity_db_path: &Path) -> PathBuf {
     crate::raw_layout::blobs_db(parent)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // CAS
-// ─────────────────────────────────────────────────────────────────────
 
 /// A row from `cas_objects` — bytes plus the declared content type and
 /// length. Hash is implicit (you fetched it by hash).
@@ -113,9 +97,6 @@ impl BlobCas {
         &self.pool
     }
 
-    /// Hash bytes and store them if absent. Returns the lowercase
-    /// 64-hex blake3 hash either way. `INSERT OR IGNORE`: identical
-    /// bytes from different ref slots collapse to one row.
     pub async fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<String> {
         let hash = blake3_hex(bytes);
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
@@ -139,13 +120,6 @@ impl BlobCas {
     /// Bulk-insert pre-hashed bytes in a single transaction, using
     /// chunked multi-row `INSERT OR IGNORE` (one prolly-tree manifest
     /// mutation per chunk's `COMMIT` instead of one per blob).
-    ///
-    /// The caller must precompute the blake3 hex hash of each item
-    /// (use [`blake3_hex`]) — `put_many` does not re-hash.
-    ///
-    /// See `docs/dev/data_architecture_ingestion.md` § "Bulk-upsert as
-    /// the standard write path" for why CAS writes share the same
-    /// batching shape as entity writes. No-op if `items` is empty.
     pub async fn put_many(&self, items: &[CasInsert<'_>]) -> Result<()> {
         if items.is_empty() {
             return Ok(());
@@ -208,17 +182,13 @@ pub fn blake3_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Read side — every provider now uses [`BlobBundle`] (below). The
 // retired `BlobView` / `BlobReader` / `SqliteBlobReader` /
 // `InMemoryBlobReader` / `materialize_to_disk` / `materialize_refs` /
 // `attachment_md` surface was deleted with the notion port (the last
 // consumer); see git history if you need its old shape.
-// ─────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────
 // content-type → extension
-// ─────────────────────────────────────────────────────────────────────
 
 /// Pick a file extension from a `content_type` like `image/png` or
 /// `application/pdf`. Returns `None` for types we don't have a stable
@@ -261,7 +231,6 @@ pub fn extension_for_content_type(ct: Option<&str>) -> Option<String> {
     Some(ext.to_string())
 }
 
-/// Pull the trailing `.ext` off an upstream filename if it has one.
 pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
     let name = name?;
     let (_, ext) = name.rsplit_once('.')?;
@@ -281,9 +250,7 @@ fn name_rank(name: &str) -> (bool, std::cmp::Reverse<&str>) {
     (name.contains('.'), std::cmp::Reverse(name))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // BlobBundle — per-doc unit of attachment data, read + write
-// ─────────────────────────────────────────────────────────────────────
 
 /// One attachment's worth of data inside a [`BlobBundle`] — blake3 +
 /// bytes + the metadata `rendered_filename` needs.
@@ -296,16 +263,6 @@ pub struct Blob {
 }
 
 impl Blob {
-    /// Stable on-disk filename: `<short-blake3>.<ext>`. Extension comes
-    /// from `content_type` when known, else from the upstream filename.
-    ///
-    /// The stem is content-addressed but the extension is derived from
-    /// **this ref's** metadata, so two refs holding identical bytes with
-    /// different metadata derive two names for one payload. Nothing
-    /// outside this module should call it directly — go through
-    /// [`BlobBundle::filename_for`], which resolves that disagreement to
-    /// one name per distinct content hash. See
-    /// [`BlobBundle::names_by_blake3`].
     pub fn rendered_filename(&self) -> String {
         let ext = extension_for_content_type(self.content_type.as_deref())
             .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()));
@@ -330,29 +287,6 @@ pub struct FetchedRef<'a> {
 
 /// Per-doc bundle of attachment data. Travels through the whole
 /// pipeline:
-///
-/// - **Download** builds an empty bundle, calls [`Self::add`] as bytes
-///   come in (and [`Self::add_error`] when a fetch fails), then asks
-///   the per-provider flush code to drain it via
-///   [`Self::cas_inserts`] (→ [`BlobCas::put_many`]),
-///   [`Self::fetched_refs`] (→ the provider's edge table), and
-///   [`Self::errors`] (→ `record_object_error`).
-///
-/// - **Parse** calls [`Self::load`] for one doc's set of `ref_id`s and
-///   attaches the resulting bundle to the parsed bucket. Two SQL
-///   queries total — one for the per-provider `ref_id → blake3 +
-///   metadata` projection, one for `cas_objects` bytes — regardless of
-///   how many attachments the doc has.
-///
-/// - **Render** consumes the bundle synchronously via [`Self::get`],
-///   [`Self::materialize_to_dir`], and [`Self::markdown_link`]. No SQL,
-///   no `tokio::task::block_in_place`, no dyn-dispatched blob reader
-///   — render is a pure transformer over an already-loaded bag of
-///   bytes.
-///
-/// Same conceptual shape both ends. The "blob read" and "blob write"
-/// operations are mirror images, and the bundle is the common
-/// vocabulary.
 #[derive(Debug, Clone, Default)]
 pub struct BlobBundle {
     by_ref: HashMap<String, Blob>,
@@ -403,15 +337,10 @@ impl BlobBundle {
         );
     }
 
-    /// Record one failed fetch. The flush code routes these through
-    /// `record_object_error` on the provider's edge-table bookkeeping
-    /// sidecar.
     pub fn add_error(&mut self, ref_id: impl Into<String>, error: impl Into<String>) {
         self.errors.push((ref_id.into(), error.into()));
     }
 
-    /// Borrow-friendly view for the per-provider flush code that has
-    /// to call [`BlobCas::put_many`].
     pub fn cas_inserts(&self) -> Vec<CasInsert<'_>> {
         self.by_ref
             .values()
@@ -440,32 +369,6 @@ impl BlobBundle {
 
     // ── parse side ───────────────────────────────────────────────────
 
-    /// Bulk-load one doc's attachments. Two SQL queries, regardless of
-    /// how many attachments:
-    ///
-    /// 1. **Projection** (per-provider). Caller supplies a SQL string
-    ///    with **exactly one `{placeholders}` substring** where the
-    ///    `?, ?, ...` IN-list should land. Must `SELECT ref_id, blake3,
-    ///    content_type, upstream_name` (any of the last two may be
-    ///    `NULL`). Example:
-    ///
-    ///    ```text
-    ///    SELECT file_id AS ref_id, blake3,
-    ///           NULL AS content_type, NULL AS upstream_name
-    ///      FROM chatgpt_attachments
-    ///     WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL
-    ///    ```
-    ///
-    /// 2. **CAS bytes**: `SELECT blake3, bytes, content_type FROM
-    ///    cas_objects WHERE blake3 IN (?, ...)`. The provider's
-    ///    `content_type` wins over `cas_objects.content_type` when
-    ///    both are present.
-    ///
-    /// Returns an empty bundle if `ref_ids` is empty. Refs that the
-    /// projection didn't surface (no row, or `blake3 IS NULL`) are
-    /// silently dropped — render then emits the
-    /// "attachment not yet fetched" placeholder via
-    /// [`Self::markdown_link`].
     pub async fn load(
         refs_pool: &SqlitePool,
         cas_pool: &SqlitePool,
@@ -581,28 +484,6 @@ impl BlobBundle {
 
     // ── render side (sync) ───────────────────────────────────────────
 
-    /// One filename per distinct content hash — the resolution every
-    /// other render-side method is built on.
-    ///
-    /// [`Blob::rendered_filename`] derives the extension from a single
-    /// ref's metadata, but the file it names is content-addressed: the
-    /// stem is `blake3[..16]`. So when one payload reaches the bundle
-    /// under two refs with different metadata, it derives two names and
-    /// gets written twice. A Google Calendar invite does exactly that —
-    /// the same iCalendar bytes arrive once as an inline `text/calendar`
-    /// MIME part (no upstream filename) and once as an `invite.ics`
-    /// attachment part — which used to leave `blobs/<stem>` beside
-    /// `blobs/<stem>.ics`, byte-identical, with only one of them linked.
-    ///
-    /// Collapsing on `blake3` rather than on the derived name is the
-    /// fix that generalizes: it does not depend on both refs happening
-    /// to derive the *same* extension, so an `application/octet-stream`
-    /// ref paired with a `report.pdf` ref collapses too.
-    ///
-    /// The winner is chosen by a total order over the candidate names —
-    /// prefer one carrying an extension, then the lexicographically
-    /// smallest — never by `by_ref` iteration order, which is a
-    /// `HashMap`'s and would make the rendered tree nondeterministic.
     fn names_by_blake3(&self) -> BTreeMap<&str, String> {
         let mut out: BTreeMap<&str, String> = BTreeMap::new();
         for blob in self.by_ref.values() {
@@ -699,35 +580,11 @@ impl BlobBundle {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Per-provider CAS-edge tables — shared shape
-// ─────────────────────────────────────────────────────────────────────
 
 /// The shape every per-provider CAS edge table follows. One row per
 /// `(owning_id, ref_id)` pair, recording the CAS `blake3` for the
 /// bytes that the upstream's `ref_id` resolved to.
-///
-/// Implementors are row structs with **exactly four fields, in this
-/// order**:
-///
-/// ```ignore
-/// #[derive(CasEdgeRow)]
-/// #[cas_edge_row(table = "slack_attachments")]
-/// pub struct SlackAttachmentRow {
-///     pub id: String,           // synth "{owning_id}#{ref_id}"
-///     pub message_uuid: String, // owning-entity FK ← OWNING_COLUMN
-///     pub file_id: String,      // upstream ref      ← REF_COLUMN
-///     pub blake3: Option<String>,
-/// }
-/// ```
-///
-/// The proc-macro derive (`datalib_etl_macros::CasEdgeRow`) reads
-/// the second and third fields' identifiers and emits
-/// [`Self::OWNING_COLUMN`] / [`Self::REF_COLUMN`] accordingly, plus
-/// the [`crate::bulk::BulkUpsertable`] impl. Default trait methods
-/// then synthesize the `CREATE TABLE` + two index DDLs and the
-/// `"{owning_id}#{ref_id}"` PK recipe, so each provider's
-/// `schema_raw.rs` is just the four-field struct + the attribute.
 pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
     /// SQL column name carrying the owning-entity FK
     /// (e.g. `conversation_id`, `message_uuid`, `chat_item_id`).
@@ -754,9 +611,6 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
         )
     }
 
-    /// Index on the owning-FK column. Supports "load every edge for
-    /// this owner" queries (per-bucket attachment loads on the
-    /// render side).
     fn by_owning_index_ddl() -> String {
         format!(
             "CREATE INDEX IF NOT EXISTS {table}_by_{owning} ON {table}({owning})",
@@ -777,8 +631,6 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
         )
     }
 
-    /// Convenience: every entry in [`Self::all_ddl`] in one slice,
-    /// ready to splice into a provider's `full_ddl()` composer.
     fn all_ddl() -> Vec<String> {
         vec![
             Self::ddl(),
@@ -794,27 +646,13 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Per-provider CAS-edge index loader
-// ─────────────────────────────────────────────────────────────────────
 
 /// Snapshot a per-provider CAS edge table as a `(ref_id → blake3)`
 /// in-memory map. Loaded once at the start of `fetch()` so the
 /// per-file "have we got these bytes yet?" check is a HashMap hit
 /// instead of a SQLite round trip queued behind preceding multi-MB
 /// CAS commits on a single-connection doltlite pool.
-///
-/// `table` is the per-provider edge table (`chatgpt_attachments`,
-/// `claude_attachments`, `slack_attachments`); `ref_id_column` is
-/// the column carrying the upstream id (`file_id`, `file_uuid`).
-/// Many edge rows can share the same `ref_id` (different owning
-/// rows); the HashMap collapses duplicates and keeps the first
-/// non-null `blake3` we see — they should all agree, since one
-/// `ref_id` ↔ one immutable set of bytes ↔ one `blake3`.
-///
-/// The caller's `fetch()` keeps the map up to date as it goes:
-/// each successful download inserts the new (ref_id, blake3) so
-/// later files in the same run hit the cache without re-fetching.
 pub async fn load_blake3_index(
     pool: &SqlitePool,
     table: &str,
@@ -847,9 +685,7 @@ pub async fn load_blake3_index(
     Ok(out)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // CAS-edge accumulator
-// ─────────────────────────────────────────────────────────────────────
 
 /// Per-bucket attachment-fetch accumulator. Every per-provider
 /// download walks an upstream bucket (a conversation, a thread, a
@@ -858,26 +694,6 @@ pub async fn load_blake3_index(
 /// the fetch fail? This struct collects those outcomes, then
 /// [`Self::flush`] hands them to [`flush_cas_edges`] via a row
 /// builder the caller supplies.
-///
-/// **Three add paths:**
-///
-///   - [`Self::add_fetched`] — we just downloaded the bytes. Lands in
-///     the [`BlobBundle`] so the end-of-bucket CAS write picks them
-///     up; the edge row will be stamped with the bundle-derived
-///     blake3.
-///   - [`Self::add_known`] — the bytes were already in the CAS from a
-///     prior sync (or an earlier file in this run hit the same
-///     ref_id). Caller passes the looked-up blake3 so the new edge
-///     row carries the actual hash.
-///   - [`Self::add_failed`] — the fetch errored. Edge row gets
-///     `blake3 = NULL` and an error stamp lands on the bookkeeping
-///     sidecar.
-///
-/// One row per `(owning_id, ref_id)` pair — same pair seen twice
-/// is a no-op after the first add. End-of-bucket
-/// [`Self::flush`] resolves each edge's blake3 (fetched → from
-/// bundle, known → from the looked-up map, failed → `None`) and
-/// delegates to [`flush_cas_edges`].
 pub struct CasEdgeAccumulator {
     bundle: BlobBundle,
     edges: Vec<EdgePending>,
@@ -924,7 +740,6 @@ impl CasEdgeAccumulator {
         true
     }
 
-    /// Record `(owning, ref)` edge with freshly-downloaded bytes.
     pub fn add_fetched(
         &mut self,
         owning_id: &str,
@@ -937,9 +752,6 @@ impl CasEdgeAccumulator {
         self.bundle.add(ref_id, bytes, content_type, upstream_name);
     }
 
-    /// Record `(owning, ref)` edge whose bytes were already in CAS
-    /// from a prior run. `blake3` is the looked-up hex hash that the
-    /// new edge row will carry.
     pub fn add_known(&mut self, owning_id: &str, ref_id: &str, blake3: String) {
         self.push_edge(owning_id, ref_id);
         self.known_blake3
@@ -947,27 +759,12 @@ impl CasEdgeAccumulator {
             .or_insert(blake3);
     }
 
-    /// Record `(owning, ref)` edge whose fetch errored. The edge row
-    /// gets `blake3 = NULL`; `err` lands on the bookkeeping sidecar
-    /// via `record_object_attempt`.
     pub fn add_failed(&mut self, owning_id: &str, ref_id: &str, err: impl Into<String>) {
         self.push_edge(owning_id, ref_id);
         self.errors.push((ref_id.to_string(), err.into()));
         self.bundle.add_error(ref_id, "fetch failed");
     }
 
-    /// End-of-bucket flush. Builds the per-`(owning, ref)` edge rows
-    /// via `build_row` and delegates to [`flush_cas_edges`]: CAS
-    /// `put_many` → bulk UPSERT edge rows → bookkeeping error stamps.
-    ///
-    /// `build_row` receives `(owning_id, ref_id, blake3)` and returns
-    /// the provider's row type. `blake3` is resolved per edge: the
-    /// bundle's `fetched_refs` for new fetches, [`Self::add_known`]'s
-    /// recorded hash for refs already in CAS, or `None` for failures.
-    ///
-    /// On failures, one stamp per failed edge (synthesized via the
-    /// row's [`BulkUpsertable::id`]) lands on the
-    /// `<T::TABLE>_bookkeeping` sidecar inside the same flush tx.
     pub async fn flush<T, F>(
         &self,
         pool: &sqlx::SqlitePool,
@@ -1026,36 +823,12 @@ impl Default for CasEdgeAccumulator {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // CAS-edge flush primitive
-// ─────────────────────────────────────────────────────────────────────
 
 /// End-of-bucket CAS-edge flush. The shape every per-provider CAS
 /// edge table (chatgpt_attachments, claude_attachments,
 /// slack_attachments, chat_item_attachments) used to hand-roll
 /// individually:
-///
-///   1. CAS pool: `put_many` so every edge row's `blake3` points at
-///      bytes already in the CAS before the edge row lands.
-///   2. Entity pool, single tx:
-///      - `bulk_upsert_in_tx` the edge rows (writes + bookkeeping).
-///      - For each `(id, err)` in `errors`, stamp `last_error` on
-///        `<T::TABLE>_bookkeeping` via `record_object_attempt`. This
-///        runs in the same tx so a failure here doesn't leave entity
-///        rows without their error annotations.
-///   3. Commit.
-///
-/// `T::TABLE` (from [`BulkUpsertable`]) is used as the bookkeeping
-/// table name — every CAS-edge table has the standard
-/// `<table>_bookkeeping` sidecar.
-///
-/// Caller's job is to pre-build the edge rows with the right blake3:
-/// for fresh fetches the blake3 comes from `bundle.fetched_refs()`,
-/// for refs whose bytes were already in CAS the caller looks it up
-/// (e.g. via the provider's per-table `<ref_col>` query) and stamps
-/// it forward — so every edge row carries the actual hash, not NULL.
-/// Failures land in `errors` so the bookkeeping sidecar still
-/// records what went wrong.
 pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     pool: &SqlitePool,
     cas: &BlobCas,
@@ -1086,9 +859,7 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Tests
-// ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1182,12 +953,6 @@ mod tests {
     /// The shape that produced byte-identical `blobs/<stem>` +
     /// `blobs/<stem>.ics` pairs: one payload reaching the bundle under
     /// two refs whose metadata derives different extensions.
-    ///
-    /// Deliberately NOT the calendar case — with `text/calendar` in the
-    /// extension table both refs now derive `.ics` and collide onto one
-    /// name anyway, so a calendar-shaped assertion here would pass with
-    /// the dedupe removed. An unmappable content type paired with a
-    /// named attachment fails without it.
     #[test]
     fn identical_bytes_under_two_refs_resolve_to_one_name() {
         const BYTES: &[u8] = b"one payload, two refs";

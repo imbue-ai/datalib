@@ -7,17 +7,6 @@ import { searchAndSettle } from "./grid-helpers";
 // their tokens appeared in that exact order — `grey earl` would return
 // zero rows even though both tokens show up in many fixture rows (just
 // as the literal "earl grey").
-//
-// Contract:
-//   * Bare text in the search bar → qmd hybrid query.
-//   * `qmd:"text"` predicate → hybrid (same as bare; explicit form).
-//   * `qmd_vsearch:"text"` → vector-only mode.
-//
-// We type into the grid's search bar (the v1 `/#/search?q=…` deeplink
-// form is gone; the query lives in the grid card's state now) and
-// gate on the Score column appearing — qmd-routed results carry
-// scores, LIKE-fallback rows don't, so the header showing up is the
-// signal that the query actually routed through qmd.
 
 async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto("/");

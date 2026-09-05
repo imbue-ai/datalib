@@ -1,19 +1,5 @@
 //! How this repo spawns the `qmd` CLI, and the one version pin that says
 //! which `qmd` that is.
-//!
-//! This lives down here — in a crate with no dependencies at all —
-//! rather than beside the search code in `datalib_unified_index`, for a
-//! build-cache reason. `qmd_indexer_bin` is a `tools=` input to the
-//! fixture's embedding genrule, and bazel keys an action on its tools'
-//! digests, so every crate that binary links is a crate whose next edit
-//! re-runs a ~90s CPU-only embed on CI. It used to link
-//! `datalib_unified_index` (and through it `datalib_core`,
-//! `datalib_schema`, `app_schema`, `datalib_time`) to reach three
-//! constants and a `Command` builder. Now it links this.
-//!
-//! `datalib_unified_index::qmd` re-exports everything here, so the
-//! search runner and daemon are unaffected and there is still exactly
-//! one pin.
 
 use std::path::{Path, PathBuf};
 
@@ -23,10 +9,6 @@ use std::path::{Path, PathBuf};
 /// `datalib/tauri/stage-runtime.sh` greps this constant to decide which
 /// qmd tree to bundle — keep the `DEFAULT_QMD_VERSION` name and
 /// string-literal shape.
-///
-/// History note: the runner used to carry its own same-named constant,
-/// which a version bump missed (2.1.0 vs 2.5.3 for six weeks) — hence
-/// one shared constant rather than a per-module default.
 pub const DEFAULT_QMD_VERSION: &str = "2.8.3";
 
 /// Canonical sub-path of the qmd index, relative to `<root>`. qmd writes
@@ -34,7 +16,6 @@ pub const DEFAULT_QMD_VERSION: &str = "2.8.3";
 /// [`qmd_cache_home`]).
 pub const QMD_INDEX_REL: &str = "unified_index/qmd/index.sqlite";
 
-/// Resolve the qmd index file path under a data root.
 pub fn qmd_index_path(root: &Path) -> PathBuf {
     crate::layout::qmd_dir(root).join("index.sqlite")
 }

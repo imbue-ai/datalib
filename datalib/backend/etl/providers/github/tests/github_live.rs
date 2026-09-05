@@ -4,20 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live GitHub single-PR download + render test.
-//!
-//! Hits real `api.github.com` via `latchkey curl`, downloads ONE PR
-//! (meta + comments + reviews) into a hermetic tempdir, renders it,
-//! and insta-snapshots a stable view.
-//!
-//! Default target is the imbue-ai mngr PR #1650 (kept around for this
-//! test). Override with `GITHUB_TEST_PR=<owner/repo#NUM-or-URL>`.
-//!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Run with:
-//!
-//! ```sh
-//! export LATCHKEY_CURL=$(pwd)/datalib/backend/target/debug/latchkey-curl-impersonate
-//! cargo test -p datalib-etl-github --test github_live -- --ignored
-//! ```
 
 use datalib_etl_github::download::{self as github, parse_pr_ref, FetchOptions};
 use datalib_etl_github::render::{parse_api_dir, render_github};

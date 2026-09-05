@@ -1,15 +1,5 @@
 //! End-to-end render over a doltlite store this test builds itself:
 //! seed readings, render, assert the page, append more, render again.
-//!
-//! The load-bearing assertion is the **skip**. YoLink's whole
-//! incrementality story is "HEAD unchanged → don't re-render", and a
-//! test that only checks the happy path would pass just as well against
-//! a renderer that re-rendered every run — so the skip is checked by
-//! watching a re-render fail to happen (no doc emitted, and the file's
-//! mtime-independent content stamp unchanged), and then checked in the
-//! other direction by appending a reading and watching the render come
-//! back. Both halves are needed: on its own, "returns UpToDate" is
-//! satisfied by a renderer that never renders at all.
 
 use std::path::Path;
 
@@ -24,8 +14,6 @@ use sqlx::sqlite::SqlitePool;
 
 const STANZA: &str = "yolink";
 
-/// Seed a device row plus its readings, then commit so `dolt_log()` has
-/// a HEAD to hand back.
 async fn seed(pool: &SqlitePool, rows: &[(&str, &str, i64, f64)], devices: &[(&str, &str)]) {
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let device_rows: Vec<YolinkDeviceRow> = devices
@@ -315,8 +303,6 @@ async fn an_empty_store_renders_a_page_without_plots() {
     );
 }
 
-/// Build a store at `raw_path`, render it cold, and return the emitted
-/// document's fingerprint.
 async fn fingerprint_of(root: &Path, rows: &[(&str, &str, i64, f64)]) -> String {
     let raw_path = root.join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();
@@ -346,12 +332,6 @@ async fn the_fingerprint_hashes_the_readings_not_the_store() {
     // Two stores with identical readings but independent histories —
     // different `dolt_log()` HEADs, because doltlite stamps its bootstrap
     // commits with the wall clock and hashes chain.
-    //
-    // The contract is that `source_fingerprint` hashes the
-    // upstream payload, so these must agree. Folding HEAD in instead
-    // (which is tempting, since HEAD is what gates the render) makes the
-    // `markdowns` row move every time the store is rebuilt from scratch,
-    // and makes two mirrors of the same data disagree.
     let rows: &[(&str, &str, i64, f64)] = &[
         ("fridge", "temperature_c", 1_781_481_609_000, 3.5),
         ("fridge", "temperature_c", 1_781_481_669_000, 3.7),

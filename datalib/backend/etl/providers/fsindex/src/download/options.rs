@@ -1,15 +1,4 @@
 //! `.fsindex.yaml` parsing, cascading, and breadcrumb writes.
-//!
-//! See [`EXTRACT.md`](../../EXTRACT.md) §"Options file" and §"Stamping
-//! policy" for what each key means. See
-//! [`schema_raw`](super::schema_raw) §"Directory tree-hash
-//! canonicalization" for why the breadcrumb is excluded from the
-//! directory's blake3 input.
-//!
-//! The fingerprint produced here lands in
-//! `scan_meta.options_fingerprint`. It is intentionally derived only
-//! from option *content* (the ignore set + stamping flag), not from
-//! platform / scanner state — see EXTRACT.md.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -79,8 +68,6 @@ impl OptionsCascade {
         self.frames.len()
     }
 
-    /// The yaml frame matching `dir`, if the cascade currently has one
-    /// pushed for that exact path.
     pub fn frame_for(&self, dir: &Path) -> Option<&FsindexYaml> {
         self.frames
             .iter()
@@ -88,7 +75,6 @@ impl OptionsCascade {
             .find_map(|(p, y)| if p == dir { Some(y) } else { None })
     }
 
-    /// Resolve effective options at the deepest frame.
     pub fn effective(&self) -> EffectiveOptions {
         let mut ignore: Vec<String> = Vec::new();
         let mut stamp = false;
@@ -105,8 +91,6 @@ impl OptionsCascade {
     }
 }
 
-/// Load `<dir>/.fsindex.yaml` if it exists. Returns `Ok(None)` when
-/// the file is absent.
 pub fn load_at(dir: &Path) -> Result<Option<FsindexYaml>> {
     let path = dir.join(BREADCRUMB_FILENAME);
     let bytes = match fs::read(&path) {
@@ -137,10 +121,6 @@ pub fn load_at(dir: &Path) -> Result<Option<FsindexYaml>> {
 /// Atomic breadcrumb write. Writes to `<dir>/.fsindex.yaml.tmp` then
 /// renames into place, so a partial write never leaves a half-baked
 /// breadcrumb the next scan would mis-parse.
-///
-/// MUST preserve user-edited keys (`ignore`, `stamp_me_with_uuid`)
-/// verbatim — callers construct `yaml` by mutating an existing
-/// [`load_at`] result.
 pub fn write_breadcrumb(dir: &Path, yaml: &FsindexYaml) -> Result<()> {
     let path = dir.join(BREADCRUMB_FILENAME);
     let tmp = dir.join(format!("{BREADCRUMB_FILENAME}.tmp"));

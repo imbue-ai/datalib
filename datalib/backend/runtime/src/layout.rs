@@ -1,37 +1,6 @@
 //! Canonical `data_root` layout — the single source of truth for the
 //! well-known directory names, shared by the writer (sync / config) and the
 //! reader (the http server) so they can't drift.
-//!
-//! `data_root` holds one directory per source stanza (each user-named, owning
-//! its `raw/` + `rendered_md/`) plus a single reserved `system/` directory for
-//! everything that isn't a source: the UI-driving aggregate indices and the
-//! server's runtime state.
-//!
-//! ```text
-//! data_root/<stanza>/raw/…                          per-source download
-//! data_root/<stanza>/rendered_md/…                  per-source render
-//! data_root/unified_index/grid/db.doltlite_db       grid_rows + markdowns index
-//! data_root/unified_index/qmd/index.sqlite          qmd search index
-//! data_root/system/feedback.doltlite_db             filed feedback
-//! data_root/system/jobs.doltlite_db                 sync job queue + history
-//! data_root/system/usage.doltlite_db                bytes-on-disk timeseries
-//! data_root/system/media/…                          served attachments
-//! data_root/system/job-logs/…                       sync job logs
-//! data_root/system/lock                             one-server-per-root claim
-//! ```
-//!
-//! Two groups, split by who may write them and whether they are worth
-//! backing up. `unified_index/` is produced by the pipeline and read by
-//! the applet that serves search; it is fully derived and carries a
-//! `CACHEDIR.TAG`. `system/` is the server's own state, and the
-//! feedback store in it is precious — nothing regenerates it, so it must
-//! not sit under a directory tagged as cache.
-//!
-//! One database per table group, never one shared file: doltlite's
-//! working set is per *file* and shared across processes, so two writers
-//! on one file commit each other's in-flight rows. Splitting the files
-//! gives each exactly one writer — the `grid_index` step for the index,
-//! this server for feedback and jobs.
 
 use std::path::{Path, PathBuf};
 
@@ -83,21 +52,14 @@ pub const LOCK_FILE: &str = "lock";
 // depend on this crate, so the policy lives where it is applied and
 // the path constants stay here.
 
-/// `data_root/system`.
 pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)
 }
 
-/// `data_root/unified_index` — the parent of every search index.
 pub fn unified_index_dir(data_root: &Path) -> PathBuf {
     data_root.join(UNIFIED_INDEX_DIR)
 }
 
-/// `data_root/unified_index/grid` — the dir holding the
-/// grid_rows/markdowns index DB.
-///
-/// The `CACHEDIR.TAG` is not here: it goes on `unified_index/` itself, so
-/// one tag covers `grid/` and `qmd/` together. See [`mark_derived_cache`].
 pub fn grid_index_dir(data_root: &Path) -> PathBuf {
     unified_index_dir(data_root).join(GRID_DIR)
 }
@@ -110,35 +72,26 @@ pub fn grid_index_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(GRID_DB)
 }
 
-/// `data_root/unified_index/qmd` — the qmd index directory. qmd writes
-/// `qmd/index.sqlite` under whatever it sees as `XDG_CACHE_HOME`, so the
-/// cache home it runs with is [`unified_index_dir`].
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
     unified_index_dir(data_root).join(QMD_DIR)
 }
 
-/// `data_root/system/media`.
 pub fn media_dir(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(MEDIA_DIR)
 }
 
-/// `data_root/system/feedback.doltlite_db`.
 pub fn feedback_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(FEEDBACK_DB)
 }
 
-/// `data_root/system/jobs.doltlite_db`.
 pub fn jobs_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(JOBS_DB)
 }
 
-/// `data_root/system/usage.doltlite_db`.
 pub fn usage_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(USAGE_DB)
 }
 
-/// `data_root/system/lock` — the advisory lock a running server holds
-/// for as long as it owns this root. See `datalib_http::lock`.
 pub fn lock_file(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(LOCK_FILE)
 }

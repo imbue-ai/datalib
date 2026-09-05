@@ -1,12 +1,6 @@
 //! Provider-owned config schema for the `claude_api` / `claude_export` sources
 //! (Program A goal #1). Schema-only (serde + anyhow), so the orchestrator and
 //! `http` can name `ClaudeConfig` without linking the provider.
-//!
-//! The two source types share a renderer but not a config: [`ClaudeConfig`]
-//! describes the live claude.ai mirror, [`ClaudeExportConfig`] describes an
-//! unpacked bulk export on disk. Both waves of both types read the raw store
-//! at `common.raw_path`; only the export type also reads
-//! `common.input_path`, and only the API type authenticates.
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
@@ -40,11 +34,6 @@ impl ClaudeConfig {
 }
 
 /// JMAP-less Claude.ai sync knobs (conversation refresh + explicit UUIDs).
-///
-/// `Default` is hand-written rather than derived so it agrees with the
-/// serde defaults: `projects` defaults to `true`, and a derived
-/// `Default` would silently make it `false` for any caller that builds
-/// the struct in Rust instead of deserializing it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeApiSync {
@@ -67,12 +56,6 @@ pub struct ClaudeApiSync {
     /// one extra request per org plus one per project whose knowledge
     /// needs refreshing, and a project is the only place some of a
     /// user's written context lives.
-    ///
-    /// Applies in `conv_uuids` mode too. That mode skips the
-    /// *conversation* listing walk, not this one: a targeted chat still
-    /// resolves its `project` grid column against the mirrored
-    /// projects, and would otherwise show a bare UUID. Set this to
-    /// `false` to opt out.
     #[serde(default = "default_true")]
     pub projects: bool,
     /// When non-empty, restrict the project mirror to exactly these
@@ -80,10 +63,6 @@ pub struct ClaudeApiSync {
     /// `https://claude.ai/project/<uuid>` URL). The per-org listing
     /// still runs — it is one request and it is where the metadata
     /// comes from — but every project outside this set is left alone.
-    ///
-    /// Intended for development and for bounding a first run against a
-    /// large account; leave it empty to mirror everything. Independent
-    /// of `conv_uuids`, which scopes conversations only.
     #[serde(default)]
     pub project_uuids: Vec<String>,
 }
@@ -106,13 +85,6 @@ impl Default for ClaudeApiSync {
 
 /// The Claude-owned slice of a `claude_export` source: an unpacked
 /// Claude bulk export sitting on disk.
-///
-/// `common.input_path` is where the export is read **from**;
-/// `common.raw_path` is where we keep our own copy of it — the same
-/// split every other file-backed source uses. There is no `sync:`
-/// block and no `latchkey_settings:`: an export needs no credentials
-/// and makes no requests, so naming either of them is a mistake this
-/// struct rejects rather than ignores.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeExportConfig {
@@ -123,14 +95,6 @@ pub struct ClaudeExportConfig {
 }
 
 impl ClaudeExportConfig {
-    /// No cross-field constraints to check.
-    ///
-    /// A *missing* `input_path` is not one: as with every other
-    /// file-backed source, its absence means the source is unmanaged —
-    /// no download step at all — rather than a download step pointed at
-    /// nothing. A download step that really was written without one is
-    /// refused by the provider's `plan_export_download`, which is the
-    /// layer that knows a download is being asked for.
     pub fn validate(&self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -149,23 +113,10 @@ pub struct ClaudeRenderConfig {
 
     /// Truncate a project knowledge document's inline text at this many
     /// bytes when rendering it into the project's page.
-    ///
-    /// Claude extracts text from *any* uploaded knowledge file, so a
-    /// project whose "document" is a 500-page EPUB yields half a
-    /// megabyte of pandoc-flavored markup in `content` — which would
-    /// otherwise become a half-megabyte markdown page and a single
-    /// `grid_rows.text` cell of the same size. Hand-written project
-    /// knowledge is a few KB; this ceiling is far above that and far
-    /// below a book.
-    ///
-    /// Truncation is a *render* concern only: the raw store keeps the
-    /// full text either way, so raising this and re-rendering
-    /// backfills. `None` disables the ceiling.
     #[serde(default = "default_max_project_doc_bytes")]
     pub max_project_doc_bytes: Option<usize>,
 }
 
-/// 128 KiB.
 fn default_max_project_doc_bytes() -> Option<usize> {
     Some(128 * 1024)
 }

@@ -1,12 +1,6 @@
 //! Provider-owned config schema for the `media` source. Schema-only
 //! (serde + anyhow), so the orchestrator can name [`MediaConfig`]
 //! without linking the provider.
-//!
-//! `media` is purely file-backed: there is no API and no `sync:` block
-//! — it scans the tree at `common.input_path` for audio, image, video
-//! and playlist files and records what each one is. It is
-//! **download-only**; see the provider's `DOWNLOAD.md` §"No render
-//! side".
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
@@ -30,52 +24,21 @@ pub struct MediaConfig {
     pub ignore: Vec<String>,
 
     /// Skip files larger than this entirely — no row at all.
-    ///
-    /// Defaults to `None`, unlike `pdf`'s 512 MiB ceiling, and the
-    /// difference is deliberate. A multi-gigabyte PDF is nearly always
-    /// a corrupt file; a multi-gigabyte video is Tuesday. Indexing one
-    /// costs a `stat` on every rescan and one streaming hash on the
-    /// first, which is exactly what the Unison cursor exists to bound.
     #[serde(default)]
     pub max_bytes: Option<u64>,
 
     /// Give up on the metadata-excluding payload hash above this size,
     /// leaving `media_items.payload_blake3` NULL.
-    ///
-    /// Separate from [`Self::max_bytes`] because the two costs are not
-    /// the same. The file hash is one sequential read the rescan cursor
-    /// then makes free forever; the payload hash is a second pass that
-    /// also has to walk a container structure. 8 GiB keeps every
-    /// realistic photo and song, and most video, while refusing to let
-    /// one 40 GiB master recording dominate a scan. `None` means no
-    /// ceiling.
     #[serde(default = "default_payload_max_bytes")]
     pub payload_max_bytes: Option<u64>,
 
     /// Index `.m3u` / `.m3u8` playlists found in the tree.
-    ///
-    /// On by default. Turning it off is for trees where the only
-    /// playlists are application caches — see the provider's
-    /// `DOWNLOAD.md` §"HLS manifests are not playlists" for why
-    /// extension alone cannot tell them apart, and what we sniff
-    /// instead.
     #[serde(default = "default_true")]
     pub playlists: bool,
 
     /// Skip files that have no data blocks allocated — cloud
     /// placeholders (Dropbox "online-only", macOS dataless files,
     /// OneDrive stubs) and iCloud's `.icloud` eviction markers.
-    ///
-    /// On by default, because reading one is not a cheap mistake: it
-    /// asks the sync client to materialize the file, so a first scan of
-    /// an evicted library would try to pull the whole thing down.
-    ///
-    /// The detection is `blocks == 0 && size > 0`, which is a
-    /// heuristic: a filesystem that reports no block counts at all
-    /// would look entirely evicted. That failure is loud rather than
-    /// silent — every skip is counted into the step's
-    /// `dataless_skipped=` summary and logged — but if you are on such
-    /// a filesystem, set this `false`.
     #[serde(default = "default_true")]
     pub skip_dataless: bool,
 }
@@ -97,7 +60,6 @@ fn default_true() -> bool {
     true
 }
 
-/// 8 GiB. See [`MediaConfig::payload_max_bytes`].
 fn default_payload_max_bytes() -> Option<u64> {
     Some(8 * 1024 * 1024 * 1024)
 }

@@ -1,30 +1,4 @@
 //! Build one self-contained Plotly page per physical quantity.
-//!
-//! ## Shape of the emitted file
-//!
-//! A single `.html` with no build step and no bundler: a `<div>` for the
-//! plot, the figure spec inlined as a `<script type="application/json">`
-//! block, and a five-line bootstrap that hands the parsed spec to
-//! `Plotly.newPlot`. Opening the file straight off disk works; so does
-//! the `<iframe>` in `index.md`.
-//!
-//! Putting the data in a JSON `<script>` block rather than interpolating
-//! it into executable JavaScript means the only escape that matters is
-//! `<` (so a device named `</script>` can't break out); [`escape_json_for_html`]
-//! handles it, and the browser's JSON parser does the rest. There is no
-//! path from stored data into evaluated code.
-//!
-//! ## Where Plotly comes from
-//!
-//! [`PLOTLY_SRC`] — a pinned version on Plotly's CDN, guarded by a
-//! Subresource Integrity hash so a compromised or swapped CDN artifact
-//! fails closed rather than executing. The consequence is that plots
-//! need network access **when viewed**; [`OFFLINE_NOTICE`] is what the
-//! reader gets when the fetch fails, instead of a blank frame.
-//!
-//! To make the plots work offline instead, write the library into the
-//! rendered tree once and point [`PLOTLY_SRC`] at it relative to the
-//! plot: everything else here is already relative-path clean.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
@@ -38,11 +12,6 @@ pub const PLOTLY_SRC: &str = "https://cdn.plot.ly/plotly-3.1.0.min.js";
 
 /// SHA-384 Subresource Integrity hash of [`PLOTLY_SRC`]. Must be
 /// recomputed whenever the pin moves:
-///
-/// ```sh
-/// curl -s https://cdn.plot.ly/plotly-<ver>.min.js \
-///   | openssl dgst -sha384 -binary | openssl base64 -A
-/// ```
 pub const PLOTLY_INTEGRITY: &str =
     "sha384-DAxS2fhSGacPW3IdpTjDpu+KotwjM8aHsfrkZRnfYyJIhAHoDav7jAJ+NmYcp6PL";
 
@@ -52,27 +21,6 @@ pub const OFFLINE_NOTICE: &str = "This plot draws with Plotly, loaded from cdn.p
      the data itself is inlined in this file and is not lost.";
 
 /// One device-and-metric series, already converted to SI.
-///
-/// # Why the line is not broken across gaps
-///
-/// A connected line spanning a stretch with no readings looks like it is
-/// asserting data nobody measured, so breaking it across outages is a
-/// tempting addition. It was tried and removed, because these series
-/// have no outages to detect — only long tails.
-///
-/// Measured against the live store (2026-08-21): every series' interval
-/// distribution runs from a 1.9–60 minute median out to a 2–5 hour
-/// maximum, with nothing bimodal in between. The water meter is the
-/// clearest case — median 1.9 min, p95 45 min — because it reports on
-/// activity rather than on a clock. A "gap longer than 10x the median"
-/// rule flagged 11% of its perfectly normal intervals as outages and
-/// shattered its line into ~1400 pieces. Any threshold that leaves that
-/// series intact is high enough to fire on nothing else.
-///
-/// What makes this safe is the markers: `lines+markers` draws a dot at
-/// every real sample, so a long bare segment with no dots on it reads as
-/// "nothing was recorded here" on sight. Keep the markers, and the line
-/// cannot lie about density.
 pub struct Trace {
     /// Legend label.
     pub name: String,
@@ -216,12 +164,6 @@ fn layout_json(quantity: &Quantity, subtitle: &str) -> Value {
 }
 
 /// Make a JSON document safe to embed in a `<script>` element.
-///
-/// The HTML parser ends a `<script>` at the first `</script` regardless
-/// of JSON quoting, so a stored string containing one would truncate the
-/// figure. Escaping every `<` as `\u003c` — still valid JSON, still
-/// parses back to `<` — closes that off without needing to reason about
-/// where in the document the character appeared.
 pub fn escape_json_for_html(json: &str) -> String {
     json.replace('<', "\\u003c")
 }

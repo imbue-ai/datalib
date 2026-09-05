@@ -1,23 +1,8 @@
 //! Proc-macros for the datalib ETL crates.
 //!
-//! Derives today:
-//!
-//!   - [`WirePayloadRow`] — DDL + bulk-upsert plumbing for any row
-//!     struct that maps to a wire-payload entity table (id + payload
-//!     + promoted columns).
-//!   - [`RawTable`] — the general form of `WirePayloadRow`, covering
-//!     both payload-shaped and payload-less raw-store tables.
-//!   - [`CasEdgeRow`] — every per-provider CAS edge table (each
-//!     attachment / blob-link table) follows the same four-column
-//!     shape; this derive emits the
-//!     [`datalib_etl::blob_cas::CasEdgeRow`] +
-//!     [`datalib_etl::bulk::BulkUpsertable`] impls so the
-//!     provider's `schema_raw.rs` is just the struct.
-//!   - [`PortableTable`] — the consumer-side counterpart: emits the
-//!     portable `CREATE TABLE` DDL + `TABLES`/`COLUMNS` consts for the
-//!     denormalized presentation tables (`grid_rows`, `edges`,
-//!     `markdowns`, `feedback`, `sync_jobs`) that back the grid / UI.
-//!     Replaces the old `schemas/codegen.py` JSON-Schema path.
+//! Four derives, one per table shape, so a provider's `schema_raw.rs` is its
+//! row structs and nothing else. Required struct shapes, attributes and the
+//! Rust→SQL type mapping are in this crate's README.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -27,51 +12,6 @@ use syn::{
     Ident, LitStr, PathArguments, Type, TypePath,
 };
 
-/// Derive `datalib_etl::doltlite_raw::WirePayloadRow` and
-/// `datalib_etl::bulk::BulkUpsertable` for a row struct that maps
-/// to a wire-payload entity table.
-///
-/// **Required shape.** The struct must have **exactly one field of
-/// type `WirePayload`** (path-tolerant — `WirePayload`,
-/// `dr::WirePayload`, or `datalib_etl::doltlite_raw::WirePayload`
-/// all match). That field carries the `id` and `payload` columns.
-/// Every *other* field is a promoted column, emitted into the CREATE
-/// TABLE in declaration order and bound in the same order.
-///
-/// **Attribute.** `#[wire_payload_row(table = "name")]` names the
-/// SQL table. Required.
-///
-/// **Type mapping** (Rust → SQL):
-/// - `String` → `TEXT NOT NULL`
-/// - `Option<String>` → `TEXT NULL`
-/// - `i64` → `INTEGER NOT NULL`
-/// - `Option<i64>` → `INTEGER NULL`
-/// - `f64` → `REAL NOT NULL`
-/// - `Option<f64>` → `REAL NULL`
-///
-/// Any other field type is a compile error pointing at the field.
-/// Add support here when a new shape comes up — keeping the universe
-/// narrow keeps the bind code straightforward.
-///
-/// **Example.**
-/// ```ignore
-/// use datalib_etl::doltlite_raw::WirePayload;
-/// use datalib_etl_macros::WirePayloadRow;
-///
-/// #[derive(WirePayloadRow)]
-/// #[wire_payload_row(table = "chat_items")]
-/// pub struct ChatItemRow {
-///     pub id_and_payload: WirePayload,
-///     pub chat_id: String,
-///     pub author_id: String,
-///     pub date_sent: i64,
-/// }
-/// ```
-///
-/// The derive emits — among other things — `ChatItemRow::ddl()`
-/// returning the same SQL the hand-written
-/// `dr::wire_payload_table_ddl("chat_items", &[…])` call would have
-/// produced.
 #[proc_macro_derive(WirePayloadRow, attributes(wire_payload_row))]
 pub fn derive_wire_payload_row(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -144,9 +84,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Attribute parsing
-// ─────────────────────────────────────────────────────────────────────
 
 fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<String> {
     for attr in attrs {
@@ -173,9 +111,7 @@ fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<Str
     ))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Field walking
-// ─────────────────────────────────────────────────────────────────────
 
 fn collect_named_fields(input: &DeriveInput) -> syn::Result<Vec<&Field>> {
     let Data::Struct(DataStruct { fields, .. }) = &input.data else {
@@ -235,9 +171,7 @@ fn is_wire_payload(ty: &Type) -> bool {
         .unwrap_or(false)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Promoted-column type mapping
-// ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 enum PromotedKind {
@@ -334,9 +268,7 @@ fn classify(ty: &Type) -> Option<PromotedKind> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // RawTable
-// ─────────────────────────────────────────────────────────────────────
 
 /// Derive a raw-store table's **entire** SQL surface from a Rust
 /// struct: the `CREATE TABLE` DDL, any `CREATE INDEX` DDLs, and the
@@ -344,53 +276,6 @@ fn classify(ty: &Type) -> Option<PromotedKind> {
 /// bulk-upsert helper writes through. The goal is that a provider's
 /// `schema_raw.rs` contains *no* hand-written `CREATE TABLE` strings
 /// and *no* hand-written `BulkUpsertable` impls — just structs.
-///
-/// This is the general form of [`WirePayloadRow`]: it covers both
-/// payload-shaped entity tables *and* payload-less tables (N:M join
-/// tables, cursor tables) that `WirePayloadRow` can't express.
-///
-/// **Two modes**, chosen by whether the struct has a `WirePayload`
-/// field:
-///
-/// 1. **Payload mode** — exactly one field of type `WirePayload`
-///    (path-tolerant, same as [`WirePayloadRow`]). It contributes the
-///    `id TEXT PRIMARY KEY` and `payload` (JSONB) columns; every other
-///    field is a promoted column. `PAYLOAD_COLUMN = Some("payload")`.
-///
-/// 2. **Plain mode** — no `WirePayload` field, no payload column. The
-///    primary key is a single column named by
-///    `#[raw_table(primary_key = "col")]` (default `"id"`); that
-///    field must be `String` or `i64`. Every other field is a typed
-///    column. N:M join tables fit this mode by carrying a synthesized
-///    single `id` (e.g. `"{email_id}#{mailbox_id}"`) so the conflict
-///    target stays one column.
-///
-/// **Attributes** on `#[raw_table(...)]`:
-/// - `table = "name"` — SQL table name. Required.
-/// - `primary_key = "col"` — plain-mode PK column. Optional, default
-///   `"id"`. Rejected in payload mode (the PK is always `id` there).
-/// - `index = "name:col1,col2"` — emit
-///   `CREATE INDEX IF NOT EXISTS name ON table(col1, col2)`. Repeatable.
-///
-/// **Type mapping** is identical to [`WirePayloadRow`] (`String` →
-/// `TEXT NOT NULL`, `Option<String>` → `TEXT NULL`, `i64`/`Option<i64>`
-/// → INTEGER, `f64`/`Option<f64>` → REAL).
-///
-/// The derive emits inherent `Self::ddl()`, `Self::index_ddls()`, and
-/// `Self::all_ddl()` (table DDL + index DDLs, ready to splice into a
-/// provider's `full_ddl()`), plus the `BulkUpsertable` impl.
-///
-/// **Example.**
-/// ```ignore
-/// #[derive(RawTable)]
-/// #[raw_table(table = "email_mailboxes",
-///             index = "email_mailboxes_by_mailbox:mailbox_id")]
-/// pub struct EmailMailboxRow {
-///     pub id: String,         // synth "{email_id}#{mailbox_id}"
-///     pub email_id: String,
-///     pub mailbox_id: String,
-/// }
-/// ```
 #[proc_macro_derive(RawTable, attributes(raw_table))]
 pub fn derive_raw_table(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -448,8 +333,6 @@ fn parse_raw_table_attrs(
     Ok((table, primary_key, indexes))
 }
 
-/// Parse `"name:col1,col2"` into an [`IndexSpec`]. The bare-column
-/// form `"name:col"` is the common single-column case.
 fn parse_index_spec(lit: &LitStr) -> syn::Result<IndexSpec> {
     let raw = lit.value();
     let (name, cols) = raw.split_once(':').ok_or_else(|| {
@@ -656,8 +539,6 @@ fn expand_raw_table(input: DeriveInput) -> syn::Result<TokenStream2> {
             pub fn index_ddls() -> ::std::vec::Vec<::std::string::String> {
                 ::std::vec![#(::std::string::String::from(#index_literals)),*]
             }
-            /// Table DDL followed by every index DDL — splice straight
-            /// into a provider's `full_ddl()`.
             pub fn all_ddl() -> ::std::vec::Vec<::std::string::String> {
                 let mut v = ::std::vec![Self::ddl()];
                 v.extend(Self::index_ddls());
@@ -669,9 +550,6 @@ fn expand_raw_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Shared between `WirePayloadRow` and `RawTable` payload mode: turn a
-/// promoted-column list into the width-aligned `name TYPE` decl string
-/// literals `wire_payload_table_ddl` expects.
 fn promoted_decl_literals(promoted: &[PromotedField]) -> Vec<LitStr> {
     let max_name_len = promoted
         .iter()
@@ -691,52 +569,8 @@ fn promoted_decl_literals(promoted: &[PromotedField]) -> Vec<LitStr> {
         .collect()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // CasEdgeRow
-// ─────────────────────────────────────────────────────────────────────
 
-/// Derive [`datalib_etl::blob_cas::CasEdgeRow`] and
-/// [`datalib_etl::bulk::BulkUpsertable`] for a per-provider CAS
-/// edge row struct.
-///
-/// **Required shape.** The struct must have **exactly four named
-/// fields, in this order**:
-///
-///   1. `id: String` — synthesized PK (`"{owning_id}#{ref_id}"`)
-///   2. `<owning>: String` — owning-entity FK (column name read from
-///      this field's identifier; e.g. `message_uuid`)
-///   3. `<ref>: String` — upstream ref id (column name read from this
-///      field's identifier; e.g. `file_id`)
-///   4. `blake3: Option<String>` — CAS hash, `NULL` until stored
-///
-/// **Attribute.** `#[cas_edge_row(table = "name")]` names the SQL
-/// table. Required.
-///
-/// The fixed shape comes from the universal pattern of every
-/// per-provider attachment-edge table; see
-/// [`datalib_etl::blob_cas::CasEdgeRow`] for the
-/// rationale. Field-name validation enforces that `id` is first and
-/// `blake3` is last; the two middle fields' identifiers become the
-/// emitted column names.
-///
-/// **Example.**
-/// ```ignore
-/// use datalib_etl_macros::CasEdgeRow;
-///
-/// #[derive(CasEdgeRow)]
-/// #[cas_edge_row(table = "slack_attachments")]
-/// pub struct SlackAttachmentRow {
-///     pub id: String,
-///     pub message_uuid: String,
-///     pub file_id: String,
-///     pub blake3: Option<String>,
-/// }
-/// ```
-///
-/// emits the table DDL, the two index DDLs, the
-/// [`datalib_etl::bulk::BulkUpsertable`] impl, and the
-/// [`datalib_etl::blob_cas::CasEdgeRow`] impl with
-/// `OWNING_COLUMN = "message_uuid"` and `REF_COLUMN = "file_id"`.
 #[proc_macro_derive(CasEdgeRow, attributes(cas_edge_row))]
 pub fn derive_cas_edge_row(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -880,62 +714,12 @@ fn is_option_string(ty: &Type) -> bool {
     matches!(classify(ty), Some(PromotedKind::TextNullable))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // PortableTable
-// ─────────────────────────────────────────────────────────────────────
 
 /// Derive the portable `CREATE TABLE` surface (`DDL` + `TABLES` +
 /// `COLUMNS` module consts) for a hand-written *presentation* row
 /// struct — the denormalized tables that back the grid / UI
 /// (`grid_rows`, `edges`, `markdowns`, `feedback`, `sync_jobs`).
-///
-/// This is the sibling of [`WirePayloadRow`]/[`RawTable`] for the
-/// *consumer* side of the system. Where those derive the raw-store
-/// wire shape (id + payload + promoted columns, `TEXT`/`INTEGER`/`REAL`,
-/// plus a `BulkUpsertable` impl bound through sqlx), `PortableTable`
-/// covers flat typed tables whose columns use portable MySQL/Dolt/SQLite
-/// types (`VARCHAR(n)`, `LONGTEXT`, `JSON`, `DOUBLE`, …) and whose rows
-/// are written by hand-rolled `INSERT`s. So this derive emits **only**
-/// the DDL/metadata consts — no `BulkUpsertable`, no serde (the struct
-/// derives `Serialize`/`Deserialize` itself).
-///
-/// It replaces the old `schemas/codegen.py` JSON-Schema → Rust path:
-/// the struct is the single source of truth, the same way extract's
-/// `schema_raw.rs` already is.
-///
-/// **Struct attribute.** `#[portable_table(table = "grid_rows",
-/// primary_key = "uuid")]`. Both keys are required. `primary_key`
-/// accepts a comma-separated list for composite keys.
-///
-/// **Per-field attribute.** `#[col(sql = "VARCHAR(96)")]` gives the
-/// portable SQL base type. Required on every field. Nullability is
-/// inferred from the Rust type: `Option<T>` → nullable (bare type),
-/// anything else → `… NOT NULL`.
-///
-/// **Derived columns.** Some tables carry columns that live in the DB
-/// but are computed at load time and so are absent from the struct
-/// (e.g. `grid_rows.when_ts_utc` / `when_offset`, derived from
-/// `when_ts`). Declare them with a repeatable field attribute on the
-/// column they follow: `#[derived(name = "when_ts_utc", sql =
-/// "VARCHAR(40)")]`. Derived columns are always nullable and are
-/// emitted into the DDL + `COLUMNS` immediately after their host field.
-///
-/// **Example.**
-/// ```ignore
-/// #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
-/// #[portable_table(table = "edges", primary_key = "edge_uuid")]
-/// pub struct EdgeRow {
-///     #[col(sql = "VARCHAR(96)")]
-///     pub edge_uuid: String,
-///     #[col(sql = "VARCHAR(96)")]
-///     pub src_markdown_uuid: String,
-///     #[col(sql = "VARCHAR(64)")]
-///     pub label: Option<String>,
-/// }
-/// ```
-///
-/// emits module-level `pub const TABLES`, `pub const DDL`, and
-/// `pub const COLUMNS` matching the byte shape `codegen.py` produced.
 #[proc_macro_derive(PortableTable, attributes(portable_table, col, derived))]
 pub fn derive_portable_table(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1028,14 +812,6 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     // from one list, so they cannot disagree — which is the failure the
     // trait's docs warn about ("Mismatch → mis-binding at runtime") and
     // the reason to generate this rather than hand-write it.
-    //
-    // Skipped for a composite primary key. `BulkUpsertable` keys on one
-    // column by contract — `ID_COLUMN` is the `ON CONFLICT(<id>)` target
-    // and `id()` returns one `&str` — and `disk_usage` is legitimately
-    // keyed on `(path, measured_at)`. Such a table still gets its DDL
-    // and column metadata; it just keeps writing itself. Generating a
-    // single-column impl for it would have to invent which half is the
-    // key.
     let composite_pk = primary_key.contains(',');
     let write_path = if composite_pk {
         quote! {}
@@ -1132,7 +908,6 @@ fn parse_portable_table_attr(
     ))
 }
 
-/// Read the required `#[col(sql = "…")]` portable type for one field.
 fn parse_col_attr(field: &Field) -> syn::Result<String> {
     for attr in &field.attrs {
         if !attr.path().is_ident("col") {
@@ -1156,8 +931,6 @@ fn parse_col_attr(field: &Field) -> syn::Result<String> {
     ))
 }
 
-/// Collect the repeatable `#[derived(name = "…", sql = "…")]` columns
-/// that trail a field.
 fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     for attr in &field.attrs {

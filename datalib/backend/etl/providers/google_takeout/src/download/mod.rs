@@ -1,9 +1,4 @@
 //! Google Takeout extractor entry point.
-//!
-//! Walks the on-disk Takeout tree under [`FetchOptions::input_path`]
-//! and dispatches each enabled sub-feed walker. Sub-feeds are opted
-//! in individually via [`SyncFlags`] so a fresh user has to enable
-//! each one consciously.
 
 pub mod attachment_path;
 pub mod db;
@@ -53,7 +48,6 @@ pub struct SyncFlags {
 }
 
 impl SyncFlags {
-    /// Convenience: every feed enabled. Tests use this.
     pub fn all() -> Self {
         Self {
             maps_reviews: true,
@@ -113,7 +107,6 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
-/// Run one download pass.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,
@@ -129,14 +122,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let root = &opts.input_path;
     let progress = &opts.progress;
-    // One scan of the export, up front. Every feed works off it: the
-    // walk, the hashes, and the decision not to re-hash what the host
-    // cache can vouch for all happen once, here, rather than nine
-    // times in nine slightly different shapes.
-    //
-    // First run hashes the whole export. Later runs are `stat`-only,
-    // and a feed enabled later costs nothing extra because its files
-    // are already in the cache.
+    // One scan of the export, up front, so the walk and the hashing happen
+    // once rather than nine times in nine slightly different shapes. The first
+    // run hashes everything; later runs are `stat`-only, and a feed enabled
+    // later costs nothing extra because its files are already in the cache.
     let scan = fsscan::scan(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
     for e in &scan.errors {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error);

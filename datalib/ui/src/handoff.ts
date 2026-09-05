@@ -3,26 +3,6 @@
 // the card's HostCommands (setSource), so the miller, tree and tiling
 // layouts all get it for free — nothing here knows which layout is
 // active.
-//
-// Three flows share this module:
-//   - create (the gallery's "build a component with an agent" entry):
-//     mint a fresh component alias seeded with the in-card hand-off
-//     instructions (`agentSeedView`, which builds a wayfinder asking
-//     the agent to DEFINE the alias) and repoint the card at `alias()`
-//     via the host. No dialog: the card body IS the instructions until
-//     the agent's first save replaces the component.
-//   - modify (the 🤖 button on any card backed by a user component):
-//     build a wayfinder that asks the agent to MODIFY the existing
-//     alias, and either show the instructions or — once the user has
-//     opted out of them — copy the wayfinder straight to the clipboard.
-//   - config (the 🤖 button on the Manage tab's config editor): same
-//     shape as modify, but the wayfinder targets `<root>/config.toml`
-//     through GET/PUT /api/config instead of a component alias.
-//
-// As the agent re-saves the alias, the card live-reloads (see
-// ShadowCard's manifest watcher); the config editor reloads the same
-// way (SourcesView), on the `config_changed` the agent's own write
-// produces.
 import { ref, watch } from "vue";
 import {
   freshUserName,

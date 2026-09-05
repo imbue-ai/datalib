@@ -15,8 +15,6 @@ use super::schema_raw::{
     MediaScanMetaRow, MediaVisualRow,
 };
 
-/// Conventional filename of this provider's entity store under
-/// `<name>/raw/`.
 pub fn db_path_for(raw_dir: &Path) -> PathBuf {
     datalib_etl::raw_layout::entities_db(raw_dir)
 }
@@ -123,25 +121,10 @@ impl RawDb {
         Ok(cache)
     }
 
-    /// Delete the path rows for files that are gone.
-    ///
-    /// `ids` is what the walk did **not** visit: the leftovers of the
-    /// in-memory cache after each seen path was removed from it. That
-    /// makes this a set difference rather than a timestamp sweep, which
-    /// matters because `DATALIB_DAG_NOW` is pinned per run — two runs
-    /// sharing a pinned `now` would make a `WHERE last_seen_at <> ?`
-    /// sweep silently delete nothing.
-    ///
-    /// **Runs at the end of a scan, not the start.** Truncating up
-    /// front — `fsindex` and `pdf` both do — throws away the rescan
-    /// cursors for every file a killed scan had not yet reached. See
-    /// [`super::schema_raw::DATA_TABLES`] and `DOWNLOAD.md`
-    /// §"Interrupting a scan".
     pub async fn delete_files(&self, ids: &[String]) -> Result<u64> {
         self.delete_by_id("media_files", ids).await
     }
 
-    /// Delete playlists that are gone, and their entries with them.
     pub async fn delete_playlists(&self, ids: &[String]) -> Result<u64> {
         let n = self.delete_by_id("media_playlists", ids).await?;
         self.delete_where("media_playlist_entries", "playlist_id", ids)
@@ -149,12 +132,6 @@ impl RawDb {
         Ok(n)
     }
 
-    /// Drop one playlist's entries before its new ones are written.
-    ///
-    /// Entries are keyed `<path>#<position>`, so upserting alone would
-    /// leave the tail behind when a playlist is *shortened* — the rows
-    /// for the positions that no longer exist. Deleting the playlist's
-    /// entries first makes the rewrite exact.
     pub async fn clear_playlist_entries(&self, playlist_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM media_playlist_entries WHERE playlist_id = ?")
             .bind(playlist_id)
@@ -196,7 +173,6 @@ impl RawDb {
         Ok(removed)
     }
 
-    /// Record where this scan ran.
     pub async fn write_scan_meta(&self, row: &MediaScanMetaRow) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
         bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row))
@@ -206,7 +182,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// The absolute scan root recorded by the last download.
     pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
         let row = sqlx::query("SELECT abs_root FROM media_scan_meta ORDER BY id LIMIT 1")
             .fetch_optional(&self.pool)

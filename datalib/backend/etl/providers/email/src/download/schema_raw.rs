@@ -1,67 +1,11 @@
-//! Raw-store schema for the email provider.
+//! Raw-store schema for the email provider. One schema for both download
+//! modes — mbox synthesizes a JMAP-shaped envelope so the two are identical
+//! from here on.
 //!
-//! Declarations-only, proto-flavored. The schema is the same regardless
-//! of where the data came from — Mbox and JMAP both populate it.
-//!
-//! ## Every table is a Rust struct
-//!
-//! There is no hand-written `CREATE TABLE` / `CREATE INDEX` text and no
-//! hand-written `BulkUpsertable` in this file. Each table is a struct
-//! deriving [`RawTable`](datalib_etl_macros::RawTable) (or, for the
-//! CAS edge, [`CasEdgeRow`](datalib_etl_macros::CasEdgeRow)); the
-//! derive emits the DDL, the index DDLs, and the bulk-upsert plumbing.
-//! `full_ddl()` is then just a concatenation of each struct's
-//! `all_ddl()`. Every write goes through the generic
-//! `datalib_etl::bulk` helpers.
-//!
-//! ## The eml is the canonical body
-//!
-//! The RFC 5322 `.eml` is the **complete backup** of a message: body,
-//! headers, MIME parts (attachments included). It rides in the shared
-//! per-source CAS keyed by `blob_id`. Everything else is metadata
-//! around it.
-//!
-//! Concretely: there is no `email_attachments` table. The parts inside
-//! an `.eml` are reachable by mail-parsing the bytes at render time;
-//! we don't download them into separate CAS entries during ingest.
-//! Both Mbox and JMAP land *only the `.eml`* in the CAS.
-//!
-//! ## `emails` carries the envelope as `payload`
-//!
-//! [`EmailRow`] is payload-shaped like every other entity table: the
-//! `id`/`payload` pair plus promoted metadata columns (time, subject,
-//! from/to/cc, message-id, threading headers, the `.eml`'s blob ref).
-//! The `payload` is the JMAP `Email/get` envelope (envelope-only — no
-//! body parts; the body comes back from the `.eml`), and the Mbox path
-//! synthesizes a JMAP-shaped envelope so both sources are identical.
-//! The promoted columns exist for indexing / cheap projection; the
-//! `mailboxIds` / `keywords` join inputs are read back out of the
-//! payload (see [`EmailRow::mailbox_ids`] / [`EmailRow::keywords`]).
-//!
-//! ## The `.eml` content hash lives on `email_blobs`
-//!
-//! The CAS `blake3` for each message's `.eml` is **not** a column on
-//! `emails` — it has a second writer (the blob-download pass backfills
-//! it after the envelope row already exists), so it lives on its own
-//! [`EmlBlobRow`] CAS edge table, exactly like every other provider's
-//! attachment edge. That keeps `emails` single-writer: re-upserting a
-//! changed envelope (flag/move churn) never clobbers a stored hash.
-//!
-//! ## Tables
-//!
-//! - `accounts`, `mailboxes`, `threads`, `emails` — payload-shaped
-//!   entity tables ([`RawTable`] payload mode); each gets a paired
-//!   `<table>_bookkeeping` sidecar.
-//! - `email_mailboxes`, `email_keywords` — two N:M join tables
-//!   ([`RawTable`] plain mode, synthesized `id` PK) refreshed
-//!   delete-then-insert per email upsert. No bookkeeping sidecars.
-//! - `email_blobs` — CAS edge ([`EmlBlobRow`]) carrying the `.eml`
-//!   `blake3`, NULL until the bytes land in the CAS.
-//! - `ingested_files` — the shared per-file resume cursor
-//!   (`datalib_etl::file_checkpoint`, scope `email/mbox`): per file,
-//!   the blake3 it hashed to at the last full ingest, read through the
-//!   host-wide fingerprint cache. Lets `mbox::fetch` skip a file whose
-//!   contents have not moved, without re-reading it.
+//! The `.eml` in the CAS is the canonical body; everything here is metadata
+//! around it, and there is deliberately no `email_attachments` table. What
+//! each table holds, and why the `.eml` hash lives on `email_blobs` rather
+//! than on `emails`, is in this provider's DOWNLOAD.md.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
@@ -92,12 +36,6 @@ pub const BLOB_KIND_EML: &str = "email";
 
 /// `accounts` — one row per JMAP account or Mbox-config-supplied
 /// account.
-///
-/// For Mbox: the orchestrator passes a `MboxAccountConfig { id,
-/// name, email_address, is_personal }` from the YAML; one row
-/// lands per configured Mbox input.
-///
-/// For JMAP: one row per account exposed in the session response.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(table = "accounts")]
 pub struct AccountRow {
@@ -109,7 +47,6 @@ pub struct AccountRow {
 }
 
 impl AccountRow {
-    /// Build from a JMAP session-fragment account entry.
     pub fn from_jmap_payload(id: &str, payload: &Value) -> anyhow::Result<Self> {
         Ok(Self {
             id_and_payload: WirePayload {
@@ -132,9 +69,6 @@ impl AccountRow {
         })
     }
 
-    /// Build from an mbox `MboxAccountConfig`. Synthesizes a payload
-    /// in the same shape the JMAP path produces so render can be
-    /// source-agnostic.
     pub fn from_mbox_config(
         id: &str,
         name: Option<&str>,
@@ -237,15 +171,6 @@ impl ThreadRow {
 /// `emails` — one row per email. Payload-shaped: the `id`/`payload`
 /// pair (payload = JMAP `Email/get` envelope, envelope-only) plus
 /// promoted metadata columns.
-///
-/// The body and all attachment bytes live inside the `.eml` blob in
-/// the CAS, reachable via `blob_id` → [`EmlBlobRow`] `blake3` →
-/// `cas_objects.bytes`. Render mail-parses the `.eml` on demand for
-/// both body display and per-part attachment extraction.
-///
-/// `references_header` (not `references`, which is a SQL reserved
-/// word) holds the space-joined `References:` message-ids.
-/// `has_attachment` is `0`/`1` in an INTEGER column.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "emails",
@@ -347,14 +272,10 @@ impl EmailRow {
         &self.id_and_payload.id
     }
 
-    /// `mailboxIds` keys read back out of the stored envelope payload.
-    /// Drives both the per-email join refresh and the
-    /// `--only-mailbox` client-side filter.
     pub fn mailbox_ids(&self) -> Vec<String> {
         self.payload_object_keys("mailboxIds")
     }
 
-    /// `keywords` keys read back out of the stored envelope payload.
     pub fn keywords(&self) -> Vec<String> {
         self.payload_object_keys("keywords")
     }
@@ -370,9 +291,6 @@ impl EmailRow {
     }
 }
 
-/// First string element of a JMAP header array (`messageId`,
-/// `inReplyTo` are arrays of message-ids), stripped of angle brackets
-/// by the upstream/parser already.
 fn first_str(v: Option<&Value>) -> Option<String> {
     v.and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
@@ -450,8 +368,6 @@ pub struct EmlBlobRow {
 }
 
 impl EmlBlobRow {
-    /// A fresh edge with `blake3` unset (the download pass backfills
-    /// it once the `.eml` bytes are stored in the CAS).
     pub fn new(email_id: &str, blob_id: &str) -> Self {
         Self {
             id: Self::pk_recipe(email_id, blob_id),
@@ -465,26 +381,6 @@ impl EmlBlobRow {
 // ── cursor table ────────────────────────────────────────────────────
 
 /// `gmail_messages` — Gmail's own message id → the row it produced.
-///
-/// Gmail's API speaks in its own opaque message ids; our rows are keyed
-/// by `Message-ID` so that a mailbox ingested from a Takeout export and
-/// then from the API dedupes. That means the mapping between the two is
-/// not derivable from either side, and three separate things need it:
-///
-/// * **Deletions.** `history.list` reports `messagesDeleted` as Gmail
-///   ids. Without this table the only way to find the row is a
-///   `payload LIKE '%…%'` scan, which is both O(rows) per deletion and
-///   silently dependent on serde's exact key spacing — a fragile no-op
-///   waiting to happen.
-/// * **Resumable backfill.** A run that stops at `message_budget` has to
-///   know, next time, which ids it already has; otherwise it re-fetches
-///   the same first N messages forever and never reaches the rest.
-/// * **Thread membership.** See [`ThreadRow`]: an incremental run must
-///   rebuild a thread from every message in it, not just the ones it
-///   touched.
-///
-/// Plain mode (no bookkeeping sidecar): it is derived bookkeeping, not
-/// upstream payload, and `dolt diff` has nothing to say about it.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "gmail_messages",
@@ -497,8 +393,6 @@ pub struct GmailMessageRow {
     pub thread_id: String,
 }
 
-/// Compose the full DDL list passed to
-/// [`datalib_etl::doltlite_raw::open`].
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     out.extend(AccountRow::all_ddl());

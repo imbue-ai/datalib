@@ -1,35 +1,4 @@
 //! Cross-provider title block used at the top of every rendered `.md`.
-//!
-//! Every provider's renderer used to open its file with a hand-rolled
-//! `# {title}` H1 (Anthropic: `# {conv.name}`, ChatGPT:
-//! `# {conv.title}`, Slack: `# #{channel}: {thread_title}`, GitHub:
-//! `# {pr.title} (#{n})`, GitLab: `# {mr.title} (!{n})`, Notion:
-//! `# {icon}{title}`, Beeper: `# {room.title} · {period}`). Each one
-//! was duplicated by the Vue preview pane's `<h2>` header, so the
-//! user saw the title twice. This module collapses that into a
-//! single [`Title`] block — same HTML across providers — and the Vue
-//! side decorates it (copy-id button) and removes its own redundant
-//! header.
-//!
-//! Output is a self-contained HTML block that markdown-it (configured
-//! with `html: true`) passes through verbatim:
-//!
-//! ```html
-//! <h1 class="page-title" data-page-title-uuid="…">
-//!   {title}
-//!   <a class="source-link" href="…" target="_blank" rel="noopener noreferrer">↗</a>
-//! </h1>
-//! ```
-//!
-//! The `data-page-title-uuid` attribute is the hook the Vue side uses
-//! to attach a copy-id button (mirroring the existing
-//! `data-section-uuid` pattern for per-message buttons). The
-//! `source-link` arrow is plain HTML — `target="_blank"` + `rel`
-//! attributes mean it always opens in a new tab and never replaces
-//! the preview pane.
-//!
-//! Either or both of `markdown_uuid` and `source_url` may be `None`
-//! — the rendered block degrades to just the title.
 
 use std::fmt::Write;
 

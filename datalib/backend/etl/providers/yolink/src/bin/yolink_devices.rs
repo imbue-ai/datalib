@@ -2,55 +2,6 @@
 //! cloud API. The UDID is one of the two values the downloader needs
 //! to sign per-window CSV URLs (the other, `familyDeviceId`, is
 //! captured separately from a download URL; see notes below).
-//!
-//! ## Why this CLI exists
-//!
-//! The downloader in `datalib_etl_yolink::download` builds signed
-//! `us.yosmart.com/download/<family_device_id>/<sig>?...` URLs locally.
-//! The signature is `md5(family_device_id + start_ms + end_ms +
-//! device_udid)`. Both opaque IDs have to live in the per-device
-//! `YolinkDevice` config (see `configs/thad_dev.yaml`).
-//!
-//! - `device_udid` (32-hex) — returned by the YoLink Open API as
-//!   `deviceUDID`. This CLI exists to fetch them so the user doesn't
-//!   have to reverse-engineer the app or scrape Android `logcat`
-//!   for each device.
-//! - `family_device_id` (32-hex) — **not in the API**. It's only
-//!   visible on the wire when the app launches an intent to Chrome to
-//!   download a CSV. To capture it, plug in your phone and:
-//!     ```
-//!     adb logcat | grep 'us\.yosmart\.com/download/'
-//!     ```
-//!   then export any chart from the YoLink/Safehous app. Each captured
-//!   URL has the form `.../download/<family_device_id>/<sig>?...` —
-//!   `<family_device_id>` is the first opaque path segment.
-//!
-//! ## Why this isn't enough on its own
-//!
-//! The Open API's `THSensor.getMetricsLogs` (which would give us full
-//! historical data without any of this signing dance) is gated on
-//! `DEVICE.HISTORICAL_DATA.READ`, a scope that is **not granted to
-//! User Access Credentials** — only to CSID business-partner
-//! credentials, and only after emailing yaochi@yosmart.com with a
-//! stated purpose. UAC tokens can call `Home.getDeviceList` (this
-//! CLI) and `*.getState` (current readings only). Historical data is
-//! consumer-accessible only via the signed-URL endpoint we recreate.
-//!
-//! ## Usage
-//!
-//! Generate a UAC pair in the Safehous/YoLink app: Menu → Settings →
-//! Account → Advanced Settings → User Access Credentials → "+". Then:
-//!
-//! ```
-//! export YOLINK_UAID=ua_xxxxxxxxxxxxxxxxxxxxxxxxx
-//! export YOLINK_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-//! bazelisk run //datalib/backend/etl/providers/yolink:yolink_devices
-//! ```
-//!
-//! Defaults to a human table. `--format yaml` emits a
-//! `sources[name=yolink].sync.devices` block (with the
-//! `family_device_id` field marked TODO so you can fill in those
-//! values from your adb capture).
 
 // This binary is a stdout-sink: the table / yaml / json output is its
 // reason to exist, and there's no progress bar to corrupt. The NOTE

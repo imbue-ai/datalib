@@ -1,13 +1,4 @@
 //! The download step driver: one source's download wave.
-//!
-//! Same machinery the retired sync orchestrator installed —
-//! ambient metrics, rate-limit guard, diagnostics — around the
-//! provider's download `DataProcessor`s (planned per-provider by
-//! [`crate::dispatch`]), which own their store
-//! (open/DDL/commit/checkpoint). The step reports its raw store's
-//! doltlite HEAD commits as the output version: doltlite only advances
-//! HEAD when a commit changed something, so a poll that found nothing
-//! new reports the same string as last run and the render skips.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -98,15 +89,6 @@ pub async fn run(
     }
 }
 
-/// A content version for one source's `raw/` tree: the HEAD commit of
-/// each doltlite store under it.
-///
-/// doltlite only advances HEAD when a commit actually changed
-/// something, so a poll that found nothing new leaves both hashes
-/// alone and the version is byte-identical to last run's. That is what
-/// lets the runner skip the render without the download having to
-/// assert anything — and it avoids reading the whole store (blob CAS
-/// included) just to hash it.
 async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
     use datalib_etl::doltlite_raw::head_commit_at_path;
     let entities = head_commit_at_path(&datalib_etl::raw_layout::entities_db(raw_dir))

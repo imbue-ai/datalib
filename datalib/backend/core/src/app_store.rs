@@ -1,18 +1,6 @@
 //! `AppStore` — the three stores this server owns: filed feedback, the
 //! sync job queue, and the bytes-on-disk timeseries, one doltlite file
 //! each.
-//!
-//! doltlite is a SQLite fork: the C API and on-disk format are
-//! libsqlite3-compatible, so we drop the `dolt sql-server` subprocess
-//! and the TCP port. The audit-trail story stays — doltlite preserves
-//! the `dolt_commit()` / `dolt_log()` SQL functions, invoked via
-//! SQLite's scalar-function syntax (`SELECT dolt_commit(...)`) instead
-//! of MySQL's `CALL DOLT_COMMIT(...)`.
-//!
-//! `insert_feedback` appends a row to the `feedback` table and stamps
-//! `SELECT dolt_commit('-Am', ?)` so each piece of feedback gets its own
-//! entry in `dolt_log`. The DDL is shipped by [`app_schema::feedback`];
-//! `CREATE TABLE IF NOT EXISTS` keeps the init idempotent.
 
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
@@ -25,12 +13,6 @@ use sqlx::Row;
 
 /// The three application stores: filed feedback, the sync job queue,
 /// and the bytes-on-disk timeseries.
-///
-/// One type, three files, because they share a writer (this process)
-/// but must not share a database. Doltlite's working set is per file and
-/// shared across processes, so a `dolt_commit('-Am', …)` covers whatever
-/// else is dirty in the same file — which is why these live apart from
-/// the index the pipeline writes, and apart from each other.
 pub struct AppStore {
     /// Filed feedback. Outside the cache-tagged index tree, because
     /// nothing regenerates it.
@@ -71,8 +53,6 @@ impl AppStore {
         Ok(store)
     }
 
-    /// True when the linked libsqlite3 is doltlite and version-control
-    /// SQL functions (`dolt_commit`, `dolt_log`, ...) are available.
     pub fn has_dolt_extensions(&self) -> bool {
         self.has_dolt
     }

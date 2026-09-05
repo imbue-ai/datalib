@@ -5,23 +5,12 @@
 // `<url>?token=…` once, the server trades it for a session cookie and
 // redirects to the clean URL, and everything the page fetches from then
 // on (search, assets, the SSE stream) rides that cookie.
-//
-// Worth having as an e2e rather than only a Rust integration test: the
-// properties under test are the browser's (does it keep the cookie
-// across a redirect? does it attach it to subresource requests?), and
-// those are exactly what a `oneshot` router test can't observe.
 
 import { test, expect } from "@playwright/test";
 
 // The same value playwright.config.ts minted and handed to the backend
 // via DATALIB_TOKEN. Read from env because the config caches it there
 // for worker subprocesses.
-//
-// Declared locally rather than pulling in @types/node: tsconfig.json's
-// `types` is deliberately narrow (just vitest/globals), and specs are
-// inside its `include` globs — playwright.config.ts gets away with bare
-// `process` only because it sits outside them. One line beats a
-// dependency and a global type widening.
 declare const process: { env: Record<string, string | undefined> };
 
 const TOKEN = process.env.DATALIB_TOKEN;

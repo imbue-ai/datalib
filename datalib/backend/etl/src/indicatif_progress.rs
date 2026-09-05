@@ -2,26 +2,6 @@
 //! a live terminal progress bar — the CLI pipeline binaries
 //! and the standalone provider CLIs (`fsindex`, the various
 //! `<provider>_download` bins) alike.
-//!
-//! The bar attaches to the process-wide `MultiProgress` published by
-//! [`datalib_obs::init`], so log emissions suspend bar draws before
-//! writing and the two never stomp each other. A caller that hasn't run
-//! `obs::init` (tests, `--log-format` piping with no TTY) transparently
-//! falls back to a tracing-only sink — no bar, but the structured event
-//! stream is unchanged.
-//!
-//! Two entry points:
-//!   * [`Progress::indicatif`] — the one-liner. Builds a `Progress` that
-//!     fans a bar + a [`TracingSink`] out from one emission point. This
-//!     is what a CLI wants: `progress: Progress::indicatif("fsindex")`.
-//!   * [`make_bar`] / [`IndicatifSink::new`] — the building blocks, for
-//!     callers (sync) that manage one `MultiProgress` across many bars
-//!     themselves.
-//!
-//! Inner bars (e.g. per-channel progress within a Slack source) are
-//! created on demand via `Progress::child(prefix)`, which routes to
-//! [`IndicatifSink::child`] and attaches a fresh child bar to the same
-//! MultiProgress so it renders nested under its parent.
 
 use std::sync::Arc;
 
@@ -119,12 +99,6 @@ impl Progress {
     /// obs's shared `MultiProgress`) **and** a [`TracingSink`], fanned
     /// out from one emission point — the same wiring the orchestrator
     /// gives each source.
-    ///
-    /// Falls back to a tracing-only `Progress` when
-    /// [`datalib_obs::shared_multi`] returns `None` (i.e. `obs::init`
-    /// hasn't run — tests, or a binary that opted out of the bar). The
-    /// structured event stream is identical either way; only the
-    /// terminal bar is conditional.
     pub fn indicatif(prefix: impl Into<String>) -> Progress {
         Self::indicatif_inner(prefix.into(), false)
     }
@@ -171,9 +145,6 @@ pub fn make_multi() -> Arc<MultiProgress> {
         .expect("datalib_obs::init must run before indicatif_progress::make_multi")
 }
 
-/// Build a fresh top-level bar attached to the given MultiProgress.
-/// Starts as an indeterminate spinner with `{prefix}`; switches to a
-/// determinate bar once the worker calls `set_length`.
 pub fn make_bar(multi: &MultiProgress, prefix: impl Into<String>) -> ProgressBar {
     make_bar_at_depth(multi, prefix, 0)
 }
@@ -197,8 +168,6 @@ pub fn make_bar_at_depth(
     bar
 }
 
-/// A bar that renders only `{prefix} {spinner} {msg}` — no headline
-/// counters. The message is the whole display.
 pub fn make_message_only_bar(multi: &MultiProgress, prefix: impl Into<String>) -> ProgressBar {
     make_message_only_bar_at_depth(multi, prefix, 0)
 }
@@ -239,9 +208,6 @@ fn leading_at_depth(depth: usize) -> String {
     s
 }
 
-/// Determinate-style template — used once a real `set_length(Some(_))`
-/// arrives. Renders the standard `{pos}/{len} [bar]` shape with
-/// throughput + message tail.
 fn determinate_style(depth: usize, prefix_width: usize) -> ProgressStyle {
     let leading = leading_at_depth(depth);
     let template = format!(

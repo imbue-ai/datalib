@@ -1,16 +1,4 @@
 //! Slack HTTP fixture synthesizer.
-//!
-//! Reads the raw-API JSONL the live downloader writes under
-//! `<api_dir>/raw_api/<method>/*.jsonl` — each line is a recorded
-//! `{method, params, response, ...}` envelope — and emits one playback
-//! fixture per recorded call. Because every paginated request was
-//! captured individually with its own `cursor`/`oldest`/`latest` params,
-//! the cursor chain is preserved for free: replaying just hits the same
-//! URLs in the same order and the live download walks them.
-//!
-//! Methods covered (matches [`crate::download::shapes`]):
-//! `auth.test`, `users.list`, `conversations.list`,
-//! `conversations.history`, `conversations.replies`.
 
 use std::collections::BTreeMap;
 use std::fs;

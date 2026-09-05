@@ -1,10 +1,4 @@
 //! `YouTube and YouTube Music/history/watch-history.html` walker.
-//!
-//! MDL cell-per-entry shape, one cell per video watched. The cell's
-//! anchors are `(video_url, video_title)` then `(channel_url,
-//! channel_title)`; the visible text trailing the anchors is the
-//! timestamp Google rendered. PK recipe:
-//! `uuidv5(NS, "youtube:watch:{video_id}:{iso_ts}")`.
 
 use datalib_etl::fsscan;
 

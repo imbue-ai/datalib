@@ -26,14 +26,6 @@ import { test, expect } from "@playwright/test";
 
 // Compact tuple per row — enough to identify which entry shifted
 // without dragging the full SearchRow shape into the snapshot.
-//
-// `entire_chat` / `snippet` / `when` / `markdown_uuid` deliberately
-// left out: they churn with cosmetic doc-route refactors, content
-// edits, and clock changes. The five fields below uniquely identify
-// a row and shift only on a real ingest behavior change.
-//
-// Mirrors the visible AG Grid columns the user actually sees
-// (Source / Kind / Channel / Author).
 type RowTuple = [
   uuid: string,
   source: string,

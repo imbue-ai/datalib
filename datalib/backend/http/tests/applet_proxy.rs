@@ -1,11 +1,6 @@
 //! Integration test for the applet **proxy**: a spawned server, a real
 //! loopback socket, and the gateway's hand-written HTTP/1.1 client
 //! parsing bytes a separate hand-written server produced.
-//!
-//! Split out of `applet_endpoint.rs` because it binds ports and runs
-//! programs from the ambient environment, so it carries
-//! `no-sandbox`/`requires-network` (the same treatment the UI e2e test
-//! takes). Everything that can be hermetic stays in the other file.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -64,12 +59,6 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Val
     )
 }
 
-/// The real applet host, built by Bazel and handed over in `env`,
-/// spelled the way a config would: binary plus subcommand.
-///
-/// Using it rather than only a fixture is the point of this file: it is
-/// the one test where an applet's hand-written HTTP responses and the
-/// gateway's hand-written parser actually meet.
 fn applet_command() -> String {
     let bin = PathBuf::from(std::env::var("APPLET_BIN").expect("APPLET_BIN set by the BUILD rule"))
         .canonicalize()
@@ -77,11 +66,6 @@ fn applet_command() -> String {
     format!("{} slack", bin.display())
 }
 
-/// Write one document through the store the slack applet reads.
-///
-/// `msgs` is `(message_index, author, text, when_ts)`; the thread row
-/// itself carries no index, which is how the applet tells the document
-/// row from the messages inside it.
 fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
     use datalib_etl::grid_index::RenderedMarkdown;
     use datalib_etl::indexed_markdown::IndexedMarkdownStore;
@@ -141,9 +125,6 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
     store.close();
 }
 
-/// A rendered tree shaped the way Slack renders: one document per
-/// thread, with the thread row and its messages all carrying that
-/// document's `markdown_uuid`.
 fn seed_tree(root: &Path, rel: &str, channel: &str) {
     let tree = root.join(rel);
     std::fs::create_dir_all(&tree).unwrap();
@@ -284,23 +265,10 @@ workspace = "Home"
 }
 
 // The client half on its own, against a listener this test owns.
-//
-// The reference-applet tests above prove the round trip works; these
-// pin the wire format for shapes that applet does not produce — an
-// arbitrary status code, and a request body whose content type is not
-// JSON. Driving `forward` directly is what lets the request bytes
-// themselves be asserted.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-/// Bind a listener, hand one canned response to the first connection,
-/// and return what the client sent.
-///
-/// The request must be drained completely before responding: the
-/// client does not half-close its write side, so a server that closes
-/// with bytes still unread makes the kernel answer with RST and the
-/// client sees "connection reset" instead of the response.
 fn one_shot_server(response: &'static [u8]) -> (u16, std::thread::JoinHandle<String>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();

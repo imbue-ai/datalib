@@ -1,9 +1,5 @@
 //! `chatgpt-download` — incrementally mirror chatgpt.com conversations
 //! into `<out>/{me.json, conversations.json, conversations/<id>.json}`.
-//!
-//! Requires `latchkey` (with the `chatgpt` service registered) and a
-//! Cloudflare-clearing curl impersonator on `LATCHKEY_CURL`. See
-//! `EXTRACT.md` in this crate.
 
 use std::path::PathBuf;
 use std::time::Duration;

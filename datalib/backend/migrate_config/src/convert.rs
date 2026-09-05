@@ -1,27 +1,4 @@
 //! Turning a legacy `config.yaml` into a current `config.toml`.
-//!
-//! Two source formats, one destination:
-//!
-//! * [`steps_yaml_to_toml`] — a pre-TOML config already in the steps
-//!   format. A straight reserialization: the steps and their params
-//!   survive exactly, and YAML-only spellings are resolved on the way
-//!   through (anchors in particular get expanded into the copies TOML
-//!   needs).
-//! * [`stanza_yaml_to_toml`] — the much older stanza-based `sources:`
-//!   format ([`crate::legacy_stanza`]). A real schema translation: each
-//!   source becomes a `<name>.download` + `<name>.render` step pair,
-//!   with the legacy subtree split across the two phases.
-//!
-//! Both produce a reviewable draft, not a byte-faithful rewrite:
-//! comments and formatting from the input are not carried over.
-//!
-//! Output is assembled as *text* — one serialized `[[steps]]` block per
-//! step, glued together with comment dividers — rather than serializing
-//! the whole config in one shot. Comments are the reason: a migrated
-//! file wants section headers and commented-out disabled sources, and
-//! neither survives a value-level serializer. Within a block we still
-//! let `toml::to_string` do the work, so quoting, escaping, and the
-//! values-before-tables ordering rule are never hand-rolled.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -48,18 +25,11 @@ struct StepOut {
     params: Option<toml::Value>,
 }
 
-/// The `unified_index` applet, as a `[[applets]]` block of text.
-///
-/// A converted config needs it for the same reason a scaffolded one
-/// does: the grid, the document view and the document picker are served
-/// by this applet, so a config without it opens an app with no search.
-/// Emitted for both conversion paths.
 fn unified_index_applet() -> String {
     "\n[[applets]]\nid = \"unified_index\"\ncommand = \"datalib-applet unified_index\"\n"
         .to_string()
 }
 
-/// One step as a `[[steps]]` block of text, ready to concatenate.
 fn step_block(step: &StepOut) -> Result<String> {
     #[derive(Serialize)]
     struct One<'a> {
@@ -68,7 +38,6 @@ fn step_block(step: &StepOut) -> Result<String> {
     toml::to_string(&One { steps: [step] }).with_context(|| format!("serialize step {:?}", step.id))
 }
 
-/// The top-level keys, which TOML requires above the first `[[steps]]`.
 fn header(data_root: Option<PathBuf>, binary_dir: Option<PathBuf>) -> Result<String> {
     #[derive(Serialize)]
     struct Head {
@@ -84,8 +53,6 @@ fn header(data_root: Option<PathBuf>, binary_dir: Option<PathBuf>) -> Result<Str
     .context("serialize the top-level keys")
 }
 
-/// A full-width `# ── label ───────` section divider, padded to a fixed
-/// width so the migrated file's sections are scannable.
 fn divider(label: &str) -> String {
     const WIDTH: usize = 68;
     let pad = "\u{2500}".repeat(WIDTH.saturating_sub(label.chars().count()));
@@ -94,12 +61,6 @@ fn divider(label: &str) -> String {
 
 /// The pre-TOML steps schema, which this crate is now the only home
 /// for.
-///
-/// It used to be read straight into the live `DagConfig`, since only
-/// the parser differed. That stopped being true when a step's `id`
-/// became the tree it writes: the live schema has no `outputs`, and
-/// ids of the form `slack.download` are no longer valid. Both are
-/// converted here — see [`upgraded_id`].
 #[derive(Debug, serde::Deserialize)]
 struct LegacyStepsConfig {
     #[serde(default)]
@@ -124,12 +85,6 @@ struct LegacyStep {
     params: Option<toml::Value>,
 }
 
-/// A legacy step's id, in the current spelling: the tree it declared
-/// writing. `slack.download` + `outputs: [slack/raw]` → `slack/raw`.
-///
-/// Falls back to the old id when the step declared no outputs, which
-/// only happens for a malformed config — the runner then rejects it by
-/// name, which is a better failure than inventing a path.
 fn upgraded_id(step: &LegacyStep) -> String {
     step.outputs
         .first()
@@ -137,13 +92,6 @@ fn upgraded_id(step: &LegacyStep) -> String {
         .unwrap_or_else(|| step.id.clone())
 }
 
-/// A legacy step's `inputs`, as step ids.
-///
-/// A legacy input already names an artifact path, and a step's id *is*
-/// that path, so a concrete input converts to itself. A wildcard has no
-/// counterpart in a world where inputs name steps — `**/rendered_md`
-/// becomes the explicit list of render steps it used to match, which is
-/// the same edge set written down.
 fn upgraded_inputs(inputs: &[String], render_ids: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for i in inputs {
@@ -162,7 +110,6 @@ fn upgraded_inputs(inputs: &[String], render_ids: &[String]) -> Vec<String> {
     out
 }
 
-/// A pre-TOML steps config, re-emitted as TOML.
 pub fn steps_yaml_to_toml(text: &str) -> Result<String> {
     // `params: Option<toml::Value>` deserializes fine from a YAML
     // document — the one thing that doesn't survive is YAML `null`,
@@ -332,13 +279,6 @@ pub fn stanza_yaml_to_toml(text: &str) -> Result<String> {
     Ok(out)
 }
 
-/// One of the two source-independent fan-in steps.
-///
-/// Its inputs are the render steps by id. The legacy format wrote
-/// `**/rendered_md` here; a glob has no meaning once an input names a
-/// step, so the same edge set is written down instead. That is also why
-/// this takes the source list: the fan-ins are emitted before the
-/// sources, but they can only be *written* once their names are known.
 fn fanin(id: &str, command: &str, render_ids: &[String]) -> StepOut {
     StepOut {
         id: id.to_string(),
@@ -349,12 +289,6 @@ fn fanin(id: &str, command: &str, render_ids: &[String]) -> StepOut {
     }
 }
 
-/// A legacy params subtree as a TOML value, or `None` when there's
-/// nothing in it.
-///
-/// Note an empty-but-present `sync` table is *not* nothing: its
-/// presence is what makes a source managed, so [`strip_nulls`] keeps it
-/// and this keeps the params block it lives in.
 fn params_value(val: &serde_yaml::Value, name: &str) -> Result<Option<toml::Value>> {
     if val.as_mapping().is_none_or(|m| m.is_empty()) {
         return Ok(None);
@@ -372,11 +306,6 @@ fn params_value(val: &serde_yaml::Value, name: &str) -> Result<Option<toml::Valu
 /// `outlink_format` / `only_render_labels` (email) move over
 /// verbatim. An explicit `common.raw_path` is *copied* (both phases
 /// read the raw-store location); see below for `common.input_path`.
-///
-/// Only the keys `RenderCommon` accepts are copied over — the rest of
-/// `SourceCommon` (`blob_size_limit_bytes`, `download_params`,
-/// `event_tape`) is download-side and would be rejected by the render
-/// config's `deny_unknown_fields`.
 fn split_render_params(val: &mut serde_yaml::Value, ty: &str, managed: bool) -> serde_yaml::Value {
     use serde_yaml::{Mapping, Value};
     let mut render = Mapping::new();

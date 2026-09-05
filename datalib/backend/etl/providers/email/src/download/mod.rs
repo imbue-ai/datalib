@@ -1,23 +1,5 @@
 //! JMAP downloader. State-token-first incremental sync over four
 //! phases:
-//!
-//!   1. Session — `.well-known/jmap` → cache `apiUrl`, `downloadUrl`,
-//!      pick account, upsert the account row.
-//!   2. Mailboxes — `Mailbox/changes` since stored state (full
-//!      `Mailbox/get` on first run or when the server returns
-//!      `cannotCalculateChanges`).
-//!   3. Emails — `Email/changes` for created / updated / destroyed
-//!      (full enumeration via `Email/query` as fallback). Detail via
-//!      `Email/get` in batches; threadIds collected for the next phase.
-//!      Destroyed ids hard-delete the row + joins + bookkeeping
-//!      (dolt history preserves the prior state).
-//!   4. Threads — `Thread/get` for every thread id touched this run.
-//!   5. Blobs — `.eml` source per email + every
-//!      `Email.attachments[].blobId`, fetched via the substituted
-//!      `downloadUrl`. Respects `blob_size_limit_bytes`.
-//!
-//! State tokens are persisted per `(account_id, type_name)` in the
-//! shared `sync_scope_state` table; see [`db::state_scope`].
 
 pub mod api;
 pub mod db;
@@ -49,18 +31,6 @@ use api::call;
 use db::refresh_email_joins;
 use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow};
 
-/// Bulk-upsert one account row. Wraps the generic
-/// `bulk_upsert_in_tx<AccountRow>` so call sites don't have to spell
-/// out the row construction + tx ceremony.
-///
-/// `now` is the timestamp this fetch run stamps into every
-/// `<table>_bookkeeping.fetched_at` it touches — see [`fetch`] for
-/// where it's computed. Passing it down (rather than calling
-/// `IsoOffsetTimestamp::now_local()` per upsert) gives a single
-/// consistent "this run touched the row at" value across every
-/// table written in one sync, and keeps the bookkeeping sidecars'
-/// semantics honest: their stamp means "the sync that wrote this,"
-/// not "the millisecond the upsert query ran."
 async fn upsert_account(db: &RawDb, now: &str, id: &str, payload: &Value) -> Result<()> {
     let row = AccountRow::from_jmap_payload(id, payload)?;
     let mut tx = db.pool().begin().await.context("begin account tx")?;
@@ -69,7 +39,6 @@ async fn upsert_account(db: &RawDb, now: &str, id: &str, payload: &Value) -> Res
     Ok(())
 }
 
-/// Bulk-upsert a `Mailbox/get` `list` array under one account.
 async fn upsert_mailboxes(
     db: &RawDb,
     now: &str,
@@ -89,9 +58,6 @@ async fn upsert_mailboxes(
     Ok(())
 }
 
-/// Bulk-upsert a batch of thread rows. Callers accumulate
-/// `Vec<ThreadRow>` across whatever JMAP `Thread/get` page boundary
-/// they're walking and flush once per batch — no per-row tx.
 async fn upsert_threads(db: &RawDb, now: &str, rows: &[ThreadRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
@@ -102,9 +68,6 @@ async fn upsert_threads(db: &RawDb, now: &str, rows: &[ThreadRow]) -> Result<()>
     Ok(())
 }
 
-/// Bulk-upsert a batch of emails: the envelope rows go through
-/// `bulk_upsert_in_tx`, and each row's join tables get refreshed
-/// (delete-then-insert) inside the same transaction.
 async fn upsert_emails(db: &RawDb, now: &str, rows: &[EmailRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
@@ -241,8 +204,6 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({ K_ONLY_EXTRACT_LABELS: labels })
 }
 
-/// Run one download pass against a JMAP account. Returns a summary the
-/// orchestrator stamps into `sync_runs.summary`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(d) => d,
@@ -484,9 +445,7 @@ async fn run_sync(
     Ok(summary)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Mailboxes
-// ─────────────────────────────────────────────────────────────────────
 
 async fn sync_mailboxes(
     db: &RawDb,
@@ -593,9 +552,7 @@ async fn incremental_mailboxes(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Emails
-// ─────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 async fn sync_emails(
@@ -893,9 +850,7 @@ async fn ingest_email_list(
     upsert_emails(db, now, &rows).await
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Threads
-// ─────────────────────────────────────────────────────────────────────
 
 async fn sync_threads(
     db: &RawDb,
@@ -941,9 +896,7 @@ async fn sync_threads(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Blobs
-// ─────────────────────────────────────────────────────────────────────
 
 /// Download the `.eml` for every email that doesn't have its
 /// blake3 set yet. After the eml-as-canonical port we no longer
@@ -1106,9 +1059,7 @@ struct EmlJob {
 /// accumulator without tracking which task was which.
 type EmlFetchOutcome = (String, String, Result<(Vec<u8>, Option<String>)>);
 
-// ─────────────────────────────────────────────────────────────────────
 // Helpers
-// ─────────────────────────────────────────────────────────────────────
 
 fn string_array(v: &Value, key: &str) -> Vec<String> {
     v.get(key)

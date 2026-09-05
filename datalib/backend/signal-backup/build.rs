@@ -1,19 +1,4 @@
 //! Cargo-only proto codegen.
-//!
-//! Under Bazel the proto sources are compiled by `rust_prost_library`
-//! (see `BUILD.bazel`), which injects the generated code as an
-//! external crate `signal_backup_proto`; the rust_library target sets
-//! `--cfg=bazel_prost` so `src/proto.rs` re-exports from that crate.
-//!
-//! Under cargo there's no such crate — the prost path inside the
-//! workspace is Bazel-only — but the workspace's `cargo clippy`
-//! pre-commit hook still needs to typecheck this crate. So we run
-//! `prost_build` here at build time, write the generated modules into
-//! `OUT_DIR`, and `src/proto.rs` `include!`s them under
-//! `#[cfg(not(bazel_prost))]`.
-//!
-//! `protoc` is provided by `protobuf-src` (vendored prebuilt) so the
-//! cargo path works on a clean host without a system protoc install.
 
 // `println!` is the only way to communicate with cargo from a build
 // script (it parses `cargo:` directives off stdout). The workspace's
@@ -41,11 +26,6 @@ fn main() -> std::io::Result<()> {
     // `docs/dev/data_architecture_ingestion.md` §"Wire-fidelity": the
     // raw store records semantic content as JSON; the transcoding
     // from prost wire bytes is lossless and not a normalization.
-    //
-    // TODO(follow-up): bytes fields currently serialize as JSON
-    // arrays of u8 numbers (the serde default for `Vec<u8>`).
-    // Polish to base64/hex via `field_attribute` once we enumerate
-    // the relevant field paths.
     prost_build::Config::new()
         .type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]")
         .compile_protos(

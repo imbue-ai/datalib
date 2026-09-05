@@ -1,14 +1,5 @@
 //! End-to-end test for the Beeper provider against the
 //! ST:TNG-themed SQL fixture.
-//!
-//! Materializes a Beeper Texts-shaped data directory from the
-//! `fixtures/beeper_tng/` SQL files into a tempdir, runs
-//! `download::fetch` + `render::render_all` against it, and
-//! asserts the on-disk doltlite output + rendered markdown.
-//!
-//! Requires the system `sqlite3` CLI (macOS ships with it; on
-//! Linux distros it's in the `sqlite3` package). Override via
-//! `BEEPER_SQLITE3=/path/to/sqlite3` if needed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,9 +11,6 @@ use datalib_etl::progress::Progress;
 use datalib_etl_beeper::download::{self, FetchOptions, FetchSummary};
 use datalib_etl_beeper::render::{self, Period};
 
-/// Path to the fixture directory on disk. Bazel stages the fixture
-/// at a runfiles-relative path and exposes it via
-/// `BEEPER_FIXTURE_DIR`; cargo runs out of `CARGO_MANIFEST_DIR`.
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("BEEPER_FIXTURE_DIR") {
         return PathBuf::from(d);
@@ -30,9 +18,6 @@ fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/beeper_tng")
 }
 
-/// Build a Beeper Texts-shaped data dir at `target` from the
-/// checked-in SQL + media. Mirrors `build_fixture.sh` so the test
-/// stays self-contained.
 fn materialize_fixture(target: &Path) -> Result<()> {
     let fixtures = fixture_dir();
     std::fs::create_dir_all(target.join("local-signal"))?;
@@ -79,8 +64,6 @@ fn materialize_fixture(target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Invoke `download::fetch` for the test's chosen sources. Tests
-/// pick whichever wrapper matches their runtime context.
 async fn run_extract(
     db_path: PathBuf,
     beeper_data_dir: PathBuf,
@@ -98,8 +81,6 @@ async fn run_extract(
     .await
 }
 
-/// Sync wrapper: spin up a private runtime. Use from `#[test]`
-/// (no outer runtime). Panics if invoked from inside one.
 fn run_extract_sync(
     db_path: PathBuf,
     beeper_data_dir: PathBuf,

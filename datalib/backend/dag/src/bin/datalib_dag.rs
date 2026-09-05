@@ -1,65 +1,5 @@
 //! `datalib-dag` — run a DAG config file (see `datalib_dag::config`
 //! for the schema).
-//!
-//! ```sh
-//! datalib-dag config.toml [--binary-dir DIR] [--sync STEP_ID[,…]]…
-//!     [--now RFC3339] [--parallelism N]
-//!     [--reset-and-redownload] [--refetch-blobs]
-//! datalib-dag --check config.toml
-//! ```
-//!
-//! * `--check` validates the config and runs nothing, printing *every*
-//!   problem rather than the first — which is the difference between
-//!   one round-trip and one per typo for whoever (or whatever) is
-//!   editing the file. Exit 0 clean, 1 if the file is not a config at
-//!   all, 2 if some entries were dropped.
-//!
-//! * `--binary-dir` is prepended to every step's `PATH`, so commands
-//!   can name step binaries bare (`datalib-step …`). Defaults to the
-//!   config `binary_dir`, then this executable's own directory.
-//! * `--sync` runs a subgraph and only that subgraph: the named
-//!   source steps (the steps with no inputs) plus everything
-//!   downstream of them. Every other step is reported `not_selected`
-//!   and never considered — including work pending elsewhere, like a
-//!   source that downloaded yesterday but failed to render. "Sync
-//!   yolink" means yolink; nothing happens for slack. Inside the
-//!   subgraph the usual change propagation applies, so a fan-in
-//!   re-runs only if a selected chain actually moved. This is the
-//!   per-source "Sync now" mode; a full run (no `--sync`) picks up
-//!   whatever was left pending.
-//! * `--now` pins the run timestamp, exported to every step as
-//!   `DATALIB_DAG_NOW` (downloads stamp it into raw bookkeeping,
-//!   index into `markdowns.rendered_at`); omitted, the local clock is
-//!   sampled once at startup so the whole run still agrees on one
-//!   value.
-//! * `--reset-and-redownload` / `--refetch-blobs` are exported as
-//!   `DATALIB_DAG_RESET_AND_REDOWNLOAD` / `DATALIB_DAG_REFETCH_BLOBS`;
-//!   steps that fetch from an origin honor them (see
-//!   `datalib-step download --help`), everything else ignores them.
-//!
-//! Every step runs as a subprocess executing its config `command:`
-//! (with the declared params/inputs/outputs appended as `--params` /
-//! `--inputs` / `--outputs` JSON flags — see docs/dev/step_protocol.md).
-//! Events stream to stderr as NDJSON — including one final
-//! `run_summary` event, the machine-readable run record (tee stderr
-//! to keep it). The per-step report prints to stdout.
-//!
-//! SIGINT/SIGTERM are forwarded to running steps as SIGINT so they
-//! can checkpoint-commit and report a `cancelled` outcome; the
-//! scheduler then drains, emits the run summary, and exits 130.
-//! A config with a broken *entry* no longer stops the run: that entry
-//! is dropped, everything else runs, and the diagnostics are printed
-//! before the plan. See `datalib_dag::diagnostics`. A dropped entry is
-//! not "all ok", so the run exits 2 even when every step that did run
-//! succeeded.
-//!
-//! Exit codes: 0 all ok, 2 some step failed/blocked or some config
-//! entry was dropped, 130 cancelled, 1 setup error (including a config
-//! file that is not a config).
-//!
-//! Only one runner may hold a data root at a time (`system/runner-lock`,
-//! `flock(2)`), so a sync started from a terminal and one started by the
-//! app refuse rather than interleave. The refusal names the holder.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -191,17 +131,6 @@ async fn main() -> Result<()> {
     let graph = checked.graph;
 
     // One runner per data root, taken before anything is written.
-    //
-    // Two runners interleave `system/dag_state.json` — rewritten after
-    // every terminal step — and interleave the raw stores their steps
-    // write, whose doltlite working set is shared across processes. So
-    // a sync started from a terminal while the app is syncing, or two
-    // terminals, would corrupt bookkeeping quietly rather than loudly.
-    //
-    // Held until the process exits, however it exits: `flock(2)` is
-    // released by the kernel, so a crashed run leaves nothing to clean
-    // up. `_lock` and not `_` — binding to `_` would drop it here and
-    // release the claim before the run starts.
     let _lock = datalib_dag::lock::FileLock::acquire_runner(&data_root).map_err(|e| {
         if e.is_held() {
             anyhow::anyhow!(
@@ -292,22 +221,6 @@ async fn main() -> Result<()> {
     // means every way of starting a sync gets it — the http server's
     // worker shells out to this binary too — while a library caller
     // embedding `Runner` is not forced to own a file.
-    //
-    // The bus owns a writer thread, and this binary ends in
-    // `std::process::exit`, which runs no destructors. So the bus gets
-    // an explicit scope that computes the exit code, and the exit
-    // happens *after* that scope closes.
-    //
-    // That is the nursery discipline from Nathaniel J. Smith's "Notes
-    // on structured concurrency, or: Go statement considered harmful"
-    // (https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/):
-    // a spawned thing's lifetime is bracketed by a scope its parent
-    // cannot leave early, so there is no path out that forgets it. The
-    // first version of this called a `finish()` by hand instead, which
-    // is precisely the unstructured spawn the essay argues against —
-    // and it was already wrong, because the `?` on `runner.run` below
-    // skips it. `//tests/fixtures:progress_bus_e2e_test` is what caught
-    // the empty bus, and is what would catch it coming back.
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
         match ProgressBusSink::start(&data_root, &run_id) {

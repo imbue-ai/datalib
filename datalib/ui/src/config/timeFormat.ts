@@ -6,17 +6,8 @@
 // always "is this stale?", which the relative form answers directly and
 // an absolute one makes you do arithmetic for; the exact instant is the
 // occasional need, so it gets the gesture.
-//
-// Every timestamp in this project is ISO-8601 with the source's own UTC
-// offset preserved (see AGENTS.md), which `Date` parses correctly
-// without either side being normalized first.
 
 /// The absolute form, in the viewer's own locale, on a 24-hour clock.
-///
-/// `hourCycle` rather than the locale's default: these times are
-/// operational — "did this run before or after that one" — and a
-/// 12-hour clock makes that a two-token comparison. Everything else
-/// (field order, month name, separators) still follows the system.
 const STAMP_FMT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
@@ -38,22 +29,6 @@ export function formatStamp(iso: string | null): string {
 
 /// Order two stamps by the instant they name.
 ///
-/// A timestamp column that *displays* "5 minutes ago" must not sort on
-/// that text — alphabetically "10 minutes ago" precedes "2 hours ago"
-/// precedes "seconds ago", which is three kinds of wrong at once. AG Grid
-/// sorts on the row's value rather than what a `cellRenderer` painted,
-/// so the text is never the key; this is about the value.
-///
-/// Even then, comparing the values as strings is wrong. Every stamp
-/// here is ISO-8601 with the *source's own* UTC offset preserved (see
-/// AGENTS.md), so `2026-09-01T13:00:00+02:00` and
-/// `2026-09-01T04:00:00-07:00` are the same instant written two ways
-/// and neither text order nor equality survives it. Parse, then
-/// compare.
-///
-/// A row that has never run sorts as **forever ago** — older than any
-/// real stamp, rather than as a special case pinned to one end.
-///
 /// That makes this a plain total order, which is the point: reversing
 /// the sort reverses the whole column, so "never run" leads ascending
 /// and trails descending, and one click on the header is how you ask
@@ -61,6 +36,15 @@ export function formatStamp(iso: string | null): string {
 /// bottom whichever way the column points — needs the sort direction
 /// threaded in and negated back out, which is two orders wearing one
 /// function's clothes.
+///
+/// A row that has never run sorts as **forever ago** — older than any
+/// real stamp, rather than as a special case pinned to one end.
+///
+/// A timestamp column that *displays* "5 minutes ago" must not sort on
+/// that text — alphabetically "10 minutes ago" precedes "2 hours ago"
+/// precedes "seconds ago", which is three kinds of wrong at once. AG Grid
+/// sorts on the row's value rather than what a `cellRenderer` painted,
+/// so the text is never the key; this is about the value.
 export function compareStamps(a: string | null, b: string | null): number {
   if (a === b) return 0;
   if (!a) return -1;

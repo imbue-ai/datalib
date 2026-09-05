@@ -1,10 +1,5 @@
 //! WhatsApp render — thin adapter over
 //! [`datalib_etl_chat_common::render::render_all`].
-//!
-//! Receives the per-chat `BlobBundle` map already loaded by
-//! [`super::parse::parse`] (mirroring slack's per-thread bundles) and
-//! forwards every other arg straight through. No CAS-pool open here:
-//! parse owns the synchronous bag of attachment bytes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -27,23 +22,6 @@ use sqlx::Row;
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
 /// that we need every existing WhatsApp doc rebuilt.
-///
-/// v3 = attachment bytes now stream through `datalib_etl::blob_cas`
-/// (the same store every other chat-style provider uses). The on-disk
-/// `blobs/<short>.<ext>` filename is whatever
-/// `BlobBundle::filename_for` picks, which is blake3-prefixed (was
-/// sha256-prefixed in v2); existing docs all rebuild.
-///
-/// v2 = attachments now materialize bytes into the rendered page's
-/// `blobs/` subdir, so images render inline instead of "(not yet
-/// fetched)".
-///
-/// v1 = chat-common's unified block style + reactions inline +
-/// per-message `id="m-{uuid}"` anchors.
-///
-/// v4 = a message or reaction whose `timestamp` column is NULL gets a
-/// null `when_ts` instead of a real-looking `1970-01-01T00:00:00`. See
-/// `docs/dev/data_architecture_parse_and_render.md` §6.
 pub const RENDER_VERSION: u32 = 4;
 
 const SOURCE_LABEL: &str = "WhatsApp";
@@ -81,13 +59,6 @@ pub fn render_all(
     // between that hash and HEAD via `dolt_diff_wa_<table>`. Skip the
     // rest. Cold start (no cursor) or no doltlite db on disk renders
     // every chat.
-    //
-    // The orchestrator's per-doc `prior_fingerprints` map is ignored
-    // here — dolt is the single source of truth for "did anything
-    // change?". Cost: a row change in a long-running chat re-renders
-    // every period bucket of that chat with identical bytes (mtimes
-    // bump). Same-bytes rewrites are fine; if a downstream consumer
-    // grows sensitive to mtime, reintroduce a per-bucket compare.
     let cursor_path = render_cursor::cursor_path(out_dir, source_name);
     let prior = render_cursor::read_for_params(&cursor_path, &render_cursor::no_params())?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
@@ -255,10 +226,6 @@ mod tests {
     ///      dolt_diff filter sees an empty changed set)
     ///   4. modify a message in chat A, commit
     ///   5. render → expect only chat A's bucket(s) re-rendered
-    ///
-    /// Skipped silently on stock libsqlite3 (no dolt_* SQL surface). Under
-    /// bazel (where doltlite is linked) this is the full incremental
-    /// story.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dolt_diff_drives_incremental_render() {
         let td = tempfile::tempdir().expect("tempdir");
@@ -397,9 +364,6 @@ mod tests {
         .expect("insert wa_message");
     }
 
-    /// Runs `parse` + `render_all` and returns the markdown_uuids the
-    /// chat-common renderer emitted (via on_doc_complete). Uses
-    /// `Period::All` so every chat collapses to a single bucket.
     async fn render_capture(raw_dir: &Path, out_dir: &Path) -> Vec<String> {
         let raw_dir = raw_dir.to_path_buf();
         let out_dir = out_dir.to_path_buf();

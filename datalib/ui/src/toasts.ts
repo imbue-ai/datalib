@@ -1,13 +1,4 @@
 // Tiny module-level toast store.
-//
-// Any UI code can push a notice here and it pops up in <ToastStack/>
-// (mounted once in App.vue). Used by `api.ts` to surface non-2xx fetches
-// and backend-provided `errors[]`, so a degraded response — schema
-// mismatch, qmd fallback, etc. — is visible instead of leaving the user
-// staring at an empty grid.
-//
-// No new deps: a module-level `reactive([])` is reactive across all
-// components that import `toasts`.
 
 import { reactive } from "vue";
 

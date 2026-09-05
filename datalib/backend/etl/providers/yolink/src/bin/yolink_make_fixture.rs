@@ -1,49 +1,6 @@
 //! `yolink-make-fixture <spec.json> <raw_dir>` — expand a TNG-themed
 //! JSON spec into a YoLink doltlite raw store, ready for the render
 //! step to read.
-//!
-//! ## Why a fixture *maker* rather than a checked-in store
-//!
-//! Every other fixture source in this tree is checked-in input that the
-//! download step ingests. YoLink can't work that way: its downloader
-//! fetches signed-URL CSVs by shelling out to `curl` (see
-//! `download/mod.rs`), which is neither hermetic nor routed through the
-//! HTTP transport that `datalib-step synthesize` records playback tapes
-//! for. So the fixture pipeline seeds the raw store directly and emits
-//! no yolink download step at all.
-//!
-//! That is a limitation of the fixture harness, not a property of the
-//! source: yolink has a real doltlite downloader, and a configured
-//! yolink source runs both waves like any other. See
-//! `tests/fixtures/run_sync_pipeline.py`'s `PRESEEDED_RAW`.
-//!
-//! Checking in a `.doltlite_db` instead was the other option, and it's
-//! worse: an opaque binary blob in git, coupled to the on-disk chunk
-//! format, that nobody can read or edit. This binary is the same shape
-//! as `signal-make-fixture` / `whatsapp-make-fixture`.
-//!
-//! ## Determinism
-//!
-//! Sample values come from a **pure formula** — a sine plus a
-//! deterministic hash-derived jitter — never from an RNG or a clock, so
-//! the same spec always produces the same readings. The bookkeeping
-//! stamps and the `dolt_commit` date come from `--now` (falling back to
-//! `$DATALIB_DAG_NOW`, which the DAG runner exports so a whole run
-//! agrees — see the timestamp convention in AGENTS.md), so the fixture's
-//! commit log reads in fixture time rather than in build time.
-//!
-//! That is as far as this binary can take it. The store is **not**
-//! byte-stable across runs: `doltlite_raw::open` creates two commits of
-//! its own before we get the pool — doltlite's "Initialize data
-//! repository" and the shared layer's "schema: apply DDL" — and both
-//! take the wall clock. Commit hashes chain, so those two move every
-//! run and ours moves with them. Pinning the rest is still worth doing:
-//! it removes the build clock from the readings, from the bookkeeping
-//! columns, and from the one commit message a reader of the fixture
-//! actually cares about.
-//!
-//! Spec shape: see `tests/fixtures/yolink_tng/tng.json`, which is the
-//! only instance and documents each field inline.
 
 use std::path::PathBuf;
 
@@ -230,9 +187,6 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
     Ok(reading_rows.len())
 }
 
-/// Values for one (device, metric) series.
-///
-/// Pure function of the spec — see the module docs on determinism.
 fn generate(spec: &Spec, device: &DeviceSpec, metric: &MetricSpec) -> Result<Vec<f64>> {
     if let Some(source) = &metric.cumulative_of {
         let per_sample = device
@@ -277,12 +231,6 @@ fn generate(spec: &Spec, device: &DeviceSpec, metric: &MetricSpec) -> Result<Vec
         .collect())
 }
 
-/// Deterministic pseudo-jitter in `[-1, 1]`.
-///
-/// A 64-bit FNV-1a over `(device, metric, index)` folded into a float.
-/// Chosen over `rand` because the genrule caches on output bytes: the
-/// series must be identical on every machine, forever, with no seed to
-/// thread around.
 fn jitter(device: &str, metric: &str, i: usize) -> f64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in device
@@ -300,7 +248,6 @@ fn jitter(device: &str, metric: &str, i: usize) -> f64 {
     ((h >> 40) as f64 / (1u64 << 24) as f64) * 2.0 - 1.0
 }
 
-/// Three decimals, matching the precision the real CSVs carry.
 fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }

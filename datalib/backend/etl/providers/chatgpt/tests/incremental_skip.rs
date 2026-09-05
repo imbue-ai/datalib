@@ -1,21 +1,4 @@
 //! Two-pass resume / skip-check round-trip.
-//!
-//! Regression guard for the format-mismatch bug (commit 1fc3ee8, then
-//! reintroduced in the Rust port): the `/conversations` listing reports
-//! `update_time` as an ISO-8601 string while `/conversation/{id}`
-//! reports it as a Unix-epoch float. The download path stores the detail
-//! float, so a naive byte-for-byte comparison against the listing string
-//! never matches and every already-downloaded conversation gets
-//! re-fetched — defeating incremental resume.
-//!
-//! This test fetches once, then fetches *again* against the same DB and
-//! the same playback fixtures (whose listing uses the ISO shape and
-//! whose detail uses the float shape, exactly like the live API) and
-//! asserts the second pass skips everything.
-//!
-//! Lives in its own integration-test file — and thus its own Bazel
-//! `rust_test` target / process — so the process-wide
-//! `DATALIB_HTTP_PLAYBACK` env var can't race other tests.
 
 use std::fs;
 use std::time::Duration;
@@ -33,8 +16,6 @@ fn write_json(path: &std::path::Path, v: &Value) {
     fs::write(path, serde_json::to_vec_pretty(v).unwrap()).unwrap();
 }
 
-/// The ISO-8601 string the listing endpoint reports for a detail-side
-/// epoch float — microseconds, explicit `+00:00`, matching the live API.
 fn iso_for_epoch(epoch: f64) -> String {
     let micros = (epoch * 1_000_000.0).round() as i64;
     DateTime::from_timestamp_micros(micros)

@@ -1,18 +1,5 @@
 //! Render LinkedIn `connections` as first-class contacts through the
 //! shared [`datalib_etl_contact_common`] renderer.
-//!
-//! Each row of the `connections` raw table (one per 1st-degree
-//! connection; see `Connections.csv`) becomes one
-//! [`NormalizedContact`]: identity is a UUID derived from the member's
-//! profile URL ([`schema_raw::connection_uuid`]), the URL is also the
-//! contact's canonical web link, and the remaining columns (Company,
-//! Position, Email, Connected On) become the detail fields. They all
-//! share a single "Connections" group.
-//!
-//! Future enhancement: fetch each connection's profile picture and store
-//! it in blob_cas, then set [`NormalizedContact::photo`] — the renderer
-//! already materializes photos for vCard contacts the same way. For now
-//! we have no picture bytes, so the photo stays unset.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -40,8 +27,6 @@ const GROUP_LABEL: &str = "Connections";
 /// omitted here to avoid redundancy.
 const FIELD_COLUMNS: &[&str] = &["Company", "Position", "Email Address", "Connected On"];
 
-/// Render the `connections` table under `raw_dir` into `out_dir`. No-op
-/// when the raw store (or the `connections` table) is absent / empty.
 pub fn render_connections(
     raw_dir: &Path,
     out_dir: &Path,
@@ -99,7 +84,6 @@ pub fn render_connections(
     Ok(())
 }
 
-/// One `connections` payload row → one [`NormalizedContact`].
 fn to_contact(p: &Value) -> NormalizedContact {
     let url = field(p, "URL");
     let name = full_name(p);

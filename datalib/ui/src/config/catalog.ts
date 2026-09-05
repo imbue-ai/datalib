@@ -1,39 +1,8 @@
 // The source catalog the "Add Data Source" picker renders, and the form
 // descriptors the wizard fills in.
-//
-// TEMPORARY HOME. The design (docs/dev/source_wizard.md) puts each
-// entry next to its provider's schema, in the `*_config` crate, served
-// from `GET /api/sources/catalog`. Nothing serves that yet, so the
-// table lives here — which means it can drift from the Rust structs it
-// mirrors. When the endpoint lands, delete this file and fetch instead;
-// the shapes below are deliberately the shapes that endpoint should
-// return, so the swap is a fetch and a type import.
-//
-// Seven descriptors carry a form: `slack_api`, `claude_api` and the two
-// `email` variants (Gmail, Fastmail) for the credentialed path, and
-// `lightroom` / `signal_backup` / `whatsapp_backup` / `pdf` / `media`
-// for the on-disk one. Every other type is listed so the picker shows
-// the real breadth of what datalib supports, but is marked
-// `wizard: false` — picking one sends you to the config editor rather
-// than pretending a form exists.
-//
-// ### One step type, more than one entry
-//
-// Gmail and Fastmail are both `datalib-step download email`. They are
-// *not* one form: they authenticate against different latchkey
-// services, select their download mode with different params, and want
-// different words on screen. So `email` has three entries here, and the
-// thing that separates them is `variantKey` — the params path whose
-// presence says which one an existing step is. `type` stops being a
-// unique key at that point; `entryKey` is the unique one.
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`sync.channels` → `[steps.params.sync] channels`).
-///
-/// `phase` says which of the source's two steps the value lands on.
-/// It defaults to `download`; the render step carries only render-time
-/// knobs, and the two params schemas are `deny_unknown_fields` on the
-/// Rust side, so putting a value on the wrong step fails loudly.
 export type FieldPhase = "download" | "render";
 
 type FieldBase = {
@@ -43,12 +12,6 @@ type FieldBase = {
   phase?: FieldPhase;
   /// Only shown, and only written, while the `bool` field at this
   /// target is on.
-  ///
-  /// This is not cosmetic. A provider may reject a combination its
-  /// struct can express — `slack_api` errors on `dm_users` set with
-  /// `dms = false`, because both silent readings of that are wrong —
-  /// and a form that can produce a config the backend refuses is a
-  /// form that fails at sync time instead of at fill-in time.
   requires?: string;
 };
 
@@ -76,11 +39,6 @@ export type Field =
   /// browser it can't, and the typed input is all there is until a
   /// `GET /api/fs/browse` endpoint exists — `<input type=file>` is no
   /// substitute, since a browser never yields a filesystem path.
-  ///
-  /// `picks` is what decides which dialog opens, so a file/dir mismatch
-  /// here is the one error a picker can still let through. Both it and
-  /// `pickTitle` are required in practice; they are optional in the
-  /// type only because this table predates the picker.
   | ({ kind: "path" } & FieldBase & {
       placeholder?: string;
       required?: boolean;
@@ -110,34 +68,11 @@ export type Field =
   | ({ kind: "bool" } & FieldBase & { default?: boolean })
   /// `default` pre-fills the box on a **new** source only, and is
   /// deliberately not applied when editing an existing one.
-  ///
-  /// The asymmetry is the point. A `bool`/`select` default matches the
-  /// backend's own default, so seeding it while editing changes
-  /// nothing. An `int` default here is a *policy* the wizard imposes
-  /// where the backend has none — `blob_size_limit_bytes` means "no
-  /// limit" when absent — so seeding it on edit would silently cap a
-  /// source that was deliberately uncapped, the next time someone
-  /// opened the form to change something unrelated. Absent stays
-  /// absent; only a value already in the config is shown back.
   | ({ kind: "int" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
       placeholder?: string;
       /// Offer a checklist built from `POST /api/probe`, alongside the
       /// comma-separated box. Names *which* of the probe's lists:
-      ///
-      ///   `labels`     everything the account has. What a **download**
-      ///                filter may name — for Gmail that includes
-      ///                `Starred` and `Unread`, which the service
-      ///                resolves server-side.
-      ///   `mailboxes`  only the entries emails are actually filed in.
-      ///                What a **render** filter may name: it matches
-      ///                stored mailbox paths, so offering `Starred`
-      ///                there would offer a filter that silently
-      ///                matches nothing.
-      ///
-      /// The typed box stays either way — a probe needs credentials
-      /// that may not exist yet, and a form should not be unusable
-      /// until a network call succeeds.
       probe?: "labels" | "mailboxes";
     });
 
@@ -160,12 +95,6 @@ export type CatalogEntry = {
   /// declare no render step (`lightroom`, `fsindex`). Defaults to true.
   renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials.
-  ///
-  /// The wizard uses it to list stored accounts and to run
-  /// `latchkey auth browser <service>`. At *request* time latchkey
-  /// picks the service by matching the URL rather than by this string,
-  /// so a wrong value here misleads the setup screen without breaking
-  /// a sync — which is exactly the kind of wrong that survives.
   credentialService?: string;
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
@@ -175,20 +104,6 @@ export type CatalogEntry = {
   /// is present, so a more specific key must come first in `CATALOG`.
   variantKey?: string;
   /// Params this entry always writes, with no field to edit them.
-  ///
-  /// Two jobs, both about identity rather than preference:
-  ///
-  ///   * **selecting a mode.** An `email` step is a Gmail step because
-  ///     it has a `gmail_api` table, and a JMAP step because it has a
-  ///     `sync.hostname`. Neither is something to ask about — the
-  ///     person picked "Gmail" off the tile grid already.
-  ///   * **following from the choice.** A Gmail source's webmail
-  ///     outlinks are Gmail's. There is no second answer.
-  ///
-  /// A preset is written on every save and is counted as *known* by
-  /// `paramsAreRepresentable`, so a step carrying one stays editable.
-  /// If a value is a real choice, make it a field — a preset the user
-  /// can't see is a value they can't change without the config editor.
   preset?: Preset[];
   /// Offer "Test connection", and populate any `probe:` field from
   /// what comes back. Requires a `datalib-step probe <type>` on the
@@ -346,12 +261,6 @@ export const CATALOG: CatalogEntry[] = [
   { type: "notion_api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", wizard: false, credentialService: "notion" },
 
   // ── the two `email` variants ──────────────────────────────────────
-  //
-  // Same step type, same raw schema, same render path: a mailbox
-  // mirrored from Gmail and one mirrored over JMAP dedupe against each
-  // other rather than doubling (docs/dev/email_download_modes.md).
-  // What differs is how you reach the account, and that is all these
-  // two entries encode.
   //
   // Gmail must come before the JMAP entry: `variantKey` matching takes
   // the first hit, and a Gmail step has no `sync` table to confuse it
@@ -758,32 +667,17 @@ export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {
 
 /// A stable, unique key for an entry — what a `v-for` keys on and what
 /// the picker's cursor compares.
-///
-/// `type` alone stopped being unique when `email` grew a Gmail entry and
-/// a Fastmail entry beside its catch-all. Rather than inventing a
-/// second id to keep in step with the type, the key *is* the pair that
-/// already distinguishes them.
 export function entryKey(entry: CatalogEntry): string {
   return entry.variantKey ? `${entry.type}:${entry.variantKey}` : entry.type;
 }
 
 /// The first entry for a step type, ignoring variants.
-///
-/// Right for a caller that only has a type string and wants a label —
-/// but wrong for anything that will *write* a step, since the variants
-/// of one type write different params. Those callers want
-/// [`catalogForStep`].
 export function catalogFor(type: string): CatalogEntry | undefined {
   return CATALOG.find((e) => e.type === type);
 }
 
 /// The entry describing a step that already exists: its type, narrowed
 /// by which variant its params say it is.
-///
-/// Among the entries for one type, the first whose `variantKey` is
-/// present in the params wins; an entry with no `variantKey` matches
-/// anything and so acts as the fallback. That ordering is why the
-/// catch-all `email` entry sits last in `CATALOG`.
 export function catalogForStep(
   type: string | null,
   params: Record<string, unknown>,

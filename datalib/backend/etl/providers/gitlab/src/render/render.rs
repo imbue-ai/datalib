@@ -1,16 +1,4 @@
 //! Render captured GitLab MRs to **one** markdown document per MR.
-//!
-//! Layout:
-//! ```text
-//! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.md
-//! ```
-//!
-//! Section order in the doc:
-//! 1. Front matter + title + MR meta (state, source/target, author)
-//! 2. **Description** — `merge_request.description`
-//! 3. **General discussion** — individual_note + non-positioned discussions
-//! 4. **Inline comments** — positioned discussions, grouped by (`new_path`,
-//!    `new_line`), then within each group chronologically.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

@@ -1,13 +1,5 @@
 //! Render the chat-shaped Takeout feeds into markdown via the shared
 //! chat renderer.
-//!
-//! Two feeds render today: **Google Chat** (`chat_messages`, grouped by
-//! their owning `spaces/<id>` prefix) and **Google Voice**
-//! (`voice_messages`, grouped by the contact / participant-set the
-//! conversation is with, periodized by month). The rest (maps, youtube,
-//! gemini, bills) stay queryable in the raw store. Each row maps into a
-//! [`NormalizedChatItem`] and the lot is handed to
-//! [`datalib_etl_chat_common::render::render_all`].
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -75,9 +67,6 @@ fn voice_profile() -> RenderProfile {
     }
 }
 
-/// Render the chat-shaped feeds under `raw_dir`. No-op when the raw
-/// store is absent; renders whichever of Google Chat / Google Voice has
-/// rows.
 pub fn render(
     raw_dir: &Path,
     out_root: &Path,
@@ -134,9 +123,6 @@ pub fn render(
     Ok(())
 }
 
-/// Build per-conversation [`BlobBundle`]s for the Voice feed: one bundle
-/// per `chat.id`, holding every attachment its messages reference. Keyed
-/// to match [`build_voice_chats`]' `chat.id`.
 async fn load_voice_blobs(
     db: &RawDb,
     voice_messages: &[Value],
@@ -170,14 +156,6 @@ async fn load_voice_blobs(
     Ok(out)
 }
 
-/// One [`NormalizedChat`] per space, periodized into month buckets
-/// (oldest-first) like the Voice / Signal / WhatsApp renderers.
-///
-/// `groups` is `(takeout dir name, group_info payload)`. The directory
-/// name (`"DM <spaceId>"`, `"Space <spaceId>"`) carries the space id —
-/// `group_info.json` itself has only a `members` array — so we key the
-/// member display off the dir's trailing token, which matches the space
-/// id parsed out of each message's `message_id` (`"<space>/<topic>/…"`).
 fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<NormalizedChat> {
     // space id -> participant display, from each group dir's members.
     let mut display_by_space: HashMap<String, String> = HashMap::new();
@@ -313,20 +291,6 @@ fn space_of_dir(dir: &str) -> String {
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
 /// timestamp to unix millis, or `None` on any shape we don't recognize.
-///
-/// Recent exports use a narrow no-break space (U+202F) before AM/PM;
-/// normalize it first.
-///
-/// **Assume-UTC is legal here and the audit is in the string.** The
-/// export states its zone as the literal trailing word `UTC` — chrono
-/// cannot turn that into an offset, so this is a naive parse plus a UTC
-/// assumption. That assumption is only permitted inside `datalib-time`
-/// (see its module docs), which is why this calls
-/// `parse_custom_strftime_assumed_utc` rather than doing
-/// `NaiveDateTime::parse_from_str(..).and_utc()` locally.
-///
-/// It used to return `0` on an unexpected shape, which put a real-looking
-/// 1970 stamp in the grid. `None` now reaches `when_ts` as a null.
 fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().replace(['\u{202f}', '\u{00a0}'], " ");
     const FMTS: [&str; 2] = [
@@ -340,9 +304,6 @@ fn parse_date_ms(s: &str) -> Option<i64> {
 
 // ── Google Voice ────────────────────────────────────────────────────
 
-/// The `NormalizedChat.id` (and `blobs_by_chat` key) for a voice row:
-/// its conversation_key, namespaced so it can't collide with a Google
-/// Chat space slug.
 fn voice_chat_id(m: &Value) -> String {
     let key = m
         .get("conversation_key")
@@ -351,9 +312,6 @@ fn voice_chat_id(m: &Value) -> String {
     format!("voice:{key}")
 }
 
-/// Attachment ref_names referenced by one voice row — the `attachments`
-/// array (texts/MMS) plus the single `audio` ref (voicemail / call /
-/// recording).
 fn voice_attachment_refs(m: &Value) -> Vec<String> {
     let mut refs = Vec::new();
     if let Some(arr) = m.get("attachments").and_then(Value::as_array) {
@@ -429,9 +387,6 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
     chats
 }
 
-/// Map one `voice_messages` payload into a normalized item. Texts/MMS →
-/// Text or Attachment; voicemail/recording → Attachment (with the audio
-/// blob, transcript as caption); missed/placed/received calls → System.
 fn voice_item(m: &Value) -> NormalizedChatItem {
     let kind = m.get("kind").and_then(Value::as_str).unwrap_or("text");
     let message_uuid = m
@@ -573,11 +528,6 @@ fn party_id(party: Option<&Value>) -> String {
 /// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the
 /// raw value, then to `None`.
-///
-/// `None` rather than `0`: a Voice row we cannot date has no timestamp,
-/// and §6 says that is a null `when_ts`, not the epoch. Parsed through
-/// `datalib-time` so the rule for reading an offsetted string lives in
-/// one crate (rule P3).
 fn voice_date_ms(m: &Value) -> Option<i64> {
     let ts = m
         .get("when")
@@ -590,15 +540,6 @@ fn voice_date_ms(m: &Value) -> Option<i64> {
         .map(|t| t.to_unix_millis())
 }
 
-/// `YYYY-MM` (UTC) bucket key for a unix-millis timestamp.
-///
-/// An undated item still has to be filed somewhere or it vanishes from
-/// the rendered tree, so it keeps filing under the epoch bucket —
-/// exactly where it has always gone. That is a filing decision, not a
-/// claim about when it happened; its `when_ts` is null. See
-/// [`datalib_etl::periodize::Period::key_for_undated`] for the full
-/// reasoning (chiefly: `period_key` feeds `markdown_uuid`, so a new key
-/// would retire the page's identity).
 fn month_of(ms: Option<i64>) -> String {
     use chrono::TimeZone;
     chrono::Utc
@@ -608,8 +549,6 @@ fn month_of(ms: Option<i64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// MIME guess from an attachment filename's extension, so chat-common
-/// can pick `<img>` / `<audio>` / `<video>` / link rendering.
 fn voice_mime(name: &str) -> Option<String> {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
     let ct = match ext.as_str() {

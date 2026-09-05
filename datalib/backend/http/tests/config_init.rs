@@ -1,20 +1,5 @@
 //! `POST /api/config/init` — the onboarding action that turns an empty
 //! folder into a data library.
-//!
-//! The failure this guards against: a data root with no `config.toml`
-//! declares no applets, so the grid's `/applet/unified_index/search`
-//! came back `502 {"error":"no applet \"unified_index\""}` — the first
-//! thing a new user saw. The config the endpoint writes is what makes
-//! that applet exist at all, so the test that matters is not "a file
-//! appeared" but "the gateway now knows the applet".
-//!
-//! What is asserted is the gateway's own bookkeeping —
-//! configured-but-not-running is a different answer from
-//! not-configured, and this test pins the transition between them. It
-//! does not assert that the applet *starts*: the scaffold names
-//! `datalib-applet` by bare command, which resolves to nothing under
-//! `bazel test` and to a real binary on a machine that installed one,
-//! and the property under test holds either way.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

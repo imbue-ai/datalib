@@ -5,27 +5,6 @@ import { clickRowByUuid } from "./grid-helpers";
 // is mostly `<iframe>`s. That makes it the only coverage for a seam
 // several pieces have to agree on:
 //
-//   renderer writes a RELATIVE `src="plots/<q>.html"`  (render/render.rs)
-//     → ChatBody rewrites it to `/applet/unified_index/asset/{markdown_uuid}/…`  (asset_urls.ts)
-//       → the backend resolves that against the markdown's directory  (http/src/lib.rs)
-//         → the framed document is the page the renderer generated
-//
-// Each piece has its own unit test; none of them notices when the
-// contract between two of them changes. Breaking any single link here
-// leaves a document that renders an empty box, which no other test sees.
-//
-// ─── What this deliberately does NOT assert ───────────────────────────
-//
-// That Plotly *drew*. The plot pages load Plotly from cdn.plot.ly (see
-// `render/plot.rs::PLOTLY_SRC`), and asserting on a canvas would make
-// this test need the public internet and stay green only while a third
-// party is up. Instead we read the figure spec the page inlines and
-// assert on that — it is the renderer's output, which is the part we
-// own. When the CDN is unreachable the page shows its offline notice,
-// which is designed behavior, not a regression.
-//
-// ─── Trap, if you extend this ────────────────────────────────────────
-//
 // playwright.config.ts sets `use.extraHTTPHeaders.authorization` for the
 // whole browser context, and Playwright applies it to cross-origin
 // subresources too. An `Authorization` header makes the cdn.plot.ly

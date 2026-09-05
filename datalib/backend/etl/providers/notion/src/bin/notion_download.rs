@@ -1,10 +1,5 @@
 //! `notion-download` — mirror Notion pages via the official API into a
 //! single doltlite database file.
-//!
-//! Requires `latchkey` with two services registered:
-//!   - `notion` (Bearer token for `api.notion.com`)
-//!   - `notion_unofficial` (cookie session for `www.notion.so/api/v3`),
-//!     needed only when `--inbox` is used.
 
 use std::path::PathBuf;
 use std::time::Duration;

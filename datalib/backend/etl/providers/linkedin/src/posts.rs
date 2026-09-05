@@ -1,32 +1,5 @@
 //! Render the user's own LinkedIn posts and the comments they left,
 //! grouped into one chat-style thread per post.
-//!
-//! LinkedIn splits a person's post activity across two export CSVs:
-//! `Shares_<id>.csv` (posts you authored) and `Comments_<id>.csv`
-//! (comments you left on posts — usually other people's). Both row
-//! kinds carry a link to the post they belong to, and that link embeds
-//! a stable post URN (`urn:li:{share,ugcPost,activity,…}:<n>`). We key
-//! on that URN so every share and every comment on the same post
-//! collapse into a single thread:
-//!
-//!   * A post you authored becomes the thread's opening message (your
-//!     commentary), authored as "Me".
-//!   * Each comment you left becomes a follow-up message, also "Me".
-//!   * A post you only commented on (its body isn't in the export) opens
-//!     with a short system note for the missing original, then your
-//!     comment(s).
-//!
-//! Every message carries a linkout back to the post on linkedin.com —
-//! surfaced inline in the markdown body *and* in the grid row's
-//! `source_url` (via a path-less attachment, which the chat renderer
-//! does not draw for text items, so it populates the linkout column
-//! without cluttering the transcript).
-//!
-//! Caveat: LinkedIn mints a `share`/`ugcPost` URN for *your* posts but
-//! an `activity` URN for posts you comment on, with different numeric
-//! ids even for the same underlying post — so a comment on your own post
-//! won't always merge into its share thread. We group on whatever URN
-//! each row carries; exact merges happen only when the URNs agree.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -65,9 +38,6 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render the `shares` + `comments` raw tables under `raw_dir` into
-/// per-post threads in `out_dir`. No-op if the raw store is absent or
-/// neither table exists.
 pub fn render_posts(
     raw_dir: &Path,
     out_dir: &Path,
@@ -116,9 +86,6 @@ struct Thread<'a> {
     comments: Vec<&'a Value>,
 }
 
-/// One [`NormalizedChat`] per post key. Shares and comments that resolve
-/// to the same post URN land in the same thread; the post opens it and
-/// comments follow, oldest-first.
 fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat> {
     // BTreeMap keeps thread order stable across runs.
     let mut by_post: BTreeMap<String, Thread> = BTreeMap::new();
@@ -217,9 +184,6 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
     chats
 }
 
-/// A "Me"-authored message (a post or a comment), with the post URL
-/// surfaced both as a clickable inline linkout and as the grid row's
-/// `source_url` (the path-less attachment).
 fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> NormalizedChatItem {
     let mut text = body;
     if let Some(u) = nonempty(url) {
@@ -244,8 +208,6 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
     }
 }
 
-/// Opening item for a thread whose post body LinkedIn didn't export
-/// (a post we only commented on). A system note carries the linkout.
 fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedChatItem {
     let note = match nonempty(url) {
         Some(u) => format!("Original post not included in the LinkedIn export — {u}"),
@@ -284,8 +246,6 @@ fn linkout(url: &str) -> Vec<NormalizedAttachment> {
     }
 }
 
-/// Group key for a post link: its canonical URN when parseable, else the
-/// exact link, else a per-row fallback so link-less rows stay distinct.
 fn thread_key(link: &str, fallback: &str) -> String {
     post_urn(link)
         .or_else(|| nonempty(link).map(str::to_string))
@@ -310,8 +270,6 @@ fn post_urn(link: &str) -> Option<String> {
     }
 }
 
-/// A short, human-scannable title: the first line of the post (or, for a
-/// comment-only thread, the first comment), truncated.
 fn thread_title(share: Option<&Value>, comments: &[&Value]) -> String {
     let snippet = share
         .and_then(|s| nonempty(field(s, "ShareCommentary")))

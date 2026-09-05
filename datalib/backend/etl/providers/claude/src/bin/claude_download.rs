@@ -1,10 +1,6 @@
 //! `claude-download` — mirror claude.ai conversations in the
 //! Claude-export shape so the existing translator works against
 //! either source indistinguishably.
-//!
-//! Requires `latchkey` (with the `claude-ai` service registered) and
-//! a Cloudflare-clearing curl impersonator on `LATCHKEY_CURL`. See
-//! `EXTRACT.md` in this crate.
 
 use std::path::PathBuf;
 use std::time::Duration;

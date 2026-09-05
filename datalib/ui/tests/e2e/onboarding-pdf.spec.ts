@@ -2,30 +2,6 @@
 // library with a source in it, that source is synced, and what it
 // produced is in the grid — then a file lands in the watched folder and
 // the second sync picks it up.
-//
-// Everything here is driven from the screen. There is no `writeConfig`
-// helper and no API call that changes state: the config this test runs
-// on is written by the button that initializes the root, by the wizard,
-// and by the row's delete action, exactly as a person's would be. The
-// point is that the *seams between the screens* work — the first-run
-// gate hands over to the Pipeline table, the wizard's TOML is a config
-// the runner accepts, the runner's record reaches the row that started
-// it, and the applet serves what the pipeline just wrote.
-//
-// Its own backend, on its own empty root (FW_E2E_ONBOARDING_URL, see
-// playwright.config.ts): the onboarding state is one-shot, and
-// `first-run.spec.ts` already consumes the other empty root. That root
-// is also the one server here whose PATH carries the dash-named
-// binaries, because a scaffold-written config names them bare — which
-// is what an installed user's config does.
-//
-// **Why the qmd index step is deleted first.** The scaffold declares
-// two fan-ins, and `qmd_index` shells out to a node runtime and loads
-// ~1.6 GB of embedding models. It is real work this test has no opinion
-// about and cannot afford; `search-qmd-routing.spec.ts` is where qmd is
-// covered. Deleting it is done the way a user would — the row's own
-// delete action — so the removal is itself a small assertion that the
-// action works.
 
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
@@ -64,10 +40,6 @@ const SYNCED_ROWS = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"];
 /// sparkline — the number a person actually sees. `null` for a row with
 /// nothing on disk, which the column renders as an em dash rather than
 /// as a flat line at zero.
-///
-/// The label is rounded to three significant figures, so this is only
-/// good for comparisons coarser than that. The growth it is asked about
-/// here is ~23 kB against ~142 kB, which is far outside that.
 async function bytesOf(page: Page, id: string): Promise<number | null> {
   const label = row(page, id).locator('[col-id="bytes"] .m2-plot-label');
   if ((await label.count()) === 0) return null;
@@ -80,12 +52,6 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
 
 /// Every row the Explore grid is holding, read through the grid api the
 /// GridCard exposes.
-///
-/// Through the api rather than off the DOM because AG Grid virtualizes
-/// *columns* as well as rows: whether "Author" has a DOM node at all
-/// depends on the viewport width, so a `getByText` assertion on it
-/// would pass or fail on window size. The painted-ness of the grid is
-/// asserted separately, by `expectGridPainted`.
 async function gridRows(
   page: Page,
 ): Promise<{ sender: string; conversation_name: string; source: string }[]> {
@@ -114,12 +80,6 @@ async function openExplore(page: Page) {
 }
 
 // Record this file, always — video and trace, passing or failing.
-//
-// It is the widest UI path the suite has: first run, the wizard twice,
-// the Pipeline table, real syncs, and the Explore grid. That makes it
-// the run worth having a picture of when something downstream breaks,
-// and the one to watch when you want to see what the onboarding
-// actually looks like without building the app.
 //
 // `"on"` rather than `"retain-on-failure"` on purpose: a recording that
 // only exists after a failure cannot answer "what did this look like
@@ -273,39 +233,6 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(secondDone["unified_index/grid"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // A document more on disk.
-    //
-    // **The rendered_md row is the one that can fail here.** It is a
-    // plain file tree, so a run that converts nothing adds nothing to
-    // it; only a document that really was new makes it grow. The raw
-    // row grows on *every* run whether or not anything changed, so a
-    // strict increase there would pass for any re-sync. It is checked
-    // with a floor a no-op cannot clear, and the render row strictly.
-    //
-    // That per-run growth is *not* a commit, though it reads like one:
-    // measured over ten no-op runs, `dolt_log` stays put for most of
-    // them and the store still grows anyway. The bulk of it was the
-    // schema self-heal building its probe table in the store itself —
-    // create+drop nets to nothing in the working tree, so nothing
-    // commits and nothing reads as dirty, but the chunks stay — one
-    // probe per table per open, which `doltlite_raw::declared_columns`
-    // now does in memory instead. What is left is doltlite's own
-    // storage churn per write session.
-    //
-    // **The floor is calibrated to that, so it moved when the leak
-    // did.** Measured by running `datalib-step download pdf` over a
-    // copy of this scan directory: no-op runs add 2165 B once and then
-    // 507-676 B, and the run that picks up the late PDF adds 8279 B.
-    // 4 kB is above the worst no-op and half the real gain. The old
-    // 10 kB was above *both* once the probe stopped padding every run
-    // — which is how a real ingest came to fail an assertion about
-    // ingests, rather than by anything changing about the ingest.
-    //
-    // Both numbers are small and the margin is ~2x, so re-measure
-    // rather than nudge this constant if it ever goes red: the two
-    // quantities it sits between are the whole point of the check.
-    //
-    // Polled, because the storage figures are refetched when the run
-    // goes terminal rather than painted from the event that says so.
     await expect
       .poll(async () => (await bytesOf(page, "pdfs/rendered_md")) ?? 0, {
         timeout: 10_000,
@@ -340,13 +267,6 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // second source makes "this row synced and that one never did" a
     // distinguishable state, and only then does a button that runs
     // everything mean something a per-row Sync does not.
-    //
-    // Signal is the second source on purpose. `pdf` is a local scan
-    // with no credentials; Signal is the shape almost every real source
-    // has — a download step that decrypts a backup with a passphrase it
-    // reads from the environment, and a render step with an option of
-    // its own, so the wizard takes its *second dialog* path rather than
-    // the checkbox.
     test.skip(
       !SIGNAL_BACKUP_DIR,
       "needs FW_E2E_SIGNAL_BACKUP_DIR — signal_make_fixture from run_e2e.sh",
@@ -430,12 +350,6 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     }
 
     // ── 6. and the Signal messages are searchable ────────────────────
-    //
-    // `source:`, not `type:` — `type` is the row *shape*
-    // (chat/message/all) and `source` is the provider, matched against
-    // `grid_rows.source_label`, which Signal's renderer sets to
-    // "Signal". Asking for `type:Signal` would silently parse as free
-    // text and route through qmd.
     await openExplore(page);
     await searchAndSettle(page, "source:Signal type:all");
     const signalRows = await gridRows(page);

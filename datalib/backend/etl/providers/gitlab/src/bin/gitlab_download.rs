@@ -1,8 +1,6 @@
 //! `gitlab-download` — mirror MRs the user authored / was assigned to /
 //! is a reviewer on, plus every discussion + note. Output is event-store
 //! JSONL under `<out>/<entity>/{created,updated}/events.jsonl`.
-//!
-//! Requires `latchkey` with a `gitlab` service registered (PRIVATE-TOKEN).
 
 use std::path::PathBuf;
 use std::time::Duration;

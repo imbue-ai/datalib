@@ -1,10 +1,5 @@
 //! Read raw Notion payloads from the doltlite database written by
 //! [`crate::download`].
-//!
-//! Accepts either a path to the `.doltlite_db` file directly or the
-//! resolved-input-path of the source (e.g. `<data_root>/notion-api/raw`),
-//! whose entity db lives inside as `entities.doltlite_db`. This keeps the
-//! sync orchestrator's `resolved_input_path` contract unchanged.
 
 use std::collections::HashMap;
 use std::path::Path;

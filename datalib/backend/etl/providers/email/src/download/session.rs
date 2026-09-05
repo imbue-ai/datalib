@@ -1,9 +1,4 @@
 //! JMAP session discovery + account selection.
-//!
-//! Loads `https://<hostname>/.well-known/jmap` (RFC 8620 §2.2), picks an
-//! account by id (or falls back to `primaryAccounts['urn:ietf:params:jmap:mail']`),
-//! and exposes the `apiUrl` / `downloadUrl` / `uploadUrl` templates the
-//! transport layer interpolates into.
 
 use std::time::Duration;
 
@@ -41,15 +36,6 @@ pub struct Session {
 }
 
 impl Session {
-    /// Discover the session for `hostname` (e.g. `api.fastmail.com`).
-    ///
-    /// RFC 8620 §2.2 specifies `https://<hostname>/.well-known/jmap` as
-    /// the discovery URL, and servers are allowed (encouraged, even) to
-    /// 30x-redirect it to their real session endpoint —
-    /// e.g. Fastmail redirects to `https://api.fastmail.com/jmap/session`.
-    /// `latchkey_curl` issues `curl -sS` without `-L`, so we walk
-    /// redirect hops here instead of expecting the transport to follow
-    /// them silently.
     pub async fn discover(hostname: &str, latchkey: &LatchkeySettings) -> Result<Self> {
         let mut url = format!("https://{hostname}/.well-known/jmap");
         // Bounded loop: real-world JMAP discovery is at most one hop;
@@ -135,8 +121,6 @@ impl Session {
         })
     }
 
-    /// Pick an account id: explicit override if non-empty, else the
-    /// session's primary mail account. Errors if neither is available.
     pub fn pick_account(&self, override_id: Option<&str>) -> Result<String> {
         if let Some(id) = override_id {
             if !id.is_empty() {
@@ -153,9 +137,6 @@ impl Session {
         })
     }
 
-    /// Interpolate `{accountId}` / `{blobId}` / `{name}` / `{type}` into
-    /// `downloadUrl`. Empty `name` / `type` are fine — the server uses
-    /// them only to set response headers.
     pub fn download_url_for(
         &self,
         account_id: &str,

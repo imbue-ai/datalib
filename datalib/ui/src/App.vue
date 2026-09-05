@@ -11,40 +11,6 @@ import { subscribeLive } from "@/live";
 
 // The gate in front of the whole app, for the two states where showing
 // the app would be a lie.
-//
-// Both come from one fact: `config.toml` declares the `unified_index`
-// applet, and that applet *is* the grid, the search and the document
-// view. Without a usable one, every view answers
-// `502 {"error":"no applet \"unified_index\""}` — which was, literally,
-// a new user's first impression (#199) and what a single stray config
-// key did to a working install (#209).
-//
-//   * **No config at all** → the onboarding screen, which explains what
-//     initializing will write before writing it.
-//   * **A config the server can't run on** → the config-error screen.
-//     `app_ready` is the backend's answer, false when the file is not a
-//     config or when it declares no usable `unified_index` applet.
-//
-// A config with a merely *broken step* is neither of those. It loads,
-// the app works, and that step's diagnostic belongs on its row in the
-// Pipeline table. That distinction is the point of the graded loader:
-// before it, one bad key landed you on a blocking screen.
-//
-// ## The gate is live, in both directions
-//
-// A config does not only break at startup. An agent editing the root, a
-// text editor, a `git checkout` — any of them can break or fix the file
-// while the app is open, and `watch.rs` reports every one of them as
-// `config_changed`. So this re-checks on that event, and the direction
-// that is easy to forget is the *second* one: a config that gets fixed
-// has to drop the gate on its own, with no reload. `resync` covers the
-// case where the stream itself dropped and we missed the frame.
-//
-// `null` while the first check is in flight — render nothing rather
-// than flash a view that is about to be replaced. A failed check
-// (backend blip, offline) falls through to the app: the gate exists to
-// explain a broken root, not to become a third way for the app not to
-// load.
 const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 

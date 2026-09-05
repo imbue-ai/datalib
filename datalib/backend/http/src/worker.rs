@@ -1,32 +1,4 @@
 //! In-process sync worker.
-//!
-//! `datalib-http` spawns one instance of [`run`] as a background
-//! task at startup. It drains the `sync_jobs` queue the HTTP handlers
-//! fill (`POST /api/sync/jobs`): claim the oldest `pending` row, shell
-//! out to the `datalib-dag` runner against the data root's
-//! `config.toml` (the DAG config), stream the child's
-//! stdout+stderr to `<root>/system/job-logs/<id>.log` (which
-//! `GET /api/sync/jobs/{id}/log` tails live), and write the terminal
-//! state back into the queue.
-//!
-//! Progress: the runner emits NDJSON events on stderr (`run_plan`,
-//! `step_start`, `step_finish`, `progress_*`, `run_summary`). The
-//! worker parses them into a per-task board — there are no pipeline
-//! "stages" anymore, only tasks in todo/running/terminal states — and
-//! publishes it as JSON in `progress_msg` plus a typed `tasks` list on
-//! the SSE event. Multiple tasks run concurrently; all of them carry
-//! their own sub-progress.
-//!
-//! Cancellation is cooperative *and* graceful: the cancel handler
-//! flips the row to `canceled`; the worker notices on its next poll
-//! and sends the runner SIGTERM, which it forwards to the running
-//! step subprocesses as SIGINT so they checkpoint-commit before
-//! exiting. SIGKILL only after a grace period.
-//!
-//! We use `std::process` (not `tokio::process`) because the workspace
-//! tokio build doesn't enable the `process` feature. Spawning and
-//! `try_wait()` are non-blocking enough to call straight from the async
-//! task; we never block the runtime on `wait()`.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -90,12 +62,6 @@ struct TaskBoard {
     tasks: HashMap<String, TaskEntry>,
 }
 
-/// Runner step status → the task-board state the UI renders.
-///
-/// Shared by the per-step `step_finish` path and the authoritative
-/// `run_summary` path, which must agree: an unmapped status falls to
-/// `failed` via the catch-all, so a status added on one side only would
-/// show a healthy step as failed.
 fn task_state_for(status: &str) -> &'static str {
     match status {
         "succeeded" => "done",
@@ -131,8 +97,6 @@ impl TaskBoard {
         self.tasks.get_mut(id).unwrap()
     }
 
-    /// Feed one output line; NDJSON runner events update the board,
-    /// everything else is ignored (it's still teed to the log).
     fn apply_line(&mut self, line: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             return;
@@ -246,7 +210,6 @@ impl TaskBoard {
         (Some(pct), Some(msg), tasks)
     }
 
-    /// Ids of failed tasks (for the terminal summary line).
     fn failed_ids(&self) -> Vec<String> {
         self.order
             .iter()
@@ -310,21 +273,10 @@ fn resolve_bin(env: &str, names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// Resolve the `datalib-dag` runner: `$DATALIB_DAG_BIN` or a
-/// sibling binary.
 pub fn resolve_dag_bin() -> Option<PathBuf> {
     resolve_bin("DATALIB_DAG_BIN", &["datalib-dag", "datalib_dag_bin"])
 }
 
-/// Resolve the `datalib-step` binary itself.
-///
-/// The runner is handed a *directory* (`--binary-dir`) and resolves the
-/// step binary off the child PATH, which is right for spawning steps.
-/// The wizard's connection test needs the binary directly — it runs
-/// `datalib-step probe`, which is not a pipeline step and has no runner
-/// in front of it — so it looks in the same three places, most explicit
-/// first: `$DATALIB_STEP_BIN`, the resolved `--binary-dir`, then a
-/// sibling of this executable.
 pub fn resolve_step_bin() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("DATALIB_STEP_BIN") {
         let p = PathBuf::from(p);
@@ -367,7 +319,6 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
         .then(|| dir.to_path_buf())
 }
 
-/// The worker's main loop. Runs until the process exits.
 pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     match repo.recover_running_jobs().await {
         Ok(0) => {}
@@ -411,8 +362,6 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     }
 }
 
-/// Fan a single job update out to SSE subscribers. A send with no
-/// listeners is a no-op.
 fn emit(
     tx: &ProgressTx,
     job: &SyncJobRow,
@@ -432,8 +381,6 @@ fn emit(
     });
 }
 
-/// Best-effort SIGTERM (Unix). The runner forwards it to running steps
-/// as SIGINT so they checkpoint before exiting.
 fn terminate(pid: u32) {
     #[cfg(unix)]
     // Safety: plain kill(2); racing a just-exited pid is benign (ESRCH).

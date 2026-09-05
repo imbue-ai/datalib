@@ -3,11 +3,6 @@
 //! single doltlite database at `<data_root>/<name>/raw/entities.doltlite_db`;
 //! see [`db`] for schema and [`datalib_etl::doltlite_raw`] for
 //! design rationale.
-//!
-//! Port of `src/download/gitlab_web.py`. Two refinements vs Python:
-//! - **Single-MR mode** (`--merge-request <project>!<iid>` or full URL).
-//! - **Incremental sync state** lives in the DB itself (`sync_scope_state`
-//!   table), narrowing each run via `updated_after`.
 
 pub mod canonicalize;
 pub mod client;
@@ -416,7 +411,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// Parse `namespace/project!IID` or a gitlab.com MR URL into `(proj, iid)`.
 pub fn parse_mr_ref(s: &str) -> Result<(String, u32)> {
     if let Some((proj, iid)) = s.split_once('!') {
         let n: u32 = iid.parse().with_context(|| format!("bad MR iid {iid:?}"))?;

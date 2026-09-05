@@ -11,11 +11,6 @@
 // from latchkey at runtime. Bodies are functions so date-dependent
 // parts (Slack's `since`) and the install-specific latchkey CLI hint
 // are computed at click time.
-//
-// Note these are appended to the *end* of the file, which is the only
-// place a `[[steps]]` table can safely go: in TOML every key after a
-// table header belongs to that table, so inserting mid-file would
-// silently reparent whatever followed.
 
 // YYYY-MM-DD for `n` days before today (UTC).
 function isoDaysAgo(days: number): string {

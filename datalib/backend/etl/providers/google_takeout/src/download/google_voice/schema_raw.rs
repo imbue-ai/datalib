@@ -1,23 +1,4 @@
 //! Raw-store schema for the Google Voice feed.
-//!
-//! Declarations-only, mirroring the crate's top-level `schema_raw`. The
-//! tables here are merged into the crate's `full_ddl()` /
-//! `DATA_TABLES` / `EDGE_TABLES` so `RawDb::open` creates them and
-//! `reset()` truncates them.
-//!
-//! ## Identity (idempotent)
-//!
-//! Google Voice gives us no per-record IDs, so every row's PK is a
-//! uuidv5 over a recipe of the most stable fields. Re-ingesting the same
-//! export reproduces identical IDs (the recipes are pure functions of
-//! the parsed content):
-//!
-//!   - message: `voice:msg:{folder}:{conversation}:{rfc3339_millis}:{sender}:{sha8(body)}`
-//!     — the ms-precision timestamp + sender + body hash is effectively
-//!     unique and stable.
-//!   - call/voicemail event: `voice:{kind}:{folder}:{party}:{published}`.
-//!   - bill: `voice:bill:{sha8(row cells)}`.
-//!   - greeting: `voice:greeting:{filename}`.
 
 use datalib_etl::doltlite_raw::{WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
@@ -31,20 +12,16 @@ pub const VOICE_DATA_TABLES: &[&str] = &["voice_messages", "voice_bills", "voice
 /// CAS edge tables (image / audio / recording / greeting blobs).
 pub const VOICE_EDGE_TABLES: &[&str] = &["voice_attachments"];
 
-/// Per-feed uuidv5 namespace.
 fn voice_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"google-voice.datalib")
 }
 
-/// uuidv5 of a recipe under the Voice namespace.
 pub fn ns_id(recipe: &str) -> String {
     Uuid::new_v5(&voice_ns(), recipe.as_bytes())
         .as_hyphenated()
         .to_string()
 }
 
-/// First 8 hex chars of the sha256 of `s` — a short, stable content tag
-/// for identity recipes.
 pub fn sha8(s: &str) -> String {
     let digest = Sha256::digest(s.as_bytes());
     hex8(&digest)
@@ -103,8 +80,6 @@ pub struct VoiceAttachmentRow {
     pub blake3: Option<String>,
 }
 
-/// Entity-table DDL for the Voice feed (the crate's `full_ddl()` appends
-/// the `_bookkeeping` sidecars + CAS edge DDL via the shared loop).
 pub fn voice_table_ddl() -> Vec<String> {
     use datalib_etl::blob_cas::CasEdgeRow as _;
     let mut out = vec![

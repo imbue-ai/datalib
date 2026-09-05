@@ -1,35 +1,5 @@
 //! Read the whole YoLink raw store into memory for the renderer, and
 //! decide up front whether there is anything to do.
-//!
-//! ## The cursor is the store's HEAD, and that is the whole story
-//!
-//! Providers that render one document per conversation run a
-//! `dolt_diff_<table>` scan (see
-//! [`datalib_etl::doltlite_raw::scan_buckets`]) to find *which* buckets
-//! changed. YoLink renders one document for the entire store, so a
-//! per-bucket answer has nothing to narrow: either the store moved and
-//! the single page is stale, or it didn't and the page is current.
-//!
-//! So [`parse`] asks for the HEAD commit hash — one `dolt_log()` row —
-//! and compares it against `_render_cursor.json`. On a match it returns
-//! [`Parsed::UpToDate`] having touched zero reading rows; the ~150k-row
-//! `SELECT` below only ever runs when a download actually appended
-//! something. That is exactly the "no new data, no re-render" cursor,
-//! and it costs one query to evaluate.
-//!
-//! `RENDER_VERSION` rides along in the cursor's `params` (see
-//! [`crate::render::render::cursor_params`]), so bumping it invalidates
-//! the fast path too — otherwise a renderer change would only reach
-//! mirrors that happened to sync new readings.
-//!
-//! ## Secrets
-//!
-//! `yolink_devices.family_device_id` is half of the per-device
-//! signed-URL secret pair (see `download/schema_raw.rs`): anyone holding
-//! it plus the device UDID can pull that device's entire history,
-//! forever. It is read here only so [`DeviceRow`] mirrors the table
-//! faithfully; [`crate::render::render`] must never put it in the
-//! rendered document. See [`DeviceRow::family_device_id`].
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -128,8 +98,6 @@ pub struct ScopeConfigRow {
     pub updated_at: String,
 }
 
-/// Open the store, check HEAD against `last_render_hash`, and load
-/// everything if it moved.
 pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
     let db_path = db_path_for(raw_path);
     if !db_path.exists() {
@@ -278,8 +246,6 @@ async fn load_commits(pool: &SqlitePool) -> Vec<CommitRow> {
         .collect()
 }
 
-/// The download step's recorded scope. Best-effort for the same reason
-/// as [`load_commits`]: an older store may predate the table.
 async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
     let Ok(rows) =
         sqlx::query("SELECT scope, config, updated_at FROM sync_scope_config ORDER BY scope")
@@ -298,7 +264,6 @@ async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
 }
 
 impl ParsedYolink {
-    /// Series grouped by device name, preserving the query's ordering.
     pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
         let mut out: BTreeMap<&str, Vec<&Series>> = BTreeMap::new();
         for s in &self.series {
@@ -307,7 +272,6 @@ impl ParsedYolink {
         out
     }
 
-    /// Newest reading timestamp anywhere in the store, if any.
     pub fn latest_ts_ms(&self) -> Option<i64> {
         self.series
             .iter()
@@ -316,7 +280,6 @@ impl ParsedYolink {
             .copied()
     }
 
-    /// Oldest reading timestamp anywhere in the store, if any.
     pub fn earliest_ts_ms(&self) -> Option<i64> {
         self.series
             .iter()

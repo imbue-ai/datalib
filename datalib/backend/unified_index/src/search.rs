@@ -40,11 +40,6 @@ pub struct SearchRow {
     /// of the row's `qmd_path`, which is the stanza directory under the
     /// data root and the name the config gives it (`slack/raw` →
     /// `slack`). Empty when the row carries no `qmd_path`.
-    ///
-    /// The *label* a person put on that source in `config.toml` is
-    /// deliberately not here. It is config, mutable at any time, and the
-    /// index has never read the config — baking it in would mean
-    /// re-indexing on every relabel. The UI joins the two by this name.
     pub source_name: String,
     pub kind: String,
     pub author: String,
@@ -63,18 +58,6 @@ pub struct SearchRow {
     /// The upstream's own id for this entity, verbatim from the
     /// `upstream_id` grid_rows column. Empty when the producer
     /// didn't set one (a provider not yet ported onto `datalib_id`).
-    ///
-    /// This is what the grid's "Copy source ID(s)" action puts on the
-    /// clipboard, as distinct from "Copy UUID(s)" which copies `uuid`
-    /// — our id resolves inside datalib (URLs, feedback,
-    /// `id:` filters), this one resolves upstream. Keeping the two
-    /// actions separate is deliberate: the ids are often both
-    /// UUID-shaped, so a single action that silently returned
-    /// whichever existed would leave no way to tell which you had.
-    ///
-    /// For Perseus this is the locator path (`"1"`, `"1.2"`, `"1.2.3"`
-    /// for book / chapter / section), which the scaife control panel
-    /// parses to build its book→chapter→section tree.
     pub upstream_id: String,
     /// What sort of upstream thing the row is, in the provider's own
     /// vocabulary (`"conversation"`, `"tool_use"`, `"pr"`). Empty when

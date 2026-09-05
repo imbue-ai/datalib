@@ -1,29 +1,4 @@
 //! CardDAV client built on top of [`datalib_etl::http`].
-//!
-//! Discovery walks `current-user-principal` → principal URL →
-//! `addressbook-home-set` → addressbook list (each step one
-//! PROPFIND). Incremental sync is one `sync-collection` REPORT per
-//! addressbook with the persisted sync-token; the response carries
-//! per-href etags, the vCard `<address-data>` payloads inline, and
-//! a new sync-token at the document root. Servers that don't honor
-//! sync-collection fall back to a ctag check + etag walk.
-//!
-//! Auth headers are injected by latchkey based on URL host (see
-//! `datalib_etl::http`). Callers do NOT touch credentials here.
-//!
-//! ## XML parsing strategy
-//!
-//! Multistatus responses come back with variable namespace prefixes
-//! across server implementations (Apple emits `d:` / `card:`,
-//! Fastmail `D:` / `C:`, Google all-`d:`-with-card-namespace, etc).
-//! Rather than wire up a full namespace-aware deserializer, we walk
-//! the event stream from `quick-xml` and match on **local element
-//! names** — DAV-defined names like `response`, `href`, `propstat`
-//! and CardDAV-defined names like `address-data`. Both URI
-//! namespaces (`DAV:` and `urn:ietf:params:xml:ns:carddav`) only
-//! contain elements with disjoint local names, so local-name match
-//! is unambiguous in practice and forgives every prefix quirk
-//! we've encountered.
 
 use std::collections::HashMap;
 
@@ -97,9 +72,7 @@ pub struct Multistatus {
     pub sync_token: Option<String>,
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Request bodies
-// ─────────────────────────────────────────────────────────────────────
 
 /// PROPFIND body that asks for `current-user-principal` — the entry
 /// point of every discovery flow. Depth `0`.
@@ -175,9 +148,7 @@ fn escape_xml(s: &str) -> String {
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Request helpers
-// ─────────────────────────────────────────────────────────────────────
 
 /// Issue a PROPFIND with the given XML body and depth header. Caller
 /// supplies the parsed multistatus.
@@ -210,8 +181,6 @@ pub async fn propfind(
     parse_multistatus(&req.url, &resp.body_str())
 }
 
-/// Issue a sync-collection REPORT. Depth defaults to `0` per
-/// RFC 6578 §3.
 pub async fn report(
     url: &str,
     body: &str,
@@ -240,9 +209,6 @@ pub async fn report(
     parse_multistatus(&req.url, &resp.body_str())
 }
 
-/// 207 Multi-Status is the success status for both PROPFIND and
-/// REPORT. Some servers also return 200 for PROPFIND when the
-/// response is single-resource; tolerate that too.
 fn expect_dav_status(
     method: &HttpMethod,
     url: &str,
@@ -258,17 +224,8 @@ fn expect_dav_status(
     })
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Multistatus parsing
-// ─────────────────────────────────────────────────────────────────────
 
-/// Walks the event stream and assembles a [`Multistatus`].
-///
-/// Strategy: track a small stack of element local names so we know
-/// the path (e.g. `multistatus/response/propstat/prop/getetag`) when
-/// text appears. We only key off local name; namespace prefixes
-/// vary across servers and the URI-vs-URI ambiguity is moot because
-/// the DAV and CardDAV vocabularies have disjoint locals.
 pub fn parse_multistatus(url: &str, body: &str) -> Result<Multistatus, CarddavError> {
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
@@ -358,7 +315,6 @@ pub fn parse_multistatus(url: &str, body: &str) -> Result<Multistatus, CarddavEr
     Ok(out)
 }
 
-/// Element name with the namespace prefix stripped.
 fn local_name(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");
     match s.rsplit_once(':') {
@@ -378,8 +334,6 @@ fn parse_status_code(s: &str) -> Option<u16> {
     code.parse().ok()
 }
 
-/// Routes captured text to the right field on the current
-/// [`DavResponse`] based on the stack path. Splits out for testability.
 fn apply_text(
     current: &mut Option<DavResponse>,
     stack: &[String],
@@ -420,9 +374,6 @@ fn apply_text(
     }
 }
 
-/// True when the immediate parent element in the stack (the one
-/// above the current leaf) has the given local name. The stack
-/// includes the leaf, so the parent is at `len - 2`.
 fn parent_is(stack: &[String], parent: &str) -> bool {
     if stack.len() < 2 {
         return false;
@@ -452,8 +403,6 @@ impl TextCapture {
         }
     }
 
-    /// Pop the matching open element + return its accumulated text.
-    /// `None` when there's no matching open frame (mis-nested input).
     fn finish(&mut self, name: &str) -> Option<String> {
         if self.pending.last().map(|(n, _)| n.as_str()) == Some(name) {
             let (_, text) = self.pending.pop().unwrap();
@@ -468,28 +417,19 @@ impl TextCapture {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // vCard utility helpers
-// ─────────────────────────────────────────────────────────────────────
 
 /// Pull the `UID` line out of a vCard. RFC 6350 §6.7.6 mandates it,
 /// but we tolerate its absence and return `None` so the caller can
 /// synthesize a stable id from `(addressbook_id, href)` instead.
-///
-/// Handles RFC 6350 §3.2 line folding (continuation lines start with
-/// a space or tab) by reconstructing logical lines before scanning.
 pub fn vcard_uid(vcard: &str) -> Option<String> {
     extract_property(vcard, "UID")
 }
 
-/// Pull the `FN:` (formatted name) line out of a vCard. The
-/// `display_name` promoted column reads this.
 pub fn vcard_fn(vcard: &str) -> Option<String> {
     extract_property(vcard, "FN")
 }
 
-/// Pull the `REV:` (revision timestamp) line — useful for "last
-/// modified upstream" sorts even when the server's etag is opaque.
 pub fn vcard_rev(vcard: &str) -> Option<String> {
     extract_property(vcard, "REV")
 }
@@ -554,8 +494,6 @@ pub struct VcardProp {
 }
 
 impl VcardProp {
-    /// First-matching parameter value (case-insensitive on key).
-    /// Returns `None` if the parameter isn't set on this occurrence.
     pub fn param(&self, key: &str) -> Option<&str> {
         self.params
             .iter()
@@ -563,9 +501,6 @@ impl VcardProp {
             .map(|(_, v)| v.as_str())
     }
 
-    /// `TYPE=` label, with the bare-token form (`EMAIL;HOME:…`) folded
-    /// in as `TYPE=HOME`. Used by render to label a multi-valued
-    /// property. Lowercase for stability across servers.
     pub fn type_label(&self) -> Option<String> {
         self.param("TYPE").map(|s| s.to_ascii_lowercase())
     }
@@ -633,9 +568,7 @@ pub fn deleted_hrefs(ms: &Multistatus) -> Vec<String> {
         .collect()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Tests
-// ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

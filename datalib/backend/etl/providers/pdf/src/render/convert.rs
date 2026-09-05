@@ -1,43 +1,5 @@
 //! PDF → Markdown conversion, plus the post-processing that the raw
 //! converter output needs before it is worth indexing.
-//!
-//! # Why post-process at all
-//!
-//! pdf-inspector's markdown is good, but two of its artifacts are
-//! actively harmful *to a search index* specifically, which is what we
-//! feed. Both were found by running a mixed corpus through it (see
-//! `PROTOTYPE.md`):
-//!
-//! 1. **Per-glyph CJK spacing.** A PDF that justifies CJK text
-//!    positions each glyph separately, so extraction yields
-//!    `世 界 人 权 宣 言` rather than `世界人权宣言`. Every substring
-//!    search for the real word then misses. Measured at 307 occurrences
-//!    in a single 7-page Chinese document.
-//! 2. **Underline markup.** `detect_underline` emits raw `<u>` tags
-//!    around every hyperlink in browser print-to-PDF output. They are
-//!    not markdown, they clutter the text column of every grid row, and
-//!    the link itself is already preserved as a markdown link. We turn
-//!    the option off rather than strip after the fact.
-//! 3. **Browser print chrome.** A page printed to PDF from a browser
-//!    carries `8/24/26, 1:55 PM  Page Title` at the top of every page
-//!    and `https://…  2/5` at the bottom. Indexed, that is one spurious
-//!    hit per page for any query matching the title or the URL.
-//!
-//! pdf-inspector's own `strip_headers_footers` (on by default, left on)
-//! removes most of these, but not all: 48 survived across the 4
-//! print-to-PDF documents in the corpus. [`strip_repeated_chrome`]
-//! catches the remainder that sit on their own line, by repetition
-//! rather than by pattern.
-//!
-//! **What is still not handled, measured:** of those 48, only 8 were on
-//! their own line; the other 40 had been *fused into a body line* by
-//! the extractor (`… to honour 8/24/26, 1:55 PM Apollo. Over time …`),
-//! where the same float-interleaving that scrambles Wikipedia infoboxes
-//! puts them mid-paragraph. Removing those means editing inside a line
-//! on a timestamp-shaped regex, which would eventually delete a real
-//! date out of real prose. We leave them: a spurious per-page hit is a
-//! smaller harm than silently corrupting document text. The real fix is
-//! upstream reading-order work, not a bigger regex here.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -45,27 +7,6 @@ use std::path::Path;
 /// Bumped when render output changes in a way that should invalidate
 /// previously-rendered documents — the markdown itself, or the shape of
 /// the `grid_rows` projected from it.
-///
-/// It genuinely participates in the cache key, via
-/// [`render_fingerprint`](super::render_fingerprint). That indirection
-/// is necessary: the framework stores this in
-/// `markdowns.renderer_version` and that column's doc comment claims a
-/// bump "invalidates every cache entry at once", but `load_fingerprints`
-/// selects only `(markdown_uuid, source_fingerprint)` and never reads
-/// the version back. Relying on the documented behavior would mean an
-/// existing install silently keeps stale output forever, since a
-/// document's content hash does not change when our renderer does.
-///
-/// This is also the hook that makes an OCR engine swappable later:
-/// turning OCR on bumps this, and every affected document re-renders
-/// with no migration.
-///
-/// History:
-///   1 — initial.
-///   2 — `grid_rows.source_url` became a `file://` URL instead of a
-///       root-relative path.
-///   3 — mixed documents render at all (#173), and the pages that carry
-///       no text now leave a note in the markdown instead of vanishing.
 pub const RENDER_VERSION: u32 = 3;
 
 /// One page of converted text.
@@ -81,7 +22,6 @@ pub struct Page {
 }
 
 impl Page {
-    /// A page whose text came out of the document.
     fn textual(number: u32, text: String) -> Self {
         Self {
             number,
@@ -92,24 +32,12 @@ impl Page {
 }
 
 /// What we write in place of a page we could not read.
-///
-/// A scanned insert in an otherwise-readable report used to disappear
-/// without trace: the page simply was not in the output, so a reader
-/// went from page 2 to page 4 with nothing to say why. The count is in
-/// `pdf_documents.ocr_page_count`, but nobody reading the document sees
-/// that. This is the same information where it is actually needed.
-///
-/// Deliberately not a `grid_rows` row. The text is boilerplate — one
-/// identical sentence per unreadable page — so rows would add nothing to
-/// the grid while costing a qmd embedding each, and a scan-heavy corpus
-/// has a lot of them.
 pub fn note_for_page(number: u32) -> String {
     format!(
         "*Page {number} — no extractable text (image-only or scanned; OCR is not available yet).*"
     )
 }
 
-/// Convert one PDF and split the result into pages.
 pub fn convert(path: &Path) -> Result<Vec<Page>> {
     let md = pdf_inspector::MarkdownOptions {
         // We split on these markers to build per-page sections, so they
@@ -141,35 +69,10 @@ pub fn convert(path: &Path) -> Result<Vec<Page>> {
     Ok(pages)
 }
 
-/// Whether the converter told us which page anything came from.
-///
-/// Without a single `<!-- Page N -->` marker, [`split_pages`] calls the
-/// whole output page 1 as a fallback — a number it invented, not one the
-/// document reported. [`note_unreadable_pages`] must not extrapolate
-/// from an invented number.
 fn saw_page_markers(md: &str) -> bool {
     md.lines().any(|l| parse_page_marker(l).is_some())
 }
 
-/// Fill the gaps in `pages` with [`note_for_page`] placeholders, so a
-/// converted document covers pages 1..=`page_count` continuously.
-///
-/// The converter emits a `<!-- Page N -->` marker only when page N has
-/// at least one text line, so a page number missing from `pages` is
-/// exactly a page it found no text on. Three guards keep that inference
-/// honest, because being wrong here means telling a reader that a page
-/// they can see text on is blank:
-///
-/// * `saw_markers` must be true. With no marker anywhere, [`split_pages`]
-///   numbered the whole output page 1 by fallback, so the numbering is
-///   ours rather than the document's and says nothing about pages 2..N.
-/// * Nothing is filled for an empty conversion. A document we extracted
-///   no text at all from does not reach the render step, and turning one
-///   into a file made entirely of notes would be a worse answer than the
-///   gap it replaces.
-/// * Nothing is filled when a page number exceeds `page_count`. The
-///   markers and the page census then disagree, and the census is the
-///   one we would be extrapolating from.
 fn note_unreadable_pages(pages: &mut Vec<Page>, page_count: u32, saw_markers: bool) {
     if !saw_markers || pages.is_empty() || page_count == 0 {
         return;
@@ -190,32 +93,6 @@ fn note_unreadable_pages(pages: &mut Vec<Page>, page_count: u32, saw_markers: bo
     pages.sort_by_key(|p| p.number);
 }
 
-/// Remove running heads and feet: the first and/or last line of a page
-/// when that same line recurs on most other pages.
-///
-/// Keyed on repetition rather than on a pattern, because the shapes
-/// vary by producer (browser print chrome, a report's running title, a
-/// confidentiality footer) and a regex per shape would be an endless
-/// list. Two constraints keep it from eating real content:
-///
-/// * **Position.** Only the first and last non-empty line of a page are
-///   candidates. A sentence that legitimately repeats mid-body is
-///   never touched.
-/// * **Frequency.** The line must appear in that position on at least
-///   half the pages, and on at least two. A single-page document is
-///   left entirely alone — with one page there is no evidence any line
-///   is chrome.
-///
-/// The two positions compare differently, and the asymmetry is
-/// load-bearing:
-///
-/// * **Footers** are compared with digit runs normalized to `#`, so
-///   `… 1/7` and `… 2/7` count as one footer. Pagination lives here.
-/// * **Headers** must match *exactly*. Normalizing digits at the top of
-///   the page would fuse `# Chapter 1` with `# Chapter 2` and delete
-///   every chapter heading in a book — caught by
-///   `keeps_headings_that_differ_per_page`. Browser print headers carry
-///   a fixed timestamp and title, so they match exactly anyway.
 pub fn strip_repeated_chrome(pages: &mut [Page]) {
     if pages.len() < 2 {
         return;
@@ -258,7 +135,6 @@ pub fn strip_repeated_chrome(pages: &mut [Page]) {
     }
 }
 
-/// First and last non-empty lines of a page, if any.
 fn edge_lines(text: &str) -> (Option<&str>, Option<&str>) {
     let mut non_empty = text.lines().filter(|l| !l.trim().is_empty());
     let first = non_empty.next();
@@ -266,8 +142,6 @@ fn edge_lines(text: &str) -> (Option<&str>, Option<&str>) {
     (first, last)
 }
 
-/// Collapse digit runs so paginated variants of one footer compare
-/// equal (`… 1/7` and `… 2/7` both become `… #/#`).
 fn normalize_digits(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_digits = false;
@@ -285,11 +159,6 @@ fn normalize_digits(s: &str) -> String {
     out
 }
 
-/// Split converter output on its `<!-- Page N -->` markers.
-///
-/// Content before the first marker (some documents emit none at all)
-/// becomes page 1, so a document always has at least one page as long
-/// as it has any text.
 pub fn split_pages(md: &str) -> Vec<Page> {
     let mut pages: Vec<Page> = Vec::new();
     let mut current = String::new();
@@ -320,13 +189,6 @@ fn parse_page_marker(line: &str) -> Option<u32> {
     n.trim().parse().ok()
 }
 
-/// Collapse single spaces between CJK ideographs.
-///
-/// Only *single* spaces between two CJK characters are removed. A run
-/// of two or more is a deliberate gap (table cell padding, a column
-/// boundary the extractor preserved) and is left alone. Latin text
-/// interleaved with CJK is unaffected, because at least one side of the
-/// space is then not an ideograph.
 pub fn collapse_cjk_spacing(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());

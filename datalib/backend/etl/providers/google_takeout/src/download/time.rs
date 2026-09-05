@@ -1,20 +1,4 @@
 //! Two date-time parsers used by the Takeout walkers.
-//!
-//! Google emits two human-grade timestamp shapes in the slices we
-//! ingest:
-//!
-//!   1. **Google Chat long-form English** (in `messages.json`'s
-//!      `created_date`):
-//!      `"Tuesday, February 11, 2025 at 11:33:35 AM UTC"`
-//!   2. **Takeout MDL grid timestamp** (YouTube watch history + Gemini
-//!      activity cells):
-//!      `"Jun 4, 2026, 11:48:37 AM PDT"`
-//!
-//! Both carry the timezone as a North-American three/four-letter
-//! abbreviation. We hard-code the abbreviations Google emits to
-//! fixed offsets and refuse to guess on anything else. A parse
-//! failure surfaces as `None` so the caller can leave `when_ts =
-//! NULL` per the architecture doc's "no fabricated timestamps" rule.
 
 use chrono::{NaiveDateTime, TimeZone};
 use datalib_time::IsoOffsetTimestamp;
@@ -71,9 +55,6 @@ fn finalize(naive: NaiveDateTime, offset_minutes: i32) -> Option<String> {
     Some(IsoOffsetTimestamp::from(dt).to_rfc3339())
 }
 
-/// Parse Google Chat's `created_date` field, e.g.
-/// `"Tuesday, February 11, 2025 at 11:33:35 AM UTC"`. Returns
-/// `Some(rfc3339)` on success.
 pub fn parse_chat_long_form(s: &str) -> Option<String> {
     let s = normalize_spaces(s);
     let (body, abbr) = split_trailing_abbrev(&s)?;
@@ -90,9 +71,6 @@ pub fn parse_chat_long_form(s: &str) -> Option<String> {
     finalize(naive, offset)
 }
 
-/// Parse a Takeout MDL grid timestamp, e.g.
-/// `"Jun 4, 2026, 11:48:37 AM PDT"` (YouTube watch-history,
-/// Gemini activity cells).
 pub fn parse_mdl_grid(s: &str) -> Option<String> {
     let s = normalize_spaces(s);
     let (body, abbr) = split_trailing_abbrev(&s)?;

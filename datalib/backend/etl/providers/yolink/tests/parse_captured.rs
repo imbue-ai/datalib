@@ -1,9 +1,6 @@
 //! Parse real CSV captures from `us.yosmart.com/download/...`.
 //! Gated by `YOLINK_FIXTURE_DIR` (captures embed bearer tokens
 //! and per-account device IDs; they don't belong in the repo).
-//!
-//! Expects `bfreezer1.out` (THSensor) and `valve.out`
-//! (WaterMeter) under the fixture dir.
 
 use std::{env, fs, path::PathBuf};
 

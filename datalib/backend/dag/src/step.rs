@@ -1,20 +1,6 @@
 //! The step contract: what a step declares ([`StepSpec`]), how it is
 //! invoked ([`StepRun`], [`StepCtx`]), and what it reports back
 //! ([`StepOutcome`] / [`StepError`]).
-//!
-//! Everything not declared here is private to the step — resume
-//! cursors, dedup indexes, retry bookkeeping all live behind the
-//! step's own artifacts. The scheduler relies only on the advertised
-//! guarantees: idempotent re-invocation, atomic outputs, and honest
-//! version reporting.
-//!
-//! A step reports one *version string* per output it has something to
-//! say about. The version is meant to be derived from the output's
-//! content (a dolt commit hash, a row-set hash, a cursor hash), so
-//! "unchanged" is something the scheduler *derives* — two runs over
-//! the same data report the same string — rather than something the
-//! step asserts. An output the step says nothing about is content
-//! hashed by the scheduler instead: always correct, just slower.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -30,12 +16,6 @@ use crate::events::StepProgress;
 pub type StepId = String;
 
 /// A step declaration.
-///
-/// A step's `id` **is** the tree it writes, relative to the data root,
-/// so it needs no `outputs`: `output()` returns the path derived from
-/// the id. Edges are the ids a step names in `inputs` — nothing is
-/// derived by matching paths against each other. See
-/// `docs/dev/step_identity.md`.
 #[derive(Debug, Clone)]
 pub struct StepSpec {
     /// Identity, and the tree this step writes: `<data_root>/<id>/`.
@@ -62,13 +42,6 @@ impl StepSpec {
     /// is also the tree it writes), the command it runs, its
     /// environment overrides, and the step ids it declares as inputs —
     /// since editing an `inputs =` line changes what the step is.
-    ///
-    /// This is what makes a config edit invalidate a step. A step whose
-    /// `params` changed has different argv (the runner appends
-    /// `--params JSON`), so it fingerprints differently and is stale
-    /// even though its inputs did not move. In-process steps have no
-    /// argv; they contribute their id, which is enough for tests and
-    /// for the built-in steps the runner synthesizes.
     pub fn fingerprint_material(&self) -> String {
         let mut m = String::new();
         m.push_str(&self.id);
@@ -114,8 +87,6 @@ impl StepSpec {
         ArtifactPath::parse(&self.id).expect("step id is a valid artifact path")
     }
 
-    /// Declare a version for the step's own behavior. See
-    /// [`StepSpec::code_version`].
     pub fn code_version(mut self, v: impl Into<String>) -> Self {
         self.code_version = Some(v.into());
         self
@@ -143,7 +114,6 @@ pub enum StepRun {
 }
 
 impl StepRun {
-    /// Wrap an async closure as an in-process step body.
     pub fn in_process<F, Fut>(f: F) -> Self
     where
         F: Fn(StepCtx) -> Fut + Send + Sync + 'static,
@@ -185,13 +155,10 @@ pub struct StepCtx {
 }
 
 impl StepCtx {
-    /// Absolute path of an artifact under `data_root`.
     pub fn path(&self, artifact: &ArtifactPath) -> PathBuf {
         self.data_root.join(artifact.as_str())
     }
 
-    /// Absolute path for a relative artifact string (convenience for
-    /// step bodies that know their own layout).
     pub fn path_str(&self, rel: &str) -> PathBuf {
         self.data_root.join(rel)
     }
@@ -199,17 +166,14 @@ impl StepCtx {
 
 /// Per-output report: the content version of this artifact now.
 /// `path` must be one of the step's declared outputs.
-///
-/// The version is opaque to the scheduler — it only ever compares it
-/// for equality with the version a consumer recorded. What matters is
-/// that it is a function of the output's *content*: a step that ran
-/// twice over the same data must report the same string both times, or
-/// consumers re-run for nothing. A dolt commit hash, a row-set hash,
-/// or a render cursor's hash all qualify; a timestamp does not.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactState {
     pub path: ArtifactPath,
     /// Content version the step vouches for.
+    /// Must be a function of the output's *content* — a dolt commit hash, a
+    /// row-set hash — so two runs over the same data report the same string
+    /// and the scheduler can derive "unchanged". A timestamp does not
+    /// qualify. Opaque otherwise: it is only ever compared for equality.
     pub version: String,
 }
 

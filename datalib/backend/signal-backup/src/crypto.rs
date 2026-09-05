@@ -67,7 +67,6 @@ fn hkdf_sha256(info: &[u8], ikm: &[u8], length: usize) -> Vec<u8> {
     out
 }
 
-/// K_B = HKDF(BACKUP_KEY_INFO, passphrase).
 pub fn derive_backup_key(passphrase: &str) -> [u8; 32] {
     let v = hkdf_sha256(BACKUP_KEY_INFO, passphrase.as_bytes(), 32);
     let mut out = [0u8; 32];
@@ -82,7 +81,6 @@ fn derive_metadata_key(backup_key: &[u8; 32]) -> [u8; 32] {
     out
 }
 
-/// Returns `(hmac_key, aes_key)` for the `main` blob.
 pub fn derive_message_keys(backup_key: &[u8; 32], backup_id: &[u8]) -> ([u8; 32], [u8; 32]) {
     let mut info = Vec::with_capacity(MESSAGE_BACKUP_INFO.len() + backup_id.len());
     info.extend_from_slice(MESSAGE_BACKUP_INFO);
@@ -122,9 +120,6 @@ pub fn decrypt_metadata_backup_id(backup_key: &[u8; 32], metadata_bytes: &[u8]) 
     Ok(out)
 }
 
-/// Decrypt + gunzip the `main` blob. Layout:
-/// `body || hmac_sha256(hmac_key, body)(32)`, where
-/// `body = iv(16) || aes_cbc_pkcs7(aes_key, iv, gzip(frames))`.
 pub fn decrypt_main(hmac_key: &[u8; 32], aes_key: &[u8; 32], main: &[u8]) -> Result<Vec<u8>> {
     if main.len() < IV_LENGTH + MAC_LENGTH {
         return Err(anyhow!("main too short: {}", main.len()));

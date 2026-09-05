@@ -1,10 +1,4 @@
 //! Program-A `DataProcessor`s for the `pdf` source.
-//!
-//! Both waves are always present: download scans and identifies,
-//! render converts whatever the store says is convertible. The source
-//! owns its raw store end to end (open, register the interrupt hook,
-//! write, commit) via the standard `RawStoreSession`; the orchestrator
-//! only drives `run`.
 
 use std::path::PathBuf;
 
@@ -90,8 +84,6 @@ impl DataProcessor for PdfRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::RENDER_VERSION)
     }

@@ -1,12 +1,4 @@
 //! Build-time version stamps surfaced to runtime.
-//!
-//! `git_hash()` returns the commit SHA the binary was built from, sourced
-//! from the `DATALIB_GIT_HASH` rustc env var. For cargo builds that
-//! var is set by `build.rs`; for Bazel builds it will be set via the
-//! workspace status stamp (`tools/workspace_status.sh`) once the stamp
-//! file is wired into `rust_library.rustc_env_files`. Until then, Bazel
-//! builds report the literal string `"unknown"` — the same fallback used
-//! when the build happens outside a git checkout altogether.
 
 /// SHA of the commit this binary was built from, or `"unknown"` when the
 /// build environment couldn't supply one. Stamped onto every feedback row

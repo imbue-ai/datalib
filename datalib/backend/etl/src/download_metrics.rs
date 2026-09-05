@@ -1,37 +1,4 @@
 //! General per-download-step "what changed" metrics.
-//!
-//! The goal is a source-agnostic sense of scale for every sync run:
-//! how many API calls a source made, how many rows it wrote, and how
-//! the on-disk raw store grew — *without* a single line of
-//! data-source-specific counting code. Two complementary mechanisms get
-//! us there:
-//!
-//!   1. **Live counters at the shared write/HTTP chokepoints.** A
-//!      [`tokio::task_local`] holds an [`DownloadMetrics`] for the
-//!      duration of one source's download (installed by [`scope`]). The
-//!      three chokepoints every provider funnels through —
-//!      [`crate::http::latchkey_curl`] (API calls),
-//!      [`crate::bulk::bulk_upsert_entity_in_tx`] (entity rows), and
-//!      [`crate::blob_cas::BlobCas::put_many`]/`put` (CAS blobs) — call
-//!      [`record_api_request`] / [`record_upserts`], which add into the
-//!      ambient context if one is installed and are a silent no-op
-//!      otherwise (tests, standalone CLIs, the render phase). No
-//!      provider knows these exist.
-//!
-//!   2. **before/after snapshots of the db files themselves.**
-//!      [`snapshot_db_file`] opens a throwaway read-only connection and
-//!      `COUNT(*)`s every table (plus the file's byte size). Taken once
-//!      before any writer opens and once after the source commits, the
-//!      delta (`rows_after - rows_before`, i.e. [`TableStats::rows_net`])
-//!      is the authoritative, universal "what changed" — it captures
-//!      *every* table, including ones a provider writes with hand-rolled
-//!      SQL that bypasses the bulk chokepoint, and the bookkeeping
-//!      sidecars.
-//!
-//! `rows_upserted` (mechanism 1) is therefore "rows written through the
-//! shared bulk/CAS chokepoints" and may read 0 for a table a provider
-//! populates with its own `INSERT`; `rows_net` (mechanism 2) always
-//! reflects the real change. Both are reported per table.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -40,9 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::progress::ProgressSink;
 
-// ─────────────────────────────────────────────────────────────────────
 // Live counters + ambient task-local context
-// ─────────────────────────────────────────────────────────────────────
 
 /// Per-source live counters, accumulated at the shared chokepoints for
 /// the duration of one source's download. Cheap to clone behind the
@@ -100,23 +65,15 @@ impl DownloadMetrics {
         self.rows_upserted.lock().unwrap().clone()
     }
 
-    /// Wire the source's real bar sink in so counter updates can refresh
-    /// the live `api=… rows[…]` suffix. The orchestrator calls this once,
-    /// before installing the [`MetricsSink`] wrapper on the bar.
     pub fn attach_bar(&self, sink: Arc<dyn ProgressSink>) {
         *self.bar.lock().unwrap() = Some(sink);
     }
 
-    /// Record the provider's latest bar message (called by
-    /// [`MetricsSink`]) and re-render with the metrics suffix appended.
     fn set_provider_message(&self, msg: &str) {
         *self.provider_msg.lock().unwrap() = msg.to_string();
         self.render();
     }
 
-    /// Compose `"<provider msg>  ·  api=N rows[t=n …]"`, omitting empty
-    /// pieces. The suffix is what makes the live counters visible on the
-    /// per-source bar.
     fn compose(&self) -> String {
         let msg = self.provider_msg.lock().unwrap().clone();
         let api = self.api_requests.load(Ordering::Relaxed);
@@ -160,9 +117,6 @@ tokio::task_local! {
     static CURRENT: Arc<DownloadMetrics>;
 }
 
-/// Install `metrics` as the ambient download-metrics context for the
-/// duration of `fut`. Chokepoints invoked anywhere within `fut` (on the
-/// same task) record into it. Everything outside any `scope` is a no-op.
 pub async fn scope<F>(metrics: Arc<DownloadMetrics>, fut: F) -> F::Output
 where
     F: Future,
@@ -174,21 +128,15 @@ fn with_current<R>(f: impl FnOnce(&DownloadMetrics) -> R) -> Option<R> {
     CURRENT.try_with(|m| f(m)).ok()
 }
 
-/// Count one outbound API request against the current source, if a
-/// metrics context is installed. Called from [`crate::http::latchkey_curl`].
 pub fn record_api_request() {
     let _ = with_current(DownloadMetrics::record_api_request);
 }
 
-/// Count `n` row upserts into `table` against the current source, if a
-/// metrics context is installed. Called from the bulk/CAS chokepoints.
 pub fn record_upserts(table: &str, n: usize) {
     let _ = with_current(|m| m.record_upserts(table, n as u64));
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Live-suffix progress sink
-// ─────────────────────────────────────────────────────────────────────
 
 /// Wraps a source's top-level bar so every `set_message` the provider
 /// emits gets the live `api=… rows[…]` suffix appended. All other calls

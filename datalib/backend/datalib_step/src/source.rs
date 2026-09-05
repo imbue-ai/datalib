@@ -1,22 +1,7 @@
 //! Parsing of the runner-appended step declaration flags.
-//!
-//! With per-provider step types the params carry no `type:`
-//! discriminator (the nested subcommand names the provider) and no
-//! `name:` either — `--params` is the provider's own config subtree
-//! verbatim, deserialized by [`crate::dispatch::plan`].
-//!
-//! The source name comes from the step's own id, which the runner puts
-//! in `DATALIB_DAG_STEP` and which *is* the tree the step writes
-//! (`slack/raw`). Nothing is derived: the step is told where it lives.
-//! This used to split the first `--outputs` entry on `/` to reconstruct
-//! a prefix and then rebuild the same path from it — see
-//! `docs/dev/step_identity.md`.
 
 use anyhow::{Context, Result};
 
-/// The provider config subtree from `--params`. Absent → empty
-/// object, so a step whose provider needs no knobs (most render
-/// steps) needs no `params:` in the config.
 pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
     match params {
         None => Ok(serde_json::Value::Object(Default::default())),
@@ -32,13 +17,6 @@ pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
     }
 }
 
-/// The tree this step owns, relative to the data root: its config `id`,
-/// as the runner passes it in `DATALIB_DAG_STEP`.
-///
-/// Providers still want a bare *name* for their store layout and their
-/// commit messages, which is the id's first segment — `slack/raw` →
-/// `slack`. That is a display convenience, not identity: nothing
-/// resolves anything by it.
 pub fn tree_from_env() -> Result<String> {
     let id = std::env::var(STEP_ID_ENV).with_context(|| {
         format!(
@@ -58,7 +36,6 @@ pub fn tree_from_env() -> Result<String> {
 /// because `datalib-step` deliberately does not depend on the runner.
 pub const STEP_ID_ENV: &str = "DATALIB_DAG_STEP";
 
-/// The bare source name for a step id: its first path segment.
 pub fn source_name(tree: &str) -> &str {
     tree.split('/').next().unwrap_or(tree)
 }

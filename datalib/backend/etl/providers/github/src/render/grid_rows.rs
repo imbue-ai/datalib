@@ -1,14 +1,4 @@
 //! Build the `grid_rows` for one GitHub PR document.
-//!
-//! Under the single-doc-per-PR model, every row in a PR's row set shares
-//! the same `qmd_path` (the PR's `index.md`). Each individual comment is
-//! still its own row keyed by its provider-namespaced UUID — clicks in
-//! the grid scroll to `data-msg-index="N"` inside the unified doc, where
-//! `N` is the row's `message_index`.
-//!
-//! Row order (and therefore `message_index`) matches the rendered doc:
-//! reviews → general → inline (grouped by `(path, line)` lex, then
-//! chronological within each thread).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};

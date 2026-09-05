@@ -1,40 +1,13 @@
-//! The unified grid index: one table stacked from every source's
-//! render store.
+//! The unified grid index: one table stacked from every source's render
+//! store.
 //!
-//! Two entry points, and they are the same write path seen from two
-//! sides:
+//! Two entry points, which are the same write path from two sides.
+//! [`apply_one`] writes one rendered document; [`build_grid_index`] stacks
+//! every source's store into the unified index, which is the `grid_index` DAG
+//! step's whole job.
 //!
-//!   * [`apply_one`] writes one rendered document — its `grid_rows`,
-//!     its `edges` and its `markdowns` row. The render step calls it
-//!     per document against that *source's own* store; the index calls
-//!     it against the unified one.
-//!   * [`build_grid_index`] stacks every source's store into the
-//!     unified index. This is the `grid_index` DAG step's whole job.
-//!     It asks each store `dolt_diff` from the commit the index last
-//!     consumed (`source_cursors`) to that store's HEAD, so a
-//!     steady-state run reads the documents that moved and nothing
-//!     else — and can name the ones that *left*, which is how a
-//!     deleted document finally gets removed from the grid.
-//!
-//! The sidecar format is the cross-provider contract:
-//!
-//! ```jsonc
-//! {
-//!   "header": {
-//!     "markdown_uuid": "…",            // primary key for the document
-//!     "source_fingerprint": "…",       // hash of upstream payload
-//!     "render_version": 1              // renderer-side schema stamp
-//!   },
-//!   "rows": [GridRow, …]
-//! }
-//! ```
-//!
-//! Skip logic: before applying we look up `markdowns.source_fingerprint`
-//! by `markdown_uuid`; if it matches the incoming document we treat it
-//! as up-to-date and leave `grid_rows` alone. Delete-then-insert, so a
-//! re-render replaces a document's rows rather than accumulating them,
-//! and any provider's render step can fill a store this loader consumes
-//! verbatim.
+//! Writes are delete-then-insert, gated on `markdowns.source_fingerprint`, so
+//! a re-render replaces a document's rows rather than accumulating them.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -55,42 +28,18 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
 
-/// Serializes concurrent writers against one doltlite index pool AND
-/// optionally batches all writes into one big transaction — with
-/// observability baked in.
+/// Serializes concurrent writers against one doltlite index pool, and
+/// optionally batches every write into one transaction.
 ///
-/// Background: doltlite (like SQLite) serializes writes at the file
-/// level — only one writer can advance the chunk store at a time. If
-/// you give multiple tasks their own pool connections and call
-/// `apply_one` from each, they race for the underlying write lock;
-/// losers wait inside sqlx's `busy_timeout` (default ~5s) and
-/// eventually see `(code 5) database is locked`. The orchestrator's
-/// per-source parallel render hits this in production.
+/// doltlite serializes writes at the file level, so per-task pool connections
+/// calling `apply_one` race for the write lock and eventually see `(code 5)
+/// database is locked`. Batching matters as much: each per-doc auto-commit
+/// costs ~50ms, because every statement boundary materializes the prolly
+/// tree's manifest.
 ///
-/// We also discovered (via the wait/hold counters this struct
-/// reports) that each per-doc auto-commit costs ~50ms because every
-/// statement boundary materializes the prolly tree's manifest. At
-/// 488 docs that's ~24s of wall-clock time spent serializing tiny
-/// writes through doltlite's per-commit overhead. Wrapping the whole
-/// render phase in ONE `BEGIN ... COMMIT` collapses that overhead
-/// — only the final COMMIT pays the manifest cost.
-///
-/// Putting both behaviors in one type keeps the contract simple:
-/// every per-doc call to `apply_one` goes through `WriteLock::acquire`,
-/// which returns `&mut conn` for the duration of one write. If a
-/// transaction is active (`begin_transaction` was called), every
-/// acquire uses the SAME held connection so the writes accumulate
-/// in one transaction; otherwise each acquire takes a fresh pool
-/// connection and statements auto-commit individually.
-///
-/// The metrics counters answer "where is the time going":
-///
-///   * `total_wait` — summed across all `acquire` calls; high values
-///     relative to wall time mean writers are queuing behind one
-///     another (doltlite write throughput is the bottleneck).
-///   * `total_hold` — summed time the lock was held; divide by
-///     `acquisitions` for the average per-doc write cost.
-///   * `acquisitions` — number of `acquire` calls that ran.
+/// The counters answer "where is the time going": `total_wait` high against
+/// wall time means writers are queuing, and `total_hold / acquisitions` is the
+/// average per-doc write cost.
 pub struct WriteLock {
     pool: SqlitePool,
     inner: Mutex<WriteLockInner>,
@@ -100,9 +49,8 @@ pub struct WriteLock {
 }
 
 struct WriteLockInner {
-    /// Held connection during an active `BEGIN ... COMMIT` batch.
-    /// `None` outside a transaction; in that case `acquire` takes a
-    /// fresh pool connection per call and statements auto-commit.
+    /// Held connection during an active batch. `None` outside a transaction,
+    /// where `acquire` takes a fresh connection per call.
     tx_conn: Option<sqlx::pool::PoolConnection<sqlx::Sqlite>>,
 }
 
@@ -145,13 +93,6 @@ impl WriteLock {
         Arc::new(Self::new(pool))
     }
 
-    /// Open one big write transaction. Subsequent `acquire` calls
-    /// reuse the same connection so every statement lands inside
-    /// the same `BEGIN ... COMMIT`. Pair with
-    /// [`commit_transaction`] or [`rollback_transaction`].
-    ///
-    /// Panics if a transaction is already active — there's only one
-    /// render phase per run and one ROLLBACK target.
     pub async fn begin_transaction(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
         assert!(
@@ -171,8 +112,6 @@ impl WriteLock {
         Ok(())
     }
 
-    /// Commit the batch and release the held connection. Subsequent
-    /// `acquire` calls revert to per-call auto-commit mode.
     pub async fn commit_transaction(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
         let mut conn = inner
@@ -186,10 +125,6 @@ impl WriteLock {
         Ok(())
     }
 
-    /// Roll back the batch and release the held connection.
-    /// Best-effort — if ROLLBACK itself errors we drop the conn
-    /// anyway (the pool re-establishes per-connection state on
-    /// next acquire).
     pub async fn rollback_transaction(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
         let Some(mut conn) = inner.tx_conn.take() else {
@@ -202,11 +137,9 @@ impl WriteLock {
             .map(|_| ())
     }
 
-    /// Acquire write access. Returns a guard wrapping `&mut conn`.
-    /// If a transaction is active, the guard hands out the held
-    /// connection (so the caller's statements accumulate in the
-    /// batch); otherwise a fresh pool connection is taken and
-    /// dropped at guard release (auto-commit per statement).
+    /// Acquire write access. Inside a transaction the guard hands out the
+    /// held connection so statements accumulate in the batch; otherwise it
+    /// takes a fresh pool connection that auto-commits at release.
     pub async fn acquire<'a>(&'a self) -> Result<WriteLockGuard<'a>> {
         let wait_start = Instant::now();
         let inner_guard = self.inner.lock().await;
@@ -242,8 +175,8 @@ impl WriteLock {
     }
 }
 
-/// RAII guard: dropping it stamps the hold-time counter and (in
-/// non-transaction mode) returns the per-call connection to the pool.
+/// Dropping the guard stamps the hold-time counter and, outside a
+/// transaction, returns the connection to the pool.
 pub struct WriteLockGuard<'a> {
     inner: tokio::sync::MutexGuard<'a, WriteLockInner>,
     fresh_conn: Option<sqlx::pool::PoolConnection<sqlx::Sqlite>>,
@@ -252,9 +185,8 @@ pub struct WriteLockGuard<'a> {
 }
 
 impl<'a> WriteLockGuard<'a> {
-    /// Mutable access to the active write connection. Same conn
-    /// across every `acquire` while a transaction is open; a fresh
-    /// per-call conn otherwise.
+    /// The active write connection: the same one across every `acquire`
+    /// while a transaction is open, a fresh per-call one otherwise.
     pub fn conn(&mut self) -> &mut sqlx::pool::PoolConnection<sqlx::Sqlite> {
         if let Some(c) = self.inner.tx_conn.as_mut() {
             return c;
@@ -272,89 +204,56 @@ impl Drop for WriteLockGuard<'_> {
     }
 }
 
-/// Per-rendered-markdown metadata projection: one row per `.md` file
-/// in `<root>/rendered_md/`. `source_fingerprint` is the renderer's
-/// input-hash, set when the markdown + blobs land on disk; subsequent
-/// runs compare against it to decide whether to re-render.
-/// `row_set_hash` is the load-side hash over the canonical grid_rows,
-/// used by tools that walk a stale tree.
+/// Per-rendered-markdown metadata: one row per `.md` file.
+/// `source_fingerprint` is the renderer's input hash, compared on later runs
+/// to decide whether to re-render.
 ///
-/// `markdown_uuid` is the canonical addressing primitive for rendered
-/// output: every grid_row carries a FK back here, and `/api/chat/{uuid}`
-/// dereferences it through `md_path`. Note that for sharded renders
-/// (beeper renders one file per period) a single upstream
-/// "conversation" maps to N rows here — `conversation_uuid` is not
-/// unique in the table.
-///
-/// Derived from `datalib_schema::markdowns::MarkdownRow`, not written
-/// out here. It used to be a hand-written string beside that struct,
-/// and the two drifted: this string grew `source_fingerprint` and
-/// `upstream_cursor` while the struct — which nothing read — kept the
-/// older eleven columns. Pointing the DDL at the struct is what makes
-/// the struct the schema rather than a description of one.
+/// `markdown_uuid` is the canonical addressing primitive for rendered output.
+/// A sharded render (beeper writes one file per period) maps one upstream
+/// conversation to N rows, so `conversation_uuid` is not unique here.
 pub const MARKDOWNS_DDL: &str = MARKDOWNS_TABLE_DDL[0].1;
 
-/// Stats emitted on every load run. Stable shape so a web UI can poll
-/// or stream it without per-provider branches.
+/// Stats emitted on every load run. Stable shape, so a web UI can poll or
+/// stream it without per-provider branches.
 #[derive(Debug, Default, Serialize)]
 pub struct GridIndexSummary {
     pub markdowns_total: usize,
     pub markdowns_loaded: usize,
     pub markdowns_skipped: usize,
     pub rows_inserted: usize,
-    /// Documents dropped from the index because the source that owned
-    /// them stopped holding them. Only a cursor-driven run can be
-    /// non-zero here — see [`build_grid_index`].
+    /// Documents dropped because the source that owned them stopped holding
+    /// them. Only a cursor-driven run can be non-zero here.
     pub markdowns_removed: usize,
 }
 
-/// Every `CREATE TABLE` in the grid index, in creation order.
-///
-/// One list so the DDL pass and the schema check below can't drift into
-/// covering different sets of tables — a table missing from the check
-/// would keep an old shape forever while the ones beside it healed.
+/// Every `CREATE TABLE` in the grid index, in creation order. One list, so
+/// the DDL pass and the schema check can't drift into covering different
+/// sets of tables.
 fn index_ddl() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_DDL
         .iter()
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
-        // `source_cursors` belongs in this list, not beside it. The
-        // reconcile below drops and rebuilds every table named here
-        // together, and a cursor that survived a rebuild of the rows it
-        // points past would tell the next run "nothing changed" about
-        // an index that had just been emptied. Coupling their lifetimes
-        // is the whole reason the cursor lives in the index database.
+        // `source_cursors` belongs in this list, not beside it: the reconcile
+        // drops and rebuilds every table named here together, and a cursor
+        // that survived a rebuild would tell the next run "nothing changed"
+        // about an index that had just been emptied.
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
 }
 
-/// Apply DDL for `grid_rows`, `markdowns`, and `edges`, and rebuild them
-/// from scratch if what's on disk no longer matches.
+/// Apply the index DDL, rebuilding from scratch if what's on disk no longer
+/// matches.
 ///
-/// `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already
-/// exists, so without the reconcile below an index created under an
-/// older schema never gains a column a later change introduced — and
-/// then every statement naming that column fails. That is not
-/// hypothetical: #216 renamed `grid_rows.external_id` to `upstream_id`
-/// and added two columns beside it, and every data root predating it
-/// answered both the read path and the write path with
-/// `no such column: upstream_id`.
-///
-/// **Drop and rebuild, rather than `ALTER TABLE … ADD COLUMN`.** This is
-/// the opposite of [`crate::doltlite_raw::open`]'s policy for raw
-/// stores, deliberately, because the two hold different kinds of row.
-/// A raw store's rows cost a network fetch, so adding the column and
-/// keeping the rows is the cheap correct answer. Every row here is a
-/// pure function of a row already in a source's render store, so a
-/// rebuild costs one local scan — and it is the *only* answer that
-/// yields correct values: an `ADD COLUMN` leaves existing rows NULL in
-/// the new column, and `markdowns.source_fingerprint` then makes the
-/// next run skip exactly those documents, so the NULLs are permanent.
+/// **Drop and rebuild, rather than `ALTER TABLE … ADD COLUMN`** — the
+/// opposite of [`crate::doltlite_raw::open`]'s policy, because every row here
+/// is a pure function of a row in a source's render store, so a rebuild costs
+/// one local scan. It is also the only answer that yields correct values:
+/// `ADD COLUMN` leaves existing rows NULL, and the fingerprint skip then makes
+/// those NULLs permanent.
 ///
 /// All three tables go together even when only one drifted, because
-/// `markdowns` holds the fingerprints that drive that skip. Dropping
-/// `grid_rows` alone would leave every document looking up-to-date and
-/// the index permanently empty.
+/// `markdowns` holds the fingerprints that drive that skip.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl() {
         sqlx::query(ddl)
@@ -365,17 +264,14 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     reconcile_index_schema(pool).await
 }
 
-/// The table a DDL statement creates, for error messages. Every
-/// statement in [`index_ddl`] is a `CREATE TABLE`, so the fallback is
-/// unreachable in practice; it degrades to the raw SQL rather than
-/// panicking.
+/// The table a DDL statement creates, for error messages. Degrades to the
+/// raw SQL rather than panicking.
 fn table_of(ddl: &str) -> String {
     crate::doltlite_raw::parse_create_table_name(ddl).unwrap_or_else(|| ddl.to_string())
 }
 
-/// Drop and recreate every index table if any one of them disagrees
-/// with its DDL. See [`init_schema`] for why it is all-or-nothing and
-/// why rebuilding beats `ADD COLUMN` here.
+/// Drop and recreate every index table if any one of them disagrees with
+/// its DDL. See [`init_schema`] for why it is all-or-nothing.
 async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
     let mut drift: Vec<String> = Vec::new();
     for ddl in index_ddl() {
@@ -434,16 +330,12 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Renderer-side cache stamp. Bump when the canonical-tuple shape in
-/// `compute_row_set_hash` or the rendered `.md` layout changes — every
-/// `documents.row_set_hash` is invalidated and the next ingest will
-/// re-render. `rust-v1` is the clean break from the Python `"v1"` since
-/// the hash encoding differs.
+/// Bump when the canonical-tuple shape in `compute_row_set_hash` or the
+/// rendered `.md` layout changes: every `documents.row_set_hash` is
+/// invalidated and the next ingest re-renders.
 pub const RENDERER_VERSION: &str = "rust-v1";
 
-// ─────────────────────────────────────────────────────────────────────
-// Cross-source id collision detection
-// ─────────────────────────────────────────────────────────────────────
+// ── Cross-source id collision detection ─────────────────────────────
 
 /// One id claimed by two different sources inside a single index run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,13 +344,13 @@ pub struct IdCollision {
     pub id_kind: &'static str,
     /// The contested id.
     pub id: String,
-    /// Source name that claimed it first (sidecars are walked in sorted
-    /// order, so "first" is stable across runs).
+    /// Source that claimed it first (sidecars are walked in sorted order, so
+    /// "first" is stable across runs).
     pub first_source: String,
     /// `markdown_uuid` the first claim arrived under.
     pub first_markdown_uuid: String,
-    /// Source name that claimed it second — the one whose data would
-    /// have won or blown up.
+    /// Source that claimed it second — the one whose data would have won or
+    /// blown up.
     pub second_source: String,
     /// `markdown_uuid` the second claim arrived under.
     pub second_markdown_uuid: String,
@@ -485,28 +377,15 @@ impl std::fmt::Display for IdCollision {
 
 /// Which source claimed each id during ONE index run.
 ///
-/// Two sources emitting the same `markdown_uuid` or the same
-/// `grid_rows.uuid` is not a benign duplicate. [`apply_markdown`]
-/// deletes by `markdown_uuid` before inserting, so on a *full* overlap
-/// the sidecar applied second erases the first one's rows and rewrites
-/// the `markdowns` row with its own `md_path` and `source_name` — one
-/// source's data vanishes from the index with no error and no row-count
-/// change to notice. On a *partial* overlap (same row uuid, different
-/// markdown) the plain `INSERT` instead trips `PRIMARY KEY (uuid)` and
-/// rolls the whole batch back with a bare sqlx error naming neither
-/// source. Cheap overlap failed loudly, total overlap failed silently;
-/// this makes both loud and names both sides.
+/// Two sources emitting the same `markdown_uuid` or `grid_rows.uuid` is not a
+/// benign duplicate: a full overlap erases the first source's rows with no
+/// error and no row-count change, and a partial one rolls the batch back with
+/// an error naming neither source. This makes both loud, and names both sides.
 ///
-/// Scoped to a single run on purpose. Checking against ids already in
-/// the database would flag a source *rename* — same ids arriving under
-/// a new `source_name`, which is legitimate and must keep working —
-/// whereas two sidecars claiming one id inside one walk is always
-/// either a misconfiguration (the same upstream account wired up
-/// twice) or an id recipe missing a discriminator.
-///
-/// Claims are recorded *before* the fingerprint skip check, so an
-/// overlap is still caught on a steady-state re-run where one of the
-/// two sidecars is unchanged and never applied.
+/// Run-scoped on purpose — checking ids already in the database would flag a
+/// source *rename*, which is legitimate. Claims are recorded before the
+/// fingerprint skip, so an overlap is caught even when one sidecar is
+/// unchanged.
 #[derive(Debug, Default)]
 pub struct IdClaims {
     /// markdown_uuid → source that claimed it.
@@ -520,13 +399,9 @@ impl IdClaims {
         Self::default()
     }
 
-    /// Record one sidecar's claims. Returns the first collision found,
-    /// leaving the claim table in a usable state either way.
-    ///
-    /// Same-source re-claims are impossible by construction — one
-    /// document owns one `markdown_uuid` and the walk visits each
-    /// document once — so any repeat is a genuine cross-source clash and
-    /// is reported even when both sides name the same source.
+    /// Record one sidecar's claims, returning the first collision found.
+    /// Same-source re-claims are impossible by construction, so any repeat is
+    /// a genuine cross-source clash.
     pub fn claim(
         &mut self,
         source_name: &str,
@@ -566,11 +441,9 @@ impl IdClaims {
     }
 }
 
-/// Map a grid_rows `kind` (string used in the UI) to the
-/// `documents.kind` enum (chat/thread/page/pr/mr). Anything not in this
-/// map is a child row and shouldn't be picked as the canonical document
-/// row — but if it ends up being the only candidate we fall back to
-/// `"chat"`, matching the Python behavior.
+/// Map a grid_rows display `kind` to the `documents.kind` enum. Anything
+/// unlisted is a child row and shouldn't be the canonical document row, but
+/// falls back to `"chat"` if it is the only candidate.
 fn doc_kind_for(grid_kind: &str) -> &'static str {
     match grid_kind {
         "Chat" => "chat",
@@ -579,24 +452,19 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         "GitLab MR" => "mr",
         "Notion Page" | "Notion Database" => "page",
         "Notion Comment Thread" => "thread",
-        // A PDF is a document, not a conversation. It reaches the same
-        // grid and preview surfaces as everything else, but the sync
-        // page shows this string, and calling a scanned manual a "chat"
-        // is just wrong.
+        // A PDF is a document, not a conversation, and the sync page shows
+        // this string.
         "PDF Document" => "document",
-        // Same reasoning as PDF: a Claude Project is a collection of
-        // written context (description, custom instructions, knowledge
-        // files), not a conversation.
+        // Likewise a Claude Project: written context, not a conversation.
         "Project" => "document",
         _ => "chat",
     }
 }
 
-/// SHA-256 over the canonical per-row tuple, sorted by `(when_ts, uuid)`
-/// so the hash is independent of producer order. Encoding is a
-/// `\0`-delimited concatenation of length-prefixed fields — stable across
-/// Rust versions (unlike `Debug`), unlike Python's `repr` but that's
-/// fine: bumping `RENDERER_VERSION` invalidates the old hashes anyway.
+/// SHA-256 over the canonical per-row tuple, sorted by `(when_ts, uuid)` so
+/// the hash is independent of producer order. The encoding is
+/// length-prefixed and `\0`-delimited, so it is stable across Rust versions
+/// in a way `Debug` is not.
 pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
     let mut sorted: Vec<&GridRow> = rows.iter().collect();
     sorted.sort_by(|a, b| a.when_ts.cmp(&b.when_ts).then_with(|| a.uuid.cmp(&b.uuid)));
@@ -646,63 +514,40 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
     s
 }
 
-/// One markdown's payload as handed from render to the indexer. The
-/// render-side callback constructs this once md + blobs are durably on
-/// disk; [`apply_one`] writes the corresponding `grid_rows` + `markdowns`
-/// rows so render+index commit per-doc atomically.
+/// One markdown's payload as handed from render to the indexer,
+/// constructed once the md and its blobs are durably on disk so that render
+/// and index commit per-document atomically.
 #[derive(Debug, Clone)]
 pub struct RenderedMarkdown {
     pub markdown_uuid: String,
-    /// User-facing config name (e.g. `tiny-slack`); falls back to the
-    /// provider string when sync doesn't have one wired in.
+    /// User-facing config name (e.g. `tiny-slack`), falling back to the
+    /// provider string.
     pub source_name: String,
     pub source_fingerprint: String,
-    /// Optional provider-defined cheap-probe value the orchestrator can
-    /// use *before* loading payloads to decide whether a markdown has
-    /// changed since last run. Examples: slack stamps each thread's
-    /// `MAX(fetched_at)` here, so the next run can `GROUP BY
-    /// thread_root_uuid` on the existing index and skip loading
-    /// untouched threads entirely. None when the provider has no
-    /// cheaper-than-fingerprint signal.
+    /// A cheap probe the orchestrator can check *before* loading payloads to
+    /// decide whether a markdown moved. Slack stamps each thread's
+    /// `MAX(fetched_at)`. None when the provider has nothing cheaper than the
+    /// fingerprint.
     pub upstream_cursor: Option<String>,
-    /// Absolute path to the rendered `.md`. Used to derive the
-    /// `qmd_path` we stamp into `markdowns.md_path` by stripping the
-    /// out-dir prefix.
+    /// Absolute path to the rendered `.md`; `qmd_path` is this with the
+    /// out-dir prefix stripped.
     pub md_path: PathBuf,
     pub render_version: u32,
     pub rows: Vec<GridRow>,
-    /// Outgoing edges originating from this markdown
-    /// (`src_markdown_uuid == markdown_uuid`). Empty for renderers that
-    /// don't emit edges yet — the Load step still issues the DELETE so
-    /// stale rows from a previous render get cleaned up.
+    /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
+    /// renderers that don't emit edges; the DELETE still runs, so stale rows
+    /// from a previous render get cleaned up.
     pub edges: Vec<EdgeRow>,
     /// What render could not do while producing this document: records
-    /// dropped, fields nulled, deliberate lossy rules that fired.
-    ///
-    /// Travels with the document rather than through a side channel so
-    /// the rows and the record of what was lost getting them commit
-    /// together — and so a renderer reports a problem by returning it,
-    /// with no context to thread and no ambient sink to install.
-    ///
-    /// Empty when read back by
-    /// [`crate::indexed_markdown::IndexedMarkdownStore::documents`]: by
-    /// then the problems are already rows in the store, and re-applying
-    /// them on the way to the index would double-count.
+    /// dropped, fields nulled, lossy rules that fired. Travels with the
+    /// document so the rows and the record of what was lost commit together.
+    /// Empty when read back from the store, where they are already rows.
     pub problems: Vec<datalib_schema::render_problems::RenderProblemRow>,
 }
 
-/// Write one rendered document into Dolt unconditionally.
-///
-/// Skip semantics live in the *render* side now (`prior_fingerprints`
-/// gate before each per-doc loop) — by the time we're called here the
-/// caller has already decided the doc needs to land. `out_dir` is the
-/// prefix stripped off `md_path` to produce a portable `qmd_path`.
-///
-/// `write_lock` owns the pool and serializes concurrent writers; see
-/// [`WriteLock`] for the contention-avoidance contract and the
-/// optional `begin_transaction` / `commit_transaction` batching that
-/// collapses ~50ms-per-doc auto-commit overhead into one final
-/// per-run COMMIT.
+/// Write one rendered document into the index unconditionally. The caller
+/// has already applied the fingerprint skip. `out_dir` is stripped off
+/// `md_path` to produce a portable `qmd_path`.
 pub async fn apply_one(
     write_lock: &WriteLock,
     out_dir: &Path,
@@ -718,67 +563,30 @@ pub async fn apply_one(
     apply_markdown(write_lock, md, &qmd_rel, now_override).await
 }
 
-/// Stack every source's render store into the unified index.
+/// Stack every source's render store into the unified index — the
+/// `grid_index` DAG step's whole job.
 ///
-/// This is the `grid_index` DAG step's whole job, not a
-/// disaster-recovery tool — an earlier version of this comment said the
-/// opposite while the body eight lines down said the truth.
+/// **Each source is asked what changed, not read whole**, via `dolt_diff`
+/// between the commit `source_cursors` last consumed and the store's HEAD.
+/// Two things fall out of that: a document a source stopped holding can be
+/// named and deleted, and the cursor advances inside the write transaction,
+/// so it can never claim more than the index holds.
 ///
-/// **Each source is asked what changed, not read whole.** Every source
-/// keeps its rows in `<name>/rendered_md/indexed_markdown.doltlite_db`,
-/// a doltlite store with a commit hash; the index remembers the hash it
-/// last consumed per source in `source_cursors` and asks that store
-/// `dolt_diff` between the two. A steady-state run therefore reads the
-/// documents that moved and nothing else, where it used to read every
-/// document from every store and discard the unchanged ones in Rust
-/// after paying for them.
-///
-/// Two things fall out of diffing rather than re-reading, and both are
-/// the point:
-///
-///   * A document a source **stopped** holding can be named, so it is
-///     deleted from the index. Re-reading could never see it — an
-///     absent document produces no row to compare — so a deleted
-///     conversation stayed in the grid until someone wiped the index.
-///   * The cursor advances **inside** the write transaction, so it can
-///     never claim more than the index actually holds.
-///
-/// The fingerprint skip below is kept, and is not redundant: the cold
-/// path still reads whole stores, and it is what makes a re-index of
-/// unchanged content cheap on the run that has no usable cursor.
+/// The fingerprint skip is still not redundant — the cold path reads whole
+/// stores, and the skip is what makes that cheap.
 pub async fn build_grid_index(
     pool: &SqlitePool,
     out_dir: &Path,
     progress: impl Fn(&str),
     now_override: Option<&str>,
 ) -> Result<GridIndexSummary> {
-    // build_grid_index is single-threaded — there are no parallel workers
-    // contending here. A fresh write lock owns the pool clone so
-    // `apply_one` has somewhere to acquire connections. The whole
-    // loop runs inside one begin/commit_transaction batch: doltlite
-    // charges ~50ms per auto-committed statement bundle (prolly-tree
-    // manifest mutation), which is ruinous on a full-root rebuild —
-    // this is the DAG index step's hot path now, not just a
-    // disaster-recovery tool. An error rolls the batch back, leaving
-    // the index exactly as it was.
+    // The whole loop runs in one begin/commit batch: doltlite charges ~50ms
+    // per auto-committed statement bundle, which is ruinous on a full rebuild.
+    // An error rolls back, leaving the index exactly as it was.
     let write_lock = WriteLock::new(pool.clone());
-    // data_root holds one dir per stanza (each with a `rendered_md/` tree)
-    // plus the reserved `system/` dir. Walk each stanza's rendered_md; skip
-    // `system/` (the aggregate indices live there, no sidecars).
-    // (stanza name, its render store): the stanza directory name IS the
-    // config-level source name — `<data_root>/<name>/rendered_md/…` —
-    // so `documents.source_name` keeps the user-facing name exactly as
-    // the fused loader did.
-    //
-    // This used to walk every stanza's tree collecting `*.grid_rows.json`
-    // and parse each one. Each source now keeps its rows in a doltlite
-    // store written by this same `apply_one`, so the index is *stacked*
-    // from those rather than re-projected from JSON.
-    // Cursors first: the read below is scoped by them, so they have to
-    // be loaded before the write transaction opens (the index pool is
-    // one connection wide, and a read against it while the transaction
-    // holds that connection would deadlock — same reason
-    // `load_fingerprints` is hoisted).
+    // One dir per source plus the reserved `system/`; the directory name IS
+    // the config-level source name. Cursors load before the write transaction
+    // opens, because the index pool is one connection wide.
     let cursors = load_source_cursors(pool).await?;
 
     let mut docs: Vec<(String, RenderedMarkdown)> = Vec::new();
@@ -806,11 +614,9 @@ pub async fn build_grid_index(
             let scan = store
                 .changed_since(cursor)
                 .with_context(|| format!("diff render store for {stanza}"))?;
-            // Say which path was taken, every time. A cold start that
-            // fires silently on every run is the expensive failure this
-            // whole mechanism exists to remove, and it looks exactly
-            // like a fast one from the outside — it just does more work
-            // and still gets the right answer.
+            // Say which path was taken, every time: a cold start that fires
+            // silently on every run looks exactly like a fast one from the
+            // outside — it just does more work and still gets the right answer.
             match (&scan.changed_buckets, cursor) {
                 (None, None) => tracing::info!(
                     source = %stanza,
@@ -832,9 +638,8 @@ pub async fn build_grid_index(
             let found = store
                 .documents_matching(out_dir, scan.changed_buckets.as_ref())
                 .with_context(|| format!("read documents from {stanza}"))?;
-            // An id the diff named that the store no longer has is a
-            // deletion. Only a diff can produce this: reading whole
-            // stores sees what is there, never what left.
+            // An id the diff named that the store no longer has is a deletion.
+            // Only a diff can produce this.
             if let Some(changed) = &scan.changed_buckets {
                 let present: HashSet<&str> =
                     found.iter().map(|d| d.markdown_uuid.as_str()).collect();
@@ -845,8 +650,7 @@ pub async fn build_grid_index(
             store.close();
             // Only advance a cursor when we know the HEAD we consumed.
             // `new_head: None` means `dolt_log()` did not answer, and an
-            // unwritten cursor cold-starts the next run — the safe
-            // direction.
+            // unwritten cursor cold-starts the next run — the safe direction.
             if let Some(head) = scan.new_head {
                 advanced.push((stanza.clone(), head));
             }
@@ -859,10 +663,9 @@ pub async fn build_grid_index(
         ..Default::default()
     };
 
-    // Fingerprints are bulk-loaded BEFORE the write transaction: the
-    // index pool is one connection wide (doltlite's HEAD is
-    // per-connection), so a per-doc read against the pool while the
-    // transaction holds that connection would deadlock.
+    // Loaded before the write transaction opens: the index pool is one
+    // connection wide, so a read while the transaction holds that connection
+    // would deadlock.
     let prior_fingerprints = load_fingerprints(pool).await?;
 
     write_lock
@@ -886,8 +689,8 @@ pub async fn build_grid_index(
             &mut summary,
         )
         .await?;
-        // Cursors last and in the same transaction: if anything above
-        // failed we roll back to both the old rows and the old cursors.
+        // Cursors last and in the same transaction: a failure above rolls
+        // back to both the old rows and the old cursors.
         let now = now_override
             .map(str::to_string)
             .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339());
@@ -917,8 +720,7 @@ pub async fn build_grid_index(
             Ok(summary)
         }
         Err(e) => {
-            // Best effort — the held connection rolls back on drop
-            // anyway.
+            // Best effort — the held connection rolls back on drop anyway.
             let _ = write_lock.rollback_transaction().await;
             Err(e)
         }
@@ -926,7 +728,7 @@ pub async fn build_grid_index(
 }
 
 /// The per-document loop of [`build_grid_index`], separated so the caller
-/// can wrap it in one begin/rollback-or-commit transaction.
+/// can wrap it in one transaction.
 async fn load_all_batch(
     write_lock: &WriteLock,
     prior_fingerprints: &HashMap<String, String>,
@@ -936,13 +738,10 @@ async fn load_all_batch(
     now_override: Option<&str>,
     summary: &mut GridIndexSummary,
 ) -> Result<()> {
-    // One run's id claims, used to catch two sources writing the same
-    // `markdown_uuid` / `grid_rows.uuid`. See [`IdClaims`].
+    // See [`IdClaims`]: catches two sources writing the same id.
     let mut claims = IdClaims::new();
     for (stanza, md) in docs {
-        // The stanza dir name is the config-level source name; fall
-        // back to the canonical row's provider only if it were somehow
-        // empty.
+        // The stanza dir name is the config-level source name.
         let source_name = if stanza.is_empty() {
             md.rows
                 .first()
@@ -952,10 +751,9 @@ async fn load_all_batch(
             stanza.clone()
         };
 
-        // Claim this document's ids BEFORE the fingerprint skip below:
-        // an overlap between two sources must still be caught on a
-        // steady-state re-run, where one of the two is unchanged and
-        // would otherwise never be looked at.
+        // Claim ids BEFORE the fingerprint skip, so an overlap between two
+        // sources is still caught on a steady-state re-run where one of them
+        // is unchanged and would never be looked at.
         if let Some(collision) = claims.claim(&source_name, &md.markdown_uuid, &md.rows) {
             return Err(anyhow::anyhow!("{collision}"))
                 .with_context(|| format!("load {} from {stanza}", md.markdown_uuid));
@@ -965,13 +763,11 @@ async fn load_all_batch(
             summary.markdowns_skipped += 1;
             continue;
         }
-        // Re-stamp the source name from the stanza, which is
-        // authoritative; everything else comes through from the store
-        // unchanged, because the store holds what the renderer emitted.
+        // The stanza name is authoritative. Everything else comes through
+        // from the store unchanged.
         let md = RenderedMarkdown {
             source_name,
-            // Already rows in the store; re-applying them on the way to
-            // the index would double-count.
+            // Already rows in the store; re-applying would double-count.
             problems: Vec::new(),
             ..md.clone()
         };
@@ -989,10 +785,9 @@ async fn load_all_batch(
     Ok(())
 }
 
-/// Bulk fingerprint snapshot. Used once per sync to populate the
-/// `prior_fingerprints` map every renderer consults at per-markdown
-/// skip time. Rows whose `source_fingerprint` is NULL are omitted so
-/// the caller treats them as "not rendered".
+/// Bulk fingerprint snapshot, read once per sync into the map every
+/// renderer consults at per-markdown skip time. NULL fingerprints are
+/// omitted, so the caller treats them as "not rendered".
 pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query(
         "SELECT markdown_uuid, source_fingerprint \
@@ -1010,9 +805,6 @@ pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, Stri
     Ok(out)
 }
 
-/// `source_name → store_commit` for every source the index has a
-/// cursor for. Empty on a fresh index, which reads as "cold-start
-/// everything".
 pub async fn load_source_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query("SELECT source_name, store_commit FROM source_cursors")
         .fetch_all(pool)
@@ -1025,9 +817,6 @@ pub async fn load_source_cursors(pool: &SqlitePool) -> Result<HashMap<String, St
     Ok(out)
 }
 
-/// Advance one source's cursor. Called **inside** the index write
-/// transaction, so the cursor and the rows it accounts for commit or
-/// roll back together — see [`SourceCursorRow::store_commit`].
 async fn write_source_cursor(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     row: &SourceCursorRow,
@@ -1038,8 +827,7 @@ async fn write_source_cursor(
         .await
         .context("clear prior source cursor")?;
     let sql = crate::bulk::insert_sql::<SourceCursorRow>();
-    // Audited: `sql` is built from `SourceCursorRow`'s associated
-    // consts, never from row data; all values bound.
+    // Audited: `sql` is built from `SourceCursorRow`'s associated consts.
     row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
         .execute(&mut **conn)
         .await
@@ -1047,14 +835,10 @@ async fn write_source_cursor(
     Ok(())
 }
 
-/// Remove a document and everything hanging off it from the index.
-///
-/// The same three deletes `apply_markdown` runs before re-inserting,
-/// without the insert. Until the cursor landed there was no caller:
-/// the index was rebuilt by applying every document a store still
-/// held, so a document a source *stopped* holding was never visited
-/// and stayed in the grid forever. Being able to name what disappeared
-/// is a property of diffing rather than of re-reading.
+/// Remove a document and everything hanging off it: the three deletes
+/// `apply_markdown` runs before re-inserting, without the insert. Only
+/// reachable because the index diffs rather than re-reads — a deleted
+/// conversation used to stay in the grid forever.
 pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
     let conn = guard.conn();
@@ -1072,10 +856,6 @@ pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Res
     Ok(())
 }
 
-/// Bulk upstream-cursor snapshot, used the same way as
-/// [`load_fingerprints`] but for the cheap-probe shortcut a few
-/// providers use. Today only slack writes a non-NULL cursor (each
-/// thread's `MAX(fetched_at)`); other providers' rows are omitted.
 pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query(
         "SELECT markdown_uuid, upstream_cursor \
@@ -1099,11 +879,9 @@ async fn apply_markdown(
     qmd_path: &str,
     now_override: Option<&str>,
 ) -> Result<usize> {
-    // Acquire serialized write access. If the orchestrator has called
-    // `begin_transaction`, every guard hands back the SAME held
-    // connection so all per-doc DELETE/INSERTs/upsert statements
-    // accumulate inside one big batch; otherwise each guard takes a
-    // fresh pool connection (auto-commit per statement).
+    // Inside `begin_transaction` every guard hands back the same connection,
+    // so the per-doc statements accumulate in one batch; otherwise each takes
+    // a fresh connection and auto-commits.
     let mut guard = write_lock.acquire().await?;
     let conn = guard.conn();
 
@@ -1117,11 +895,9 @@ async fn apply_markdown(
         insert_grid_row(conn, row).await?;
     }
 
-    // Edges are sharded by source markdown: each markdown owns the
-    // outgoing edges whose `src_markdown_uuid` matches. Re-rendering a
-    // markdown therefore replaces its outgoing-edge set. Incoming edges
-    // (whose `dst_markdown_uuid` matches) are owned by the source
-    // markdown's own row set, so they survive this delete.
+    // Each markdown owns the edges whose `src_markdown_uuid` matches, so a
+    // re-render replaces its outgoing set. Incoming edges belong to the other
+    // markdown's row set and survive.
     sqlx::query("DELETE FROM edges WHERE src_markdown_uuid = ?")
         .bind(&md.markdown_uuid)
         .execute(&mut **conn)
@@ -1138,17 +914,13 @@ async fn apply_markdown(
         .await
         .context("upsert markdowns")?;
 
-    // dolt_commit is issued ONCE per run by the grid_index step after
-    // the full load finishes — not here. Per-doc commits would land
-    // thousands of entries in dolt_log per run, drowning the audit
-    // trail. See `datalib_step::grid_index` for the closing commit_run
-    // call.
+    // The grid_index step issues one dolt_commit per run after the whole
+    // load; per-doc commits would drown dolt_log.
     Ok(md.rows.len())
 }
 
-/// Pick the canonical row for a markdown — the row whose `uuid` matches
-/// `markdown_uuid` (the chat/thread/PR/page row). Fallback to the first
-/// row if nothing matches.
+/// The row whose `uuid` matches `markdown_uuid` — the chat/thread/PR/page
+/// row — falling back to the first row.
 fn pick_canonical<'a>(rows: &'a [GridRow], markdown_uuid: &str) -> Option<&'a GridRow> {
     rows.iter()
         .find(|r| r.uuid == markdown_uuid)
@@ -1174,9 +946,8 @@ async fn upsert_markdown(
     let updated_at = timestamps.iter().max().copied();
     let row_set_hash = compute_row_set_hash(&md.rows);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
-    // Prefer the user-facing source_name the renderer was invoked with
-    // (config.sources[].name in sync). Fall back to the canonical row's
-    // provider when build_grid_index rebuilds from disk without that context.
+    // Fall back to the canonical row's provider when build_grid_index
+    // rebuilds from disk without the config-level name.
     let source_name = if md.source_name.is_empty() {
         canonical.provider.clone()
     } else {
@@ -1238,39 +1009,20 @@ async fn insert_grid_row(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     row: &GridRow,
 ) -> Result<()> {
-    // `when_ts_utc` / `when_offset` used to be split out here. They are
-    // `#[derived]` columns on `GridRow` now, computed by
-    // `GridRow::derived_when_ts_utc` / `derived_when_offset` and bound
-    // by the generated impl — so the derivation sits beside the column
-    // declaration that documents it, and any other writer of this table
-    // gets it too instead of having to remember.
-    // Columns and binds come from `GridRow`'s generated
-    // `BulkUpsertable` impl, so this INSERT cannot drift from the DDL
-    // the same struct derives. It used to be 28 hand-written column
-    // names and 28 hand-written `.bind()` calls whose only guarantee of
-    // agreeing with each other, or with the schema, was review.
-    //
-    // A plain INSERT, not the bulk upsert: a `PRIMARY KEY (uuid)`
-    // collision here is a finding, not an update — see the error arm
-    // below, which names the document that already claimed the id.
+    // A plain INSERT, not the bulk upsert: a `PRIMARY KEY (uuid)` collision
+    // here is a finding, not an update — see the error arm below.
     // `ON CONFLICT DO UPDATE` would silently overwrite it.
     let sql = crate::bulk::insert_sql::<GridRow>();
-    // Audited: every part of `sql` comes from `GridRow`'s associated
-    // consts, never from row data; all values are bound by `bind_into`.
+    // Audited: `sql` comes from `GridRow`'s associated consts; values bound.
     let res = row
         .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
         .execute(&mut **conn)
         .await;
 
     if let Err(e) = res {
-        // Almost always `PRIMARY KEY (uuid)`. The bare sqlx error names
-        // the constraint but not the row already sitting there, which
-        // is the only thing that tells you *which* other document
-        // minted this id. [`IdClaims`] catches the within-run case
-        // before we ever get here, so reaching this point means the
-        // clash is against a row already in the index — a stale row
-        // from a previous layout, or a recipe that changed its
-        // `markdown_uuid` while keeping its row ids.
+        // Almost always `PRIMARY KEY (uuid)`. The bare sqlx error names the
+        // constraint but not the row already there, which is the only thing
+        // that says which other document minted this id.
         let existing: Option<(String, String)> = sqlx::query_as(
             "SELECT provider, IFNULL(markdown_uuid, '') FROM grid_rows WHERE uuid = ? LIMIT 1",
         )
@@ -1299,24 +1051,11 @@ async fn insert_grid_row(
 
 #[cfg(test)]
 mod insert_round_trip_tests {
-    //! Every `GridRow` field has to actually reach the index.
-    //! [`insert_grid_row`] spells its column list and its bindings out
-    //! by hand, so a field can be declared on the struct, populated by
-    //! a renderer, selected by the read path and given a grid column —
-    //! and still be dropped silently on the way in. The row lands with
-    //! a NULL, every layer reports success, and the column is just
-    //! empty.
-    //!
-    //! That is not hypothetical: `org_uuid` / `org_name` shipped that
-    //! way. Both were declared with `#[col(sql = …)]`, set by
-    //! chat-common's renderer from real Anthropic org data, read back
-    //! by `SEARCH_ROW_COLUMNS`, and surfaced as the grid's "Org"
-    //! column — while the INSERT never listed them, so the column was
-    //! empty for every row from the day it appeared.
-    //!
-    //! Rather than pin those two names, this fills every column with a
-    //! distinct sentinel and asserts nothing reads back NULL. The next
-    //! forgotten column fails here instead of in the UI.
+    //! Every `GridRow` field has to actually reach the index. A field can be
+    //! declared, populated, selected and given a grid column — and still be
+    //! dropped silently on the way in, landing as a NULL while every layer
+    //! reports success, which is how `org_uuid` / `org_name` shipped. So every
+    //! column gets a distinct sentinel and nothing may read back NULL.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -1324,17 +1063,16 @@ mod insert_round_trip_tests {
     use std::str::FromStr;
     use tempfile::tempdir;
 
-    /// A row with every `Option` field `Some` and every scalar
-    /// non-empty, so any NULL read back is a binding that was dropped
-    /// rather than a value that was genuinely absent.
+    /// Every `Option` field `Some` and every scalar non-empty, so a NULL read
+    /// back is a dropped binding rather than a genuinely absent value.
     fn fully_populated_row() -> GridRow {
         GridRow {
             uuid: "row-everything".into(),
             provider: "claude".into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
-            // Offset-bearing and parseable, so the two `#[derived]`
-            // columns (`when_ts_utc` / `when_offset`) are non-NULL too.
+            // Offset-bearing and parseable, so the two `#[derived]` columns
+            // are non-NULL too.
             when_ts: Some("2026-06-02T13:00:00-07:00".into()),
             author: Some("Jean-Luc Picard".into()),
             account: Some("acct-1701".into()),
@@ -1381,8 +1119,8 @@ mod insert_round_trip_tests {
             .expect("insert_grid_row");
         drop(conn);
 
-        // `SELECT *` on purpose: the point is to see every column the
-        // DDL declares, including ones this test predates.
+        // `SELECT *` on purpose: the point is to see every column the DDL
+        // declares, including ones this test predates.
         let read_back = sqlx::query("SELECT * FROM grid_rows WHERE uuid = ?")
             .bind(&row.uuid)
             .fetch_one(&pool)
@@ -1423,14 +1161,10 @@ mod insert_round_trip_tests {
 
 #[cfg(test)]
 mod id_claim_tests {
-    //! [`IdClaims`] is the tripwire for two configured sources minting
-    //! the same id. Before it existed, a *full* overlap (same
-    //! `markdown_uuid`) was silent — `apply_markdown`'s
-    //! DELETE-by-markdown_uuid meant the second document erased the
-    //! first one's rows and the run reported success — while a
-    //! *partial* overlap (same row uuid, different markdown) blew the
-    //! whole batch up on `PRIMARY KEY (uuid)` with an error naming
-    //! neither source. These tests pin both shapes.
+    //! [`IdClaims`] is the tripwire for two configured sources minting the
+    //! same id. A full overlap used to be silent (the second document erased
+    //! the first's rows and the run reported success); a partial overlap blew
+    //! the batch up with an error naming neither source. These pin both.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
 
@@ -1498,19 +1232,16 @@ mod id_claim_tests {
         assert_eq!(hit.id, "conv-1");
         assert_eq!(hit.first_source, "claude-api");
         assert_eq!(hit.second_source, "claude-export");
-        // The message has to name both sides — that is the whole point
-        // of the check, and the only thing that tells an operator
-        // which two stanzas to look at.
+        // Naming both sides is the whole point — it is the only thing that
+        // tells an operator which two stanzas to look at.
         let msg = hit.to_string();
         assert!(msg.contains("claude-api"), "{msg}");
         assert!(msg.contains("claude-export"), "{msg}");
     }
 
-    /// The loud-but-useless case: two sources whose documents differ
-    /// but whose *rows* collide — e.g. one shared upstream entity
-    /// rendered into two different markdowns. This previously surfaced
-    /// as a bare sqlx PRIMARY KEY error deep inside a rolled-back
-    /// batch.
+    /// The loud-but-useless case: two sources whose documents differ but
+    /// whose *rows* collide. This used to surface as a bare sqlx PRIMARY KEY
+    /// error deep inside a rolled-back batch.
     #[test]
     fn same_row_uuid_under_different_markdowns_is_reported() {
         let mut claims = IdClaims::new();
@@ -1528,10 +1259,9 @@ mod id_claim_tests {
         assert_eq!(hit.second_markdown_uuid, "md-b");
     }
 
-    /// A source *rename* must stay legal: the ids are unchanged, only
-    /// `source_name` differs, and there is exactly one claimant per id
-    /// within the run. The tracker is deliberately run-scoped rather
-    /// than checking the database precisely so this keeps working.
+    /// A source *rename* must stay legal: same ids, different `source_name`,
+    /// one claimant per id within the run. Run-scoping the tracker is
+    /// precisely what keeps this working.
     #[test]
     fn a_renamed_source_reclaiming_its_own_ids_is_clean() {
         let mut first_run = IdClaims::new();
@@ -1547,24 +1277,15 @@ mod id_claim_tests {
 }
 
 #[cfg(test)]
-// Test diagnostics; cargo test captures stdout/stderr and prints it
-// per-test on failure or with `--nocapture`. No MP in scope here.
+// Test diagnostics; cargo test captures and prints them per-test.
 #[allow(clippy::disallowed_macros)]
 mod write_lock_tests {
-    //! Reproduces the production "(code 5) database is locked" we saw
-    //! on a real render run: multiple per-source render
-    //! workers calling [`apply_one`] in parallel against one pool that
-    //! has `max_connections > 1`. Without the [`WriteLock`] argument
-    //! each task gets its own connection, all of them race for
-    //! doltlite's file-level write lock, and the losers eventually
-    //! time out at sqlx's busy_timeout. With the WriteLock wired in,
-    //! the Rust side queues writers and doltlite only ever sees one.
-    //!
-    //! The lock object also collects timing metrics; the assertions
-    //! at the bottom confirm the wait/hold counters reflect what
-    //! actually happened (acquisitions == total docs written, etc).
-    //! No artificial sleeps or stalls — the contention is real,
-    //! produced by the same code path the orchestrator uses.
+    //! Reproduces the production "(code 5) database is locked": several
+    //! per-source render workers calling [`apply_one`] in parallel against one
+    //! pool with `max_connections > 1`. Without the [`WriteLock`] each task
+    //! gets its own connection, all race for doltlite's file-level write lock,
+    //! and the losers time out. No artificial sleeps — the contention is real,
+    //! from the same code path production uses.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -1628,37 +1349,16 @@ mod write_lock_tests {
             .unwrap()
     }
 
-    /// Drives N parallel tokio tasks through `apply_one`, each writing
-    /// K unique markdowns into the same pool. With the WriteLock the
-    /// orchestrator currently passes, every call must succeed. Counts
-    /// in `grid_rows` and `markdowns` are then verified to match the
-    /// expected `N*K` writes, and the WriteLock metrics are sanity-
-    /// checked (acquisitions == total writes, both timing counters
-    /// non-negative, etc.).
+    /// Per-call auto-commit mode: N parallel tasks through `apply_one`, each
+    /// writing K unique markdowns into one pool. `max_connections=8` so the
+    /// pool *could* hand out enough connections for the busy-timeout race;
+    /// with the lock, only one writer runs at a time.
     ///
-    /// We deliberately use `max_connections=8` to make the pool able
-    /// to hand out enough connections that, WITHOUT the lock, the
-    /// busy-timeout race would fire. With the lock, the connections
-    /// don't help — only one writer runs at a time, so contention
-    /// drops to zero on the doltlite side.
-    /// Per-call auto-commit mode (no `begin_transaction`). Drives N
-    /// parallel tasks through `apply_one` and verifies the lock
-    /// serializes them cleanly. The per-doc cost here is whatever
-    /// doltlite charges for one auto-committed statement bundle.
-    ///
-    /// `#[ignore]`'d because it dominates the etl_unittests critical
-    /// path (~26s for 480 serialized auto-commit dolt writes at
-    /// ~54ms each, vs. <1s for the rest of the suite combined). Its
-    /// purpose is to demonstrate — and guard against regression in —
-    /// the order-of-magnitude perf gap with the transaction-batched
-    /// companion test below, which is a one-time empirical
-    /// characterization that doesn't need to re-run on every CI build.
-    /// Run on demand with
-    ///   `bazel test //datalib/backend/etl:etl_unittests \
-    ///        --test_arg=--ignored \
-    ///        --test_arg=parallel_apply_one_serializes_writes_with_metrics`
-    /// when changing the WriteLock, `apply_one`, or doltlite's
-    /// auto-commit path.
+    /// `#[ignore]`d because it dominates the suite's critical path (~26s for
+    /// 480 serialized auto-commit dolt writes). It exists to characterize the
+    /// order-of-magnitude gap against the transaction-batched test below. Run
+    /// it with `--test_arg=--ignored` when changing the WriteLock,
+    /// `apply_one`, or doltlite's auto-commit path.
     #[ignore = "slow (~26s) — perf characterization; run on demand"]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn parallel_apply_one_serializes_writes_with_metrics() {
@@ -1716,13 +1416,9 @@ mod write_lock_tests {
         );
     }
 
-    /// One big transaction wrapping every write — the orchestrator's
-    /// production mode. Asserts:
-    ///   * every per-doc apply_one succeeds
-    ///   * the final COMMIT lands every row in the table
-    ///   * doltlite's per-statement overhead is amortized: the
-    ///     avg_hold here should be DRAMATICALLY smaller than the
-    ///     auto-commit version above
+    /// One big transaction wrapping every write — the production mode.
+    /// Asserts every write succeeds, the final COMMIT lands every row, and
+    /// `avg_hold` is dramatically smaller than the auto-commit version above.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn parallel_apply_one_inside_one_transaction_is_faster() {
         const N_TASKS: usize = 16;
@@ -1737,8 +1433,7 @@ mod write_lock_tests {
         let write_lock = WriteLock::new_arc(pool.clone());
         let out_dir = PathBuf::from("/tmp");
 
-        // Open the big batch. Every apply_one call below now reuses
-        // the same held conn and accumulates statements into the
+        // Every apply_one below reuses the held conn and accumulates into the
         // open transaction.
         write_lock.begin_transaction().await.expect("BEGIN");
 
@@ -1837,16 +1532,13 @@ mod write_lock_tests {
 
 #[cfg(test)]
 mod schema_reconcile_tests {
-    //! The index must survive a schema change to `grid_rows`,
-    //! `markdowns` or `edges` without a human deleting the file.
+    //! The index must survive a schema change to `grid_rows`, `markdowns` or
+    //! `edges` without a human deleting the file.
     //!
-    //! Both directions matter and fail silently in opposite ways. A
-    //! reconcile that doesn't fire leaves every statement naming a new
-    //! column erroring against an older data root — the #216 bug these
-    //! tests were written for. One that fires when it shouldn't wipes a
-    //! healthy index on every single pipeline run, and because the
-    //! rebuild that follows repopulates it, the only visible symptom is
-    //! that the run got slower.
+    //! Both directions fail silently. A reconcile that doesn't fire leaves
+    //! every statement naming a new column erroring against an older root.
+    //! One that fires when it shouldn't wipes a healthy index on every run,
+    //! and since the rebuild repopulates it, the only symptom is slowness.
 
     use std::path::Path;
     use std::str::FromStr;
@@ -1857,15 +1549,10 @@ mod schema_reconcile_tests {
     use crate::doltlite_raw::actual_column_names;
     use crate::grid_index::{init_schema, EDGES_DDL, MARKDOWNS_DDL};
 
-    /// `grid_rows` exactly as data roots created before #216 have it on
-    /// disk — read out of a real one with the doltlite shell. `git_sha`
-    /// is followed by `external_id`, and none of the three `upstream_*`
-    /// columns that replaced it exist.
-    ///
-    /// Written out longhand rather than derived from the current DDL:
-    /// the point is to pin a shape from history, and a shape computed
-    /// from today's struct would silently become "today's shape" again
-    /// the next time a column moves.
+    /// `grid_rows` exactly as data roots created before #216 have it on disk.
+    /// Written out longhand rather than derived from the current DDL: the
+    /// point is to pin a shape from history, and a computed one would
+    /// silently become today's shape again.
     const PRE_216_GRID_ROWS_DDL: &str = "CREATE TABLE IF NOT EXISTS grid_rows (
         uuid VARCHAR(96) NOT NULL,
         provider VARCHAR(32) NOT NULL,
@@ -1915,9 +1602,6 @@ mod schema_reconcile_tests {
             .unwrap()
     }
 
-    /// Seed one indexed document in the pre-#216 shape: a `markdowns`
-    /// row carrying the fingerprint that drives the skip, and the
-    /// `grid_rows` row it produced.
     async fn seed_pre_216(pool: &SqlitePool) {
         sqlx::query(PRE_216_GRID_ROWS_DDL)
             .execute(pool)
@@ -1945,15 +1629,14 @@ mod schema_reconcile_tests {
         .unwrap();
     }
 
-    /// An index written before #216 is brought to the current schema,
-    /// and its fingerprints are cleared so the rebuild actually runs.
+    /// An index written before #216 is brought to the current schema, and its
+    /// fingerprints are cleared so the rebuild actually runs.
     ///
-    /// The `markdowns` assertion is the load-bearing half. Recreating
-    /// `grid_rows` alone would satisfy every "does the column exist"
-    /// check while leaving `markdowns.source_fingerprint` in place — and
-    /// `build_grid_index` skips a document whose fingerprint still
-    /// matches, so the index would stay empty for as long as nothing
-    /// upstream changed.
+    /// The `markdowns` assertion is the load-bearing half: recreating
+    /// `grid_rows` alone satisfies every "does the column exist" check while
+    /// leaving the fingerprints in place, and `build_grid_index` skips a
+    /// document whose fingerprint still matches — so the index would stay
+    /// empty until something upstream changed.
     #[tokio::test]
     async fn an_index_predating_a_column_rename_is_rebuilt() {
         let dir = tempdir().unwrap();
@@ -1979,10 +1662,9 @@ mod schema_reconcile_tests {
         assert_eq!(count(&pool, "grid_rows").await, 0);
     }
 
-    /// The write path works afterwards. This is the statement that
-    /// actually failed on a real data root — `no such column:
-    /// upstream_id` from inside `insert_grid_row` — so asserting the
-    /// column list alone would leave the thing users hit untested.
+    /// The write path works afterwards. `no such column: upstream_id` from
+    /// inside `insert_grid_row` is what actually failed on a real data root,
+    /// so asserting the column list alone would leave that untested.
     #[tokio::test]
     async fn the_rebuilt_index_accepts_a_write() {
         let dir = tempdir().unwrap();
@@ -2001,14 +1683,10 @@ mod schema_reconcile_tests {
         .expect("insert naming the post-#216 columns must succeed");
     }
 
-    /// An index already at the current schema is left completely alone.
-    ///
-    /// Without this, a reconcile whose comparison is subtly wrong (a
-    /// name normalized differently, a set compared against a list)
-    /// would drop and rebuild the whole index on every run. Nothing
-    /// downstream would notice — the rebuild puts the rows back — so
-    /// the only symptom would be a pipeline that quietly stopped being
-    /// incremental.
+    /// An index already at the current schema is left completely alone. A
+    /// reconcile whose comparison is subtly wrong would rebuild on every run,
+    /// and nothing downstream would notice — the only symptom is a pipeline
+    /// that quietly stopped being incremental.
     #[tokio::test]
     async fn a_current_index_is_not_touched() {
         let dir = tempdir().unwrap();
@@ -2038,16 +1716,11 @@ mod schema_reconcile_tests {
 mod source_cursor_tests {
     //! What the cursor buys, and the trap in testing it.
     //!
-    //! Before the cursor, a steady-state re-index still *read* every
-    //! document from every source's store and then dropped the
-    //! unchanged ones by comparing `source_fingerprint`. The visible
-    //! result — nothing written — is identical either way. So a test
-    //! asserting "nothing was loaded" passes just as happily against
-    //! the old behaviour and proves nothing about the cursor.
-    //!
-    //! `markdowns_total` is the number of documents actually read, and
-    //! it is the field that separates the two. Every test here asserts
-    //! on it.
+    //! Before the cursor, a steady-state re-index still *read* every document
+    //! and dropped the unchanged ones by fingerprint. Nothing was written
+    //! either way, so "nothing was loaded" proves nothing. `markdowns_total`
+    //! — documents actually read — is the field that separates the two, and
+    //! every test here asserts on it.
 
     use std::path::Path;
     use std::str::FromStr;
@@ -2109,8 +1782,6 @@ mod source_cursor_tests {
         root.join(source).join("rendered_md")
     }
 
-    /// Write `docs` as the whole content of one source's store and
-    /// commit, the way the render step does.
     fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
         for d in docs {
@@ -2120,8 +1791,6 @@ mod source_cursor_tests {
         store.close();
     }
 
-    /// Drop a document from a source's store, as a deleted upstream
-    /// conversation would.
     fn unrender(root: &Path, source: &str, uuid: &str) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
         store.remove_document(uuid).unwrap();
@@ -2137,11 +1806,8 @@ mod source_cursor_tests {
     }
 
     /// The headline claim: a second run over an unchanged source reads
-    /// nothing at all.
-    ///
-    /// `markdowns_total == 0` is the whole assertion. Under the old
-    /// read-everything-then-compare behaviour this run read 2 and
-    /// skipped 2, and `markdowns_loaded` was 0 in both worlds.
+    /// nothing at all. `markdowns_total == 0` is the whole assertion — the
+    /// old read-then-compare behaviour also reported `markdowns_loaded: 0`.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unchanged_source_is_not_read_at_all_on_the_second_run() {
         let td = tempdir().unwrap();
@@ -2214,11 +1880,8 @@ mod source_cursor_tests {
         assert_eq!(text, "b-changed");
     }
 
-    /// A document a source stops holding is removed from the index.
-    ///
-    /// This is impossible without a diff: reading whole stores sees
-    /// what is present and can never name what left, so before the
-    /// cursor a deleted conversation stayed in the grid forever.
+    /// A document a source stops holding is removed. Impossible without a
+    /// diff: reading whole stores sees what is present, never what left.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_document_the_source_dropped_is_deleted_from_the_index() {
         let td = tempdir().unwrap();
@@ -2243,13 +1906,10 @@ mod source_cursor_tests {
         assert_eq!(left, "md-1");
     }
 
-    /// A cursor the store's history does not contain must fall back to
-    /// reading the store whole, not to reading nothing.
-    ///
-    /// This is the failure mode worth a test: "I cannot tell what
-    /// changed" and "nothing changed" are the same shape from the
-    /// outside — an empty result — and picking the wrong one leaves
-    /// the index silently frozen.
+    /// An unusable cursor must fall back to reading the store whole, not to
+    /// reading nothing. "I cannot tell what changed" and "nothing changed"
+    /// are the same shape from outside — an empty result — and picking the
+    /// wrong one leaves the index silently frozen.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unusable_cursor_falls_back_to_reading_everything() {
         let td = tempdir().unwrap();

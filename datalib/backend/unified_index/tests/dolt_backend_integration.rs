@@ -1,12 +1,4 @@
 //! End-to-end integration test for the doltlite backend.
-//!
-//! Opens a doltlite file in a temp directory, connects [`DoltRepo`],
-//! creates the `grid_rows` table, inserts a handful of fixture rows, and
-//! verifies that [`IndexRepo::search`] returns them in the expected order.
-//!
-//! No subprocess, no port — just a file on disk. This test runs anywhere
-//! `sqlite`-compatible doltlite is linked (the sqlx-sqlite driver opens
-//! the file natively).
 
 use datalib_schema::grid_rows::DDL as GRID_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;

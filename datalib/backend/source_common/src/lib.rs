@@ -1,22 +1,5 @@
 //! Schema-only foundation crate shared by every provider `*-config`
 //! crate (and by the retired stanza schema in `migrate_config`).
-//!
-//! Holds the per-source **common envelope** of shared tunables ([`SourceCommon`])
-//! that each provider config composes, the global [`Defaults`] block those
-//! tunables fall back to, and the cross-source download knobs
-//! ([`DownloadParams`]). Depends on nothing but `serde`, so any config crate can
-//! compose [`SourceCommon`] without pulling ETL or orchestrator code.
-//!
-//! [`LatchkeySettings`] sits here for the same reason but is deliberately *not*
-//! part of [`SourceCommon`]: only the providers that authenticate through the
-//! `latchkey` CLI compose it, so the block is rejected on a local-only source
-//! rather than accepted and ignored.
-//!
-//! All cross-node derivation (folding [`Defaults`] into each source, resolving
-//! paths from `data_root`) happens once, eagerly, in the orchestrator's
-//! `normalize()` via [`SourceCommon::fold_defaults`] and
-//! [`SourceCommon::resolve_paths`]. Downstream code receives a fully-resolved,
-//! self-contained [`SourceCommon`] and never re-derives anything.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -107,10 +90,6 @@ impl SourceCommon {
     /// `<data_root>/<name>/raw` default when unset; tilde-expands an explicit
     /// `input_path` but leaves it `None` when omitted. Run once in
     /// `normalize()`.
-    ///
-    /// Layout: every artifact a stanza produces is grouped under
-    /// `<data_root>/<name>/` (`raw/` here, `rendered_md/` on the render
-    /// side), so a source's whole footprint is one self-contained subtree.
     pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
         let default_raw = data_root.join(name).join("raw");
         self.raw_path = Some(match self.raw_path.take() {
@@ -122,23 +101,18 @@ impl SourceCommon {
         }
     }
 
-    /// Resolved raw-store directory. Valid only after [`Self::resolve_paths`].
     pub fn raw_path(&self) -> &Path {
         self.raw_path
             .as_deref()
             .expect("SourceCommon::raw_path read before normalize()")
     }
 
-    /// Resolved input path: the explicit `input_path` if set, else the raw dir
-    /// (the meaningless-but-harmless fallback for API sources). Valid only
-    /// after [`Self::resolve_paths`].
     pub fn input_or_raw_path(&self) -> &Path {
         self.input_path
             .as_deref()
             .unwrap_or_else(|| self.raw_path())
     }
 
-    /// Whether the wire-event tape is enabled (`None` → enabled default).
     pub fn event_tape_enabled(&self) -> bool {
         self.event_tape.as_ref().map(|e| e.enabled).unwrap_or(true)
     }
@@ -146,43 +120,16 @@ impl SourceCommon {
 
 /// Per-source latchkey knobs, for a source whose downloader authenticates
 /// through the `latchkey` CLI.
-///
-/// Composed as `latchkey_settings:` by exactly those providers' config
-/// crates and by **no** others, which is the whole point of it being a
-/// separate block rather than a field on [`SourceCommon`]: a
-/// `latchkey_settings` key on a local-only source (`pdf`, `media`,
-/// `signal_backup`, …) hits that config's `deny_unknown_fields` and fails
-/// at load time, instead of being accepted and silently ignored.
-///
-/// Providers forward the whole struct — not the individual fields — down to
-/// their HTTP layer (`HttpRequest::latchkey`), so a knob added here reaches
-/// every latchkey provider without touching any of them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LatchkeySettings {
     /// Which stored latchkey account this source mirrors
     /// (`latchkey --account <acct> curl …`).
-    ///
-    /// Latchkey keys credentials by `(service, account)` and *requires* the
-    /// flag once a service holds two — the normal case once work and personal
-    /// identities are both signed in to the same service. The name is
-    /// latchkey's own (whatever `latchkey auth list` shows for the service),
-    /// not the provider's; the unnamed default account is `""` there, but
-    /// address it by omitting this field rather than by writing an empty
-    /// string.
-    ///
-    /// `None` means "the only stored account", which is what every source
-    /// that predates this block wants. It is deliberately not a
-    /// pick-the-first fallback: with two accounts stored and none named,
-    /// latchkey fails the request as ambiguous, which is the loud outcome we
-    /// want over silently mirroring the wrong identity.
     #[serde(default)]
     pub account: Option<String>,
 }
 
 impl LatchkeySettings {
-    /// Reject values that would reach latchkey as nonsense. Call from the
-    /// composing config's `validate()`.
     pub fn validate(&self) -> Result<(), String> {
         if self.account.as_ref().is_some_and(|a| a.trim().is_empty()) {
             return Err(
@@ -194,7 +141,6 @@ impl LatchkeySettings {
         Ok(())
     }
 
-    /// The account to pass to `latchkey --account`, if one was configured.
     pub fn account(&self) -> Option<&str> {
         self.account.as_deref()
     }
@@ -221,7 +167,6 @@ pub struct RenderCommon {
 }
 
 impl RenderCommon {
-    /// Same resolution as [`SourceCommon::resolve_paths`].
     pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
         let default_raw = data_root.join(name).join("raw");
         self.raw_path = Some(match self.raw_path.take() {
@@ -233,15 +178,12 @@ impl RenderCommon {
         }
     }
 
-    /// Resolved raw-store directory. Valid only after [`Self::resolve_paths`].
     pub fn raw_path(&self) -> &Path {
         self.raw_path
             .as_deref()
             .expect("RenderCommon::raw_path read before resolve_paths()")
     }
 
-    /// Resolved input path: the explicit `input_path` if set, else the
-    /// raw dir. Valid only after [`Self::resolve_paths`].
     pub fn input_or_raw_path(&self) -> &Path {
         self.input_path
             .as_deref()

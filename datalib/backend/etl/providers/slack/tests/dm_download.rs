@@ -1,30 +1,4 @@
 //! Whole-download tests for the `dms` / `dm_users` config knobs.
-//!
-//! The unit tests in `download/mod.rs` cover `conversation_types`,
-//! `resolve_dm_users` and `select_targets` as pure functions. These
-//! cover the part that actually moves data: that a run with `dms` off
-//! never asks Slack for a DM, that a run with it on stores DM messages,
-//! and that an allowlist narrows to the named person.
-//!
-//! Why this needs an integration test: every gate on the DM path fails
-//! *silently to a no-op*. Drop the `dms` plumbing anywhere between the
-//! config struct and `conversations.list` and the run still succeeds —
-//! it just mirrors no DMs, which is indistinguishable from a workspace
-//! that has none. Worse in the other direction: a `select_targets` that
-//! ignored its allowlist would mirror DMs the config asked to leave
-//! alone, and nothing downstream would report it.
-//!
-//! Same synth → playback → download shape as `config_change_backfill.rs`.
-//! Playback is keyed on the exact param set, so the `types=` value the
-//! downloader sends is itself load-bearing: the `dms = false` fixture
-//! only answers the two-channel-types request, and a run that asked for
-//! `im,mpim` would fail outright rather than pass quietly.
-//!
-//! The conversation payloads below carry the fields the live API
-//! actually returns (checked 2026-08-31): an `im` has `user`,
-//! `is_archived` and `is_user_deleted` but no `name` and no
-//! `is_member`; an `mpim` looks like a private channel and additionally
-//! carries a `members` array that includes the account itself.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -77,8 +51,6 @@ fn write_auth_and_users(api: &Path) {
     );
 }
 
-/// One `conversations.list` envelope, keyed on the exact `types` the
-/// downloader is expected to send.
 fn write_conversations_list(api: &Path, file: &str, types: &str, conversations: Value) {
     write_envelope(
         &api.join(format!("raw_api/conversations.list/{file}.jsonl")),
@@ -94,8 +66,6 @@ fn write_conversations_list(api: &Path, file: &str, types: &str, conversations: 
     );
 }
 
-/// A cold-start `conversations.history` envelope for one conversation,
-/// carrying a single message so the store shows whether it was walked.
 fn write_history(api: &Path, channel: &str, ts: &str, text: &str) {
     write_envelope(
         &api.join(format!("raw_api/conversations.history/{channel}.jsonl")),
@@ -117,8 +87,6 @@ fn write_history(api: &Path, channel: &str, ts: &str, text: &str) {
     );
 }
 
-/// The four conversations every DM-enabled scenario lists, in the
-/// shapes the live API returns. `U1` is the account itself.
 fn all_conversations() -> Value {
     json!([
         {"id": "C1", "name": "bridge", "is_channel": true, "is_member": true,
@@ -165,7 +133,6 @@ async fn run_fetch(out: &Path, dms: bool, dm_users: Option<Vec<&str>>) {
     .unwrap();
 }
 
-/// The channel ids that actually have mirrored messages.
 fn channels_with_messages(out: &Path) -> BTreeSet<String> {
     let raw = block_on_load_all(&db_path_for(out)).expect("load db");
     raw.messages.iter().map(|m| m.channel_id.clone()).collect()
@@ -177,12 +144,6 @@ fn set(ids: &[&str]) -> BTreeSet<String> {
 
 /// Backward compatibility, and the default every existing config gets:
 /// DMs off means the request never asks for them.
-///
-/// The `conversations.list` fixture answers only the channel-types
-/// request. If the downloader sent `im,mpim` — because someone wired
-/// `dms` to default true, or dropped the flag on its way to the
-/// request — playback has nothing to serve and the run fails here,
-/// rather than passing while quietly mirroring the wrong thing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dms_off_never_asks_for_direct_messages() {
     let _guard = ENV_LOCK.lock().await;

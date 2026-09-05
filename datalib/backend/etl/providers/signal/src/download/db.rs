@@ -1,16 +1,4 @@
 //! Open + non-DDL data-manipulation for the Signal raw store.
-//!
-//! [`RawDb`] owns the entity-db pool and the sibling CAS handle.
-//! The schema itself — every table DDL, every row struct + its
-//! `BulkUpsertable` impl, the resume cursor, and the per-table
-//! commentary — lives next door in [`super::schema_raw`].
-//!
-//! What's here is the small set of things `schema_raw` can't be:
-//! `RawDb::open`, `reset`, the resume-cursor read/write methods
-//! (`snapshot_already_ingested`, `record_snapshot_ingested`,
-//! `last_ingested_snapshot`). Entity-table writes go through the
-//! generic `datalib_etl::bulk::bulk_upsert_in_tx<T>` helper
-//! from the caller (`super::mod`); they don't live on `RawDb`.
 
 use std::path::Path;
 
@@ -104,9 +92,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Returns the most recently-recorded (snapshot_dir, blake3),
-    /// for logging "we ingested X previously" lines. Returns `None`
-    /// on a fresh DB.
     pub async fn last_ingested_snapshot(&self) -> Result<Option<(String, String)>> {
         let row = sqlx::query(
             "SELECT snapshot_dir, blake3 FROM ingested_backups

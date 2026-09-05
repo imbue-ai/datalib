@@ -1,22 +1,4 @@
 //! Markdown + grid_rows rendering for Signal chats.
-//!
-//! One `.md` per `(chat, period_key)` bucket. Layout under `out_dir`:
-//!
-//! ```text
-//! <stanza>/rendered_md/<chat_uuid>/<period_key>.md
-//! <stanza>/rendered_md/<chat_uuid>/<period_key>.grid_rows.json
-//! ```
-//!
-//! Each chat item in a bucket becomes one line of the markdown body:
-//!
-//! ```text
-//! - 2364-04-09T12:00:00Z  Me: Status report.
-//! - 2364-04-09T12:01:00Z  Will Riker: All decks at green status, Captain.
-//! ```
-//!
-//! The row set carries: one chat-level grid_row (`Signal Chat`) per
-//! bucket plus one message-level grid_row (`Signal Message`) per
-//! chat item that surfaces in the search grid.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,20 +18,6 @@ use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
 /// that we need every existing doc rebuilt.
-///
-/// v3 = each chat item now emits `id="m-{msg_uuid}"
-/// data-section-uuid="{msg_uuid}"` on its inline span, so the
-/// frontend's row-click → preview-scroll path can anchor on the
-/// message_grid_row uuid. Without this the chat-preview pane has no
-/// hook for `scrollIntoView` and same-thread row clicks were silently
-/// no-op (caught by `row-click-scroll-position.spec.ts`).
-///
-/// v2 = period-bucketed (one .md per (chat, period_key) instead of one per chat).
-///
-/// v4 = a bucket with no items no longer gets a chat-level row stamped
-/// `1970-01-01T00:00:00`; its `when_ts` is null, as is that of any row
-/// whose `date_sent` is not a representable instant. See
-/// `docs/dev/data_architecture_parse_and_render.md` §6.
 pub const RENDER_VERSION: u32 = 4;
 
 const SOURCE_LABEL: &str = "Signal";
@@ -507,15 +475,6 @@ fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {
         .map(|r| r.display())
         .unwrap_or_else(|| format!("recipient_{}", item.author_id))
 }
-/// `date_sent` (epoch ms) as a grid-ready `when_ts`, at seconds
-/// precision, or `None` when it isn't a representable instant.
-///
-/// This used to fall back to the literal `"1970-01-01T00:00:00+00:00"`,
-/// on the reasoning that a sortable epoch is a "visible-broken" marker.
-/// It isn't visible at all: in the grid it is indistinguishable from a
-/// real 1970 message, it sorts into a real position, and it matches
-/// `before:` / `after:` queries it should not. The policy now lives in
-/// `datalib-time` so all three renderers that had a copy of it agree.
 fn iso_ts(date_sent_ms: i64) -> Option<String> {
     datalib_time::when_ts_from_unix_millis(
         Some(date_sent_ms),

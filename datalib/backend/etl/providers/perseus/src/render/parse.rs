@@ -1,29 +1,4 @@
 //! TEI XML walker for the Perseus multi-edition corpus.
-//!
-//! Each edition (one TEI file per `tlg0003.tlg001.<id>.xml`) shares the
-//! same locator scheme, after `<text>/<body>/<div type="edition">`:
-//!
-//! ```xml
-//! <div subtype="book" n="1">
-//!   <div subtype="chapter" n="1">
-//!     <div subtype="section" n="1">…text…</div>
-//!     <div subtype="section" n="2">…text…</div>
-//!   </div>
-//!   …
-//! </div>
-//! ```
-//!
-//! Some chapters in the older editions have no `<div subtype="section">`
-//! children — the chapter `<div>` carries the text directly. We fall
-//! back to `n="1"` for those.
-//!
-//! We no longer privilege a single Greek/English pair: every `*.xml`
-//! under `input_path` (except `__cts__.xml`) is parsed as an edition,
-//! and the rendered locator tree is the *union* of every edition's
-//! (book, chapter, section) locators — a partial edition (e.g. a
-//! German selection of a few speeches) simply contributes text for the
-//! sections it covers. Human-readable edition titles come from
-//! `__cts__.xml` when present.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -64,8 +39,6 @@ pub struct Section {
 }
 
 impl Section {
-    /// Text for one edition, or "" when this edition doesn't cover the
-    /// section.
     pub fn text(&self, edition_id: &str) -> &str {
         self.texts.get(edition_id).map(String::as_str).unwrap_or("")
     }
@@ -91,8 +64,6 @@ pub struct ParsedPerseus {
 }
 
 impl ParsedPerseus {
-    /// Language code for an edition id, or "" if unknown. Used by the
-    /// aligner to pick the right sentence splitter.
     pub fn lang_of(&self, edition_id: &str) -> &str {
         self.editions
             .iter()
@@ -102,8 +73,6 @@ impl ParsedPerseus {
     }
 }
 
-/// Read every edition TEI under `input_path` and merge them into one
-/// locator tree. Edition titles come from `__cts__.xml` when present.
 pub fn parse(input_path: &Path) -> Result<ParsedPerseus> {
     let cts = read_cts(input_path)?; // id -> (lang_attr, title)
 
@@ -443,7 +412,6 @@ fn read_cts(input_path: &Path) -> Result<BTreeMap<String, (String, String)>> {
     Ok(out)
 }
 
-/// Pull `urn` and `xml:lang` off an `<edition>`/`<translation>` start tag.
 fn edition_attrs(e: &BytesStart) -> (String, String) {
     let mut urn = String::new();
     let mut lang = String::new();
@@ -462,7 +430,6 @@ fn edition_attrs(e: &BytesStart) -> (String, String) {
     (urn, lang)
 }
 
-/// `<label>` + the attribution surname extracted from `<description>`.
 fn build_title(label: &str, description: &str) -> String {
     let label = normalize_whitespace(label);
     let desc = normalize_whitespace(description);
@@ -509,7 +476,6 @@ fn push_normalized(buf: &mut String, s: &str) {
     buf.push_str(s);
 }
 
-/// Collapse all whitespace runs to single spaces and trim.
 fn normalize_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_space = true;

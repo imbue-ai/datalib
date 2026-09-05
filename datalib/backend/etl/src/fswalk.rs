@@ -1,28 +1,4 @@
 //! Shared filesystem-scanning primitives for file-backed providers.
-//!
-//! Factored out of `datalib-etl-fsindex`, which grew them first and is
-//! still their heaviest user. Two providers now need the same three
-//! things — hash a file's bytes, decide whether a previously-seen path
-//! can skip that hash, and walk a tree honoring gitignore-shaped rules
-//! — and duplicating them would let the two copies drift on exactly the
-//! subtleties that are easy to get wrong (the mmap threshold, the
-//! `nostamp` fallback, the `rescan` sentinel).
-//!
-//! What deliberately did NOT move here:
-//!
-//! - **Directory tree-hashing** (`hash_tree`). Only fsindex builds a
-//!   Merkle tree over directories; a document provider hashes leaves and
-//!   stops. It stays in fsindex next to the canonicalization doc that
-//!   defines its wire format.
-//! - **The `.fsindex.yaml` cascade and UUID stamping.** That is
-//!   fsindex's opt-in upstream mutation, not a general scanning
-//!   concern (see fsindex's `DOWNLOAD.md` §"Stamping policy").
-//! - **The post-order streaming walker.** fsindex's walker is tuned for
-//!   tens of millions of entries and folds child hashes into parents;
-//!   [`walk_files`] here is a flat leaf-only walk for corpora three
-//!   orders of magnitude smaller. Sharing one walker would mean
-//!   carrying fsindex's post-order machinery into callers that have no
-//!   directory rows to fold into.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -54,7 +30,6 @@ pub fn to_hex(h: &Blake3) -> String {
 /// MiB is the threshold blake3's own `b3sum` CLI uses.
 const MMAP_THRESHOLD: u64 = 16 * 1024 * 1024;
 
-/// Hash file bytes. Streams below [`MMAP_THRESHOLD`], mmaps above it.
 pub fn hash_file(path: &Path, size: u64) -> Result<Blake3> {
     let mut hasher = blake3::Hasher::new();
     if size >= MMAP_THRESHOLD {
@@ -70,15 +45,11 @@ pub fn hash_file(path: &Path, size: u64) -> Result<Blake3> {
     Ok(*hasher.finalize().as_bytes())
 }
 
-/// Hash a symlink's target bytes, so a retarget registers as a content
-/// change.
 pub fn hash_symlink_target(target: &[u8]) -> Blake3 {
     *blake3::hash(target).as_bytes()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Fast-rescan cursor (Unison's `dataClearlyUnchanged`)
-// ─────────────────────────────────────────────────────────────────────
 
 /// Which fields of the stat triple are trustworthy on the filesystem
 /// this row was recorded from.
@@ -142,12 +113,6 @@ pub enum StampDecision {
     Rehash,
 }
 
-/// Reuse-vs-rehash for one previously-scanned path. Pure; no I/O.
-///
-/// Mirrors Unison's `dataClearlyUnchanged` (`src/fpcache.ml:243`). The
-/// decision compares only against what was *stored*: the `stamp_kind`
-/// the walker would assign to the new row is a platform decision made
-/// elsewhere and does not enter here.
 pub fn decide(prev: Option<&StampCursor>, fresh: &FreshStat) -> StampDecision {
     let Some(prev) = prev else {
         return StampDecision::Rehash;
@@ -166,9 +131,6 @@ pub fn decide(prev: Option<&StampCursor>, fresh: &FreshStat) -> StampDecision {
     StampDecision::ReuseHash
 }
 
-/// Extract the rescan triple from a `Metadata`. On non-Unix the inode
-/// and dev come back `None`, which callers should pair with
-/// [`StampKind::NoStamp`].
 pub fn fresh_stat(md: &std::fs::Metadata) -> FreshStat {
     #[cfg(unix)]
     {
@@ -209,9 +171,7 @@ pub fn stamp_kind_for(fresh: &FreshStat) -> StampKind {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Flat leaf walk
-// ─────────────────────────────────────────────────────────────────────
 
 /// One visited file.
 pub struct WalkedFile {
@@ -233,16 +193,6 @@ pub struct WalkError {
     pub error: String,
 }
 
-/// Walk `root` and yield every regular file whose path satisfies
-/// `accept`, honoring `.gitignore`-shaped rules found in the tree plus
-/// any `extra_ignores` globs supplied by config.
-///
-/// Symlink policy: a symlink **to a file** is followed and indexed, a
-/// symlink **to a directory** is not descended into. Descending is what
-/// creates unbounded loops (`a/link -> ..`), whereas a link to a file
-/// terminates immediately — and refusing those would mean skipping real
-/// documents, including every input under a Bazel runfiles tree, which
-/// is entirely symlinks.
 pub fn walk_files<F>(
     root: &Path,
     extra_ignores: &[String],

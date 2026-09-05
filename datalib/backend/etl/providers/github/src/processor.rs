@@ -116,8 +116,6 @@ impl DataProcessor for GithubRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::grid_rows::RENDER_VERSION)
     }

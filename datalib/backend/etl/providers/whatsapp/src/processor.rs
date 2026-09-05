@@ -4,11 +4,6 @@
 //! raw doltlite store) when `sync:` is present, plus an always-present
 //! **render** processor ([`WhatsappRender`]). [`plan_download`] /
 //! [`plan_render`] build the per-wave processors the orchestrator drives.
-//!
-//! Storage ownership lives here, not in the orchestrator: [`WhatsappDownload`]
-//! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
-//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
-//! orchestrator never sees a pool or a commit.
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
@@ -23,8 +18,6 @@ use datalib_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
 use crate::download;
 
-/// Download wave. Download requires `sync:` (which carries the required
-/// `backup_dir`); error exactly as the old orchestrator did.
 pub fn plan_download(
     ctx: PlanContext,
     config: WhatsappConfig,
@@ -117,8 +110,6 @@ impl DataProcessor for WhatsappRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

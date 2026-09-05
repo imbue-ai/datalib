@@ -1,76 +1,13 @@
 //! Give a GitLab payload a stable form before it is stored.
-//!
-//! # The problem
-//!
-//! GitLab embeds a cache-buster in avatar URLs:
-//!
-//! ```text
-//! https://gitlab.com/uploads/-/system/user/avatar/20370006/avatar.png?v=1788242602
-//! ```
-//!
-//! For at least some users that `?v=` is **the time of the fetch**, not
-//! a property of the image. Measured against the live golden on
-//! 2026-09-01: the value was `1788242602`, and the run that produced it
-//! started at `1788242598` — four seconds earlier. So the stored payload
-//! differs from itself on every fetch, `dolt_diff_merge_requests`
-//! reports a change, and the manual-e2e golden churns on content that
-//! never moved. One bake produced 31 changed lines from this alone.
-//!
-//! It is not uniform, which is what makes the field unusable rather than
-//! merely noisy. Across two consecutive bakes:
-//!
-//! | avatar | `?v=` | |
-//! |---|---|---|
-//! | user 14374385 | `2026-05-15 00:00:00`, both times | stable — a real version |
-//! | user 14376375 | `2026-08-31 00:14` → `2026-09-01 00:00` | rotates daily |
-//! | user 20370006 | `2026-08-31 11:17` → `2026-09-01 06:03` | equals the fetch time |
-//!
-//! A field that is a content version for one row and a clock reading for
-//! the next cannot be trusted as either.
-//!
-//! # Why strip the parameter rather than declare the field volatile
-//!
-//! The same reasoning `claude`'s `canonicalize_project_payload`
-//! records for sorting `permissions` instead of dropping it: the
-//! *contents* are content — an avatar actually changing is a change we
-//! want to see — and it is only the cache-buster that carries no
-//! information. Stripping `?v=` keeps the URL, so a different avatar
-//! path still registers as a difference.
-//!
-//! There is also a mechanical reason `VOLATILE_PATHS` cannot do this
-//! job. [`split_volatile`](datalib_etl::doltlite_raw::split_volatile)
-//! takes fixed object-key paths from the payload root and skips any path
-//! that would descend through a non-object. Of the 43 `avatar_url`
-//! occurrences in one bake, 37 sit inside arrays —
-//! `discussions[].payload.notes[].author.avatar_url`,
-//! `merge_requests[].payload.reviewers[].avatar_url` — which no such
-//! path can reach. Making it reach them would mean teaching a wildcard
-//! segment to shared machinery that 130 targets depend on, to express
-//! something a nine-line recursive walk says directly.
-//!
-//! # Scope
-//!
-//! Only a `v=<digits>` parameter, and only under a key named
-//! `avatar_url`. Other query parameters survive, and a `v=` whose value
-//! is not all digits is left alone — GitLab's cache-buster is a unix
-//! timestamp, and anything else is more likely to be meaningful.
 
 use serde_json::Value;
 
-/// Recursively rewrite every `avatar_url` in `payload`, dropping the
-/// `?v=<digits>` cache-buster.
-///
-/// Returns an owned copy; the input is untouched. Idempotent, so it is
-/// safe to apply on a re-upsert of an already-stored payload.
 pub fn canonicalize_payload(payload: &Value) -> Value {
     let mut out = payload.clone();
     strip_in_place(&mut out, false);
     out
 }
 
-/// `under_avatar_key` is true when the value we are looking at was
-/// reached through a key named `avatar_url`, which is the only place a
-/// string gets rewritten.
 fn strip_in_place(v: &mut Value, under_avatar_key: bool) {
     match v {
         Value::Object(map) => {
@@ -95,14 +32,6 @@ fn strip_in_place(v: &mut Value, under_avatar_key: bool) {
     }
 }
 
-/// Drop a `v=<digits>` parameter from `url`'s query string.
-///
-/// `None` when there is nothing to change, so the caller can skip the
-/// write. Hand-rolled rather than routed through the `url` crate: this
-/// is a textual edit on a value we must otherwise preserve byte for
-/// byte, and a parse/serialize round-trip would also normalize
-/// percent-encoding and default ports — rewriting URLs we were asked to
-/// leave alone.
 fn strip_version_param(url: &str) -> Option<String> {
     let (base, query) = url.split_once('?')?;
     let kept: Vec<&str> = query

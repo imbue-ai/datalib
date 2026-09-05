@@ -1,32 +1,4 @@
 //! Datalib Tauri shell.
-//!
-//! A thin process manager around the real backend: on startup the
-//! launcher window (`launcher-dist/index.html`) asks which data
-//! library to open — recent ones, an existing folder, or a new empty
-//! one — skipped when a root is supplied via CLI arg /
-//! `$DATALIB_DATA_ROOT`. Then the shell spawns the
-//! bundled **`datalib-http` binary** — the exact same binary the
-//! web packaging runs — as a child process on an ephemeral 127.0.0.1
-//! port and opens the main window at its URL. That server serves both
-//! the rust-embed'd Vue UI and `/api/*`, so the UI's relative
-//! `fetch('/api/…')` transport works unchanged.
-//!
-//! The backend is deliberately NOT linked in-process: one binary, one
-//! behavior. Everything backend-side (DB layout, config, qmd, sync
-//! worker) is whatever `datalib-http` does — the shell only decides
-//! *which* binary to run and passes one presentation flag (`--no-open`:
-//! the window replaces the browser tab).
-//!
-//! Port handshake: the child gets `DATALIB_BIND=127.0.0.1:0` and
-//! `--url-file <tmp>`; it writes its bound URL there as soon as the
-//! listener exists, and the shell polls for that file. No port
-//! pre-allocation race, no log parsing.
-//!
-//! The child is killed when the app exits (see the `RunEvent::Exit`
-//! handler in `main`).
-//!
-//! The `datalib://` deep-link handler is still TODO — see
-//! blueprint/datalib-ui/plan-datalib-ui.md §F8.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -50,17 +22,7 @@ fn version() -> &'static str {
 }
 
 // --- Launcher commands -----------------------------------------------------
-//
-// The four things the launcher window can ask for. Each of the three
-// that open a library ends in `boot`, which replaces this window with
-// the app; the launcher never learns a path it did not already show.
-//
-// Returning `serde_json::Value` rather than a `#[derive(Serialize)]`
-// struct keeps `serde`'s derive out of this crate for one payload
-// consumed by one hand-written page.
 
-/// What the launcher renders: the remembered libraries, and where a new
-/// one would go.
 #[tauri::command]
 fn launcher_state(app: AppHandle) -> serde_json::Value {
     let recents: Vec<serde_json::Value> = home_dir(&app)
@@ -119,9 +81,6 @@ fn launcher_pick(app: AppHandle) {
         });
 }
 
-/// Create the empty library the launcher named and open it. Only the
-/// directory is made here; the config inside it is the app's own
-/// first-run screen, which explains itself before writing.
 #[tauri::command]
 fn launcher_create(app: AppHandle) -> Result<(), String> {
     let root = new_root_path(&app);
@@ -135,14 +94,10 @@ fn launcher_quit(app: AppHandle) {
     app.exit(0);
 }
 
-/// The user's home directory, as Tauri resolves it.
 fn home_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().home_dir().ok()
 }
 
-/// Where a new library goes. `document_dir` is the platform's real
-/// Documents directory (localized, relocatable), with `~/Documents` as
-/// the fallback and the home directory itself as the last resort.
 fn new_root_path(app: &AppHandle) -> PathBuf {
     let documents = app.path().document_dir().ok().or_else(|| {
         let home = home_dir(app)?;
@@ -266,19 +221,6 @@ fn explicit_data_root() -> Option<PathBuf> {
     Some(PathBuf::from(expanded))
 }
 
-/// Open the launcher window: the app's first screen when it was
-/// started without a data root.
-///
-/// This replaced an immediate native folder picker. The picker asked
-/// for a folder with no window behind it and nothing saying what the
-/// folder was for — and canceling it quit the app, since there was
-/// nothing else on screen. The launcher explains what a data library
-/// is, offers the ones already opened, and can make a new one; the
-/// picker is still there, one button in.
-///
-/// This is the only window that loads the bundled `frontendDist`
-/// (`launcher-dist/`). Every other window points at the spawned
-/// backend.
 fn show_launcher(app: &AppHandle) -> tauri::Result<()> {
     WebviewWindowBuilder::new(app, LAUNCHER_WINDOW, WebviewUrl::App("index.html".into()))
         .title("Datalib")
@@ -348,19 +290,6 @@ async fn boot(app: AppHandle, root: PathBuf) {
         // (a "Sent via Superhuman" footer, a newsletter's tracking
         // link). Following one in place replaces the whole UI with a
         // marketing page and leaves no chrome to come back from.
-        //
-        // `ui/src/externalLinks.ts` intercepts the clicks and is what
-        // makes those links actually *work*; this is the backstop
-        // under it, for the navigations a click handler never sees —
-        // an HTTP redirect, a `<meta refresh>`, embedded script
-        // assigning `location`.
-        //
-        // Caveat: wry does not tell us which frame navigated, so an
-        // *external* iframe would be blocked and popped into the
-        // browser too. Nothing renders one today — email HTML goes
-        // through htmd, which drops iframes, and plot embeds are
-        // rewritten to same-origin asset URLs — but a renderer that
-        // starts emitting one would want a frame check here first.
         .on_navigation(move |next| {
             if !leaves_the_app(next, &app_origin) {
                 return true;
@@ -383,16 +312,6 @@ async fn boot(app: AppHandle, root: PathBuf) {
 }
 
 /// A boot that did not produce a window.
-///
-/// Reached from the launcher, this is recoverable: say what went wrong
-/// and put the user back in front of the other choices — a data root on
-/// an unmounted volume should cost one dialog, not the session. The
-/// launcher is reloaded rather than merely revealed because its buttons
-/// disable themselves on click, expecting to be replaced by the app.
-///
-/// With no launcher — booting an explicit `$DATALIB_DATA_ROOT` or CLI
-/// root — there is nothing to return to, and the old behavior stands:
-/// dialog, then exit.
 fn boot_failed(app: &AppHandle, msg: String) {
     let Some(launcher) = app.get_webview_window(LAUNCHER_WINDOW) else {
         return fatal(app, msg);
@@ -416,13 +335,6 @@ fn remember(app: &AppHandle, root: &Path) {
     }
 }
 
-/// Whether navigating to `next` would take the window off the app.
-///
-/// Mirrors `isExternalHref` in `ui/src/externalLinks.ts` — same-origin
-/// http(s) is the app itself (its routes, its asset URLs); `mailto:` /
-/// `tel:` are handoffs no webview can service. Every other scheme
-/// (`about:`, `blob:`, `data:`, devtools) is left alone rather than
-/// guessed at.
 fn leaves_the_app(next: &Url, app_origin: &str) -> bool {
     match next.scheme() {
         "http" | "https" => next.origin().ascii_serialization() != app_origin,
@@ -515,7 +427,6 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
     Ok(url)
 }
 
-/// Last ~20 lines of the backend log, for error dialogs.
 fn log_tail(path: &std::path::Path) -> String {
     let Ok(content) = std::fs::read_to_string(path) else {
         return String::from("(no backend log captured)");
@@ -525,9 +436,6 @@ fn log_tail(path: &std::path::Path) -> String {
     lines[start..].join("\n")
 }
 
-/// Surface a startup-fatal error in a dialog, then exit. `eprintln!` is
-/// useless in a Finder-launched app — the dialog is the only channel
-/// the user will actually see.
 fn fatal(app: &AppHandle, msg: String) {
     eprintln!("{msg}");
     let handle = app.clone();

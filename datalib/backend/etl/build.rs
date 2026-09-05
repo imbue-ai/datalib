@@ -8,10 +8,6 @@
 //! `--workspace_status_command=tools/workspace_status.sh`, so this
 //! build.rs is the cargo-side counterpart only. Mirror of
 //! `datalib/backend/sync/build.rs`.
-//!
-//! Emitted env:
-//!   DATALIB_GIT_HASH       full HEAD SHA
-//!   DATALIB_VERSION        `git describe --tags --always --dirty`
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

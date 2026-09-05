@@ -5,22 +5,6 @@
 // column's header bar and evaluated (cardSource.ts) to render the
 // column inside a Shadow DOM via ShadowCard. Edit the source and
 // press Enter to re-run the card.
-//
-// URL: the path is a /-separated list of `code:state` segments, one
-// per column (see url.ts). `state` is an opaque per-card string —
-// cards persist whatever they want through ctx.host.setState and get
-// it back via ctx.initialState; the host just round-trips it.
-//
-// Structural operations are host commands, not bus messages: a card
-// calls `ctx.host.openCards(source)` to open a column to its right
-// (replacing everything further right — Miller semantics), or
-// `openCards(a, b, …)` to open a run of columns at once. The bus
-// carries ambient cross-card events only (e.g. edge hover).
-//
-// New cards come from the "+" strip after the last column: it appends
-// a `galleryView()` column the user resolves by picking a component
-// (in dev mode the gallery also shows each entry's source, and the
-// source box above stays directly editable).
 import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";

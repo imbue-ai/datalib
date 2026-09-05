@@ -1,42 +1,5 @@
 //! `datalib-applet unified_index` — the grid index and the qmd index,
 //! served over HTTP.
-//!
-//! This is the one part of the old `datalib-http` that had a reason to
-//! leave: no core feature reads it, one program (`datalib-step`) already
-//! produces it, and it is the only surface whose data lives in a tree
-//! nothing else touches (`<root>/unified_index/`).
-//!
-//! ## Why grid and qmd are one applet
-//!
-//! A free-text search needs both in one request: qmd returns hits, the
-//! grid resolves them to rows (`grid_row_refs`, then `search_by_uuids`
-//! preserving rank order). Splitting them into two applets would put a
-//! proxy hop in the middle of every query for no gain — they are
-//! produced together, read together, and versioned together.
-//!
-//! ## Endpoints
-//!
-//! Reached through the gateway at `/applet/unified_index/…`, which is
-//! also what the UI calls. There is no `/api/*` alias: `datalib-http`
-//! does not know these routes exist, which is the whole point of the
-//! move.
-//!
-//! ```text
-//! /search?q=&limit=     the grid
-//! /qmd_state            which of these documents the qmd index holds
-//! /columns              its column set
-//! /docs                 rendered documents, for the picker card
-//! /chat/{uuid}          one document: header from the index, body from disk
-//! /asset/{uuid}/{rel}   a file sitting next to that document
-//! ```
-//!
-//! ## Why it contributes no components
-//!
-//! The gallery's grid and document views are builtins in the app
-//! bundle, not components from the frontend store, so this applet has
-//! nothing to write into `--frontend-dir` and never receives one. It is
-//! the case the applet contract already allowed for and had no instance
-//! of: a server that contributes endpoints and no UI.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -76,9 +39,6 @@ struct Index {
     qmd: Arc<QmdDaemon>,
 }
 
-/// Serve until killed. The gateway supervises the process; there is
-/// nothing to write before binding, so this binds immediately and
-/// announces straight away.
 pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let root = match params.get("data_root").and_then(|v| v.as_str()) {
         Some(p) => PathBuf::from(p),
@@ -133,14 +93,6 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     })
 }
 
-/// Point this data root's qmd dir at the shared model cache.
-///
-/// Models live once in `~/.cache/qmd/models` (~2 GB) and every data root
-/// reaches them through a symlink, so qmd — run with
-/// `XDG_CACHE_HOME=<root>/unified_index` — resolves out to that one copy
-/// instead of downloading its own. Best-effort: a pre-existing real
-/// directory is left alone, and a cold cache pays a one-time download on
-/// the first semantic search rather than blocking startup.
 fn ensure_models(root: &std::path::Path) {
     // No index yet means no sync has run, so there is nothing to point
     // at the cache and no search to warm. The first sync creates the
@@ -393,20 +345,6 @@ pub struct QmdStateResponse {
     pub errors: Vec<String>,
 }
 
-/// Report which of the given rendered markdowns the qmd index holds,
-/// and which of those have a complete set of embedding vectors.
-///
-/// POST rather than GET because the uuid list is as long as the grid's
-/// result set. Kept out of `/search` deliberately: the two answers
-/// change on different clocks — search results when the user types,
-/// index state while an indexing run is in flight — and the grid wants
-/// to refresh the badges without re-running the query.
-///
-/// The resolution chain itself lives in
-/// `datalib_unified_index::qmd::index_state::resolve_markdown_states`,
-/// which is what its tests drive; everything here is request shaping:
-/// dedupe, cap, and turn batch-level failures into `errors` rather than
-/// a 500 the grid can do nothing with.
 async fn qmd_state(
     State(s): State<Index>,
     Json(req): Json<QmdStateRequest>,
@@ -502,9 +440,6 @@ async fn columns() -> Json<Vec<ColumnSpec>> {
     Json(default_columns())
 }
 
-/// List rendered documents for the document-picker card, newest first.
-/// The row shape is [`DocRow`] straight from the repo; 500 is plenty
-/// for a pick-from-a-list UI without paging machinery.
 async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCode> {
     match s.repo.list_docs(500).await {
         Ok(rows) => Ok(Json(rows)),
@@ -575,9 +510,6 @@ async fn chat(
 /// `/applet/unified_index/asset/{markdown_uuid}/blobs/foo.png` once the UI rewrites them;
 /// this handler resolves them by looking up the markdown's on-disk path
 /// and joining `rel` against its parent directory.
-///
-/// Path-traversal guard: canonicalize both the parent dir and the target,
-/// reject the request if the target escapes the parent.
 async fn asset(
     State(s): State<Index>,
     Path((markdown_uuid, rel)): Path<(String, String)>,

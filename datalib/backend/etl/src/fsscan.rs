@@ -1,31 +1,23 @@
 //! "What changed on the filesystem since I last looked?"
 //!
-//! One walk, answered by joining two halves that live in different
-//! places for good reasons:
-//!
-//! - **The host-wide fingerprint cache** ([`crate::fingerprint_cache`])
-//!   — `abs_path → (stat, blake3)`. Expensive to compute, identical for
-//!   every consumer, shared across scans, branches and providers, and
-//!   deliberately unversioned because it describes a machine rather
-//!   than a history.
-//! - **The caller's own [`FileScanCursor`]** — what *this* source has
-//!   already ingested, which lives in that source's own store beside
-//!   its other ingestion state.
-//!
-//! The cache cannot answer the question alone, and that is not a
-//! limitation to be fixed: it is *shared*, so another consumer's scan
-//! moves it. "Since I last looked" is only well-posed relative to a
-//! particular looker.
-//!
 //! ```text
-//!     scan(cache, root, opts, accept)  →  Scan            "what is there now"
-//!     scan.changes_since(&cursor)      →  Changes         "what you have not dealt with"
+//!     scan(cache, root, opts, accept)  →  Scan            what is there now
+//!     scan.changes_since(&cursor)      →  Changes         what you haven't dealt with
 //!     scan.cursor()                    →  FileScanCursor  persist this
 //! ```
 //!
-//! The walk itself hashes only what the cache cannot vouch for, so a
-//! second provider scanning a tree the first one already walked pays
-//! stat calls and nothing else.
+//! One walk joining two halves that live apart for good reason. The host-wide
+//! [`crate::fingerprint_cache`] is expensive to compute, identical for every
+//! consumer, and deliberately unversioned because it describes a machine
+//! rather than a history. The caller's own [`FileScanCursor`] is what *this*
+//! source has ingested, and lives in that source's store.
+//!
+//! The cache cannot answer alone, and that is not a gap to close: it is
+//! shared, so another consumer's scan moves it. "Since I last looked" is only
+//! well-posed relative to a particular looker.
+//!
+//! The walk hashes only what the cache cannot vouch for, so a second provider
+//! over an already-walked tree pays stat calls and nothing else.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -47,21 +39,13 @@ pub struct ScannedFile {
     pub blake3: Blake3,
 }
 
-/// What a source has already dealt with: root-relative path → the
-/// digest it ingested.
+/// What a consumer last saw under a root: every file it finished with, and
+/// what that file hashed to at the time.
 ///
-/// Built from whatever that source already stores. Nothing here needs
-/// a new table: `pdf` and `media` keep `path → blake3` as a location
-/// index anyway, and a provider keyed only by content can hand back an
-/// empty map and rely on [`Changes::added`] plus its own
-/// "do I have this digest?" check.
-/// What a consumer last saw under a root: every file it finished
-/// with, and what that file hashed to at the time.
-///
-/// A [`Scan`] is *now*; this is *then*; [`Scan::changes_since`] is the
-/// difference. Consumers persist one of these — the repo calls this
-/// shape a resume cursor wherever it appears, and this is that cursor
-/// for a file scan.
+/// A [`Scan`] is *now*, this is *then*, and [`Scan::changes_since`] is the
+/// difference. Nothing here needs a new table — `pdf` and `media` already keep
+/// `path → blake3` as a location index, and a provider keyed only by content
+/// can hand back an empty map.
 pub type FileScanCursor = BTreeMap<String, Blake3>;
 
 /// Has this file changed since the cursor last saw it?
@@ -124,12 +108,10 @@ pub struct Scan {
     pub root: PathBuf,
     /// The root exactly as the caller gave it.
     ///
-    /// Kept because canonicalizing is right for *addressing* and wrong
-    /// for *recording*: a provider that stores "where I scanned" should
-    /// store what the user configured, or a deliberate symlink
-    /// indirection silently becomes its current target. `rel` is
-    /// unaffected either way — a root-relative path is the same
-    /// whichever spelling of the root you started from.
+    /// Canonicalizing is right for *addressing* and wrong for *recording*: a
+    /// provider storing "where I scanned" should store what the user
+    /// configured, or a deliberate symlink indirection silently becomes its
+    /// current target.
     pub root_as_given: PathBuf,
     pub files: Vec<ScannedFile>,
     pub errors: Vec<WalkError>,
@@ -171,15 +153,11 @@ impl Changes {
             || !self.moved.is_empty()
     }
 
-    /// Files whose **content** the caller must read: the added and the
-    /// modified. A move is not here — the bytes are already known.
-    /// [`Self::needs_reading`], narrowed to one directory of the
-    /// scanned root. An export root holds several feeds' files side by
-    /// side, and each feed wants only what is under its own subtree.
+    /// [`Self::needs_reading`], narrowed to one directory of the scanned root:
+    /// an export root holds several feeds' files side by side.
     ///
-    /// `rel_dir` is root-relative and may be several segments deep
-    /// (`"Maps/Photos and videos"`). Matching is case-insensitive,
-    /// because export trees are handed to us by other people's tools.
+    /// `rel_dir` is root-relative and may be several segments deep. Matching is
+    /// case-insensitive, because export trees come from other people's tools.
     pub fn needs_reading_under<'a>(
         &'a self,
         rel_dir: &'a str,
@@ -193,6 +171,8 @@ impl Changes {
         })
     }
 
+    /// Files whose **content** the caller must read: the added and the
+    /// modified. A move is not here — the bytes are already known.
     pub fn needs_reading(&self) -> impl Iterator<Item = &ScannedFile> {
         self.added.iter().chain(self.modified.iter())
     }
@@ -258,10 +238,9 @@ impl Scan {
 
 /// Walk `root`, hashing only what the host cache cannot vouch for.
 ///
-/// `accept` is the caller's file filter — `pdf` wants PDFs, `media`
-/// wants media. Filtering is deliberately the caller's, and the cache
-/// deliberately keeps whatever any consumer has ever hashed, so a
-/// narrow scan never costs a broad one its work.
+/// `accept` is the caller's file filter. Filtering is deliberately the
+/// caller's and the cache keeps whatever any consumer has hashed, so a narrow
+/// scan never costs a broad one its work.
 pub async fn scan<A>(
     cache: &FingerprintCache,
     given: &Path,
@@ -274,19 +253,16 @@ where
     scan_with(cache, given, opts, accept, |_, _| true).await
 }
 
-/// [`scan`], plus a veto consulted **after** the stat and **before**
-/// any read.
+/// [`scan`], plus a veto consulted **after** the stat and **before** any read.
 ///
-/// Some files must not be opened at all. A macOS file evicted to
-/// iCloud is "dataless": it has a size and an mtime, and reading a
-/// byte silently pulls the whole thing back over the network. A filter
-/// on the path cannot see that — only the stat can — and by the time
-/// `scan` would hash it the damage is done. So the caller gets to
-/// refuse, knowing what it is refusing.
+/// Some files must not be opened at all: a macOS file evicted to iCloud is
+/// "dataless", so reading one byte silently pulls the whole thing back over the
+/// network. Only the stat can see that, and by the time `scan` would hash it
+/// the damage is done.
 ///
 /// A refused file is absent from [`Scan::files`] and leaves the cache
-/// untouched, so nothing later mistakes "we declined to look" for "we
-/// looked and it was empty".
+/// untouched, so nothing later mistakes "we declined to look" for "we looked
+/// and it was empty".
 pub async fn scan_with<A, D>(
     cache: &FingerprintCache,
     given: &Path,
@@ -298,12 +274,10 @@ where
     A: Fn(&Path) -> bool,
     D: Fn(&Path, &std::fs::Metadata) -> bool,
 {
-    // Resolved, so the cache's keys line up and two spellings of one
-    // tree address one set of entries. A user's configured root is
-    // rarely canonical — `~/Docs` may be a symlink, may carry a `..`,
-    // may have a trailing slash — and all of those must reach the same
-    // cache rows. The unresolved form is kept on the `Scan` for callers
-    // that record where they scanned.
+    // Resolved, so the cache's keys line up and two spellings of one tree
+    // address one set of entries — a configured root is rarely canonical. The
+    // unresolved form stays on the `Scan` for callers that record where they
+    // scanned.
     let resolved = given
         .canonicalize()
         .with_context(|| format!("resolve scan root {}", given.display()))?;

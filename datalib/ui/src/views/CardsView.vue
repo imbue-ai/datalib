@@ -3,12 +3,6 @@
 // share — the bottom status bar and the layout toggle — and keeps
 // each layout host alive across toggles (v-show, not v-if) so
 // switching back doesn't lose its cards.
-//
-// The layouts are deliberately independent: the miller layout syncs
-// its column stack with the URL (see MillerView), the tree and tiling
-// layouts are in-memory only, and cards are NOT carried across when
-// toggling. The non-default hosts are mounted lazily on first use so
-// the default columns experience doesn't pay for hidden grid cards.
 import { onMounted, ref } from "vue";
 import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";

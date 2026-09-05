@@ -1,10 +1,4 @@
 //! `Maps/Photos and videos/*.json` + matching media file walker.
-//!
-//! Takeout pairs each photo with a JSON sidecar of the same stem
-//! (`2026-06-04-af8bb6e0.jpg` ↔ `2026-06-04-af8bb6e0.json`). PK is
-//! the file stem. Bytes land in `cas_objects` keyed by `blake3`; the
-//! `maps_photos.blake3` column carries the hash so render can join
-//! back without a separate edge table.
 
 use std::path::{Path, PathBuf};
 

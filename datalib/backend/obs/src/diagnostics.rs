@@ -1,22 +1,6 @@
 //! Per-source diagnostics capture: every WARN/ERROR `tracing` event a
 //! source emits during its download is collected so the orchestrator can
 //! fold it into the per-source block of the JSON sync summary.
-//!
-//! The mechanism mirrors `datalib_etl::download_metrics`: a
-//! [`tokio::task_local`] holds a [`Diagnostics`] buffer for the duration of
-//! one source's download (installed by [`scope`]). A global
-//! [`DiagnosticsLayer`] — added to the subscriber by [`crate::init`] —
-//! intercepts every WARN/ERROR event and appends a rendered line to the
-//! ambient buffer, if one is installed on the current task. This captures
-//! both *wire-level* warnings (the shared HTTP chokepoint's rate-limit /
-//! backoff `warn!`, transport-error logs) and any *internally generated*
-//! `warn!` / `error!` a provider emits — with zero provider-side code.
-//!
-//! Caveats: only events emitted on the source's own task are attributed
-//! (an event from a detached `spawn`/`spawn_blocking` won't see the
-//! task-local); and capture is gated by the global `EnvFilter`, so an event
-//! the log filter suppresses entirely is not collected (the default filter
-//! passes WARN/ERROR for every target).
 
 use std::fmt::Write as _;
 use std::future::Future;
@@ -69,17 +53,14 @@ impl Diagnostics {
         entries.push(entry);
     }
 
-    /// A copy of everything captured so far.
     pub fn snapshot(&self) -> Vec<DiagnosticEntry> {
         self.entries.lock().unwrap().clone()
     }
 
-    /// Count of entries discarded after hitting [`MAX_ENTRIES`].
     pub fn dropped(&self) -> usize {
         *self.dropped.lock().unwrap()
     }
 
-    /// `(warnings, errors)` counts over the retained entries.
     pub fn counts(&self) -> (usize, usize) {
         let entries = self.entries.lock().unwrap();
         let errors = entries.iter().filter(|e| e.level == "ERROR").count();
@@ -91,9 +72,6 @@ tokio::task_local! {
     static CURRENT: Arc<Diagnostics>;
 }
 
-/// Install `diagnostics` as the ambient capture buffer for the duration of
-/// `fut`. WARN/ERROR events emitted anywhere within `fut` on the same task
-/// are appended to it. Everything outside any `scope` is dropped.
 pub async fn scope<F>(diagnostics: Arc<Diagnostics>, fut: F) -> F::Output
 where
     F: Future,

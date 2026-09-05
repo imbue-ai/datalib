@@ -1,18 +1,5 @@
 //! Slack mrkdwn → CommonMark converter. Port of `src/ingest/providers/
 //! slack/mrkdwn.py`.
-//!
-//! Slack's "mrkdwn" overlaps with but diverges from CommonMark in
-//! several places:
-//!
-//!   - `*bold*` (single asterisk) instead of `**bold**`
-//!   - `~strike~` (single tilde) instead of `~~strike~~`
-//!   - `<https://url|label>` instead of `[label](https://url)`
-//!   - `<@U…>` / `<#C…|name>` / `<!here>` / `<!subteam^S…|name>` mentions
-//!   - `&amp;` / `&lt;` / `&gt;` HTML-escapes in the message body
-//!
-//! Rendered `.md` is served verbatim to the UI's CommonMark renderer, so
-//! translation happens at render time. The regex pipeline is exercised
-//! by snapshot tests sitting alongside this module.
 
 use std::collections::BTreeMap;
 
@@ -38,9 +25,6 @@ static STRIKE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(^|[^\w~])~([^\s~][^~\n]*?[^\s~]|[^\s~])~([^\w~]|$)").unwrap());
 static SHORTCODE: Lazy<Regex> = Lazy::new(|| Regex::new(r":([a-zA-Z0-9_+\-]+):").unwrap());
 
-/// Replace `:shortcode:` with the matching Unicode emoji. Unknown
-/// shortcodes pass through untouched, matching the Python `emoji` lib's
-/// `language="alias"` behavior.
 pub fn emojize_shortcodes(text: &str) -> String {
     SHORTCODE
         .replace_all(text, |caps: &Captures<'_>| {
@@ -52,8 +36,6 @@ pub fn emojize_shortcodes(text: &str) -> String {
         .into_owned()
 }
 
-/// Replace `<@U…>` / `<@U…|label>` with `@<label>` only. Plain-text
-/// path — see `to_commonmark` for the full pipeline.
 pub fn resolve_user_mentions(text: &str, user_labels: &BTreeMap<String, String>) -> String {
     let replaced = USER_REF
         .replace_all(text, |caps: &Captures<'_>| {

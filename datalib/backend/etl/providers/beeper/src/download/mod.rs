@@ -1,18 +1,4 @@
 //! Beeper download entry point.
-//!
-//! Reads Beeper Texts' on-disk SQLite stores under
-//! `~/Library/Application Support/BeeperTexts/` and re-shapes them
-//! into our `rooms`/`users`/`events`/`blobs` doltlite tables. No
-//! network, no auth — everything's local data the desktop app
-//! already syncs and decrypts for us.
-//!
-//! The user picks which chat networks to ingest via `FetchOptions.sources`
-//! (e.g. `["signal", "googlechat"]`). Each canonical network is
-//! mapped to the right `accountID` patterns by [`index_db`]; rows
-//! that don't match are skipped at the source.
-//!
-//! See `EXTRACT.md` for the on-disk layout and the rationale for
-//! reading from index.db rather than the network.
 
 pub mod db;
 pub mod index_db;
@@ -29,9 +15,6 @@ use tracing::{info, instrument};
 
 pub use db::{db_path_for, RawDb};
 
-/// Default location of Beeper Texts' data directory on macOS. The
-/// reader walks `<beeper_data_dir>/index.db` and
-/// `<beeper_data_dir>/media/`.
 pub fn default_beeper_data_dir() -> PathBuf {
     // ~/Library/Application Support/BeeperTexts is the macOS path.
     // On other platforms there's no Beeper Texts install at all, so

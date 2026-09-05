@@ -1,25 +1,6 @@
 //! Slack render: convert parsed thread buckets into the shared
 //! `chat-common` normalized model and delegate the markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
-//!
-//! One Slack thread → one [`NormalizedChat`] with a single `"all"`
-//! bucket; `chat_uuid` and the bucket's `markdown_uuid` are the existing
-//! `slack_thread_uuid`, so page identities / links stay stable across
-//! the migration. Each thread carries its own per-thread `BlobBundle`
-//! (keyed by `chat.id`) so chat-common materializes attachment bytes the
-//! same way the bespoke renderer used to.
-//!
-//! What chat-common gives us: image/audio/video attachments render as
-//! inline `<img>` / `<audio controls>` / `<video controls>` widgets;
-//! reactions become first-class per-reaction grid rows; the thread
-//! permalink is the chat-level `↗` linkout and each message carries its
-//! own permalink `↗` + grid `source_url`.
-//!
-//! Incrementality is unchanged and still dolt-diff driven: `parse`
-//! consulted `dolt_diff_<table>` against the render cursor and only
-//! loaded threads that actually changed, so we pass an empty
-//! `prior_fingerprints` map (chat-common's fingerprint-skip is a no-op
-//! here) and advance the cursor on success.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -143,8 +124,6 @@ pub fn render_all(
     })
 }
 
-/// One [`NormalizedChat`] per thread bucket, plus the per-thread
-/// [`BlobBundle`] keyed by `chat.id` for chat-common to materialize.
 fn build_chats(
     parsed: &ParsedSlack,
     user_labels: &BTreeMap<String, String>,
@@ -257,8 +236,6 @@ fn build_item(
     }
 }
 
-/// First non-empty line of the (mention-resolved) root text, truncated —
-/// the scannable bit of the thread title.
 fn thread_title(root_text: &str, user_labels: &BTreeMap<String, String>) -> String {
     let resolved = resolve_user_mentions(root_text, user_labels);
     let first = resolved
@@ -270,9 +247,7 @@ fn thread_title(root_text: &str, user_labels: &BTreeMap<String, String>) -> Stri
     first.chars().take(80).collect()
 }
 
-// ---------------------------------------------------------------------------
 // File / reaction extraction from raw_json → normalized model.
-// ---------------------------------------------------------------------------
 
 /// Map a Slack message's `files[]` into [`NormalizedAttachment`]s. The
 /// real `mimetype` flows through so chat-common picks `<img>` / `<audio>`
@@ -325,8 +300,6 @@ fn build_attachments(raw: &Value) -> Vec<NormalizedAttachment> {
         .unwrap_or_default()
 }
 
-/// Backfill an image mime for files where Slack omitted `mimetype` but
-/// gave a recognizable `filetype`, so they still render inline.
 fn image_mime_for(filetype: &str) -> Option<String> {
     let m = match filetype {
         "png" => "image/png",
@@ -343,11 +316,6 @@ fn image_mime_for(filetype: &str) -> Option<String> {
 /// reacting user (resolved to a display label), so each is its own
 /// searchable grid row. A count-only reaction (no `users` list) yields a
 /// single row labelled with the count.
-///
-/// The branch below is also an id boundary: the two shapes produce
-/// differently-keyed rows for the same reaction, so a re-fetch that
-/// returns the other shape re-keys them. See [`crate::ids::reaction`]
-/// for why that is left standing and what the fixes would cost.
 fn build_reactions(
     raw: &Value,
     m: &Message,

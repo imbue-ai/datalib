@@ -1,12 +1,6 @@
 //! Provider-owned config schema for the `google_takeout` source (Program A
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `GoogleTakeoutConfig` without linking the provider.
-//!
-//! `GoogleTakeoutSync` is the per-feed opt-in block; it replaces the copy
-//! that used to live in `datalib-core`'s `config.rs`. The provider's
-//! `plan()` maps it field-for-field onto
-//! `datalib_etl_google_takeout::download::SyncFlags`, so the SyncFlags
-//! duplication is now provider-owned rather than orchestrator-owned.
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};

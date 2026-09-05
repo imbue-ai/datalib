@@ -1,13 +1,4 @@
 //! Document identity and metadata pulled straight out of the PDF file.
-//!
-//! Everything here is **best-effort and non-fatal**. A PDF that lopdf
-//! cannot parse still converts fine — pdf-inspector has its own
-//! parser — so a failure in this module downgrades to `None` columns
-//! rather than failing the document. That asymmetry is deliberate:
-//! conversion is the job, lineage is a bonus.
-//!
-//! See [`super::schema_raw`] §"Ship of Theseus" for why these are hints
-//! rather than keys.
 
 use lopdf::{Document, Object};
 
@@ -47,13 +38,6 @@ pub fn extract(bytes: &[u8]) -> DocIdentity {
     from_doc(&doc)
 }
 
-/// Identity fields *and* the content hash from a **single** parse.
-///
-/// Both readers want the same `Document`, and parsing is the expensive
-/// part of each — a large scanned PDF is tens of megabytes and lopdf
-/// inflates every object stream to build the object map. Doing it once
-/// here is why [`super::content_hash::from_doc`] exists alongside
-/// [`super::content_hash::compute`].
 pub fn extract_with_content_hash(bytes: &[u8]) -> (DocIdentity, Option<String>) {
     let Ok(doc) = Document::load_mem(bytes) else {
         return (DocIdentity::default(), None);
@@ -61,7 +45,6 @@ pub fn extract_with_content_hash(bytes: &[u8]) -> (DocIdentity, Option<String>) 
     (from_doc(&doc), super::content_hash::from_doc(&doc))
 }
 
-/// Pull the identity fields out of an already-parsed document.
 pub fn from_doc(doc: &Document) -> DocIdentity {
     let mut out = DocIdentity {
         encrypted: doc.trailer.get(b"Encrypt").is_ok(),
@@ -119,8 +102,6 @@ pub fn from_doc(doc: &Document) -> DocIdentity {
     out
 }
 
-/// The catalog's `/Metadata` stream, decompressed. `None` when absent
-/// or undecodable.
 fn xmp_bytes(doc: &Document) -> Option<Vec<u8>> {
     let catalog = doc.catalog().ok()?;
     let meta = catalog.get(b"Metadata").ok()?;
@@ -185,8 +166,6 @@ fn first_rdf_item(inner: &str) -> Option<String> {
     (!inner.is_empty() && !inner.contains('<')).then(|| inner.to_string())
 }
 
-/// Decode a PDF text-string object to a Rust `String`, handling the
-/// UTF-16BE BOM form the spec allows.
 fn text_of(o: &Object) -> Option<String> {
     let raw = o.as_str().ok()?;
     if raw.len() >= 2 && raw[0] == 0xFE && raw[1] == 0xFF {
@@ -217,15 +196,6 @@ fn to_hex(b: &[u8]) -> String {
     s
 }
 
-/// Convert a PDF date string to ISO-8601 **preserving the source
-/// offset**, per AGENTS.md §"Timestamp convention".
-///
-/// The PDF form is `D:YYYYMMDDHHmmSSOHH'mm'` where `O` is `+`, `-`, or
-/// `Z`, and every component after the year is optional. `D:20240115`
-/// alone is legal. An offsetless timestamp is rendered without one
-/// rather than being invented as UTC — we genuinely do not know the
-/// zone, and guessing would fabricate information the file did not
-/// carry.
 pub fn parse_pdf_date(s: &str) -> Option<String> {
     let s = s.trim();
     let s = s.strip_prefix("D:").unwrap_or(s);

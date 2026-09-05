@@ -1,13 +1,5 @@
 //! Map parsed vCards into [`NormalizedContact`]s and hand them to the
 //! shared [`datalib_etl_contact_common`] renderer.
-//!
-//! Everything cross-cutting — per-contact `.md` + `.grid_rows.json`
-//! layout, the `| Field | Value |` table, photo materialization,
-//! fingerprint-skip, the `on_doc_complete` callback — lives in
-//! contact-common (the sibling of chat-common). This provider keeps
-//! only what's CardDAV-specific: the vCard → field mapping, the
-//! `(account, addressbook, uid)` UUID recipes, and the per-source
-//! `source_label` humanization.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,12 +22,6 @@ use super::{addressbook_uuid, contact_uuid};
 /// richer grid-row search text).
 pub const RENDER_VERSION: u32 = 2;
 
-/// Render entry point. Same signature as before the contact-common
-/// migration so the sync runner's render match-arm is unchanged.
-///
-/// Contacts are not event-shaped — vCards without a `REV:` field have no
-/// source-side timestamp, and we never fabricate one. Such rows carry
-/// `when_ts: None` all the way to the GridRow.
 pub fn render_all(
     parsed: &ParsedContacts,
     out_dir: &Path,
@@ -66,9 +52,6 @@ pub fn render_all(
     )
 }
 
-/// One [`ParsedContact`] → one [`NormalizedContact`]. The UUID recipes
-/// (`contact_uuid` / `addressbook_uuid`) are upstream-stable: the same
-/// vCard yields the same ids whether it came over CardDAV or off disk.
 fn normalize(contact: &ParsedContact, source_name: &str) -> NormalizedContact {
     let mut fields: Vec<ContactField> = Vec::new();
     if let Some(org) = &contact.org {

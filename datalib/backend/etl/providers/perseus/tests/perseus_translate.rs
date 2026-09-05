@@ -5,11 +5,6 @@
 //! multi-edition render path: if the parser silently drops a section
 //! or the renderer flips a UUID derivation, this fails before bad data
 //! hits a user's root.
-//!
-//! The fixture has two editions, `perseus-grc2` (Greek) and
-//! `1st1K-eng1` (English), with one section (1.1.2) deliberately
-//! missing on the English side. No `__cts__.xml` is present, so edition
-//! titles fall back to the short id.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

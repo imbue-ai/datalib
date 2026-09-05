@@ -106,10 +106,6 @@ onBeforeUnmount(unsubHover);
 // (truthy `src_anchor_uuid`) drive inline clickable highlights
 // inside the body and are NOT listed here — they appear in context
 // where the user can read what they're navigating from.
-//
-// We treat both `null` and `""` as "whole doc": the backend's SQL
-// representation of a missing anchor can land as either depending
-// on the SQLite driver path, and the UI doesn't care which.
 const docLevelOutgoing = computed<EdgeOut[]>(() => {
   if (!chat.value) return [];
   return (chat.value.outgoing_edges ?? []).filter((e) => !e.src_anchor_uuid);

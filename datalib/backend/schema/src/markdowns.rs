@@ -7,15 +7,6 @@
 // 'conversation' upstream can shard into many markdowns when a provider
 // renders one file per period (beeper) — the `markdowns` table is keyed
 // on the rendered file, not the abstract conversation.
-//
-// Hand-written row struct; the `CREATE TABLE` DDL + column metadata are
-// derived from it by `#[derive(PortableTable)]`.
-//
-// This struct went unused for a long time while `grid_index.rs` carried
-// a hand-written `MARKDOWNS_DDL` string beside it, and the two drifted:
-// the string grew `source_fingerprint` and `upstream_cursor`, the struct
-// did not. A schema object nothing reads is not a schema. Both columns
-// are here now, and `grid_index` derives its DDL from this struct.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -75,21 +66,12 @@ pub struct MarkdownRow {
     /// path the renderer wrote. NULL until the renderer has produced
     /// output. The backend's `/api/chat/{markdown_uuid}` endpoint
     /// resolves this column to find the file to serve.
-    ///
-    /// Every `grid_rows.qmd_path` pointing at this markdown must be
-    /// byte-equal to this value; see that column's docs for why the qmd
-    /// hit→row mapping depends on it.
     #[col(sql = "VARCHAR(1024)")]
     pub md_path: Option<String>,
     /// Hash of the upstream payload(s) that produced this document, as
     /// computed by the renderer. The render stage's skip check compares
     /// it: an unchanged fingerprint means the document does not need
     /// re-rendering.
-    ///
-    /// Distinct from `row_set_hash`, which is computed *from the rows*
-    /// after the fact; this one is computed from the *input* before any
-    /// work is done, which is what makes it a skip check rather than a
-    /// verification.
     #[col(sql = "VARCHAR(64)")]
     pub source_fingerprint: Option<String>,
     /// Optional provider-defined cheap-probe value, consulted *before*

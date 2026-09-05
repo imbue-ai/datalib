@@ -1,29 +1,10 @@
 //! Normalized chat types. Each provider populates these from its own
 //! row model before handing off to [`crate::render::render_all`].
-//!
-//! These types are *display-shaped*: every field is what the renderer
-//! needs to emit markdown or fill a `GridRow`. They are not meant as a
-//! lossless representation of the source data — the raw store keeps
-//! that. UUIDs are pre-minted by the provider (each has its own v5
-//! namespace) so chat-common stays provider-agnostic.
 
 use serde::Serialize;
 
 /// What flavor of item this is. Collapses each provider's richer event
 /// taxonomy into three buckets the renderer knows how to lay out.
-///
-/// Mapping reference:
-///
-/// | provider  | source value              | NormalizedItem.kind  |
-/// |-----------|---------------------------|----------------------|
-/// | Beeper    | TEXT, NOTICE              | Text                 |
-/// | Beeper    | IMAGE, VIDEO, FILE, AUDIO | Attachment           |
-/// | Beeper    | MEMBERSHIP, HIDDEN, *     | System               |
-/// | Signal    | StandardMessage           | Text or Attachment   |
-/// | Signal    | ChatUpdate, etc.          | System (when shown)  |
-/// | WhatsApp  | message_type=0            | Text                 |
-/// | WhatsApp  | message_type ∈ {1..media} | Attachment           |
-/// | WhatsApp  | message_system rows       | System               |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ItemKind {
     Text,
@@ -41,10 +22,6 @@ pub struct NormalizedAttachment {
     /// `"blobs/abc123.jpg"`) that the markdown link / `<img src=…>`
     /// will target. Provider is responsible for putting the bytes
     /// at `<page_dir>/<rel_path>` before render.
-    ///
-    /// `None` is legal — the renderer surfaces a "(not yet fetched)"
-    /// placeholder. The grid_row's full-text-search column still
-    /// gets the caption or file_name.
     pub rel_path: Option<String>,
     /// User-visible label (file name, image alt text). Falls back to
     /// the basename of `rel_path` when missing.
@@ -67,14 +44,10 @@ pub struct NormalizedAttachment {
     /// `rel_path` so the markdown link points at the materialized
     /// blob. Unknown ref_ids fall through to the "(not yet fetched)"
     /// placeholder.
-    ///
-    /// [`BlobBundle`]: datalib_etl::blob_cas::BlobBundle
     pub ref_id: Option<String>,
 }
 
 impl NormalizedAttachment {
-    /// True when MIME type suggests an inline image. The renderer uses
-    /// this to pick `![alt](url)` vs `[alt](url) (size)` markdown.
     pub fn is_image(&self) -> bool {
         self.mime_type
             .as_deref()
@@ -100,11 +73,6 @@ pub struct NormalizedReaction {
     pub date_ms: Option<i64>,
     /// What this reaction is upstream, for its grid_row's backpointer
     /// columns. `None` for providers not yet ported onto `datalib_id`.
-    ///
-    /// Reactions get their own grid_rows, so they need their own
-    /// backpointer — they are not covered by the containing item's.
-    /// The round-trip check treats an unset one on a ported provider
-    /// as a failure, which is how the gap was found.
     pub source_ref: Option<UpstreamRef>,
 }
 
@@ -124,26 +92,6 @@ pub struct NormalizedChatItem {
     pub author_display: String,
     /// Unix milliseconds for the item's effective timestamp, or `None`
     /// when this item has no timestamp at all.
-    ///
-    /// **`None` is the honest answer, and it must survive to the grid.**
-    /// `docs/dev/data_architecture_parse_and_render.md` §6 requires
-    /// `GridRow.when_ts` to be null when upstream gave no timestamp and
-    /// none can be inherited from a parent — "not 'epoch,' not 'now,'
-    /// not 'midnight UTC of the row's date.'" This field was an `i64`
-    /// until 2026-09, which meant a provider *could not say* "no
-    /// timestamp"; all eight providers on chat-common invented a `0` at
-    /// the boundary and the grid filled up with real-looking
-    /// `1970-01-01T00:00:00+00:00` rows. A fabricated epoch is strictly
-    /// worse than a null: it sorts into a real position, it is
-    /// indistinguishable from a genuine 1970 record, and it matches
-    /// `before:` / `after:` queries it should not.
-    ///
-    /// Before settling for `None`, prefer inheriting: a sub-item that
-    /// lacks its own stamp should take the parent's plus a
-    /// microsecond/millisecond bump (see
-    /// [`datalib_time::IsoOffsetTimestamp::bump_micros`]), which is
-    /// §6-sanctioned and what anthropic and chatgpt do. `None` is for
-    /// when there is no parent stamp to inherit either.
     pub date_ms: Option<i64>,
     /// Optional message body. Text items always carry this; attachment
     /// items use it as the caption; system items use it as the summary.
@@ -177,12 +125,6 @@ pub struct NormalizedChatItem {
 /// The upstream's own identity for one chat item, carried through to
 /// the message-level grid_row's `upstream_id` /
 /// `upstream_entity_kind`.
-///
-/// One field rather than two loose `Option`s because neither half is
-/// useful alone: a native id with no kind is ambiguous (GitHub numbers
-/// three comment types in overlapping sequences), and a kind with no id
-/// points at nothing. Making them inseparable means a provider cannot
-/// half-populate the backpointer.
 #[derive(Debug, Clone, Serialize)]
 pub struct UpstreamRef {
     /// The upstream's identifier for this item, within the chat's
@@ -202,12 +144,6 @@ impl UpstreamRef {
     /// Build from an ids-module `Identity`'s own `entity_kind` and
     /// `natural_key` — never from the expression that was *passed* to
     /// the id function.
-    ///
-    /// The two are usually the same string, which is the hazard: a
-    /// recipe that later gains a prefix or a scope component leaves the
-    /// call site still storing the raw upstream value, and the
-    /// backpointer silently stops regenerating the row. Only
-    /// `ingested_tng_test`'s round-trip check would notice.
     pub fn new(entity_kind: impl Into<String>, native_id: impl Into<String>) -> Self {
         Self {
             native_id: native_id.into(),
@@ -258,24 +194,11 @@ pub struct NormalizedChat {
     /// JID, Anthropic conversation UUID, Slack
     /// `{channel_id}:{thread_ts}`). Goes into the chat-level grid_row's
     /// `upstream_id` column and the .md frontmatter.
-    ///
-    /// Set it even when it currently equals the row's `uuid`: providers
-    /// that pass an upstream id through as the primary key lose that
-    /// route the moment they move onto `datalib_id`, and this column is
-    /// what the grid's "Copy source ID(s)" action reads.
     pub external_id: Option<String>,
     /// The `Scope::Upstream` value every row in this chat was minted
     /// under — the exact provider-issued string fed to
     /// `datalib_id::entity_id`, stamped into `grid_rows.upstream_scope`.
     /// `None` for chats minted under `ProviderGlobal` or `Content`.
-    ///
-    /// Per-chat rather than per-item because a chat belongs to exactly
-    /// one workspace/account, and every row inside it inherits that.
-    ///
-    /// Related to `account` but not the same: `account` is a display
-    /// and filter value the UI shows, and a provider may prettify it.
-    /// This one must stay byte-exact, because the round-trip check
-    /// recomputes `uuid` from it.
     pub upstream_scope: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`

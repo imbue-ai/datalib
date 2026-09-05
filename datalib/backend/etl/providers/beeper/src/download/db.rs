@@ -1,38 +1,4 @@
 //! Doltlite-backed raw store for the Beeper provider.
-//!
-//! Single sqlite file at `<data_root>/<name>/raw/entities.doltlite_db`. Shared
-//! bookkeeping tables (`blobs`, `sync_runs`) and
-//! the open / blob plumbing live in [`datalib_etl::doltlite_raw`];
-//! the primary-key policy is documented there.
-//!
-//! Beeper is multi-sourced: at least two SQLite stores on a typical
-//! macOS install hold the data the desktop app shows you:
-//!   * `~/Library/Application Support/BeeperTexts/index.db` — the
-//!     desktop app's unified per-account message cache (covers cloud
-//!     bridges like Slack/Google Chat AND local megabridges like
-//!     Signal).
-//!   * `~/Library/Messages/chat.db` — macOS's own iMessage SQLite,
-//!     read directly by Beeper Texts via its platform-SDK integration.
-//!     (Reader not yet implemented; needs Full Disk Access.)
-//!
-//! All readers feed into the same three object tables here. The
-//! `source` column records which on-disk store a row originated from;
-//! the `network` column is the canonical chat network (`"signal"`,
-//! `"googlechat"`, `"slack"`, `"imessage"`, …) for downstream
-//! filtering & dispatch.
-//!
-//! Tables:
-//! - `rooms` — PK is `beeper_room_uuid(source, native_room_id)`. The
-//!   native id (Matrix room id for index.db; chat.guid for Mac
-//!   chat.db) lives alongside as its own column. Namespacing by
-//!   `source` means two stores could in principle hold the "same"
-//!   chat from different angles without colliding.
-//! - `users` — PK is `beeper_user_uuid(source, native_user_id)`.
-//! - `events` — PK is `beeper_event_uuid(source, native_event_id)`.
-//!   `event_type` is the Beeper-canonical taxonomy (`TEXT`, `IMAGE`,
-//!   `FILE`, `REACTION`, `MEMBERSHIP`, `HIDDEN`, …) — same labels the
-//!   desktop app uses in `mx_room_messages.type`, so we don't have to
-//!   reconstruct them from raw Matrix event shapes.
 
 use std::path::Path;
 
@@ -83,9 +49,6 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything from upstream. See
-    /// [`datalib_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
@@ -148,8 +111,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Bulk-upsert users. See [`Self::bulk_upsert_rooms`] for the
-    /// pattern.
     pub async fn bulk_upsert_users(&self, rows: &[UserRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
@@ -161,8 +122,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Bulk-upsert events. Hot path on a fresh ingest (thousands to
-    /// tens of thousands of events per beeper account).
     pub async fn bulk_upsert_events(&self, rows: &[EventRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
@@ -174,8 +133,6 @@ impl RawDb {
         Ok(())
     }
 
-    /// Bulk-upsert attachment edge rows (`beeper_media_attachments`).
-    /// Pair with [`BlobCas::put_many`] for the CAS bytes themselves.
     pub async fn bulk_upsert_media_attachments(
         &self,
         rows: &[BeeperMediaAttachmentRow],

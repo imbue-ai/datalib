@@ -2,12 +2,6 @@ import { test, expect } from "@playwright/test";
 import { expectGridPainted } from "./grid-helpers";
 
 // Smoke test: the grid actually renders rows from the TNG fixture.
-//
-// Catches regressions where the harness materializes
-// `backend_index.doltlite_db` but the backend looks somewhere else, so
-// the grid comes up empty. The e2e harness materializes from the same
-// fixture dump `dev_tng` uses, so a green run here means the dev_tng
-// path works too.
 
 test("the grid populates with rows from the fixture", async ({
   page,

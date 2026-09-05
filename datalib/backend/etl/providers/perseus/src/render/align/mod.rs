@@ -1,26 +1,4 @@
 //! Within-section sentence-level alignment between a *pair* of editions.
-//!
-//! The Perseus CTS spine already gives us section-level alignment for
-//! free (`1.4.1` exists in every edition). What this module adds is the
-//! next layer: when one edition split a sentence the other kept whole
-//! (or vice versa), find which sentence goes with which.
-//!
-//! Alignment is **opt-in per edition pair** — the source config's
-//! `alignment_pairs` lists the `(edition_a, edition_b)` pairs to align
-//! (default: none). For each configured pair and each section both
-//! cover, we:
-//!   1. Split each side into sentences with [`split::split_for`] (the
-//!      splitter is chosen by the edition's language).
-//!   2. If both sides have ≤1 sentence, return the trivial 1:1 (no
-//!      model call).
-//!   3. Otherwise embed each sentence via [`embed::Embedder`]
-//!      (mean-pooled Ancient-Greek-BERT) and run [`dp::align`].
-//!
-//! The result is per (book, chapter, section) a list of
-//! [`SectionPairAlignment`]s — one per configured pair that covers the
-//! section — each carrying which a-sentence-indices group with which
-//! b-sentence-indices. The renderer turns those into `<span>` anchors
-//! and `bilingual-alignment` edges.
 
 pub mod dp;
 pub mod embed;
@@ -60,7 +38,6 @@ pub struct PerseusAlignments {
 }
 
 impl PerseusAlignments {
-    /// The pair alignments covering one section (empty when none).
     pub fn for_section(&self, book_n: &str, ch_n: &str, sec_n: &str) -> &[SectionPairAlignment] {
         self.by_section
             .get(&(book_n.to_string(), ch_n.to_string(), sec_n.to_string()))
@@ -68,9 +45,6 @@ impl PerseusAlignments {
             .unwrap_or(&[])
     }
 
-    /// Whether an edition participates in any configured pair — i.e.
-    /// whether the renderer should emit per-sentence anchor spans for
-    /// it.
     pub fn is_aligned(&self, edition_id: &str) -> bool {
         self.aligned.contains(edition_id)
     }
@@ -157,8 +131,6 @@ pub async fn align_all(
     })
 }
 
-/// Align one section's two texts. Returns one trivial group when
-/// neither side has more than one sentence (no model call).
 fn align_pair(
     emb: Option<&Embedder>,
     a_text: &str,

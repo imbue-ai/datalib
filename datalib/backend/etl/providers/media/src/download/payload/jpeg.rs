@@ -1,43 +1,5 @@
 //! JPEG payload: the coding tables and the entropy-coded scan, with
 //! every `APPn` and comment segment removed.
-//!
-//! For a photo library this is the highest-value recipe in the module,
-//! because JPEG metadata is *enormous* and *constantly rewritten*. A
-//! camera JPEG's `APP1` holds EXIF plus a full embedded thumbnail;
-//! Lightroom, Photos and exiftool rewrite it to set a rating, a
-//! keyword, a caption, a corrected timestamp, or a GPS fix — and some
-//! of them regenerate the thumbnail while they are there. None of that
-//! touches a single coefficient of the image.
-//!
-//! What is excluded:
-//!
-//! - `APP0`…`APP15` — JFIF, EXIF and its thumbnail, XMP, Photoshop IRB
-//!   (where ratings and crops live), MPF, and the ICC profile.
-//! - `COM` — comment segments.
-//! - Anything after `EOI`. Phone cameras append a second image there
-//!   (Apple's depth data, Samsung's motion photo); it is a passenger,
-//!   not the picture.
-//!
-//! What is kept: `SOF` (dimensions and component layout), `DQT`, `DHT`,
-//! `DRI`, the `SOS` headers and the entropy-coded data itself.
-//!
-//! # Why the ICC profile is excluded
-//!
-//! `APP2`'s ICC profile is the one genuinely arguable exclusion: it is
-//! metadata by structure, but it changes how the image *renders*, so
-//! dropping it means a file re-tagged from sRGB to Display P3 keeps its
-//! payload hash — a false merge, the direction this module otherwise
-//! refuses.
-//!
-//! It is excluded anyway, for consistency and for cost. Consistency:
-//! carving one `APPn` out of the exclusion would make the recipe "all
-//! APPn except APP2", and an ICC profile is routinely rewritten
-//! byte-differently for the same colour space by different tools —
-//! which would hand back exactly the churn we are removing. Cost: the
-//! failure is two photographs of the same scene in two colour spaces
-//! sharing a hint column value, which a human resolves in one look at
-//! the grid. `blake3` still distinguishes them, and it is still the
-//! key.
 
 use anyhow::Result;
 
@@ -117,14 +79,6 @@ pub fn plan(src: &mut Src) -> Result<Option<Plan>> {
     Ok(Plan::flat(SCHEME, ranges).non_empty())
 }
 
-/// Find the end of an entropy-coded run starting at `from`.
-///
-/// Inside the run, `FF` is escaped as `FF 00`, and restart markers
-/// `FF D0`…`FF D7` are part of the data. Any other `FF xx` is the next
-/// real marker and ends the run. Getting this wrong in the lenient
-/// direction (stopping at the first `FF`) truncates the image; getting
-/// it wrong in the greedy direction (running to EOF) would swallow the
-/// trailing `APPn` segments this recipe exists to exclude.
 fn scan_end(src: &mut Src, from: u64) -> Result<u64> {
     let mut at = from;
     while at < src.len() {

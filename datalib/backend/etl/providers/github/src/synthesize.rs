@@ -1,26 +1,4 @@
 //! GitHub HTTP fixture synthesizer.
-//!
-//! Walks the event-store layout the live downloader writes under
-//! `<api_dir>/<entity>/{created,updated}/events.jsonl` and emits playback
-//! fixtures for every request [`crate::download`] would issue:
-//!
-//! * `GET https://api.github.com/user` — viewer identity, from the latest
-//!   `self_identity` record's `raw`.
-//! * `GET /search/issues?q=is:pr {scope}&per_page=100&sort=updated&order=desc`
-//!   — one fixture per [`crate::download::DEFAULT_SCOPES`] scope.
-//!   We assume **first-run / full-sync playback**: no `updated:>=since`
-//!   clause is appended. The body is a `{"items": [...]}` envelope with
-//!   one minimal item per known PR (`repository_url` + `number` are the
-//!   only fields download reads). No `Link: rel="next"` header → paginate
-//!   stops after one page.
-//! * `GET /repos/{repo}/pulls/{num}` — the per-PR detail, from the latest
-//!   `pull_request` record's `raw`.
-//! * `GET /repos/{repo}/issues/{num}/comments?per_page=100` — array of
-//!   `issue_comment.raw` for that PR.
-//! * `GET /repos/{repo}/pulls/{num}/reviews?per_page=100` — array of
-//!   `pr_review.raw` for that PR.
-//! * `GET /repos/{repo}/pulls/{num}/comments?per_page=100` — array of
-//!   `pr_review_comment.raw` for that PR.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -39,24 +39,6 @@ const CONFIG_DIR = import.meta.dirname;
 // not. Everything Bazel hands us is a symlink into bazel-out, so that
 // broke this package from both ends at once — and, annoyingly, the two
 // ends want opposite fixes.
-//
-//   * `bazel build` (js_run_binary, chdir into the sandbox): the staged
-//     `index.html` resolves through to the real output base while the
-//     cwd is a sandbox path. Vite names an emitted asset by relativizing
-//     it against `root`, so `index.html` came out with ten `../` in it,
-//     and rolldown — Vite 8's bundler — rejects any emitted name that is
-//     absolute or relative. Fix: pin `root` to the config's own resolved
-//     directory, putting `root` on the same side as the file.
-//
-//   * `bazel test` (vitest, runfiles): the runfiles symlinks point *out
-//     of* the sandbox, so every spec resolved to `/@fs/<real execroot>/…`
-//     — a path that exists but that the sandbox will not let the test
-//     read. All 16 suites failed with "Cannot find module". Fix:
-//     `preserveSymlinks`, so resolution stays inside the runfiles tree.
-//
-// Applying either fix to both modes breaks the other one, which is why
-// this is keyed on `command`. Neither is needed for a host `pnpm build`
-// / `pnpm test`, where nothing is a symlink and both branches are inert.
 export default defineConfig(({ command }) => ({
   // Build half of the note above. `outDir` has to be pinned to the CWD
   // alongside it: `outDir` is resolved against `root`, so moving `root`
@@ -82,11 +64,6 @@ export default defineConfig(({ command }) => ({
     // own `const routeLocationKey = Symbol()`, so `useRoute()`'s
     // `inject(...)` and the router's `app.provide(...)` key on
     // *different* symbols and `useRoute()` returns undefined.
-    //
-    // `dedupe` tells Vite to collapse multiple resolutions of these
-    // packages to a single instance. Host `pnpm install` doesn't need
-    // this because its node_modules layout doesn't expose the double
-    // path; the issue is specific to the aspect_rules_js virtual tree.
     dedupe: ["vue", "vue-router", "pinia"],
     // Test/serve half of the note above.
     ...(command === "build" ? {} : { preserveSymlinks: true }),

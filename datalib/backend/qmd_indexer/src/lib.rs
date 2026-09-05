@@ -1,37 +1,5 @@
 //! Drive the `qmd` CLI to (re)build a BM25 + embedding index over the
 //! rendered conversation markdown tree at a given root.
-//!
-//! QMD (https://github.com/tobi/qmd) is an npm package. We invoke it via
-//! [`datalib_runtime::qmd::qmd_command`] — the app-bundled Node runtime
-//! when staged, else `npx -y @tobilu/qmd@<version>` — so callers don't
-//! need a global install.
-//!
-//! This crate links `datalib_runtime` (no dependencies) and
-//! `datalib_obs`, and deliberately not `datalib_core` or
-//! `datalib_unified_index`. `qmd_indexer_bin` is a `tools=` input to
-//! `//tests/fixtures:ingested_tng_qmd`, and bazel keys an action on its
-//! tools' digests — so whatever this binary links is the set of crates
-//! whose next edit re-runs a ~90s CPU-only embed on CI. Keep the
-//! dependency list short on purpose; reach for a re-export in
-//! `datalib_runtime` before adding one.
-//!
-//! QMD stores its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. We pin
-//! it inside the data root by setting `XDG_CACHE_HOME=<root>/system`, so
-//! the resulting index lives at `<root>/unified_index/qmd/index.sqlite` alongside
-//! the other cross-stanza aggregates (`backend_index/db.doltlite_db`).
-//!
-//! The run is **incremental** — qmd's `update` only re-indexes changed
-//! files. The first run lazily creates the collection via `collection add`
-//! (detected by the absence of `index.sqlite`); subsequent runs skip
-//! straight to `update` + optional `embed`.
-//!
-//! qmd stores its ~300MB embedding model under
-//! `<XDG_CACHE_HOME>/qmd/models/`, which would otherwise land inside the
-//! data root and bloat any archive of it. The models cache is independent
-//! of the index, so we pre-create `<root>/qmd/models` as a symlink to a
-//! shared `models_dir` (default `~/.cache/qmd/models` — the same path a
-//! standalone `qmd` run uses, so the two share one cache). qmd treats
-//! the symlink transparently and models stay outside the data root.
 
 use std::path::{Path, PathBuf};
 
@@ -62,14 +30,6 @@ pub struct IndexOptions {
     /// Whether to run `qmd pull` before embedding. On by default,
     /// because it is what puts the query-expansion and reranker models
     /// in place for the first interactive query.
-    ///
-    /// Turn it off when the caller has already staged the embedding
-    /// model into `models_dir` and does not query — the fixture build
-    /// (`tests/fixtures/build_qmd_index.py`) is the one such caller.
-    /// Pull is not merely redundant there, it is destructive: it decides
-    /// a cached file is stale unless it can fetch a matching etag from
-    /// HuggingFace, so with no network (or a 429) it DELETES the staged
-    /// model and the embed that follows has to download a replacement.
     pub pull: bool,
 }
 
@@ -106,18 +66,6 @@ pub fn default_models_dir() -> PathBuf {
 /// lands in the cache dir, by their on-disk filenames (qmd derives these
 /// from the HF URIs). Used by [`models_present`] to detect a cold cache
 /// (the backend logs a first-search-will-download heads-up).
-///
-/// Only the embedding + query-expansion models, not the reranker: those
-/// two are what the app can actually load (the daemon embeds every
-/// query; the CLI fallback additionally expands), and qmd lazily fetches
-/// anything else on first use, so a missing one degrades to a one-time
-/// download rather than a hard failure.
-///
-/// This is about a REAL data root, whose models the app downloads to
-/// `default_models_dir()`. Test roots no longer come through here: the
-/// three GGUFs are pinned in MODULE.bazel and
-/// `tests/fixtures/materialize_tng_root.sh` links them in from bazel
-/// inputs, so it has no list of its own to keep in sync any more.
 pub const REQUIRED_MODELS: &[&str] = &[
     "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
     "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf",
@@ -211,38 +159,6 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
 
     // Pull BEFORE embed, and the order is the whole point.
-    //
-    // Both steps can fetch the embedding model, but only `pull` writes
-    // the `<model>.gguf.etag` sidecar it later reads to decide whether a
-    // cached file is current. `embed` goes through node-llama-cpp's
-    // `resolveModelFile`, which writes no sidecar. So embedding first
-    // left a 318 MB embeddinggemma on disk with no etag, and the `pull`
-    // that followed read "file present, etag absent" as stale, deleted
-    // it, and downloaded it a second time — on every cold run.
-    //
-    // The comment this replaces asserted the opposite ("`qmd pull` is
-    // idempotent so re-pulling it is free (cache-checked)"). CI said
-    // otherwise in as many words: `(318.1 MB, refreshed)`, where
-    // `refreshed` is qmd's term for "there was a cached copy and I threw
-    // it away" — it is set from `cached.length > 0`, so it is also the
-    // proof that a copy existed. The two models that `pull` fetches
-    // itself report `cached/checked`, which is merely `!refreshed` and
-    // says nothing about whether a download happened.
-    //
-    // Pulling first still serves the original purpose — getting the
-    // query-expansion and reranker models in place so the first user
-    // query, via the UI or `qmd query`, doesn't pay a multi-hundred-MB
-    // download on the interactive path.
-    //
-    // Best-effort: a failure here doesn't fail the index build. `embed`
-    // below then fetches the embedding model on demand exactly as it did
-    // before, and queries still work with the first one paying for the
-    // rest. The likely failure is a network hiccup against huggingface,
-    // which shouldn't mark an otherwise-fine sync as errored.
-    //
-    // A caller that staged the models itself skips this entirely — see
-    // `IndexOptions::pull` for why running it anyway would undo the
-    // staging rather than confirm it.
     if opts.pull {
         if let Err(e) = run_qmd(&cache_home, &opts.qmd_version, &["pull"]) {
             status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
@@ -337,15 +253,6 @@ fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
 /// (possibly *failed*) run already registered it. qmd's `collection add`
 /// aborts with "Collection '<name>' already exists" — which for our
 /// idempotent re-runs is success, not failure.
-///
-/// Why this can't just lean on the `first_run` (`!index.sqlite`) gate:
-/// qmd records the collection in its config the moment `collection add`
-/// runs, but `index.sqlite` only appears after a successful `update`. So
-/// a run that registers the collection and then dies before `update`
-/// finishes (e.g. the `embed` step fails on a native-module/ABI error)
-/// leaves the collection registered with no index file. Every later run
-/// then sees `first_run == true`, re-runs `collection add`, and aborts.
-/// Swallowing "already exists" makes the step re-entrant.
 fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
     let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
     cmd.args(args);

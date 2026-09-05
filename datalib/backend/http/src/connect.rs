@@ -1,38 +1,6 @@
 //! Endpoints the Add-a-source wizard needs before a source exists:
 //! which latchkey accounts are stored, starting latchkey's browser
 //! login, and asking a provider what an account can actually reach.
-//!
-//! All three shell out. That is deliberate and worth stating, because
-//! the alternative looks tempting from here:
-//!
-//! * **latchkey is a CLI, not a library.** `latchkey services info
-//!   <name>` already prints JSON with the stored accounts and their
-//!   validity, and `latchkey auth browser <name>` already knows how to
-//!   drive an OAuth flow in a real browser. Reimplementing either
-//!   against the credential store would be a second thing to keep in
-//!   step with the pin in `datalib_core::node_runtime`.
-//! * **The probe belongs to the provider.** `datalib-http` links no
-//!   provider crate and should not start: knowing that a Gmail label
-//!   named `INBOX` is spelled `Inbox` in a filter is exactly the
-//!   knowledge the email provider exists to hold. So the probe is
-//!   `datalib-step probe <type>`, resolved the same way the sync
-//!   worker resolves `datalib-dag`.
-//!
-//! ### Why the browser login is polled rather than awaited
-//!
-//! `latchkey auth browser` opens a window and waits for a person. That
-//! is tens of seconds at best and unbounded at worst, so the request
-//! that starts it returns an id immediately and the UI polls. The
-//! alternative — holding the HTTP request open — gives the browser
-//! nothing to show and no way to give up.
-//!
-//! The attempts live in a process-global map rather than on
-//! [`crate::AppState`]. They are ephemeral UI state belonging to no
-//! data root: one `datalib-http` serves one root, an attempt is
-//! meaningless once the process exits, and nothing else in the server
-//! reads them. Putting them in the shared state would have added a
-//! field to every construction of it, including nine tests, to hold
-//! something none of them care about.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -61,9 +29,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Long, because the clock is a person reading a consent screen.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
-// ---------------------------------------------------------------------
 // GET /api/latchkey/{service}
-// ---------------------------------------------------------------------
 
 /// The accounts latchkey holds for one service, and how one could be
 /// added.
@@ -109,12 +75,6 @@ pub async fn get_service(
     }
 }
 
-/// Reshape `latchkey services info` into what the wizard reads.
-///
-/// Split out from the handler so the shape is testable without a
-/// latchkey on the host — this is a wire format two programs agree on,
-/// and a silent change to it would show up as an empty account list
-/// rather than as an error.
 fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
     let auth_options = v
         .get("authOptions")
@@ -155,9 +115,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
     }
 }
 
-// ---------------------------------------------------------------------
 // POST /api/latchkey/{service}/connect  +  GET /api/latchkey/connect/{id}
-// ---------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ConnectRequest {
@@ -273,9 +231,7 @@ pub async fn connect_status(
     }
 }
 
-// ---------------------------------------------------------------------
 // POST /api/probe
-// ---------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub struct ProbeRequest {
@@ -342,11 +298,8 @@ pub async fn probe(
     Ok(Json(report))
 }
 
-// ---------------------------------------------------------------------
 // shared
-// ---------------------------------------------------------------------
 
-/// Run latchkey and return stdout, or an error carrying its stderr.
 async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
     // The same resolution `datalib_etl::latchkey` uses (bundled Node
     // runtime, else `npx -y latchkey@<pin>`), reached through
@@ -393,9 +346,6 @@ async fn latchkey_json(args: &[&str], timeout: Duration) -> anyhow::Result<Value
         .map_err(|e| anyhow::anyhow!("latchkey printed something that isn't JSON: {e}"))
 }
 
-/// Last 4 KiB of a command's output. Enough to carry a stack or a
-/// couple of error lines; short enough that a runaway log can't be
-/// pushed into a browser.
 fn tail(s: &str) -> String {
     let s = s.trim();
     const MAX: usize = 4096;
@@ -411,12 +361,6 @@ fn tail(s: &str) -> String {
     format!("…{}", &s[cut..])
 }
 
-/// A latchkey service name, checked before it becomes an argv element.
-///
-/// Nothing here reaches a shell, so this is not about quoting: it is
-/// that a value beginning with `-` would be read by latchkey as an
-/// option rather than a service, and a path separator would let a
-/// request name something that is not a service at all.
 fn validated_service(service: &str) -> Result<String, (StatusCode, Json<Value>)> {
     let s = service.trim();
     if s.is_empty()
@@ -433,7 +377,6 @@ fn validated_service(service: &str) -> Result<String, (StatusCode, Json<Value>)>
     Ok(s.to_string())
 }
 
-/// A `datalib-step` source type, checked for the same reason.
 fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)> {
     let s = source_type.trim();
     if s.is_empty() || !s.chars().all(|c| c.is_ascii_lowercase() || c == '_') {

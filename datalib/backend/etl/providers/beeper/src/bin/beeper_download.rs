@@ -1,15 +1,5 @@
 //! `beeper-download` — drives [`datalib_etl_beeper::download::fetch`]
 //! from the command line.
-//!
-//! Reads Beeper Texts' on-disk SQLite stores under
-//! `~/Library/Application Support/BeeperTexts/` and copies the rows
-//! for the configured chat networks into a doltlite database. No
-//! network, no auth.
-//!
-//! ```sh
-//! beeper-download --out ~/beeper-mirror.doltlite_db \
-//!     --source signal --source googlechat
-//! ```
 
 use std::path::PathBuf;
 

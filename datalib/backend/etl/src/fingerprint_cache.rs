@@ -1,91 +1,10 @@
 //! A host-local cache of "what did this path look like, and what was its
 //! hash" — the fast-rescan cursor, kept out of versioned storage.
 //!
-//! # Why this is not a table in the scan store
-//!
-//! Every tree-scanning provider keeps a Unison-style cursor so a rescan
-//! can skip hashing a file whose `(mtime, size, inode, dev)` has not
-//! moved. Until now each kept it inside its own `.doltlite_db`, beside
-//! the content. That is the wrong home for three reasons, and the third
-//! is the one that bites:
-//!
-//! 1. **It is host state.** An inode number means nothing on another
-//!    machine. A branch fetched from elsewhere carries a cursor that
-//!    cannot match, so every file rehashes — and nothing records which
-//!    host a cursor came from, so you cannot even detect it.
-//! 2. **Branching it is a category error.** The cursor describes the
-//!    *live filesystem*, which has no history. Rolling a branch back
-//!    does not un-modify the files on disk, so a rolled-back cursor
-//!    would be describing a machine state that never existed. Per host
-//!    there is only ever a latest.
-//! 3. **A fresh branch loses it.** Start a new branch of the scan data
-//!    and the cursor is gone with it, so a rescan of an unchanged tree
-//!    pays a full rehash for a reason that has nothing to do with the
-//!    tree.
-//!
-//! Measured, 100k entries: `files` + `file_stats` in one doltlite store
-//! is 291 B/row; `files` alone is 148 B/row. **The cursor was 49% of the
-//! versioned store**, because `file_stats` re-stores the full path as
-//! its own primary key.
-//!
-//! # Why plain SQLite
-//!
-//! This is a cache: losing it costs a rehash, not correctness. It needs
-//! no commits, no history, and no prolly tree. doltlite creates its own
-//! `CTLD` format by default, but the `doltlite_engine=sqlite` URI
-//! parameter opts out for a new empty file — the same door
-//! `datalib_progress::bus` goes through. Measured on 100k rows: bulk
-//! write 0.20s against 0.37s (insert + `dolt_commit` + `dolt_gc`), and
-//! single-row updates ~0.3ms against ~50ms.
-//!
-//! # Keyed by absolute path
-//!
-//! One chain per host, not per root — which is the part Unison gets
-//! wrong. Its `fpcache` is per replica *pair*, so syncing one tree
-//! against two peers hashes the same bytes twice, and scanning a
-//! directory tells you nothing about its parent.
-//!
-//! Absolute keys make overlapping roots share work in both directions.
-//! Measured, an inner directory of 2000 files inside a parent that also
-//! holds 500 of its own:
-//!
-//! | | files reused | files hashed |
-//! |---|---|---|
-//! | scan the inner directory (cold) | 0 | 2000 |
-//! | then scan the **parent** | **2000** | 500 (only its own) |
-//! | then scan the inner directory again | 2000 | 0 |
-//!
-//! Pruning stays scoped to the root it was given, so the parent's
-//! entries survive a nested scan and vice versa — otherwise two
-//! overlapping scans would keep evicting each other and neither would
-//! ever be fast.
-//!
-//! A root that moves simply misses rather than colliding, and two
-//! providers scanning one tree reuse each other's work.
-//!
-//! # Removal is by "the file is gone", never by "I did not look at it"
-//!
-//! Two different things look alike from inside one scan, and
-//! conflating them breaks the cache in opposite directions:
-//!
-//! - **The path no longer exists.** Dead weight. It should go, and a
-//!   scan that covered the directory is exactly who knows.
-//! - **The scan did not look at the path.** It must stay. What a scan
-//!   sees is a property of *its filters*, not of the filesystem, and
-//!   this cache is shared by consumers who disagree about what is
-//!   interesting: `fsindex` honours a per-directory `ignore` cascade,
-//!   `pdf` only wants PDFs.
-//!
-//! The first version pruned on "the scan did not write a row for it",
-//! which is the second thing wearing the first thing's clothes — so an
-//! `fsindex` scan ignoring `*.tmp` evicted 200 entries a full scan had
-//! just cached. The distinction is settled with one `lstat` per
-//! candidate: gone means gone, and anything still on disk is kept
-//! whatever this scan's filters thought of it.
-//!
-//! [`FingerprintCache::forget`] is therefore deliberately dumb — it
-//! removes exactly what it is handed. The policy lives in the caller,
-//! which is the only party that can tell the two cases apart.
+//! Host state, not versioned state: an inode number means nothing on another
+//! machine, and the live filesystem has no history to branch. Plain SQLite,
+//! keyed by absolute path so overlapping roots share work. The crate README
+//! has the measurements.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -97,10 +16,6 @@ use sqlx::{Row, SqlitePool};
 use crate::fswalk::{Blake3, StampCursor, StampKind};
 
 /// What kind of thing a cached entry describes.
-///
-/// Directories are cached too: `fsindex` hashes a directory over its
-/// children, so a directory has a digest like anything else, and its
-/// cursor is what lets a rescan skip the `readdir`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     File,
@@ -152,11 +67,6 @@ pub struct CachedTree {
 }
 
 impl CachedTree {
-    /// Build a tree from root-relative entries held in memory.
-    ///
-    /// The child index is derived here, so a caller never has to keep
-    /// the two in step. Used by tests, and by any provider that wants a
-    /// prior view from somewhere other than the cache file.
     pub fn from_entries(
         items: impl IntoIterator<Item = (String, EntryKind, Blake3, StampCursor)>,
     ) -> Self {
@@ -171,12 +81,10 @@ impl CachedTree {
         tree
     }
 
-    /// The stat cursor recorded for a root-relative path.
     pub fn cursor(&self, rel: &str) -> Option<&StampCursor> {
         self.entries.get(rel).map(|(_, _, c)| c)
     }
 
-    /// The digest recorded for a root-relative path.
     pub fn blake3(&self, rel: &str) -> Option<Blake3> {
         self.entries.get(rel).map(|(_, h, _)| *h)
     }
@@ -185,16 +93,10 @@ impl CachedTree {
         self.entries.get(rel).map(|(k, _, _)| *k)
     }
 
-    /// The immediate children recorded for a directory, root-relative
-    /// and sorted. The root's children are keyed by the empty string.
-    ///
-    /// Derived from the key set rather than stored, so it cannot drift
-    /// out of step with the entries themselves.
     pub fn children(&self, rel: &str) -> Option<&Vec<String>> {
         self.children.get(rel)
     }
 
-    /// Every root-relative path in the tree, unordered.
     pub fn paths(&self) -> impl Iterator<Item = &String> {
         self.entries.keys()
     }
@@ -237,13 +139,6 @@ pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS fingerprints (
     dev         INTEGER
 )";
 
-/// The default cache location for this host.
-///
-/// A cache directory, deliberately — not the data root. Host state in a
-/// data root is wrong twice: the root may sit on a synced volume (this
-/// repo lives under Dropbox), which would replicate one machine's inode
-/// numbers to another; and a data root is a thing you copy or move,
-/// while this describes the machine.
 pub fn default_cache_path() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("DATALIB_CACHE_DIR") {
         return Ok(PathBuf::from(dir).join("fingerprints.sqlite"));
@@ -289,8 +184,6 @@ pub struct FingerprintCache {
 }
 
 impl FingerprintCache {
-    /// Open (creating if absent) the cache at `path`, as a plain-SQLite
-    /// file.
     pub async fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)
@@ -327,7 +220,6 @@ impl FingerprintCache {
         &self.pool
     }
 
-    /// Where this cache lives, absolute.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -376,7 +268,6 @@ impl FingerprintCache {
         Ok(tree)
     }
 
-    /// Upsert a batch of observations.
     pub async fn store(&self, batch: &[Fingerprint]) -> Result<()> {
         if batch.is_empty() {
             return Ok(());
@@ -409,15 +300,6 @@ impl FingerprintCache {
         Ok(())
     }
 
-    /// Forget specific absolute paths.
-    ///
-    /// Deliberately dumb: it removes exactly what it is given and
-    /// decides nothing. The policy — which entries have earned removal
-    /// — belongs to the caller, because only the caller knows the
-    /// difference between "this path is gone from the filesystem" and
-    /// "my filter did not look at it". Getting that backwards is how
-    /// the first version of this let a narrow scan evict a broad one's
-    /// work.
     pub async fn forget(&self, abs_paths: &[String]) -> Result<u64> {
         if abs_paths.is_empty() {
             return Ok(0);
@@ -436,12 +318,6 @@ impl FingerprintCache {
         Ok(removed)
     }
 
-    /// The cache's footprint on disk, in bytes.
-    ///
-    /// Sums the database and its `-wal` / `-shm` sidecars, because in
-    /// WAL mode recent writes live in the sidecar and the main file
-    /// alone would under-report — a scan could write thousands of rows
-    /// and appear to have grown by nothing.
     pub fn disk_bytes(&self) -> u64 {
         let mut total = 0u64;
         for suffix in ["", "-wal", "-shm"] {
@@ -454,20 +330,12 @@ impl FingerprintCache {
         total
     }
 
-    /// Fold the WAL back into the database and truncate it.
-    ///
-    /// Best-effort: a concurrent scan holding the file makes this fail,
-    /// which costs nothing. Worth doing at the end of a run so the
-    /// footprint reported is a settled number rather than one that
-    /// depends on when SQLite last checkpointed, and so the sidecar
-    /// does not grow across runs.
     pub async fn checkpoint(&self) {
         let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(&self.pool)
             .await;
     }
 
-    /// Total rows, for diagnostics.
     pub async fn count(&self) -> Result<i64> {
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprints")
             .fetch_one(&self.pool)
@@ -496,27 +364,10 @@ fn glob_escape(literal: &str) -> String {
     out
 }
 
-/// The canonical form of a scan root, as the cache keys it.
-///
-/// Every entry point normalizes through this rather than trusting the
-/// caller, so a relative root, a `..`, a trailing slash and a symlinked
-/// route to the same tree all address one set of entries. Absolute
-/// keying is the whole basis of "one chain per host": a relative key
-/// would put two unrelated trees, scanned as the same relative name
-/// from different directories, on top of each other.
-///
-/// A root that cannot be resolved (it was deleted, say) falls back to
-/// the path as given — a lookup then simply finds nothing, which is the
-/// right answer.
 pub fn canonical_root(root: &Path) -> PathBuf {
     root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
-/// Absolute path for a root-relative entry, as the cache keys it.
-///
-/// `root` is expected to be canonical already — the walker canonicalizes
-/// once and reuses it per entry, rather than paying a `canonicalize`
-/// syscall per row.
 pub fn abs_key(root: &Path, rel: &str) -> String {
     if rel.is_empty() {
         root.display().to_string()
@@ -697,10 +548,6 @@ mod tests {
     /// The mirror of the case above, and the one that pays off most:
     /// a scan of a parent must reuse a nested scan's hashes for the
     /// subtree they share, hashing only what is genuinely new to it.
-    ///
-    /// This is what per-host keying buys over Unison's per-replica-pair
-    /// `fpcache`, where scanning `/a` and `/a/b/c` are unrelated jobs
-    /// that each hash the overlap from scratch.
     #[tokio::test]
     async fn an_outer_root_reuses_a_nested_scan_s_work() {
         let tmp = tempfile::tempdir().unwrap();
@@ -749,14 +596,6 @@ mod tests {
 
     /// The cache is grow-only, and that is the point: a narrower scan
     /// must not evict a broader one's work.
-    ///
-    /// Two consumers share this cache and disagree about what is
-    /// interesting — `fsindex` honours an `ignore` cascade, `pdf` only
-    /// wants PDFs. A "delete what this scan did not see" pass would let
-    /// whichever scan is narrowest destroy the rest. Measured before it
-    /// was removed: an `fsindex` scan ignoring `*.tmp` evicted 200
-    /// entries a full scan had just cached, so the next full scan had
-    /// to rehash them.
     #[tokio::test]
     async fn a_narrower_scan_does_not_evict_a_broader_one() {
         let tmp = tempfile::tempdir().unwrap();

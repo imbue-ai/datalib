@@ -1,18 +1,4 @@
 // First-run onboarding against a genuinely empty data root.
-//
-// The bug this guards: opening the app on an empty folder showed the
-// grid, the grid asked the `unified_index` applet for rows, and that
-// applet is declared *in the config* — so a new user's first screen was
-// `502 {"error":"no applet \"unified_index\""}`. The fix is a gate that
-// says what it is about to do to the folder and then does it.
-//
-// This spec drives a second backend, started by playwright.config.ts on
-// its own empty `mkdtemp` root (FW_E2E_EMPTY_URL) — the onboarding
-// state is unreachable from the fixture root, which has a config.
-//
-// The one destructive step is the point of the test, so the order
-// inside the single test matters: everything asserted about the
-// uninitialized root has to happen before the button is clicked.
 
 import { test, expect } from "@playwright/test";
 

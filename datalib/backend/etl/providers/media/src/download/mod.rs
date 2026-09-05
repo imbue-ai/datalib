@@ -1,15 +1,5 @@
 //! The `media` download side: walk a tree, work out what each audio,
 //! image, video and playlist file is, and record it.
-//!
-//! There is no render side — see the crate docs. This is the whole
-//! provider.
-//!
-//! The shape follows `pdf`: load the rescan cache, truncate the
-//! path-keyed tables so deletions fall out, walk, and do per-item work
-//! only for content we have not seen. What differs is what "per-item
-//! work" means. `pdf` classifies; here it is a container sniff, a
-//! payload-hash plan, and a metadata read — all of which are keyed on
-//! content, so N copies of one song are parsed once.
 
 pub mod db;
 pub mod kind;
@@ -236,13 +226,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Reconcile last. Whatever is still in the cache was never visited,
     // so it is a path that is gone.
-    //
-    // Doing it here rather than up front is what makes an interrupted
-    // scan cheap: a run killed before this point leaves every row it
-    // had, and a stale `(mtime, size, inode, dev)` is exactly as good a
-    // cursor as a fresh one. The cost is the opposite window — rows for
-    // deleted files linger until a scan runs to completion — which is
-    // the safe direction of the two.
     let gone_files: Vec<String> = prev.paths.into_keys().collect();
     let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
     summary.removed = (opts.db.delete_files(&gone_files).await?
@@ -254,22 +237,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// A cloud placeholder: the file has a size but no allocated blocks, so
-/// its bytes are not here.
+/// A cloud placeholder: the file has a size but no allocated blocks, so its
+/// bytes are not here.
 ///
-/// Reading one is not a cheap mistake — it asks Dropbox or iCloud to
-/// materialize the file, so a first scan of an evicted library would
-/// try to pull the whole thing down. Skipping is the safe default and
-/// every skip is counted into `dataless_skipped=`.
+/// Reading one asks Dropbox or iCloud to materialize the file, so a first scan
+/// of an evicted library would try to pull the whole thing down. Consulted
+/// through [`fsscan::scan_with`]'s admit hook, the only place that sees a stat
+/// *before* anything reads.
 ///
-/// It is a heuristic: a filesystem that reports no block counts at all
-/// looks entirely evicted, which is why `skip_dataless` can be turned
-/// off. iCloud's `.icloud` eviction markers need no handling here —
-/// they are named `.track.mp3.icloud`, so `kind::accept` never visits
-/// them in the first place.
-///
-/// Consulted through [`fsscan::scan_with`]'s admit hook, which is the
-/// only place that sees a stat *before* anything reads the file.
+/// A heuristic: a filesystem reporting no block counts at all looks entirely
+/// evicted, which is why `skip_dataless` can be turned off. iCloud's `.icloud`
+/// markers need no handling — `kind::accept` never visits them.
 #[cfg(unix)]
 fn is_dataless(md: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;

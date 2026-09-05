@@ -4,23 +4,11 @@
 // row — a validating builder — so producers stop hand-writing 24-field
 // literals (where a malformed value silently reaches the grid) and
 // instead funnel through [`GridRow::builder`].
-//
-// Validation deliberately lives here, at construction time, rather than
-// at DB-insert time: a bad `when_ts` used to slip all the way to
-// `load::insert_grid_row`, where `split_when_ts` quietly returned `None`
-// and left the raw upstream string (e.g. LinkedIn's `"16 Jun 2026"`) in
-// the displayed column. Catching it in `build()` turns that silent
-// display bug into a loud error a provider's own tests trip over.
 
 use datalib_time::validate_iso_offset;
 
 use crate::render_problems::{sample_of, Outcome, Problem, Reason, RenderProblemRow};
 
-/// Short content hash for a record with no usable identity.
-///
-/// Not `blake3` the crate — `datalib_schema` has no hashing dependency
-/// and does not need one for a 16-char surrogate whose only job is to be
-/// stable for the same bad record across runs.
 fn blake3_hex(s: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -57,25 +45,6 @@ impl std::fmt::Display for GridRowError {
 impl std::error::Error for GridRowError {}
 
 impl GridRow {
-    /// `when_ts_utc` — the same instant normalized to UTC, fixed
-    /// microsecond width, `Z` suffix.
-    ///
-    /// Derived rather than stored on the struct because producers never
-    /// set it: a single zone and a single width make lexical order match
-    /// true chronological order, which a column of mixed local-offset
-    /// `when_ts` strings does not — `2026-01-01T09:00:00+00:00` sorts
-    /// before `2026-01-01T10:00:00-08:00` as text and is nine hours
-    /// earlier in fact. This is the column the grid sorts and
-    /// `before:`/`after:`-filters on.
-    ///
-    /// An absent or unparseable `when_ts` leaves it NULL — never a
-    /// fabricated value, per
-    /// `docs/dev/data_architecture_parse_and_render.md` §6.
-    ///
-    /// Lives here, next to the column declaration that documents it,
-    /// rather than in the index writer that used to compute it inline:
-    /// the derivation is part of the schema, and the `PortableTable`
-    /// derive calls this by name.
     pub fn derived_when_ts_utc(&self) -> Option<String> {
         self.when_ts
             .as_deref()
@@ -190,8 +159,6 @@ impl GridRowBuilder {
     opt_setter!(notion_block_uuid);
     opt_setter!(markdown_uuid);
 
-    /// Set the optional `message_index` column (within-conversation
-    /// ordinal). Accepts `Some(i)` or a bare `i64`.
     pub fn message_index(mut self, v: impl Into<Option<i64>>) -> Self {
         self.message_index = v.into();
         self
@@ -199,23 +166,6 @@ impl GridRowBuilder {
 
     /// Validate and finalize the row, or report why it could not be
     /// built and return `None` so the caller drops it and keeps going.
-    ///
-    /// This is R2's second category made expressible. `build` offers one
-    /// failure mode, and every callsite in the tree propagated it with
-    /// `?` — so a single row with an unparseable `when_ts` failed the
-    /// whole source's render, which the DAG then classified as `data`
-    /// and used to poison every step below it, `grid_index` included.
-    /// One bad record out of forty thousand stopped the grid updating
-    /// for every provider.
-    ///
-    /// A dropped row is pushed onto `problems` as a `Dropped` /
-    /// `NoIdentity`-or-`CoercionFailed` entry, so the record of what was
-    /// lost lands beside the rows that survived — never a count without
-    /// a reason, never a reason without a sample.
-    ///
-    /// The caller supplies `scope_key` (the `markdown_uuid` this row
-    /// belongs to) and `source_name`, because a `GridRow` on its own
-    /// does not know which document it was headed for.
     pub fn build_or_record(
         self,
         source_name: &str,
@@ -286,13 +236,6 @@ impl GridRowBuilder {
         }
     }
 
-    /// Validate and finalize the row.
-    ///
-    /// Rejects an empty `uuid` / `provider` / `kind` / `source_label`,
-    /// and a `when_ts` that isn't RFC 3339 with an explicit offset (the
-    /// grid's sortable `when_ts_utc` column is derived from it). `None`
-    /// `when_ts` is fine — it means "no source-side timestamp", which we
-    /// never fabricate.
     pub fn build(self) -> Result<GridRow, GridRowError> {
         for (field, val) in [
             ("uuid", &self.uuid),

@@ -1,34 +1,5 @@
 //! Resolve a Takeout attachment's referenced filename to its on-disk
 //! path, tolerating Google's silent truncation of long names.
-//!
-//! Google Takeout records the *full* attachment filename in Chat's
-//! `messages.json` (`export_name`) but truncates the file actually
-//! written to disk to a byte cap, preserving the extension. The on-disk
-//! stem is therefore a prefix of the referenced stem, e.g.
-//!
-//! ```text
-//! referenced: File-84f97831-a19d-4d1b-89f0-dfc9cbd19ca4-1_all_148157.jpeg
-//! on disk:    File-84f97831-a19d-4d1b-89f0-dfc9cbd19ca4-1_al.jpeg
-//! ```
-//!
-//! so an exact `dir.join(name)` misses for any longish filename. See
-//! issue #64.
-//!
-//! [`resolve`] tries the exact name first, then falls back to the
-//! **unique longest same-extension prefix** in the directory. Requiring
-//! the extension to match is what keeps this safe: it anchors the match
-//! to a real attachment file rather than, say, a sibling `.json`/`.html`
-//! whose stem happens to be a prefix. Picking the *longest* prefix
-//! ignores coincidental short prefixes; a tie at the longest length
-//! (only reachable via case-folding extension collisions on a
-//! case-sensitive filesystem) degrades to [`Resolved::Missing`] rather
-//! than guessing.
-//!
-//! Note: Google Voice's MMS `src` is extension-less, so this resolver is
-//! deliberately NOT used there — an extension-less prefix match would
-//! grab the conversation's own `.html` transcript. Voice truncation needs
-//! a media-extension-restricted matcher validated against real data;
-//! tracked as a follow-up on #64.
 
 use std::path::{Path, PathBuf};
 
@@ -44,8 +15,6 @@ pub enum Resolved {
     Missing,
 }
 
-/// Split `name` into `(stem, ext)` on the last `.`. A name with no `.`
-/// (or a leading-dot dotfile) has an empty extension.
 fn split_ext(name: &str) -> (&str, &str) {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem, ext),
@@ -53,8 +22,6 @@ fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
-/// Resolve `referenced` (the full name from the export) to an on-disk
-/// path under `dir`, tolerating truncation. See module docs.
 pub fn resolve(dir: &Path, referenced: &str) -> Resolved {
     let exact = dir.join(referenced);
     if exact.is_file() {

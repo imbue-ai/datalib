@@ -3,10 +3,6 @@
 //! the legacy JSON tree under
 //! `me.json` + `conversations.json` + `conversations/<id>.json`) and
 //! flattens it into typed rows.
-//!
-//! `raw_json` fields carry the JSON minus whatever has been exploded
-//! into sibling row types — e.g. conversations drop `mapping`,
-//! messages drop `content` — so the row payload stays bounded.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -101,11 +97,6 @@ pub struct OAContentPartRow {
 /// JSON payload (full, untouched — used for fingerprinting and for
 /// on-demand shredding into messages/parts) paired with the surfaced
 /// `OAConversationRow` metadata.
-///
-/// Render is per-conversation: render fingerprints the payload,
-/// skips it against the indexer's prior fingerprint, and only shreds
-/// the mapping into messages+parts when it has to render. That keeps
-/// the steady-state render near-free for unchanged conversations.
 #[derive(Debug, Clone)]
 pub struct ChatGPTConversation {
     pub conv: OAConversationRow,
@@ -160,9 +151,6 @@ pub struct ParsedChatGPTApi {
     pub scan: ScanResult,
 }
 
-/// Normalize a ChatGPT timestamp to an ISO-8601 string. Strings pass through
-/// verbatim (preserving any embedded offset); numbers are rendered in UTC
-/// with an explicit `+00:00` suffix. See the Python original for rationale.
 fn epoch_to_iso(v: &Value) -> Option<String> {
     match v {
         Value::Null => None,
@@ -450,22 +438,10 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
     rows
 }
 
-/// Cold-start entry point: no render cursor, render everything.
-/// Kept for the in-crate JSON-tree fixture used by `chatgpt_render`
-/// and similar tests.
 pub fn parse_api_dir(path: &Path) -> Result<ParsedChatGPTApi> {
     parse(path, None)
 }
 
-/// Two-phase parse driven by `dolt_diff_<table>`.
-///
-/// Phase 1 — ask doltlite which conversations changed since
-/// `last_render_hash`. Cold start (`last_render_hash = None`) loads
-/// every conversation; same path also taken when doltlite extensions
-/// aren't linked or when `path` resolves to a legacy JSON tree.
-///
-/// Phase 2 — load conversation payloads, filtered to the surviving
-/// set.
 pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedChatGPTApi> {
     let db_path = db_path_for(path);
     if db_path.exists() {

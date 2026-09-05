@@ -1,47 +1,4 @@
 //! Hoisting the metadata worth querying into typed columns.
-//!
-//! Two readers, matching the two class tables:
-//!
-//! - **Audio** goes through `lofty`, which puts ID3v2, Vorbis comments,
-//!   MP4 `ilst` atoms, RIFF `INFO` and APEv2 behind one interface and
-//!   also reports bitrate, sample rate, channels and duration.
-//! - **Visual** goes through `kamadak-exif` for the EXIF/TIFF IFD that
-//!   JPEG, PNG, HEIF, WebP and DNG all embed, plus a small amount of
-//!   direct container reading for the things EXIF does not carry:
-//!   video duration, frame rate, codecs, and the dimensions of a file
-//!   with no EXIF block at all.
-//!
-//! # Everything here is a hint
-//!
-//! No field in this module is trusted enough to key anything on. Tags
-//! are typed by humans through a dozen tools with a dozen conventions,
-//! and the failure modes are mundane rather than exotic: a compilation
-//! where every track has a different `album_artist`, a camera whose
-//! clock was in the wrong year, `artist` holding
-//! `"Miles Davis feat. John Coltrane"` where a sibling file says
-//! `"Miles Davis"`. We record what the file says and do not correct
-//! it, for the same reason `pdf` stores producer junk in `author`
-//! rather than filtering it: the heuristic that drops a routing code
-//! eventually drops a real name.
-//!
-//! # Timestamps, and the one deviation from the repo convention
-//!
-//! AGENTS.md requires every stored timestamp to carry its source's UTC
-//! offset. EXIF's `DateTimeOriginal` has none — it is local wall-clock
-//! with no zone, and the offset only arrived with EXIF 2.31's
-//! `OffsetTimeOriginal`, which most cameras still omit.
-//!
-//! So [`VisualMeta::captured_at`] carries an offset **when the file
-//! supplies one** and is naive (`2026-05-04T03:42:05`) when it does
-//! not. The alternatives were worse: stamping `+00:00` would assert
-//! the photo was taken in UTC, and stamping the *scanning machine's*
-//! offset would assert it was taken wherever the scan ran. A missing
-//! offset is a fact about the file, and the naive form is the only
-//! encoding that states it.
-//!
-//! A GPS-carrying photo could have its true offset recovered by
-//! differencing `DateTimeOriginal` against the UTC `GPSDateStamp` /
-//! `GPSTimeStamp`. That is a genuine follow-up, not a rejection.
 
 use std::path::Path;
 
@@ -125,8 +82,6 @@ pub struct VisualMeta {
 }
 
 impl VisualMeta {
-    /// Nothing was found. Emitting a row anyway would put an
-    /// all-NULL `media_visual` entry behind every MP3.
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -143,22 +98,6 @@ pub struct Meta {
     pub codec: Option<String>,
 }
 
-/// Read what this file will say about itself.
-///
-/// Both readers are attempted whenever the container could carry that
-/// kind of metadata, rather than one being picked from the item's
-/// class. The class is single-valued and a file need not be: an MP4
-/// music video carries `ilst` tags *and* capture metadata, and an
-/// `.m4a` shot on a phone carries a recording date in `©day`. Choosing
-/// a reader by class silently dropped whichever half did not match.
-///
-/// A row is emitted for a class table only when there is something in
-/// it — see [`AudioMeta::has_tags`] and [`VisualMeta::is_empty`] — so
-/// this does not fill `media_visual` with a row per MP3.
-///
-/// Never fails the caller: a file whose tags are unreadable is still a
-/// file we know exists, and the honest record of that is a row with
-/// NULL columns. Parse failures are logged at `debug` and swallowed.
 pub fn extract(path: &Path, class: MediaClass, container: Container) -> Meta {
     let mut meta = Meta::default();
 
@@ -229,7 +168,6 @@ pub fn extract(path: &Path, class: MediaClass, container: Container) -> Meta {
     meta
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Audio
 
 fn read_audio(path: &Path) -> Result<(AudioMeta, Option<i64>, Option<String>)> {
@@ -275,7 +213,6 @@ fn read_audio(path: &Path) -> Result<(AudioMeta, Option<i64>, Option<String>)> {
     Ok((m, duration_ms, codec))
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // EXIF
 
 fn read_exif(path: &Path) -> Result<VisualMeta> {
@@ -372,8 +309,6 @@ fn gps_degrees(
     Some(deg * sign)
 }
 
-/// `DateTimeOriginal` as ISO-8601, with `OffsetTimeOriginal` appended
-/// when the camera recorded one.
 fn exif_timestamp(exif: &exif::Exif) -> Option<String> {
     use exif::{In, Tag};
     let ascii = |tag: Tag| -> Option<String> {
@@ -401,7 +336,6 @@ fn exif_timestamp(exif: &exif::Exif) -> Option<String> {
     })
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Container structure: what EXIF does not carry
 
 fn read_structure(
@@ -626,8 +560,6 @@ fn read_bmff_udta(src: &mut Src, udta: bmff::Atom, visual: &mut VisualMeta) -> R
     Ok(())
 }
 
-/// ISO-6709: sign-prefixed fields run together, e.g.
-/// `+37.7749-122.4194+010.000/`.
 fn parse_iso6709(s: &str) -> Option<(f64, f64, Option<f64>)> {
     let s = s.trim().trim_end_matches('/');
     let mut fields: Vec<String> = Vec::new();

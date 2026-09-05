@@ -6,17 +6,6 @@
 //! diff` against that trailing commit shows exactly which readings
 //! moved this run — same source-of-truth pattern every other
 //! provider uses.
-//!
-//! Demo of how little this layer needs once the schema is in place
-//! — the row types and their `BulkUpsertable` impls live in
-//! [`schema_raw`]; this file is just curl / parse / loop, plus the
-//! per-device cursor-advance after each window. See
-//! [`docs/dev/data_architecture_ingestion.md`] §"Schema first" for the
-//! principle this provider was kept simple to demonstrate.
-//!
-//! Strict CSV header check: a `℃` column with a `℉` row value is
-//! rejected, not coerced. The point is to notice unit flips
-//! instead of corrupting history.
 
 pub mod schema_raw;
 
@@ -55,14 +44,6 @@ const DEFAULT_WINDOW_DAYS: i64 = 7;
 
 /// One parsed sample. Serializable so insta snapshot tests can
 /// pretty-print it.
-///
-/// `payload` is the JSON-encoded `{header: value}` map of the source
-/// CSV row this sample was derived from — the raw wire representation
-/// YoLink served. Two `Reading`s coming out of the same CSV row (e.g.
-/// the temperature + humidity pair from a `Temperature(℃) Humidity
-/// (%RH)` row) share an identical `payload` string; see the
-/// [`schema_raw::YolinkReadingRow`] docstring for why we keep this
-/// even though it costs a small amount of denormalization.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reading {
     pub ts_ms: i64,
@@ -236,9 +217,6 @@ const SCOPE_CONFIG_KEY: &str = "yolink:download";
 /// Blob key. Named so writer and reader can't drift.
 const K_DEVICE_STARTS: &str = "device_starts";
 
-/// Per-device `start` dates, the only knob that decides which data lands
-/// on disk. `overlap_minutes` / `window_days` shape *how* the walk
-/// paginates and are re-applied every run, so they don't belong here.
 fn scope_config_blob(opts: &FetchOptions) -> serde_json::Value {
     let starts: std::collections::BTreeMap<&str, &str> = opts
         .sync
@@ -500,10 +478,6 @@ async fn fetch_device(
 /// snapshot (see `ParamUtils::hashMD5` + `_THSensorNewChartScreenState`).
 /// Yolink does not expose this scheme via its public API; UAC tokens
 /// can't access historical data.
-///
-/// REDACT: the `family_device_id` + `device_udid` pair from each
-/// `YolinkDevice` is a per-device read secret. Anything that publishes
-/// generated URLs effectively publishes that secret.
 fn build_signed_url(dev: &YolinkDevice, start_ms: i64, end_ms: i64) -> Result<String> {
     let mut hasher = Md5::new();
     hasher.update(dev.family_device_id.as_bytes());
@@ -548,8 +522,6 @@ fn build_signed_url(dev: &YolinkDevice, start_ms: i64, end_ms: i64) -> Result<St
     Ok(url)
 }
 
-/// `curl -sSfL <url>` → stdout. `-f` makes 4xx/5xx exit non-zero so
-/// we don't feed a "Forbidden" HTML body to the CSV parser.
 async fn curl(url: &str) -> Result<String> {
     let out = Command::new("curl")
         .arg("-sSfL")

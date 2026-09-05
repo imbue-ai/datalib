@@ -2,13 +2,6 @@
 //! [`datalib_etl::http::latchkey_curl`], which captures the full
 //! response (status, every header, body) and supports playback from
 //! disk fixtures. Mirrors `src/download/chatgpt_web.py:_curl_get`.
-//!
-//! Cloudflare TLS fingerprinting is `curl_impersonate`'s job; export
-//! `LATCHKEY_CURL=/path/to/curl_impersonate-chrome` before running the
-//! download binary live.
-//!
-//! Blob download itself happens in `download::mod` against the doltlite
-//! `blobs` table; this module is transport-only.
 
 use std::time::Duration;
 
@@ -56,8 +49,6 @@ impl ChatGPTClient {
         Self::default()
     }
 
-    /// Build a client that authenticates as the source's configured
-    /// latchkey identity. Every request it issues carries the settings.
     pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
         Self {
             latchkey,

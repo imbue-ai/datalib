@@ -1,8 +1,6 @@
 //! `github-download` — mirror PRs the user authored / commented on /
 //! was @mentioned in, plus all their comments and reviews. Output is
 //! event-store JSONL under `<out>/<entity>/{created,updated}/events.jsonl`.
-//!
-//! Requires `latchkey` with a `github` service registered (Bearer token).
 
 use std::path::PathBuf;
 use std::time::Duration;

@@ -1,18 +1,4 @@
 //! `GET /api/pipeline/storage` — bytes on disk, and how fresh they are.
-//!
-//! The numbers come from a background walk on a tick, not from a walk
-//! per request: that is what stops the cost of the answer scaling with
-//! the number of open tabs, and it is what makes a *history* exist at
-//! all (see `datalib_http::usage`). The price is that the answer can be
-//! a few seconds old, and there are two moments where a few seconds old
-//! is wrong rather than merely stale — a page's first paint, and a sync
-//! going terminal. `?refresh=1` covers both.
-//!
-//! The freshness test below is not hypothetical. A first cut debounced
-//! the refresh against the last walk's *start*, which meant a walk that
-//! began before a sync finished writing would swallow the refresh that
-//! came after it — and the Pipeline table's size column read "—" one
-//! frame after a sync it had just watched succeed.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -106,11 +92,6 @@ async fn a_step_that_has_written_nothing_is_present_false() {
 }
 
 /// A refresh sees what was written since the last one.
-///
-/// This is the contract the Pipeline table's size column rests on: a
-/// sync finishes, the UI asks with `refresh=1`, and the answer includes
-/// the bytes that sync just wrote. A refresh that could be coalesced
-/// away by an *earlier* walk would fail here.
 #[tokio::test]
 async fn a_refresh_sees_bytes_written_since_the_last_walk() {
     let td = tempfile::tempdir().unwrap();

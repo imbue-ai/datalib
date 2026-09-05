@@ -1,9 +1,4 @@
 //! JMAP method-call transport.
-//!
-//! Wraps [`datalib_etl::http::latchkey_curl`] with JMAP-specific
-//! request encoding and response unpacking. Every call sends a single
-//! `{using, methodCalls}` envelope (RFC 8620 §3.2) and returns the
-//! first method response's args.
 
 use std::time::Duration;
 
@@ -24,9 +19,6 @@ const CALL_ID: &str = "a";
 /// reasonable `Email/get` page including bodyValues.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// POST `{using, methodCalls: [[method, args, "a"]]}` and return the
-/// arg object from the matching response. Surfaces `error` method
-/// responses (per JMAP §3.6) as `Err`.
 pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value> {
     let envelope = json!({
         "using": [CAP_CORE, CAP_MAIL],
@@ -74,9 +66,6 @@ fn map_http_err(e: HttpError) -> anyhow::Error {
     anyhow!("{e}")
 }
 
-/// GET an arbitrary URL (e.g. `session.downloadUrl` after substitution)
-/// and return the body bytes. Errors carry the HTTP status so callers
-/// can record a transport-level failure on the bookkeeping sidecar.
 pub async fn download_bytes(
     url: &str,
     timeout: Duration,

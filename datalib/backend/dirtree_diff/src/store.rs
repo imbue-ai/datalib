@@ -1,31 +1,4 @@
 //! Reading `files` out of doltlite stores.
-//!
-//! The whole reason this is Rust: sqlx links the same doltlite
-//! amalgamation the rest of the tree does
-//! (`//third-party/doltlite:sqlite3`), so there is no CLI to locate, no
-//! subprocess per query, and no JSON to parse back.
-//!
-//! ## Reading through a pin
-//!
-//! Every read here goes through `dolt_at_files('<commit>')`, never a
-//! bare `SELECT`. A bare `SELECT` reads doltlite's **working set** —
-//! the staging area — which may hold rows a scan wrote but has not
-//! committed. Resolving each side to a commit hash once, up front, and
-//! reading only through that pin is what makes a run reproducible even
-//! if a scan is writing to the same file while we read. See
-//! `docs/dev/streaming_steps.md`.
-//!
-//! ## Why two files need unifying
-//!
-//! `dolt_diff_files` is bound to the connection's *main* database and
-//! resolves commit hashes only against that database's own chunk store;
-//! `ATTACH` extends neither (it reports
-//! `dolt_diff_files is only available in the main database`, and a
-//! foreign hash comes back `ref not found`). But a `.doltlite_db` works
-//! as a `file://` remote for another, so [`unify`] fetches both scans
-//! into a throwaway scratch database. Neither input is opened for
-//! writing or copied, and chunk dedup makes it cost roughly the novelty
-//! between the two scans rather than the size of the second.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -37,14 +10,6 @@ use sqlx::Row;
 
 use crate::model::Entry;
 
-/// Open a read pool against a doltlite file.
-///
-/// `max_connections(1)` is mandatory, not a tuning choice: doltlite's
-/// HEAD pointer, working set and active branch are per-connection, so a
-/// pool that hands out two connections shows two different views of the
-/// same file. `datalib_etl::doltlite_raw` documents the symptoms; this
-/// crate does not depend on it because that opener also runs DDL and a
-/// rescue commit, and we must not write to someone else's scan.
 pub async fn open(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
         .with_context(|| format!("sqlite uri for {}", path.display()))?
@@ -63,10 +28,6 @@ pub async fn open(path: &Path) -> Result<SqlitePool> {
 }
 
 /// A commit hash as doltlite renders it: 40 lowercase hex characters.
-///
-/// Wrapped in a newtype because these are interpolated into SQL — the
-/// table-valued functions take them as literals — so the invariant that
-/// they are hex has to hold at the boundary rather than at each use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Commit(String);
 
@@ -102,17 +63,6 @@ pub async fn resolve_ref(pool: &SqlitePool, reference: &str) -> Result<Commit> {
     Commit::parse(&raw)
 }
 
-/// Fetch two independent scan files into one scratch database.
-///
-/// Returns nothing: the caller must open a **fresh** connection to
-/// `scratch` afterwards. doltlite registers the per-table
-/// `dolt_diff_<table>` / `dolt_at_<table>` vtabs when a connection is
-/// opened, from the tables present at that moment. The scratch database
-/// is empty when we open it to add the remotes, so that connection
-/// never learns about `files` and every later query on it fails with
-/// `no such table: dolt_diff_files` — while a second connection to the
-/// same file works fine. Fetching and reading therefore cannot share a
-/// connection.
 pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<()> {
     let pool = open(scratch).await?;
     let left = std::fs::canonicalize(left).with_context(|| format!("{}", left.display()))?;
@@ -160,7 +110,6 @@ fn entry_from_row(row: &sqlx::sqlite::SqliteRow, prefix: &str) -> Entry {
     }
 }
 
-/// The prolly diff between two commits, split by `diff_type`.
 pub async fn fetch_diff(
     pool: &SqlitePool,
     from: &Commit,
@@ -240,15 +189,6 @@ pub async fn duplicate_candidates(
     Ok(rows.iter().map(|r| entry_from_row(r, "from_")).collect())
 }
 
-/// Where each of `digests` lives in the tree at `commit`.
-///
-/// The one deliberately expensive query. `files` carries no secondary
-/// index on `blake3` — the provider's `STORAGE_NOTES.md` §2 measures
-/// what one would cost on a TEXT-PK table — so each chunk is a whole
-/// corpus scan. It runs only for digests the move pairing could not
-/// already account for, and it says so, because a quiet O(corpus) scan
-/// hiding behind a fast O(changes) diff is the kind of fallback this
-/// repo tells you not to add silently.
 pub async fn lookup_digests(
     pool: &SqlitePool,
     commit: &Commit,

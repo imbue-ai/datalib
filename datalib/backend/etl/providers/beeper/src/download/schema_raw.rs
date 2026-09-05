@@ -1,64 +1,4 @@
 //! Raw-store schema for the Beeper provider.
-//!
-//! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! and [`docs/dev/archived/data_architecture_plan.md`](/docs/dev/archived/data_architecture_plan.md)
-//! §P0.1 for the conventions every `schema_raw.rs` follows.
-//!
-//! Beeper-specific notes:
-//!
-//! - **Local sqlite ingestion, not a live API.** Beeper reads the
-//!   desktop app's on-disk SQLite tree under
-//!   `~/Library/Application Support/BeeperTexts/` (primarily
-//!   `index.db`, plus per-bridge `local-<bridge>/megabridge.db`
-//!   files). There is no remote cursor, no listing endpoint, and no
-//!   incremental "what changed since?" probe: every fetch walks the
-//!   current sqlite snapshot end-to-end and relies on UPSERT dedup
-//!   plus the per-provider CAS edge table to keep work bounded.
-//!   Consequently there is no provider-local cursor table here.
-//!
-//! - **The source `.db` files ARE the backup.** Per
-//!   `docs/dev/data_architecture_ingestion.md` §"Schema first", a
-//!   provider whose upstream is already on disk doesn't need to
-//!   slavishly preserve every byte — re-running download is cheap
-//!   and the source file remains untouched. So Beeper drops the
-//!   per-row `payload` JSONB column it used to keep: every field
-//!   render actually wants is already promoted to a typed column,
-//!   and a future read that wants something more obscure can
-//!   re-download from `index.db` directly.
-//!
-//! - **Multi-sourced.** Rows can come from `beeper_index` (the
-//!   desktop app's unified cache, covering cloud bridges like Slack /
-//!   Google Chat and local megabridges like Signal) or from a
-//!   `beeper_megabridge_<network>` reader (cracks open the per-bridge
-//!   `megabridge.db` to backfill upstream-canonical ids the desktop
-//!   cache drops). The `source` column on every row records which
-//!   on-disk store the row originated from; PKs are namespaced by
-//!   `source` so two stores holding the "same" chat from different
-//!   angles cannot collide. See [`beeper_room_uuid`-family recipes in
-//!   `crate::render`].
-//!
-//! - **Chat-human family with Slack / Signal.** Per
-//!   `docs/dev/data_architecture_ingestion.md` §"Shared schemas across similar
-//!   sources", Beeper is part of the chat-human cluster: `rooms` is
-//!   the channel/thread/DM entity, `users` is the peer, `events` is
-//!   the message-shaped child. `events.timestamp_ms` is the
-//!   event-shaped value render sources into `GridRow.when_ts`
-//!   (Unix milliseconds, matching what Beeper / Matrix natively
-//!   carry); sub-items lacking their own timestamp get a
-//!   µs-bumped value derived from the parent per
-//!   `docs/dev/data_architecture_ingestion.md`.
-//!
-//! - **`rooms` / `users` are not event-shaped.** They have no
-//!   `when_ts` column; render leaves `GridRow.when_ts` empty for
-//!   them.
-//!
-//! - **PKs are render-side UUIDv5.** The `id` columns are minted
-//!   by `beeper_room_uuid` / `beeper_user_uuid` / `beeper_event_uuid`
-//!   in `crate::render`, keyed off `(source, native_id)`. The
-//!   recipes live there because they're also consumed by the
-//!   render-side cross-reference logic; the writer here calls
-//!   into the same functions.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable;
@@ -71,22 +11,12 @@ use uuid::Uuid;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
-///
-/// Used by `download::db::RawDb::reset` to wipe per-row state without
-/// touching blobs or bookkeeping. Also drives [`full_ddl`] when it
-/// asks the shared layer for paired `<table>_bookkeeping` DDLs.
 pub const DATA_TABLES: &[&str] = &["rooms", "users", "events", "beeper_media_attachments"];
 
-// ─────────────────────────────────────────────────────────────────────
 // rooms
-// ─────────────────────────────────────────────────────────────────────
 
 /// `rooms` — one row per chat / channel / DM Beeper Texts knows
 /// about.
-///
-/// Provenance: `index.db`'s `mx_room_metadata` / `threads` join,
-/// surfaced by [`super::index_db`]. One row per Matrix room id (the
-/// `native_room_id`) per `source` store.
 ///
 /// PK choice: render-side UUIDv5 `beeper_room_uuid(source,
 /// native_room_id)`. The native id (Matrix room id for index.db;
@@ -94,34 +24,6 @@ pub const DATA_TABLES: &[&str] = &["rooms", "users", "events", "beeper_media_att
 /// its own column so cross-reference passes that arrive *after* the
 /// row was written (e.g. the megabridge enrichment pass keyed off
 /// `mxid`) can resolve back to the PK without recomputing the UUID.
-///
-/// Native vs external ids: `native_room_id` is the room's identifier
-/// inside Beeper's universe (the Matrix room id, e.g.
-/// `!abc:beeper.local`). `external_room_id` and
-/// `external_workspace_id` are the UPSTREAM system's canonical ids
-/// (Signal conversation UUID, Slack channel id, Google Chat space
-/// id, …) — what you'd use to talk to that service's own API.
-/// Sourced from `thread.extra.bridge.*` when Beeper populates them.
-///
-/// Columns:
-/// - `id` — UUIDv5 PK (see above). Primary key.
-/// - `source` — which on-disk store this row came from
-///   (`"beeper_index"`, `"beeper_megabridge_signal"`, …). Part of the
-///   uniqueness key with `native_room_id`.
-/// - `network` — canonical chat network (`"signal"`, `"googlechat"`,
-///   `"slack"`, `"imessage"`, …) for downstream filtering & dispatch.
-/// - `native_room_id` — Beeper-side room id.
-/// - `external_room_id` — upstream system's canonical room id.
-/// - `external_workspace_id` — upstream workspace / team / account
-///   id; `NULL` for bridges with a flat per-account namespace.
-/// - `account_id` — Beeper-side bridge account id (`thread.accountID`
-///   on index.db).
-/// - `room_type` — Beeper-canonical taxonomy
-///   (`"single"`, `"group"`, `"space"`, …).
-/// - `title` — denormalized room title.
-/// - `description` — denormalized room topic / description.
-/// - `is_dm` — 1 if a 1:1 chat, 0 otherwise.
-/// - `is_space` — 1 if a Matrix space (folder of rooms), 0 otherwise.
 pub const ROOMS_DDL: &str = "CREATE TABLE IF NOT EXISTS rooms (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -208,38 +110,13 @@ impl BulkUpsertable for RoomRow {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // users
-// ─────────────────────────────────────────────────────────────────────
 
 /// `users` — one row per peer / participant Beeper Texts knows
 /// about, across every chat in a given `source` store.
 ///
-/// Provenance: `index.db`'s `mx_room_members` / users join, surfaced
-/// by [`super::index_db`]. The same Matrix user id may legitimately
-/// appear across rooms; we dedupe on `(source, native_user_id)`.
-///
 /// PK choice: render-side UUIDv5 `beeper_user_uuid(source,
 /// native_user_id)`.
-///
-/// Columns:
-/// - `id` — UUIDv5 PK. Primary key.
-/// - `source` — which on-disk store this row came from. Part of the
-///   uniqueness key with `native_user_id`.
-/// - `network` — canonical chat network for this user, when known.
-///   `NULL` when the membership row alone doesn't carry it (e.g.
-///   imported contacts).
-/// - `native_user_id` — Beeper-side user id (Matrix user id from
-///   index.db).
-/// - `display_name` — denormalized chat-display name (per-room or
-///   per-account).
-/// - `full_name` — denormalized profile-level name when distinct from
-///   `display_name`.
-/// - `remote_id` — upstream system's canonical user id (Signal ACI,
-///   Slack user id, …) when Beeper propagates it.
-/// - `avatar_blob_id` — `ref_id` into
-///   [`beeper_media_attachments`](BeeperMediaAttachmentRow) for a
-///   cached profile image, when present.
 pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -303,63 +180,16 @@ impl BulkUpsertable for UserRow {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // events
-// ─────────────────────────────────────────────────────────────────────
 
 /// `events` — one row per message / reaction / membership /
 /// edit / hidden event Beeper Texts has cached.
-///
-/// Provenance: `index.db`'s `mx_room_messages` + `mx_reactions` (with
-/// per-row `source = "beeper_index"`), plus optional backfill from
-/// `local-<bridge>/megabridge.db` (with `source =
-/// "beeper_megabridge_<network>"`) that populates
-/// `external_event_id` keyed off `mxid`.
 ///
 /// PK choice: render-side UUIDv5 `beeper_event_uuid(source,
 /// native_event_id)`. Both index.db and the megabridge file expose a
 /// stable per-message Matrix event id (the `mxid` column), so the
 /// UUIDv5 keyed off `(source, mxid)` is upstream-stable across
 /// re-fetches.
-///
-/// `external_event_id` is reserved for the upstream system's
-/// canonical message id (Signal message UUID, Slack `ts`, etc.). It
-/// is **not** populated from `index.db` — Beeper doesn't propagate
-/// the underlying network's per-message ids into the desktop cache.
-/// The column exists here so future bridges-DB or cloud-API readers
-/// can backfill it without a schema bump.
-///
-/// Columns:
-/// - `id` — UUIDv5 PK. Primary key.
-/// - `source` — which on-disk store this row came from.
-/// - `network` — canonical chat network for this event.
-/// - `room_uuid` — FK into [`ROOMS_DDL`]; equals
-///   `beeper_room_uuid(source, native_room_id)`.
-/// - `sender_uuid` — FK into [`USERS_DDL`]; equals
-///   `beeper_user_uuid(source, native_sender_user_id)`. `NULL` for
-///   system events with no clear sender.
-/// - `native_event_id` — Beeper-side event id (Matrix `mxid`).
-/// - `external_event_id` — upstream system's canonical message id;
-///   `NULL` until the megabridge pass backfills it.
-/// - `event_type` — Beeper-canonical taxonomy (`"TEXT"`, `"IMAGE"`,
-///   `"FILE"`, `"REACTION"`, `"MEMBERSHIP"`, `"HIDDEN"`, …) — same
-///   labels the desktop app uses in `mx_room_messages.type`.
-/// - `timestamp_ms` — upstream send time in Unix milliseconds.
-///   Sourced into `GridRow.when_ts` by render (after conversion
-///   to ISO-8601).
-/// - `text_content` — promoted plain-text body, when present.
-/// - `reply_to_native_event_id` — Matrix `mxid` this event replies
-///   to; threading anchor.
-/// - `edit_of_native_event_id` — Matrix `mxid` this event edits.
-/// - `reaction_emoji` — promoted reaction emoji for
-///   `event_type = "REACTION"` rows.
-/// - `reaction_target_native_event_id` — Matrix `mxid` the reaction
-///   targets.
-///
-/// Attachment payloads (`IMAGE` / `FILE` events) are NOT stored
-/// here. Each attachment lands as one row in
-/// [`beeper_media_attachments`](BeeperMediaAttachmentRow), keyed by
-/// `(event_uuid, attachment_id)`, with the bytes in the sibling CAS.
 pub const EVENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -391,33 +221,6 @@ pub const EVENTS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
 
 /// Row matching [`EVENTS_DDL`]. Hand-rolled `BulkUpsertable` (no
 /// `payload` column).
-///
-/// **Schema honesty caveat:** `reaction_emoji` and
-/// `reaction_target_native_event_id` are only meaningful when
-/// `event_type = 'REACTION'`; `text_content` and `reply_to_*` /
-/// `edit_of_*` make sense for `'TEXT'` / `'IMAGE'` / `'FILE'` rows
-/// but not for `'REACTION'` / `'MEMBERSHIP'` / `'HIDDEN'`. The DDL
-/// doesn't enforce these per-`event_type` subsets — it can't,
-/// without a per-type table split — and a reader of the schema has
-/// to consult this docstring (and the
-/// [`crate::render::render`] taxonomy switch) to know which
-/// columns apply when.
-///
-/// We pay this cost deliberately to keep the
-/// "everything-on-one-timeline" rendering shape:
-/// `SELECT … FROM events WHERE room_uuid = ? ORDER BY timestamp_ms`
-/// in one indexed scan is the load-bearing operation for both
-/// period-bucketing and reaction-to-message attachment. A
-/// per-`event_type` split (`beeper_message` / `beeper_reaction` /
-/// `beeper_membership` / …) would force a `UNION` or a join-heavy
-/// rewrite of the bucket walker in
-/// [`crate::render::parse`] and lose the chronological
-/// ordering convenience the unified table buys us.
-///
-/// If a future need pushes us toward stricter typing, the natural
-/// re-split is along `event_type` — the docstring above already
-/// lists the canonical taxonomy and most columns map cleanly to
-/// one or two subtables.
 #[derive(Debug, Clone, Default)]
 pub struct EventRow {
     pub id: String,
@@ -480,9 +283,7 @@ impl BulkUpsertable for EventRow {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // beeper_media_attachments (CAS edge table)
-// ─────────────────────────────────────────────────────────────────────
 
 /// `beeper_media_attachments` — N:M edge between one Beeper event
 /// (`IMAGE` / `FILE` / avatar-bearing row) and a `cas_objects` blob.
@@ -497,19 +298,6 @@ impl BulkUpsertable for EventRow {
 /// distinct `ref_id` like `"{event_uuid}:0"`, `"{event_uuid}:1"`,
 /// …). Avatar attachments (one per user) reuse the shape with the
 /// user's UUID as the owning id.
-///
-/// Columns:
-/// - `id` — synthesized PK.
-/// - `event_uuid` — owning event FK (or user UUID for avatars).
-///   Indexed so the per-bucket
-///   [`datalib_etl::blob_cas::BlobBundle::load`] projection on
-///   the render side stays cheap.
-/// - `ref_id` — Beeper-side attachment id (the desktop app's
-///   `attachment.id`, typically a `mxc://…` URL). Indexed against
-///   `blake3` so the "have we got these bytes yet?" skip check is
-///   one row read.
-/// - `blake3` — CAS hash of the bytes, NULL until the file copy
-///   completes.
 #[derive(Debug, Clone, CasEdgeRow)]
 #[cas_edge_row(table = "beeper_media_attachments")]
 pub struct BeeperMediaAttachmentRow {
@@ -519,9 +307,7 @@ pub struct BeeperMediaAttachmentRow {
     pub blake3: Option<String>,
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // UUIDv5 identity recipes
-// ─────────────────────────────────────────────────────────────────────
 
 /// v5 namespace for every UUID this provider mints. Distinct from
 /// other providers so we can never accidentally collide a Beeper
@@ -560,9 +346,6 @@ pub fn beeper_event_uuid(source: &str, native_event_id: &str) -> String {
     .to_string()
 }
 
-/// Per-period document UUID. Stable for the lifetime of the
-/// `(room, period)` pair regardless of how many times we re-render
-/// — so the load step can foreign-key against it consistently.
 pub fn beeper_markdown_uuid(room_uuid: &str, period_key: &str) -> String {
     Uuid::new_v5(
         &BEEPER_UUID_NS,
@@ -571,9 +354,7 @@ pub fn beeper_markdown_uuid(room_uuid: &str, period_key: &str) -> String {
     .to_string()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Composer
-// ─────────────────────────────────────────────────────────────────────
 
 /// Compose the full DDL list passed to
 /// [`datalib_etl::doltlite_raw::open`]: every entity table DDL,

@@ -2,30 +2,12 @@
 // The "Add Data Source" / "Edit" flow: pick a type, fill its form,
 // review the TOML that will be written.
 //
-// **It configures one step.** A fetch step and the render step that
-// reads it are two separate rows, two separate forms, and two separate
-// things to run — there is no "source" object here.
-//
-// Adding the render step is offered at the end of a fetch step's flow,
-// and *how* depends on whether there is anything to ask. Only
-// `signal_backup` declares a render-phase field today, so for every
-// other provider the render step has no configuration at all: it gets a
-// checkbox here rather than a second dialog, because a dialog with
-// nothing in it is a dialog that shouldn't exist. When the provider
-// does have render knobs, this same component opens again for the
-// render step, pre-filled and pointed at the step just written.
-//
-// One component serves create and edit — the design's point is that
-// they are the same descriptor driven two ways (docs/dev/
-// source_wizard.md).
-//
 // Two fields carry the identity, and only one of them is permanent.
 // **Name** is what you type and what every screen shows; it is free
 // text and always editable. **Id** is the directory on disk and the
 // prefix inside every `qmd_path` the index holds, so changing it is a
 // migration rather than an edit — it is derived from the name once, at
 // creation, and read-only forever after.
-//
 
 // A descriptor with a `credentialService` also gets a **Connection**
 // block: which latchkey account to use, a button that runs latchkey's
@@ -35,12 +17,6 @@
 // every `probe:` field's checklist. A label picker built from the live
 // account is the difference between a filter that works and a filter
 // that is a spelling test.
-//
-// What this does NOT do yet: no live *channel* picker for Slack (the
-// probe exists, but slack has no `datalib-step probe` arm), and edit
-// regenerates the step rather than surgically editing values — which is
-// why the caller only offers Edit when `paramsAreRepresentable` said
-// yes.
 import { computed, onUnmounted, ref, watch } from "vue";
 import {
   CATALOG,
@@ -82,11 +58,6 @@ const props = defineProps<{
   /// too.
   takenIds: Set<string>;
   /// Present → edit that step instead of creating one.
-  ///
-  /// `downloadParams` is the params of the step this one *reads*, set
-  /// only when editing a render step. A render step's own params carry
-  /// no credentials, so without it "Test connection" would have nothing
-  /// to authenticate with and the label picker nothing to list.
   editing?: {
     step: ConfiguredStep;
     entry: CatalogEntry;
@@ -180,10 +151,6 @@ const idTouched = ref(!!props.renderFor);
 
 /// The fields this dialog shows. Empty for most render steps, which is
 /// why one is usually a checkbox below rather than a dialog of its own.
-///
-/// Also drops fields whose `requires` gate is shut. `buildStep` applies
-/// the same gate when it writes the TOML, and the two have to agree —
-/// otherwise the review pane shows a setting the form isn't offering.
 const shownFields = computed(() =>
   chosen.value
     ? fieldsFor(chosen.value, phase.value).filter((f) => fieldIsActive(f, values.value))
@@ -307,12 +274,6 @@ function onPickKeydown(e: KeyboardEvent) {
 /// choosing `work-slack`, and the steps written under it are
 /// `work-slack/raw` and (later) `work-slack/rendered_md`. So the field
 /// validates a single path segment, and the step ids are built from it.
-///
-/// Mirrors the rules `migrate_config`'s `validate_source_name` applies
-/// on the YAML path, and the segment rules `dag::config` enforces on a
-/// step id. `system` is reserved by the loader; `unified_index` is not
-/// any more (the index steps own it by *being* it) but proposing it
-/// would collide, so the wizard still declines to.
 const RESERVED = new Set(["system", "unified_index"]);
 const idError = computed(() => {
   const n = stem.value;
@@ -348,15 +309,6 @@ const stepId = computed(() =>
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
 /// fails at deserialize time rather than at sync time. Caught here so
 /// the message lands under the field instead of in a job log.
-///
-/// Read off `shownFields`, not the whole descriptor: a required field
-/// belongs to one step, and this dialog is only ever writing one. Over
-/// the whole list it gated a render step on a *download* field, which
-/// nothing on the form could fill — `signal_backup` is the one entry
-/// with both a required download field and a render knob, and its
-/// render step was unreachable from the UI in both ways it is offered.
-/// This also lets `requires` do its job: a gated-off field is not
-/// missing, it is inapplicable.
 const missingRequired = computed(() =>
   shownFields.value
     .filter((f) => "required" in f && f.required)
@@ -429,9 +381,7 @@ async function browse(f: Field) {
   // Canceled: leave the field exactly as it was, and say nothing.
 }
 
-// ---------------------------------------------------------------------
 // Connection: which latchkey account, and what it can reach
-// ---------------------------------------------------------------------
 
 /// The latchkey service this descriptor authenticates against, on the
 /// step that actually authenticates. A render step reads a directory,
@@ -521,9 +471,7 @@ const accountValue = computed(() =>
   accountField.value ? String(values.value[accountField.value.target] ?? "").trim() : "",
 );
 
-// ---------------------------------------------------------------------
 // The probe
-// ---------------------------------------------------------------------
 
 const probe = ref<{
   state: "idle" | "running" | "ok" | "failed";
@@ -562,12 +510,6 @@ async function testConnection() {
 }
 
 /// What a `probe:` field should offer, given what came back.
-///
-/// `mailboxes` narrows to the entries emails are actually filed in.
-/// The download filter takes anything the account has; the render
-/// filter matches stored mailbox paths, so offering `Starred` there
-/// would offer a filter that silently matches nothing. See
-/// `Field.probe` and `ProbeLabel.kind`.
 function probeOptions(field: Field): ProbeReport["labels"] {
   const report = probe.value.report;
   if (!report || field.kind !== "string_list" || !field.probe) return [];
@@ -592,13 +534,6 @@ function toggleLabel(field: Field, path: string) {
 }
 
 /// Chosen labels the probed account does not have.
-///
-/// Worth its own line because the failure it prevents is loud and
-/// late: Gmail's downloader *refuses* a run whose `only_extract_labels`
-/// names a label the account lacks (an empty label filter would mean
-/// "everything", so it cannot fall back), and the render-side filter
-/// fails the other way — it matches nothing and renders an empty tree.
-/// Both are much cheaper to find here.
 function unknownLabels(field: Field): string[] {
   const options = probeOptions(field);
   if (options.length === 0) return [];

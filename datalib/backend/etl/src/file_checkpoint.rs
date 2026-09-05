@@ -1,41 +1,12 @@
 //! Where a file-backed source got to: its resume cursor, per feed.
 //!
-//! One question, for every provider that reads files off disk: **which
-//! files have changed since this feed last finished with them?**
+//! The persistent half of "which files changed since this feed last finished
+//! with them?" — [`crate::fsscan`] is the other half, and the crate README
+//! explains why they live apart, why the cursor is a content hash rather than
+//! a stat pair, and what that does not fix.
 //!
-//! The answer is a content hash, and it comes from
-//! [`crate::fsscan`] — one scan of the source's root, hashing only
-//! what the host-wide fingerprint cache cannot vouch for. This module
-//! is only the persistent half: the cursor a feed stores so that "since
-//! *I* last looked" is well-posed, since the cache itself is shared and
-//! another consumer's scan moves it.
-//!
-//! The shape every caller wants:
-//!
-//! ```text
-//!     let scan    = fsscan::scan(cache, root, opts, accept).await?;
-//!     let changes = scan.changes_since(&load_cursor(pool, SCOPE).await?);
-//!     for f in changes.needs_reading() { … ; record_file(&mut tx, SCOPE, f).await?; }
-//! ```
-//!
-//! Each scope namespaces rows per `(provider, feed)`, so two feeds can
-//! claim the same file without colliding.
-//!
-//! **Why content and not `(size, mtime)`.** It was the stat pair, on
-//! the reasoning that hashing every run was too expensive. The cache
-//! removed that cost. What the stat pair got wrong was the *false
-//! re-ingest*: touching a file — `rsync` without `-t`, a restore from
-//! backup, re-downloading the same export — re-read and re-parsed the
-//! whole thing though not one byte had moved.
-//!
-//! Be clear about what this does **not** fix, because "content hash"
-//! invites the wrong assumption: the cache still decides whether to
-//! re-hash from Unison's `(mtime, size, inode, dev)` cursor, so an edit
-//! preserving all four is still invisible. That was equally true
-//! before. The gain is that the assumption lives in one place, shared
-//! with every scan, instead of once per provider — and
-//! `an_edit_preserving_the_whole_stat_is_still_invisible` pins it so
-//! nobody reads more into the change than it delivers.
+//! Each scope namespaces rows per `(provider, feed)`, so two feeds can claim
+//! the same file without colliding.
 
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -58,10 +29,9 @@ pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files 
 
 /// Create the table, dropping one written to an older shape.
 ///
-/// A store from before the cursor became content-based has `mtime_ns`
-/// where `blake3` now goes, and no migration can invent hashes it never
-/// recorded. Dropping is the honest move and a cheap one: this table is
-/// a cursor, so losing it costs one re-ingest and never data.
+/// A store from before the cursor became content-based has `mtime_ns` where
+/// `blake3` now goes, and no migration can invent hashes it never recorded.
+/// Dropping is cheap: this is a cursor, so losing it costs one re-ingest.
 pub async fn ensure_schema(pool: &SqlitePool) -> Result<()> {
     let cols: Vec<String> =
         sqlx::query_scalar("SELECT name FROM pragma_table_info('ingested_files')")
@@ -108,11 +78,10 @@ pub async fn load_cursor(pool: &SqlitePool, scope: &str) -> Result<FileScanCurso
 
 /// Stamp one scanned file as finished, inside the caller's transaction.
 ///
-/// Per file, not per run, and deliberately: a crash partway through a
-/// directory keeps the files that did land and re-reads only the rest.
-/// Callers run this in the same transaction that wrote the file's rows,
-/// so a crash between the two cannot leave a stamp claiming content
-/// that never arrived.
+/// Per file, not per run, so a crash partway through a directory keeps what
+/// landed and re-reads only the rest. Callers run this in the same transaction
+/// that wrote the file's rows, so a crash between the two cannot leave a stamp
+/// claiming content that never arrived.
 pub async fn record_file(
     tx: &mut Transaction<'_, Sqlite>,
     scope: &str,
@@ -146,26 +115,17 @@ pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile
     Ok(())
 }
 
-/// Ingest one already-scanned file, if its contents have changed since
-/// `scope` last finished with it.
+/// Ingest one already-scanned file, if its contents have changed since `scope`
+/// last finished with it — the dozen lines every single-file feed repeated
+/// around its parser, once.
 ///
-/// Every single-file feed repeated the same dozen lines around its
-/// parser: is the file there, has it changed, read it, parse it, open a
-/// transaction, write the rows, stamp the cursor, commit. Only the
-/// scope and the parser ever differed. This is that dozen lines, once.
+/// Takes a [`ScannedFile`] rather than a path because the provider has already
+/// scanned the export root, so the file's existence and its hash are known.
 ///
-/// It takes a [`ScannedFile`] rather than a path because by the time a
-/// feed runs, its provider has already scanned the export root — the
-/// file's existence and its hash are known, and re-`stat`ing it here
-/// would be asking a question that has been answered.
-///
-/// Returns the number of rows written — `0` when the file is absent
-/// from the scan or unchanged, which a caller reports as "nothing to
-/// do".
-///
-/// A parse that yields no rows still stamps: the file was read and
-/// understood to contain nothing, and re-reading it every run would be
-/// the "retry forever" shape. If its bytes change, so does the hash.
+/// Returns rows written; `0` when the file is absent from the scan or
+/// unchanged. A parse that yields no rows still stamps — the file was read and
+/// understood to contain nothing, and re-reading it every run would be the
+/// "retry forever" shape.
 pub async fn ingest_changed<T, F>(
     pool: &SqlitePool,
     scope: &str,
@@ -212,9 +172,6 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
     Ok(())
 }
 
-/// `DELETE FROM ingested_files WHERE scope LIKE ?`. Use from a
-/// provider's `reset` when wiping every scope it owns
-/// (e.g. `"google_takeout/%"`).
 pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
     ensure_schema(pool).await?;
     sqlx::query("DELETE FROM ingested_files WHERE scope LIKE ?")
@@ -336,13 +293,9 @@ mod tests {
         assert_eq!(second.changes_since(&cursor).needs_reading().count(), 1);
     }
 
-    /// The defect the content hash exists to fix.
-    ///
-    /// Under the old `(size, mtime)` cursor this went the other way:
-    /// `touch` moved the mtime, the stamp stopped matching, and the
-    /// whole file re-ingested though not one byte had changed. `rsync`
-    /// without `-t`, a restore from backup, and re-downloading the same
-    /// export all land here.
+    /// The defect the content hash exists to fix. Under the old `(size, mtime)`
+    /// cursor `touch` moved the mtime, the stamp stopped matching, and the whole
+    /// file re-ingested though not one byte had changed.
     #[tokio::test]
     async fn touching_a_file_does_not_re_ingest_it() {
         let e = env().await;
@@ -369,15 +322,10 @@ mod tests {
         );
     }
 
-    /// The boundary this mechanism does **not** cross, pinned so that
-    /// "content hash" is never read as "always re-reads".
-    ///
-    /// The cache decides whether to re-hash from Unison's
-    /// `(mtime, size, inode, dev)` cursor. An edit preserving all four
-    /// hands back the cached hash, and the file is skipped. The old
-    /// `(size, mtime)` cursor was blind to the same edit, so nothing
-    /// regressed — but a reader who assumes hashing closed this hole
-    /// would be wrong, which is why this is a test and not a comment.
+    /// The boundary this mechanism does **not** cross, pinned so that "content
+    /// hash" is never read as "always re-reads". The cache decides whether to
+    /// re-hash from Unison's `(mtime, size, inode, dev)` cursor, so an edit
+    /// preserving all four hands back the cached hash and the file is skipped.
     #[tokio::test]
     async fn an_edit_preserving_the_whole_stat_is_still_invisible() {
         let e = env().await;

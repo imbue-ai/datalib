@@ -1,43 +1,5 @@
 //! MP3 payload: the MPEG audio frames, with every tag and the VBR
 //! header frame left out.
-//!
-//! This is the case the payload hash was worth building for. Music
-//! libraries retag constantly — a rating, a play count, embedded
-//! cover art swapped for a bigger one, iTunes normalizing a genre —
-//! and every one of those rewrites the ID3v2 block at the front of the
-//! file. The frames after it are untouched. So the file hash churns
-//! while `payload_blake3` sits still, which is exactly the difference
-//! between "how many files do I have" and "how many songs do I have".
-//!
-//! Three things are stripped:
-//!
-//! - **ID3v2 at the front.** Its size field is *syncsafe* (seven bits
-//!   per byte), which is the one detail everyone gets wrong: reading it
-//!   as a plain big-endian integer overshoots on any tag past 128 bytes
-//!   and lands in the middle of the audio.
-//! - **ID3v1 / APEv2 at the back**, in whatever order they were
-//!   appended. Both are fixed-shape trailers, so this is a loop that
-//!   peels whichever one is currently last.
-//! - **The Xing / Info / VBRI header frame.** This is the subtle one.
-//!   It is a *real, structurally valid MPEG frame* that decodes to
-//!   silence and carries the VBR seek table, the encoder delay/padding
-//!   for gapless playback, and the LAME extension's ReplayGain fields.
-//!
-//!   The seek table is the reason it churns: it is expressed in byte
-//!   offsets and a total file size, so **any tag edit that changes the
-//!   file's length invalidates it**, and any tool that notices rewrites
-//!   it. Add cover art and the audio has not moved but this frame has.
-//!   Gapless-analysis passes and `vbrfix`-style repairs rewrite it
-//!   directly. Leaving it in would put a frequently-rewritten metadata
-//!   block inside the "payload" and defeat the column for a large part
-//!   of a real library.
-//!
-//!   Note what this does *not* cover: `mp3gain` applying gain is not a
-//!   header edit. It rewrites the `global_gain` field in every frame's
-//!   side information — that is the whole trick, a volume change with
-//!   no re-encode — so it moves [`SCHEME`] as surely as a re-encode
-//!   would. Only its undo/ReplayGain bookkeeping lands in tags and this
-//!   frame.
 
 use anyhow::Result;
 
@@ -47,11 +9,6 @@ use super::{be_u32, Plan, Src};
 pub const SCHEME: &str = "mp3.frames.v1";
 
 /// Byte offset of the APEv2 footer's flags field.
-///
-/// The footer is `preamble[8] version[4] tag_size[4] item_count[4]
-/// flags[4] reserved[8]`. Reading flags at 16 instead lands on the item
-/// count — which is how you end up stripping a phantom 32-byte header
-/// off any tag whose item count happens to have its top bit set.
 pub(crate) const APE_FLAGS_AT: usize = 20;
 
 /// How far into the audio region to look for the first frame sync.
@@ -97,11 +54,6 @@ pub fn audio_start(src: &mut Src) -> Result<u64> {
     Ok((10 + u64::from(size) + footer).min(src.len()))
 }
 
-/// First byte of the trailing tags, i.e. one past the last audio byte.
-///
-/// Peels repeatedly because both trailers can be present: a file
-/// tagged by one tool and then another ends up with APEv2 sitting in
-/// front of an ID3v1 that was already there.
 fn audio_end(src: &mut Src, start: u64) -> Result<u64> {
     let mut end = src.len();
     loop {
@@ -203,10 +155,6 @@ const SAMPLE_RATE: [[u32; 3]; 3] = [
 ];
 
 /// Decode a 4-byte frame header, or `None` if these bytes are not one.
-///
-/// Every reserved encoding is rejected rather than guessed at, because
-/// the caller uses "did this decode?" as its sync test — a lenient
-/// decoder here would happily lock onto a byte pair inside the audio.
 pub fn decode_header(b: &[u8]) -> Option<FrameHeader> {
     if b.len() < 4 || b[0] != 0xff || (b[1] & 0xe0) != 0xe0 {
         return None;
@@ -265,12 +213,6 @@ pub fn decode_header(b: &[u8]) -> Option<FrameHeader> {
     })
 }
 
-/// Locate the first frame at or after `start`.
-///
-/// A single valid header is not enough to call it a sync — random audio
-/// contains plenty of byte pairs that decode. We require that the frame
-/// this header describes is followed by *another* valid header, which
-/// is what makes a false lock vanishingly unlikely.
 fn first_frame(src: &mut Src, start: u64, end: u64) -> Result<Option<(u64, FrameHeader)>> {
     let window = (end - start).min(SYNC_SEARCH);
     let buf = src.read_upto(start, window)?;
@@ -296,9 +238,6 @@ fn first_frame(src: &mut Src, start: u64, end: u64) -> Result<Option<(u64, Frame
     Ok(None)
 }
 
-/// Byte offset of the Xing/Info tag inside a frame, per the spec: past
-/// the header and the layer-III side information, whose size depends on
-/// version and channel mode.
 fn xing_offset(h: &FrameHeader) -> u64 {
     match (h.version, h.mono) {
         (1, true) => 4 + 17,
@@ -309,11 +248,6 @@ fn xing_offset(h: &FrameHeader) -> u64 {
 }
 
 /// Is the frame at `at` a VBR header frame rather than audio?
-///
-/// Checked at the two spec-defined offsets rather than by scanning the
-/// frame for the magic. A scan would false-positive on audio that
-/// happens to contain the bytes `Info`, and the cost of that is
-/// silently dropping the first real frame of the song from the hash.
 fn is_vbr_header_frame(src: &mut Src, at: u64, h: &FrameHeader) -> Result<bool> {
     let want = xing_offset(h);
     if want + 4 <= h.frame_len {
@@ -349,8 +283,6 @@ mod tests {
         f
     }
 
-    /// A frame carrying the Xing magic at the spec offset for MPEG-1
-    /// stereo (36 bytes in).
     fn xing_frame() -> Vec<u8> {
         let mut f = frame(0x00);
         f[36..40].copy_from_slice(b"Xing");

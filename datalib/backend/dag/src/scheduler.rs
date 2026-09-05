@@ -2,35 +2,8 @@
 //! skipping steps whose inputs are unchanged, retrying failures by
 //! kind, and poisoning the subtree below a failure.
 //!
-//! Scheduling semantics:
-//!
-//! * The run executes a *runnable subgraph*: the source steps this run
-//!   selected plus everything downstream of them. With no `--sync` that
-//!   is the whole graph. Steps outside it are reported `NotSelected`
-//!   and cannot run, whatever their state.
-//! * Inside the subgraph a step runs iff it is **stale**, which is one
-//!   predicate with four clauses: it declares no inputs (its real input
-//!   is outside the graph, so it always runs); or it has never
-//!   succeeded; or some input's version differs from the one it
-//!   consumed at its last success; or its own fingerprint — argv,
-//!   env, declared patterns — differs from the one recorded then.
-//! * A step reports a content-derived version per output. Two runs over
-//!   the same data report the same string, so "unchanged" is derived
-//!   rather than asserted, and consumers skip. An output the step says
-//!   nothing about is content hashed instead — the one place the runner
-//!   hashes anything, and only ever for a step that just ran.
-//! * A step that does *not* run contributes the version recorded for its
-//!   output last time, or `version::UNKNOWN` if there is none. The
-//!   runner never reads a tree to version it on a step's behalf: it
-//!   would be reading gigabytes to answer a question the step can answer
-//!   from a commit hash, for work this run already decided not to do.
-//! * A failed step blocks its dependents *this run*, but any partial
-//!   output versions it reported are recorded — steps are
-//!   incremental, so the next run resumes from the committed partial
-//!   state.
-//! * Failure kinds map to a retry policy here; the step only
-//!   classifies. Retries simply re-invoke the step — safe because
-//!   steps promise idempotency.
+//! The scheduling rules — what a run selects, what makes a step stale, and
+//! why a version is reported rather than measured — are in the crate README.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
@@ -119,13 +92,11 @@ impl Runner {
         self
     }
 
-    /// Enable subset-sync mode with the given fringe step ids.
     pub fn only_fringe(mut self, ids: impl IntoIterator<Item = String>) -> Self {
         self.only_fringe = Some(ids.into_iter().collect());
         self
     }
 
-    /// Set the run-wide subprocess environment (see [`Runner::child_env`]).
     pub fn child_env(mut self, env: BTreeMap<String, String>) -> Self {
         self.child_env = Arc::new(env);
         self
@@ -349,10 +320,6 @@ impl Runner {
             // running, no matter how long it ran. Pressing Sync looked
             // like nothing had happened, which is exactly what it was
             // reported as.
-            //
-            // One write per dispatch batch, not per step, so the budget
-            // this file documents — O(steps) per run, state transitions
-            // only — still holds.
             if dispatched {
                 state.save(&self.data_root).context("save dag state")?;
             }
@@ -519,29 +486,6 @@ impl Runner {
         Ok(report)
     }
 
-    /// The runnable subgraph: the source steps this run selected plus
-    /// their transitive dependents. With no subset-sync selection that
-    /// is every step.
-    ///
-    /// This is reachability in the graph, computed once before anything
-    /// runs, and deliberately independent of run-time state — not what
-    /// succeeded before, not whether an input exists, not what happened
-    /// to run earlier this pass. It is what makes "sync yolink" mean
-    /// the same thing every time: the set of steps that can move is a
-    /// property of the config, readable off the DAG, rather than
-    /// something you reconstruct from the state file to predict.
-    ///
-    /// The cost is that pending work elsewhere stays pending — a source
-    /// whose render failed yesterday isn't dragged along by an
-    /// unrelated sync. That's the intended trade: it comes back on the
-    /// next full run, and in exchange a per-source sync never does
-    /// surprising work on someone else's chain.
-    ///
-    /// Steps outside it are still walked, because an in-subgraph fan-in
-    /// can depend on them: walking publishes their recorded output
-    /// versions (so consumers compare against the right thing) and
-    /// gives every step a terminal status for the report. They are
-    /// never invoked.
     fn runnable_subgraph(&self, graph: &Graph) -> Vec<bool> {
         let n = graph.steps.len();
         let Some(only) = &self.only_fringe else {
@@ -669,12 +613,6 @@ impl Runner {
         }
     }
 
-    /// Terminal state for one step: emit it, record it in `status`, and
-    /// write it into the run record.
-    ///
-    /// Every path a step can end on goes through here — succeeded,
-    /// skipped, blocked, failed, not-selected — which is what makes the
-    /// run record complete rather than best-effort.
     #[allow(clippy::too_many_arguments)]
     fn finish(
         &self,
@@ -703,10 +641,6 @@ impl Runner {
         // the time of a run that never touched it, because every
         // per-source sync walks the whole graph to publish output
         // versions and reaches every step it isn't running.
-        //
-        // The run record still carries it (`current_run.states` above),
-        // which is where "not in this sync" belongs: that map describes
-        // one run, and is replaced wholesale by the next.
         if st != StepStatus::NotSelected {
             let entry = state.steps.entry(id.clone()).or_default();
             let last = entry.last_run.get_or_insert_with(|| LastRun {
@@ -722,8 +656,6 @@ impl Runner {
     }
 }
 
-/// A wall-clock stamp in the tree's convention: local time with an
-/// explicit offset, per AGENTS.md.
 fn now_stamp() -> String {
     datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs()
 }
@@ -772,25 +704,10 @@ fn step_summary(r: &StepReport) -> crate::events::StepSummary {
 /// concrete `(path, version)` pairs for every declared output.
 /// Reporting on an undeclared output is a contract violation.
 ///
-/// Two cases, and that is the whole protocol: the step supplied a
-/// version, or it didn't and we hash the tree. Hashing is always
-/// correct and always slower — it reads every file under the output —
-/// so first-party steps report a version for everything they declare.
-///
-/// This is the runner's only call to [`tree_version`], and it is only
-/// reached with a step that just ran. When it fires it says so on the
-/// event stream: an unreported version costs a full read of the output
-/// tree, and #225 is the case for what a slow path nobody can see costs
-/// in the end.
-///
-/// The step's `fingerprint` is folded into every recorded version. A
-/// step reports on its *content*, and it has no way to know that its
-/// own definition changed — the runner never tells it. Without this, a
-/// bumped `code_version` re-runs the step (its fingerprint moved) but
-/// leaves the reported version identical, so consumers skip: the tree
-/// gets rebuilt while the index keeps serving what the old definition
-/// produced. Folding it in makes "produced by a different step" count
-/// as a change downstream, which is the conservative direction.
+/// The step's `fingerprint` is folded into every recorded version. A step
+/// reports on its content and cannot know its own definition changed, so
+/// without this a bumped `code_version` re-runs the step while leaving the
+/// reported version identical — the tree is rebuilt and consumers skip it.
 fn resolve_outputs(
     data_root: &std::path::Path,
     spec: &StepSpec,
@@ -832,9 +749,6 @@ fn resolve_outputs(
     Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
 }
 
-/// Mark dependents of `i` ready once all their deps are terminal.
-/// Poisoned dependents still flow through `decide` (as `Block`) so the
-/// report stays exhaustive: every step gets a terminal status.
 fn release_dependents(
     graph: &Graph,
     remaining_deps: &mut [usize],
@@ -908,13 +822,6 @@ mod tests {
         })
     }
 
-    /// A download step writing `content` to `<id>/data.txt` every
-    /// invocation, honestly reporting whether it changed. Counts
-    /// invocations.
-    ///
-    /// Note what it no longer has to do: its id *is* the tree it
-    /// writes, so it reads `ctx.step_id` directly instead of stripping
-    /// a `.download` suffix off it to rebuild a path.
     fn download(name: &str, content: Arc<Mutex<String>>, runs: Arc<AtomicU32>) -> StepSpec {
         StepSpec::new(
             format!("{name}/raw"),
@@ -943,9 +850,6 @@ mod tests {
         )
     }
 
-    /// A render step copying `<name>/raw/data.txt` →
-    /// `<name>/rendered_md/data.md`, uppercased. Reports nothing (the
-    /// scheduler content-hashes). Counts invocations.
     fn render(name: &str, runs: Arc<AtomicU32>) -> StepSpec {
         let inp = format!("{name}/raw");
         StepSpec::new(
@@ -1116,21 +1020,6 @@ mod tests {
     /// The run record is the only thing that makes a run visible to
     /// anyone who did not spawn it — a terminal `datalib-dag` and the
     /// UI's worker write the same file, so the UI can show either.
-    ///
-    /// What it must carry: the plan before anything runs, a terminal
-    /// state for *every* step (including the ones that were skipped or
-    /// blocked, which never "ran"), a `finished_at` that distinguishes
-    /// a completed run from a crashed one, and per-step timings that
-    /// don't need a whole-run timestamp smeared across every source.
-    /// The run id is the pinned `DATALIB_DAG_NOW`, verbatim.
-    ///
-    /// `datalib-dag` mints that value and hands it to the progress bus
-    /// as the run id *before* calling `run`, so the two derive the same
-    /// string independently. If they ever diverge, nothing errors — the
-    /// bus just describes a run nobody is displaying, `/api/dag` filters
-    /// every row out on the id mismatch, and the UI silently shows no
-    /// progress at all. This is the coupling that keeps that from
-    /// happening quietly.
     #[tokio::test]
     async fn the_run_id_is_the_pinned_now_so_the_bus_can_match_it() {
         let fx = Fixture::new();
@@ -1323,19 +1212,6 @@ mod tests {
 
     /// Regression: "running" has to reach the *file*, while the step is
     /// still running.
-    ///
-    /// `mark_running` has always written it into the in-memory state,
-    /// but the only `save` calls were on terminal states — so
-    /// `dag_state.json` went straight from "not reached yet" to
-    /// "succeeded", and a reader could never catch a step in flight no
-    /// matter how long it ran. That file is the *only* channel to a
-    /// reader who did not spawn the run: `GET /api/dag` reads it, and
-    /// the Manage grid reads that. Pressing Sync therefore looked like
-    /// nothing had happened, all the way until the step finished.
-    ///
-    /// The assertion is deliberately made from disk, in another task,
-    /// while the step is parked — reading `state` in-process would pass
-    /// against the broken version.
     #[tokio::test]
     async fn a_running_step_is_visible_on_disk_while_it_runs() {
         let root = tempfile::tempdir().unwrap();
@@ -1398,18 +1274,6 @@ mod tests {
 
     /// Regression: a subset sync must not rewrite the history of the
     /// steps it did not select.
-    ///
-    /// Every run walks the whole graph — out-of-scope steps still get a
-    /// terminal status so the report is complete and so consumers see
-    /// their recorded output versions. That walk used to write
-    /// `NotSelected` into `last_run` like any other outcome, which meant
-    /// a `--sync slack` erased email's record: a step that succeeded
-    /// yesterday came back as "not selected", stamped with the time of a
-    /// run that never touched it. In the grid that read as a source
-    /// whose "last synced" moved every time some *other* source synced.
-    ///
-    /// `current_run.states` is where "not in this sync" belongs — it
-    /// describes one run and is replaced wholesale by the next.
     #[tokio::test]
     async fn a_subset_sync_leaves_unselected_steps_history_alone() {
         let fx = Fixture::new();
@@ -1593,19 +1457,6 @@ mod tests {
 
     /// A step this run isn't touching is never content-hashed, however
     /// much data its output tree holds.
-    ///
-    /// This is the shape #225 was found in: an aborted download leaves
-    /// `succeeded: false` and no recorded version behind, with the
-    /// store still on disk. The runner used to hash that store to get a
-    /// version for a step it had already ruled out of the run — forty
-    /// seconds per `--sync`, for a 3.4 GB Slack store, producing a
-    /// number nothing in the run compared against.
-    ///
-    /// The tree here is tiny, so the test asserts *what* the runner
-    /// reported rather than how long it took. The two are the same
-    /// fact: hashing a tree with a file in it yields a 64-character
-    /// digest, and `unknown` is what you get only by not reading the
-    /// tree at all.
     #[tokio::test]
     async fn an_unselected_step_with_data_on_disk_is_not_hashed() {
         let fx = Fixture::new();
@@ -1685,11 +1536,6 @@ mod tests {
     }
 
     /// A step's config changed but its inputs did not: it re-runs.
-    ///
-    /// Without this, editing `[steps.params]` in `config.toml` — a
-    /// widened date range, a changed render knob — silently does
-    /// nothing until some input happens to move, and the tree keeps
-    /// serving output built under the old config.
     #[tokio::test]
     async fn config_change_reruns_the_step_with_unchanged_inputs() {
         let fx = Fixture::new();

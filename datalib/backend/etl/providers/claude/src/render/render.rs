@@ -2,27 +2,6 @@
 //! shared `chat-common` normalized model and delegate markdown /
 //! grid-row plumbing to
 //! [`datalib_etl_chat_common::render::render_all`].
-//!
-//! One conversation → one [`NormalizedChat`] (single `"all"` bucket).
-//! `chat_uuid`/`markdown_uuid` are minted by [`super::ids`] through
-//! `datalib_id` from the upstream `conversation_uuid` — they were that
-//! id verbatim until #216. The upstream one is still what the page
-//! title links out to (`claude.ai/chat/<conversation_uuid>`) and what
-//! `grid_rows.upstream_id` carries; `org_uuid`/`org_name` ride along on
-//! every grid row.
-//!
-//! Each Claude message is *exploded* into one [`NormalizedChatItem`] for
-//! its text (+ extracted-text attachments + downloadable files) plus one
-//! item per `thinking` / `tool_use` / `tool_result` block. Every one of
-//! those gets its own minted id and the role-/block-distinguished
-//! `kind_label` ("LLM Thinking" / "Tool Call"), so the per-block grid
-//! rows the UI links to are preserved. (The `tu-`/`tr-`/`th-` prefixed
-//! ids these used to carry are gone; [`super::ids`] says why each was
-//! wrong.)
-//!
-//! Incrementality is unchanged and still dolt-diff driven: `parse`
-//! narrowed to changed conversations, so we pass an empty
-//! `prior_fingerprints` map and advance the cursor on success.
 
 use std::collections::HashMap;
 
@@ -198,12 +177,6 @@ pub fn render_all(
     Ok(())
 }
 
-/// One [`NormalizedChat`] per conversation, messages exploded into items.
-///
-/// `project_names` resolves the conversation's `project_uuid` to the
-/// human name that goes in the `project` grid column. An unresolved
-/// UUID falls back to the UUID itself — that is what a mirror with
-/// `sync.projects = false` looks like, and a raw id beats a blank cell.
 fn build_chat(
     shredded: &ShreddedConversation,
     project_names: &HashMap<String, String>,
@@ -418,12 +391,6 @@ fn build_chat(
     }
 }
 
-/// One page per Claude Project: its description, its custom
-/// instructions, and one section per knowledge document.
-///
-/// The two synthesized sections and each knowledge document get their
-/// own minted ids ([`super::ids`]), keyed on the project UUID and the
-/// document UUID respectively.
 fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> NormalizedChat {
     let project_uuid = project.project_uuid.clone();
     let page_uuid = ids::project(&project_uuid).uuid;
@@ -557,7 +524,6 @@ fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
     )
 }
 
-/// One synthesized project section (description / custom instructions).
 fn project_item(
     id: ids::Identity,
     author_display: &str,
@@ -608,36 +574,14 @@ fn filter_nonempty(s: String) -> Option<String> {
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
 /// unparseable (callers fall back to a bumped previous time, and to
 /// `None` when there is no previous time either).
-///
-/// Goes through `datalib-time` rather than calling `chrono` directly:
-/// timestamps are a cross-source concept, so exactly one crate decides
-/// how a string becomes an instant (rule P3 in
-/// `docs/dev/data_architecture_parse_and_render.md`). Anthropic stamps
-/// every timestamp with an explicit offset, so `parse_strict` is the
-/// right member of that family.
 fn iso_to_ms(s: &str) -> Option<i64> {
     datalib_time::parse_strict(s)
         .ok()
         .map(|t| t.to_unix_millis())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Block / attachment rendering (the markdown that becomes item.text).
-// ─────────────────────────────────────────────────────────────────────
 
-/// Identity for one structural block: its grid-row `uuid` (also the
-/// item's `message_uuid` and its `data-section-uuid` anchor), plus the
-/// upstream id and entity kind that produced it.
-///
-/// A `tool_use` is keyed on its own `id`, a `tool_result` on the
-/// `tool_use_id` it answers — that is how Anthropic links the pair —
-/// and both are scoped to the containing message. A `thinking` block
-/// has no upstream id, so its position within the message is the key.
-/// When a block is missing the id its type calls for, position is the
-/// fallback.
-///
-/// Replaces the old `tu-`/`tr-`/`th-`/`blk-` string prefixes; see
-/// [`super::ids`] for what those got wrong.
 pub(crate) fn block_identity(
     msg_uuid: &str,
     block_index: usize,
@@ -662,8 +606,6 @@ pub(crate) fn block_identity(
     }
 }
 
-/// Render one `thinking` / `tool_use` / `tool_result` block to the
-/// markdown body of its own item (the `<details>` block the UI shows).
 fn block_body_md(
     btype: &str,
     btext: Option<&str>,
@@ -799,8 +741,6 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
     }
 }
 
-/// Falsy-ish check mirroring Python `if tool_input:` — skip empty
-/// object/array/string/zero.
 fn json_is_empty(v: &Value) -> bool {
     match v {
         Value::Object(m) => m.is_empty(),
@@ -812,7 +752,6 @@ fn json_is_empty(v: &Value) -> bool {
     }
 }
 
-/// JSON dumped with `indent=2, sort_keys=true` (recursive key sort).
 fn json_pretty_sorted(v: &Value) -> String {
     serde_json::to_string_pretty(&canonicalize(v)).unwrap_or_default()
 }
@@ -833,9 +772,6 @@ fn canonicalize(v: &Value) -> Value {
     }
 }
 
-/// Pull (file id, file name, is_image) out of an attachment row's
-/// raw_json. Anthropic uses `file_uuid` / `id` / `uuid` for the id
-/// depending on export vs live API.
 fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
     let raw_obj = at.raw_json.as_object();
     let id = raw_obj

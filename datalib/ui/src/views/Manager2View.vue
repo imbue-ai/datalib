@@ -1,36 +1,9 @@
 <script setup lang="ts">
 // Manager2 — the Manage tab inverted, per docs/dev/source_wizard.md.
 //
-// A grid of everything the config declares is the page — sources, the
-// shared index steps, and applets — because the thing being managed is
-// the pipeline, not only the data. "Add Data Source" sits above it;
-// each row carries Run / Edit / Delete, plus Reveal in the desktop app,
-// with each action disabled per kind and saying why. The raw config
-// editor is here but collapsed — demoted, not removed, because it stays
-// the source of truth and the wizard's "edit as TOML" escape hatch has
-// to lead somewhere.
-//
-// Everything is derived from the config text, which stays the single
-// source of truth: rows come from parsing it, and add/edit/delete
-// splice it and PUT it back through the same endpoint the editor uses.
-//
-// Columns that need backend work the design calls for, and which are
-// therefore absent rather than faked: Account (needs the latchkey
-// endpoints) and Documents (must come from the unified_index applet —
-// the layout now forbids datalib-http reading that tree).
-//
-// "Last synced" / "Last status" come from the *runner's* own per-step
-// record (`GET /api/dag`), not from the job queue. The queue is per
-// *run*, and a run routinely covers several steps, so it could only
-// ever attribute one timestamp and one status to all of them — which is
-// what the old `~` marker was apologizing for.
-//
-// Reading the runner's record has a second consequence worth knowing:
-// a sync started from a terminal shows up here, because `datalib-dag`
-// writes that record whoever spawned it. The job half of the SSE stream
-// only carries runs this server started; the `root` half carries the
-// record moving whoever wrote it, which is how that terminal run
-// reaches this table.
+// Account and Documents are absent rather than faked: they need the latchkey
+// endpoints and the unified_index applet respectively, and the layout forbids
+// datalib-http reading that tree.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
@@ -113,17 +86,6 @@ const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 const configText = ref("");
 const configPath = ref("");
 // Two independent verdicts on the config, and both matter.
-//
-// `parseError` is our own TOML parse — it is what stops the grid from
-// showing nonsense, and it is all we have while the Advanced editor
-// holds unsaved text.
-//
-// `configError` is the *backend's*, from `GET /api/config`, produced by
-// the real loader: it catches everything the runner would reject —
-// duplicate step ids, reserved stanza names, bad artifact patterns,
-// cycles — none of which is a TOML syntax error, so none of which our
-// parse can see. When the file on disk is broken this is the message
-// worth showing.
 const parseError = ref<string | null>(null);
 const configError = ref<string | null>(null);
 /// What the loader dropped from this config and why, from
@@ -133,10 +95,6 @@ const configError = ref<string | null>(null);
 const configDiagnostics = ref<Diagnostic[]>([]);
 
 /// The reason this entry is not in the pipeline, or null if it is.
-///
-/// `warning` diagnostics are deliberately not returned: they don't drop
-/// anything, so a row carrying one still runs and still deserves the
-/// runner's own status.
 function droppedReason(id: string): Diagnostic | null {
   return (
     configDiagnostics.value.find(
@@ -151,15 +109,10 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
-/// The job a banner is *about*, when it is about one.
-///
-/// "Queued a sync for Signal (Work)." is true for a few seconds and
-/// then isn't, and nothing was taking it down: the banner only ever
-/// cleared on the next action, so a finished sync left the page
-/// insisting one was still queued. Holding the job id lets the banner
-/// retire itself the moment that job stops running — the grid's Status
-/// column is what says how it went, and it says so per step, which the
-/// banner never could.
+  /// The job a banner is *about*, when it is about one. Holding the id lets
+  /// the banner retire itself the moment that job stops running; it used to
+  /// clear only on the next action, so a finished sync left the page insisting
+  /// one was still queued.
 const bannerJob = ref<string | null>(null);
 
 /// Put up a banner, optionally tying it to a job's lifetime.
@@ -216,21 +169,14 @@ const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
 const wizardOpen = ref(false);
-/// Bumped on every opening, and bound to the dialog's `key`.
-///
-/// Without it the chained "also render this?" flow writes the wrong
-/// step. `onWizardSubmit` closes the dialog and reopens it for the
-/// render step in one synchronous stretch — `window.confirm` blocks
-/// the event loop, so `wizardOpen` goes false and back to true inside
-/// a single tick. Vue never flushes the false, so `v-if` never
-/// unmounts, the component instance is *reused*, and every `ref` the
-/// wizard initialises in `setup()` keeps the value it had while
-/// creating the fetch step. The id is the one that matters: the render
-/// step was written as `signal-work` — the create-mode stem — instead
-/// of `signal-work/rendered_md`, which the runner then rejects with
-/// "a step writes only the tree its id names", and which `phaseOf`
-/// reads as `other`, so it was never wired into the fan-ins either.
-/// A key that changes forces the remount the flow was assuming.
+  /// Bumped on every opening, and bound to the dialog's `key`.
+  ///
+  /// Without it the chained "also render this?" flow writes the wrong step:
+  /// `window.confirm` blocks the event loop, so `wizardOpen` goes false and
+  /// back to true inside one tick, Vue never flushes the false, and the wizard
+  /// component is reused with every `ref` still holding the fetch step's
+  /// values — including the id. A changing key forces the remount the flow
+  /// was assuming.
 const wizardKey = ref(0);
 const editing = ref<{
   step: ConfiguredStep;
@@ -348,12 +294,6 @@ const claimedBy = computed(() => claimedByJob(sources.value, jobs.value));
 
 /// Per-step state from the newest pushed task board, overlaid on what
 /// the last `/api/dag` fetch knew.
-///
-/// This is what makes the grid react rather than wait. The worker
-/// publishes the board over SSE within 400 ms of any change — and the
-/// enqueue and cancel handlers publish the instant they write a job
-/// row — so a step going running reaches this ref without a round trip.
-/// Cleared when a run ends, since a board outlives nothing.
 const liveTasks = ref<Record<string, Overlay>>({});
 
 /// The job the pushed board belongs to. Only one job runs at a time
@@ -364,22 +304,12 @@ const liveJob = computed(() => jobs.value.find((j) => j.state === "running"));
 /// flight: the pushed board folded over the last `/api/dag`, with the
 /// fetched `current_state` dropped when that fetch still describes a
 /// *previous* run (`run.synthesized` — see `withOverlay`).
-///
-/// One helper because both readers below have to agree. They ask
-/// different questions of the same field, and a `finishedThisRun` that
-/// trusted a stale state would tell a queued row its upstream had
-/// already finished this run, when what finished was the run before.
 function stepNow(id: string): DagStep | undefined {
   const run = effectiveRun(dagRun.value, liveJob.value);
   return withOverlay(dagSteps.value[id], id, liveTasks.value[id], !!run?.synthesized);
 }
 
 /// Has this step reached a terminal state in the run now in flight?
-///
-/// A step with no state has not been reached; one that is `running` is
-/// still going. Everything else the runner reports — including
-/// `not_selected` — means it will not move again this run, which is
-/// what "no longer blocking anything downstream" means.
 function finishedThisRun(id: string): boolean {
   const state = stepNow(id)?.current_state;
   return !!state && state !== "running";
@@ -387,11 +317,6 @@ function finishedThisRun(id: string): boolean {
 
 /// The floor that keeps a row's status from going backwards within one
 /// run. See `statusFloor` for why this cannot live inside `stepStatus`.
-///
-/// A plain closure rather than a `ref`: it is not state this view
-/// renders *from*, it is a bound on what `stepStatus` may report, and
-/// making it reactive would have a computed writing to its own
-/// dependencies.
 const holdRank = statusFloor();
 
 function stepStatus(id: string, dropped: Diagnostic | null): StatusView {
@@ -430,20 +355,15 @@ const rows = computed<Row[]>(() =>
           );
     const onDisk = trees.filter((o) => o.present);
 
-    // Run: a sync is started at a *source* step — one with no declared
-    // inputs — and everything downstream follows change propagation.
-    // `datalib-dag` rejects a `--sync` naming anything else outright
-    // ("not a source step: …"), so offering the button on a render or
-    // index row would only ever queue a job that fails on startup.
-    // Naming the sources that would carry it is the useful half of
-    // saying no.
+      // A sync starts at a *source* step — one with no declared inputs — and
+      // everything downstream follows change propagation. `datalib-dag` rejects
+      // a `--sync` naming anything else, so offering the button on a render row
+      // would only queue a job that fails on startup.
     const seeds = s.kind === "step" ? sourcesFeedingIn(sources.value, s.id) : [];
-    // A dropped entry outranks every other reason a step action is
-    // unavailable, because it is the reason: the step is not in the
-    // graph, so `--sync` would refuse it and the button could only ever
-    // queue a job that fails on startup. Not for an applet's Run,
-    // though — an applet is never scheduled whatever the config says,
-    // and that is the more useful thing for its button to say.
+      // A dropped entry outranks every other reason a step action is
+      // unavailable, because it is the reason: the step is not in the graph.
+      // Not for an applet's Run, though — an applet is never scheduled
+      // whatever the config says.
     const droppedWhy = dropped
       ? `Not in the pipeline: ${dropped.message}${dropped.help ? ` — ${dropped.help}` : ""}`
       : null;
@@ -564,12 +484,6 @@ function formatBytes(n: number): string {
 }
 
 /// The value the top of every sparkline in the size column stands for.
-///
-/// One number for the whole column — that is what makes the rows
-/// comparable, and it is the only reason a row's height means anything.
-/// It covers each row's history as well as its current size: a source
-/// that has just shrunk would otherwise draw its own past off the top
-/// of its box.
 const maxBytes = computed(() => calibrationMax(rows.value));
 
 /// The plot box for a size cell, in user units. Small and fixed: the
@@ -578,11 +492,6 @@ const ROW_SPARK = { width: 120, height: 18 };
 
 /// Build the `<svg>` for one series, or null when there is nothing to
 /// draw yet.
-///
-/// `nowMs` is passed in rather than sampled here so every cell in one
-/// repaint shares a right edge — otherwise the rows are plotted against
-/// instants milliseconds apart, which is invisible but means the column
-/// is not quite one picture.
 function sparkSvg(
   history: UsageSample[],
   box: { width: number; height: number },
@@ -644,11 +553,6 @@ const ICON_PATHS: Record<string, string> = {
 };
 
 /// An icon button for the Actions cell.
-///
-/// The label is the native `title` tooltip *and* the accessible name —
-/// an icon with neither is a guess, and this row has four of them. When
-/// disabled the tooltip becomes the reason, which is the thing worth
-/// reading.
 function iconButton(
   icon: keyof typeof ICON_PATHS,
   label: string,
@@ -691,12 +595,6 @@ const columnDefs: ColDef<Row>[] = [
     // folder this is — the whole reason the name stays fixed is that
     // the on-disk layout is meant to be legible, and a grid that
     // stopped naming it would give that away for a prettier row.
-    //
-    // The step's role rides along as a glyph after the name, where a
-    // column of its own used to be. It belongs here: a fetch step and
-    // the render step reading it routinely carry the *same* name, so
-    // the mark is what tells two adjacent rows apart — and a 64px
-    // column holding one icon read as a column about nothing.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-cell-source";
@@ -775,9 +673,6 @@ const columnDefs: ColDef<Row>[] = [
       // The word, and then why it is that word: a failure message, how
       // a run died, or which steps a queued row is behind. The column
       // is icons, so this is the only place either appears.
-      //
-      // While it is running the step's own words beat everything — more
-      // than "Running" ever is.
       const why = row.progress?.msg ?? row.status.detail;
       wrap.title = why ? `${label} — ${why}` : label;
 
@@ -824,13 +719,9 @@ const columnDefs: ColDef<Row>[] = [
     field: "lastSynced",
     width: 150,
     minWidth: 150,
-    // Sort on the instant. The cell paints "5 minutes ago", and AG Grid
-    // sorts the row's *value* rather than what a renderer drew — but
-    // the value is an ISO string carrying its source's own UTC offset,
-    // which does not compare correctly as text either. A row that never
-    // ran sorts as "forever ago", so reversing the column reverses all
-    // of it and one click groups the never-run rows. See
-    // `compareStamps`.
+      // Sort on the instant. AG Grid sorts the row's value rather than what a
+      // renderer drew, and the value is an ISO string carrying its own UTC
+      // offset, which does not compare correctly as text. See `compareStamps`.
     comparator: compareStamps,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const iso = p.data?.lastSynced ?? null;
@@ -877,15 +768,6 @@ const columnDefs: ColDef<Row>[] = [
     // the largest row. Two things at once, and the column has room for
     // both because they stack: the sparkline says which way this tree
     // is going and how fast, the number says how big it is now.
-    //
-    // Linear, and shared across rows, is the point: the question is
-    // "how much of my disk is this", and on a real root one source
-    // routinely dwarfs every other — which a per-row scale would
-    // flatter away, drawing a 2 kB tree and a 40 GB one identically.
-    //
-    // A bar used to be here. It answered "how does this compare" and
-    // nothing else; the sparkline answers that at its right edge and
-    // "what has it been doing" as well, for the same pixels.
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const row = p.data;
       const wrap = document.createElement("span");
@@ -989,30 +871,9 @@ function onGridReady(e: GridReadyEvent<Row>) {
 
 /// Commit only the newest answer, whatever order the answers arrive in.
 ///
-/// Every loader below can be in flight more than once at a time: a 2s
-/// progress poll, a 5s full poll, and the explicit calls the enqueue,
-/// cancel and SSE handlers make. Nothing orders those, so an older
-/// request can answer *after* a newer one — and each of these assigns
-/// its ref wholesale, so the older snapshot wins and the screen walks
-/// backwards.
-///
-/// The two timers that used to be the loudest source of overlap are
-/// gone (`backend/http/src/watch.rs` replaced them with pushes), and
-/// the hazard is not: a `dag_changed` burst, a resync issuing every
-/// loader at once, and an enqueue racing the list read all still put
-/// several requests in flight at the same time.
-///
-/// That is not theoretical. A list of jobs fetched before the sync was
-/// enqueued, landing after it, drops the job we just created; the step
-/// loses its claim, and `stepStatus` falls past the queued branch to
-/// "never run" — a row that reads as *never synced* one frame after
-/// being queued, and then as succeeded. `manager2-sync`'s monotonicity
-/// test catches it as `["queued","never_run","succeeded"]`.
-///
-/// Sequenced on when each request *started*, and a late answer is
-/// dropped rather than applied. An answer still commits if nothing
-/// newer has committed yet, so a failed newer request doesn't strand
-/// the older one's data.
+/// Not theoretical: a job list fetched before a sync was enqueued but landing
+/// after it drops the new job, and the row reads as *never synced* one frame
+/// after being queued. `manager2-sync`'s monotonicity test catches it.
 function freshest<T>(commit: (value: T) => void) {
   let issued = 0;
   let committed = 0;
@@ -1024,35 +885,16 @@ function freshest<T>(commit: (value: T) => void) {
     commit(value);
   };
   /// Drop everything already in flight.
-  ///
-  /// For when something *other* than a fetch becomes the newest truth —
-  /// `adoptJob` writing the row `POST /api/sync/jobs` just returned.
-  /// Sequencing the fetches against each other is not enough on its
-  /// own: a list read issued before the click still carries a list from
-  /// before the job existed, and committing it erases the job, drops
-  /// the step's claim, and the row falls back to whatever it said last
-  /// run. That is a stale "Succeeded" one frame after a sync was
-  /// queued, which is exactly the going-backwards `manager2-sync`
-  /// exists to catch.
   run.invalidate = () => {
     committed = issued;
   };
   return run as typeof run & { invalidate: () => void };
 }
 
-// ── One step's log ───────────────────────────────────────────────────
-//
-// A red Status says *that* a step failed and, on hover, the runner's
-// one-line reason. The next question is always the same — what was it
-// doing — and until now the only answer was the whole job log, every
-// step's events interleaved and each `log` event's sentence buried
-// inside an escaped `tracing` envelope. Double-clicking the cell
-// narrows that to the one step, unwrapped: see `config/stepLog.ts`.
-//
-// It reads the job logs the worker already writes, so there is no new
-// endpoint behind this. The cost is that a run started from a terminal
-// has no job row and so no log to find — which the empty state says,
-// rather than leaving a blank panel implying the step said nothing.
+  // ── One step's log. A red Status says *that* a step failed; the next
+  // question is always what it was doing, and the only answer used to be the
+  // whole job log with every step interleaved. Double-clicking the cell
+  // narrows it to the one step, unwrapped — see `config/stepLog.ts`.
 
 /// The row whose log is open, or null when the panel is closed.
 const logFor = ref<Row | null>(null);
@@ -1063,13 +905,10 @@ const logBusy = ref(false);
 const logJob = ref<SyncJob | null>(null);
 const logError = ref<string | null>(null);
 
-/// How far back to look for a job whose log mentions this step.
-///
-/// A step that is skipped as up-to-date still appears in its run's log,
-/// so the newest job is very nearly always the answer. The walk exists
-/// for the case that isn't: a step added since, or one whose last real
-/// work was several syncs ago. Bounded because each miss is a fetch of
-/// a whole log file.
+/// How far back to look for a job whose log mentions this step. The newest job
+/// is very nearly always the answer; the walk exists for a step added since, or
+/// one whose last real work was several syncs ago. Bounded, because each miss
+/// is a fetch of a whole log file.
 const LOG_SEARCH_DEPTH = 8;
 
 async function openStepLog(row: Row) {
@@ -1108,27 +947,12 @@ async function openStepLog(row: Row) {
 }
 
 // ── The status bar ───────────────────────────────────────────────────
-//
-// One number for the whole root, and the shape of the last few minutes
-// of it. It is deliberately the *root* and not the sum of the rows:
-// `system/` (the stores, the job logs, the served attachments) and
-// anything a step left behind after being deleted from the config are
-// on the disk whether or not a row claims them, and "how much is
-// datalib costing me" has to include them or it is the wrong number.
 
 /// The width of the status bar's plot, in user units. Wider than a
 /// row's, because it is the only thing on its line.
 const ROOT_SPARK = { width: 260, height: 20 };
 
 /// The root's series, scaled to its own range rather than to zero.
-///
-/// This is the one place a non-zero floor is right, and the reason is
-/// arithmetic: on a 40 GB root, five minutes of a sync moves the total
-/// by a fraction of a percent, which against a zero floor is a flat
-/// line at the ceiling — a plot that cannot show the thing it is for.
-/// Against the window's own range it shows the shape, and the two
-/// endpoints are spelled out beside it so nobody reads the height as a
-/// size.
 const rootScale = computed(() => {
   const h = storage.value?.root.history ?? [];
   const values = h.map((x) => x.bytes);
@@ -1146,12 +970,6 @@ const rootScale = computed(() => {
 
 /// How much the root has grown across the window, or null when there is
 /// nothing to compare against.
-///
-/// Against `history[0]` rather than against the oldest sample *inside*
-/// the window, and they are the same thing on purpose: the response's
-/// first entry is the carry-in — the value the window opens at — so
-/// this is the change over the window even when nothing was recorded
-/// during it.
 const rootDelta = computed(() => {
   const h = storage.value?.root.history ?? [];
   if (h.length < 2 || !storage.value) return null;
@@ -1159,10 +977,6 @@ const rootDelta = computed(() => {
 });
 
 /// What the status bar's plot is actually showing, in words.
-///
-/// The line has no axis, and its floor is not zero — so the sentence
-/// naming both endpoints is not decoration, it is the scale. Without it
-/// a full-height rise reads as "doubled" when it may be 0.3%.
 const rootSparkTitle = computed(() => {
   // A response whose `measured_at` is null is a server that hasn't
   // finished its first walk. Its zero is not an empty disk, and saying
@@ -1200,13 +1014,9 @@ function paintRootSpark() {
 }
 watch([storage, rootSparkHost], paintRootSpark, { flush: "post" });
 
-// ── Help ─────────────────────────────────────────────────────────────
-//
-// What every column means used to be a paragraph under the table,
-// permanently on screen. It is worth having and it is not worth the
-// room: a reader needs it once and then never again, and while it sat
-// there it pushed the Advanced disclosure — and the config path beside
-// it — below the fold.
+  // ── Help. What every column means used to be a paragraph under the table:
+  // worth having, not worth the room, and it pushed the Advanced disclosure
+  // below the fold.
 const helpOpen = ref(false);
 
 /// Double-click on Status opens that row's log. Only that column: the
@@ -1233,12 +1043,10 @@ function reparse() {
   } catch (e) {
     parseError.value = (e as Error).message;
   }
-  // The Actions cell is a `cellRenderer`, and AG Grid reuses a cell
-  // whose row id is unchanged — so a button's disabled state is baked
-  // in at first render and does not follow the row. That matters here:
-  // adding a render step must disable "Render to markdown" on the fetch
-  // row beside it, and the row id didn't change. Same repaint the qmd
-  // columns do in GridCard for the same reason.
+    // AG Grid reuses a cell whose row id is unchanged, so a button's disabled
+    // state is baked in at first render and does not follow the row. Adding a
+    // render step has to disable "Render to markdown" on the fetch row beside
+    // it, and that row id didn't change.
   gridApi?.refreshCells({ columns: ["actions"], force: true });
 }
 
@@ -1281,15 +1089,6 @@ const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 
 /// Repaint the columns whose content is a `cellRenderer` over state
 /// that lives outside the row's identity.
-///
-/// AG Grid reuses a cell whose row id hasn't changed, so everything
-/// these renderers read — the runner's record, the job queue, the
-/// column-wide byte maximum — would otherwise stay frozen at whatever
-/// it was when the row first rendered. Same repaint the qmd columns do
-/// in GridCard for the same reason.
-///
-/// `actions` is in the list because the Run/Stop face and every
-/// button's disabled state are baked in at render time.
 function repaint() {
   gridApi?.refreshCells({
     columns: ["status", "lastSynced", "bytes", "actions"],
@@ -1332,17 +1131,6 @@ const jobActive = computed(() =>
 );
 
 /// The runner's per-step record.
-///
-/// Fetched when the server says it moved (`dag_changed`), not on a
-/// timer. A separate channel from the job stream on purpose: that
-/// stream only carries runs *this server* started, and the whole point
-/// of reading the runner's own file is that a `datalib-dag` run from a
-/// terminal shows up here too. The watcher behind `dag_changed`
-/// (`backend/http/src/watch.rs`) sees that run's writes exactly as it
-/// sees ours.
-///
-/// Through `freshest` because these refetches still overlap — several
-/// land together on a resync, and one can answer after a newer one.
 const commitDag = freshest<Awaited<ReturnType<typeof fetchDag>>>((dag) => {
   dagSteps.value = Object.fromEntries(dag.steps.map((st) => [st.id, st]));
   dagRun.value = dag.run;
@@ -1612,13 +1400,6 @@ async function runSource(id: string) {
 }
 
 /// Fold a job we have in hand into the queue we hold.
-///
-/// `POST /api/sync/jobs` answers with the row it created, which is the
-/// authoritative fact that the job exists — more so than the list read
-/// that follows it, which is a separate query against a store the write
-/// may not be visible in yet. Seeding it here means the row is claimed,
-/// and reads as Queued, on the same tick as the click rather than a
-/// round trip later.
 function adoptJob(job: SyncJob) {
   // Newest truth wins: anything already in flight predates this job.
   commitJobs.invalidate();
@@ -1631,14 +1412,6 @@ function adoptJob(job: SyncJob) {
 }
 
 /// Sync everything the config declares, in one run.
-///
-/// `source_name: null` is the runner's own "all sources" — the same job
-/// kind a row's Sync enqueues, minus the narrowing. Worth its own
-/// button because the per-row one deliberately refuses on anything that
-/// isn't a source step: with several sources configured, "bring
-/// everything up to date" otherwise meant finding each source row and
-/// pressing them one at a time, and getting one run per source instead
-/// of one run over the whole graph.
 async function runEverything() {
   busy.value = true;
   clearBanner();
@@ -1655,11 +1428,6 @@ async function runEverything() {
 }
 
 /// Call off the job that has this row claimed.
-///
-/// The unit of cancellation is the job, not the row: one job is one
-/// `datalib-dag` process covering a whole subgraph, and there is no way
-/// to drop a single step out of a run in flight. The button says which
-/// sync it stops for exactly that reason.
 async function stopSource(id: string) {
   const job = claimedBy.value.get(id);
   if (!job) return;
@@ -1682,24 +1450,6 @@ async function stopSource(id: string) {
 }
 
 /// One pushed job update, applied without a round trip.
-///
-/// The stream carries everything the grid needs to change state: the
-/// job row (which decides Queued and the Run/Stop face) and the task
-/// board (which decides Running and the progress message). Both used to
-/// be discarded — the handler here simply refetched — so every update
-/// cost two HTTP requests and arrived a fetch late. Pressing Sync
-/// looked like nothing had happened partly for that reason.
-///
-/// What still needs a fetch, and why: a step reaching a *terminal*
-/// state. The board says "done"; it does not say when, or with what
-/// error, and those are the two things the finished row shows. Only the
-/// runner's record has them. So terminal transitions ask, and
-/// everything else is painted from the push.
-///
-/// This handler sees only runs *this server* started. A `datalib-dag`
-/// run from a terminal is invisible to it, which is what the `root`
-/// channel in `onMounted` is for — not a fallback, a second mechanism
-/// for a case the first structurally cannot reach.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
   retireBanner(e.id, e.state);
@@ -1722,13 +1472,6 @@ function onJobEvent(e: JobProgressEvent) {
 /// Fold a pushed job update into the queue we hold, so the Run/Stop
 /// face and every Queued row move on the push rather than on the next
 /// `GET /api/sync/jobs/all`.
-///
-/// The event is a subset of `SyncJob` — it carries no timestamps — so
-/// an update patches the row we already have and an unseen job is
-/// stubbed with the arrival time. That stub matters: `stepStatus`
-/// compares a step's last run against the claiming job's `started_at`
-/// to decide whether the job has already been past it, and a missing
-/// value there reads as "not yet", which is the safe answer.
 function mergeJob(e: JobProgressEvent) {
   const now = new Date().toISOString();
   const at = jobs.value.findIndex((j) => j.id === e.id);
@@ -1767,18 +1510,10 @@ function mergeJob(e: JobProgressEvent) {
 let unsubscribe: (() => void) | null = null;
 let relativePoll: ReturnType<typeof setInterval> | null = null;
 
-/// The Last synced column reads "5 minutes ago", which goes stale on
-/// its own: nothing about the page has changed a second later, but the
-/// cell is now wrong. Every other repaint here is triggered by data
-/// moving, so this is the one clock the column needs.
-///
-/// It ticks every second but repaints only when at least one row would
-/// actually read differently, which since the sub-minute band became a
-/// flat "seconds ago" is at most once a minute per row — a handful of
-/// short string builds per second and, nearly always, no DOM work at
-/// all. The second-granularity tick is still what keeps the *crossing*
-/// prompt: a row goes from "seconds ago" to "1 minute ago" within a
-/// second of actually doing so, rather than up to a minute late.
+/// The Last synced column reads "5 minutes ago", which goes stale on its own,
+/// so this is the one clock the column needs. It ticks every second but
+/// repaints only when a row would actually read differently — which keeps the
+/// crossing prompt without doing DOM work most seconds.
 let lastRelativePaint = "";
 function tickRelative() {
   const now = Date.now();
@@ -1788,23 +1523,10 @@ function tickRelative() {
   gridApi?.refreshCells({ columns: ["lastSynced"], force: true });
 }
 
-/// Everything this table shows, refetched together.
-///
-/// Together is the point, and it is why this is one function rather
-/// than five calls at five cadences. The rows are derived from the
-/// config; the Status and Last synced columns come from the runner's
-/// record. Fetch the first without the second and a row that has run
-/// paints as "Never run" — it exists because the config declares it,
-/// and nothing has yet said what it did. That intermediate state is
-/// real enough that `manager2-sync.spec.ts` had to reload the page to
-/// avoid observing it (see `writeConfig` there).
-///
-/// `freshStorage` asks the backend to walk the disk before answering
-/// rather than serving what its sampler last found. Off by default:
-/// the sampler is accurate while a run is in flight, which is when the
-/// sizes move. It is worth paying for in the two cases below where we
-/// may have missed the walk entirely — the first paint, and a
-/// reconnect after the stream dropped.
+/// Everything this table shows, refetched together — which is the point, and
+/// why this is one function rather than five calls at five cadences. Rows come
+/// from the config, Status and Last synced from the runner's record; fetch the
+/// first without the second and a row that has run paints as "Never run".
 async function reloadAll(freshStorage = false) {
   await Promise.all([
     loadConfig(),
@@ -1823,29 +1545,13 @@ onMounted(async () => {
   window.addEventListener("keydown", onWindowKeydown);
 
   // Two push channels, and the split matters.
-  //
-  // `job` carries syncs *this server* started — it is what makes the
-  // Run/Stop face and the Queued rows move on the click rather than on
-  // the next fetch.
-  //
-  // `root` carries what the job stream structurally cannot: a
-  // `datalib-dag` run started from a terminal, which has no job row to
-  // report on, and an agent (or a hand) editing config.toml. Those two
-  // cases are the entire reason this view used to poll — five endpoints
-  // every 5 s forever, plus two more every 2 s during a run. On an idle
-  // tab that was 60 requests a minute, each `/api/dag` among them
-  // reloading the config, rebuilding the graph and taking the runner's
-  // lock, to answer "nothing has changed" every time.
   unsubscribe = subscribeLive({
     job: onJobEvent,
     root: (e) => {
       if (e.kind === "dag_changed") {
-        // The record moved: a step finished, or a run wrote progress.
-        // Deliberately *not* a fresh walk: this fires a few times a
-        // second while a run is going, and asking the backend to
-        // re-walk the root each time would be worse than the poll all
-        // of this replaced. The sampler is already walking on its own
-        // cadence during a run; this just reads what it found.
+          // Deliberately *not* a fresh walk: this fires a few times a second
+          // while a run is going. The sampler is already walking on its own
+          // cadence; this just reads what it found.
         void loadDag();
         void loadStorage();
       } else if (e.kind === "config_changed") {

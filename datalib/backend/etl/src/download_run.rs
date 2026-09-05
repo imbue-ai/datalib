@@ -1,55 +1,4 @@
 //! [`DownloadRun`] — bookkeeping wrapper for provider `download::fetch` calls.
-//!
-//! Every provider used to repeat the same ~12-line dance:
-//!
-//! ```ignore
-//! let run_id = db.start_run(&run_config).await?;
-//! let result = work.await;
-//! let summary_json = serde_json::json!({ /* fields per provider */ });
-//! let status = if result.is_ok() { "ok" } else { "error" };
-//! let _ = db.finish_run(run_id, status, &summary_json).await;
-//! result?;
-//! Ok(summary)
-//! ```
-//!
-//! `DownloadRun` collapses that to three lines:
-//!
-//! ```ignore
-//! let run = DownloadRun::start(db.pool(), &run_config).await?;
-//! let result = work.await;
-//! run.finish(&result, &summary).await;
-//! result?;
-//! Ok(summary)
-//! ```
-//!
-//! Beyond saving boilerplate, the wrapper:
-//!
-//! - Stamps `elapsed_ms` into every summary automatically. Per-source
-//!   timing was previously only visible in download-orchestrator logs;
-//!   now it lives next to the structured summary in
-//!   `sync_runs.summary`.
-//! - Merges an `error` field into the summary on failure (preserving
-//!   any partial summary fields the provider populated before the
-//!   error). Stock providers used to drop the partial summary on
-//!   error, which made post-mortem analysis harder than necessary.
-//! - Provides a single place to hang future cross-provider concerns
-//!   (per-table row deltas via `dolt_diff_<table>`, scope cursor
-//!   tracking, etc.) without touching every provider.
-//!
-//! Failures in the bookkeeping path itself (the `finish_run` SQL
-//! update) are **logged and swallowed**: we never want a bookkeeping
-//! write to mask whatever error the work future actually returned.
-//!
-//! # Auto-deltas (Piece B)
-//!
-//! After the run, [`DownloadRun::finish`] queries `dolt_status` for the
-//! list of dirty tables and `dolt_diff_<table>` for added / modified /
-//! removed counts since the last `dolt_commit`. The result lands in
-//! `summary.deltas` as `{table: {added, modified, removed}}`. Skipped
-//! silently when the linked libsqlite3 isn't doltlite (e.g. cargo
-//! tests under stock SQLite). This replaces the ad-hoc per-provider
-//! row counters: dolt is the ground truth, and the same code path
-//! works for every provider with zero per-provider plumbing.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -80,9 +29,6 @@ pub struct DownloadRun<'p> {
 }
 
 impl<'p> DownloadRun<'p> {
-    /// Stamp a `running` row in `sync_runs` with `config`, capture
-    /// `run_id` + the wall-clock start + the pre-run cursor snapshot,
-    /// and return the handle.
     pub async fn start(pool: &'p SqlitePool, config: &Value) -> Result<Self> {
         let run_id = start_run(pool, config).await?;
         let cursors_before = scope_state::snapshot(pool).await.unwrap_or_else(|e| {
@@ -97,25 +43,10 @@ impl<'p> DownloadRun<'p> {
         })
     }
 
-    /// `run_id` of the `sync_runs` row. Most providers don't need
-    /// this; exposed for the rare provider that wants to stamp it on
-    /// per-row writes for audit-log correlation.
     pub fn run_id(&self) -> i64 {
         self.run_id
     }
 
-    /// Finalize: update `sync_runs.{finished_at, status, summary}`.
-    ///
-    /// - `result` is the work future's outcome. Its variant decides
-    ///   `status` (`"ok"` or `"error"`); on error the message is
-    ///   merged into the summary as `"error": "<chain>"`.
-    /// - `summary` is the provider's typed summary struct. It must be
-    ///   `Serialize`; the serialized object is what lands in
-    ///   `sync_runs.summary` (plus the auto `elapsed_ms` / `error`
-    ///   merges).
-    ///
-    /// Consumes `self` so a finished run can't accidentally be
-    /// finished twice.
     pub async fn finish<S, T>(self, result: &Result<T>, summary: &S)
     where
         S: Serialize,
@@ -377,12 +308,6 @@ mod tests {
         // present at HEAD). The diff query in `compute_deltas` then errors
         // with "no such table: dolt_diff_<table>" and the row delta is
         // silently dropped.
-        //
-        // The fix commits the schema right after `open` applies the DDL, so
-        // the table exists at HEAD and the data inserts diff cleanly as
-        // "added". Verified by hand with the doltlite CLI: a CREATE+INSERT
-        // with no commit makes `dolt_diff_<table>` unresolvable; a commit of
-        // the empty schema first makes the inserts show up as `added`.
         const NEW_TABLE_DDL: &str =
             "CREATE TABLE IF NOT EXISTS discussions (id TEXT PRIMARY KEY, payload TEXT)";
         let dir = tempfile::tempdir().unwrap();

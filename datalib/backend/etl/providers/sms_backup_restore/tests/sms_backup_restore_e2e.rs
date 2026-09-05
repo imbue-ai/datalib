@@ -1,10 +1,4 @@
 //! End-to-end test for the "SMS Backup & Restore" provider.
-//!
-//! Points download at the checked-in TNG export tree (sms + calls XML
-//! with inline base64 image / audio attachments), asserts the landed
-//! raw tables + CAS blobs and the resume cursor, then runs render and
-//! asserts the merged per-number conversations + materialized
-//! attachments.
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::collections::HashMap;

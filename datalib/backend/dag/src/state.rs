@@ -1,33 +1,5 @@
 //! Persisted scheduler state, and the only record of what the pipeline
 //! is doing.
-//!
-//! Two things live here, written by the runner and by nothing else:
-//!
-//! * **Change-detection bookkeeping** — per step, the input/output
-//!   artifact versions and the fingerprint as of its last successful
-//!   run. This is what makes "is this step still up to date with the
-//!   inputs and the config it would run under?" answerable across
-//!   process restarts.
-//! * **Run state** — what each step did last ([`LastRun`]) and what the
-//!   run in flight is doing right now ([`CurrentRun`]). The UI reads
-//!   this rather than inferring from the job queue, which records whole
-//!   *runs* and so can only guess at a step.
-//!
-//! The second exists because the runner is the only process that knows
-//! the plan. A step knows what it did; only the scheduler knows what is
-//! queued, what is blocked, and on what. Putting it here means a run
-//! started from a terminal is as visible as one the UI kicked off —
-//! `datalib-dag` writes this either way.
-//!
-//! **State transitions, not progress ticks.** A step going
-//! running→succeeded lands here; "347 of 900 messages" does not. That
-//! keeps writes at O(steps) per run, the same as before this file
-//! carried run state, and leaves live progress to the NDJSON event
-//! stream where a subscriber already gets it push-shaped. A CLI run
-//! showing "running" with no bar is honest rather than impoverished.
-//!
-//! Lives at `<data_root>/system/dag_state.json` — alongside the other
-//! operational (non-rebuildable-from-raw) state per the layout doc.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -44,17 +16,6 @@ pub struct DagState {
     #[serde(default)]
     pub steps: BTreeMap<StepId, StepState>,
     /// The run in flight, or the one that finished last.
-    ///
-    /// Not cleared when a run ends — it is stamped with `finished_at`
-    /// instead, so "nothing is running, and here is what happened last"
-    /// and "nothing has ever run" stay distinguishable. A reader treats
-    /// `finished_at == None` as live.
-    ///
-    /// A crashed runner leaves this without a `finished_at` forever,
-    /// which reads as "still running" and is the same lie
-    /// `sync_runs.status = 'running'` tells for the same reason. The
-    /// runner's lock is what bounds it: a reader that finds no lock
-    /// holder knows nothing is actually running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_run: Option<CurrentRun>,
 }
@@ -151,8 +112,6 @@ impl DagState {
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", p.display()))
     }
 
-    /// Atomic (write-temp-then-rename) save, honoring the same
-    /// valid-or-absent rule we ask of step outputs.
     pub fn save(&self, data_root: &Path) -> Result<()> {
         let p = Self::path(data_root);
         if let Some(parent) = p.parent() {

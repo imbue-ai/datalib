@@ -1,13 +1,4 @@
 //! End-to-end synth → playback → download round-trip.
-//!
-//! Builds a fake on-disk ChatGPT JSON snapshot (the format the
-//! synthesizer reads), runs the HTTP fixture synthesizer over it,
-//! points `DATALIB_HTTP_PLAYBACK` at the resulting fixture tree,
-//! then drives `download::fetch` against a fresh doltlite database.
-//! Asserts the rehydrated DB matches the input.
-//!
-//! Lives in its own integration-test file so the process-wide
-//! `DATALIB_HTTP_PLAYBACK` env var can't race other tests.
 
 use std::collections::HashMap;
 use std::fs;

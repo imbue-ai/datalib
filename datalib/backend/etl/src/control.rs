@@ -1,13 +1,4 @@
 //! Shared cross-provider knobs for `download::fetch`.
-//!
-//! Every provider's `FetchOptions` embeds an [`DownloadControl`] under
-//! the field name `control`. The sync binary populates it from CLI
-//! flags; each provider's download path branches on the field that
-//! matters to it.
-//!
-//! Keep this struct *small*. It's the union of "knobs that don't
-//! belong in any one provider's own options" — meaning every provider
-//! either implements the behavior or explicitly chooses to ignore it.
 
 /// Cross-provider download-time knobs.
 #[derive(Debug, Clone, Default)]
@@ -19,18 +10,6 @@ pub struct DownloadControl {
     /// resulting `dolt diff` between the prior commit and the new
     /// one shows only upstream-content changes — because the
     /// bookkeeping sidecars are not part of the data diff.
-    ///
-    /// `sync_runs` / `sync_scope_state` are NOT truncated — they're
-    /// whole-table bookkeeping (audit log and resume cursor), not
-    /// per-row content, and preserving them across resets is useful
-    /// for debugging.
-    ///
-    /// The per-provider CAS edge table (`<provider>_attachments`) is
-    /// NOT truncated either: the per-source CAS retains the bytes
-    /// across this reset, and the edge row's `blake3` is the cache
-    /// index that lets the next download skip re-fetching. Use
-    /// [`Self::refetch_blobs`] to invalidate that cache index when
-    /// you actually want the bytes re-pulled.
     pub reset_and_redownload: bool,
 
     /// When true, the provider's `download::fetch` clears the
@@ -41,10 +20,5 @@ pub struct DownloadControl {
     /// unchanged — and the CAS is never truncated: re-fetched bytes
     /// hash to the same blake3 and `INSERT OR IGNORE` is a no-op, so
     /// this costs network IO but not disk.
-    ///
-    /// Orthogonal to [`Self::reset_and_redownload`]: pass both for a
-    /// full reset; pass `reset_and_redownload` alone for the common
-    /// "check for entity gaps without burning bandwidth on blobs"
-    /// case.
     pub refetch_blobs: bool,
 }

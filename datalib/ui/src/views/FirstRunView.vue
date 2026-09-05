@@ -1,25 +1,5 @@
 <script setup lang="ts">
 // First-run onboarding for a data root with no `config.toml`.
-//
-// Why this exists: pointing the app at an empty folder used to land
-// straight on the grid, which asks the `unified_index` applet for rows
-// — and that applet is declared *in the config*, so with no config the
-// first thing a new user saw was
-// `502 {"error":"no applet \"unified_index\""}`. Technically accurate,
-// useless as a welcome.
-//
-// The rule this screen follows: say what is about to happen to the
-// user's folder *before* touching it. It writes nothing on mount; the
-// button does, and the copy above the button names the file and lists
-// what goes in it.
-//
-// `App.vue` renders this instead of the router view while
-// `/api/config` reports `exists: false`, so it covers every front door
-// (browser, Tauri window) with one implementation.
-//
-// There is no "done" screen: initializing lands the user straight on
-// the Manage view, because a library with no sources is not finished
-// and adding one is the only useful next move.
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { initConfig, type ConfigResponse } from "@/api";
@@ -50,10 +30,6 @@ async function initialize() {
     // `created: false` with no error means a config appeared while the
     // screen was open (a second window, an agent). Nothing went wrong
     // — the library is initialized, which is all this screen wanted.
-    //
-    // Straight to the Manage view: `initialized` drops the gate so
-    // `App.vue` renders the router again, and the route is the one
-    // with the "Add Data Source" button on it.
     emit("initialized");
     void router.replace("/sources2");
   } catch (e) {

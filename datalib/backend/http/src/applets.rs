@@ -1,99 +1,28 @@
 //! Applets: config-declared servers that contribute endpoints, and
 //! that write their frontend components into the store.
 //!
-//! An applet is a sibling of a step in `config.toml` (see
-//! [`datalib_dag::config::AppletEntry`]). Where a step runs to
-//! completion during a sync and writes artifacts, an applet is a
-//! long-lived HTTP server this gateway starts. It is run once:
+//! An applet is run **once**, as
+//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params …]`,
+//! and owes three things in that order: write its components, bind a port,
+//! then print `DATALIB_APPLET_PORT=<port>` to stdout. The gateway waits for
+//! that line and only then scans the store, so **the line is the signal that
+//! the write finished** — announcing first would race the scan.
 //!
-//! ```text
-//! <command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params <json>]
-//! ```
+//! The port travels child→gateway because that is the only spelling that ties
+//! readiness to *this* child: picking one here means binding it, dropping it,
+//! and racing the child for it, after which "something accepts on that port"
+//! cannot tell the applet apart from whoever won.
 //!
-//! and owes three things, in order: write its components into that
-//! directory, bind a port, then print `DATALIB_APPLET_PORT=<port>` to
-//! stdout. The gateway waits for that line and then scans the store,
-//! so **the line is the signal that the write finished** — an applet
-//! that announced first would race the scan and intermittently come up
-//! with no components.
+//! Applets are started eagerly and kept running, because the write and the
+//! serve are one invocation — a lazily started applet's components would only
+//! exist once something had already opened a card that used them.
 //!
-//! The port travels in that direction — child to gateway, not gateway
-//! to child — because it is the only spelling that ties readiness to
-//! *this* child. Picking a port here means binding one, dropping it,
-//! and racing the child for it; the wait that followed could then only
-//! ask "is anything accepting on that port?", which another process
-//! that won the race answers just as well. That is not hypothetical:
-//! under a loaded `bazelisk test //...` the gateway adopted a
-//! stranger's listener, scanned the store before its own applet had
-//! written a byte, and reported no error while the real child exited
-//! with `EADDRINUSE`.
+//! This is not a component mechanism. Everything about components lives in
+//! [`crate::frontend`], which knows nothing about applets; an applet's only
+//! privilege is being called to write a directory, and the files it leaves
+//! are scanned and served exactly like ones a person dropped in by hand.
 //!
-//! Beyond that one line there is no protocol version, no handshake,
-//! and no registration call.
-//!
-//! ## Applets are not a component mechanism
-//!
-//! Everything about *components* lives in [`crate::frontend`], which
-//! knows nothing about applets. An applet's only privilege is being
-//! **called** to write a directory; the files it leaves behind are
-//! scanned, hash-validated and served exactly like ones a user dropped
-//! in by hand. One mechanism, one code path, nothing for the two to
-//! disagree about.
-//!
-//! That is why the components come from a directory rather than an
-//! endpoint: reading them must not require asking an applet anything,
-//! or the gallery could not list a component until something already
-//! knew to open it.
-//!
-//! ## Why the applet is told its own directory
-//!
-//! Two instances of one command differ only in their config. Passing
-//! the destination is what lets each write its own namespace — and
-//! what lets each bake its own id into the `component_args` of the
-//! gallery entry it registers, so the two appear as separate rows over
-//! one shared component.
-//!
-//! ## Applets are started eagerly and kept running
-//!
-//! Every configured applet is started at boot and stays up. The
-//! alternative — starting one on its first request — cannot work now
-//! that the write and the serve are one invocation: components would
-//! only exist once something had already opened a card that used them,
-//! which is the thing the gallery needs them for.
-//!
-//! So a data root with twelve applets runs twelve processes. Idle
-//! shutdown would trade some of that back and is not built; if it
-//! arrives, a restarted applet simply rewrites the same files, since
-//! the write is idempotent.
-//!
-//! ## A config reload restarts only what changed
-//!
-//! The registry remembers the applet list it last started. When
-//! `config.toml` moves, the new list is compared against that record
-//! entry by entry. An entry spelled exactly the same way, whose
-//! process is still alive, keeps running untouched. Everything else is
-//! stopped and started again: an entry whose config changed, one that
-//! is new, and one whose process has died since it was started.
-//!
-//! Restarting an applet the edit had nothing to do with is not free —
-//! it throws away whatever the process holds in memory, and the thing
-//! that notices the config moved is a UI poll of `/api/frontend`, so
-//! an unrelated edit would interrupt every applet at once.
-//!
-//! ## Starting an applet is destructive to its namespace
-//!
-//! An applet about to start gets a clean namespace: its directory is
-//! deleted first and it rewrites it, so a component it no longer emits
-//! actually disappears. Every directory belonging to no configured
-//! applet is deleted too, which is what takes the components of a
-//! removed applet with it. `user` is never touched, which is the whole
-//! reason that id is reserved
-//! ([`datalib_dag::config::RESERVED_APPLET_ID`]).
-//!
-//! A kept applet's directory is left exactly as it is. It would be
-//! rewritten byte-for-byte anyway — the write is idempotent for
-//! unchanged config — so deleting it would only open a window where
-//! the gallery could scan a namespace that is missing.
+//! See `docs/dev/applets.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Read, Write};
@@ -119,25 +48,13 @@ pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
 /// signal, carrying the port the gateway proxies to.
-///
-/// The applet side spells this literally (`datalib-applet`'s
-/// `announce_port`), the same way it spells [`ENV_APPLET_ID`] — the
-/// two cannot drift silently, since every applet round-trip test
-/// starts a real child and fails outright if they disagree.
 pub const APPLET_PORT_LINE: &str = "DATALIB_APPLET_PORT=";
 
 /// How long an applet gets to write its components, bind its port, and
 /// report it.
-///
-/// A bound is required because this runs during boot, after the
-/// listener is already accepting: without one, a single applet that
-/// hangs would leave a browser tab whose requests queue forever with
-/// nothing logged.
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 
-// ---------------------------------------------------------------------------
 // Discovery
-// ---------------------------------------------------------------------------
 
 /// Split a `command` string into an argv the way the DAG runner does —
 /// literally the same `shlex` call, so the two config entries cannot
@@ -152,9 +69,6 @@ fn split_command(id: &str, command: &str) -> anyhow::Result<Vec<String>> {
     Ok(argv)
 }
 
-/// Build the child command shared by the manifest dump and the server:
-/// argv from config, cwd at the data root, `binary_dir` prepended to
-/// PATH, and the entry's `env` merged last so it wins.
 fn base_command(
     entry: &AppletEntry,
     data_root: &Path,
@@ -184,7 +98,6 @@ fn base_command(
     Ok(cmd)
 }
 
-/// The frontend store root, created and marked as derived.
 fn frontend_root(data_root: &Path) -> anyhow::Result<PathBuf> {
     let root = crate::frontend::frontend_dir(data_root);
     std::fs::create_dir_all(&root)
@@ -196,15 +109,6 @@ fn frontend_root(data_root: &Path) -> anyhow::Result<PathBuf> {
     Ok(root)
 }
 
-/// Delete every applet-owned namespace directory except the ones in
-/// `keep`.
-///
-/// Deleting is what makes the store track the config: an applet
-/// removed from `config.toml` is in neither `keep` nor the list about
-/// to be started, so it leaves no orphaned components behind, and a
-/// component dropped from a restarting applet's output actually
-/// disappears. `user` is never touched, which is the whole reason that
-/// id is reserved.
 fn prune_namespaces(root: &Path, keep: &BTreeSet<String>) {
     let Ok(rd) = std::fs::read_dir(root) else {
         return;
@@ -224,19 +128,6 @@ fn prune_namespaces(root: &Path, keep: &BTreeSet<String>) {
     }
 }
 
-/// The PATH an applet child sees: `binary_dir`, then `~/.datalib/bin`,
-/// then whatever this process inherited.
-///
-/// That order matches what a *step* gets, which is the point. A step's
-/// child sees `binary_dir` first (the DAG runner prepends it) over a
-/// PATH the sync worker has already prefixed with `~/.datalib/bin`, so
-/// an applet resolving its command differently from a step would make
-/// `/agent/config.md`'s "install it in ~/.datalib/bin" advice true for
-/// one kind of config entry and false for the other.
-///
-/// `join_paths`, not a hardcoded separator, so this is correct on
-/// Windows and preserves non-UTF-8 components. Returns `None` only when
-/// there is nothing to prepend and no PATH to inherit.
 fn child_path(
     binary_dir: Option<&Path>,
     user_bin: Option<PathBuf>,
@@ -269,23 +160,10 @@ fn tail_lines(s: &str, n: usize) -> String {
     lines[start..].join("\n")
 }
 
-// ---------------------------------------------------------------------------
 // The registry
-// ---------------------------------------------------------------------------
 
 /// The applets from `config.toml`, the frontend store they write into,
 /// and the child processes behind `/applet/`.
-///
-/// Rebuilt lazily when `config.toml` changes: every read path calls
-/// [`Self::refresh_if_config_changed`], which costs one `stat` and does
-/// nothing unless the file moved. Watching the mtime rather than
-/// hooking `PUT /api/config` means a config edited by hand — or by an
-/// agent writing the file directly — is picked up too, and the UI's
-/// poll of `/api/frontend` turns that into a live update.
-///
-/// Note what this type does *not* do: it holds no component data of its
-/// own. Components come from [`crate::frontend::FrontendStore`], which
-/// reads the filesystem and cannot tell who wrote it.
 pub struct AppletRegistry {
     pub data_root: PathBuf,
     /// The CLI's `--binary-dir`, kept so a rebuild can re-resolve
@@ -330,15 +208,6 @@ fn config_stamp_of(data_root: &Path) -> Option<(u64, std::time::SystemTime)> {
 }
 
 impl AppletRegistry {
-    /// Run every applet's write, then scan the store.
-    ///
-    /// `binary_dir` is the directory applet commands resolve against,
-    /// already resolved — [`Self::from_data_root`] is what turns a CLI
-    /// override plus the config's own `binary_dir` into one.
-    ///
-    /// A failing applet does not fail the boot: its error is recorded
-    /// and everything else still loads. `user` is scanned either way,
-    /// since nothing regenerates it.
     pub fn build(
         entries: Vec<AppletEntry>,
         data_root: PathBuf,
@@ -347,9 +216,6 @@ impl AppletRegistry {
         Self::new(entries, data_root, binary_dir.clone(), binary_dir)
     }
 
-    /// `binary_dir_override` is the CLI's, kept for later reloads;
-    /// `binary_dir` is what this start actually resolves against. They
-    /// differ whenever the config supplies its own.
     fn new(
         entries: Vec<AppletEntry>,
         data_root: PathBuf,
@@ -384,13 +250,6 @@ impl AppletRegistry {
         }
     }
 
-    /// Read `config.toml` and build from it.
-    ///
-    /// The policy lives here rather than in `boot`: a missing config is
-    /// the normal state of a fresh data root and yields no applets, and
-    /// a config the validator rejects also yields none — a server that
-    /// refused to start over a bad applet id would take search and
-    /// setup down with it, leaving no way to fix the file.
     pub fn from_data_root(data_root: &Path, binary_dir: Option<PathBuf>) -> Self {
         // The *resolved* dir is what the start uses, the same one a
         // later reload will resolve. Handing `build` the bare override
@@ -400,12 +259,6 @@ impl AppletRegistry {
         Self::new(entries, data_root.to_path_buf(), binary_dir, resolved)
     }
 
-    /// Reconcile the running applets with `config.toml` if it has
-    /// changed since the last pass.
-    ///
-    /// Blocking: it execs one child per applet that has to start.
-    /// Callers on the async side run it inside `spawn_blocking`. Cheap
-    /// when nothing moved — one `stat` and a read lock.
     pub fn refresh_if_config_changed(&self) {
         let current = config_stamp_of(&self.data_root);
         let (prev_entries, prev_binary_dir) = {
@@ -450,13 +303,6 @@ impl AppletRegistry {
         }
     }
 
-    /// Rescan the frontend tree if anything in it moved.
-    ///
-    /// The store is the source of truth, so a component written by
-    /// `PUT /api/lib` — or a directory a person dropped in by hand —
-    /// has to show up without a config edit or a restart. This costs a
-    /// handful of `stat`s when nothing changed, and re-reads the tree
-    /// when it did; it never runs an applet.
     pub fn rescan_if_store_changed(&self) {
         let current = crate::frontend::StoreStamp::of(&self.data_root);
         {
@@ -472,8 +318,6 @@ impl AppletRegistry {
         }
     }
 
-    /// The frontend as `GET /api/frontend` reports it: every namespace
-    /// the store found, plus the applets that failed to write theirs.
     pub fn frontend_view(&self) -> FrontendView {
         let Ok(state) = self.state.read() else {
             return FrontendView::default();
@@ -484,7 +328,6 @@ impl AppletRegistry {
         }
     }
 
-    /// Read a component's bytes by content hash.
     pub fn read_component(&self, hash: &str) -> Option<Vec<u8>> {
         self.state.read().ok()?.store.read_component(hash)
     }
@@ -555,23 +398,6 @@ pub struct FrontendView {
     pub applet_errors: BTreeMap<String, String>,
 }
 
-/// Bring the running applets in line with `next`, given `prev` — the
-/// list that is currently running.
-///
-/// An entry in both lists, spelled identically, whose process is still
-/// alive, is left alone: not stopped, not started, its namespace
-/// directory not touched. Everything else in `next` is started, and
-/// everything running that `next` does not keep is stopped. Pass an
-/// empty `prev` to restart the lot.
-///
-/// Starts run on threads so a reload is bounded by the slowest applet
-/// rather than their sum: a broken one costs the readiness timeout
-/// once, not once per applet ahead of it in the list.
-///
-/// Returns one message per applet that failed to start, so a broken
-/// applet is visible instead of just absent. A kept applet contributes
-/// no entry — it is running, which is the only thing an error here
-/// means.
 fn reconcile(
     supervisor: &Supervisor,
     prev: &[AppletEntry],
@@ -634,16 +460,6 @@ fn reconcile(
 /// config is the reason — `None` when the config is fine, or simply
 /// isn't there yet, which is the normal state of a fresh root rather
 /// than an error.
-///
-/// Two shapes qualify, and they are different sentences. The file may
-/// not be a config at all, in which case no applet exists. Or the file
-/// loaded and *this applet's entry* was dropped, which is the case the
-/// graded loader introduced: everything else works, and the one thing
-/// the caller wanted does not.
-///
-/// Only called on a failure path, so re-reading the file here costs
-/// nothing worth caching and keeps the reason next to the request that
-/// needs it.
 fn config_load_error(data_root: &Path, id: &str) -> Option<String> {
     let path = datalib_dag::config::root_config_path(data_root);
     if !path.exists() {
@@ -665,7 +481,6 @@ fn config_load_error(data_root: &Path, id: &str) -> Option<String> {
     })
 }
 
-/// Read and validate the applet list out of a data root's config.
 fn load_entries(
     data_root: &Path,
     binary_dir: Option<PathBuf>,
@@ -682,13 +497,6 @@ fn load_entries(
             // entry logged "config rejected, none will load" and the
             // whole app went dark, which is 00633dd5 and the reason
             // #209 exists. A dropped entry now costs its own applet.
-            //
-            // Still said out loud: an applet that is silently absent is
-            // how the original mystery started, and `config_load_error`
-            // says it again on the request that trips over it.
-            // Only the applet ones: a broken *step* is the runner's to
-            // report, and echoing it here would put it in the log twice
-            // under a heading that has nothing to do with it.
             for d in checked.diagnostics.iter().filter(|d| {
                 d.entry.as_ref().map(|e| e.kind) == Some(datalib_dag::EntryKind::Applet)
                     || d.severity == datalib_dag::Severity::Fatal
@@ -709,9 +517,7 @@ fn load_entries(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Supervision
-// ---------------------------------------------------------------------------
 
 struct Running {
     port: u16,
@@ -719,33 +525,12 @@ struct Running {
 }
 
 /// The applet servers, all of them, started at boot and kept running.
-///
-/// There is no lazy start: an applet writes its components as it comes
-/// up, so deferring the start until something requested the applet
-/// would mean its components did not exist until something already knew
-/// to ask for them.
 #[derive(Default)]
 pub struct Supervisor {
     running: Mutex<BTreeMap<String, Running>>,
 }
 
 impl Supervisor {
-    /// Start one applet and wait for it to report the port it bound.
-    ///
-    /// Returns that port. The wait is what makes the caller's
-    /// subsequent store scan safe: the applet writes its directory,
-    /// binds, and only then prints the line, so having read the line
-    /// means the files are there.
-    ///
-    /// The port comes back *from the child* rather than being picked
-    /// here, and that is the whole point. Choosing one in this process
-    /// means binding it, releasing it, and hoping the child wins the
-    /// race for it — and the readiness check that followed ("something
-    /// accepts on that port") could not tell this applet apart from
-    /// whoever else had grabbed it. Under load that actually happened:
-    /// the gateway adopted a stranger's listener, scanned the store
-    /// before the applet had written a byte, and served an empty
-    /// gallery while the real child died of `EADDRINUSE` unreported.
     fn start(
         &self,
         entry: &AppletEntry,
@@ -770,23 +555,17 @@ impl Supervisor {
                     .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?,
             );
         }
-        // stdin is not an input channel — nothing is ever written to
-        // it. It is a liveness pipe, and the applet's only way to find
-        // out that this gateway is gone.
+        // stdin is not an input channel — nothing is ever written to it. It is
+        // a liveness pipe: whatever ends us, including a SIGKILL that runs no
+        // code at all, the kernel closes the write end and the applet's read
+        // end goes to EOF. That is the one signal that survives SIGKILL, which
+        // is why the shutdown handler in `main` is not enough by itself.
         //
-        // The write end lives in the `Child` we hold, so it stays open
-        // exactly as long as this process does. Whatever ends us —
-        // an orderly exit, a SIGTERM, a SIGKILL that runs no code at
-        // all — the kernel closes it, and the applet's read end goes
-        // to EOF. That is the one signal that survives SIGKILL, which
-        // is why the handler in `main` is not enough by itself.
-        //
-        // `DATALIB_APPLET_PARENT_PIPE` is how the applet knows this
-        // stdin means that. Set here rather than assumed there because
-        // an applet is an ordinary program someone may run by hand:
-        // reading stdin unbidden would swallow a terminal's input, and
-        // treating an immediate EOF from `< /dev/null` as "my parent
-        // died" would make it exit at once. See docs/dev/applets.md.
+        // `DATALIB_APPLET_PARENT_PIPE` is how the applet knows this stdin
+        // means that: an applet is an ordinary program someone may run by
+        // hand, where reading stdin unbidden would swallow a terminal's input
+        // and an immediate EOF from `< /dev/null` would look like a dead
+        // parent.
         cmd.stdin(Stdio::piped());
         cmd.env("DATALIB_APPLET_PARENT_PIPE", "1");
         // stdout is the readiness channel; stderr is the log, captured
@@ -802,14 +581,6 @@ impl Supervisor {
 
         // Drain stderr on a detached thread that both forwards each
         // line and keeps the tail in a shared buffer.
-        //
-        // Detached, and read without joining, on purpose: the pipe is
-        // held by the child *and every process it spawned*, so killing
-        // a failed applet does not necessarily close it. A `sh` wrapper
-        // whose own child is still alive would otherwise block the
-        // reader — and with it this whole function — until that
-        // grandchild exited. `stderr_eof` is how the failure path waits
-        // for the tail to be complete without giving up that property.
         let tail = Arc::new(Mutex::new(Vec::<String>::new()));
         let (stderr_eof_tx, stderr_eof) = std::sync::mpsc::channel::<()>();
         if let Some(stderr) = child.stderr.take() {
@@ -914,7 +685,6 @@ impl Supervisor {
         Ok(port)
     }
 
-    /// The port an applet is listening on, if it is running.
     fn port(&self, id: &str) -> Option<u16> {
         let mut map = self.running.lock().ok()?;
         let r = map.get_mut(id)?;
@@ -952,19 +722,12 @@ impl Supervisor {
         }
     }
 
-    /// Stop every applet.
     fn stop_all(&self) {
         self.stop_except(&BTreeSet::new());
     }
 }
 
 impl AppletRegistry {
-    /// Stop every applet this gateway started.
-    ///
-    /// The same thing `Supervisor`'s `Drop` does, reachable by name —
-    /// because `Drop` only runs when the process ends of its own
-    /// accord, and the usual way a gateway ends is a signal. See the
-    /// shutdown handler in `datalib-http`'s `main`.
     pub fn shutdown(&self) {
         self.supervisor.stop_all();
     }
@@ -978,24 +741,8 @@ impl Drop for Supervisor {
 
 // `Drop` alone was never enough, and the two gaps needed different
 // answers (#238):
-//
-//   * It does not run on a signal. The gateway had no handler, so a
-//     SIGTERM stopped it mid-instruction and nothing here was reached.
-//     `datalib-http`'s `main` now serves with a graceful shutdown and
-//     calls `AppletRegistry::shutdown` on the way out.
-//   * It cannot run on SIGKILL, ever. Nothing in this process does. So
-//     the applet is given a pipe on stdin instead — see the spawn
-//     above — and exits when it reads EOF, which the kernel delivers
-//     however this process happens to die.
-//
-// Process groups would still be worth having, so that killing an
-// applet also takes anything the applet itself spawned. They do not
-// replace either of the above: signalling a group needs somebody alive
-// to send the signal, and after a SIGKILL there is nobody.
 
-// ---------------------------------------------------------------------------
 // The proxy
-// ---------------------------------------------------------------------------
 
 pub struct ProxyResponse {
     pub status: u16,
@@ -1003,21 +750,6 @@ pub struct ProxyResponse {
     pub body: Vec<u8>,
 }
 
-/// Forward one request over a fresh HTTP/1.1 connection and read the
-/// whole response.
-///
-/// Public so a test can drive it against a listener it controls and
-/// assert the exact bytes on the wire — this is a hand-written client,
-/// so its framing is worth pinning rather than inferring from a
-/// round trip.
-///
-/// Hand-rolled rather than pulling in an HTTP client: the workspace
-/// has no client crate in its Bazel dep set, and adding one means
-/// repinning crate_universe. The cost is real and worth naming — this
-/// buffers the entire response and speaks no chunked *request* bodies,
-/// keep-alive, or upgrades. It is enough for a JSON API and not enough
-/// for streaming, which is the first thing to revisit when an applet
-/// wants server-sent events.
 pub fn forward(
     port: u16,
     method: &str,

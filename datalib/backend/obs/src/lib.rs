@@ -1,57 +1,4 @@
 //! Observability wiring for every datalib Rust binary.
-//!
-//! One entry point — [`init`] — that builds a `tracing` subscriber, plus
-//! an optional OTLP exporter and a shared `MultiProgress` for progress
-//! bars. The fmt layer writes through an [`IndicatifWriter`] tied to
-//! that `MultiProgress`, so every log emission suspends bar draws before
-//! writing. Callers attach their bars to the same `MultiProgress`
-//! (via [`shared_multi`] or [`TracingGuard::multi`]) so logs never stomp
-//! a bar.
-//!
-//! Two log formats:
-//!   * `pretty` — human-readable, one line per event. Default on TTY.
-//!   * `json` — newline-delimited JSON on stderr. Default off-TTY.
-//!
-//! And optional OTLP export: `--otlp-endpoint <url>` (or `$OTLP_ENDPOINT`)
-//! ships spans to an OTLP/gRPC collector in addition to local rendering.
-//!
-//! There are no automatic per-span progress bars. Bars are created
-//! explicitly by callers (e.g. per-source bars
-//! attached to [`shared_multi`]).
-//!
-//! # Editing this crate re-embeds the qmd index on CI
-//!
-//! `qmd_indexer_bin` links this crate (for `status_line!` and
-//! [`shared_multi`]) and `datalib_runtime`, and nothing else first-party.
-//! That binary is a bazel `tools=` input to
-//! `//tests/fixtures:ingested_tng_qmd`, and bazel keys an action on its
-//! tools' digests — so **any** change here, comments included, changes
-//! this crate's digest, changes that binary, and re-runs a ~90s CPU-only
-//! embed of the whole fixture corpus (61-611s on CI, depending on what
-//! else is competing for the runner's 4 vCPUs).
-//!
-//! That is not a reason to avoid editing this crate. It is a reason to
-//! know the bill, and to not be surprised by a slow CI run on a PR that
-//! only touched logging. `//datalib/backend/runtime` carries the same
-//! note for the same reason.
-//!
-//! Drop-in usage from a CLI:
-//!
-//! ```ignore
-//! #[derive(clap::Parser)]
-//! struct Args {
-//!     #[command(flatten)]
-//!     obs: datalib_obs::ObsArgs,
-//! }
-//!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     let args = <Args as clap::Parser>::parse();
-//!     let _guard = datalib_obs::init(&args.obs, "slack-download")?;
-//!     // ... work ...
-//!     Ok(())
-//! }
-//! ```
 
 use std::io::IsTerminal;
 use std::sync::{Arc, OnceLock};
@@ -118,20 +65,12 @@ impl Default for ObsArgs {
 
 /// Returned from [`init`]. Drop on shutdown so the OTLP batch exporter
 /// gets a chance to flush before the process exits.
-///
-/// Holds a clone of the shared `MultiProgress`. Callers that want
-/// progress bars coordinated with the tracing writer should pull
-/// [`multi`](Self::multi) and attach their bars to it (and route any
-/// status `eprintln!`-style output through `multi.println(...)`).
 pub struct TracingGuard {
     provider: Option<TracerProvider>,
     multi: Arc<MultiProgress>,
 }
 
 impl TracingGuard {
-    /// The shared `MultiProgress` whose draws are suspended by every
-    /// tracing log emission. Attach all interactive progress bars here
-    /// so they don't fight with log lines.
     pub fn multi(&self) -> &Arc<MultiProgress> {
         &self.multi
     }
@@ -154,9 +93,6 @@ impl Drop for TracingGuard {
     }
 }
 
-/// Initialize the global tracing subscriber. Call exactly once near the
-/// top of `main`. `service_name` becomes the OTLP service.name resource
-/// attribute and shows up as the span scope on traces.
 pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> {
     let filter = EnvFilter::try_new(&args.log_level)
         .with_context(|| format!("parse log-level filter {:?}", args.log_level))?;
@@ -194,14 +130,6 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     // caller-attached bars. The tracing fmt layer writes through an
     // `IndicatifWriter` that suspends this MP before each line, so log
     // emissions can't stomp on bars in either format.
-    //
-    // `IndicatifWriter::new` takes a `MultiProgress` by value, but the
-    // type is internally a cheap `Arc`-cloneable handle. Cloning here
-    // gives the writer its own handle while we keep an outer `Arc` so
-    // callers can attach bars via [`shared_multi`] / [`TracingGuard::multi`].
-    // The one legitimate construction in the workspace. Everywhere
-    // else pulls this same MP via `shared_multi()`; the clippy
-    // `disallowed-methods` entry in `clippy.toml` enforces that.
     #[allow(clippy::disallowed_methods)]
     let multi = Arc::new(MultiProgress::new());
     let writer: IndicatifWriter<tracing_indicatif::writer::Stderr> =
@@ -276,16 +204,6 @@ pub fn shared_multi() -> Option<Arc<MultiProgress>> {
 /// every status line (including the sync phase markers the http worker
 /// scrapes) when the pipeline ran as a child process. Same
 /// `format!` argument grammar as `eprintln!`.
-///
-/// Use this for any user-facing status line that can fire while bars
-/// are on screen (download / render / synth phases, the SIGINT
-/// handler, error summaries, end-of-run banners from `qmd_indexer`,
-/// etc.). Plain `tracing::info!` / `warn!` / `error!` already go
-/// through the `IndicatifWriter` and do not need this macro.
-///
-/// Enforced by `disallowed-macros` in `datalib/backend/clippy.toml`:
-/// direct `std::eprintln!` / `std::println!` in production code is
-/// banned in favor of this macro (or `tracing::*` for log events).
 #[macro_export]
 macro_rules! status_line {
     ($($arg:tt)*) => {{
