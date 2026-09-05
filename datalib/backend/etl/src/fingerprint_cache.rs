@@ -281,6 +281,11 @@ fn connect_string(path: &Path) -> String {
 #[derive(Debug, Clone)]
 pub struct FingerprintCache {
     pool: SqlitePool,
+    /// Where this cache actually lives, absolute. Kept so a caller can
+    /// report it: the cache sits outside both the data root and the
+    /// scan store, so it is the one input a reader cannot infer from
+    /// the command line.
+    path: PathBuf,
 }
 
 impl FingerprintCache {
@@ -311,11 +316,20 @@ impl FingerprintCache {
             .execute(&pool)
             .await
             .context("create fingerprints table")?;
-        Ok(Self { pool })
+        // Absolute, and resolved after creation so the file exists to
+        // canonicalize. A relative `--cache-db fp.sqlite` otherwise
+        // reports "fp.sqlite", which does not say where.
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        Ok(Self { pool, path })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// Where this cache lives, absolute.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Every cached entry at or under `root`, keyed root-relative.
