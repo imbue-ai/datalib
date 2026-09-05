@@ -16,15 +16,86 @@ Rust binaries (see `third-party/doltlite/README.md`), but the
 **`doltlite` CLI** (a SQLite shell with the dolt extensions baked in)
 is the everyday tool for poking at one of these files by hand.
 
-Install the CLI from the doltlite release page; on this dev box it
-lives at `/usr/local/bin/doltlite` and `/opt/homebrew/bin/dolt`. The
-binary's argv is identical to `sqlite3`: `doltlite [OPTIONS] DBFILE [SQL...]`.
+**Where to get it.** A release install already has it: the tarball
+`scripts/install.sh` unpacks contains **`datalib-doltlite`**, so it
+lands in `~/.local/bin` next to `datalib-dag`. In the docker image it
+is on `PATH` under the plain name `doltlite`. From a checkout, build
+it — `bazelisk build //third-party/doltlite:doltlite` — and prefer that
+over any host `doltlite` you may also have, because the Bazel target is
+version-locked to `MODULE.bazel`'s pin and so cannot disagree with what
+the pipeline wrote.
+
+Whichever you run, the argv is identical to `sqlite3`:
+`datalib-doltlite [OPTIONS] DBFILE [SQL...]`. Dot-commands, `-json`,
+`-csv`, `-box` and the interactive REPL all work, plus the `dolt_*` SQL
+surface. The recipes below are written with the `doltlite` name for
+brevity; type `datalib-doltlite` if that is what you installed.
 
 > **Always pass `-readonly`** when you're just exploring. A second
 > writer against a doltlite file commits onto its own branch and can
 > wedge later ETL runs with `commit conflict` (the same scenario the
 > `max_connections = 1` rule in `datalib_etl::doltlite_raw` exists
 > to prevent on the Rust side).
+
+## Getting the data out: export to plain SQLite
+
+A `.doltlite_db` is not a SQLite *file*. It is a prolly-tree store, and
+stock `sqlite3` opens one with `Error: file is not a database`. That is
+a fact about the on-disk format, not about lock-in — the shell above
+dumps any store to ordinary SQL, which stock SQLite loads:
+
+```sh
+datalib-doltlite -readonly unified_index/grid/db.doltlite_db .dump \
+  | sqlite3 grid.sqlite
+```
+
+That is the whole export. Measured against a real 16 MB grid store on
+2026-09-05: 15 MB of SQL, well under a second each way, and
+`grid_rows` / `markdowns` / `edges` arrive with their schemas, primary
+keys and indexes intact. It works for the raw stores too — BLOB columns
+come through as hex literals, so a `blobs.doltlite_db` round-trips its
+attachment bytes.
+
+What crosses and what doesn't:
+
+- **Crosses:** every user table, its schema, its indexes, its rows — the
+  current state of the checked-out branch.
+- **Doesn't:** the version history. `.dump` emits the working set, so
+  the commit chain that lets you ask what upstream deleted last month
+  stays behind in the `.doltlite_db`. The `dolt_*` tables are virtual
+  and simply aren't in the dump, which is what you want — a
+  `dolt_log()` frozen into a plain SQLite file would be a lie.
+
+Keep the original if you care about history; the export is a snapshot
+for tools that speak only SQLite.
+
+Two variants worth knowing:
+
+- **One table:** `.dump grid_rows` (the dot-command takes a table name,
+  or a `LIKE` pattern).
+- **No pipe, one session:** doltlite's `doltlite_engine=sqlite` URI
+  parameter selects the stock B-tree engine for a database, so an
+  `ATTACH` can *write* a real SQLite file from inside the shell:
+
+  ```sh
+  datalib-doltlite copy.doltlite_db \
+    "ATTACH 'file:grid.sqlite?doltlite_engine=sqlite' AS out;
+     CREATE TABLE out.grid_rows AS SELECT * FROM main.grid_rows;"
+  ```
+
+  Verified 2026-09-05; the result is a file `sqlite3` opens directly.
+  Two caveats, both measured the same day. `-readonly` is missing from
+  that command on purpose — under it the `ATTACH` cannot create the
+  output and the next line fails with `unknown database out` — so run
+  this against a **copy** of the store rather than adding a second
+  writer to a live one. And `CREATE TABLE … AS SELECT` copies rows and
+  column types but not primary keys or indexes, which leaves `.dump`
+  the higher-fidelity route.
+
+  `VACUUM INTO` looks like it should be the one-step version and is
+  not: it treats its argument as a literal filename rather than a URI,
+  so it writes a file *named* `file:out.sqlite?doltlite_engine=sqlite`
+  in doltlite's own format.
 
 ## Recipes
 

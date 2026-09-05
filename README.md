@@ -36,6 +36,26 @@ whole.
 See [`docs/user/config_examples/all_sources.toml`](docs/user/config_examples/all_sources.toml)
 for one fully-commented step pair per source.
 
+## Getting your data out again
+
+A mirror you can't leave is just another silo, so the exits are plain:
+
+- **Markdown** — `<name>/rendered_md/` is ordinary `.md` files, one per
+  conversation or document. Nothing to export.
+- **SQL** — the stores are
+  [doltlite](https://github.com/dolthub/doltlite) databases (SQLite's
+  engine over a versioned, content-addressed file format, which is what
+  lets datalib tell you what a source deleted between syncs). The
+  shell ships in the release tarball, and one pipe writes a plain
+  SQLite file for any tool that wants one:
+
+  ```sh
+  datalib-doltlite -readonly unified_index/grid/db.doltlite_db .dump | sqlite3 grid.sqlite
+  ```
+
+  Details, and what a snapshot does and doesn't carry, in
+  [`docs/dev/doltlite.md`](docs/dev/doltlite.md).
+
 ## Getting started
 
 - [**First-time user guide**](docs/user/first_time_user.md) — download the
