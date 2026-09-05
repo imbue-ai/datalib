@@ -543,6 +543,8 @@ fn build_nodes(
                 note: finding.note.clone(),
                 rolled_up: finding.rolled_up,
                 dup: None,
+                diff_entries: 0,
+                diff_bytes: 0,
             },
         );
     }
@@ -578,7 +580,95 @@ fn build_nodes(
         }
     }
 
-    nodes.into_values().collect()
+    let mut out: Vec<Node> = nodes.into_values().collect();
+    attach_diff_weights(&mut out);
+    out
+}
+
+/// Roll each subtree's diff weight up to the directories above it, so a
+/// reader can sort by "where is the action" rather than by name.
+///
+/// Two numbers, because they answer different questions and only one of
+/// them can be summed naively:
+///
+/// - **entries** counts every finding in the subtree, plus what its
+///   rollups absorbed. Directories included: a new directory is itself
+///   a thing that changed, and counting it double-counts nothing.
+/// - **bytes** counts only **maximal** findings — a finding with no
+///   other finding beneath it. A directory's `size` is the recursive
+///   sum of its contents, so a brand-new tree would otherwise have the
+///   directory's bytes counted again for every file inside it. Taking
+///   only the outermost fixes that, and still gives a rolled-up move
+///   (whose interior is absent from the node set) its full weight.
+///
+/// `nodes` must be sorted by path, which [`build_nodes`] guarantees.
+fn attach_diff_weights(nodes: &mut [Node]) {
+    let findings: BTreeSet<String> = nodes
+        .iter()
+        .filter(|n| n.status.is_finding())
+        .map(|n| n.path.clone())
+        .collect();
+    if findings.is_empty() {
+        return;
+    }
+
+    // A finding is maximal unless one of its ancestors-of-a-finding
+    // chains back to it — i.e. unless some finding sits below it.
+    let mut has_finding_below: BTreeSet<&str> = BTreeSet::new();
+    for path in &findings {
+        let mut cur = path.as_str();
+        while let Some(i) = cur.rfind('/') {
+            cur = &cur[..i];
+            has_finding_below.insert(cur);
+        }
+        // The root ("") is an ancestor of every top-level entry, but it
+        // is never itself a node, so it needs no marking.
+    }
+
+    // (entries, bytes) contributed at each path.
+    let mut own: Vec<(u32, i64)> = Vec::with_capacity(nodes.len());
+    for node in nodes.iter() {
+        if !node.status.is_finding() {
+            own.push((0, 0));
+            continue;
+        }
+        let entries = 1 + node.rolled_up;
+        let bytes = if has_finding_below.contains(node.path.as_str()) {
+            0
+        } else {
+            node.size
+        };
+        own.push((entries, bytes));
+    }
+
+    // Index by path so ancestors can be credited without a second scan.
+    let index: BTreeMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.path.as_str(), i))
+        .collect();
+    let mut totals: Vec<(u32, i64)> = vec![(0, 0); nodes.len()];
+    for (i, node) in nodes.iter().enumerate() {
+        let (entries, bytes) = own[i];
+        if entries == 0 && bytes == 0 {
+            continue;
+        }
+        totals[i].0 += entries;
+        totals[i].1 += bytes;
+        let mut cur = node.path.as_str();
+        while let Some(cut) = cur.rfind('/') {
+            cur = &cur[..cut];
+            if let Some(&a) = index.get(cur) {
+                totals[a].0 += entries;
+                totals[a].1 += bytes;
+            }
+        }
+    }
+
+    for (node, (entries, bytes)) in nodes.iter_mut().zip(totals) {
+        node.diff_entries = entries;
+        node.diff_bytes = bytes;
+    }
 }
 
 // ---------------------------------------------------------------------
