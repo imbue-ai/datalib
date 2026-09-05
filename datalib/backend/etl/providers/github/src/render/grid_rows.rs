@@ -13,8 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
-use anyhow::Result;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
 use super::parse::{CommentRow, CommentSection, PullRequestRow};
@@ -155,16 +155,20 @@ fn ordered_comments(comments: &[CommentRow]) -> Vec<&CommentRow> {
     out
 }
 
+/// A row that will not validate is dropped and recorded on `problems`
+/// rather than failing the whole source's render — see
+/// `GridRowBuilder::build_or_record`.
 pub fn rows_for_pr(
     pr: &PullRequestRow,
     comments: &[CommentRow],
     stanza: &str,
-) -> Result<Vec<GridRow>> {
+    problems: &mut Vec<RenderProblemRow>,
+) -> Vec<GridRow> {
     let qmd = super::render::pr_qmd_path_rel(stanza, &pr.repo_full_name, pr.pr_number);
     let entire_chat = format!("/chat/{}", pr.uuid);
 
     let mut rows: Vec<GridRow> = Vec::new();
-    rows.push(
+    rows.extend(
         GridRow::builder()
             .uuid(pr.uuid.clone())
             .provider("github")
@@ -187,11 +191,11 @@ pub fn rows_for_pr(
             .upstream_id(Some(pr.pr_number.to_string()))
             .upstream_entity_kind(Some(crate::render::parse::ENTITY_PR.to_string()))
             .markdown_uuid(Some(pr.uuid.clone()))
-            .build()?,
+            .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
     );
 
     for (idx, c) in ordered_comments(comments).into_iter().enumerate() {
-        rows.push(
+        rows.extend(
             GridRow::builder()
                 .uuid(c.uuid.clone())
                 .provider("github")
@@ -215,8 +219,8 @@ pub fn rows_for_pr(
                 // not a usable backpointer without this.
                 .upstream_entity_kind(Some(c.section.entity().to_string()))
                 .markdown_uuid(Some(pr.uuid.clone()))
-                .build()?,
+                .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
         );
     }
-    Ok(rows)
+    rows
 }

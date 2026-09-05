@@ -2,17 +2,21 @@
 //! Load.
 //!
 //! The provider's translate `DataProcessor`s (planned per-provider by
-//! [`crate::dispatch`]) write the `.md` files and `.grid_rows.json`
-//! sidecars themselves; the fused-Load callback sync installs is
-//! replaced by a counter, so nothing here touches the index DB.
+//! [`crate::dispatch`]) write the `.md` files themselves and hand every
+//! finished document back through `ctx.emit_doc`; this driver puts each
+//! one into the source's own
+//! [`IndexedMarkdownStore`](datalib_etl::indexed_markdown::IndexedMarkdownStore)
+//! at `<name>/rendered_md/indexed_markdown.doltlite_db`. Nothing here
+//! touches the unified index — `grid_index` stacks the per-source
+//! stores later.
+//!
 //! Incrementality comes from the same `prior_fingerprints` gate the
-//! processors already consult — except the fingerprints are read back
-//! from the sidecar tree on disk (the render step's own output)
-//! rather than from the index DB. The sidecar tree is thus both the
-//! artifact and the resume state, which is exactly the "mechanics
-//! private to the node" contract.
+//! processors already consult, read back from that store rather than
+//! from the index DB. The store is thus both the artifact and the
+//! resume state, which is exactly the "mechanics private to the node"
+//! contract.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -28,6 +32,7 @@ use datalib_etl::indexed_markdown::IndexedMarkdownStore;
 pub async fn run(
     planned: PlannedSource,
     data_root: &Path,
+    now: &str,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
@@ -37,6 +42,7 @@ pub async fn run(
     // sidecar header to rebuild the same two answers.
     let declared = declared_render_versions(&planned.processors);
     let mut store = IndexedMarkdownStore::open(&rendered_root)
+        .map(|s| s.with_now(now))
         .with_context(|| format!("open render store for {}", planned.name))?;
     // A tree an older renderer wrote can't be updated in place, only
     // replaced — see [`discard_tree_from_an_older_renderer`]. When it is
@@ -50,6 +56,7 @@ pub async fn run(
         store.close();
         discard_tree(&rendered_root)?;
         store = IndexedMarkdownStore::open(&rendered_root)
+            .map(|s| s.with_now(now))
             .with_context(|| format!("reopen render store for {}", planned.name))?;
     }
     let prior = store.prior_fingerprints()?;
@@ -66,63 +73,94 @@ pub async fn run(
     let source_name = planned.name.clone();
     let data_root = data_root.to_path_buf();
     let docs_in = docs.clone();
+    // `Progress` is a cheap clone; the render task takes one and this
+    // one stays behind to report the problem counts afterwards.
+    let progress_after = progress.clone();
+    // The run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`), so every
+    // problem row this render writes carries one timestamp rather than
+    // each renderer sampling its own clock. This used to be `""`, which
+    // was harmless only for as long as nothing read `ctx.now` on the
+    // render side; the problem sink does.
+    let now = now.to_string();
     // Render is synchronous work driven by `futures`' executor (NOT
     // tokio's — providers block_on their own internal futures); run it
     // on a blocking thread.
-    let versions_after = tokio::task::spawn_blocking(move || -> Result<BTreeSet<u32>> {
-        let checkpoints = CheckpointSink::new();
-        let control = datalib_etl::control::DownloadControl::default();
-        let now = String::new();
-        // Every finished document goes into the per-source store. The
-        // providers already hand us a `RenderedMarkdown` carrying its
-        // rows, edges, fingerprint and version through `ctx.emit_doc` —
-        // the same value `grid_index::apply_one` consumes — so nothing
-        // provider-side had to change to start writing a database.
-        //
-        // `problems` is empty here: the sink exists and this is the
-        // path that will carry it, but no renderer reports into it yet.
-        let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+    let versions_after =
+        tokio::task::spawn_blocking(move || -> Result<(BTreeSet<u32>, HashMap<String, i64>)> {
+            let checkpoints = CheckpointSink::new();
+            let control = datalib_etl::control::DownloadControl::default();
+            // Every finished document goes into the per-source store. The
+            // providers already hand us a `RenderedMarkdown` carrying its
+            // rows, edges, fingerprint, version and problems through
+            // `ctx.emit_doc` — the same value `grid_index::apply_one`
+            // consumes — so nothing provider-side had to change to start
+            // writing a database.
+            let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+                store
+                    .put_document(&data_root, &md)
+                    .with_context(|| format!("store document {}", md.markdown_uuid))?;
+                docs_in.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            };
+            for proc in &planned.processors {
+                let ctx = RunCtx::for_render(
+                    &planned.name,
+                    &data_root,
+                    &now,
+                    &progress,
+                    &control,
+                    &prior,
+                    &checkpoints,
+                    &mut on_doc,
+                );
+                futures::executor::block_on(proc.run(&ctx))
+                    .with_context(|| format!("processor {}", proc.id()))?;
+            }
+            // One commit for the whole render. Per-document commits would
+            // put thousands of entries in `dolt_log` per run; committing
+            // once is also what makes `dolt_diff` over this store answer
+            // "what did this render change?".
+            let stored = docs_in.load(Ordering::SeqCst);
             store
-                .put_document(&data_root, &md, &[])
-                .with_context(|| format!("store document {}", md.markdown_uuid))?;
-            docs_in.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        };
-        for proc in &planned.processors {
-            let ctx = RunCtx::for_render(
-                &planned.name,
-                &data_root,
-                &now,
-                &progress,
-                &control,
-                &prior,
-                &checkpoints,
-                &mut on_doc,
-            );
-            futures::executor::block_on(proc.run(&ctx))
-                .with_context(|| format!("processor {}", proc.id()))?;
-        }
-        // One commit for the whole render. Per-document commits would
-        // put thousands of entries in `dolt_log` per run; committing
-        // once is also what makes `dolt_diff` over this store answer
-        // "what did this render change?".
-        let stored = docs_in.load(Ordering::SeqCst);
-        store
-            .commit(&format!("render {}: {stored} document(s)", planned.name))
-            .with_context(|| format!("commit render store for {}", planned.name))?;
-        // The versions the tree now carries, read back from the store
-        // that just wrote them — the post-render check needs them, and
-        // the store is consumed by `close` here.
-        let after = store.render_versions()?;
-        store.close();
-        Ok(after)
-    })
-    .await
-    .context("render task panicked")??;
+                .commit(&format!("render {}: {stored} document(s)", planned.name))
+                .with_context(|| format!("commit render store for {}", planned.name))?;
+            // The versions the tree now carries, read back from the store
+            // that just wrote them — the post-render check needs them, and
+            // the store is consumed by `close` here. Problem counts come
+            // back the same way, so the step can say what it dropped.
+            let after = store.render_versions()?;
+            let problems = store.problem_counts()?;
+            store.close();
+            Ok((after, problems))
+        })
+        .await
+        .context("render task panicked")??;
 
-    let versions_on_disk = versions_after;
+    let (versions_on_disk, problem_counts) = versions_after;
     let docs = docs.load(Ordering::SeqCst);
     tracing::info!(docs, "render: docs (re)rendered");
+    // Say out loud what the sink holds. A problem store nothing ever
+    // reads is indistinguishable from one that is empty because
+    // everything is fine — and the more dangerous of those two reads as
+    // success. These are whole-store counts, not this-run counts: a
+    // problem on a document this run skipped is still current, which is
+    // the point of the per-document sweep.
+    if !problem_counts.is_empty() {
+        let total: i64 = problem_counts.values().sum();
+        let dropped = problem_counts.get("dropped").copied().unwrap_or(0);
+        let nulled = problem_counts.get("nulled").copied().unwrap_or(0);
+        tracing::warn!(
+            source = %source_name,
+            total,
+            dropped,
+            nulled,
+            "render: rows this source could not fully project \
+             (see render_problems in its indexed_markdown.doltlite_db)"
+        );
+        progress_after.set_message(&format!(
+            "{total} row(s) with render problems ({dropped} dropped, {nulled} degraded)"
+        ));
+    }
     every_stored_version_must_be_declared(
         &source_name,
         &rendered_root,
@@ -439,7 +477,6 @@ mod stale_tree_tests {
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
-                &[],
             )
             .unwrap();
         store.close();

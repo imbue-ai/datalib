@@ -237,10 +237,18 @@ pub struct RenderProblemRow {
     pub problems: String,
     /// When this problem was first recorded for this uuid (ISO-8601
     /// with explicit offset, per AGENTS.md).
+    ///
+    /// **Stamped by the store, not by the renderer.** A renderer
+    /// building a row has no way to know whether this problem is new —
+    /// it would have to set `first_seen_at = last_seen_at = now` every
+    /// run, which quietly destroys the only thing the column is for.
+    /// `IndexedMarkdownStore::sweep_problems` carries the existing
+    /// value forward when a uuid comes back, so leave this empty and
+    /// let the write path fill it.
     #[col(sql = "VARCHAR(40)")]
     pub first_seen_at: String,
     /// When it was last re-recorded. Equal to `first_seen_at` on a
-    /// problem seen once.
+    /// problem seen once. Also stamped by the store.
     #[col(sql = "VARCHAR(40)")]
     pub last_seen_at: String,
     /// The `RENDER_VERSION` of the renderer that recorded it, so a row

@@ -568,7 +568,6 @@ mod tests {
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
-                &[],
             )
             .unwrap();
         store.close();
@@ -617,7 +616,6 @@ mod tests {
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
-                &[],
             )
             .unwrap();
         store.close();

@@ -97,6 +97,9 @@ pub struct IndexedMarkdownStore {
     pool: SqlitePool,
     write_lock: WriteLock,
     path: PathBuf,
+    /// The run-pinned "now" stamped onto problem rows — see
+    /// [`Self::with_now`].
+    now: String,
 }
 
 /// Run a future to completion from a synchronous caller.
@@ -142,7 +145,20 @@ impl IndexedMarkdownStore {
             write_lock: WriteLock::new(pool.clone()),
             pool,
             path,
+            now: datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs(),
         })
+    }
+
+    /// Use the run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`) for the
+    /// problem timestamps this store stamps, so every row one render
+    /// writes agrees. Without it the store samples its own clock at
+    /// open, which is right for a test and near enough for a one-off
+    /// tool, but leaves a long run's rows spread over its duration.
+    pub fn with_now(mut self, now: &str) -> Self {
+        if !now.is_empty() {
+            self.now = now.to_string();
+        }
+        self
     }
 
     pub fn path(&self) -> &Path {
@@ -207,17 +223,12 @@ impl IndexedMarkdownStore {
     ///
     /// `problems` are swept the same way, and the scoping is the subtle
     /// part — see [`Self::sweep_problems`].
-    pub fn put_document(
-        &self,
-        out_dir: &Path,
-        md: &RenderedMarkdown,
-        problems: &[RenderProblemRow],
-    ) -> Result<()> {
+    pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
         blocking(async {
             crate::grid_index::apply_one(&self.write_lock, out_dir, md, None)
                 .await
                 .with_context(|| format!("apply {}", md.markdown_uuid))?;
-            self.sweep_problems(&md.markdown_uuid, problems).await
+            self.sweep_problems(&md.markdown_uuid, &md.problems).await
         })
     }
 
@@ -237,18 +248,57 @@ impl IndexedMarkdownStore {
     ) -> Result<()> {
         let mut guard = self.write_lock.acquire().await?;
         let conn = guard.conn();
+        // Read the prior `first_seen_at` for every uuid about to be
+        // rewritten, *before* the delete. This is the whole reason the
+        // store stamps these rather than the renderer: a renderer that
+        // set both timestamps to "now" every run would make
+        // `first_seen_at` a synonym for `last_seen_at`, and "this has
+        // been broken since Tuesday" would be unanswerable.
+        let seen: HashMap<String, String> = sqlx::query(
+            "SELECT uuid, first_seen_at FROM render_problems \
+             WHERE scope_kind = 'markdown' AND scope_key = ?",
+        )
+        .bind(markdown_uuid)
+        .fetch_all(&mut **conn)
+        .await
+        .context("read prior first_seen_at")?
+        .into_iter()
+        .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
+        .collect::<Result<_>>()?;
         sqlx::query("DELETE FROM render_problems WHERE scope_kind = 'markdown' AND scope_key = ?")
             .bind(markdown_uuid)
             .execute(&mut **conn)
             .await
             .context("clear prior problems for this document")?;
+        self.insert_problems(conn, problems, &seen).await
+    }
+
+    /// Insert problem rows, stamping `first_seen_at` / `last_seen_at`.
+    /// `seen` maps a uuid to the `first_seen_at` it already had, which
+    /// is carried forward; anything absent is new and gets `now` for
+    /// both.
+    async fn insert_problems(
+        &self,
+        conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+        problems: &[RenderProblemRow],
+        seen: &HashMap<String, String>,
+    ) -> Result<()> {
         for p in problems {
+            let stamped = RenderProblemRow {
+                first_seen_at: seen
+                    .get(&p.uuid)
+                    .cloned()
+                    .unwrap_or_else(|| self.now.clone()),
+                last_seen_at: self.now.clone(),
+                ..p.clone()
+            };
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
             let sql = crate::bulk::insert_sql::<RenderProblemRow>();
             // Audited: `sql` is built from `RenderProblemRow`'s
             // associated consts, never from row data; all values bound.
-            p.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+            stamped
+                .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
                 .execute(&mut **conn)
                 .await
                 .with_context(|| format!("insert render_problem {}", p.uuid))?;
@@ -268,6 +318,17 @@ impl IndexedMarkdownStore {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
+            let seen: HashMap<String, String> = sqlx::query(
+                "SELECT uuid, first_seen_at FROM render_problems \
+                 WHERE scope_kind = 'entity' AND scope_key = ?",
+            )
+            .bind(entity_id)
+            .fetch_all(&mut **conn)
+            .await
+            .context("read prior first_seen_at")?
+            .into_iter()
+            .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
+            .collect::<Result<_>>()?;
             sqlx::query(
                 "DELETE FROM render_problems WHERE scope_kind = 'entity' AND scope_key = ?",
             )
@@ -275,15 +336,7 @@ impl IndexedMarkdownStore {
             .execute(&mut **conn)
             .await
             .context("clear prior problems for this entity")?;
-            for p in problems {
-                let sql = crate::bulk::insert_sql::<RenderProblemRow>();
-                // Audited: see `sweep_problems`.
-                p.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
-                    .execute(&mut **conn)
-                    .await
-                    .with_context(|| format!("insert render_problem {}", p.uuid))?;
-            }
-            Ok(())
+            self.insert_problems(conn, problems, &seen).await
         })
     }
 
@@ -411,6 +464,15 @@ mod tests {
     }
 
     fn doc(dir: &Path, markdown_uuid: &str, fingerprint: &str) -> RenderedMarkdown {
+        doc_with(dir, markdown_uuid, fingerprint, Vec::new())
+    }
+
+    fn doc_with(
+        dir: &Path,
+        markdown_uuid: &str,
+        fingerprint: &str,
+        problems: Vec<RenderProblemRow>,
+    ) -> RenderedMarkdown {
         RenderedMarkdown {
             markdown_uuid: markdown_uuid.to_string(),
             source_name: "src".into(),
@@ -420,7 +482,7 @@ mod tests {
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             edges: Vec::new(),
-            problems: Vec::new(),
+            problems,
         }
     }
 
@@ -451,8 +513,7 @@ mod tests {
         let s = store(root);
         assert!(s.prior_fingerprints().unwrap().is_empty(), "fresh store");
 
-        s.put_document(root, &doc(root, "md-1", "fp-1"), &[])
-            .unwrap();
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
 
         let fps = s.prior_fingerprints().unwrap();
         assert_eq!(fps.get("md-1").map(String::as_str), Some("fp-1"));
@@ -466,10 +527,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(root, &doc(root, "md-1", "fp-1"), &[])
-            .unwrap();
-        s.put_document(root, &doc(root, "md-1", "fp-2"), &[])
-            .unwrap();
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
 
         let n: i64 = blocking(async {
             sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
@@ -499,21 +558,18 @@ mod tests {
         let s = store(root);
         s.put_document(
             root,
-            &doc(root, "md-1", "fp-1"),
-            &[problem("row-a", "md-1")],
+            &doc_with(root, "md-1", "fp-1", vec![problem("row-a", "md-1")]),
         )
         .unwrap();
         s.put_document(
             root,
-            &doc(root, "md-2", "fp-1"),
-            &[problem("row-b", "md-2")],
+            &doc_with(root, "md-2", "fp-1", vec![problem("row-b", "md-2")]),
         )
         .unwrap();
         assert_eq!(s.problem_counts().unwrap().get("nulled").copied(), Some(2));
 
         // A second run that only reprocesses md-2, and finds it clean.
-        s.put_document(root, &doc(root, "md-2", "fp-2"), &[])
-            .unwrap();
+        s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
 
         let counts = s.problem_counts().unwrap();
         assert_eq!(
@@ -532,14 +588,12 @@ mod tests {
         let s = store(root);
         s.put_document(
             root,
-            &doc(root, "md-1", "fp-1"),
-            &[problem("row-a", "md-1")],
+            &doc_with(root, "md-1", "fp-1", vec![problem("row-a", "md-1")]),
         )
         .unwrap();
         assert_eq!(s.problem_counts().unwrap().get("nulled").copied(), Some(1));
 
-        s.put_document(root, &doc(root, "md-1", "fp-2"), &[])
-            .unwrap();
+        s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
         assert!(
             s.problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"

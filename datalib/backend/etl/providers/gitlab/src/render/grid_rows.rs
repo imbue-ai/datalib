@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
-use anyhow::Result;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
 use super::parse::{MergeRequestRow, NoteRow, NoteSection};
@@ -115,12 +115,20 @@ fn ordered_notes(notes: &[NoteRow]) -> Vec<&NoteRow> {
     out
 }
 
-pub fn rows_for_mr(stanza: &str, mr: &MergeRequestRow, notes: &[NoteRow]) -> Result<Vec<GridRow>> {
+/// A row that will not validate is dropped and recorded on `problems`
+/// rather than failing the whole source's render — see
+/// `GridRowBuilder::build_or_record`.
+pub fn rows_for_mr(
+    stanza: &str,
+    mr: &MergeRequestRow,
+    notes: &[NoteRow],
+    problems: &mut Vec<RenderProblemRow>,
+) -> Vec<GridRow> {
     let qmd = super::render::mr_qmd_path_rel(stanza, &mr.project_full_path, mr.mr_iid);
     let entire_chat = format!("/chat/{}", mr.uuid);
 
     let mut rows: Vec<GridRow> = Vec::new();
-    rows.push(
+    rows.extend(
         GridRow::builder()
             .uuid(mr.uuid.clone())
             .provider("gitlab")
@@ -143,11 +151,11 @@ pub fn rows_for_mr(stanza: &str, mr: &MergeRequestRow, notes: &[NoteRow]) -> Res
             .upstream_id(Some(mr.mr_iid.to_string()))
             .upstream_entity_kind(Some("merge_request".to_string()))
             .markdown_uuid(Some(mr.uuid.clone()))
-            .build()?,
+            .build_or_record(stanza, &mr.uuid, RENDER_VERSION, problems),
     );
 
     for (idx, n) in ordered_notes(notes).into_iter().enumerate() {
-        rows.push(
+        rows.extend(
             GridRow::builder()
                 .uuid(n.uuid.clone())
                 .provider("gitlab")
@@ -167,8 +175,8 @@ pub fn rows_for_mr(stanza: &str, mr: &MergeRequestRow, notes: &[NoteRow]) -> Res
                 .upstream_id(Some(n.external_id.to_string()))
                 .upstream_entity_kind(Some("note".to_string()))
                 .markdown_uuid(Some(mr.uuid.clone()))
-                .build()?,
+                .build_or_record(stanza, &mr.uuid, RENDER_VERSION, problems),
         );
     }
-    Ok(rows)
+    rows
 }

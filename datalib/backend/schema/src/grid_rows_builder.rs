@@ -221,7 +221,6 @@ impl GridRowBuilder {
         source_name: &str,
         scope_key: &str,
         render_version: u32,
-        now: &str,
         problems: &mut Vec<RenderProblemRow>,
     ) -> Option<GridRow> {
         // Keep the identity before `build` consumes the builder, so a
@@ -269,8 +268,12 @@ impl GridRowBuilder {
                     stage: "grid_row".to_string(),
                     outcome: Outcome::Dropped.as_str().to_string(),
                     problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),
-                    first_seen_at: now.to_string(),
-                    last_seen_at: now.to_string(),
+                    // Left for the store to stamp; it is the only
+                    // layer that can see whether this uuid already had
+                    // a row, and so the only one that can tell "first
+                    // seen" from "seen again". See the field docs.
+                    first_seen_at: String::new(),
+                    last_seen_at: String::new(),
                     render_version: render_version as i64,
                 });
                 // Deliberately no `warn!` here. The render path's

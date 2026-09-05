@@ -29,6 +29,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -132,7 +133,8 @@ pub fn render_all(
         .unwrap_or(&md_path)
         .to_string_lossy()
         .into_owned();
-    let rows = build_grid_rows(parsed, source_name, &m_uuid, &md_rel)?;
+    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let rows = build_grid_rows(parsed, source_name, &m_uuid, &md_rel, &mut problems);
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
@@ -143,7 +145,7 @@ pub fn render_all(
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
-        problems: Vec::new(),
+        problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
     progress.inc(1);
@@ -541,12 +543,16 @@ fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
 /// make a sensor findable in the grid at all — searching `main_fridge`
 /// should land on something, and the page row's text is a summary, not
 /// an index of every device.
+/// A row that will not validate is dropped and recorded on `problems`
+/// rather than failing the source's render — see
+/// `GridRowBuilder::build_or_record`.
 fn build_grid_rows(
     parsed: &ParsedYolink,
     source_name: &str,
     m_uuid: &str,
     md_rel: &str,
-) -> Result<Vec<GridRow>> {
+    problems: &mut Vec<RenderProblemRow>,
+) -> Vec<GridRow> {
     let title = page_title(source_name);
     let by_device = parsed.series_by_device();
 
@@ -560,7 +566,7 @@ fn build_grid_rows(
         doc_text.push_str(q.title);
     }
 
-    let mut rows = vec![GridRow::builder()
+    let mut rows: Vec<GridRow> = GridRow::builder()
         .uuid(m_uuid.to_string())
         .provider("yolink")
         .kind("Sensor Timeseries")
@@ -573,8 +579,9 @@ fn build_grid_rows(
         .text(doc_text)
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
-        .build()
-        .map_err(anyhow::Error::from)?];
+        .build_or_record(source_name, m_uuid, RENDER_VERSION, problems)
+        .into_iter()
+        .collect();
 
     for (idx, dev) in parsed.devices.iter().enumerate() {
         let uuid = device_uuid(source_name, &dev.name);
@@ -590,7 +597,7 @@ fn build_grid_rows(
             .and_then(|l| l.iter().filter_map(|s| s.ts_ms.last()).max().copied())
             .or(dev.last_ts_ms)
             .and_then(iso);
-        rows.push(
+        rows.extend(
             GridRow::builder()
                 .uuid(uuid)
                 .provider("yolink")
@@ -609,11 +616,10 @@ fn build_grid_rows(
                 .upstream_id(Some(dev.kind.clone()))
                 .upstream_entity_kind(Some("device".to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
-                .build()
-                .map_err(anyhow::Error::from)?,
+                .build_or_record(source_name, m_uuid, RENDER_VERSION, problems),
         );
     }
-    Ok(rows)
+    rows
 }
 
 // ---------------------------------------------------------------- helpers

@@ -492,6 +492,24 @@ class IngestedTngPipelineTest(unittest.TestCase):
             out[source] = self._count(store, "grid_rows")
         return out
 
+    def _render_problems(self) -> dict[str, list[str]]:
+        """Per-source `render_problems` rows, as `source -> [summary…]`.
+
+        Each entry is `<outcome>|<uuid>|<problems-json>` so a failure
+        message names what was dropped rather than only how many.
+        """
+        out: dict[str, list[str]] = {}
+        for store in sorted(
+            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+        ):
+            rows = self._query(
+                store,
+                "SELECT outcome, uuid, problems FROM render_problems ORDER BY uuid;",
+            )
+            if rows:
+                out[store.parent.parent.name] = rows
+        return out
+
     def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
         env = {**os.environ}
         if reset:
@@ -625,6 +643,24 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._count(self._index_db, "grid_rows"),
             "the stores and the index must hold the same number of rows — "
             f"per-source: {stores}",
+        )
+
+        # Nothing in the TNG fixture may land in the problem sink.
+        #
+        # This is the assertion that keeps the sink honest in both
+        # directions. Every renderer now drops-and-records a row it
+        # cannot build instead of failing the step, which is what stops
+        # one bad record from poisoning `grid_index` for every other
+        # source — but the same change means a projection that quietly
+        # started dropping rows would no longer show up as a failure
+        # anywhere. Here it does: the fixture is known-good, so any
+        # `render_problems` row is a regression, and the message names
+        # the row and the reason rather than just a count.
+        self.assertEqual(
+            self._render_problems(),
+            {},
+            "the TNG fixture must render clean; a row here means a "
+            "projection started dropping or nulling data",
         )
 
         # ── id-space guardrails ─────────────────────────────────

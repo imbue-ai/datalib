@@ -1182,8 +1182,8 @@ pub fn render_notion_official(
             &pages_root,
         )?;
 
-        // Sidecar + callback only fire if gather_documents knew about
-        // this page (it should, for any page that produced rows).
+        // The callback only fires if gather_documents knew about this
+        // page (it should, for any page that produced rows).
         if let Some(pd) = page_doc_by_uuid.get(&pid) {
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: pd.page_uuid.clone(),
@@ -1194,7 +1194,7 @@ pub fn render_notion_official(
                 render_version: RENDER_VERSION,
                 rows: pd.rows.clone(),
                 edges: Vec::new(),
-                problems: Vec::new(),
+                problems: pd.problems.clone(),
             })?;
         }
 
@@ -1287,7 +1287,7 @@ pub fn render_notion_official(
                 render_version: RENDER_VERSION,
                 rows: td.rows.clone(),
                 edges: Vec::new(),
-                problems: Vec::new(),
+                problems: td.problems.clone(),
             })?;
         }
 

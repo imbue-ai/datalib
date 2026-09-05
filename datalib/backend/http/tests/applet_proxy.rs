@@ -136,7 +136,6 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 edges: Vec::new(),
                 problems: Vec::new(),
             },
-            &[],
         )
         .unwrap();
     store.close();

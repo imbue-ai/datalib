@@ -3,7 +3,6 @@
 //! Layout:
 //! ```text
 //! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.md
-//! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.grid_rows.json
 //! ```
 //!
 //! Section order in the doc:
@@ -21,6 +20,7 @@ use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
+use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -299,7 +299,8 @@ pub fn render_gitlab(
         }
 
         render_one_mr(mr, &notes, root, stanza)?;
-        let rows = rows_for_mr(stanza, mr, &notes)?;
+        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let rows = rows_for_mr(stanza, mr, &notes, &mut problems);
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
             source_name: String::new(),
@@ -309,7 +310,7 @@ pub fn render_gitlab(
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
-            problems: Vec::new(),
+            problems,
         })?;
         summary.rendered += 1;
         progress.inc(1);

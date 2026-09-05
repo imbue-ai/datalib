@@ -313,7 +313,7 @@ async fn run(
                 data_root,
             )?;
             let type_str = planned.type_str;
-            let res = render::run(planned, data_root, emitter).await;
+            let res = render::run(planned, data_root, now, emitter).await;
             hints::emit_auth_hint_on_failure(emitter, type_str, &res);
             res
         }
