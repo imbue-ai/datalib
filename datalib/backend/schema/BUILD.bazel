@@ -11,6 +11,7 @@ rust_library(
         "src/edges.rs",
         "src/markdowns.rs",
         "src/render_problems.rs",
+        "src/source_cursors.rs",
         "src/bulk.rs",
     ],
     crate_name = "datalib_schema",

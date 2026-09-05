@@ -369,8 +369,10 @@ subtree and document why.
 ## The grid_rows union table
 
 The Vue grid is backed by a single denormalized table, `grid_rows`,
-populated by the `grid_index` step from every provider's
-`*.grid_rows.json` sidecars. The Rust backend
+populated by the `grid_index` step, which stacks every source's render
+store (`<name>/rendered_md/indexed_markdown.doltlite_db`) into it —
+asking each store `dolt_diff` since the commit the index last consumed,
+so a steady-state run reads nothing. The Rust backend
 (`datalib/backend/core/src/db.rs`) issues *one* SELECT against
 `grid_rows` to render the grid — no per-provider branches in the query
 path. The schema (column names, types, per-provider mappings) is the

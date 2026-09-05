@@ -1,10 +1,11 @@
 //! The `grid_index` step type: Load, un-fused into a first-class
 //! fan-in step — everything lands in the unified grid table.
 //!
-//! Rebuilds/refreshes `unified_index/grid/db.doltlite_db` from
-//! every stanza's `.grid_rows.json` sidecar tree via
-//! [`datalib_etl::grid_index::build_grid_index`] — which already carries the
-//! per-doc fingerprint skip, so an up-to-date index costs one scan.
+//! Refreshes `unified_index/grid/db.doltlite_db` from every stanza's
+//! render store via [`datalib_etl::grid_index::build_grid_index`],
+//! which asks each store what changed since the commit this index last
+//! consumed. An up-to-date index costs one `dolt_diff` per source and
+//! reads no documents at all.
 //! Closes with a `dolt_commit`; the resulting commit hash is the
 //! output's content version.
 
@@ -52,17 +53,29 @@ pub async fn run(
     let progress = emitter.progress();
     let summary = build_grid_index(&pool, data_root, |m| progress.set_message(m), now)
         .await
-        .context("build_grid_index from sidecar trees")?;
+        .context("stack the per-source render stores")?;
     tracing::info!(
+        // `read` is the one that says whether the cursors are working:
+        // it is how many documents were pulled out of the per-source
+        // stores at all, and on a steady-state run it should be 0.
+        // `loaded` was already 0 before the cursors existed, because
+        // the fingerprint compare happened after paying to read them.
+        read = summary.markdowns_total,
         loaded = summary.markdowns_loaded,
         skipped = summary.markdowns_skipped,
+        removed = summary.markdowns_removed,
         rows = summary.rows_inserted,
         "grid_index: build_grid_index done"
     );
 
     let msg = format!(
-        "datalib-step grid_index: markdowns_loaded={} markdowns_skipped={} rows_inserted={}",
-        summary.markdowns_loaded, summary.markdowns_skipped, summary.rows_inserted,
+        "datalib-step grid_index: markdowns_read={} markdowns_loaded={} \
+         markdowns_skipped={} markdowns_removed={} rows_inserted={}",
+        summary.markdowns_total,
+        summary.markdowns_loaded,
+        summary.markdowns_skipped,
+        summary.markdowns_removed,
+        summary.rows_inserted,
     );
     let commit = datalib_etl::doltlite_raw::commit_run(&pool, &msg)
         .await

@@ -1,12 +1,14 @@
-//! `grid-rows-load` — provider-agnostic Load step. Walks
-//! `<out>/<stanza>/rendered_md/**/*.grid_rows.json` (written by any Translate
-//! step) and inserts rows into the doltlite file at
+//! `grid-rows-load` — provider-agnostic Load step. Stacks every
+//! source's render store
+//! (`<out>/<stanza>/rendered_md/indexed_markdown.doltlite_db`, written
+//! by that source's render step) into the doltlite file at
 //! `<out>/unified_index/grid/db.doltlite_db`.
 //!
-//! Incremental: a `markdowns_loaded(qmd_path PK, source_fingerprint)`
-//! table tracks which documents have already been ingested. Sidecars
-//! whose fingerprint matches the recorded one are skipped — zero
-//! writes.
+//! Incremental twice over: the index remembers, per source, the store
+//! commit it last consumed (`source_cursors`) and asks that store's
+//! `dolt_diff` what moved since; a document that does surface is still
+//! skipped if its `source_fingerprint` already matches what the index
+//! holds.
 //!
 //! ```sh
 //! grid-rows-load --out ~/mirror
@@ -31,9 +33,8 @@ use tracing::{debug, info, info_span};
     about = "Stack every source's render store into the unified doltlite index."
 )]
 struct Args {
-    /// Input root. The loader reads
-    /// `<out>/<stanza>/rendered_md/**/*.grid_rows.json` across every stanza
-    /// subtree.
+    /// Input root. The loader reads each stanza's render store at
+    /// `<out>/<stanza>/rendered_md/indexed_markdown.doltlite_db`.
     #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 

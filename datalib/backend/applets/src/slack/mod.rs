@@ -22,13 +22,14 @@
 //! reimplementing markdown, media and edge handling that the document
 //! view already does properly.
 //!
-//! ## Why it reads sidecars rather than Slack
+//! ## Why it reads the render store rather than Slack
 //!
-//! It consumes `<tree>/**/*.grid_rows.json` — the cross-provider
-//! contract every render step already emits (see
-//! `datalib/backend/etl/src/grid_index.rs`) — as untyped JSON. That
-//! keeps it independent of the Slack provider crates and, incidentally,
-//! means the same code would work over any source's rendered tree.
+//! It queries `grid_rows` in the source's own
+//! `<tree>/indexed_markdown.doltlite_db` — the cross-provider table
+//! every render step already writes (see
+//! `datalib/backend/etl/src/indexed_markdown.rs`). That keeps it
+//! independent of the Slack provider crates and, incidentally, means
+//! the same code would work over any source's render store.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -750,8 +751,9 @@ mod tests {
         assert_eq!(resp.threads[1].replies, 0);
     }
 
-    /// Row order inside a sidecar is not guaranteed, so "opening
-    /// message" has to mean lowest index rather than first seen.
+    /// Row order out of the store is not guaranteed to be message
+    /// order, so "opening message" has to mean lowest
+    /// `message_index` rather than first row seen.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_opening_message_is_the_lowest_index_not_the_first_row() {
         let tmp = tempfile::tempdir().unwrap();

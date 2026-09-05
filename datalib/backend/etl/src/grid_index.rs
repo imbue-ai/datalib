@@ -1,14 +1,20 @@
-//! Generic Load step: walk a `rendered_md/` tree of `.grid_rows.json`
-//! sidecars and upsert their rows into Dolt.
+//! The unified grid index: one table stacked from every source's
+//! render store.
 //!
-//! Two entry points:
+//! Two entry points, and they are the same write path seen from two
+//! sides:
 //!
-//!   * [`apply_one`] writes a single rendered document into `grid_rows`
-//!     and stamps the `documents` row. Called per-doc by sync's render
-//!     callback so render+index commit atomically.
-//!   * [`build_grid_index`] walks a `rendered_md/` tree and calls `apply_one`
-//!     for each sidecar. Used as a rebuild-from-disk tool; not on the
-//!     hot path now that sync renders+loads per doc.
+//!   * [`apply_one`] writes one rendered document — its `grid_rows`,
+//!     its `edges` and its `markdowns` row. The render step calls it
+//!     per document against that *source's own* store; the index calls
+//!     it against the unified one.
+//!   * [`build_grid_index`] stacks every source's store into the
+//!     unified index. This is the `grid_index` DAG step's whole job.
+//!     It asks each store `dolt_diff` from the commit the index last
+//!     consumed (`source_cursors`) to that store's HEAD, so a
+//!     steady-state run reads the documents that moved and nothing
+//!     else — and can name the ones that *left*, which is how a
+//!     deleted document finally gets removed from the grid.
 //!
 //! The sidecar format is the cross-provider contract:
 //!
@@ -30,7 +36,7 @@
 //! any provider's Render step can produce a sidecar tree this loader
 //! consumes verbatim.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,6 +48,7 @@ use anyhow::{Context, Result};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
+use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
@@ -295,6 +302,10 @@ pub struct GridIndexSummary {
     pub markdowns_loaded: usize,
     pub markdowns_skipped: usize,
     pub rows_inserted: usize,
+    /// Documents dropped from the index because the source that owned
+    /// them stopped holding them. Only a cursor-driven run can be
+    /// non-zero here — see [`build_grid_index`].
+    pub markdowns_removed: usize,
 }
 
 /// Every `CREATE TABLE` in the grid index, in creation order.
@@ -308,6 +319,13 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
+        // `source_cursors` belongs in this list, not beside it. The
+        // reconcile below drops and rebuilds every table named here
+        // together, and a cursor that survived a rebuild of the rows it
+        // points past would tell the next run "nothing changed" about
+        // an index that had just been emptied. Coupling their lifetimes
+        // is the whole reason the cursor lives in the index database.
+        .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
 }
 
 /// Apply DDL for `grid_rows`, `markdowns`, and `edges`, and rebuild them
@@ -699,10 +717,34 @@ pub async fn apply_one(
     apply_markdown(write_lock, md, &qmd_rel, now_override).await
 }
 
-/// Walk every stanza's `<out>/<stanza>/rendered_md/` for `*.grid_rows.json`
-/// sidecars and rebuild the index by calling [`apply_one`] for each. Off the
-/// hot path now — sync's render step writes through `apply_one` per doc
-/// directly — but useful as a disaster-recovery / "reindex from disk" tool.
+/// Stack every source's render store into the unified index.
+///
+/// This is the `grid_index` DAG step's whole job, not a
+/// disaster-recovery tool — an earlier version of this comment said the
+/// opposite while the body eight lines down said the truth.
+///
+/// **Each source is asked what changed, not read whole.** Every source
+/// keeps its rows in `<name>/rendered_md/indexed_markdown.doltlite_db`,
+/// a doltlite store with a commit hash; the index remembers the hash it
+/// last consumed per source in `source_cursors` and asks that store
+/// `dolt_diff` between the two. A steady-state run therefore reads the
+/// documents that moved and nothing else, where it used to read every
+/// document from every store and discard the unchanged ones in Rust
+/// after paying for them.
+///
+/// Two things fall out of diffing rather than re-reading, and both are
+/// the point:
+///
+///   * A document a source **stopped** holding can be named, so it is
+///     deleted from the index. Re-reading could never see it — an
+///     absent document produces no row to compare — so a deleted
+///     conversation stayed in the grid until someone wiped the index.
+///   * The cursor advances **inside** the write transaction, so it can
+///     never claim more than the index actually holds.
+///
+/// The fingerprint skip below is kept, and is not redundant: the cold
+/// path still reads whole stores, and it is what makes a re-index of
+/// unchanged content cheap on the run that has no usable cursor.
 pub async fn build_grid_index(
     pool: &SqlitePool,
     out_dir: &Path,
@@ -731,7 +773,18 @@ pub async fn build_grid_index(
     // and parse each one. Each source now keeps its rows in a doltlite
     // store written by this same `apply_one`, so the index is *stacked*
     // from those rather than re-projected from JSON.
+    // Cursors first: the read below is scoped by them, so they have to
+    // be loaded before the write transaction opens (the index pool is
+    // one connection wide, and a read against it while the transaction
+    // holds that connection would deadlock — same reason
+    // `load_fingerprints` is hoisted).
+    let cursors = load_source_cursors(pool).await?;
+
     let mut docs: Vec<(String, RenderedMarkdown)> = Vec::new();
+    // `source_name → (new_head, documents_applied)` for the cursors this
+    // run will advance, and the ids each source dropped.
+    let mut advanced: Vec<(String, String)> = Vec::new();
+    let mut removed: Vec<(String, String)> = Vec::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
         let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
         for entry in entries.flatten() {
@@ -748,10 +801,54 @@ pub async fn build_grid_index(
         for (stanza, rendered_root) in stanzas {
             let store = crate::indexed_markdown::IndexedMarkdownStore::open(&rendered_root)
                 .with_context(|| format!("open render store for {stanza}"))?;
+            let cursor = cursors.get(&stanza).map(String::as_str);
+            let scan = store
+                .changed_since(cursor)
+                .with_context(|| format!("diff render store for {stanza}"))?;
+            // Say which path was taken, every time. A cold start that
+            // fires silently on every run is the expensive failure this
+            // whole mechanism exists to remove, and it looks exactly
+            // like a fast one from the outside — it just does more work
+            // and still gets the right answer.
+            match (&scan.changed_buckets, cursor) {
+                (None, None) => tracing::info!(
+                    source = %stanza,
+                    "index: no cursor for this source; reading its whole store"
+                ),
+                (None, Some(from)) => tracing::warn!(
+                    source = %stanza,
+                    from,
+                    "index: cursor unusable against this store (reset, rebuilt, or no \
+                     dolt_diff); falling back to reading it whole"
+                ),
+                (Some(changed), _) => tracing::info!(
+                    source = %stanza,
+                    changed = changed.len(),
+                    scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
+                    "index: documents changed since the last index"
+                ),
+            }
             let found = store
-                .documents(out_dir)
+                .documents_matching(out_dir, scan.changed_buckets.as_ref())
                 .with_context(|| format!("read documents from {stanza}"))?;
+            // An id the diff named that the store no longer has is a
+            // deletion. Only a diff can produce this: reading whole
+            // stores sees what is there, never what left.
+            if let Some(changed) = &scan.changed_buckets {
+                let present: HashSet<&str> =
+                    found.iter().map(|d| d.markdown_uuid.as_str()).collect();
+                for gone in changed.iter().filter(|u| !present.contains(u.as_str())) {
+                    removed.push((stanza.clone(), gone.clone()));
+                }
+            }
             store.close();
+            // Only advance a cursor when we know the HEAD we consumed.
+            // `new_head: None` means `dolt_log()` did not answer, and an
+            // unwritten cursor cold-starts the next run — the safe
+            // direction.
+            if let Some(head) = scan.new_head {
+                advanced.push((stanza.clone(), head));
+            }
             docs.extend(found.into_iter().map(|d| (stanza.clone(), d)));
         }
     }
@@ -771,15 +868,44 @@ pub async fn build_grid_index(
         .begin_transaction()
         .await
         .context("WriteLock::begin_transaction for build_grid_index")?;
-    let res = load_all_batch(
-        &write_lock,
-        &prior_fingerprints,
-        out_dir,
-        &docs,
-        &progress,
-        now_override,
-        &mut summary,
-    )
+    let res = async {
+        for (stanza, gone) in &removed {
+            delete_markdown(&write_lock, gone)
+                .await
+                .with_context(|| format!("delete {gone} dropped by {stanza}"))?;
+            summary.markdowns_removed += 1;
+        }
+        load_all_batch(
+            &write_lock,
+            &prior_fingerprints,
+            out_dir,
+            &docs,
+            &progress,
+            now_override,
+            &mut summary,
+        )
+        .await?;
+        // Cursors last and in the same transaction: if anything above
+        // failed we roll back to both the old rows and the old cursors.
+        let now = now_override
+            .map(str::to_string)
+            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339());
+        let mut guard = write_lock.acquire().await?;
+        let conn = guard.conn();
+        for (source_name, store_commit) in &advanced {
+            write_source_cursor(
+                conn,
+                &SourceCursorRow {
+                    source_name: source_name.clone(),
+                    store_commit: store_commit.clone(),
+                    indexed_at: now.clone(),
+                    documents_applied: summary.markdowns_loaded as i64,
+                },
+            )
+            .await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    }
     .await;
     match res {
         Ok(()) => {
@@ -881,6 +1007,68 @@ pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, Stri
         out.insert(uuid, fp);
     }
     Ok(out)
+}
+
+/// `source_name → store_commit` for every source the index has a
+/// cursor for. Empty on a fresh index, which reads as "cold-start
+/// everything".
+pub async fn load_source_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
+    let rows = sqlx::query("SELECT source_name, store_commit FROM source_cursors")
+        .fetch_all(pool)
+        .await
+        .context("load_source_cursors")?;
+    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
+    for r in rows {
+        out.insert(r.try_get("source_name")?, r.try_get("store_commit")?);
+    }
+    Ok(out)
+}
+
+/// Advance one source's cursor. Called **inside** the index write
+/// transaction, so the cursor and the rows it accounts for commit or
+/// roll back together — see [`SourceCursorRow::store_commit`].
+async fn write_source_cursor(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    row: &SourceCursorRow,
+) -> Result<()> {
+    sqlx::query("DELETE FROM source_cursors WHERE source_name = ?")
+        .bind(&row.source_name)
+        .execute(&mut **conn)
+        .await
+        .context("clear prior source cursor")?;
+    let sql = crate::bulk::insert_sql::<SourceCursorRow>();
+    // Audited: `sql` is built from `SourceCursorRow`'s associated
+    // consts, never from row data; all values bound.
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("write source cursor {}", row.source_name))?;
+    Ok(())
+}
+
+/// Remove a document and everything hanging off it from the index.
+///
+/// The same three deletes `apply_markdown` runs before re-inserting,
+/// without the insert. Until the cursor landed there was no caller:
+/// the index was rebuilt by applying every document a store still
+/// held, so a document a source *stopped* holding was never visited
+/// and stayed in the grid forever. Being able to name what disappeared
+/// is a property of diffing rather than of re-reading.
+pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Result<()> {
+    let mut guard = write_lock.acquire().await?;
+    let conn = guard.conn();
+    for sql in [
+        "DELETE FROM grid_rows WHERE markdown_uuid = ?",
+        "DELETE FROM edges WHERE src_markdown_uuid = ?",
+        "DELETE FROM markdowns WHERE markdown_uuid = ?",
+    ] {
+        sqlx::query(sql)
+            .bind(markdown_uuid)
+            .execute(&mut **conn)
+            .await
+            .with_context(|| format!("delete {markdown_uuid} from the index"))?;
+    }
+    Ok(())
 }
 
 /// Bulk upstream-cursor snapshot, used the same way as
@@ -1842,5 +2030,245 @@ mod schema_reconcile_tests {
             "a matching schema must not be rebuilt; the fingerprints that make \
              the index incremental would be thrown away on every run"
         );
+    }
+}
+
+#[cfg(test)]
+mod source_cursor_tests {
+    //! What the cursor buys, and the trap in testing it.
+    //!
+    //! Before the cursor, a steady-state re-index still *read* every
+    //! document from every source's store and then dropped the
+    //! unchanged ones by comparing `source_fingerprint`. The visible
+    //! result — nothing written — is identical either way. So a test
+    //! asserting "nothing was loaded" passes just as happily against
+    //! the old behaviour and proves nothing about the cursor.
+    //!
+    //! `markdowns_total` is the number of documents actually read, and
+    //! it is the field that separates the two. Every test here asserts
+    //! on it.
+
+    use std::path::Path;
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use tempfile::tempdir;
+
+    use crate::grid_index::{build_grid_index, init_schema, load_source_cursors, RenderedMarkdown};
+    use crate::indexed_markdown::IndexedMarkdownStore;
+    use datalib_schema::grid_rows::GridRow;
+
+    async fn index_pool(root: &Path) -> SqlitePool {
+        let db = root.join("unified_index/grid/db.doltlite_db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+                    .unwrap()
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    fn doc(root: &Path, source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
+        let row = GridRow::builder()
+            .uuid(uuid)
+            .provider("test")
+            .kind("Test")
+            .source_label("Test")
+            .conversation_uuid(uuid)
+            .entire_chat(format!("/chat/{uuid}"))
+            .text(text)
+            .markdown_uuid(Some(uuid.to_string()))
+            .when_ts(Some("2026-01-01T00:00:00+00:00".to_string()))
+            .build()
+            .unwrap();
+        RenderedMarkdown {
+            markdown_uuid: uuid.to_string(),
+            source_name: source.to_string(),
+            // Fingerprint follows the text, the way a renderer's does.
+            source_fingerprint: format!("fp-{text}"),
+            upstream_cursor: None,
+            md_path: root
+                .join(source)
+                .join("rendered_md")
+                .join(format!("{uuid}.md")),
+            render_version: 1,
+            rows: vec![row],
+            edges: Vec::new(),
+            problems: Vec::new(),
+        }
+    }
+
+    fn rendered_root(root: &Path, source: &str) -> std::path::PathBuf {
+        root.join(source).join("rendered_md")
+    }
+
+    /// Write `docs` as the whole content of one source's store and
+    /// commit, the way the render step does.
+    fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {
+        let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
+        for d in docs {
+            store.put_document(root, d).unwrap();
+        }
+        store.commit("test render").unwrap();
+        store.close();
+    }
+
+    /// Drop a document from a source's store, as a deleted upstream
+    /// conversation would.
+    fn unrender(root: &Path, source: &str, uuid: &str) {
+        let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
+        store.remove_document(uuid).unwrap();
+        store.commit("test unrender").unwrap();
+        store.close();
+    }
+
+    async fn index_row_count(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// The headline claim: a second run over an unchanged source reads
+    /// nothing at all.
+    ///
+    /// `markdowns_total == 0` is the whole assertion. Under the old
+    /// read-everything-then-compare behaviour this run read 2 and
+    /// skipped 2, and `markdowns_loaded` was 0 in both worlds.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unchanged_source_is_not_read_at_all_on_the_second_run() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(
+            root,
+            "src",
+            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+        );
+
+        let first = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(first.markdowns_total, 2, "cold start reads the whole store");
+        assert_eq!(first.markdowns_loaded, 2);
+        assert_eq!(index_row_count(&pool).await, 2);
+
+        let second = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(
+            second.markdowns_total, 0,
+            "nothing changed, so nothing should have been READ — a non-zero \
+             count here means the cursor was ignored and the run fell back to \
+             reading the store and comparing fingerprints"
+        );
+        assert_eq!(second.markdowns_loaded, 0);
+        assert_eq!(index_row_count(&pool).await, 2, "and the rows are intact");
+    }
+
+    /// The cursor must be recorded, and must be the store's HEAD.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_cursor_lands_in_the_index_and_names_the_store_head() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+
+        let cursors = load_source_cursors(&pool).await.unwrap();
+        let recorded = cursors.get("src").expect("a cursor for src").clone();
+
+        let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
+        let head = store.changed_since(None).unwrap().new_head;
+        store.close();
+        assert_eq!(Some(recorded), head, "the cursor is the store's HEAD");
+    }
+
+    /// Only what moved is read — the untouched document stays unread,
+    /// not merely unwritten.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_the_changed_document_is_read() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(
+            root,
+            "src",
+            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+        );
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+
+        // md-2 changes; md-1 does not.
+        render(root, "src", &[doc(root, "src", "md-2", "b-changed")]);
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.markdowns_total, 1, "one document read, not two");
+        assert_eq!(s.markdowns_loaded, 1);
+
+        let text: String = sqlx::query_scalar("SELECT text FROM grid_rows WHERE uuid = 'md-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(text, "b-changed");
+    }
+
+    /// A document a source stops holding is removed from the index.
+    ///
+    /// This is impossible without a diff: reading whole stores sees
+    /// what is present and can never name what left, so before the
+    /// cursor a deleted conversation stayed in the grid forever.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_the_source_dropped_is_deleted_from_the_index() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(
+            root,
+            "src",
+            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+        );
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(index_row_count(&pool).await, 2);
+
+        unrender(root, "src", "md-2");
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.markdowns_removed, 1, "the dropped document is reported");
+        assert_eq!(index_row_count(&pool).await, 1, "and its rows are gone");
+        let left: String = sqlx::query_scalar("SELECT uuid FROM grid_rows")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, "md-1");
+    }
+
+    /// A cursor the store's history does not contain must fall back to
+    /// reading the store whole, not to reading nothing.
+    ///
+    /// This is the failure mode worth a test: "I cannot tell what
+    /// changed" and "nothing changed" are the same shape from the
+    /// outside — an empty result — and picking the wrong one leaves
+    /// the index silently frozen.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unusable_cursor_falls_back_to_reading_everything() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+
+        // A hash from no history anyone has.
+        sqlx::query("UPDATE source_cursors SET store_commit = ? WHERE source_name = 'src'")
+            .bind("0123456789abcdef0123456789abcdef")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(
+            s.markdowns_total, 1,
+            "an unusable cursor must re-read the store, not skip it"
+        );
+        assert_eq!(index_row_count(&pool).await, 1);
     }
 }

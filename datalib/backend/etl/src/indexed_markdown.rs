@@ -45,7 +45,7 @@
 //! to it would reintroduce the problem across stages instead of across
 //! sources.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -232,6 +232,41 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Drop a document and everything hanging off it from this store.
+    ///
+    /// The inverse of [`put_document`](Self::put_document), and the
+    /// operation a source uses to say "I no longer hold this" — which
+    /// the index turns into a delete of its own, because a `dolt_diff`
+    /// can name a row that left where re-reading never could.
+    ///
+    /// **No renderer calls this yet.** Render is incremental, so "not
+    /// re-emitted this run" overwhelmingly means "not looked at", not
+    /// "deleted" — the same trap the problem sweep documents — and
+    /// nothing on the render side currently distinguishes the two. So a
+    /// conversation deleted upstream still lingers in its source's
+    /// store. That is a real gap, and it is now the *only* place it
+    /// lingers: the index below is no longer a second copy of the same
+    /// problem.
+    pub fn remove_document(&self, markdown_uuid: &str) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            for sql in [
+                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
+                "DELETE FROM edges WHERE src_markdown_uuid = ?",
+                "DELETE FROM markdowns WHERE markdown_uuid = ?",
+                "DELETE FROM render_problems WHERE scope_kind = 'markdown' AND scope_key = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(markdown_uuid)
+                    .execute(&mut **conn)
+                    .await
+                    .with_context(|| format!("remove {markdown_uuid} from the store"))?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replace this document's problem rows with `problems`.
     ///
     /// **Scoped to the document actually reprocessed, never to the
@@ -353,12 +388,85 @@ impl IndexedMarkdownStore {
     /// relative `md_path`, because that is what `apply_one` strips back
     /// off to derive `qmd_path`.
     pub fn documents(&self, out_dir: &Path) -> Result<Vec<RenderedMarkdown>> {
+        self.documents_matching(out_dir, None)
+    }
+
+    /// Which documents changed between `cursor` and this store's HEAD.
+    ///
+    /// This is the query the unified index exists to ask, and the
+    /// reason the render artifact is a database rather than a tree of
+    /// files: a consumer that remembers one commit hash can be told
+    /// exactly what moved, instead of reading everything and comparing.
+    ///
+    /// `changed_buckets: None` means **cold start — take everything**,
+    /// and every uncertain path returns it: no cursor, a cursor the
+    /// store's history no longer contains (it was reset or rebuilt), a
+    /// `dolt_diff` vtab that would not resolve. That asymmetry is
+    /// deliberate and is [`scan_buckets`](crate::doltlite_raw::scan_buckets)'s
+    /// rule, not ours: re-indexing a document that did not change costs
+    /// time, and skipping one that did costs correctness.
+    ///
+    /// Three tables are unioned, not one. `markdowns` alone looks
+    /// sufficient — `apply_markdown` stamps `row_set_hash` into it, so
+    /// any change to a document's *rows* changes its markdowns row —
+    /// but that hash is computed over `GridRow`s only, so a document
+    /// whose **edges** moved and whose rows did not would have an
+    /// unchanged `markdowns` row and be missed.
+    pub fn changed_since(&self, cursor: Option<&str>) -> Result<crate::doltlite_raw::DiffScan> {
+        blocking(crate::doltlite_raw::scan_buckets(
+            &self.pool,
+            cursor,
+            &crate::doltlite_raw::DiffScanSpec {
+                // Nothing in a render store fans out to "re-index
+                // everything": every row already names the document it
+                // belongs to. The providers need this for tables like
+                // `users` / `channels`, whose rename shows up inside
+                // every rendered doc; by the time rows reach here that
+                // fan-out has already happened, on the render side.
+                global_fanout_tables: &[],
+                bucket_query: "
+                    SELECT DISTINCT markdown_uuid FROM (
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_markdowns
+                         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_grid_rows
+                         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_src_markdown_uuid, from_src_markdown_uuid)
+                                 AS markdown_uuid
+                          FROM dolt_diff_edges
+                         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    )
+                    WHERE markdown_uuid IS NOT NULL
+                ",
+            },
+        ))
+    }
+
+    /// [`documents`](Self::documents), restricted to `only` when it is
+    /// `Some`. An id in `only` with no document behind it is simply
+    /// absent from the result — that is how a *deletion* reaches the
+    /// caller, which compares what it asked for against what it got.
+    pub fn documents_matching(
+        &self,
+        out_dir: &Path,
+        only: Option<&HashSet<String>>,
+    ) -> Result<Vec<RenderedMarkdown>> {
         blocking(async {
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
                 sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
                     .fetch_all(&self.pool)
                     .await
                     .context("read markdowns")?;
+            let mds: Vec<_> = match only {
+                Some(keep) => mds
+                    .into_iter()
+                    .filter(|m| keep.contains(&m.markdown_uuid))
+                    .collect(),
+                None => mds,
+            };
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows: Vec<datalib_schema::grid_rows::GridRow> =

@@ -36,6 +36,7 @@ since run 3 wipes the cursor and then re-creates it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -510,6 +511,45 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 out[store.parent.parent.name] = rows
         return out
 
+    def _source_cursors(self) -> dict[str, str]:
+        """`source_name -> store_commit` from the index's cursor table."""
+        rows = self._query(
+            self._index_db,
+            "SELECT source_name, store_commit FROM source_cursors "
+            "ORDER BY source_name;",
+        )
+        out: dict[str, str] = {}
+        for line in rows:
+            name, _, commit = line.partition("|")
+            out[name] = commit
+        return out
+
+    def _store_heads(self) -> dict[str, str]:
+        """`source_name -> HEAD` of each source's render store."""
+        out: dict[str, str] = {}
+        for store in sorted(
+            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+        ):
+            out[store.parent.parent.name] = self._scalar(
+                store,
+                "SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1;",
+            )
+        return out
+
+    # The step's tracing event, as it reaches stderr: JSON nested inside
+    # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
+    _GRID_INDEX_READ = re.compile(r'build_grid_index done.*?\\?"read\\?":\s*(\d+)')
+
+    def _grid_index_reads(self, stderr: str) -> list[int]:
+        """How many documents each grid_index step in a run READ.
+
+        Not `loaded`: that was already 0 on a steady-state run before
+        the index kept cursors, because the fingerprint compare happened
+        after paying to read every document out of every source's store.
+        `read` is the number the cursors actually move.
+        """
+        return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
+
     def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
         env = {**os.environ}
         if reset:
@@ -764,6 +804,30 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "handed out",
         )
         self.assertEqual(self._providers(), EXPECTED_PROVIDERS, "run 2 providers")
+
+        # The index consumed each source's render store up to that
+        # store's current commit, and recorded where it got to.
+        self.assertEqual(
+            self._source_cursors(),
+            self._store_heads(),
+            "every source's index cursor must name that source's render "
+            "store HEAD; a source missing here is one the index will "
+            "re-read whole on every run",
+        )
+        # And the payoff: a steady-state run reads nothing out of those
+        # stores at all.
+        #
+        # `markdowns_read`, not `markdowns_loaded` — loaded was already
+        # 0 before the cursors existed, because the fingerprint compare
+        # happened *after* paying to read every document from every
+        # store. Asserting on it would pass either way and prove
+        # nothing.
+        self.assertEqual(
+            self._grid_index_reads(run2.stderr),
+            [0],
+            "run 2's grid_index must read 0 documents: nothing changed, "
+            "so every source's dolt_diff should have come back empty",
+        )
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
         )

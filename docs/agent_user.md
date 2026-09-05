@@ -11,8 +11,8 @@ codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
 Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source a `<name>.download` step (fetch
-raw data) and a `<name>.render` step (raw → markdown +
-`*.grid_rows.json` sidecars), then two shared fan-in steps —
+raw data) and a `<name>.render` step (raw → markdown + a per-source
+index database), then two shared fan-in steps —
 `grid_index` (SQL index) and `qmd_index` (semantic search index):
 
 ```
@@ -21,7 +21,8 @@ raw data) and a `<name>.render` step (raw → markdown +
 ├── <name>/raw/                     # per-source raw stores
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.doltlite_db
-├── <name>/rendered_md/             # per-source markdown tree + sidecars
+├── <name>/rendered_md/             # per-source markdown tree
+│   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid/db.doltlite_db         # the grid_rows SQL index — query this
 │   └── qmd/index.sqlite            # semantic search index

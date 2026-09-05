@@ -33,8 +33,10 @@ and what the tree actually does today is measured in the
 built in four places — while its **P-rules are mixed**, and P1 and P3
 are both currently violated. §2's
 ["Where this is heading"](#where-this-is-heading-the-artifact-becomes-a-database)
-is pure aspiration: it describes replacing the sidecar tree with
-doltlite tables, and none of it exists.
+is now **half built**: Step 1 shipped — the sidecar tree is gone and
+each source writes a doltlite database — and Step 2 (the markdown
+itself moving into a table) is still aspiration. That section says
+which is which.
 
 ## 1. Why there are three of these
 
@@ -139,20 +141,54 @@ principle.
 
 ### Where this is heading: the artifact becomes a database
 
-**Status: aspiration. Nothing below is built**, and it is recorded here
-rather than in a proposal file because it changes *this* contract — the
-sidecar is defined immediately above, and anyone reading that definition
-should know it is expected to be temporary.
+**Status: Step 1 is built; Step 2 is not.** The two steps looked
+similar when this was written and cost very different amounts, which is
+why they were separated — and that turned out to be the right split.
 
-The intent is to move render's output out of the file tree and into
-doltlite, in two steps that look similar and cost very different
-amounts.
+**Step 1 — the sidecar becomes a table. Done.** Each source writes its
+projected rows into
+`<name>/rendered_md/indexed_markdown.doltlite_db`: `grid_rows`,
+`markdowns`, `edges` and `render_problems`, already columnar and
+already in the shape the unified index stacks. There is no
+`<id>.grid_rows.json` anywhere in the tree any more, and
+`datalib-index-lib` — the crate that existed only to define that wire
+format — is deleted.
 
-**Step 1 — the sidecar becomes a table.** Instead of one
-`<id>.grid_rows.json` per document, each source writes its projected
-rows into a per-source doltlite database, already columnar and already
-in the shape the unified index concatenates. The grid index then reads
-tables rather than walking a tree of JSON.
+Everything the argument below predicted it would buy, it bought:
+
+- The two tree walks are two indexed queries
+  (`IndexedMarkdownStore::prior_fingerprints` / `render_versions`).
+- The unreadable-sidecar failure class is gone; there is no file to
+  fail to parse.
+- Render commits once per run, so a document's rows and its
+  `render_problems` land together or not at all.
+- **Deletion is expressible, and the index now uses it.** The grid
+  index keeps a per-source cursor (`source_cursors`, one commit hash
+  per source, in the index database) and asks each store
+  `dolt_diff` between that commit and its HEAD. A steady-state run
+  reads *nothing*: the TNG fixture's second run reads 0 documents
+  where the first read 58. And because a diff can name a row that
+  **left**, a document a source stops holding is finally deleted from
+  the index — re-reading whole stores could never see that, so before
+  this a deleted conversation stayed in the grid until someone wiped
+  the file.
+
+One thing the list below got wrong, worth recording because it is the
+kind of claim this repo warns about believing: the fingerprint compare
+did **not** get replaced by the cursor. Both are in the tree and both
+earn their place — the cursor decides *which documents to read*, the
+fingerprint decides *whether a document that was read needs writing*,
+and the cold path (no cursor, or a cursor the store's history no
+longer contains) still needs the second one.
+
+What Step 1 did *not* fix is deletion on the render side: nothing yet
+removes a document from a source's own store when it disappears
+upstream, because render is incremental and "not re-emitted this run"
+overwhelmingly means "not looked at". `IndexedMarkdownStore::remove_document`
+is the operation; no renderer calls it. That gap used to exist in two
+places and now exists in one.
+
+The original argument, which still reads correctly:
 
 The argument is that **the sidecar tree is a hand-rolled version of what
 doltlite already does for us one stage earlier.** Download → raw store
@@ -192,15 +228,16 @@ doltlite database with a single writer, the problem table belongs in
 dropped or nulled getting them there commit in one transaction, and can
 never disagree about which run they came from.
 
-Note this supersedes the reasoning in
-[`data_architecture_ingestion.md`](data_architecture_ingestion.md),
-which says the sidecar `source_fingerprint` compare stays. Under this
-design it does not: it is replaced by the same cursor pattern
-everywhere else already uses.
+[`data_architecture_ingestion.md`](data_architecture_ingestion.md) says
+the `source_fingerprint` compare stays, and this section used to claim
+it would be superseded by the cursor. **The ingestion doc was right.**
+Both shipped, and they answer different questions — see the correction
+above.
 
-Step 1 is close to free, and that is worth saying plainly: **nothing
-outside our own code reads a `.grid_rows.json`.** It is a machine
-format with exactly one producer and one consumer.
+Step 1 was close to free, and that is worth saying plainly: **nothing
+outside our own code ever read a `.grid_rows.json`.** It was a machine
+format with exactly one producer and one consumer, which is what made
+replacing it a local change.
 
 **Step 2 — the markdown moves too.** Longer-term, the rendered `.md`
 lives in a doltlite table rather than as a file on disk.

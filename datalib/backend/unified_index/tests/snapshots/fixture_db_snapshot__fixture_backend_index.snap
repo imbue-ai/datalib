@@ -822,7 +822,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_loaded=58 markdowns_skipped=0 rows_inserted=194"
+      "message": "datalib-step grid_index: markdowns_read=58 markdowns_loaded=58 markdowns_skipped=0 markdowns_removed=0 rows_inserted=194"
     }
   ],
   "grid_rows": [

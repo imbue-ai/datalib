@@ -101,9 +101,9 @@ rust_test(
 )
 
 
-# Provider-agnostic Load step: walk *.grid_rows.json sidecars and
-# upsert into Dolt; tracks markdowns_loaded(qmd_path, fingerprint) for
-# idempotent skips.
+# Provider-agnostic Load step: stack every source's render store into
+# the unified index, driven by the per-source `source_cursors` commit
+# the index last consumed.
 rust_binary(
     name = "grid_rows_load",
     srcs = ["src/bin/grid_rows_load.rs"],

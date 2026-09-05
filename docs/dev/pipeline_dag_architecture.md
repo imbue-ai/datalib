@@ -346,10 +346,12 @@ rough dependency order:
   incremental step's reported partial outputs are still recorded.
 * **Load is un-fused by force, not choice.** The single-writer rule
   (no two steps' output trees may overlap) makes per-source writes into
-  the shared index impossible, so `grid_index` is one fan-in step driving
-  `load_all` over every `.grid_rows.json` sidecar tree. Render uses its
-  own sidecar tree as the prior-fingerprint store — the artifact is the
-  resume state, no index-DB peeking.
+  the shared index impossible, so `grid_index` is one fan-in step that
+  stacks every source's render store
+  (`<name>/rendered_md/indexed_markdown.doltlite_db`) into the unified
+  index, asking each store `dolt_diff` since the commit the index last
+  consumed. Render uses that same store as its own prior-fingerprint
+  store — the artifact is the resume state, no index-DB peeking.
 * **Everything goes into the NDJSON stream** (stderr of the runner):
   `run_plan` (all step ids, topo order) opens the run, then
   `step_start` / `progress_*` / `log` / `hint` / `step_finish`, closed

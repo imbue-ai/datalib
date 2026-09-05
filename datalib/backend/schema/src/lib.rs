@@ -10,6 +10,7 @@
 //!   * `edges`     — directed links between rendered documents / anchors
 //!   * `markdowns` — per-rendered-`.md` metadata + render bookkeeping
 //!   * `render_problems` — what render could not do, beside what it did
+//!   * `source_cursors` — how far the index has consumed each source
 //!
 //! App-state tables that are *not* part of the render schema
 //! (`feedback`, `sync_jobs`) live in the separate `app_schema` crate.
@@ -39,6 +40,10 @@ pub mod markdowns {
 
 pub mod render_problems {
     include!("render_problems.rs");
+}
+
+pub mod source_cursors {
+    include!("source_cursors.rs");
 }
 
 #[cfg(test)]
