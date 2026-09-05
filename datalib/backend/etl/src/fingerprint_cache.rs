@@ -63,27 +63,29 @@
 //! A root that moves simply misses rather than colliding, and two
 //! providers scanning one tree reuse each other's work.
 //!
-//! # Nothing is ever evicted
+//! # Removal is by "the file is gone", never by "I did not look at it"
 //!
-//! The cache is append-and-update only. There is deliberately no
-//! "delete what this scan did not see" pass, because *what a scan sees*
-//! is a property of that scan's filters, not of the filesystem. Two
-//! consumers share this cache and do not agree on what is interesting:
-//! `fsindex` honours a per-directory `ignore` cascade, `pdf` only cares
-//! about PDFs. A pass like that lets the narrowest scan of a tree
-//! destroy every other scan's work in it — measured, an `fsindex` scan
-//! that ignored `*.tmp` evicted 200 entries a previous full scan had
-//! cached, so the next full scan had to rehash them.
+//! Two different things look alike from inside one scan, and
+//! conflating them breaks the cache in opposite directions:
 //!
-//! It buys no safety either. The hazard it looks like it addresses — a
-//! path deleted and recreated matching a stale cursor — is already
-//! handled by the stamp: a recreated file has a different inode, so
-//! `fswalk::decide` rehashes it. An entry for a path that no longer
-//! exists is simply never looked up.
+//! - **The path no longer exists.** Dead weight. It should go, and a
+//!   scan that covered the directory is exactly who knows.
+//! - **The scan did not look at the path.** It must stay. What a scan
+//!   sees is a property of *its filters*, not of the filesystem, and
+//!   this cache is shared by consumers who disagree about what is
+//!   interesting: `fsindex` honours a per-directory `ignore` cascade,
+//!   `pdf` only wants PDFs.
 //!
-//! What that costs is one row (~150 B) per path ever scanned on this
-//! host, including paths since deleted. Deleting the file reclaims it
-//! and is always safe — the next scan rebuilds what it needs.
+//! The first version pruned on "the scan did not write a row for it",
+//! which is the second thing wearing the first thing's clothes — so an
+//! `fsindex` scan ignoring `*.tmp` evicted 200 entries a full scan had
+//! just cached. The distinction is settled with one `lstat` per
+//! candidate: gone means gone, and anything still on disk is kept
+//! whatever this scan's filters thought of it.
+//!
+//! [`FingerprintCache::forget`] is therefore deliberately dumb — it
+//! removes exactly what it is handed. The policy lives in the caller,
+//! which is the only party that can tell the two cases apart.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -391,6 +393,33 @@ impl FingerprintCache {
         }
         tx.commit().await.context("commit cache tx")?;
         Ok(())
+    }
+
+    /// Forget specific absolute paths.
+    ///
+    /// Deliberately dumb: it removes exactly what it is given and
+    /// decides nothing. The policy — which entries have earned removal
+    /// — belongs to the caller, because only the caller knows the
+    /// difference between "this path is gone from the filesystem" and
+    /// "my filter did not look at it". Getting that backwards is how
+    /// the first version of this let a narrow scan evict a broad one's
+    /// work.
+    pub async fn forget(&self, abs_paths: &[String]) -> Result<u64> {
+        if abs_paths.is_empty() {
+            return Ok(0);
+        }
+        let mut removed = 0u64;
+        let mut tx = self.pool.begin().await.context("begin forget tx")?;
+        for path in abs_paths {
+            let r = sqlx::query("DELETE FROM fingerprints WHERE abs_path = ?")
+                .bind(path)
+                .execute(&mut *tx)
+                .await
+                .context("forget fingerprint")?;
+            removed += r.rows_affected();
+        }
+        tx.commit().await.context("commit forget tx")?;
+        Ok(removed)
     }
 
     /// Total rows, for diagnostics.
@@ -710,6 +739,32 @@ mod tests {
             "an entry the narrower scan had no opinion about was evicted"
         );
         assert_eq!(cache.count().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn forget_removes_only_what_it_is_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Path::new("/r");
+        let cache = FingerprintCache::open(&tmp.path().join("c.sqlite"))
+            .await
+            .unwrap();
+        cache
+            .store(&[
+                fp(root, "a.bin", EntryKind::File, 1),
+                fp(root, "b.bin", EntryKind::File, 2),
+            ])
+            .await
+            .unwrap();
+
+        let removed = cache.forget(&[abs_key(root, "a.bin")]).await.unwrap();
+        assert_eq!(removed, 1);
+        let tree = cache.load_under(root).await.unwrap();
+        assert!(tree.blake3("a.bin").is_none());
+        assert_eq!(tree.blake3("b.bin"), Some([2u8; 32]));
+
+        // Forgetting something absent is not an error.
+        assert_eq!(cache.forget(&[abs_key(root, "never")]).await.unwrap(), 0);
+        assert_eq!(cache.forget(&[]).await.unwrap(), 0);
     }
 
     /// A path containing GLOB metacharacters must not become a pattern.

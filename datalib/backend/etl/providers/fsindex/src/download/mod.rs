@@ -25,7 +25,7 @@ pub mod options;
 pub mod schema_raw;
 pub mod walker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -101,6 +101,40 @@ pub struct FetchSummary {
     /// Total bytes we did NOT hash because the rescan cursor let us
     /// reuse a cached digest — the work the incremental cache saved.
     pub bytes_skipped: u64,
+}
+
+/// Drop cache entries under `root` whose paths no longer exist.
+///
+/// Returns `(removed, kept_but_unvisited)`. The second number is the
+/// interesting one: those are paths this scan filtered out but which
+/// are still on disk, and keeping them is what stops a narrow scan from
+/// evicting a broad one's work.
+async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Result<(u64, u64)> {
+    let cached = cache.load_under(root).await?;
+    let visited = db.all_entry_ids().await?;
+
+    let mut gone: Vec<String> = Vec::new();
+    let mut still_present = 0u64;
+    for rel in cached.paths() {
+        if visited.contains(rel) {
+            continue;
+        }
+        let abs = root.join(rel);
+        // `symlink_metadata`, not `metadata`: a dangling symlink is
+        // still an entry that exists, and following it would delete a
+        // cache row for something that is really there.
+        match std::fs::symlink_metadata(&abs) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                gone.push(datalib_etl::fingerprint_cache::abs_key(root, rel));
+            }
+            // Present, or unreadable for some other reason (a
+            // permission change on a parent). Either way, not evidence
+            // of deletion — keep it.
+            _ => still_present += 1,
+        }
+    }
+    let removed = cache.forget(&gone).await?;
+    Ok((removed, still_present))
 }
 
 /// Run one download pass against `opts.root`.
@@ -198,6 +232,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
             );
         }
+    }
+
+    // ── forget what the filesystem forgot ─────────────────────────────
+    // Cache entries under this root that the walk did not write a row
+    // for are *candidates*, not casualties: the walk may simply have
+    // filtered them out, and this cache is shared with consumers whose
+    // filters differ. One `lstat` settles it — a path that is really
+    // gone is dropped, and anything still on disk is kept whatever this
+    // scan thought of it.
+    //
+    // Cheap because the candidate set is small: on an unchanged tree it
+    // is empty, and otherwise it is the deletions plus whatever this
+    // scan ignored.
+    match forget_deleted(&opts.cache, &opts.root, &db).await {
+        Ok((0, _)) => {}
+        Ok((gone, kept)) => info!(
+            event = "fsindex_cache_forgot_deleted",
+            removed = gone,
+            kept_present = kept,
+            "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
+             scan did not look at but which still exist"
+        ),
+        // A cache that cannot be tidied is still a correct cache.
+        Err(e) => warn!(event = "fsindex_cache_forget_failed", error = %e,
+                        "could not tidy the fingerprint cache: {e}"),
     }
 
     // ── scan_meta ────────────────────────────────────────────────────

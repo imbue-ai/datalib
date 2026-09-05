@@ -375,3 +375,125 @@ async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
         "expected one `sub/f.txt` per tree, got {rows:?}"
     );
 }
+
+/// A symlinked route to a tree must share the cache with the real one.
+///
+/// The root is canonicalized, which resolves symlinks fully, so
+/// scanning `/x/link` and `/x/real` address one set of entries instead
+/// of hashing the same bytes twice. Entries *inside* the tree are
+/// deliberately NOT resolved: fsindex records a symlink as a symlink
+/// (hashing its target string), so canonicalizing it would conflate it
+/// with whatever it points at.
+#[tokio::test]
+async fn a_symlinked_root_shares_the_cache_with_its_real_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(real.join("sub")).unwrap();
+    std::fs::write(real.join("sub/f.bin"), b"content").unwrap();
+    // A symlink inside the tree, pointing at a sibling.
+    std::os::unix::fs::symlink(real.join("sub/f.bin"), real.join("inside.link")).unwrap();
+
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+
+    // Scan through the symlinked route first.
+    let via_link = download::fetch(fetch_opts(
+        &tmp.path().join("a.doltlite_db"),
+        &link,
+        cache.clone(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(via_link.files_hashed, 1, "the first scan should hash");
+    assert_eq!(via_link.symlinks, 1, "the in-tree symlink stays a symlink");
+
+    // The real route reuses all of it.
+    let via_real = download::fetch(fetch_opts(
+        &tmp.path().join("b.doltlite_db"),
+        &real,
+        cache.clone(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        via_real.files_hashed, 0,
+        "the real path rehashed what the symlinked path had already cached"
+    );
+    assert_eq!(via_real.files_reused, 1);
+
+    let keys: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    let canonical = real.canonicalize().unwrap();
+    for key in &keys {
+        assert!(
+            key.starts_with(canonical.to_str().unwrap()),
+            "entry {key:?} was keyed under the symlink rather than the real path"
+        );
+    }
+    // The in-tree symlink is keyed where it was walked, not where it points.
+    assert!(
+        keys.iter().any(|k| k.ends_with("/inside.link")),
+        "the in-tree symlink was resolved away instead of recorded: {keys:?}"
+    );
+}
+
+/// A path that is really gone leaves the cache; a path this scan merely
+/// filtered out does not.
+///
+/// Those look identical from inside one scan — neither wrote a row —
+/// and treating them the same is what let an early version evict a
+/// broad scan's work. One `lstat` tells them apart.
+#[tokio::test]
+async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("tree");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("kept.bin"), b"a").unwrap();
+    std::fs::write(root.join("doomed.bin"), b"b").unwrap();
+    std::fs::write(root.join("scratch.tmp"), b"c").unwrap();
+
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+    let db_path = tmp.path().join("s.doltlite_db");
+    download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(cache.count().await.unwrap(), 4, "root + three files");
+
+    // One file really goes; the other is merely filtered out.
+    std::fs::remove_file(root.join("doomed.bin")).unwrap();
+    std::fs::write(root.join(".fsindex.yaml"), "ignore:\n  - \"*.tmp\"\n").unwrap();
+    download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+
+    let keys: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    assert!(
+        !keys.iter().any(|k| k.ends_with("doomed.bin")),
+        "a deleted path stayed in the cache: {keys:?}"
+    );
+    assert!(
+        keys.iter().any(|k| k.ends_with("scratch.tmp")),
+        "an ignored-but-present path was evicted: {keys:?}"
+    );
+
+    // And the filtered file is still cheap when a later scan wants it.
+    std::fs::remove_file(root.join(".fsindex.yaml")).unwrap();
+    let after = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        after.files_hashed, 0,
+        "the previously-ignored file had to be rehashed"
+    );
+}
