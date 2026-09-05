@@ -107,11 +107,16 @@ pub struct IngestSummary {
 #[instrument(skip_all, fields(export = %opts.input_path.display()))]
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     let db_path = db_path_for(&opts.db_path);
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path)
-            .await
-            .with_context(|| format!("open raw db {}", db_path.display()))?,
+    // `owned` is "we opened this pool, so we close it" — see the close
+    // below.
+    let (db, owned) = match opts.db.clone() {
+        Some(db) => (db, false),
+        None => (
+            RawDb::open(&db_path)
+                .await
+                .with_context(|| format!("open raw db {}", db_path.display()))?,
+            true,
+        ),
     };
 
     // Each run replaces the snapshot wholesale anyway (upsert + prune),
@@ -128,6 +133,22 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     let mut summary = IngestSummary::default();
     let result = ingest_all(&db, &opts, &mut summary).await;
     run.finish(&result, &summary).await;
+    // Close the pool if — and only if — we opened it. A caller that
+    // handed us a `db` owns its lifetime (the processor shares one pool
+    // with its `RawStoreSession`, which closes it in `finish`); a
+    // caller that did not gets a pool nothing would ever close.
+    //
+    // That mattered: doltlite's HEAD, working set and active branch are
+    // per-connection, so two live connections to one file are two
+    // writers, and the second one's `dolt_commit` can fail with
+    // `commit conflict: another connection committed to this branch`.
+    // sqlx does not close a dropped pool's connections synchronously,
+    // so "it goes out of scope here" is not the same as "it is closed"
+    // — and the next `open` of the same file may race the one we left
+    // behind.
+    if owned {
+        db.pool().close().await;
+    }
     result?;
     Ok(summary)
 }
