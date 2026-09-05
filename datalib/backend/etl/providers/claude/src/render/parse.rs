@@ -1,15 +1,4 @@
 //! Port of `src/ingest/providers/claude/parse.py`.
-//!
-//! Reads the doltlite raw store written by [`crate::download`] — and
-//! only that. Both source types that share this renderer put their rows
-//! in the same six tables: `claude_api` from the live API walk,
-//! `claude_export` from [`crate::download::export`], which ingests an
-//! unpacked bulk export. There is one input shape here, deliberately;
-//! the second reader that used to walk an export tree in place is gone
-//! (issue #207).
-//!
-//! `raw_json` carries the JSON minus any sibling rows we've exploded
-//! out.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -130,11 +119,6 @@ pub struct AttachmentRow {
 /// fingerprinting and for on-demand shredding into messages / content
 /// blocks / attachments) paired with the surfaced [`ConversationRow`]
 /// metadata.
-///
-/// Render is per-conversation: render fingerprints the payload,
-/// skips it against the indexer's prior fingerprint, and only shreds
-/// the `chat_messages` array when it has to render. That keeps the
-/// steady-state render near-free for unchanged conversations.
 #[derive(Debug, Clone)]
 pub struct ClaudeConversation {
     pub conv: ConversationRow,
@@ -196,7 +180,6 @@ fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
 
-/// Two-phase parse driven by `dolt_diff_<table>`.
 pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
     let db_path = db_path_for(path);
     if db_path.exists() {
@@ -316,9 +299,6 @@ async fn parse_doltlite_async(
     Ok(parsed)
 }
 
-/// Walk one conversation's `chat_messages[*].files[*]` and enumerate
-/// every `file_uuid` it references — the input set to
-/// [`BlobBundle::load`].
 fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
@@ -375,13 +355,6 @@ async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
     Ok(out)
 }
 
-/// `project_uuid → name` over the projects passed in.
-///
-/// **Must be built from every stored project, not from the narrowed
-/// render set.** Conversations put their project's name in the
-/// `project` grid column, and a conversation can be re-rendered in a
-/// pass where its own project didn't change — feeding this the filtered
-/// list would silently degrade those rows back to a bare UUID.
 fn name_index(projects: &[ProjectRow]) -> std::collections::HashMap<String, String> {
     projects
         .iter()
@@ -389,7 +362,6 @@ fn name_index(projects: &[ProjectRow]) -> std::collections::HashMap<String, Stri
         .collect()
 }
 
-/// Build a [`ProjectRow`] from one stored project payload.
 fn project_row(
     project_uuid: String,
     org_uuid: Option<String>,
@@ -419,7 +391,6 @@ fn project_row(
     }
 }
 
-/// Build a [`ProjectDocRow`] from one stored knowledge-doc payload.
 fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> ProjectDocRow {
     let obj = payload.as_object().cloned().unwrap_or_default();
     ProjectDocRow {
@@ -436,18 +407,6 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
 /// `dolt_diff_claude_attachments` and `dolt_diff_project_docs` to
 /// project the changed bucket keys — conversation UUIDs from the first
 /// two, project UUIDs from the third.
-///
-/// `users`, `orgs` and `projects` fan out to "render everything":
-/// rendered docs dereference those names in frontmatter, grid columns
-/// and page titles, so a rename has to repaint every doc in the
-/// affected scope. `projects` is on that list because every
-/// conversation's `project` grid column carries its project's *name* —
-/// a rename that only repainted the project's own page would leave
-/// every conversation in it showing the old label.
-///
-/// `project_docs` deliberately is **not** a fanout table: editing a
-/// knowledge document changes that project's page and nothing else, and
-/// it is the one project-side write that happens with any regularity.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
@@ -480,19 +439,6 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
     })
 }
 
-/// Build a [`ParsedExport`] from a snapshot already loaded out of the
-/// doltlite DB.
-///
-/// A conversation the **API** walk stored holds the raw `/api/...`
-/// response, so it gets normalized into export shape here (the step
-/// that used to happen at fetch time). A conversation the **export**
-/// ingest stored is already in export shape and must not be
-/// normalized: doing so would stamp it `_source: {via: "claude.ai/api",
-/// org_uuid: ""}`, which is both a lie about where it came from and an
-/// empty org on every one of its grid rows.
-///
-/// The two are told apart by the `org_uuid` column, which only the API
-/// walk can fill — see [`crate::download::db::LoadedConversation`].
 pub fn parse_loaded(raw: crate::download::db::LoadedRaw) -> ParsedExport {
     let mut out = ParsedExport::default();
     for u in &raw.users {

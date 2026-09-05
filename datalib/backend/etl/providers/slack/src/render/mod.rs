@@ -1,15 +1,4 @@
 //! Slack render stage: raw → typed buckets ready for render.
-//!
-//! Entry point is [`parse::parse`]: it opens the doltlite DB, runs
-//! the `dolt_diff_<table>` scan against the render cursor, and
-//! loads only the changed thread buckets — each one carrying its
-//! own per-thread [`datalib_etl::blob_cas::BlobBundle`] so render
-//! is fully sync. Falls back to the legacy JSON-tree reader for the
-//! in-crate fixture (cold-start only, every thread rendered).
-//!
-//! Determinism: row UUIDs are `uuid::Uuid::new_v5` with the slack
-//! namespace defined in `download::schema_raw`. Same hash for the same
-//! source data across re-ingest.
 
 pub mod mrkdwn;
 pub mod parse;
@@ -38,23 +27,6 @@ pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
 /// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse a Slack `ts` — unix seconds with a fractional part, always UTC
 /// (`"1728499573.123456"`) — into an offsetted instant.
-///
-/// **The one place a Slack `ts` is interpreted.** There used to be two
-/// copies of this arithmetic, one here and one in `render/render.rs`,
-/// each with its own `unwrap_or(0)`s; a `ts` Slack never sent, or sent
-/// in a shape we didn't expect, came out of both as a real-looking
-/// `1970-01-01T00:00:00`. Now every unexpected shape is `None`, and
-/// `None` reaches the grid as a null `when_ts` — see
-/// `docs/dev/data_architecture_parse_and_render.md` §6.
-///
-/// The sub-second part is padded/truncated to microseconds because that
-/// is the precision Slack actually uses; a `ts` with no fractional part
-/// at all is still a valid instant (`.0`), but a *non-numeric* one is
-/// not, and is rejected rather than silently read as zero.
-///
-/// Note this does **not** touch row identity: `slack_message_uuid` /
-/// `slack_thread_uuid` are keyed on the raw `ts` string, never on the
-/// parsed value.
 pub fn parse_slack_ts(ts: &str) -> Option<IsoOffsetTimestamp> {
     let (secs_str, frac_str) = ts.split_once('.').unwrap_or((ts, ""));
     let secs: i64 = secs_str.parse().ok()?;
@@ -73,13 +45,10 @@ pub fn parse_slack_ts(ts: &str) -> Option<IsoOffsetTimestamp> {
     Some(base.bump_micros(micros))
 }
 
-/// Render Slack `ts` as ISO-8601 with microsecond precision and a
-/// `+00:00` offset, or `None` when the `ts` isn't one we can read.
 pub fn ts_to_iso(ts: &str) -> Option<String> {
     parse_slack_ts(ts).map(|t| t.to_rfc3339_micros())
 }
 
-/// Slack `ts` → unix milliseconds, or `None` when unparseable.
 pub fn ts_to_ms(ts: &str) -> Option<i64> {
     parse_slack_ts(ts).map(|t| t.to_unix_millis())
 }
@@ -118,22 +87,6 @@ pub struct Channel {
 }
 
 impl Channel {
-    /// How this conversation is titled in rendered markdown and in the
-    /// grid's `conversation_name`.
-    ///
-    /// A channel keeps the `#name` it has always had — including the
-    /// `#<channel_id>` fallback for a channel whose name we never
-    /// captured, which is why the fallback lives here rather than at
-    /// the call site.
-    ///
-    /// A DM is named after the people in it, `@`-sigilled: a 1:1 DM has
-    /// no name to put after a `#`, and `#D0123ABCD` is not something
-    /// anyone can read. The account itself is subtracted, so a DM reads
-    /// as who you are talking *to*. The naming itself is
-    /// [`crate::download::schema_raw::dm_display_name`], shared with
-    /// the downloader's progress lines so the two can't disagree.
-    ///
-    /// `users` maps user id → display label ([`User::label`]).
     pub fn display(
         &self,
         users: &std::collections::BTreeMap<String, String>,

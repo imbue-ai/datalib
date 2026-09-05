@@ -1,11 +1,4 @@
 //! Doltlite-backed raw store for the ChatGPT provider.
-//!
-//! Three tables — `me`, `conversations`, `chatgpt_attachments` —
-//! shared bookkeeping (`<table>_bookkeeping`, `sync_runs`, …) lives
-//! in [`datalib_etl::doltlite_raw`]. Per the dolt_diff +
-//! per-provider CAS edge migration: attachment bytes still ride in
-//! the shared `cas_objects`, but the (file_id → blake3) mapping lives
-//! on `chatgpt_attachments` rather than the shared `blob_refs`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -45,8 +38,6 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything from upstream.
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
@@ -66,7 +57,6 @@ impl RawDb {
 
     // ── `me` ────────────────────────────────────────────────────────
 
-    /// Returns the latest `/me` payload, if any.
     pub async fn load_me(&self) -> Result<Option<Value>> {
         let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
             .fetch_optional(&self.pool)
@@ -84,12 +74,6 @@ impl RawDb {
     /// ids are absent from the map — caller treats them as "we don't
     /// have this conversation yet, fetch it." Used by the listing pass
     /// to decide which conversations need a detail fetch.
-    ///
-    /// `update_time` comes back as the JSON-encoded text we wrote: the
-    /// *detail* endpoint's Unix-epoch float. The caller does not compare
-    /// it to the *listing* value (an ISO-8601 string) byte-for-byte —
-    /// both sides are canonicalized to whole-second epoch first (see
-    /// `download::update_time_secs`).
     pub async fn existing_update_times(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
@@ -148,9 +132,6 @@ impl RawDb {
 
     // ── loads ───────────────────────────────────────────────────────
 
-    /// Conversation payloads + their fetch-time metadata. The payload
-    /// is the raw upstream response; downstream layers stamp synthetic
-    /// keys back on if they want them.
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
             "SELECT c.id, json(c.payload) AS payload, b.fetched_at

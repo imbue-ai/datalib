@@ -1,19 +1,6 @@
 //! The `synthesize` subcommand: build HTTP playback fixtures for one
 //! source, reading its `input_path` (interpreted as a checked-in raw
 //! fixture tree) and writing replay tapes into `--out`.
-//!
-//! Dev utility, not a pipeline step: it writes outside the data root
-//! and exists to (re)generate the fixture trees that `download
-//! --playback-root` replays in hermetic runs. Ported from
-//! the retired `datalib-sync --synthesize-playback-root`, one source per
-//! invocation.
-//!
-//! Params are read structurally from the JSON (`source.common.input_path`,
-//! `source.fetch_photos`) rather than through the typed provider
-//! configs — synthesizers only need the fixture-tree location, and
-//! this keeps the dev utility off the normalize/validate path.
-//! Sources without an HTTP synthesizer are skipped with a log line,
-//! mirroring sync's behavior.
 
 use std::path::{Path, PathBuf};
 

@@ -1,17 +1,4 @@
 // One step's share of a job log.
-//
-// A job log is the whole run: `datalib-dag`'s NDJSON event stream for
-// every step in it, interleaved. The question a red Status raises is
-// about exactly one of them — "why did *this* fail?" — and answering it
-// from the raw file means reading past every other step's chatter and
-// then past a second layer of JSON, because a step's `log` events carry
-// a whole `tracing` envelope escaped inside `msg`.
-//
-// So this narrows on two axes at once: to the step, and to the sentence.
-// What survives is what a person would have written down.
-//
-// Kept out of the view, and pure, so the unwrapping rules can be tested
-// against real log lines rather than eyeballed through a modal.
 
 /// One line, ready to paint.
 export type StepLogLine = {
@@ -57,11 +44,6 @@ function trailing(fields: Record<string, unknown>): string {
 }
 
 /// Pull the human sentence out of a `log` event's `msg`.
-///
-/// `msg` is one of two things and there is no flag saying which: a
-/// plain string, or a `tracing` JSON envelope serialized into a string.
-/// The steps emit *both* for the same event — the envelope and then the
-/// bare line — which is why the caller dedupes.
 function unwrapMessage(msg: string): { text: string; level: "info" | "warn" | "error" | null } {
   let parsed: unknown;
   try {
@@ -97,13 +79,6 @@ function unwrapMessage(msg: string): { text: string; level: "info" | "warn" | "e
 }
 
 /// Every line in `logText` that belongs to `stepId`, unwrapped.
-///
-/// Non-JSON lines are dropped: `datalib-dag` prints a human summary
-/// table after the stream, and it names every step, so keeping those
-/// would put other steps' outcomes into this step's log.
-///
-/// `progress_inc` is dropped too — one event per item, saying nothing a
-/// reader wants, and the Status column already draws the bar.
 export function stepLogLines(logText: string, stepId: string): StepLogLine[] {
   const out: StepLogLine[] = [];
   for (const raw of logText.split("\n")) {

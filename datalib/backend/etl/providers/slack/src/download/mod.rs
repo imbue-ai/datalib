@@ -1,27 +1,4 @@
 //! Slack downloader entry point.
-//!
-//! Captures Slack data into a single doltlite db at
-//! `<data_root>/<name>/raw/entities.doltlite_db` — one row per workspace
-//! (`auth.test`), user, channel, message, reply page, and attachment
-//! edge, plus the shared `cas_objects` blob store. See `db.rs` and
-//! `schema_raw.rs` for the table layout.
-//!
-//! Resume cursor: derived at startup from the DB.
-//! `RawDb::ts_bounds_by_channel` gives the per-channel `max(ts)` we've
-//! ever recorded, and the next forward pass starts there. The trailing
-//! refresh window re-queries the last N days; idempotent upserts
-//! collapse no-op refresh passes to zero writes.
-//!
-//! Because that cursor answers "where do I start?" on its own, a config
-//! change that *widens* what should be on disk would otherwise be
-//! silently ignored — the classic case being `since` moved to an
-//! earlier date, which the forward walk can't express because it only
-//! ever moves forward. [`Adjustments`] closes that gap: the
-//! scope-affecting params are recorded via
-//! [`datalib_etl::scope_config`] after each successful run, and the
-//! next run diffs them to schedule a bounded backfill (or, for a
-//! relaxed blob knob, a re-walk). Narrowing is always a no-op — the
-//! store is a superset and nothing in the pipeline deletes.
 
 pub mod api;
 pub mod db;
@@ -56,9 +33,7 @@ pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 /// refetch even on warm-cache runs.
 pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 
-// ---------------------------------------------------------------------------
 // Per-method drivers.
-// ---------------------------------------------------------------------------
 
 fn datetime_to_slack_ts(dt: &DateTime<Utc>) -> String {
     let secs = dt.timestamp();
@@ -268,12 +243,8 @@ fn next_cursor(resp: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-// ---------------------------------------------------------------------------
 // Which conversations this run walks.
-// ---------------------------------------------------------------------------
 
-/// A `dm_users` entry as written, normalized for matching: leading `@`
-/// dropped, trimmed, lowercased.
 fn normalize_dm_entry(spec: &str) -> String {
     spec.trim().trim_start_matches('@').trim().to_lowercase()
 }
@@ -290,13 +261,6 @@ struct DmAllowlist {
     unmatched: Vec<String>,
 }
 
-/// Resolve `dm_users` entries to Slack user ids.
-///
-/// An entry matches a user id, handle, display name or real name,
-/// case-insensitively, with an optional leading `@`. One entry may
-/// legitimately resolve to several users (two people can share a
-/// display name); all of them are kept, since the alternative is
-/// silently dropping one person's DMs.
 fn resolve_dm_users(entries: &[String], users: &[UserDirectoryEntry]) -> DmAllowlist {
     let mut out = DmAllowlist::default();
     for spec in entries {
@@ -338,17 +302,6 @@ struct TargetPlan {
     dm_targets: usize,
 }
 
-/// Split the listed conversations into the ones this run walks.
-///
-/// The two scoping knobs are independent, and that is the whole point:
-/// `channels` filters channels by name, `dm_users` filters DMs by
-/// person. Running the channel-name filter over DMs — which is what
-/// happens if you treat one list as covering both — drops every DM,
-/// because a DM has no name to match.
-///
-/// A group DM is in scope when *any* of its members is on the
-/// allowlist: allowlisting Riker means "the conversations I have with
-/// Riker", and the three-way with Riker and Data is one of them.
 fn select_targets(
     listed: &[FetchTarget],
     channels: Option<&[String]>,
@@ -397,9 +350,7 @@ fn select_targets(
     plan
 }
 
-// ---------------------------------------------------------------------------
 // Config-change adjustments.
-// ---------------------------------------------------------------------------
 
 /// Scope key for this provider's [`datalib_etl::scope_config`] blob.
 /// Slack's incremental state is per-channel (`MAX(ts)` in `messages`),
@@ -418,19 +369,6 @@ const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 /// The subset of [`FetchOptions`] that decides *which data lands on
 /// disk*, recorded after a successful run so the next one can spot a
 /// widening the per-channel watermark would otherwise swallow.
-///
-/// Deliberately excludes:
-/// - `channels` / `members_only` — a newly listed channel has no rows,
-///   so `channel_latest_ts` is `None` and it cold-starts from `since`
-///   without any help from us.
-/// - `dms` / `dm_users` — same reason, one level up. Turning DMs on
-///   lists conversations that have no message rows at all, so each one
-///   cold-starts from `since` on its own. (What *does* need help is the
-///   `conversations.list` sweep TTL, which would otherwise serve the
-///   pre-DM listing for up to six hours — handled by keying the sweep
-///   marker on `dms`, in `fetch_channels`.)
-/// - `refresh_window_days` — already re-applied on every run.
-/// - `conv`-style one-offs and paths — not scope-affecting.
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({
         K_SINCE: opts.since,
@@ -441,11 +379,6 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 
 /// What this run has to do differently because the config widened since
 /// the run that produced the store's current contents.
-///
-/// Both fields default to "nothing to do", which is what an absent or
-/// unreadable blob must produce — see `scope_config`'s module docs on
-/// why a first upgrade can't be allowed to stampede every mirror into a
-/// full re-download.
 #[derive(Debug, Default, Clone)]
 struct Adjustments {
     /// `since` moved earlier: walk `[since_ts, oldest_stored_ts]` for
@@ -463,10 +396,6 @@ struct Adjustments {
 
 impl Adjustments {
     /// Whether any adjustment is in play.
-    ///
-    /// `#[cfg(test)]` because only the tests below consult it — the
-    /// production path branches on the individual flags. Without the
-    /// gate, clippy's `dead_code` fails the non-test build.
     #[cfg(test)]
     fn any(&self) -> bool {
         self.backfill_below_oldest || self.force_full_walk
@@ -474,15 +403,6 @@ impl Adjustments {
 
     /// Whether pass B can skip a thread because its replies are already
     /// mirrored.
-    ///
-    /// Normally "stored `latest_reply` is at or past what the API
-    /// advertises" is sufficient. Under [`Self::force_full_walk`] it is
-    /// not: reply attachments are downloaded *only* inside
-    /// `paginate_replies`, so a thread that is fully mirrored
-    /// message-wise still has unfetched files hanging off it when the
-    /// blob knob that skipped them is later relaxed. Re-walking pass A
-    /// alone would fetch top-level attachments and silently miss every
-    /// in-thread one.
     fn thread_up_to_date(&self, api_latest: Option<&str>, stored: Option<&str>) -> bool {
         if self.force_full_walk {
             return false;
@@ -490,28 +410,10 @@ impl Adjustments {
         matches!((api_latest, stored), (Some(api), Some(s)) if s >= api)
     }
 
-    /// Whether a completed run has actually satisfied the config it
-    /// planned for, and may therefore record it.
-    ///
-    /// Per-channel failures are swallowed into a `warn!` so one bad
-    /// channel can't sink a whole sync, which means `Ok(())` from the
-    /// work future does *not* imply every channel was covered. Recording
-    /// the blob anyway would make the next run see no widening and drop
-    /// the scheduled backfill permanently — unlike the per-channel
-    /// watermark, which self-heals because it is derived from stored
-    /// rows rather than from bookkeeping.
     fn run_satisfied_config(run_ok: bool, channel_failures: usize) -> bool {
         run_ok && channel_failures == 0
     }
 
-    /// Diff the recorded blob against this run's options.
-    ///
-    /// Only *widenings* produce work. A narrowed knob leaves an on-disk
-    /// superset, and nothing in the pipeline deletes, so it is always a
-    /// no-op. A `since` that fails to parse is treated as no
-    /// information rather than an error: the caller has already
-    /// validated the current value, and a garbage *stored* value must
-    /// not fail an otherwise-good sync.
     fn plan(prev: Option<&Value>, opts: &FetchOptions) -> Self {
         let mut out = Self::default();
         let Some(prev) = prev else {
@@ -570,9 +472,7 @@ impl Adjustments {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Per-channel history + threads.
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 async fn export_channel(
@@ -616,15 +516,6 @@ async fn export_channel(
         None => (since_ts.to_string(), true),
     };
     // The resume decision, per conversation, in the run's own log.
-    //
-    // "Why did this conversation re-walk history it already has?" is
-    // otherwise unanswerable after the fact: the only observable is a
-    // message count in the summary, and every explanation for a
-    // non-zero one — no stored watermark, a widened `since`, a relaxed
-    // blob knob — produces the identical number. These four fields
-    // separate them. `resumed = false` with a `watermark` present means
-    // an adjustment forced the re-walk; `resumed = false` with none
-    // means the conversation had nothing stored and cold-started.
     info!(
         event = "slack_channel_walk_planned",
         channel = %channel_id,
@@ -693,10 +584,6 @@ async fn export_channel(
     // was never fetched. Walk `[since_ts, oldest]` to fill it in. Runs
     // before pass B so backfilled thread roots land in `collected` and
     // get their replies fetched like any other message.
-    //
-    // Skipped when `force_full_walk` already re-walked the whole range
-    // above, and when the channel has no history (the cold-start arm
-    // started at `since_ts` already).
     if adjust.backfill_below_oldest && !adjust.force_full_walk {
         if let Some(oldest) = channel_oldest_ts {
             if since_ts < oldest {
@@ -903,9 +790,6 @@ async fn list_history(
     Ok(())
 }
 
-/// Paginate `conversations.replies` for one thread. Upserts every
-/// message in the response (including the parent re-served by Slack)
-/// and records a `replies_pages` row so the next sync can skip.
 #[allow(clippy::too_many_arguments)]
 async fn paginate_replies(
     db: &RawDb,
@@ -1024,9 +908,7 @@ fn reply_message_input(
     })
 }
 
-// ---------------------------------------------------------------------------
 // Public entry point.
-// ---------------------------------------------------------------------------
 
 pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
@@ -1294,15 +1176,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // handed us a `db` owns its lifetime (the processor shares one pool
     // with its `RawStoreSession`, which closes it in `finish`); a
     // caller that did not gets a pool nothing would ever close.
-    //
-    // That mattered: doltlite's HEAD, working set and active branch are
-    // per-connection, so two live connections to one file are two
-    // writers, and the second one's `dolt_commit` can fail with
-    // `commit conflict: another connection committed to this branch`.
-    // sqlx does not close a dropped pool's connections synchronously,
-    // so "it goes out of scope here" is not the same as "it is closed"
-    // — and the next `open` of the same file may race the one we left
-    // behind.
     if owned {
         db.pool().close().await;
     }
@@ -1621,7 +1494,6 @@ mod tests {
         }
     }
 
-    /// A 1:1 DM: no name, one counterpart in `user`.
     fn im(id: &str, user_id: &str) -> FetchTarget {
         FetchTarget {
             id: id.into(),
@@ -1631,9 +1503,6 @@ mod tests {
         }
     }
 
-    /// A group DM: Slack's composite handle plus a `members` array that
-    /// includes the account itself (U1 here). Shape confirmed against
-    /// the live API.
     fn mpim(id: &str, name: &str, members: &[&str]) -> FetchTarget {
         FetchTarget {
             id: id.into(),

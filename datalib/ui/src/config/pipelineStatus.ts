@@ -1,14 +1,4 @@
 // What a pipeline row's Status column says, and why.
-//
-// Pure functions over four inputs — the config's steps, the job queue,
-// the runner's per-step record, and the loader's diagnostics — so the
-// whole state machine is
-// testable without a grid, a browser, or a running sync. Manager2View
-// does the drawing; everything about *which* state a row is in lives
-// here.
-//
-// The three sources and their precedence are the substance of this
-// file; see `stepStatus`.
 
 import type { ConfiguredStep } from "@/config/sourceSteps";
 import type { DagRun, DagStep, DagStepProgress, Diagnostic, SyncJob, SyncTask } from "@/api";
@@ -16,18 +6,9 @@ import { formatStamp } from "@/config/timeFormat";
 
 /// What the pushed task board contributes to a row.
 ///
-/// The board (`tasks` on a `GET /api/sync/stream` frame) speaks the
-/// same per-step vocabulary as the runner's `current_state`, and
-/// arrives up to 400 ms after the fact instead of on the next fetch of
-/// the runner's record. So
-/// it is not a new source of truth — it is the *same* one, earlier, and
-/// is folded in as such rather than given its own precedence tier.
-///
-/// Only the live half is taken. A terminal board state carries neither
-/// the timestamp nor the error the row has to show, and both live in
-/// the runner's record — so a step going terminal is a signal to
-/// refetch, never something to paint from here. `pushedOverlay` returns
-/// what to overlay; `boardWentTerminal` says when to go and ask.
+/// Only the live half is taken: a terminal board state carries neither the
+/// timestamp nor the error the row has to show, so a step going terminal is a
+/// signal to refetch rather than something to paint from here.
 export type Overlay = {
   current_state: string | null;
   progress: DagStepProgress | null;
@@ -39,24 +20,11 @@ const TERMINAL_BOARD = new Set(["done", "skipped", "not_selected", "failed", "bl
 
 /// Fold one pushed task board into per-step overlays.
 ///
-/// `todo` deliberately produces nothing: a step the runner has not
-/// reached is exactly the absent-`current_state` case the queued branch
-/// of `stepStatus` already handles, and inventing a state for it here
-/// would only add a second way to say the same thing.
-///
 /// A step the board reports as **terminal** does produce one, and must.
-/// It used to be dropped like `todo`, on the reasoning that the board
-/// only exists to show a step *running* — but the two are not alike.
-/// `todo` means "not reached", which is what the queued branch says
-/// anyway; terminal means "reached, and finished in *this* run", and
-/// nothing else on screen knows that until `/api/dag` catches up.
-/// Dropping it sent a row that had just been Running back to Queued for
-/// the length of that fetch, which `manager2-sync`'s monotonicity check
-/// caught as `["Queued","Running","Queued","Succeeded"]`.
-///
-/// The state is carried verbatim rather than mapped: `stepStatus` only
-/// asks whether it is `running` or absent, so the board's own word is
-/// both sufficient and the least invented thing to store.
+/// `todo` means "not reached", which the queued branch already says; terminal
+/// means "reached, and finished in *this* run", which nothing else on screen
+/// knows until `/api/dag` catches up. Dropping it sent a row that had just
+/// been Running back to Queued for the length of that fetch.
 export function pushedOverlay(
   tasks: SyncTask[],
   now: string,
@@ -92,22 +60,15 @@ export function boardWentTerminal(tasks: SyncTask[]): boolean {
 
 /// Apply an overlay to what the last fetch of the runner's record knew
 /// about a step.
-///
-/// Kept here rather than in the view so the fold is covered by the same
-/// timeline tests as everything else it feeds.
 export function withOverlay(
   step: DagStep | undefined,
   id: string,
   overlay: Overlay | undefined,
   /// True when the fetched record describes a *previous* run, so its
-  /// `current_state` is about different work and only the board can
-  /// speak for now. See [`EffectiveRun.synthesized`], which is where
-  /// this comes from.
-  ///
-  /// `last_run` is deliberately untouched: that is this row's history,
-  /// it is still correct, and blanking it would send the row to "Never
-  /// run" — which ranks *below* Queued and so is its own way of going
-  /// backwards.
+  /// `current_state` is about different work and only the board can speak for
+  /// now. `last_run` is deliberately untouched: that is this row's history, it
+  /// is still correct, and blanking it would send the row to "Never run",
+  /// which ranks below Queued and so is its own way of going backwards.
   baseStateIsStale = false,
 ): DagStep | undefined {
   if (!overlay && !baseStateIsStale) return step;
@@ -135,16 +96,6 @@ export function withOverlay(
 }
 
 /// The run a row should be judged against.
-///
-/// `/api/dag` is fetched, not pushed, so right after a sync starts it
-/// may still describe the *previous* run — closed, and therefore
-/// vetoing every live reading. The pushed board proves a run is in
-/// flight before that fetch lands, and when it does, it wins: a closed
-/// record cannot out-rank evidence of a step currently running.
-///
-/// The window is much shorter than it used to be — the fetch is
-/// triggered by the record actually moving rather than by a 2-second
-/// timer — but it is not zero, and this is what covers it.
 export type EffectiveRun = DagRun & {
   /// True when this run was **not** reported by the runner — it was
   /// inferred from the queue because a job is running and the fetched
@@ -179,15 +130,6 @@ export function effectiveRun(
 
 /// How far through a run each status is.
 ///
-/// A total order over the *run* vocabulary, and total on purpose: an
-/// unranked run status would silently opt out of the floor below, which
-/// is the one place a gap would go unnoticed. Every terminal state
-/// shares the top rank — they are different outcomes of the same
-/// progress.
-///
-/// "Never run" sits *below* Queued: it is the absence of history, so
-/// seeing it after a sync was queued really is going backwards.
-///
 /// **`config_rejected` and `config_blocked` are deliberately absent,
 /// and must stay absent.** They are not points in a run — they say the
 /// entry is not in the pipeline at all, which is news that has to be
@@ -197,6 +139,9 @@ export function effectiveRun(
 /// this whole change is about. `statusFloor` passes an unranked status
 /// through and forgets the row, which is what we want here: the next
 /// status after a config edit starts from nothing.
+///
+/// "Never run" sits *below* Queued: it is the absence of history, so
+/// seeing it after a sync was queued really is going backwards.
 export const STATUS_RANK: Record<string, number> = {
   never_run: -1,
   queued: 0,
@@ -210,27 +155,6 @@ export const STATUS_RANK: Record<string, number> = {
 
 /// A floor under a row's status, holding it to the furthest it has got
 /// within one run.
-///
-/// **Why this cannot be done inside `stepStatus`.** That function
-/// describes a single snapshot, and the snapshot is genuinely
-/// ambiguous: when neither the pushed board nor the runner's record
-/// says anything about this step in the run now in flight, "the runner
-/// has not reached it" (Queued) and "this is what it last did"
-/// (`last_run`'s outcome) are both consistent with what we hold. Which
-/// one is *right* depends on what the row already showed — before the
-/// step was seen running, Queued; after, the outcome. A reducer over
-/// one snapshot has no way to know, and both readings shipped as bugs:
-/// picking the outcome painted the previous run's `Succeeded` between
-/// `Queued` and `Running`, and picking Queued sent a row that had been
-/// Running back to Queued.
-///
-/// So the ordering is enforced where the history lives. This is not a
-/// cosmetic smoothing of a correct sequence — it is the missing input.
-///
-/// `run` keys the memory: a new sync is a new key, so the floor resets
-/// and the next run is free to start at Queued again. The claiming
-/// job's id is the natural key, because it exists from the enqueue
-/// frame — before the runner has minted a run id of its own.
 export function statusFloor(): (id: string, run: string, next: StatusView) => StatusView {
   const seen = new Map<string, { run: string; view: StatusView }>();
   return (id, run, next) => {
@@ -252,12 +176,6 @@ export function statusFloor(): (id: string, run: string, next: StatusView) => St
 }
 
 /// One row's status, reduced to a vocabulary the Status column can draw.
-///
-/// `key` picks the glyph and the colour; `label` is the word it stands
-/// for, and — because that column is icons — is the only place the word
-/// still appears, as the tooltip and the accessible name. `detail` is
-/// the sentence worth reading when there is one (a failure message, how
-/// a run died, which job a queued row is waiting on).
 export type StatusView = {
   key: string;
   label: string;
@@ -300,15 +218,6 @@ function listOf(items: string[]): string {
 }
 
 /// Has this step already been reached by the run `job` started?
-///
-/// Both timestamps are this tree's ISO-8601-with-offset, so `Date`
-/// parses them and the comparison is offset-correct without either side
-/// being normalized first. A job with no `started_at` has not been
-/// claimed by the worker yet, so nothing can have been reached.
-///
-/// Unparsable input answers "no": that leaves the row queued, which is
-/// the reading that stays true for longest — the next fetch corrects it
-/// either way.
 function reachedSince(
   last: { started_at: string; finished_at: string | null } | null,
   job: { started_at: string | null },
@@ -332,11 +241,6 @@ export function dependentsOf(steps: ConfiguredStep[]): Record<string, string[]> 
 
 /// Every step a sync of `seeds` will consider: the seeds plus their
 /// transitive dependents.
-///
-/// This mirrors `Runner::runnable_subgraph` — reachability in the
-/// graph, and nothing about run-time state. It has to, because it is
-/// what lets a row say "queued" the moment the button is pressed,
-/// before the runner exists to be asked.
 export function closureOf(
   dependents: Record<string, string[]>,
   seeds: string[],
@@ -354,10 +258,6 @@ export function closureOf(
 
 /// The source steps a given step ultimately reads from: walk `inputs`
 /// up until every branch reaches a step that declares none.
-///
-/// These are exactly the ids `--sync` accepts (`datalib-dag` rejects
-/// anything else with "not a source step"), which is why they are worth
-/// naming — a row that can't be run itself can say which rows carry it.
 export function sourcesFeeding(steps: ConfiguredStep[], id: string): string[] {
   const byId = new Map(steps.map((s) => [s.id, s]));
   const found = new Set<string>();
@@ -382,16 +282,6 @@ export function sourcesFeeding(steps: ConfiguredStep[], id: string): string[] {
 
 /// The steps a queued step is actually waiting behind: its declared
 /// inputs that have not finished in the run now in flight.
-///
-/// "Queued" alone is a weak thing to tell someone — it says a row will
-/// run without saying what it is behind. A render step waiting on its
-/// download and a download waiting only for the worker to pick the job
-/// up look identical in the column and are different situations, and
-/// the difference is exactly what the DAG already knows.
-///
-/// Direct inputs only. The transitive set is the rest of the pipeline
-/// and reads as noise; naming the one or two steps immediately ahead is
-/// what answers the question.
 export function waitingOn(
   steps: ConfiguredStep[],
   id: string,
@@ -405,13 +295,6 @@ export function waitingOn(
 }
 
 /// step id → the queued-or-running job that has claimed it.
-///
-/// The job queue, not the runner's record, because this has to be true
-/// during the window the runner does not yet exist: a click enqueues a
-/// row, and the worker picks it up on its next poll. For that second or
-/// two the runner's record still describes the *previous* run, and a
-/// grid reading only that shows nothing happening — which is exactly
-/// what pressing the play button used to look like.
 export function claimedBy(
   steps: ConfiguredStep[],
   jobs: SyncJob[],
@@ -435,16 +318,6 @@ export function claimedBy(
 
 /// What a step is doing right now, or did last.
 ///
-/// Three sources, in this precedence, and the order is the whole point:
-///
-/// 1. **The runner's record for a run in flight.** Only `running` is
-///    read from it — every terminal state it could report has already
-///    been written to `last_run`, timestamps and all, so reading it
-///    twice would only create a way for the two to disagree.
-/// 2. **The job queue**, for a step a job has claimed but the runner
-///    has not reached: `queued`.
-/// 3. **`last_run`** — what this step last actually did.
-///
 /// `not_selected` appears nowhere. It is a fact about a *run* ("this
 /// one didn't ask for me"), not about the step, and letting it reach a
 /// row overwrote a real history with a non-event: a source that
@@ -452,10 +325,6 @@ export function claimedBy(
 /// time of a run that never touched it. The runner no longer records it
 /// as a `last_run`, and `GET /api/dag` drops the ones already on disk;
 /// this is the reader-side half of the same rule.
-///
-/// A run whose record has no `finished_at` and whose lock nobody holds
-/// is a run that died. Its steps say `interrupted` rather than spinning
-/// forever.
 export function stepStatus(args: {
   /// The step being described. Passed separately from `step`, which is
   /// absent until a run has reached this row at least once.
@@ -509,17 +378,6 @@ export function stepStatus(args: {
   // all means it has — including `not_selected`, which is the runner
   // saying this row is out of scope after all, and is more current than
   // the closure we predicted.
-  //
-  // The second guard is about *staleness*, not scope, and it is the
-  // reason this can't be judged from the queue alone. The queue and the
-  // runner's record are two independent fetches, so a snapshot can pair
-  // a finished run with a job row that hasn't been marked done yet.
-  // Without the guard the row flashes back to "Queued" after the sync
-  // completes — a status going backwards, which is worse than a stale
-  // one, because it reads as "it's about to run again".
-  //
-  // `last_run` at or after the job's start means this job already did
-  // its work here, whatever the queue still says.
   if (claim && !current && !reachedSince(last, claim)) {
     // "the sync of pdfs/raw" reads badly on pdfs/raw's own row, which
     // is the row most likely to be read: a source step is what you

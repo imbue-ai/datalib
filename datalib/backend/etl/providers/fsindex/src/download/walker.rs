@@ -1,32 +1,5 @@
 //! Bottom-up tree walker that produces one (FileRow, Fingerprint)
 //! pair per visible entry under a root.
-//!
-//! See [`EXTRACT.md`](../../EXTRACT.md) §"Why two entity tables" and
-//! §"The fast-rescan trick" for the row split and reuse-vs-rehash
-//! decision. See [`super::schema_raw`] §"Directory tree-hash
-//! canonicalization" for the dir hash encoding.
-//!
-//! CONCERN(tree-hash-spec-one-way): the canonical encoding is a
-//! one-way commitment to a byte format. A future change to the
-//! encoding can only be rolled out by bumping `scan_meta.scanner_version`
-//! so existing dir hashes are explicitly considered stale.
-//!
-//! We drive a manual depth-first recursion (see [`Dfs`]) rather than
-//! using a walk crate, so an unchanged directory (matching cached
-//! mtime) can enumerate its children from the in-memory rescan cache
-//! and skip the `readdir` syscall entirely — Unison's
-//! `unchangedChildren` fast path. CONCERN(perf-unmeasured): performance
-//! against the design-target tens-of-millions scale is asserted, not
-//! measured.
-//!
-//! CONCERN(long-tail-fs): non-UTF-8 names, sparse files, files that
-//! disappear between readdir and stat, case-insensitive collisions,
-//! mtimes in the future — handled coarsely (skip + warn, or
-//! propagate-to-bookkeeping) but not exhaustively tested.
-//!
-//! CONCERN(utf8-paths): the schema requires `files.id TEXT`, which
-//! means valid UTF-8. Non-UTF-8 entry names are skipped with a
-//! `warn!` and recorded as walker errors. See [`Walker::collect`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,16 +19,6 @@ use datalib_etl::fswalk::{FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
 /// flushes the batch via the callback when it reaches this many rows.
-///
-/// This is the memory-vs-amplification knob. Each batch is one sqlite
-/// transaction: larger batches mean fewer transactions, which means
-/// less write-amplification (every COMMIT lays down fresh prolly chunk
-/// novelty that only `dolt_gc` reclaims). But a batch is also buffered
-/// in memory — both as `ScanResult`s in our process and as the open
-/// transaction's working-set delta inside doltlite — so it can't grow
-/// unbounded (a single all-in-one transaction OOMs at multi-million-row
-/// scale). 100k rows is ~35 MB of `ScanResult` and keeps the
-/// transaction count to ~50 even on a 5M-file tree.
 pub const BATCH_SIZE: usize = 100_000;
 
 /// Output row pair from the walk. The walker emits these in
@@ -116,12 +79,6 @@ impl<'a> Walker<'a> {
     /// via the `emit_batch` callback so memory stays O(batch_size +
     /// tree_depth) rather than O(total_entries). The callback's
     /// `Err` short-circuits the walk.
-    ///
-    /// The walker never writes the filesystem. Stamping (which does
-    /// write) is the orchestrator's job and happens either before
-    /// the walk (preferred, so the walker sees the new breadcrumbs)
-    /// or after a separate in-memory `collect()` call (legacy
-    /// path).
     pub fn collect_streaming<F>(
         &self,
         counters: &WalkerCounters,
@@ -161,14 +118,6 @@ impl<'a> Walker<'a> {
 /// it — but on a large unchanged tree we save one `readdir` per
 /// directory, and (since the cache is fully in memory) touch the disk
 /// only for the stats.
-///
-/// Known gap: a child that was *ignored* on the previous scan is not in
-/// the cache, so if a cascade `ignore` rule is *loosened* by editing an
-/// existing `.fsindex.yaml` (which does not change the affected
-/// directories' mtimes), the newly-unignored entries are not picked up
-/// until that directory's mtime next changes or a `--reset-and-redownload`.
-/// Newly-*ignored* entries are handled correctly (we re-test the current
-/// ignore set against every enumerated child).
 struct Dfs<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> {
     root: &'a Path,
     prev: &'a CachedTree,
@@ -468,9 +417,6 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         Ok((dir_hash, dir_size))
     }
 
-    /// Real `readdir`: the directory's current entries, skipping the
-    /// breadcrumb file and non-utf8 names, sorted by name for stable
-    /// output (matching the old `walkdir` `sort_by_file_name`).
     fn read_children(
         &self,
         dir_path: &Path,
@@ -504,17 +450,6 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
     }
 }
 
-/// Accumulated options cascade for a directory (`root` → `dir`),
-/// memoized so each `.fsindex.yaml` is read at most once per scan and
-/// each directory's cascade is built at most once.
-///
-/// `config_cache` holds the parsed-or-absent breadcrumb per directory;
-/// `cascade_cache` holds the cumulative cascade per directory. Because
-/// a directory's cascade is just its parent's cascade plus its own
-/// breadcrumb frame, building it walks down from the nearest cached
-/// ancestor, so steady-state cost is one hash lookup per ancestor and
-/// zero filesystem reads. This replaces the old per-entry rebuild that
-/// re-read every ancestor breadcrumb for every file.
 fn cascade_for_dir(
     root: &Path,
     dir: &Path,
@@ -553,7 +488,6 @@ fn cascade_for_dir(
     cascade
 }
 
-/// The cache key for a root-relative entry.
 fn fp_abs(root: &Path, rel: &str) -> String {
     datalib_etl::fingerprint_cache::abs_key(root, rel)
 }
@@ -566,8 +500,6 @@ fn fp_kind(kind: FileKind) -> EntryKind {
     }
 }
 
-/// The observation to cache, dropping the identity fields on
-/// filesystems where they mean nothing.
 fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor {
     let inode_ok = matches!(stamp_kind, StampKind::Inode);
     StampCursor {
@@ -579,22 +511,6 @@ fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor
     }
 }
 
-/// Can this directory's cached child list stand in for a `readdir`?
-///
-/// Only when the cached row describes *this* directory and nothing in
-/// it has changed. The mtime alone is not enough: the cache is keyed by
-/// root-relative path, so a scan of a different tree — the scan root is
-/// always the key `""` — compares against whatever the previous scan
-/// left at that path. Two unrelated directories sharing an mtime then
-/// look "unchanged" and the walker enumerates the *other* tree's
-/// children, silently producing a wrong listing rather than an error.
-/// `(inode, dev)` is the filesystem's own answer to "same directory",
-/// so it settles the question.
-///
-/// Unlike [`datalib_etl::fswalk::decide`] this does not compare size: a
-/// directory's cached size is the rolled-up size of its visible
-/// contents, computed by this walker, not the `st_size` a fresh stat
-/// reports.
 fn same_dir_unmodified(prev: &StampCursor, fresh: &FreshStat) -> bool {
     if matches!(prev.stamp_kind, StampKind::Rescan) {
         // A previous run was interrupted here; take the readdir.
@@ -970,20 +886,6 @@ mod tests {
 
     /// A *different* directory that happens to share an mtime must not
     /// inherit the cached child list.
-    ///
-    /// The cache is keyed by root-relative path and the scan root is
-    /// always `""`, so scanning tree B against a cache built from tree
-    /// A compares their two roots directly. On a filesystem with coarse
-    /// mtimes — or simply two directories created in the same tick — an
-    /// mtime-only check calls them equal, and the walker then
-    /// enumerates A's children while standing in B. That is silent
-    /// corruption, not an error: CI (Linux) caught it through
-    /// `fsindex/tests/branch_scan.rs`, which scans two roots into two
-    /// branches of one file, where it dropped a whole subdirectory.
-    ///
-    /// The cache is doctored rather than the filesystem: the point is
-    /// the identity check, and forcing two real directories to share an
-    /// mtime would need a crate we do not otherwise depend on.
     #[test]
     fn a_different_directory_with_the_same_mtime_is_not_skipped() {
         let a = tempfile::tempdir().unwrap();

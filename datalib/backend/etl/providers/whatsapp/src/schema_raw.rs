@@ -1,33 +1,17 @@
 //! DDL for the curated `wa_*` mirror tables.
 //!
-//! Each table holds columns verbatim from msgstore.db's corresponding
-//! table, with two changes:
+//! Columns come verbatim from msgstore.db, with two changes: autoincrement
+//! `_id` / `*_row_id` columns become stable identifiers (the internal `_id` is
+//! dropped outright — it renumbers on phone restore, so it would be noise in
+//! every dolt diff), and a parent's `*_row_id` foreign key is resolved to that
+//! parent's stable PK columns.
 //!
-//! 1. The autoincrement `_id` and `*_row_id` columns are replaced
-//!    with stable identifiers (see [`crate`] docs for the rekey rules).
-//!    The internal `_id` is dropped entirely — it would just be noise
-//!    in dolt diffs since it renumbers on phone restore.
-//! 2. The (parent's `*_row_id` foreign keys are resolved to the parent's
-//!    stable PK columns. For example, `message_text.message_row_id` →
-//!    `(chat_jid, key_id, from_me)` matching the parent `wa_message`.
-//!
-//! Column types match SQLite's source schema (`INTEGER`, `TEXT`,
-//! `BLOB`, `REAL`). Doltlite supports the same types so re-typing
-//! isn't needed.
-//!
-//! Schema notes for new readers:
-//!
-//! - `wa_message.text_data` carries the raw message body for simple
-//!   text messages. For rich content (links, replies, media captions,
-//!   …) the body lives in `wa_message_text` / `wa_message_media` /
-//!   the add-on tables and `text_data` is null.
-//! - `wa_message_add_on.parent_chat_jid` etc. are pinned at download
-//!   time by joining the source's `parent_message_row_id` → `message`
-//!   → `(chat_jid, key_id, from_me)`. add-ons in WhatsApp model
-//!   reactions, polls, pinned-in-chat markers, etc.
-//! - `wa_media_files` is keyed by blake3 of the file bytes. Multiple
-//!   `wa_message_media` rows can point at the same file (forwards,
-//!   re-sends); the registry is the dedup.
+//! Two things a new reader trips over. `wa_message.text_data` holds the body
+//! only for simple text messages; for links, replies and media captions it is
+//! null and the body lives in `wa_message_text` / `wa_message_media` / the
+//! add-on tables. And `wa_media_files` is keyed by blake3, so several
+//! `wa_message_media` rows can point at one file — forwards and re-sends dedup
+//! through the registry.
 
 use uuid::Uuid;
 
@@ -231,18 +215,13 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
     PRIMARY KEY (chat_jid, key_id, from_me)
 );";
 
-/// Catalog of plaintext media files from the source backup. Bytes live
-/// in the sibling CAS file (managed by `datalib_etl::blob_cas`), and
-/// `blake3` is both this table's key and the CAS key.
+/// Catalog of plaintext media files from the source backup. Bytes live in the
+/// sibling CAS, and `blake3` is both this table's key and the CAS key.
 ///
-/// It used to carry a second hash, `sha256`, described as "the upstream
-/// identifier (matches `wa_message_media.file_hash`)". Nothing ever
-/// joined on that: the shipped join is
-/// `wa_media_files.relative_path = wa_message_media.file_path`, and
-/// `file_hash` is stored and never read back. So the sha256 was a
-/// second digest of the same bytes serving as the `blob_refs.ref_id` —
-/// a job blake3 already does for every other provider, and one that
-/// forced a full re-read of every media file on every run to compute.
+/// Deliberately one digest: the shipped join is
+/// `wa_media_files.relative_path = wa_message_media.file_path`, so a second
+/// hash was stored and never read back — and computing it forced a full
+/// re-read of every media file on every run.
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
     blake3 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
@@ -293,8 +272,6 @@ pub fn whatsapp_reaction_uuid(source: &str, chat_jid: &str, key_id: &str, from_m
     .to_string()
 }
 
-/// Per-bucket document UUID. Stable for the lifetime of a
-/// `(chat, period_key)` pair regardless of how many times we re-render.
 pub fn whatsapp_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
     Uuid::new_v5(
         &WHATSAPP_UUID_NS,

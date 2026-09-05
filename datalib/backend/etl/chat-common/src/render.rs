@@ -8,11 +8,6 @@ use std::path::{Path, PathBuf};
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
-///
-/// The `entity_kind` component of the `datalib_id` recipe, in the
-/// upstream's vocabulary — distinct from `grid_rows.kind`, which is a
-/// display label for the grid's Kind column ('Chat', 'Slack Thread')
-/// and may be reworded without re-keying anything.
 pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 
 use anyhow::{Context, Result};
@@ -51,18 +46,6 @@ pub struct RenderProfile {
     /// `grid_rows.upstream_entity_kind` for this profile's chat-level
     /// rows — the `entity_kind` component of the `datalib_id` recipe
     /// that minted their `uuid`.
-    ///
-    /// Per-profile rather than a chat-common constant because a
-    /// provider can render more than one shape of top-level page
-    /// through this path: the Claude provider runs conversations and
-    /// Claude *Projects* through two profiles, and a project page is not a
-    /// conversation. Hardcoding `"conversation"` here stamped a
-    /// backpointer on project rows that regenerated a different id —
-    /// caught by `ingested_tng_test`'s round-trip check, invisible
-    /// otherwise.
-    ///
-    /// Must match the kind the provider's `ids` module used; the
-    /// round-trip check is what enforces it.
     pub chat_entity_kind: &'static str,
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
@@ -80,16 +63,6 @@ pub struct RenderSummary {
     pub reactions_rendered: usize,
 }
 
-/// Render every bucket of every chat. Returns aggregate counts; the
-/// per-doc work is delegated to [`render_one`].
-///
-/// `blobs_by_chat` maps `chat.id` to the per-chat
-/// [`BlobBundle`](datalib_etl::blob_cas::BlobBundle) the provider
-/// pre-loaded from its raw store + sibling CAS in `parse`. Each
-/// rendered page calls `bundle.materialize_to_dir(<page_dir>/blobs)` so
-/// the markdown's `![](blobs/…)` links resolve. Chats without an entry
-/// (or with an empty bundle) render with "(not yet fetched)"
-/// placeholders for any attachment that has a `ref_id`.
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     profile: &RenderProfile,
@@ -236,11 +209,6 @@ fn render_one(
 /// `rel_path = "blobs/<filename_for(ref)>"` so the markdown emitter
 /// picks up the materialized blob instead of the "(not yet fetched)"
 /// placeholder. Same shape slack's bucket-side render uses.
-///
-/// On any io error from `materialize_to_dir` we log WARN and leave
-/// `rel_path` alone — the existing renderer branch already handles
-/// the placeholder rendering, and a partial render is strictly better
-/// than a hard fail mid-render.
 fn materialize_attachment_bytes(
     doc: &NormalizedDoc,
     page_dir: &Path,
@@ -288,9 +256,7 @@ fn output_paths(
     (md_path, page_dir)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Markdown
-// ─────────────────────────────────────────────────────────────────────
 
 fn render_markdown(
     profile: &RenderProfile,
@@ -504,20 +470,8 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Grid rows
-// ─────────────────────────────────────────────────────────────────────
 
-/// Project one bucket into its `grid_rows`.
-///
-/// A row that will not validate is **dropped and recorded**, not
-/// propagated: `build_or_record` pushes a `render_problems` entry onto
-/// `problems` and returns `None`, and the rest of the document renders.
-/// This used to be `.build()?`, which meant one message with an
-/// unparseable timestamp failed the whole source's render — which the
-/// DAG then classified as a data failure and used to poison
-/// `grid_index`, so a single bad record out of forty thousand stopped
-/// the grid updating for every provider. R2's second category.
 #[allow(clippy::too_many_arguments)]
 fn build_grid_rows(
     profile: &RenderProfile,
@@ -683,9 +637,7 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
         .join(" ")
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Fingerprint
-// ─────────────────────────────────────────────────────────────────────
 
 fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &NormalizedDoc) -> String {
     let mut h = Sha256::new();
@@ -770,9 +722,7 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
         .collect::<String>()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Format helpers
-// ─────────────────────────────────────────────────────────────────────
 // `when_ts_from_ms` / `display_ts` used to live here. Both were the
 // timestamp policy rather than anything chat-shaped, and beeper and
 // signal each carried their own drifting copy, so they moved to
@@ -807,9 +757,6 @@ mod tests {
     use super::*;
     use datalib_schema::render_problems::{Problem, Reason};
 
-    /// Project the first bucket and assert nothing was dropped. Tests
-    /// that *want* a drop call `build_grid_rows` directly and read the
-    /// problems out.
     fn rows_of(profile: &RenderProfile, chat: &NormalizedChat) -> Vec<GridRow> {
         let mut problems = Vec::new();
         let rows = build_grid_rows(
@@ -867,12 +814,6 @@ mod tests {
     }
 
     /// One unusable message must cost that message and nothing else.
-    ///
-    /// This is the regression the problem sink exists for. Before it,
-    /// `build_grid_rows` propagated the first `GridRowError` with `?`,
-    /// so this chat rendered *zero* rows and failed the source's render
-    /// — which the DAG classifies as a data failure and uses to poison
-    /// `grid_index`, taking every other provider's grid update with it.
     #[test]
     fn an_unbuildable_message_is_dropped_and_recorded_not_propagated() {
         let profile = test_profile();

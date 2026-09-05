@@ -4,37 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! `datalib-http` — single-binary search backend.
-//!
-//! Usage: `datalib-http <data_root> [--no-open] [--url-file <path>]`.
-//! The data root is the directory the pipeline (`datalib-dag`) writes
-//! into: one directory per source stanza, `unified_index/` for the
-//! search indexes, and `system/` for this server's own state — the
-//! feedback and job stores and the `system/media/` symlinked
-//! attachments. The directory is created on demand.
-//!
-//! On startup we open the default browser at the listening URL so the
-//! user doesn't need to copy-paste it; `--no-open` skips that, useful
-//! for headless runs (CI, e2e tests, debugging) and for the Tauri
-//! shell, which runs this binary as a child process (with
-//! `--url-file <path>`; see the Args docs) and points its window at the
-//! announced URL.
-//!
-//! Authentication: every request needs the per-process API token (see
-//! [`datalib_http::auth`]). It rides in the announced URL as
-//! `?token=…`, which the browser trades for a session cookie on the
-//! first load; scripts and agents read it from
-//! `<data_root>/system/api-token` and send
-//! `Authorization: Bearer …`. Set `$DATALIB_TOKEN` to pin it (that's
-//! how `dev.sh` shares one token with the Vite proxy).
-//!
-//! Bind address: `$DATALIB_BIND` if set, else `127.0.0.1:8731`. The
-//! env override exists for the playwright e2e suite which needs an
-//! ephemeral port per run; users running the bundled release just get
-//! the default.
-//!
-//! Stores: `system/feedback.doltlite_db` and `system/jobs.doltlite_db`,
-//! each through a one-connection `sqlx::SqlitePool`. The search indexes
-//! belong to the `unified_index` applet and are never opened here.
 
 use clap::Parser;
 use datalib_http::{router, ApiToken};
@@ -139,19 +108,6 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("config: {}", state.config_path().display());
 
     // Serve until a signal, then stop the applets on the way out.
-    //
-    // Without this the process had no signal handling at all, so a
-    // SIGTERM landed on the default disposition and stopped it
-    // mid-instruction: no unwind, no `Drop`, and therefore no
-    // `Supervisor::drop` — the one thing that kills the applet
-    // children. They were re-parented to init and ran until the
-    // machine was rebooted. A laptop that had been running the app and
-    // its test suite for a week was holding 186 of them (#238).
-    //
-    // `Drop` on the way out of `main` would not be enough on its own
-    // either: `AppState` is cloned into the router and into the sync
-    // worker, so the registry's refcount does not necessarily reach
-    // zero here. Hence the explicit call.
     let applets = state.applets.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(terminated())
@@ -161,11 +117,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve on the first signal that means "stop".
-///
-/// SIGKILL is deliberately absent because it cannot be caught — the
-/// gateway can do nothing on that path, which is why the applet also
-/// watches for its parent to disappear. See `applets.rs`.
 async fn terminated() {
     let interrupt = async {
         let _ = tokio::signal::ctrl_c().await;

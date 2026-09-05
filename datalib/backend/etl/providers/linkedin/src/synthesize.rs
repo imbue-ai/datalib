@@ -1,18 +1,4 @@
 //! HTTP playback synthesizer for the LinkedIn connection-photo fetch.
-//!
-//! LinkedIn download is otherwise file-backed (it walks CSVs), but the
-//! optional photo fetch ([`crate::download::photos`]) makes real web
-//! requests: GET the profile page, scrape `og:image`, GET the image. To
-//! exercise that path hermetically in the TNG fixture pipeline, this
-//! synthesizer reads `Connections.csv` and writes, for each connection:
-//!
-//!   1. a profile-page fixture whose HTML carries an `og:image` meta tag
-//!      pointing at a synthetic media URL, and
-//!   2. an image fixture at that media URL with placeholder bytes.
-//!
-//! The requests are built with the same [`HttpRequest::get(..).plain()`]
-//! the extractor issues, so [`write_fixture`]'s key matches the lookup
-//! at replay time. Fully synthetic — no real LinkedIn bytes committed.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -73,8 +59,6 @@ impl Synthesizer for LinkedinSynth {
     }
 }
 
-/// Synthetic, deterministic media URL for a profile — the `og:image` the
-/// page fixture advertises and the image fixture answers to.
 fn synthetic_image_url(profile_url: &str) -> String {
     let slug = profile_url
         .trim_end_matches('/')
@@ -105,8 +89,6 @@ fn png_headers() -> BTreeMap<String, String> {
     h
 }
 
-/// Read the `URL` column of `Connections.csv` (tolerating the `Notes:`
-/// preamble). Empty when the file is absent or has no URL column.
 fn connection_urls(export_dir: &Path) -> Result<Vec<String>> {
     let path = export_dir.join("Connections.csv");
     let Ok(raw) = std::fs::read_to_string(&path) else {

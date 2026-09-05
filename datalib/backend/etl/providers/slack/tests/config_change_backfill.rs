@@ -1,19 +1,4 @@
 //! Two-run tests for the config-change adjustments.
-//!
-//! The unit tests in `download/mod.rs` cover `Adjustments::plan` as a
-//! pure predicate. These cover the part that actually moves data: that a
-//! widened `since` on run 2 issues the bounded backfill call and lands
-//! the older messages, and that an unchanged config doesn't.
-//!
-//! Why this needs an integration test: every gate on the backfill path
-//! fails *silently to a no-op*. If the `Adjustments` plumbing into
-//! `export_channel` were dropped, `channel_ts_bounds.get(cid)` would
-//! yield `None`, the `if let Some(oldest)` would skip the backfill, and
-//! every unit test would still pass — reproducing the exact bug this
-//! machinery exists to fix.
-//!
-//! Same synth → playback → download shape as `playback_roundtrip.rs`;
-//! the two-run structure follows `chatgpt/tests/incremental_skip.rs`.
 
 use std::fs;
 use std::path::Path;
@@ -49,7 +34,6 @@ fn write_envelope(path: &Path, line: &Value) {
     fs::write(path, s).unwrap();
 }
 
-/// Envelopes for auth/channels/users, shared by every run.
 fn write_setup_fixtures(api: &Path) {
     write_envelope(
         &api.join("raw_api/auth.test/run-1.jsonl"),

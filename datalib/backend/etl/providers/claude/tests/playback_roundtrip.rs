@@ -1,11 +1,4 @@
 //! Claude synth → playback → download round-trip.
-//!
-//! Builds a JSON snapshot, synthesizes playback fixtures, runs
-//! `download::fetch` against a fresh doltlite db, and asserts the
-//! rehydrated conversations match the input. With the doltlite port
-//! we store the **raw** API payload in `conversations.payload`, so
-//! comparisons happen against the raw response shape rather than the
-//! normalized export shape.
 
 use std::collections::HashMap;
 use std::fs;

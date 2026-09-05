@@ -1,22 +1,4 @@
 //! `fsindex` download entry point.
-//!
-//! Orchestrates: open DB, optional branch checkout, load Unison-style
-//! rescan caches, truncate-and-rebuild, run the streaming walker as a
-//! producer that pushes row batches over an mpsc channel to a writer
-//! task, periodically emit progress + metrics, then write scan_meta.
-//!
-//! There is **one** scan engine — the streaming producer/consumer
-//! pipeline. Stamping (writing UUID breadcrumb files into the tree;
-//! opt-in via `stamp_me_with_uuid` in a `.fsindex.yaml`) never swaps
-//! the engine: it runs as a small post-write enrichment pass over the
-//! directory rows the stream already wrote, dropping breadcrumbs and
-//! `UPDATE`-ing `identity_uuid` in the same pre-commit working tree.
-//! Toggle the pass with `opts.no_stamp` / `--no-stamp`; the scan
-//! itself — and its progress reporting — is identical either way.
-//!
-//! See [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! §"Commit lifecycle" — `fetch` returns and the caller decides
-//! whether to `dolt_commit`.
 
 pub mod db;
 pub mod hash;
@@ -110,13 +92,6 @@ pub struct FetchSummary {
     /// database plus its `-wal` / `-shm` sidecars.
     pub cache_bytes_before: u64,
     /// And after, once the WAL has been folded back in.
-    ///
-    /// Note this does **not** shrink when entries are forgotten:
-    /// SQLite returns freed pages to its own freelist, not to the
-    /// filesystem, so a scan reporting `cache_forgot=4000` will still
-    /// show no change. The space is reused by the next insert. Only
-    /// `VACUUM` hands it back, which rewrites the whole file and is not
-    /// worth doing on a cache.
     pub cache_bytes_after: u64,
     /// Total bytes fed through blake3 this scan — i.e. the content of
     /// the `files_hashed` files only.
@@ -126,12 +101,6 @@ pub struct FetchSummary {
     pub bytes_skipped: u64,
 }
 
-/// Drop cache entries under `root` whose paths no longer exist.
-///
-/// Returns `(removed, kept_but_unvisited)`. The second number is the
-/// interesting one: those are paths this scan filtered out but which
-/// are still on disk, and keeping them is what stops a narrow scan from
-/// evicting a broad one's work.
 async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Result<(u64, u64)> {
     let cached = cache.load_under(root).await?;
     let visited = db.all_entry_ids().await?;
@@ -160,7 +129,6 @@ async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Re
     Ok((removed, still_present))
 }
 
-/// Run one download pass against `opts.root`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let total_start = Instant::now();
     let db = match opts.db.clone() {
@@ -274,10 +242,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // filters differ. One `lstat` settles it — a path that is really
     // gone is dropped, and anything still on disk is kept whatever this
     // scan thought of it.
-    //
-    // Cheap because the candidate set is small: on an unchanged tree it
-    // is empty, and otherwise it is the deletions plus whatever this
-    // scan ignored.
     let mut cache_entries_forgotten = 0u64;
     match forget_deleted(&opts.cache, &opts.root, &db).await {
         Ok((0, _)) => {}
@@ -616,16 +580,6 @@ async fn streaming_pipeline(
 /// into `files`; here we walk the directory rows and, for any dir
 /// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
 /// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`.
-///
-/// Returns the number of dirs **newly** stamped (a fresh breadcrumb
-/// written). Dirs that already carried an identity still get their
-/// `identity_uuid` column set, but don't count — matching the
-/// historical `stamped_directories` semantics.
-///
-/// Bounded by the directory count, so the extra SELECT + per-dir
-/// UPDATEs are cheap next to the file walk. Runs in the same working
-/// tree as the scan, so the stamps land in the orchestrator's single
-/// commit.
 async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> {
     let mut count = 0_usize;
     for id in db.dir_ids().await? {
@@ -666,14 +620,10 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
     Ok(count)
 }
 
-/// UUIDv7: time-ordered, so breadcrumb UUIDs sort chronologically.
 fn new_uuid() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
-/// A cache footprint as `before->after (H -> H, ±H)`, raw bytes first
-/// so the line stays greppable and the human form right after so it is
-/// readable without arithmetic.
 pub fn human_growth(before: u64, after: u64) -> String {
     let delta = if after >= before {
         format!("+{}", human_bytes(after - before))
@@ -687,8 +637,6 @@ pub fn human_growth(before: u64, after: u64) -> String {
     )
 }
 
-/// Human-readable byte count, decimal (1000-based) units to match the
-/// `MB/s` throughput readouts (which divide by 1_000_000).
 pub fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if n < 1000 {

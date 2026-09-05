@@ -1,25 +1,4 @@
 //! Close-to-real reproducer for the doltlite × sqlx-sqlite BUSY bug.
-//!
-//! Mirrors datalib-sync's per-source RawDb pattern as closely as
-//! possible without provider-specific code or network. Each "source":
-//!
-//!   1. Opens a SqlitePool (max_connections=1) on its own .doltlite_db,
-//!      runs the same SHARED_DDL the real RawDb runs (sync_runs, blobs,
-//!      plus provider tables + bookkeeping).
-//!   2. Inserts a sync_runs row via pool.begin()+execute+tx.commit (like
-//!      doltlite_raw::start_run).
-//!   3. Loops over N synthetic "items". For each:
-//!        - SELECT to check if blob already exists (interleaved read).
-//!        - pool.begin() + INSERT into provider table + INSERT into the
-//!          bookkeeping sidecar + tx.commit (multi-statement upsert).
-//!        - Every K items, sleep S ms to simulate HTTP latency between
-//!          API calls — this creates the bursty pattern.
-//!   4. UPDATEs the sync_runs row (finish_run).
-//!   5. Runs SELECT dolt_commit('-Am', ?).
-//!   6. Closes the pool.
-//!
-//! N sources run concurrently in tokio tasks. We count user-visible
-//! BUSY errors on inserts and on the dolt_commit.
 
 // Standalone debug/benchmark CLI. Doesn't run under datalib-sync,
 // has no indicatif progress bars to corrupt, and emits its results +

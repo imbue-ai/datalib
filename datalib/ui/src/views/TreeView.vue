@@ -7,23 +7,6 @@
 // points to (and `openCards(a, b, …)` spawns a parent→child spine).
 // Closing a node closes its whole subtree (children would be
 // orphaned otherwise).
-//
-// Positions are auto-layout first: every open/close/resize re-runs
-// the tidy-tree layout (treeLayout.ts) and nodes animate to their new
-// spots. Dragging a node by its title bar stores a manual offset ON
-// TOP of its layout position; descendants inherit ancestor offsets,
-// so dragging moves the whole subtree and later reflows preserve the
-// deviation instead of snapping it back. Nodes resize from any of
-// their four corners. Gestures follow the design-tool (Figma/tldraw)
-// convention:
-// wheel / two-finger scroll pans, ctrl-or-cmd+wheel and trackpad
-// pinch zoom toward the cursor, space+drag / middle-drag / background
-// drag pan. A wheel over a card is left alone so the card's own
-// content (grid, document) keeps scrolling.
-//
-// Unlike the miller layout there is NO URL sync: the tree is
-// in-memory only and lost on reload. Cards are also not carried
-// across when toggling layouts (see CardsView).
 import { computed, reactive, ref, nextTick, useTemplateRef, onMounted, onBeforeUnmount } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";

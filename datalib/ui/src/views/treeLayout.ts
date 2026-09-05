@@ -8,9 +8,6 @@
 // for programmatically spawned children. Node sizes are arbitrary;
 // a child's x depends on its own parent's width, so resizing one
 // node only shifts its descendants.
-//
-// Pure function of the node list — TreeView re-runs it on every
-// open/close/resize and animates nodes to their new spots.
 
 export type LayoutNode = {
   id: string;

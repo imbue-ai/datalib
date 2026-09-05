@@ -1,13 +1,4 @@
 //! Hermetic smoke test for `download::fetch`.
-//!
-//! Builds a small directory tree in a tempdir, scans it, snapshots
-//! the `files` table, then edits the tree (modify, touch, add) and
-//! re-scans. Asserts the per-summary cache stats are right (some
-//! files reuse, the rest rehash) and snapshots the table again to
-//! catch silent regressions in the canonicalization, the symlink
-//! handling, or the cascaded `.fsindex.yaml` ignore filter.
-//!
-//! Update with `cargo insta review` from `datalib/backend`.
 
 use std::fs;
 #[cfg(unix)]
@@ -70,10 +61,6 @@ async fn dump_files(db_path: &Path) -> String {
 /// every FILE entry should carry `stamp_kind = inode` on unix with
 /// non-NULL `inode` + `dev`. If this fails, `fswalk::decide` will never
 /// reuse anything, however unchanged the file is.
-///
-/// The cursor lives in the fingerprint cache, not the scan store — it
-/// is host state, so it is deliberately not versioned or branched. See
-/// `datalib_etl::fingerprint_cache`.
 async fn assert_inode_stamp_kind(cache: &FingerprintCache, root: &Path) {
     let tree = cache.load_under(root).await.unwrap();
     let files: Vec<&String> = tree
@@ -124,7 +111,6 @@ fn fetch_opts(db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOpti
     }
 }
 
-/// Read a directory row's `identity_uuid` from the `files` table.
 async fn dir_identity_uuid(db_path: &Path, id: &str) -> Option<String> {
     let db = RawDb::open(db_path).await.unwrap();
     let row = sqlx::query("SELECT identity_uuid FROM files WHERE id = ? AND kind = 'dir'")
@@ -320,10 +306,6 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
 /// chain per host rather than one per root. A relative `--root` must
 /// not produce relative keys: the same relative name used from two
 /// directories would put two unrelated trees on one key.
-///
-/// Caught by running the real binary with `--root sub` from two
-/// different working directories and finding both trees stored under
-/// `sub/...`.
 #[tokio::test]
 async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
     let tmp = tempfile::tempdir().unwrap();
@@ -377,13 +359,6 @@ async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
 }
 
 /// A symlinked route to a tree must share the cache with the real one.
-///
-/// The root is canonicalized, which resolves symlinks fully, so
-/// scanning `/x/link` and `/x/real` address one set of entries instead
-/// of hashing the same bytes twice. Entries *inside* the tree are
-/// deliberately NOT resolved: fsindex records a symlink as a symlink
-/// (hashing its target string), so canonicalizing it would conflate it
-/// with whatever it points at.
 #[tokio::test]
 async fn a_symlinked_root_shares_the_cache_with_its_real_path() {
     let tmp = tempfile::tempdir().unwrap();
@@ -445,10 +420,6 @@ async fn a_symlinked_root_shares_the_cache_with_its_real_path() {
 
 /// A path that is really gone leaves the cache; a path this scan merely
 /// filtered out does not.
-///
-/// Those look identical from inside one scan — neither wrote a row —
-/// and treating them the same is what let an early version evict a
-/// broad scan's work. One `lstat` tells them apart.
 #[tokio::test]
 async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
     let tmp = tempfile::tempdir().unwrap();
@@ -499,11 +470,6 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
 }
 
 /// The scan reports which cache it used and how much moved through it.
-///
-/// The cache lives outside both the data root and the scan store, so it
-/// is the one input a reader cannot infer from the command line — and
-/// "why did this rescan hash everything?" is unanswerable without the
-/// read/write counts.
 #[tokio::test]
 async fn the_summary_accounts_for_the_cache() {
     let tmp = tempfile::tempdir().unwrap();

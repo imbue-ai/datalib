@@ -1,20 +1,4 @@
 //! The path a step writes, which is also the step's id.
-//!
-//! An artifact is addressed by a `/`-separated path relative to
-//! `data_root`, and the path names the whole tree rooted there (a file
-//! is a one-node tree). A step owns exactly one such tree, and its
-//! `id` *is* that path — see `docs/dev/step_identity.md`.
-//!
-//! That identity is what makes this type as small as it is. There is
-//! nothing to match and nothing to overlap: two steps writing one tree
-//! would have to share an id, which the config loader already refuses,
-//! so single-writer holds by construction. Edges are the `inputs` a
-//! step declares, which are the ids of the steps it reads.
-//!
-//! This type used to be `ArtifactPat`, a glob pattern with `*` / `**`
-//! segments, an overlap test, and a conflict test — the machinery
-//! edge *derivation* needed when outputs were free-form paths. All of
-//! it is gone; what remains is a validated relative path.
 
 use std::fmt;
 
@@ -27,14 +11,6 @@ pub struct ArtifactPath {
 }
 
 impl ArtifactPath {
-    /// Parse and validate. Surrounding `/` are trimmed, so `"/a/b/"`
-    /// and `"a/b"` are the same path.
-    ///
-    /// Rejects the shapes that would let a path escape the data root or
-    /// name something a directory can't be: empty, an empty segment,
-    /// `.` / `..`. Wildcards are no longer special — a `*` is now just
-    /// a character no id should contain, and the config loader's id
-    /// rules refuse it there.
     pub fn parse(raw: &str) -> anyhow::Result<Self> {
         let raw = raw.trim_matches('/');
         if raw.is_empty() {

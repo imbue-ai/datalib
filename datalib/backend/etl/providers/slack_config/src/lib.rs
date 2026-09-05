@@ -56,11 +56,6 @@ pub struct SlackApiSync {
     /// knob that decides how far back the mirror goes, so "just the last
     /// week" means setting this to seven days ago. Unset defaults to
     /// 2024-01-01 (the provider's `DEFAULT_SINCE`).
-    ///
-    /// Moving it earlier backfills the newly-covered window on the next
-    /// run; moving it later is a no-op, since nothing in the pipeline
-    /// deletes already-mirrored messages. See the provider's
-    /// `DOWNLOAD.md` for how that is detected.
     #[serde(default)]
     pub since: Option<String>,
     /// Also mirror channels the account can see but isn't a member of.
@@ -74,35 +69,10 @@ pub struct SlackApiSync {
     /// channels. **Off unless set**, and deliberately so: DMs are the
     /// most sensitive thing in a workspace, and an upgrade must not
     /// start mirroring them because a new field appeared.
-    ///
-    /// Orthogonal to `channels` / `all_channels`, which scope the
-    /// channel half only. Setting `channels` and `dms = true` mirrors
-    /// those channels *and* your DMs; it does not filter DMs by
-    /// channel name (a DM has no channel name to match).
     #[serde(default)]
     pub dms: bool,
     /// Restrict DM mirroring to conversations with these people. Unset
     /// (with `dms = true`) means every DM the account can see.
-    ///
-    /// Entries name a *person*, not a conversation, because that is the
-    /// only handle a DM has: a Slack user id (`U024BE7LH`) or any of
-    /// that user's names — handle, display name, or real name — with an
-    /// optional leading `@`. Matching is case-insensitive. This is the
-    /// `@`-namespace counterpart to `channels`' `#`-namespace, which is
-    /// why it is a separate list rather than more entries in `channels`.
-    ///
-    /// An entry that matches nobody in the mirrored user directory is a
-    /// loud `warn!`, not a silent empty result.
-    ///
-    /// **Group DMs are skipped while this is set.** `conversations.list`
-    /// describes an `mpim` with a mangled composite handle
-    /// (`mpdm-alice--bob--carol-1`) and no member list, so "is this
-    /// group a conversation with Alice?" can't be answered without a
-    /// per-group extra call. Rather than guess by string-splitting a
-    /// name that may itself contain dashes, the allowlist covers 1:1
-    /// DMs only; leave it unset to mirror group DMs too.
-    ///
-    /// Requires `dms = true` — see [`SlackApiSync::validate`].
     #[serde(default)]
     pub dm_users: Option<Vec<String>>,
 }

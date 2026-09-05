@@ -1,17 +1,13 @@
 //! Decrypt → mirror → commit for a single WhatsApp backup directory.
 //!
-//! Entry point is [`ingest`]: given `backup_dir`
-//! (containing `Databases/msgstore.db.crypt15` and `Media/`), the
-//! 32-byte root key, and a target `wa_raw.doltlite_db` path, decrypts
-//! the message store to a tempfile, walks the curated tables into the
-//! target db (drop-and-rebuild), registers media files by blake3, and
-//! issues a single `dolt_commit`.
+//! [`ingest`] takes `backup_dir`, the 32-byte root key and a target
+//! `wa_raw.doltlite_db`: it decrypts the message store to a tempfile, walks
+//! the curated tables into the target (drop-and-rebuild), registers media by
+//! blake3, and issues one `dolt_commit`.
 //!
-//! The decrypted msgstore lives in a `tempfile::NamedTempFile` and is
-//! dropped at the end of `ingest`; the plaintext never touches a
-//! user-visible path. Media files are read directly from
-//! `backup_dir/Media/` (WhatsApp stores them in the clear) so no
-//! plaintext copy of those is ever made.
+//! No plaintext ever reaches a user-visible path — the decrypted msgstore is a
+//! `NamedTempFile` dropped at the end, and media are read in place from
+//! `backup_dir/Media/`, which WhatsApp already stores in the clear.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -79,14 +75,6 @@ impl RawDb {
     }
 }
 
-/// Full pipeline: decrypt, mirror, commit.
-///
-/// `backup_dir` must contain `Databases/msgstore.db.crypt15`. If a
-/// sibling `Media/` directory exists, every file under it is registered
-/// in `wa_media_files`; absent silently means "no media to register".
-///
-/// `target_db_path` is the doltlite file to populate. Created if absent;
-/// extended in-place if present (drop-and-rebuild of the `wa_*` tables).
 pub async fn ingest(
     backup_dir: &Path,
     root_key: &[u8; 32],
@@ -182,8 +170,6 @@ async fn fetch_with_pool(
     Ok(summary)
 }
 
-/// Sqlite source-side pool (the decrypted msgstore.db). Read-only,
-/// single connection.
 async fn open_source_sqlite(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
         .with_context(|| format!("sqlite uri for {}", path.display()))?
@@ -211,12 +197,8 @@ async fn truncate_wa_tables(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Per-table mirrors
-// ─────────────────────────────────────────────────────────────────────
 
-/// jid: source `_id` → raw_string lookup table for rekey of every
-/// `*_jid_row_id` column the other tables carry.
 async fn mirror_jid(
     src: &SqlitePool,
     dst: &SqlitePool,
@@ -260,7 +242,6 @@ async fn mirror_jid(
     Ok(map)
 }
 
-/// chat: source `_id` → chat_jid (= jid_map[chat.jid_row_id]).
 async fn mirror_chat(
     src: &SqlitePool,
     dst: &SqlitePool,
@@ -401,13 +382,10 @@ async fn mirror_message(
         let from_me: i64 = r.get("from_me");
         let key_id: String = r.get("key_id");
         let Some(chat_jid) = chat_map.get(&chat_row_id).cloned() else {
-            // Every msgstore ships with a synthetic seed row at
-            // `_id=1` with `chat_row_id=-1` and `key_id="-1"` —
-            // it's an Android-side schema artifact, not a real
-            // message. Drop it silently. Other orphan rows
-            // (real `key_id`, missing chat) still WARN because
-            // they're worth flagging — maybe a chat row was
-            // pruned, maybe the source is corrupted.
+            // Every msgstore ships a synthetic seed row at `_id=1` — an
+            // Android schema artifact, not a message. Other orphan rows
+            // still WARN, since a pruned chat or a corrupt source is worth
+            // flagging.
             if chat_row_id == -1 && key_id == "-1" {
                 tracing::debug!(message_id = id, "wa_message: dropping msgstore seed row");
             } else {
@@ -770,26 +748,18 @@ async fn mirror_message_add_on_reaction(
     Ok(())
 }
 
-/// Register every media file in `wa_media_files`, and make sure its
-/// bytes are in the sibling blob_cas keyed by blake3.
+/// Register every media file in `wa_media_files` and make sure its bytes are
+/// in the sibling blob CAS, keyed by blake3. Render joins
+/// `wa_message_media.file_path` → `wa_media_files.relative_path` and uses that
+/// row's blake3 as the CAS key.
 ///
-/// Render resolves an attachment by joining
-/// `wa_message_media.file_path` → `wa_media_files.relative_path`, then
-/// uses that row's blake3 as the CAS key.
+/// One scan of `Media/` produces path, size and hash without opening a file,
+/// because the host fingerprint cache vouches for anything whose stat has not
+/// moved; bytes are read only for hashes the CAS lacks, in bounded batches.
+/// A real `Media/` folder is gigabytes.
 ///
-/// One scan of `Media/` produces the metadata rows outright — path,
-/// size and hash — without opening a single file, because the host
-/// fingerprint cache already vouches for anything whose stat has not
-/// moved. Bytes are then read only for hashes the CAS does not already
-/// hold, in bounded batches.
-///
-/// Both halves of that are new. This used to read *every* media file
-/// on *every* run, hold all of their bytes in memory at once, and hash
-/// each twice — sha256 for the table key and blake3 for the CAS. A
-/// real `Media/` folder is gigabytes.
-///
-/// Dot-prefixed entries (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`)
-/// are WhatsApp's own scratch state, not message media.
+/// Dot-prefixed entries (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`) are
+/// WhatsApp's own scratch state, not message media.
 async fn mirror_media_files(
     dst: &SqlitePool,
     target_db_path: &Path,

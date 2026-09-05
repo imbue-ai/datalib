@@ -1,14 +1,4 @@
 //! Signal download entry point.
-//!
-//! Discovers the latest `signal-backup-*` snapshot under
-//! `opts.snapshot_root`, decrypts it with the AEP read from
-//! `opts.aep_env_var` (default `SIGNAL_BACKUP_PASSPHRASE`), iterates frames,
-//! and UPSERTs them into the doltlite raw store. One backup snapshot
-//! per fetch — older snapshots are ignored; cleaning them up is the
-//! user's problem.
-//!
-//! The AEP never lands on disk: we read it from the env at call time,
-//! pass it through the [`Snapshot::open`] derivation, and drop it.
 
 pub mod db;
 pub mod schema_raw;
@@ -93,12 +83,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     if opts.control.refetch_blobs {
-        // Wipe the attachment edge table + its bookkeeping so the
-        // next walk re-decrypts every attachment. `cas_objects`
-        // itself is never wiped — re-decrypted bytes hash to the
-        // same blake3 and the `INSERT OR IGNORE` on the CAS side
-        // is a no-op. This is the Signal-specific equivalent of the
-        // per-provider equivalent for `refetch_blobs`.
+        // Wipe the attachment edge table and its bookkeeping so the next
+        // walk re-decrypts. `cas_objects` is never wiped — re-decrypted
+        // bytes hash to the same blake3 and the CAS insert is a no-op.
         sqlx::query("DELETE FROM chat_item_attachments")
             .execute(db.pool())
             .await
@@ -137,12 +124,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         files_root = %files_root.display(),
     );
 
-    // Resume cursor — fast path. Fingerprint the snapshot by the
-    // content of its three files and look that up against
-    // `ingested_backups`. No decrypt on the skip, and the digests come
-    // from this host's shared cache, so a snapshot something else
-    // already walked costs three stat calls. See
-    // `schema_raw::snapshot_fingerprint`.
+    // Resume cursor, fast path: fingerprint the snapshot by the content of its
+    // three files and look it up in `ingested_backups`. No decrypt on the skip,
+    // and the digests come from this host's shared cache, so a snapshot
+    // something else already walked costs three stat calls.
     let fingerprint = schema_raw::snapshot_fingerprint(&opts.cache, &snapshot_dir)
         .await
         .with_context(|| format!("snapshot fingerprint {}", snapshot_dir.display()))?;
@@ -195,29 +180,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         ..Default::default()
     };
 
-    // Accumulate entity rows in memory and bulk-upsert via the
-    // generic `bulk_upsert_in_tx` helper at the end. Every table
-    // (including singleton `account` and the new attachment table)
-    // goes through the same code path — see
-    // `docs/dev/data_architecture_ingestion.md` §"One writer per row"
-    // and §"Bulk-upsert as the standard write path". Attachment
-    // bytes are decrypted during the frame walk (per-attachment
-    // AES-256) but the CAS + entity-table writes are batched via
-    // `PendingAttachments` and flushed once at the end.
+    // Entity rows accumulate in memory and go out through the generic
+    // `bulk_upsert_in_tx` at the end — every table by the same path. Attachment
+    // bytes are decrypted during the frame walk but their CAS and entity writes
+    // are batched through `PendingAttachments`.
     let mut accounts: Vec<AccountRow> = Vec::new();
     let mut recipients: Vec<RecipientRow> = Vec::new();
     let mut chats: Vec<ChatRow> = Vec::new();
     let mut chat_items: Vec<ChatItemRow> = Vec::new();
     let mut pending_attachments = PendingAttachments::default();
 
-    // Skip-check map: pre-load `(media_name → blake3)` for every
-    // attachment we have already decrypted in a prior run. Lets us
-    // skip the AES decrypt step for media files that appear in this
-    // snapshot but were already processed in an earlier one (common
-    // when two snapshots share an unchanged photo). One query,
-    // O(N) memory, vs. N per-row queries during the walk. After
-    // `--refetch-blobs` the table is empty so the map is empty and
-    // every attachment gets re-decrypted.
+    // Pre-load `(media_name → blake3)` for everything decrypted in a prior
+    // run, so an attachment shared between two snapshots skips the AES
+    // step. One query and O(N) memory, against N per-row queries during
+    // the walk. Empty after `--refetch-blobs`, so everything re-decrypts.
     let already_decrypted: std::collections::HashMap<String, String> = {
         let rows = sqlx::query(
             "SELECT ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
@@ -279,13 +255,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
 
-                // Walk attachments: decrypt synchronously (AES-256
-                // can't be batched), then queue the entity-row +
-                // CAS bytes into `PendingAttachments` for the
-                // end-of-fetch bulk flush. Re-downloads skip cheaply
-                // via the new `chat_item_attachments` table's
-                // `(ref_id, blake3)` index — see
-                // [`schema_raw::CHAT_ITEM_ATTACHMENTS_DDL`].
+                // Decrypt synchronously (AES-256 can't be batched), then
+                // queue the entity row and CAS bytes for the end-of-fetch
+                // flush. Re-downloads skip cheaply via
+                // `chat_item_attachments`'s `(ref_id, blake3)` index.
                 if let Some(backup::chat_item::Item::StandardMessage(sm)) = &ci.item {
                     for (idx, att) in sm.attachments.iter().enumerate() {
                         ingest_attachment(
@@ -358,14 +331,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// Hash the three on-disk files of a Signal snapshot directory
-/// (`metadata || main || files`) into a single Blake3 hex string,
-/// alongside the total byte count.
-///
-/// See `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC` for the canonical
-/// statement of the recipe. Streams each file in 64 KiB chunks so we
-/// don't materialize the whole thing in memory — `main` can be tens
-/// of MB.
 fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
     use std::io::Read;
     let mut hasher = blake3::Hasher::new();
@@ -422,14 +387,6 @@ struct DecryptedCas {
 /// `<files_root>/XX/<media_name>` tree and queue them for batched
 /// CAS + entity-table writes via the `PendingAttachments`
 /// accumulator.
-///
-/// Quietly does nothing when the attachment doesn't carry the
-/// fields we need to locate it on disk (no `LocatorInfo`, no
-/// `local_key`, integrity check is `encrypted_digest` rather than
-/// `plaintext_hash`, …). Signal's wire format permits all of those
-/// states for valid attachments — they just mean we don't have the
-/// local plaintext to surface, so the Render pass renders the
-/// message text without an inline link.
 #[allow(clippy::too_many_arguments)]
 fn ingest_attachment(
     files_root: &Path,
@@ -569,9 +526,6 @@ async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()
     .await
 }
 
-/// Pick the newest `signal-backup-*` subdir under `root`. Signal's
-/// dirname format is `signal-backup-YYYY-MM-DD-HH-MM-SS`, which sorts
-/// lexicographically the same as chronologically.
 fn pick_latest_snapshot(root: &Path) -> Result<PathBuf> {
     let mut best: Option<(String, PathBuf)> = None;
     let entries =

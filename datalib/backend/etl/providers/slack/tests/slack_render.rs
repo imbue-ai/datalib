@@ -1,8 +1,4 @@
 //! Golden test for `slack::render` against the TNG fixture.
-//!
-//! Renders the fixture into a tempdir, snapshots the per-thread `.md`
-//! payloads. Incrementality (dolt_diff-driven skip) is exercised by
-//! `slack_incremental.rs` against a real doltlite DB.
 
 use std::collections::BTreeMap;
 use std::fs;

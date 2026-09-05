@@ -1,15 +1,5 @@
 //! Claude (claude.ai) downloader entry point — the `claude_api`
 //! source type's download wave. Port of `src/download/claude_web.py`.
-//!
-//! Writes into a single doltlite database file
-//! (`<data_root>/<name>/raw/entities.doltlite_db`). Conversations are stored as
-//! the **raw** `/api/...` payload — the export-shape normalization
-//! used to happen here at fetch time, but now lives in `render`
-//! so the raw store stays as close to the wire as possible.
-//!
-//! The sibling [`export`] module is the other writer of these same
-//! tables: it ingests an unpacked bulk export (`claude_export`) rather
-//! than calling an API, so one renderer serves both source types.
 
 pub mod api;
 pub mod db;
@@ -50,25 +40,12 @@ const CLAUDE_ORIGIN: &str = "https://claude.ai";
 /// How long a completed `/organizations` listing stays good. Matches
 /// slack's `MANIFEST_TTL`, and for the same reason: the org set is
 /// near-static, so re-listing it on every download is pure waste.
-///
-/// NOTE — this cache was added on a diagnosis that turned out to be wrong,
-/// and may not have been necessary. See the sweep comment in `fetch`.
 pub const ORGS_TTL: chrono::Duration = chrono::Duration::hours(6);
 const ORGS_SWEEP_KEY: &str = "orgs";
 
 /// How long a project's knowledge-doc listing stays good.
-///
-/// The project *listing* is refetched every run (one request per org),
-/// and a changed `updated_at` forces a doc refetch — that is the same
-/// incrementality the conversation walk uses. But we have not confirmed
-/// that adding or editing a knowledge document bumps the project's
-/// `updated_at`, and if it doesn't, an `updated_at`-only rule would let
-/// docs go stale forever. This TTL is the floor that bounds that risk:
-/// worst case one extra request per project per day.
 pub const PROJECT_DOCS_TTL: chrono::Duration = chrono::Duration::hours(24);
 
-/// Per-project sweep-marker key for the docs listing. Namespaced by
-/// project UUID so each project ages independently.
 fn project_docs_sweep_key(project_uuid: &str) -> String {
     format!("project_docs:{project_uuid}")
 }
@@ -227,44 +204,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // with setup instructions — instead of first emitting a
         // misleading account-fetch warning and then dying on a cryptic
         // curl error.
-        //
-        // But re-listing on every download is waste: the org set changes
-        // maybe once a year, and the manual-e2e golden runs the pipeline
-        // three times per invocation. So reuse the stored rows while a
-        // completed sweep is younger than ORGS_TTL, mirroring slack's
-        // `conversations.list` / `users.list` markers.
-        //
-        // ── Why this cache exists, and why it may not have needed to ──
-        //
-        // It was added 2026-08-17 to stop claude.ai returning HTTP 403 on
-        // this endpoint during golden runs, on the theory that we were being
-        // rate-limited for calling it too often. That theory was wrong.
-        //
-        // The 403 carries `cf-mitigated: challenge`, `server: cloudflare`,
-        // and a `Just a moment...` HTML body, with NO Retry-After and no
-        // x-ratelimit-* headers. It is Cloudflare's interactive bot
-        // challenge, not a quota — nothing expires, and no amount of backing
-        // off clears it. What clears it is looking like a browser: with
-        // LATCHKEY_CURL pointed at
-        // //datalib/backend/etl:latchkey_curl_impersonate the same request
-        // returns 200 immediately, and without it, it 403s no matter how few
-        // calls you have made. (The pre-existing note that disabled the
-        // claude stanza in the manual-e2e config two months earlier
-        // blamed "rate limiting" for the same 403 — quite possibly the same
-        // misdiagnosis.)
-        //
-        // The cache is kept because it is independently worth having —
-        // one listing per invocation instead of three, for data that is
-        // effectively static — but it should not be credited with fixing the
-        // 403s, and if it is ever in the way, removing it costs little.
-        // Don't let it become load-bearing in someone's mental model of why
-        // claude downloads work.
-        //
-        // The preflight survives where it matters: a cold store has no
-        // marker, so a first run — the one where a missing registration or
-        // dead sessionKey is actually likely — still calls upstream and
-        // still fails loudly. Only a warm store, which has already proven
-        // the credential once, skips.
         let cached_orgs = match db.sweep_age(ORGS_SWEEP_KEY).await {
             Ok(Some(age)) if age < ORGS_TTL => match db.load_orgs().await {
                 // An empty `orgs` table with a fresh marker shouldn't
@@ -348,11 +287,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // labels stale: a conversation resolves its `project` grid
         // column through `project_name_by_uuid`, and with no projects
         // mirrored that column falls back to a bare UUID.
-        //
-        // `project_uuids` is the knob for narrowing this walk; empty
-        // means every project. Best-effort: a project failure warns and
-        // is counted, but does not abort the chat mirror, which is the
-        // main event.
         if opts.projects {
             let only: HashSet<String> = opts
                 .project_uuids
@@ -397,11 +331,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // reset per org makes the bar jump backwards (e.g. `77/58`
         // when the second org's length is smaller than the count
         // already accumulated from the first).
-        //
-        // No pre-seed: we only ever write a row after a successful
-        // detail fetch. The next sync's listing is the source of truth
-        // for "what should exist." A previously-failed fetch is
-        // naturally retried because no row exists yet.
         struct OrgPlan<'a> {
             org_uuid: String,
             org_name: String,
@@ -590,24 +519,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// Mirror every org's Claude Projects: the project metadata rows plus
-/// each project's knowledge documents.
-///
-/// Incrementality mirrors the conversation walk — the listing is one
-/// request per org and a project whose `updated_at` is unchanged is not
-/// re-written — with one addition: knowledge docs live behind a
-/// per-project [`PROJECT_DOCS_TTL`] sweep marker, because we have not
-/// confirmed that editing a document bumps the project's `updated_at`.
-///
-/// Best-effort throughout. A 403 on an org means "no project permission
-/// here" (the same shape `list_conversations` already handles); any
-/// other failure warns, counts into `summary.errors`, and moves on
-/// rather than aborting the conversation mirror.
-///
-/// `only` narrows the walk to a specific set of project UUIDs when
-/// non-empty (config `sync.project_uuids`). It filters *after* the
-/// listing, not instead of it: the listing is one request per org and
-/// it is where the project metadata comes from.
 #[allow(clippy::too_many_arguments)]
 async fn sync_projects(
     client: &mut ClaudeClient,
@@ -785,28 +696,6 @@ async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: boo
     }
 }
 
-/// Sort the string arrays that the API returns as unordered *bags*, so
-/// re-fetching an unchanged project lands identical bytes.
-///
-/// `permissions` is a set of capability names. The API returns the same
-/// eight strings in a different order on different fetches, which makes
-/// the stored payload differ from itself: `dolt_diff_projects` reports a
-/// change, the project re-renders, and the manual-e2e golden's
-/// `--reset-and-redownload` stability check fails on content that never
-/// actually changed.
-///
-/// Sorting is the right fix rather than declaring the field volatile:
-/// the *contents* are content — losing a permission is a real change we
-/// want to see — it is only the order that carries no information.
-///
-/// The general rule, of which this is one instance: **an unordered
-/// collection from an API must be given an order before it is stored.**
-/// JSON arrays preserve whatever order the server happened to emit, and
-/// nothing upstream promises that is stable.
-///
-/// The export ingest ([`export::ingest`]) runs this too: an export is
-/// generated from the same upstream data, so a re-export can reorder
-/// the same bag just as a re-fetch can.
 pub(crate) fn canonicalize_project_payload(payload: &Value) -> Value {
     let mut out = payload.clone();
     if let Some(permissions) = out.get_mut("permissions").and_then(Value::as_array_mut) {
@@ -849,9 +738,6 @@ async fn upsert_project(
     commit_rows(db, &[row], now).await
 }
 
-/// Write one project's knowledge documents. Returns how many rows were
-/// written. Docs carry their text inline, so there is nothing to fetch
-/// past this listing and nothing to put in the CAS.
 async fn upsert_project_docs(
     db: &RawDb,
     docs: &[Value],
@@ -1087,14 +973,6 @@ async fn save_conversation(
     commit_rows(db, &[row], now).await
 }
 
-/// `(uuid, display name)` for one `/organizations` entry, or `None`
-/// when it carries no uuid.
-///
-/// The fallback label is the uuid's leading 8 characters — taken with
-/// `char_indices` rather than a byte slice, so an unexpected non-ASCII
-/// id truncates instead of panicking mid-codepoint. Three call sites
-/// (conversation listing, single-conversation fetch, project listing)
-/// need exactly this pair.
 fn org_identity(org: &Value) -> Option<(&str, String)> {
     let uuid = org.get("uuid").and_then(|v| v.as_str())?;
     let name = match org.get("name").and_then(|v| v.as_str()) {
@@ -1104,11 +982,6 @@ fn org_identity(org: &Value) -> Option<(&str, String)> {
     Some((uuid, name))
 }
 
-/// Open a transaction, bulk-upsert `rows`, commit.
-///
-/// Every entity write in this module has exactly this shape, and
-/// `T::TABLE` supplies the error context, so call sites carry only the
-/// row construction that actually differs between them.
 async fn commit_rows<T: datalib_etl::bulk::BulkUpsertable>(
     db: &RawDb,
     rows: &[T],
@@ -1128,8 +1001,6 @@ async fn commit_rows<T: datalib_etl::bulk::BulkUpsertable>(
         .with_context(|| format!("commit {} upsert tx", T::TABLE))
 }
 
-/// Bulk-upsert helpers — same `now` as the rest of the fetch so the
-/// bookkeeping sidecars all share a timestamp.
 async fn upsert_users(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
     if payloads.is_empty() {
         return Ok(());
@@ -1185,8 +1056,6 @@ async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
     commit_rows(db, &rows, now).await
 }
 
-/// Pull `users.json` entries from an existing bulk-export directory
-/// into the DB. Best-effort: missing file is fine.
 async fn ingest_export_users(db: &RawDb, export_dir: &Path, now: &str) -> Result<()> {
     let path = export_dir.join("users.json");
     if !path.exists() {
@@ -1213,9 +1082,6 @@ fn pick_user_fields(acct: &Value) -> Value {
     Value::Object(obj)
 }
 
-/// Walk a conversation tree's `chat_messages[*].files[]` and
-/// queue every unique attachment for the end-of-conversation CAS
-/// flush. Skips files we already have bytes for.
 async fn fetch_files_for(
     db: &RawDb,
     conv: &Value,
@@ -1349,8 +1215,6 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<S
     }
 }
 
-/// Parse a `since` config value: full RFC 3339 or bare `YYYY-MM-DD`
-/// (assumed UTC midnight). Same accepted forms as slack's `since`.
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
     let t = datalib_time::parse_strict(s)
         .or_else(|_| datalib_time::parse_yyyy_mm_dd_assumed_utc(s))
@@ -1358,9 +1222,6 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
     Ok(t.inner().with_timezone(&Utc))
 }
 
-/// `since` scope check on a listing item's `updated_at`. An item with
-/// a missing or unparseable timestamp is conservatively in scope —
-/// better to fetch it than to silently drop it.
 fn updated_at_in_scope(updated_at: Option<&str>, since: Option<&DateTime<Utc>>) -> bool {
     let Some(since) = since else {
         return true;
@@ -1467,13 +1328,6 @@ mod tests {
     // ── unordered bags from the API ──────────────────────────────────
 
     /// Two fetches of an unchanged project must serialize identically.
-    ///
-    /// The API returns `permissions` as a set, and the order varies
-    /// between fetches. Left alone that makes the payload differ from
-    /// itself: `dolt_diff_projects` reports a change, the project
-    /// re-renders, and the manual-e2e golden's `--reset-and-redownload`
-    /// stability check fails on content that never changed. Observed
-    /// 2026-08-31, which is what prompted this.
     #[test]
     fn project_permissions_are_stored_in_a_stable_order() {
         let one = serde_json::json!({

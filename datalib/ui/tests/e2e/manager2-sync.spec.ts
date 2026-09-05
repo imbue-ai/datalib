@@ -1,35 +1,6 @@
 // Driving a real sync from the Pipeline grid, and watching the whole
 // sequence it produces.
 //
-// The unit suite (src/config/pipelineStatus.test.ts) replays synthetic
-// frames through the same state machine, which pins what each frame
-// *means*. It cannot tell you the frames a real backend emits, or in
-// what order. That is this file's job: one real `datalib-dag` run,
-// driven from the button a person presses, sampled the way the grid
-// itself sees it.
-//
-// The pipeline is real and entirely local: no network, no credentials.
-//
-//   pdfs/raw -> pdfs/rendered_md    the `pdf` provider, over the
-//                                   checked-in TNG corpus
-//   docs/raw                        the `fsindex` scanner, over the
-//                                   tree materialize_tng_root.sh drops
-//                                   into every fixture root
-//
-// `pdf` is the local-only provider that has *both* halves, which is why
-// it carries this spec: a `raw -> rendered_md` edge is what makes
-// "everything downstream is queued too" a real assertion about the DAG
-// rather than a contrived one. `fsindex` (download-only) is the
-// unrelated second source — the one whose history must not move.
-//
-// Both are read-only against what they scan: `pdf` keys documents on
-// content hash and writes only into its raw store, and `fsindex`'s
-// breadcrumb `stamp` defaults off. The binary and the corpus arrive as
-// FW_E2E_DATALIB_STEP / FW_E2E_PDF_FIXTURE_DIR, because the fixture
-// root is a temp dir with nothing on PATH.
-//
-// Two properties are worth a real backend, and both were real bugs:
-//
 //   * **A sync of one source must not touch another's history.** Every
 //     run walks the whole graph to publish output versions, and it used
 //     to write `not_selected` into the steps it walked past — so a
@@ -39,8 +10,11 @@
 //     `dag_state.json` when a step *finished*, so pressing Sync looked
 //     like nothing had happened until it was over.
 //
-// The config is shared by every spec in the run (workers: 1), so it is
-// restored in afterEach — including on failure.
+// `pdf` is the local-only provider that has *both* halves, which is why
+// it carries this spec: a `raw -> rendered_md` edge is what makes
+// "everything downstream is queued too" a real assertion about the DAG
+// rather than a contrived one. `fsindex` (download-only) is the
+// unrelated second source — the one whose history must not move.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
@@ -66,17 +40,6 @@ const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
 
 /// This spec's own data root, asked of the backend rather than read
 /// from the environment.
-///
-/// It rewrites `config.toml`, so it runs against a data root nobody
-/// else touches (`tests/e2e/config-mutating.ts`; the project's
-/// `baseURL` is what points it there). The config it writes names
-/// `data_root` absolutely, so it has to name *that* root — pointing at
-/// the shared fixture root instead would have every sync here writing
-/// into the tree twenty other specs are reading.
-///
-/// `GET /api/config` reports the absolute path of the config file the
-/// backend is serving, so its directory is the answer, and it comes
-/// from the same server the page is talking to by construction.
 let dataRoot = "";
 async function resolveDataRoot(request: APIRequestContext): Promise<string> {
   const { path } = (await (await request.get("/api/config")).json()) as {
@@ -103,6 +66,12 @@ async function writeConfig(page: Page, text: string) {
   // Reload, so the rows this test then watches were painted from the
   // config *and* the runner's record together.
   //
+  // Without this the sequence sampler below recorded
+  // `["Queued", "Never run", "Succeeded"]` and failed the monotonicity
+  // check — correctly, by its own rule that "Never run" after a queue
+  // is going backwards. The status was a rendering artifact of the save
+  // rather than anything the runner did.
+  //
   // Saving re-derives the table from the config text at once — that is
   // the point of the Advanced editor — but the per-step history behind
   // the Status and Last synced columns comes from `GET /api/dag`, which
@@ -111,12 +80,6 @@ async function writeConfig(page: Page, text: string) {
   // and nothing has yet said what it did. Mounting the page afresh
   // fetches config, jobs and the DAG record in one `Promise.all`, so
   // that in-between state cannot be observed.
-  //
-  // Without this the sequence sampler below recorded
-  // `["Queued", "Never run", "Succeeded"]` and failed the monotonicity
-  // check — correctly, by its own rule that "Never run" after a queue
-  // is going backwards. The status was a rendering artifact of the save
-  // rather than anything the runner did.
   await openManager(page);
 }
 
@@ -155,15 +118,6 @@ test.describe("a real sync, driven from the grid", () => {
   // step walked.
 
   // Carry the `[[applets]]` stanza forward from whatever was there.
-  //
-  // Replacing the file without it *removes* the unified_index applet,
-  // and the gateway restarts applets on any config change that drops or
-  // alters their entry — which tears down the resident qmd daemon and
-  // re-arms a model load for whichever spec searches next
-  // (`score-sort-order` and `search-qmd-routing` both sort after this
-  // file). Applets are invisible to the scheduler, so keeping the
-  // stanza changes nothing this spec asserts; dropping it was incidental
-  // and made an unrelated spec slower.
   const applets = () => {
     const at = original.indexOf("[[applets]]");
     return at === -1 ? "" : `\n${original.slice(at)}`;
@@ -239,12 +193,6 @@ ${applets()}`;
     // Watch the row the way the grid paints it, from before the click
     // until it settles. This is the real sequence — the unit suite
     // replays a synthetic one through the same state machine.
-    //
-    // Recorded from mutations rather than sampled on a timer, which is
-    // what this used to do (a `for(;;)` loop around
-    // `waitForTimeout(150)`). Two things change as a result: the
-    // sleep is gone, and the sequence is *complete* — see
-    // `recordStatuses`.
     await recordStatuses(page, ["pdfs/raw", "pdfs/rendered_md"]);
     // Whatever the rows say before the click. The recorder seeds itself
     // with the current value, so this is 1 for a row with a status and
@@ -301,18 +249,6 @@ ${applets()}`;
     // recorder can, and the answer is the first: on this fixture the
     // sequence is `["Queued","Succeeded"]` — the row never paints
     // Running at all.
-    //
-    // That is not a sampling artifact and not a bug. The board the
-    // status comes from is published by the worker at ~400 ms
-    // (`backend/http/src/worker.rs`), and a PDF scan of two files
-    // starts and finishes well inside one of those windows — so no
-    // published frame ever carries the step as `running`, and there is
-    // nothing for any observer to see. Asserting it would be asserting
-    // that this fixture is slow.
-    //
-    // What the complete sequence *does* buy is the check below: a
-    // backwards transition that lasted less than a sample used to be
-    // invisible, and now is not.
 
     // The sequence must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one.
@@ -351,11 +287,6 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. `pdfs/raw` is
     // already terminal here, so waiting on the render is bounded.
-    //
-    // `settleRow` again, and the log re-read afterwards: the recorder
-    // has been running throughout, so this is the whole downstream
-    // sequence rather than its two ends plus whatever a sampler
-    // happened to catch in between.
     expect(await settleRow(page, "pdfs/rendered_md", was["pdfs/rendered_md"])).toMatch(
       /^(Succeeded|Up to date)$/,
     );
@@ -525,21 +456,6 @@ ${applets()}`;
     // The whole column reversed, nulls included — not just its stamped
     // middle. This is the property that makes the order a single total
     // one rather than two rules stitched together.
-    //
-    // Worth knowing what this test does NOT pin: deleting
-    // `compareStamps` entirely leaves the whole suite green (measured).
-    // Same-offset ISO stamps sort correctly as text by accident, and
-    // "forever ago" is what AG Grid's default already does with nulls,
-    // so nothing observable here distinguishes the two. The comparator
-    // earns its place on stamps in *different* UTC offsets, which one
-    // machine cannot produce — that case lives in
-    // src/config/timeFormat.test.ts and is the real coverage.
-    //
-    // Compared on stamps, not row ids: `pdfs/raw` and its render step
-    // finish inside the same second, so they compare equal, and a
-    // stable sort leaves tied rows in the order it found them rather
-    // than swapping them on reversal. Their stamps are equal too, so
-    // the stamp sequence reverses cleanly whichever way the tie fell.
     expect(
       desc.map((r) => r.stamp),
       "descending should be ascending reversed, end to end",

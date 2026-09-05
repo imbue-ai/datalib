@@ -9,16 +9,6 @@
 // that were flat the whole way, and a series that last changed an hour
 // ago — one sample, far to the left — would draw as a single point
 // instead of the flat line it actually is.
-//
-// Hence: horizontal to the sample's instant at the old value, vertical
-// to the new one, and a run out to the right edge at whatever the last
-// value was. The response's carry-in sample (the newest one from
-// *before* the window) is what gives the left edge a value to start at.
-//
-// No plotting library. The output is a `points` string for a
-// `<polyline>` and one for the `<polygon>` under it, which is the whole
-// job — a dependency would be more code to pin and vendor than the
-// thirty lines below.
 
 /// One measurement, as the API hands it out.
 export type UsageSample = {
@@ -34,10 +24,6 @@ export type SparkOpts = {
   /// `nowMs - windowMs`.
   windowMs: number;
   /// The value the top of the plot stands for.
-  ///
-  /// Passing one shared value across a column is what makes its rows
-  /// comparable — a per-row maximum would draw a 2 kB source and a
-  /// 40 GB one as the same shape.
   max: number;
   /// The value the bottom stands for. Zero for a calibrated column,
   /// where a row's height should mean its size. Non-zero only where
@@ -122,10 +108,6 @@ export function sparkline(samples: UsageSample[], opts: SparkOpts): Spark | null
 }
 
 /// The largest value a set of series reaches, current values included.
-///
-/// This is the number a calibrated column is drawn against: it has to
-/// cover the history as well as the present, or a row that has just
-/// shrunk would draw its own past off the top of the box.
 export function calibrationMax(
   series: { bytes: number | null; history: UsageSample[] }[],
 ): number {

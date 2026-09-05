@@ -1,27 +1,5 @@
 //! The **retired** stanza-based config format — the app envelope
 //! ([`Config`]) plus a [`SourceConfig`] discriminated union over `type:`.
-//!
-//! Nothing in the shipping pipeline reads this any more; it lives here,
-//! in the migration tool, purely so an old `config.yaml` can still be
-//! translated into a current `config.toml`. Always YAML — this format
-//! predates the TOML switch and was never written in anything else.
-//!
-//! [`SourceConfig`] outlives its envelope in one respect: it is the only
-//! mapping from a source `type:` string to that provider's config
-//! schema, which is what makes it useful for validating the documented
-//! example configs (see `tests/config_examples.rs`).
-//!
-//! **Compose, don't flatten (issue #41).** Each `type:` arm of [`SourceConfig`]
-//! is a *newtype* over the provider's own `*-config` crate (`SlackConfig`,
-//! `EmailConfig`, …), so every provider's config is defined exactly once, in its
-//! crate. Each provider config *composes* a [`SourceCommon`] (`common:`) for the
-//! shared per-source envelope. `name`/`enabled` stay orchestrator-owned here.
-//!
-//! **One mechanism: [`Config::normalize`].** All cross-node derivation — folding
-//! the global `defaults:` into each source's `common`, and resolving
-//! `raw_path`/`input_path` from `data_root` — happens once, eagerly, at load.
-//! Downstream code receives a fully-resolved, self-contained tree and never
-//! re-derives anything (there are no lazy `resolved_*` accessors).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -92,13 +70,11 @@ impl Default for SyncConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Sources. A source entry is the orchestrator-owned envelope (`name`/`enabled`)
 // plus a nested `source:` discriminated union over `type:`. `type` collapses
 // what used to be three fields (`provider`, `kind`, `provenance`) into one —
 // think of `type:` as the name of a constructor and the rest of `source:` as
 // its arguments. Mirrors `SourceConfig` in `src/ingest/config.py`.
-// ---------------------------------------------------------------------------
 
 /// One entry of `sources:`. The orchestrator owns `name` (identity in the list)
 /// and `enabled` (run-or-not); everything the provider needs lives under
@@ -124,12 +100,9 @@ impl SourceEntry {
     pub fn is_managed(&self) -> bool {
         self.source.is_managed()
     }
-    /// Resolved raw-store directory (valid after [`Config::normalize`]).
     pub fn raw_path(&self) -> &Path {
         self.source.common().raw_path()
     }
-    /// Resolved input path: explicit `input_path` else the raw dir (valid after
-    /// [`Config::normalize`]).
     pub fn input_path(&self) -> &Path {
         self.source.common().input_or_raw_path()
     }
@@ -182,13 +155,6 @@ pub enum SourceConfig {
     Pdf(PdfConfig),
     /// Local music / photos / video / playlists. File-backed and
     /// **download-only**.
-    ///
-    /// Postdates the YAML format entirely — no legacy config ever named
-    /// it, and the migrator will never produce it. It is here for the
-    /// other job this enum does: being the one mapping from a `type:`
-    /// string to a provider's config schema, which is what validates
-    /// the documented example configs (see the module header and
-    /// `tests/config_examples.rs`).
     Media(MediaConfig),
 }
 
@@ -224,22 +190,18 @@ macro_rules! over_payload {
 }
 
 impl SourceConfig {
-    /// The shared per-source envelope (`common:`).
     pub fn common(&self) -> &SourceCommon {
         over_payload!(self, c => &c.common)
     }
 
-    /// Mutable access to the envelope — used by [`Config::normalize`].
     pub fn common_mut(&mut self) -> &mut SourceCommon {
         over_payload!(self, c => &mut c.common)
     }
 
-    /// Provider-local validation, delegated to the owning `*-config` crate.
     pub fn validate(&self) -> anyhow::Result<()> {
         over_payload!(self, c => c.validate())
     }
 
-    /// Wire-format discriminator value (`"slack_api"`, `"claude_export"`, …).
     pub fn type_str(&self) -> &'static str {
         match self {
             SourceConfig::ClaudeExport(_) => "claude_export",
@@ -266,9 +228,6 @@ impl SourceConfig {
         }
     }
 
-    /// True when the worker is allowed to download into / build the raw store
-    /// for this source — a `sync:` block, or (for file-backed sources) an
-    /// `input_path:` export on disk.
     pub fn is_managed(&self) -> bool {
         match self {
             // File-backed only: managed iff an `input_path:` export is set.
@@ -440,7 +399,6 @@ impl Config {
         }
     }
 
-    /// Resolve `${data_root}` and `~` in the qmd index path after load.
     pub fn resolved_qmd_index(&self) -> PathBuf {
         let s = self
             .qmd
@@ -449,9 +407,6 @@ impl Config {
         expand_tilde(&s)
     }
 
-    /// Validate cross-source invariants (non-empty + unique names) and each
-    /// source's provider-local rules (delegated to its `*-config` crate).
-    /// Called by [`load_config`] after [`Config::normalize`].
     fn validate(&self) -> Result<(), ConfigError> {
         let mut names: Vec<&str> = Vec::with_capacity(self.sources.len());
         for entry in &self.sources {
@@ -481,11 +436,6 @@ impl Config {
         Ok(())
     }
 
-    /// Enabled sources, optionally narrowed to a single source by name.
-    ///
-    /// When `$DATALIB_ONLY_SOURCE` is set and non-empty, only the matching
-    /// source is yielded (the UI's per-source "Sync now"); unset yields every
-    /// enabled source.
     pub fn enabled_sources(&self) -> impl Iterator<Item = &SourceEntry> {
         let only = std::env::var("DATALIB_ONLY_SOURCE")
             .ok()
@@ -501,8 +451,6 @@ impl Config {
         })
     }
 
-    /// Absolute path to the backend index doltlite DB:
-    /// `data_root/unified_index/grid/db.doltlite_db`.
     pub fn dolt_db_path(&self) -> PathBuf {
         datalib_core::layout::grid_index_db(&self.data_root)
     }
@@ -1074,7 +1022,6 @@ sources:
         );
     }
 
-    /// Pytest-tmp_path-style: a brand-new, uniquely-named temp dir per call.
     fn tempdir() -> PathBuf {
         tempfile::TempDir::with_prefix("datalib-cfg-")
             .expect("create tempdir")

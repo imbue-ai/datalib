@@ -1,10 +1,4 @@
 //! The uniform per-step event stream: progress, logs, and lifecycle.
-//!
-//! Steps only *emit* events; the orchestrator owns all rendering
-//! (terminal bars, dashboard, whatever). The schema matches what
-//! `TracingSink` already emits in-process today, so the same stream
-//! crosses a process boundary as NDJSON — that is exactly the
-//! subprocess protocol in [`crate::subprocess`].
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -117,15 +111,6 @@ impl EventSink for NoopSink {
 }
 
 /// One emitted line: the event, plus the wall-clock instant the sink saw it.
-///
-/// The timestamp lives here rather than on [`Event`] because it is a property
-/// of *observation*, not of the event: a step's own events are re-emitted by
-/// the runner when it reads them off the child's stdout, and the orchestrator's
-/// receive time is what you want when reconstructing a timeline across
-/// concurrent steps.
-///
-/// `flatten` keeps the wire shape flat — `{"ts":…,"event":"step_start",…}` —
-/// so existing consumers that match on `event` are unaffected.
 #[derive(Serialize)]
 struct Stamped<'a> {
     ts: String,
@@ -135,18 +120,6 @@ struct Stamped<'a> {
 
 /// Serializes each event as one JSON line. This is both the on-disk
 /// log format and the wire format a subprocess step writes on stdout.
-///
-/// Every line carries a `ts` (RFC3339, local offset). Without it the stream
-/// answers "what happened" but not "when" or "how long" — you cannot profile
-/// a run, and a step that stalls is indistinguishable from one doing work.
-/// `scripts/dag_profile.py` turns a captured stream into per-step durations
-/// and a list of suspicious gaps.
-///
-/// The `ts` is the raw material for more than that; see issue #136 for the
-/// planned work — gap-ranked log excerpting as a bounded failure report
-/// (complementary to "last N lines", which answers how a run ended rather
-/// than where it got stuck), progress-flatline detection, and per-step
-/// timings on [`StepSummary`] so a profile doesn't need the whole stream.
 pub struct NdjsonSink<W: Write + Send> {
     w: Mutex<W>,
 }

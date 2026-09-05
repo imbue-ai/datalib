@@ -1,49 +1,4 @@
 //! M3U playlists: the order, and what it points at.
-//!
-//! A playlist is the only thing in this provider that is *about* other
-//! files rather than about itself, and that shapes every decision here.
-//!
-//! # The raw target string is the data
-//!
-//! An M3U entry is a path typed by whatever wrote the file, and in a
-//! library of any age most of them are broken: written on Windows with
-//! backslashes, pointing at a drive that no longer exists, relative to
-//! a directory the playlist was later moved out of, or naming a song
-//! deleted five years ago. It is tempting to store only the entries
-//! that resolve.
-//!
-//! That would throw away the most interesting rows in the table. "This
-//! playlist references 240 tracks and I still have 187 of them" is a
-//! question worth being able to ask, and the 53 missing ones are the
-//! answer — they are a record of music that was once here. So
-//! `target_raw` is stored **verbatim**, resolution is a separate
-//! nullable column, and nothing is ever dropped for failing to
-//! resolve.
-//!
-//! Nothing is deduplicated or reordered either. A playlist that names
-//! the same track three times means it three times, and `position` is
-//! the entire content of the format.
-//!
-//! # HLS manifests are not playlists
-//!
-//! `.m3u8` is also the extension for HTTP Live Streaming manifests —
-//! the segment lists every video player and browser cache writes by the
-//! thousand. They are machine chatter, not something a person made, and
-//! indexing them would bury the real playlists.
-//!
-//! Extension cannot separate them, so the contents do: an HLS manifest
-//! declares itself with `#EXT-X-` tags (`#EXT-X-VERSION`,
-//! `#EXT-X-TARGETDURATION`, `#EXT-X-STREAM-INF`). Any file carrying one
-//! is recorded as HLS and skipped. That test is the format's own, not a
-//! heuristic about filenames.
-//!
-//! # Encoding
-//!
-//! `.m3u8` means "M3U, UTF-8" — the `8` is the encoding, which is the
-//! whole reason the extension exists. Plain `.m3u` predates that and is
-//! usually in the writer's local codepage. We decode UTF-8 when the
-//! bytes are valid UTF-8 and fall back to Latin-1 when they are not,
-//! which is lossless for the bytes and never fails.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -128,10 +83,6 @@ pub struct Playlist {
 }
 
 /// Decode UTF-8, falling back to Latin-1 rather than failing.
-///
-/// Latin-1 is the right fallback specifically because it cannot fail:
-/// every byte maps to a code point, so the worst case is mojibake in
-/// one field rather than a lost playlist.
 fn decode(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
@@ -190,14 +141,6 @@ pub fn parse(bytes: &[u8]) -> Playlist {
     pl
 }
 
-/// Where an entry points, as a root-relative slash path, when that is
-/// somewhere inside the scanned tree.
-///
-/// `playlist_rel` is the playlist's own root-relative path; relative
-/// targets resolve against its directory. Returns `None` for URLs, for
-/// absolute paths, and for anything that climbs out of the root — all
-/// of which are ordinary, and all of which leave `resolved_path` NULL
-/// with `target_raw` still recording what was asked for.
 pub fn resolve(target: &str, kind: TargetKind, playlist_rel: &str) -> Option<String> {
     if kind != TargetKind::Relative {
         return None;
@@ -234,7 +177,6 @@ pub fn resolve(target: &str, kind: TargetKind, playlist_rel: &str) -> Option<Str
     Some(parts.join("/"))
 }
 
-/// Playlist file extensions, and the format string recorded for each.
 pub fn format_of(path: &Path) -> &'static str {
     match path
         .extension()
@@ -247,7 +189,6 @@ pub fn format_of(path: &Path) -> &'static str {
     }
 }
 
-/// Root-relative, slash-separated form of a path under `root`.
 pub fn rel_path(root: &Path, path: &Path) -> Option<String> {
     let rel: PathBuf = path.strip_prefix(root).ok()?.to_path_buf();
     Some(

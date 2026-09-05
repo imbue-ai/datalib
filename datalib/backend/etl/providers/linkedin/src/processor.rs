@@ -1,10 +1,4 @@
 //! Program-A `DataProcessor`s for the `linkedin` source.
-//!
-//! LinkedIn is a file-backed export ("takeout"): [`LinkedinDownload`] ingests
-//! every CSV in the export into the raw store (optionally downloading
-//! connection photos), and [`LinkedinRender`] renders the three render
-//! feeds (messages, connections, posts). The source owns its raw store
-//! (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use std::path::PathBuf;
 
@@ -106,8 +100,6 @@ impl DataProcessor for LinkedinRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::RENDER_VERSION)
     }

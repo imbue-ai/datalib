@@ -1,31 +1,4 @@
 //! PNG payload: the chunks that determine the pixels.
-//!
-//! PNG's own critical/ancillary distinction almost gives us the answer
-//! for free — critical chunks (an uppercase first letter) are the ones
-//! a decoder must understand — so the recipe is "every critical chunk,
-//! plus `tRNS`".
-//!
-//! `tRNS` is the one ancillary chunk included, because it carries
-//! transparency for palette and grayscale images: dropping it would
-//! merge a transparent PNG with an opaque one that is otherwise
-//! identical, and that is a false *merge*, the direction we refuse.
-//!
-//! Everything else is out: `tEXt`/`iTXt`/`zTXt` (where every tagger
-//! writes), `eXIf`, `tIME`, `pHYs`, `bKGD`. So are the colour-space
-//! chunks `gAMA`, `cHRM`, `sRGB` and `iCCP` — the same call made for
-//! JPEG's ICC profile, and made the same way for the same reason (see
-//! [`super::jpeg`], which has the full argument).
-//!
-//! # The false split this recipe cannot avoid
-//!
-//! `IDAT` holds *deflate-compressed* pixels, not pixels. Running a PNG
-//! through `optipng`, or re-saving it from a tool with a different zlib
-//! level, produces byte-different `IDAT` for identical pixels — so the
-//! payload hash splits. That is the accepted direction (a false split
-//! costs a row; a false merge hides a file), but it does mean PNG
-//! benefits less from this column than JPEG or MP3 do. Decompressing to
-//! hash raw pixels would fix it and is what a future
-//! `decoded_blake3` column would do.
 
 use anyhow::Result;
 

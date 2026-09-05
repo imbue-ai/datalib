@@ -7,9 +7,6 @@
 // since head styles don't pierce the shadow boundary. Components used
 // as children of a card must also be `.ce.vue` and listed in
 // `styleSources` so their CSS lands in the root too.
-//
-// Each card runs as its own Vue app; the CardCtx arrives as a `ctx`
-// prop. Teardown is app.unmount().
 import { createApp, h, type Component } from "vue";
 import type { CardRender } from "./types";
 

@@ -2,10 +2,6 @@
 //! WHERE-builder, snippet generator, and the [`ChatMeta`] row shape the
 //! impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].
-//!
-//! Both backends speak `?` placeholders and the same `grid_rows`
-//! projection (column names + types written by `src/ingest/sql_writers.py`),
-//! so a single WHERE-builder works for both.
 
 use crate::query::{extract_uuid_suffix, Field, ParsedQuery, RowType};
 

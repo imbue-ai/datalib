@@ -1,12 +1,4 @@
 //! End-to-end synth → playback → download round-trip for GitHub.
-//!
-//! Seeds a fake event-store (the JSONL shape the synthesizer reads from),
-//! synthesizes HTTP fixtures over it, then drives `download::fetch`
-//! against a fresh doltlite database with `DATALIB_HTTP_PLAYBACK`
-//! pointed at the synthesized tree. Asserts the rehydrated DB carries
-//! the same upstream payload per key.
-//!
-//! One test per binary so the process-wide playback env var can't race.
 
 use std::collections::HashMap;
 use std::fs;

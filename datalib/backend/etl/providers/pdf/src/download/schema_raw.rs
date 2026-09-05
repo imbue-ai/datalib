@@ -1,80 +1,4 @@
 //! Raw-store schema for the `pdf` provider.
-//!
-//! # Why two tables, and why the PK is a hash
-//!
-//! The question this provider answers is "what documents do I have?",
-//! not "what files are on this disk." Those differ whenever the same
-//! PDF exists twice — and in a personal corpus it almost always does:
-//! the paper in `~/Downloads`, the copy in a Dropbox folder, the one
-//! saved out of an email. Keying on path would convert, store, and
-//! index that document three times, and a `mv` would read as a delete
-//! plus an add.
-//!
-//! So the content entity is keyed on **`blake3(bytes)`**, and locations
-//! hang off it:
-//!
-//! - [`PDF_DOCUMENTS_DDL`] — PK `blake3` (lowercase hex). One row per
-//!   distinct document: page count, classification, extracted
-//!   metadata, and the lineage hints below. A `mv` does not touch it;
-//!   a byte change produces a new row.
-//! - [`PDF_PATHS_DDL`] — PK `id` (root-relative path), FK `blake3`.
-//!   Where copies live, plus Unison's `(mtime, size, inode, dev)`
-//!   rescan cursor so an unchanged file skips the read.
-//!
-//! This mirrors fsindex's `files` / `file_stats` split and is motivated
-//! the same way (see its `DOWNLOAD.md` §"Why two entity tables"): one
-//! table changes only when content does, the other churns every scan,
-//! and mixing them makes `dolt diff` noise-dominated. The difference is
-//! which way the arrow points — fsindex keys both on path because *the
-//! tree* is its subject; we key content on the hash because *the
-//! document* is ours.
-//!
-//! # Ship of Theseus: lineage is a hint, never a key
-//!
-//! PDFs do carry identifiers. The trailer `/ID` array's first element
-//! is spec'd to be permanent for the document's lifetime, and XMP Media
-//! Management defines `xmpMM:DocumentID` (stable across edits),
-//! `xmpMM:InstanceID` (fresh per save), and `xmpMM:OriginalDocumentID`
-//! (the ancestor). Semantically that is exactly the versioning model we
-//! want.
-//!
-//! It is also unreliable in both directions. Only Adobe-lineage tooling
-//! emits XMP MM consistently — scanners, LaTeX, and browser
-//! print-to-PDF mostly omit it — and `cp` duplicates whatever is there,
-//! so two files can claim one `DocumentID`. That is the same trap
-//! fsindex documented for its `.fsindex.yaml` breadcrumbs under the
-//! heading "The UUID is not unique," and we take the same position:
-//! these columns are **indexed secondary hints, not keys**.
-//!
-//! `content_blake3` is the answer to the same question that does not
-//! depend on the producer having cooperated. It is a hash over the
-//! document's content — every object reachable from the catalog, with
-//! the Info dictionary, the XMP packet and the trailer `/ID` excluded —
-//! so it is present for every parseable PDF rather than 3 in 20, and
-//! `cp` cannot make two different documents claim one value. Retitle a
-//! PDF or add an XMP tag and `blake3` moves while `content_blake3`
-//! holds. "Show me every version of this document" is therefore
-//!
-//! ```sql
-//! SELECT blake3, title, doc_modified_at FROM pdf_documents
-//!  WHERE content_blake3 = ? ORDER BY doc_modified_at;
-//! ```
-//!
-//! and the time axis comes free from `dolt_log` / `dolt_diff` over the
-//! blake3-keyed rows, so no separate version table is needed.
-//!
-//! It is a *better* hint, not a key. A writer that renumbers objects —
-//! Acrobat "Save As", `qpdf --linearize`, Ghostscript — changes it even
-//! though nothing visual moved, so it splits where it should have
-//! merged. That direction is the safe one and is why the PK stays
-//! `blake3`: a false split costs a duplicate row, where a false merge
-//! would hide a document. See [`super::content_hash`] for the full
-//! account of what survives and what does not.
-//!
-//! We deliberately do **not** stamp identity into the PDFs themselves.
-//! fsindex stamps directories and explicitly refuses to stamp files;
-//! for us it would be worse, since writing a breadcrumb into a document
-//! changes its bytes and therefore its primary key.
 
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
@@ -136,16 +60,6 @@ pub const PDF_PATHS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_paths (
 )";
 
 /// Where the scan actually ran.
-///
-/// `pdf_paths.id` is root-relative — that is what keeps a moved data
-/// root from rewriting every row — so *something* has to remember the
-/// absolute root, or the render step cannot open the files. Recording
-/// it here rather than re-reading `input_path` from the render step's
-/// config means the two can never disagree: render converts exactly
-/// the tree that was scanned, even if the config was edited in between.
-/// Same reasoning as fsindex's `scan_meta`, and keyed the same way — on
-/// the source name from config, not the path, so the row survives a
-/// move of the root.
 pub const PDF_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_scan_meta (
     id           TEXT PRIMARY KEY,
     abs_root     TEXT NOT NULL,
@@ -195,35 +109,6 @@ impl PdfKind {
     }
 }
 
-/// Whether a document has anything worth converting today.
-///
-/// **This is a per-document question, and the classification cannot
-/// answer it.** There used to be a `PdfKind::is_convertible_without_ocr`
-/// that said `TextBased | Mixed`, while the actual gate skipped any
-/// document with a non-empty `pages_needing_ocr` — which every `Mixed`
-/// document has by definition. The two disagreed, the gate won, and no
-/// `Mixed` document ever rendered: a 200-page report with three scanned
-/// inserts lost all 197 readable pages. Its unit test could not fail,
-/// because it asserted the predicate rather than the behavior. See
-/// issue #173.
-///
-/// The rule now reads the page census instead of the label:
-///
-/// * `page_count > ocr_page_count` — at least one page carries text we
-///   can extract. That is the whole condition for having something to
-///   render; the pages we skipped stay visible in `ocr_page_count`, and
-///   the render step notes each one in the markdown.
-/// * `!has_encoding_issues` — mojibake is worse than a gap. Text from a
-///   broken font encoding *looks* like text, so it would be indexed and
-///   searched as if it meant something. An absent page is honest; a
-///   garbled one is not.
-///
-/// This mirrors the `WHERE` clause in
-/// [`super::db::RawDb::convertible_documents`], which is what actually
-/// selects, and `db.rs`'s `renders_only_documents_with_readable_pages`
-/// asserts the two agree row for row. Test the query, not this: the
-/// query is what ships, and a predicate that only agrees with itself is
-/// how #173 stayed green.
 pub fn document_is_renderable(
     page_count: i64,
     ocr_page_count: i64,

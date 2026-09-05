@@ -1,24 +1,4 @@
 //! Integration coverage for the Claude Projects mirror.
-//!
-//! The insta golden (`claude_render`) renders projects out of the
-//! **legacy JSON tree**, which is not the production path. This test
-//! covers the production one end to end: synthesize playback fixtures →
-//! `download::fetch` → doltlite raw store → `render::parse::parse`.
-//!
-//! It also pins the two incrementality claims that are easy to break
-//! silently, because breaking them costs correctness nothing and only
-//! shows up as extra requests:
-//!
-//!   * a second run with unchanged upstream re-fetches neither the
-//!     project metadata nor its knowledge documents;
-//!   * a changed project `updated_at` forces both.
-//!
-//! Both scenarios live under **one** `#[tokio::test]` on purpose: the
-//! playback root is selected by a process-wide env var, and the test
-//! harness runs `#[test]` fns on parallel threads, so two of them each
-//! pointing `DATALIB_HTTP_PLAYBACK` at their own tempdir race and one
-//! reads the other's fixtures. Same reason `reset_and_redownload.rs`
-//! holds exactly one test.
 
 use std::fs;
 use std::time::Duration;
@@ -49,8 +29,6 @@ fn conversations() -> Value {
 
 const OTHER_PROJECT: &str = "proj-2";
 
-/// A second project in the same org, so `sync.project_uuids` has
-/// something to leave out.
 fn other_project() -> Value {
     json!({
         "uuid": OTHER_PROJECT,
@@ -95,8 +73,6 @@ fn project(updated_at: &str) -> Value {
     })
 }
 
-/// Write the snapshot tree the synthesizer reads and (re)generate the
-/// playback fixtures from it.
 fn seed(api: &std::path::Path, playback: &std::path::Path, project_updated_at: &str) {
     fs::create_dir_all(api.join("projects")).unwrap();
     fs::write(
@@ -146,11 +122,6 @@ async fn projects_mirror_end_to_end() {
 /// whole run before the project walk, so a targeted refetch mirrored no
 /// projects at all — and `sync.projects` (default on) and an explicit
 /// `sync.project_uuids` were both silently ignored.
-///
-/// That is the wrong default precisely because of what the targeted
-/// conversation needs: it resolves its `project` grid column through
-/// `project_name_by_uuid`, so with no projects mirrored the column shows
-/// a bare UUID instead of the project's name.
 async fn conv_uuids_scopes_conversations_not_projects() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -301,9 +272,6 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     );
 }
 
-/// `sync.project_uuids` bounds the walk to the named projects. The
-/// per-org listing still happens (it is one request and the source of
-/// the metadata), but nothing outside the set is stored.
 async fn project_uuids_bounds_the_walk() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");

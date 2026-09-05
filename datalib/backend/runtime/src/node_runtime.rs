@@ -1,34 +1,5 @@
 //! Locate the Node runtime + npm package trees bundled with the Tauri
 //! app, so `latchkey` and `qmd` run without any Node/npm on the host.
-//!
-//! `datalib/tauri/stage-runtime.sh` stages (and the app bundles
-//! under `Contents/Resources/`) this layout:
-//!
-//! ```text
-//! runtime/
-//!   node/bin/node                  pinned Node runtime
-//!   latchkey/<version>/node_modules/latchkey/dist/src/cli.js
-//!   qmd/<version>/node_modules/@tobilu/qmd/dist/cli/qmd.js
-//! ```
-//!
-//! Trees are keyed by the exact version the Rust callers pin, so a
-//! version bump that isn't re-staged simply misses here and falls back
-//! to `npx` — same behavior as today, never a stale tree. The staging
-//! script greps its versions out of the Rust sources (see its header),
-//! which keeps the two sides from drifting silently.
-//!
-//! Resolution order for the `runtime/` root (first hit wins):
-//!   1. `$DATALIB_RUNTIME_DIR` — explicit override; tests, dev runs,
-//!      and non-Tauri packagers that ship the tree elsewhere.
-//!   2. `<exe_dir>/../runtime` — the macOS .app layout: our binaries are
-//!      bundled resources under `Contents/Resources/binaries/`, and the
-//!      runtime tree sits next to them at `Contents/Resources/runtime/`.
-//!   3. `<exe_dir>/runtime` — flat layouts (a release tarball unpacked
-//!      into one directory).
-//!
-//! A miss anywhere returns `None` and callers fall back to
-//! `npx -y <pkg>@<version>` via [`npx_command`], which is exactly the
-//! pre-bundling behavior.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -113,9 +84,6 @@ pub fn bundled_command(kind: &str, version: &str, entry_rel: &str) -> Option<Com
 /// The pre-bundling fallback: `npx -y <pkg_spec>`. Honors `$NPX_BIN` as
 /// a runtime override (handy outside bazel; bazel actions rely on the
 /// pinned `PATH` from `.bazelrc` instead — see the resolver note there).
-///
-/// The command gets its own npm cache, scoped by the ABI of the Node
-/// that will run it — see [`npx_cache_dir`] for why.
 pub fn npx_command(pkg_spec: &str) -> Command {
     let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
     let mut cmd = Command::new(&npx);
@@ -126,47 +94,11 @@ pub fn npx_command(pkg_spec: &str) -> Command {
     cmd
 }
 
-/// A private npm cache for [`npx_command`], scoped by Node's ABI.
-///
-/// npm keys the npx package directory on the **package spec alone** —
-/// `<cache>/_npx/<hash of "@tobilu/qmd@2.8.3">` — with no Node version
-/// anywhere in it. So by default every Node on a machine shares one
-/// installed tree, while a native module inside that tree may be built
-/// for exactly one `NODE_MODULE_VERSION`.
-///
-/// The original offender was named: qmd's `better-sqlite3` 12 shipped a
-/// `node-v<abi>` prebuilt. qmd 2.8.3 moved to better-sqlite3 13, whose
-/// bindings live in the tarball and are chosen by platform, and the
-/// tree-sitter grammars and node-llama-cpp resolve per-platform too — so
-/// as of that bump there is no *known* ABI-bound module left in the
-/// tree. The scoping stays anyway: it costs one re-install per ABI once,
-/// it is not re-audited on every qmd bump, and the failure it prevents
-/// surfaces as a `require()` abort deep inside a genrule.
-///
-/// Two Nodes therefore poison each other. Whichever installs first wins
-/// the directory, and the other dies in `require()` with "compiled
-/// against a different Node.js version" — every time, until someone
-/// deletes the cache, which only re-runs the race. It is not a stale
-/// cache and clearing it is not a fix.
-///
-/// Putting the ABI in the path supplies the dimension npm's key is
-/// missing. This lives here rather than at the qmd call site so the next
-/// `npx` consumer inherits the fix instead of rediscovering the bug;
-/// `latchkey` is unaffected either way, since its one native module
-/// (`@napi-rs/keyring`) is N-API and ABI-stable across Node majors.
-///
-/// Costs one re-install per ABI, once. `None` — meaning npm's own
-/// default applies, exactly as before — when there is no `$HOME` or the
-/// ABI can't be read, because a shared cache that usually works beats no
-/// qmd at all.
 fn npx_cache_dir(npx: &OsStr) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(cache_dir_for(Path::new(&home), &node_abi(npx)?))
 }
 
-/// Path construction, split out so it is testable without a Node on the
-/// host. Sits under `~/.cache/datalib/` beside the `~/.cache/qmd/models`
-/// tree qmd itself uses.
 fn cache_dir_for(home: &Path, abi: &str) -> PathBuf {
     home.join(".cache").join("datalib").join("npx").join(abi)
 }
@@ -198,9 +130,6 @@ fn parse_abi(stdout: &str) -> Option<String> {
     (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit())).then(|| s.to_string())
 }
 
-/// The `node` that will run `npx`: its sibling when `$NPX_BIN` names a
-/// real path, else whatever `node` `PATH` resolves — which is what npx
-/// itself would use.
 fn node_beside(npx: &OsStr) -> OsString {
     let dir = Path::new(npx)
         .parent()
@@ -211,9 +140,6 @@ fn node_beside(npx: &OsStr) -> OsString {
     }
 }
 
-/// One-line rendering of a `Command` (program + args) for status-line
-/// logging, so call sites can show the real invocation whether it
-/// resolved to the bundled runtime or npx.
 pub fn display_command(cmd: &Command) -> String {
     let mut s = cmd.get_program().to_string_lossy().into_owned();
     for a in cmd.get_args() {
@@ -223,8 +149,6 @@ pub fn display_command(cmd: &Command) -> String {
     s
 }
 
-/// True when `cmd`'s program is under the staged runtime — lets
-/// diagnostics say which flavor ran.
 pub fn is_bundled(cmd: &Command) -> bool {
     runtime_root().is_some_and(|root| Path::new(cmd.get_program()).starts_with(root))
 }
@@ -235,11 +159,6 @@ mod tests {
 
     /// End-to-end resolution against a synthetic staged tree, driven
     /// through `$DATALIB_RUNTIME_DIR`.
-    ///
-    /// One test body covers hit + both miss shapes (missing entry,
-    /// missing version) because they share the env var, and Rust tests
-    /// in one crate share a process — splitting them would race on
-    /// `set_var` (same pattern as qmd_indexer's env tests).
     #[test]
     fn bundled_command_resolves_staged_tree() {
         let base =

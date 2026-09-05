@@ -3,16 +3,6 @@
 // The vendored engine can load code from dactal.org at runtime — dormant
 // today, one call away always. `public/dactal/index.html` pins that shut
 // with `script-src 'self' 'unsafe-eval'; connect-src 'self'`.
-//
-// A CSP is exactly the kind of thing that rots silently: it only fails at
-// runtime, in a browser, and only on the paths it forbids — which nothing
-// exercises. Both halves need guarding, because both regress invisibly:
-//
-//   * too tight and DACTAL breaks (the engine needs `eval`, the renderer
-//     needs inline styles). You'd only notice by opening a DACTAL card.
-//   * too loose — someone adds `'unsafe-inline'` to fix an inline
-//     `<script>`, say, or moves main.js back into the page — and the
-//     remote-load paths quietly open again with nothing failing.
 
 import { test, expect } from "@playwright/test";
 

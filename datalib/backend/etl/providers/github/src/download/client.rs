@@ -3,9 +3,6 @@
 //! subprocess and supports playback from disk fixtures. Latchkey injects
 //! the `Authorization: Bearer <token>` header for the `github` service —
 //! don't add it here.
-//!
-//! Port of `_call_github_once` + `call_github` + `paginate` in
-//! `src/download/github_web.py`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -73,8 +70,6 @@ impl GitHubClient {
         Self::default()
     }
 
-    /// Build a client that authenticates as the source's configured
-    /// latchkey identity. Every request it issues carries the settings.
     pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
         Self {
             latchkey,

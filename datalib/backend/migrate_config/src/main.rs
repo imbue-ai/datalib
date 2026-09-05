@@ -6,23 +6,6 @@
 
 //! `datalib-migrate-config` — convert a pre-TOML `config.yaml` into the
 //! `config.toml` the pipeline reads today.
-//!
-//! ```sh
-//! datalib-migrate-config ~/datalib          # writes ~/datalib/config.toml
-//! datalib-migrate-config old.yaml -o new.toml
-//! datalib-migrate-config ~/datalib --stdout # print, write nothing
-//! ```
-//!
-//! Both legacy formats are handled and told apart by their content: the
-//! steps schema written in YAML, and the retired stanza-based `sources:`
-//! one. The output is a reviewable draft — comments from the old file
-//! are not carried over — but it is re-parsed and graph-checked before
-//! being written, so what lands is something the runner accepts.
-//!
-//! The old file is never touched or deleted, and an existing
-//! `config.toml` is never clobbered without `--force`. Recovering from a
-//! bad conversion should always be "delete the new file", never "restore
-//! from a backup you didn't take".
 
 use std::path::PathBuf;
 

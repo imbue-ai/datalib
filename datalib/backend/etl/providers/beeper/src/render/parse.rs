@@ -1,13 +1,4 @@
 //! Render-stage parser.
-//!
-//! Opens the doltlite raw store the download stage built and pulls
-//! out the data we need to render. The high-level grouping
-//! (`(room, period)` → rendered document) is done in SQL via
-//! GROUP BY + strftime so SQLite shoulders the bucketing. The
-//! finer details — attaching reactions to their target's period
-//! when target and reaction landed in different periods — happen
-//! in Rust, because that's a graph traversal SQL can't express
-//! cleanly.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -106,12 +97,8 @@ pub struct ParsedBeeper {
     pub docs: Vec<DocBucket>,
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Entry point
-// ─────────────────────────────────────────────────────────────────────
 
-/// Compatibility entry — sync/main.rs calls this with no period
-/// knob, in which case we default to `Month`.
 pub fn parse_raw_dir(input: &Path) -> Result<ParsedBeeper> {
     parse(input, Period::Month)
 }

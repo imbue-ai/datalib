@@ -1,18 +1,4 @@
 //! Program A `DataProcessor`s for the email source.
-//!
-//! Email contributes an **download** processor ([`EmailDownload`] — JMAP or
-//! Gmail-API live sync, or file-backed mbox, chosen by config) and a **render** processor
-//! ([`EmailRender`]). [`plan_download`] / [`plan_render`] build the per-wave
-//! processors the orchestrator drives, owning every email-specific decision
-//! (which download mode, whether
-//! an mbox is present, the outlink flavor) so the orchestrator destructures
-//! nothing.
-//!
-//! Storage ownership lives here, not in the orchestrator: [`EmailDownload`]
-//! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
-//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
-//! orchestrator never sees a pool or a commit. (The per-source *report* is
-//! still assembled orchestrator-side for now — tracked in issue #37.)
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::{Path, PathBuf};
@@ -273,8 +259,6 @@ impl DataProcessor for EmailRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }
@@ -319,9 +303,6 @@ impl DataProcessor for EmailRender {
     }
 }
 
-/// True when `input` looks like an mbox drop: a single `.mbox` file or a
-/// directory containing at least one. (Provider-owned copy of the
-/// orchestrator's old `is_mbox_input`.)
 fn is_mbox_input(input: &Path) -> bool {
     if input.is_file() {
         return input.extension().and_then(|s| s.to_str()) == Some("mbox");
@@ -335,8 +316,6 @@ fn is_mbox_input(input: &Path) -> bool {
     })
 }
 
-/// Whether `input_path` points at something on disk (so "no mbox here" is a
-/// real error) vs. the default raw-store fallback (which isn't an export).
 fn input_path_is_set_but_no_mbox(input: &Path) -> bool {
     input.exists()
 }

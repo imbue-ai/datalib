@@ -1,20 +1,4 @@
 //! Rule-based sentence splitter for Greek and English.
-//!
-//! Treats a terminator (`.` `;` `·` `:` for Greek; `.` `?` `!` for
-//! English) followed by whitespace and an uppercase letter as a
-//! sentence boundary. Keeps the terminator on the preceding sentence
-//! so the concatenation of `(splits + interleaved whitespace)` is
-//! lossless with respect to the input modulo the very whitespace runs
-//! we collapsed.
-//!
-//! Returns `(sentence_text, byte_range_within_input)` so the renderer
-//! can wrap each sentence in its own `<span>` without scanning the
-//! input twice.
-//!
-//! NOT a general-purpose splitter: it's tuned for normalized Perseus
-//! section text (single-line, no abbreviations, no acronyms). For the
-//! ~3.6k Thucydides sections this gets the same splits as the
-//! reference Python regex.
 
 const GRC_TERMINATORS: &[char] = &['.', ';', '·', ':'];
 const ENG_TERMINATORS: &[char] = &['.', '?', '!'];
@@ -41,9 +25,6 @@ pub fn split_eng(text: &str) -> Vec<Sentence> {
     split(text, ENG_TERMINATORS)
 }
 
-/// Pick the splitter by language code: Ancient Greek uses its own
-/// terminator set (`. · ; :`); every Latin-script language (eng, fre,
-/// ger, lat, ita, …) uses `. ? !`.
 pub fn split_for(lang: &str, text: &str) -> Vec<Sentence> {
     if lang == "grc" {
         split_grc(text)

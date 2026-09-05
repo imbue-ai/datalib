@@ -1,11 +1,4 @@
 //! Content hashing for fsindex.
-//!
-//! Leaf hashing (files, symlink targets) and the `Blake3` digest type
-//! now live in [`datalib_etl::fswalk`] — the `pdf` provider needs the
-//! same mmap-threshold behavior, and two copies would drift. What
-//! stays here is the part only fsindex has: the canonical directory
-//! tree-hash defined in [`super::schema_raw`] §"Directory tree-hash
-//! canonicalization."
 
 use super::schema_raw::FileKind;
 
@@ -18,12 +11,6 @@ pub struct TreeChild {
     pub blake3: Blake3,
 }
 
-/// Canonical directory tree-hash per the schema doc.
-///
-/// Each child contributes `name || 0x00 || kind_tag || child_blake3
-/// (32 raw bytes) || 0x0a`, children sorted by lexical byte order of
-/// `name`. The whole concatenation is hashed with blake3. Empty
-/// children list hashes the empty string (well-defined).
 pub fn hash_tree(children: &[TreeChild]) -> Blake3 {
     let mut sorted: Vec<&TreeChild> = children.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));

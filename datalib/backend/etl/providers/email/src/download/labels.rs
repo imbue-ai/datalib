@@ -1,26 +1,4 @@
 //! The one label vocabulary, shared by every download mode.
-//!
-//! Gmail hands us the same label under three different spellings
-//! depending on how we ask:
-//!
-//! | concept | Takeout `X-Gmail-Labels` | Gmail API `labels.list` |
-//! |---------|--------------------------|--------------------------|
-//! | inbox   | `Inbox`                  | `INBOX`                  |
-//! | sent    | `Sent`                   | `SENT`                   |
-//! | starred | `Starred`                | `STARRED`                |
-//! | promos  | `Category Promotions`    | `CATEGORY_PROMOTIONS`    |
-//!
-//! Left alone, those produce two different `mailboxes` rows and two
-//! different `mailbox_id`s for one Gmail label — so a user who ingested a
-//! Takeout export and then switched to the API would see their Inbox
-//! twice in the grid. [`canonical_name`] collapses them onto
-//! Takeout's spelling (chosen because it is what the existing mbox raw
-//! stores already contain, so nothing already on disk has to migrate),
-//! and [`mailbox_id`] keys off that canonical name.
-//!
-//! Emails themselves dedupe on `Message-ID` (see
-//! [`super::envelope::email_id`]); this module is the same discipline
-//! applied to mailboxes.
 
 use sha2::{Digest, Sha256};
 
@@ -140,8 +118,6 @@ pub fn canonical_name(label: &str) -> String {
     }
 }
 
-/// How to treat `label`. Unrecognized labels are user labels: a mailbox
-/// with no role, keeping their name.
 pub fn map_label(label: &str) -> LabelMap {
     match system_entry(label) {
         Some((_, kind)) => kind.into_map(),
@@ -149,23 +125,6 @@ pub fn map_label(label: &str) -> LabelMap {
     }
 }
 
-/// Stable id for a mailbox row, keyed on the name exactly as given.
-///
-/// It deliberately does **not** canonicalize: only the caller knows
-/// whether a label is a system one. Google will happily let you create a
-/// user label named `INBOX`, and folding that onto the real inbox would
-/// merge two different mailboxes into one row. Callers that know they
-/// hold a system label pass [`canonical_name`]'s output; callers holding
-/// a user label pass its name verbatim.
-///
-/// Takeout's spellings are already the canonical ones, which is why the
-/// mbox path can pass its labels through untouched and still agree with
-/// the other modes.
-///
-/// The `mbox-` prefix and the `mbox:` hash domain are historical — they
-/// predate there being more than one non-JMAP mode — and are kept
-/// verbatim because changing them would orphan every mailbox row in every
-/// raw store already on disk.
 pub fn mailbox_id(account_id: &str, label: &str) -> String {
     let mut h = Sha256::new();
     h.update(b"mbox:");
@@ -181,8 +140,6 @@ pub fn mailbox_id(account_id: &str, label: &str) -> String {
     out
 }
 
-/// Split a Takeout `X-Gmail-Labels` header. Labels are comma-separated;
-/// commas inside a label are backslash-escaped (`\,`).
 pub fn split_gmail_labels(value: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();

@@ -1,12 +1,6 @@
 //! Provider-owned config schema for the `pdf` source. Schema-only
 //! (serde + anyhow), so the orchestrator can name [`PdfConfig`] without
 //! linking the provider.
-//!
-//! `pdf` is purely file-backed: there is no API and no `sync:` block —
-//! it scans the tree at `common.input_path` for PDFs, converts the ones
-//! that carry real text, and indexes the result. Provider knobs are the
-//! ignore cascade, a size ceiling, and the OCR switch (off, and
-//! currently only off — see [`PdfConfig::ocr`]).
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
@@ -37,20 +31,10 @@ pub struct PdfConfig {
     pub max_bytes: Option<u64>,
 
     /// Run OCR over pages that carry no extractable text.
-    ///
-    /// **Not implemented yet; setting it `true` is rejected at load
-    /// time** rather than silently ignored, so a config that asks for
-    /// OCR fails loudly instead of quietly indexing nothing for every
-    /// scanned document. The first pass classifies scanned PDFs and
-    /// records them (`pdf_documents.needs_ocr`) without converting
-    /// them, which is what makes adding an engine later a pure
-    /// addition: the rows that need one are already enumerated.
     #[serde(default)]
     pub ocr: bool,
 }
 
-/// 512 MiB. Comfortably above any real document, well below the size
-/// where hashing and conversion stop being background-cheap.
 fn default_max_bytes() -> Option<u64> {
     Some(512 * 1024 * 1024)
 }

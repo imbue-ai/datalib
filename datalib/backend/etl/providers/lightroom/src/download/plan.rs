@@ -1,50 +1,4 @@
 //! Schema introspection and DDL synthesis for the SQLite→doltlite mirror.
-//!
-//! Everything here is generic over "some SQLite database attached under
-//! a schema alias" — nothing knows what Lightroom is. The one
-//! Lightroom-shaped decision (prefer `id_global` over `id_local` as the
-//! key) arrives as config, in [`super::mirror::MirrorOptions`].
-//!
-//! ## Why introspect instead of replaying `sqlite_master.sql`
-//!
-//! Copying each `CREATE TABLE` verbatim out of the source's
-//! `sqlite_master` is tempting and does work — doltlite parses all 133
-//! of a stock Lightroom catalog's table definitions unchanged. But
-//! verbatim DDL forecloses the two things this ingester needs to do to
-//! it: drop a column (the XMP filter) and choose a different primary key
-//! (the stable-key rewrite). Both are textual surgery on arbitrary SQL
-//! if you start from the source text, and neither is if you start from
-//! `PRAGMA table_info`.
-//!
-//! What introspection loses is CHECK constraints, foreign keys, and
-//! collations — none of which a mirror needs, because the mirror is
-//! never the thing being written to by an application. Indexes and
-//! triggers are dropped on purpose: doltlite stores each table as a
-//! prolly tree keyed by its primary key, so a secondary index buys a
-//! backup nothing and costs it space in every commit.
-//!
-//! ## Why column DEFAULTs are not mirrored
-//!
-//! A `DEFAULT` is a rule for writes, and the mirror is not written to.
-//! It only ever applies to a row inserted without a value for that
-//! column, and no such insert happens here: [`TableSpec::copy_sql`]
-//! names every column on both sides, so every mirrored value comes from
-//! the source row it was copied from. A mirrored `DEFAULT` could
-//! therefore never fire.
-//!
-//! Carrying one across is not free, either. `PRAGMA table_xinfo`
-//! reports the default as SQL text — a literal like `'unset'`, but
-//! equally an expression like `datetime('now')` — out of the `.lrcat`,
-//! a SQLite file we did not write. Splicing that back into our own
-//! `CREATE TABLE` means either trusting it or parsing arbitrary SQL to
-//! decide whether to. That is a real cost, paid to reproduce a rule
-//! nothing can trigger, so the defaults are simply dropped — same
-//! reasoning as the constraints above.
-//!
-//! There is deliberately no schema-reconciliation logic here. Every run
-//! drops each mirror table and recreates it from the source, so the
-//! mirror's schema is never *compared* to anything — it is simply
-//! rebuilt. See [`super::mirror`] for why that is free.
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqliteConnection;
@@ -70,22 +24,6 @@ impl ColumnSpec {
     /// `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`. No
     /// `DEFAULT`: see the module docs for why the mirror does not carry
     /// one.
-    ///
-    /// The declared type is quoted, like the name is, and for the same
-    /// reason: it comes from `PRAGMA table_xinfo` on the attached source
-    /// catalog — an arbitrary SQLite file we did not write — and SQLite
-    /// lets a *quoted* type name hold anything at all, reporting it back
-    /// with the quotes gone. Unquoted, `INTEGER); DROP TABLE x; --` is a
-    /// perfectly legal declared type that ends our column definition
-    /// early.
-    ///
-    /// Quoting a type is meaning-preserving, which is not obvious and is
-    /// the reason this is two lines rather than a validator. A type name
-    /// may be a quoted name, and SQLite dequotes it before deciding
-    /// anything, so `"VARCHAR(255)"` and `VARCHAR(255)` produce the same
-    /// column: same affinity, same `table_info` text, and an
-    /// `INTEGER PRIMARY KEY` stays a rowid alias either way. Verified in
-    /// both doltlite and stock SQLite across every affinity class.
     pub fn decl(&self) -> String {
         let mut s = quote_ident(&self.name);
         if !self.decl_type.is_empty() {
@@ -149,7 +87,6 @@ impl TableSpec {
         )
     }
 
-    /// The mirrored column list, quoted: `"a", "b"`.
     fn column_list(&self) -> String {
         self.columns
             .iter()
@@ -158,11 +95,6 @@ impl TableSpec {
             .join(", ")
     }
 
-    /// `INSERT INTO main."t" ("a","b") SELECT "a","b" FROM <schema>."t"`.
-    ///
-    /// The column list is explicit on both sides so a dropped column (or
-    /// a source that gained one we're not mirroring yet) can't shift the
-    /// positional mapping.
     pub fn copy_sql(&self, from_schema: &str) -> String {
         let list = self.column_list();
         format!(
@@ -178,14 +110,10 @@ impl TableSpec {
 /// user, but they still get quoted: SQLite permits spaces, keywords, and
 /// punctuation in identifiers, and a mirror that only worked on
 /// well-behaved schemas would be a mirror with a footgun in it.
-///
-/// Also used for a column's declared *type*, which SQLite's grammar
-/// likewise allows to be a quoted name — see [`ColumnSpec::decl`].
 pub fn quote_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
-/// Table names in an attached schema, excluding SQLite's internal ones.
 pub async fn table_names(conn: &mut SqliteConnection, schema: &str) -> Result<Vec<String>> {
     let sql = format!(
         "SELECT name FROM {}.sqlite_master \
@@ -216,7 +144,6 @@ pub struct SourceColumn {
     pub generated: bool,
 }
 
-/// Introspect one table's columns.
 pub async fn table_columns(
     conn: &mut SqliteConnection,
     schema: &str,

@@ -3,17 +3,6 @@ import { test, expect } from "@playwright/test";
 // The grid's `Indexed` / `Embedded` columns, end to end against the
 // fixture's real qmd index.
 //
-// The fixture indexes AND embeds every rendered document, so a healthy
-// run shows ✅ in both columns for every row. That makes the negative
-// case the interesting one to guard: if the hash join breaks — qmd
-// changes how it hashes content, or `markdowns.md_path` stops
-// resolving — every cell flips to ❌ and nothing else in the suite
-// fails. Asserting "no ❌ anywhere" is what catches that.
-//
-// The endpoint assertion runs first and separately from the DOM one:
-// when both fail, knowing whether the backend or the wiring broke is
-// most of the debugging.
-//
 // Both columns ship hidden — they answer "why didn't search find X?",
 // which is a question you go looking for. So the DOM test also pins the
 // default, and that un-hiding them actually fetches: a version that

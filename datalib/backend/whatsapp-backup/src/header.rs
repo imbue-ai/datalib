@@ -1,21 +1,5 @@
 //! Minimal protobuf scanner that pulls the 16-byte IV out of the
 //! `BackupPrefix` header at the front of a crypt15 file.
-//!
-//! We deliberately do *not* depend on prost or a generated proto here —
-//! the only field we need is the IV, the format is single-purpose, and
-//! avoiding codegen keeps the crate buildable in pure cargo without a
-//! protoc dependency. The scan is wire-format aware enough to skip
-//! varint, length-delimited, and fixed32/64 fields, which covers every
-//! field WhatsApp uses in BackupPrefix today.
-//!
-//! File framing (single-file backup):
-//!   byte 0          — protobuf size (single u8, big-endian; max 255)
-//!   byte 1          — optional msgstore-features flag, present iff == 0x01
-//!   N bytes         — BackupPrefix protobuf (length = size from byte 0)
-//!   [...ciphertext, 16-byte GCM tag, 16-byte MD5 checksum...]
-//!
-//! BackupPrefix fields we care about:
-//!   field 3 (c15_iv, length-delimited submessage) → field 1 (IV, 16 bytes)
 
 use thiserror::Error;
 
@@ -69,9 +53,6 @@ pub fn parse_header(bytes: &[u8]) -> Result<BackupHeader, HeaderError> {
     })
 }
 
-/// Walk the top-level BackupPrefix fields; when we hit field 3 (a
-/// length-delimited submessage), recurse to find field 1 within it
-/// (the 16-byte IV).
 fn scan_for_iv(header: &[u8]) -> Result<[u8; 16], HeaderError> {
     let mut pos = 0usize;
     while pos < header.len() {

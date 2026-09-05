@@ -1,10 +1,5 @@
 //! `DoltRepo` — production [`IndexRepo`](crate::repo::IndexRepo) backed
 //! by a `sqlx::SqlitePool` against the grid index on disk.
-//!
-//! Reads only: the `grid_index` step is the file's only writer, which is
-//! what lets a reader hold it open while a sync rewrites it. The pool is
-//! still pinned to one connection — see
-//! [`datalib_core::store::open_pool`] for why that is unrelated.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,10 +18,6 @@ use datalib_core::store::{is_missing_table, open_pool};
 use datalib_schema::edges::EdgeRow;
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
-///
-/// `root` is the data root (e.g. `~/Documents/datalib`) — needed
-/// because `qmd_path` in `grid_rows` is stored relative to the root and
-/// the trait contract returns an absolute path.
 pub struct DoltRepo {
     /// The grid index: `grid_rows`, `markdowns`, `edges`. Read-only from
     /// here — the `grid_index` step is its only writer.
@@ -43,18 +34,6 @@ const SEARCH_ROW_COLUMNS: &str = "uuid, provider, kind, source_label, when_ts, a
      message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
      upstream_entity_kind, qmd_path";
 
-/// Build a [`SearchRow`] from one `grid_rows` row selected with
-/// [`SEARCH_ROW_COLUMNS`]. `needle` is the free-text term the snippet is
-/// centered on; pass `""` for a query that has none.
-///
-/// sqlx-sqlite has a load-bearing gotcha: `try_get::<T>` for a SQL NULL
-/// column does NOT return Err — it silently returns `T::default()` (0
-/// for i64, "" for String). That means `try_get(…).ok()` with an
-/// `Option<T>` LHS gives `Some(0)` / `Some("")` for NULL, NOT `None`. To
-/// distinguish NULL from an actual default value, the type passed to
-/// `try_get` must itself be `Option<T>`. Pattern:
-/// `try_get::<Option<T>, _>(…).ok().flatten()`. See
-/// `tests/fixture_db_snapshot.rs` for the canonical example.
 fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
     let kind: String = r.try_get("kind").unwrap_or_default();
     let author: String = r.try_get("author").unwrap_or_default();
@@ -105,9 +84,6 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
 /// a source from its declared outputs, and the same one `grid_index`
 /// uses when it walks one directory per stanza — the stanza directory
 /// name *is* the config-level name.
-///
-/// Empty for a path with no separator, which would mean a renderer wrote
-/// outside its own tree.
 fn source_name_from_qmd_path(qmd_path: &str) -> String {
     match qmd_path.split_once('/') {
         Some((first, _)) => first.to_string(),
@@ -116,20 +92,15 @@ fn source_name_from_qmd_path(qmd_path: &str) -> String {
 }
 
 impl DoltRepo {
-    /// Wrap an existing index pool.
     pub fn from_pool(pool: SqlitePool, root: Arc<PathBuf>) -> Self {
         Self { pool, root }
     }
 
-    /// Open the grid index for this data root, read-only in practice:
-    /// the `grid_index` step is its only writer, and any number of
-    /// readers may hold it open at once.
     pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
         let pool = open_pool(&datalib_core::layout::grid_index_db(&root)).await?;
         Ok(Self::from_pool(pool, root))
     }
 
-    /// The grid-index pool, for a test that wants to seed rows.
     pub fn index_pool(&self) -> &SqlitePool {
         &self.pool
     }

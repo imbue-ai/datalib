@@ -1,34 +1,5 @@
 //! Raw-store schema for the LinkedIn data-export provider — the
 //! authoritative *manifest* of every file we try to ingest.
-//!
-//! Unlike the macro-driven `schema_raw.rs` of the API-backed providers,
-//! LinkedIn's raw store is generic: one `(id, payload)` table per export
-//! file, created lazily (see [`crate::download`]). There are no row
-//! structs to declare here. What lives here instead is the thing the
-//! generic walker *can't* infer on its own:
-//!
-//!   * [`KNOWN_FILES`] — an enumeration of every file a complete
-//!     LinkedIn export contains, each mapped to its canonical raw table
-//!     name, natural-key column hint(s), whether it's message-shaped,
-//!     and a one-line description. This is documentation first and a
-//!     lookup table second.
-//!   * [`canonical_table`] — slugify an export-relative path into a
-//!     table name *and* strip the per-member numeric suffix LinkedIn
-//!     bolts onto some filenames (`Comments_17529409.csv` →
-//!     `comments`), so the same logical feed lands in the same table
-//!     for every user.
-//!   * The provider uuidv5 namespace ([`linkedin_ns`] / [`ns_id`]),
-//!     shared by download (row ids) and render (chat/message ids).
-//!
-//! ### Robustness contract
-//!
-//! The walker ingests *every* CSV it finds, listed here or not — a file
-//! absent from [`KNOWN_FILES`] still gets a table (it just earns a WARN
-//! so we notice new export shapes). And every file here is optional: a
-//! user who deleted, never exported, or excluded a file (Thad omitted
-//! `messages.csv` for privacy) just yields no table for it. So this
-//! manifest is a description of the *maximal* export, never a
-//! requirement.
 
 use uuid::Uuid;
 
@@ -114,7 +85,6 @@ pub const KNOWN_FILES: &[KnownFile] = &[
     KnownFile { table: "whatsapp_phone_numbers", export_name: "Whatsapp Phone Numbers.csv", id_cols: &[], message_shaped: false, note: "WhatsApp phone numbers linked to your account." },
 ];
 
-/// Look up a file's manifest entry by its [`canonical_table`] name.
 pub fn known_file(table: &str) -> Option<&'static KnownFile> {
     KNOWN_FILES.iter().find(|f| f.table == table)
 }
@@ -126,8 +96,6 @@ pub fn known_file(table: &str) -> Option<&'static KnownFile> {
 /// across re-exports and the rendered contact agrees with the raw row.
 pub const UUID_KEYED_TABLES: &[&str] = &["connections"];
 
-/// Whether [`canonical_table`] `table`'s row id is a uuidv5 of its
-/// natural key (see [`UUID_KEYED_TABLES`]).
 pub fn is_uuid_keyed(table: &str) -> bool {
     UUID_KEYED_TABLES.contains(&table)
 }
@@ -152,14 +120,6 @@ pub fn message_tables() -> Vec<&'static str> {
         .collect()
 }
 
-/// Slugify an export-relative path into a SQL table name and strip the
-/// per-member numeric suffix LinkedIn appends to some filenames.
-///
-/// Lowercase; every run of non-alphanumerics collapses to a single `_`;
-/// a leading digit is prefixed with `t_`; and a trailing all-digits
-/// segment (the member id in `Comments_17529409` → `comments`) is
-/// dropped so the same logical feed maps to one table for every user.
-/// `Receipts_v2` keeps its `v2` (not all digits).
 pub fn canonical_table(rel: &str) -> String {
     // Drop a trailing file extension (`.csv`, `.html`) so it doesn't
     // slugify into a `_csv` suffix; callers may pass a full filename.
@@ -195,13 +155,10 @@ pub fn canonical_table(rel: &str) -> String {
     }
 }
 
-/// Per-provider uuidv5 namespace for synthesized row / chat / message
-/// ids. Shared by download and render so the two agree.
 pub fn linkedin_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"linkedin.datalib")
 }
 
-/// uuidv5 of `recipe` under the provider namespace, hyphenated.
 pub fn ns_id(recipe: &str) -> String {
     Uuid::new_v5(&linkedin_ns(), recipe.as_bytes())
         .as_hyphenated()

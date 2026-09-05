@@ -1,13 +1,4 @@
 //! Google Voice takeout feed.
-//!
-//! Parses the `Voice/` subtree of a Google Takeout export — `Calls/`
-//! (and optionally `Spam/`) per-record HTML, `Bills.html`, and
-//! `Greetings/` — into "closer-to-raw" JSON payload rows. Unlike the
-//! other feeds we do NOT preserve the upstream bytes: the input is
-//! already-rendered HTML, so we parse it and back out the underlying
-//! records (timestamps, phone numbers, person identifiers, transcripts,
-//! attachment blob refs). See [`parse`] for the HTML shapes and
-//! `schema_raw` for the table/identity design.
 
 pub mod parse;
 pub mod schema_raw;
@@ -43,12 +34,6 @@ pub struct VoiceSummary {
     pub blobs_stored: usize,
 }
 
-/// Run one Google Voice ingest pass over `<root>/Voice/`.
-///
-/// Processes `Calls/` always, and `Spam/` when `include_spam` is set;
-/// loads `Bills.html` and `Greetings/` regardless. Idempotent: every
-/// row's PK is a uuidv5 over stable parsed fields (see
-/// [`schema_raw`]), so re-runs upsert in place.
 pub async fn ingest(
     db: &RawDb,
     scan: &fsscan::Scan,
@@ -263,7 +248,6 @@ fn ingest_record(
     }
 }
 
-/// hChatLog → one `voice_messages` row per parsed message.
 fn ingest_text_thread(
     folder: &str,
     path: &Path,
@@ -347,7 +331,6 @@ fn ingest_text_thread(
     }
 }
 
-/// haudio (voicemail / call) → one `voice_messages` row.
 #[allow(clippy::too_many_arguments)]
 fn ingest_event(
     folder: &str,
@@ -418,8 +401,6 @@ fn ingest_event(
     });
 }
 
-/// An orphan recording (`<label> - <Type> - <ts>.mp3` with no sibling
-/// `.html`) → one `voice_messages` row carrying just the audio blob.
 #[allow(clippy::too_many_arguments)]
 fn ingest_orphan_audio(
     folder: &str,
@@ -516,8 +497,6 @@ fn parse_filename(stem: &str) -> Option<(String, Option<String>, String)> {
     }
 }
 
-/// A party's stable identity fragment for PK recipes: phone, else name,
-/// else `"?"`.
 fn party_id(p: &Party) -> String {
     p.tel
         .clone()
@@ -563,8 +542,6 @@ fn derive_channel(label: &str, tels: &[String]) -> (String, String) {
     }
 }
 
-/// Canonicalize a parsed RFC3339 timestamp to millis precision, or
-/// `None` if it doesn't parse (the raw value is kept in the payload).
 fn normalize_ts(raw: &str) -> Option<String> {
     datalib_time::parse_strict(raw)
         .ok()
@@ -574,14 +551,6 @@ fn normalize_ts(raw: &str) -> Option<String> {
 /// Resolve an HTML `src`/`href` to a sibling file. Audio `src` carries
 /// the full filename (exact match); MMS `img src` drops the extension,
 /// so fall back to a stem match.
-///
-/// NB: this deliberately does NOT use the truncation-tolerant prefix
-/// resolver (issue #64). Voice's MMS `src` is extension-less, and a
-/// prefix match there happily matches the conversation's own
-/// `<conversation>.html` transcript (whose stem is a prefix of the
-/// `src`), storing the HTML as a bogus "attachment". Voice truncation
-/// needs a media-extension-restricted matcher validated against real
-/// truncated Voice data; tracked as a follow-up on #64.
 fn resolve_sibling(html_path: &Path, src: &str) -> Option<PathBuf> {
     let dir = html_path.parent()?;
     let exact = dir.join(src);

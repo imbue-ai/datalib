@@ -8,14 +8,6 @@
 // `code` and `state` are percent-escaped (so embedded `/` and `:`
 // survive — `encodeURIComponent` escapes both); `size` is a plain
 // number, never containing `:`. So a segment splits cleanly on `:`.
-//
-// Trailing empties are dropped, so the common cases stay terse:
-//   `code`              — default width, no state
-//   `code:1.2`          — resized, no state
-//   `code::abc`         — default width, state "abc"
-//   `code:1.2:abc`      — resized, with state
-// "code", "code:" and "code::" are all equivalent (default width, no
-// state).
 
 export type ColumnSpec = {
   code: string;

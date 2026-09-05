@@ -1,9 +1,4 @@
 //! Notion synth → playback → download round-trip.
-//!
-//! Seeds a JSONL fixture tree (the on-disk shape NotionSynth reads),
-//! synthesizes playback fixtures, then drives `download::fetch` against
-//! a fresh doltlite db. Asserts the round-trip lands one page / block
-//! / comment per input record.
 
 use std::collections::HashMap;
 use std::time::Duration;

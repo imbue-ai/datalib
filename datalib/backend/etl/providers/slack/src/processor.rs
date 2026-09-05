@@ -1,10 +1,4 @@
 //! Program-A `DataProcessor`s for the slack_api source (download + render).
-//!
-//! Slack is the one provider that consumes the wire-event tape: its download
-//! processor wires its own `EventTape` onto its `RawDb` (when enabled via the
-//! resolved shared config, surfaced via `config.common.event_tape_enabled()`) — so
-//! the orchestrator no longer needs the `HasEventTape` capability or the
-//! `DbHandle::attach_event_tape` no-op-for-everyone-else hook.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -132,8 +126,6 @@ impl DataProcessor for SlackRender {
         &self.id
     }
 
-    /// The value every document this processor writes carries: the render
-    /// path stamps `profile.render_version`, which is this constant.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

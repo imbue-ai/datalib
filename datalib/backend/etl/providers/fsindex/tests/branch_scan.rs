@@ -1,15 +1,4 @@
 //! Two scan roots, one doltlite file, one branch each.
-//!
-//! This is the arrangement `schema_raw.rs` §"Multi-root via doltlite
-//! branches, one db per source" describes, and the only thing that
-//! exercises `FetchOptions::target_doltlite_branch` — every other
-//! caller in the tree passes `None`, which is why the branch path could
-//! sit broken without a single test going red.
-//!
-//! It was broken: `RawDb::checkout_branch` issued MySQL's
-//! `CALL DOLT_CHECKOUT(?)`, which doltlite's parser rejects outright
-//! (`near "CALL": syntax error`), and the `-b` fallback failed the same
-//! way — so `--branch` errored rather than degrading.
 
 use std::path::Path;
 
@@ -67,19 +56,6 @@ async fn scan_and_commit(
     db.commit(&format!("scan {id}")).await.unwrap();
 }
 
-/// Root-relative file paths committed on `branch`.
-///
-/// Reads through a pin — resolve the branch to a commit hash, then read
-/// `dolt_at_files('<hash>')` — rather than checking the branch out and
-/// running a bare `SELECT`. Two reasons, and both matter here:
-///
-/// 1. A bare `SELECT` reads doltlite's **working set**, not the commit.
-///    That is the staging area, so it would report rows this scan had
-///    written but not yet committed, and the assertion would be about
-///    the wrong thing.
-/// 2. The verification must not lean on `checkout_branch`, which is the
-///    mechanism under test. A checkout that silently no-ops would make
-///    both sides of the comparison read the same branch.
 async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
     let db = RawDb::open(db_path).await.unwrap();
     let commit: String = sqlx::query_scalar("SELECT dolt_hashof(?)")
@@ -102,11 +78,6 @@ async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
 }
 
 /// The regression guard: `--branch` has to actually switch branches.
-///
-/// Asserted three ways, because each catches a different failure. The
-/// checkout erroring outright is what the `CALL` bug did; a checkout
-/// that silently no-ops would leave both scans stacked on `main`, and
-/// the per-branch row sets are what catch that.
 #[tokio::test]
 async fn two_roots_land_on_their_own_branches() {
     let tmp = tempfile::tempdir().unwrap();

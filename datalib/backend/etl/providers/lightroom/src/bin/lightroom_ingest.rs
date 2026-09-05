@@ -1,23 +1,4 @@
 //! `lightroom-ingest` — mirror a Lightroom catalog into a doltlite store.
-//!
-//! The standalone counterpart to the `lightroom.download` DAG step, for
-//! poking at a real catalog without writing a config:
-//!
-//! ```sh
-//! bazelisk build //datalib/backend/etl/providers/lightroom:lightroom_ingest
-//! bazel-bin/datalib/backend/etl/providers/lightroom/lightroom_ingest \
-//!   --catalog ~/Pictures/Lightroom/Catalog.lrcat \
-//!   --db /tmp/lightroom_backup.doltlite_db
-//! ```
-//!
-//! Run it again after editing in Lightroom and it prints what changed.
-//! Inspect the result with the doltlite shell — see `INGEST.md`
-//! §"Reading the backup".
-//!
-//! This binary is the mirror's own orchestrator: `download::fetch`
-//! writes but never commits (the framework's commit-lifecycle rule), so
-//! the single per-run `dolt_commit` is issued here, leaving a clean
-//! working tree for the next open.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

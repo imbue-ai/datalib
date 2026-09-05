@@ -1,19 +1,5 @@
 //! Datalib **app-state schema** crate — the tables that hold the
 //! application's own state rather than rendered/presentable data.
-//!
-//! These tables are *not* part of the render schema (`datalib_schema`,
-//! which defines `grid_rows` / `edges` / `markdowns`). They were split out
-//! so the render pipeline's "universal schema" no longer has reach into
-//! UI feedback and the background job queue:
-//!
-//!   * `feedback`    — user-filed feedback on datalib surfaces
-//!   * `sync_jobs`   — background job queue for UI-driven sync
-//!   * `disk_usage`  — bytes-on-disk timeseries per tree under the root
-//!
-//! Each module is a hand-written row struct whose `CREATE TABLE` DDL and
-//! column metadata are derived from the struct by
-//! `#[derive(PortableTable)]` (see `datalib_etl_macros`). The struct
-//! is the single source of truth — there is no code generation step.
 
 pub mod feedback {
     include!("feedback.rs");

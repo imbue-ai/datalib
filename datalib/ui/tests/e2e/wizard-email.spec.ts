@@ -1,19 +1,5 @@
 // Gmail and Fastmail: two wizard forms over one step type, and the
 // Connection block that fills their label pickers from the live account.
-//
-// **The network is stubbed here on purpose.** The real
-// `/api/latchkey/*` and `/api/probe` shell out to latchkey and to
-// `datalib-step probe`, which need a credential in the host's keyring
-// and reach Google and Fastmail. What this spec is for is the wiring
-// between them and the form — that a probe's answer becomes chips, that
-// ticking a chip becomes `only_extract_labels`, that the render dialog
-// is offered folders rather than flags — and every one of those is a
-// pure function of the response body. The response bodies below are
-// real ones, trimmed: they were captured from a live probe of a Gmail
-// account and a Fastmail mailbox on 2026-09-04.
-//
-// The fixture root's config.toml is shared by every spec in the run
-// (workers: 1), so it is restored in afterEach — including on failure.
 import { test, expect, type Page } from "@playwright/test";
 
 const wizard = (page: Page) => page.getByRole("dialog");

@@ -1,18 +1,4 @@
 // Manager2: one row per step, and the two-step flow that creates them.
-//
-// A fetch step and the render step that reads it are separate rows,
-// separately editable and separately runnable. The wizard writes the
-// fetch step; the render step comes either from a checkbox (when the
-// provider has no render options, which is all but one of them) or from
-// a row action later.
-//
-// The id is the tree a step writes, so it is fixed after creation. The
-// name is what a person types, derived once into the id and freely
-// changed after.
-//
-// The fixture root's config.toml is shared by every spec in the run
-// (workers: 1), so it is restored in afterEach — including on failure,
-// which is what stops one broken assertion here cascading.
 import { test, expect, type Page } from "@playwright/test";
 
 async function openManager(page: Page) {
@@ -80,15 +66,6 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   await expect(alsoRender(page)).toBeChecked();
 
   // ...and the card around it is a real block, not a sliver.
-  //
-  // `.wiz-check` was once the class on *two* things: this label, and a
-  // bool field's own `<input type=checkbox>`, whose `width: 16px;
-  // height: 16px` therefore applied to the whole card. Its heading and
-  // its paragraph of help wrapped inside a 16px column and overlapped
-  // the disclosure below it. Every other assertion in this file passed
-  // throughout — a crushed label still contains a checked input, and
-  // the preview still says what it writes — which is why the check has
-  // to be on the geometry. Same shape as `expectGridPainted`.
   const card = wizard(page).locator("label.wiz-check");
   const box = await card.boundingBox();
   expect(box, "the also-render card should be laid out").not.toBeNull();
@@ -127,10 +104,6 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
 
   // Edit the fetch step: name free, id fixed, and renaming leaves the
   // id alone — the property that keeps the index's paths honest.
-  //
-  // There is no Id *field* here any more: a disabled box holding a
-  // value you cannot change is a control that exists only to refuse
-  // you. The id is still stated, as the fact it is.
   await row(page, "personal-claude/raw").getByRole("button", { name: "Edit" }).click();
   await expect(nameField(page)).toHaveValue("Personal Claude");
   await expect(idField(page)).toHaveCount(0);
@@ -183,6 +156,12 @@ test("a provider whose render step has options writes the sibling id, not the st
 }) => {
   // The path Claude never takes, and the one that was broken.
   //
+  // That config is not merely untidy — it does not run. `datalib-dag`
+  // rejects it with "a step writes only the tree its id names", which
+  // is a red Status on a source that downloaded perfectly well, and
+  // `phaseOf` reads the stem as `other`, so the step is never wired
+  // into the fan-ins either. Two failures, one cause.
+  //
   // A provider whose *render* step has options gets a second dialog
   // instead of the checkbox: `onWizardSubmit` closes the wizard and
   // reopens it for the render step. Both happen in one synchronous
@@ -193,23 +172,6 @@ test("a provider whose render step has options writes the sibling id, not the st
   // create-mode value, and the id is the one that mattered: the render
   // step was written as `signal-work` (the stem) instead of
   // `signal-work/rendered_md`.
-  //
-  // That config is not merely untidy — it does not run. `datalib-dag`
-  // rejects it with "a step writes only the tree its id names", which
-  // is a red Status on a source that downloaded perfectly well, and
-  // `phaseOf` reads the stem as `other`, so the step is never wired
-  // into the fan-ins either. Two failures, one cause.
-  //
-  // The name is checked alongside the id because it is the second
-  // witness to the same reuse: on the broken build it stayed "Signal
-  // Work" instead of picking up the render dialog's own default.
-  //
-  // `wizard-select.spec.ts` reaches the same form and deliberately
-  // *dismisses* this confirm, taking the row action instead so that it
-  // doesn't depend on the offer. That is the complement of this spec,
-  // not a duplicate of it: the row action opens a fresh dialog, which
-  // is the one path where the reuse bug cannot show up. Accepting the
-  // confirm is the whole point here.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
   await wizard(page)

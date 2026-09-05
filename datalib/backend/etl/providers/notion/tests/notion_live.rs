@@ -4,24 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live Notion single-page download test.
-//!
-//! Hits real `api.notion.com/v1` via `latchkey curl`, downloads ONE
-//! page (its body + comments) into a hermetic tempdir, and
-//! insta-snapshots a curated stable view of what came back. Serves as
-//! both an integration smoke test and a piece of documentation
-//! showing what a Notion page capture looks like end-to-end.
-//!
-//! The default target is the imbue-ai
-//! "Project Data Liberation — test page" — a stable Notion page kept
-//! for this test. Override with `NOTION_TEST_PAGE=<uuid>` to point at
-//! a different page (UUID, dashed or undashed).
-//!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Run with:
-//!
-//! ```sh
-//! export LATCHKEY_CURL=$(pwd)/datalib/backend/target/debug/latchkey-curl-impersonate
-//! cargo test -p datalib-etl-notion --test notion_live -- --ignored
-//! ```
 
 use datalib_etl_notion::download::{self as notion, FetchOptions};
 use datalib_etl_notion::render::parse_api_dir;

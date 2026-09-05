@@ -1,27 +1,4 @@
 //! Shared incremental-sync cursor helpers.
-//!
-//! Until now, both [`crate::doltlite_raw`]'s `sync_scope_state` table
-//! and the policy for *deriving* a `since` floor from it lived
-//! separately in every provider that needed them — gitlab and github
-//! each had a `since_for_scope` with subtly different semantics
-//! (gitlab returned a full RFC3339 timestamp, github returned a date;
-//! gitlab trusted state-when-present, github clamped to `min(state,
-//! window_floor)`). That divergence was unintentional and bit us
-//! recently (the gitlab `full_sync: true` override was hiding the
-//! incremental path entirely — see `sync/main.rs:1529`'s git history).
-//!
-//! This module is the single source of truth:
-//!
-//! - [`since_for_scope`] is the canonical policy. State, if present,
-//!   *is* the cursor — with one exception: a `refresh_window_days` that
-//!   has *widened* since the run that produced the cursor reaches back
-//!   past it, because otherwise the cursor would silently swallow the
-//!   config change. See [`crate::scope_config`] for the general shape
-//!   of that problem and [`REFRESH_WINDOW_KEY`] for the recorded key.
-//! - [`snapshot`] reads every `(scope, last_seen_at)` row for diffing.
-//! - [`CursorMove`] / [`diff`] turn a before/after snapshot pair into
-//!   the per-scope advancement stamped into `sync_runs.summary.cursors`
-//!   by `DownloadRun::finish`.
 
 use std::collections::HashMap;
 
@@ -30,44 +7,6 @@ use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-/// Canonical `since` policy for an incremental-sync scope. Returns what
-/// to pass as `updated_after` / `updated:>=` on the next listing call —
-/// `None` means "no `since` filter; do a full scope walk."
-///
-/// Policy:
-/// 1. `full == true` → `None` (caller forced a full rescan).
-/// 2. `state[scope] = Some(s)` → `Some(s)`; the last successful sync's
-///    timestamp is the authoritative cursor, *unless* `prior` shows the
-///    window has widened (below).
-/// 3. otherwise, if `refresh_window_days > 0` → `Some(now - window)`.
-/// 4. otherwise → `None` (no state, no window, no filter).
-///
-/// Returns full RFC 3339 (`2026-06-07T18:00:00Z`). Callers needing
-/// another form (github's `updated:>=YYYY-MM-DD`) reformat locally.
-///
-/// # The widened-window exception
-///
-/// Rule 2 alone is correct for resumption but wrong for a *config
-/// change*: because state unconditionally wins, widening
-/// `refresh_window_days` on an already-synced store would do nothing at
-/// all. The cursor answers "where do I start?" by itself and the window
-/// never gets a second vote — see [`crate::scope_config`].
-///
-/// `prior` is the config blob recorded alongside this scope's cursor by
-/// the last run that satisfied it. When it shows a *narrower* window
-/// than the current config, the newly-in-scope range has never been
-/// walked, so this run reaches back to cover it:
-///
-/// - new window is `0` (unbounded) where the recorded one wasn't →
-///   `None`, a full scope walk.
-/// - otherwise → the earlier of the cursor and `now - window`, so the
-///   walk covers the gap without giving up the cursor's precision when
-///   the cursor is already older than the new floor.
-///
-/// A *narrowed* window is a no-op: the store already holds a superset.
-/// An absent or key-less blob is likewise a no-op — every store predating
-/// `sync_scope_config` has none, and reading that as "re-walk" would
-/// stampede every installed mirror on upgrade.
 pub fn since_for_scope(
     state: &HashMap<String, String>,
     scope: &str,
@@ -126,9 +65,6 @@ pub fn refresh_window_blob(refresh_window_days: u32) -> serde_json::Value {
     serde_json::json!({ REFRESH_WINDOW_KEY: refresh_window_days })
 }
 
-/// Snapshot every `(scope, last_seen_at)` row from `sync_scope_state`.
-/// Used by [`DownloadRun`] to capture before/after cursor positions for
-/// diffing into `summary.cursors`.
 pub async fn snapshot(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT scope, last_seen_at FROM sync_scope_state")
@@ -227,7 +163,6 @@ mod tests {
         serde_json::json!({ REFRESH_WINDOW_KEY: window })
     }
 
-    /// Days between `now` and an RFC 3339 `since`, for window assertions.
     fn days_back(since: &str) -> i64 {
         let parsed = chrono::DateTime::parse_from_rfc3339(since).expect("rfc3339");
         Utc::now()

@@ -10,10 +10,6 @@
 // even though current use cases all use span sources. New ingests are
 // expected to populate this table; older ingests that pre-date the
 // table simply leave it empty (the schema is purely additive).
-//
-// Hand-written row struct; the `CREATE TABLE` DDL + column metadata are
-// derived from it by `#[derive(PortableTable)]`. This struct is the
-// single source of truth for the column names, types, and shape.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

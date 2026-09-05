@@ -1,26 +1,5 @@
 //! Minimal MDL `outer-cell` walker, shared by `youtube_watch_history`
 //! and `gemini_apps`.
-//!
-//! Takeout HTML exports are ~140 KB of inlined Material Design Lite
-//! CSS followed by N copies of:
-//!
-//! ```html
-//! <div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp">
-//!   <div class="header-cell mdl-cell mdl-cell--12-col">…header…</div>
-//!   <div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">
-//!     …row body — anchors, prompt text, timestamp…
-//!   </div>
-//!   <div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption">
-//!     …"Products: …", "Why is this here?" provenance…
-//!   </div>
-//! </div>
-//! ```
-//!
-//! We pre-load the whole file (the file is at worst tens of MB in
-//! practice — see `docs/dev/archived/google_takeout_ingestion.md` § "Watch-history
-//! (and Gemini Apps HTML) at scale" for the math) and walk it with
-//! `str::find` for the `<div class="outer-cell` boundaries. No
-//! `scraper` / `html5ever` dependency.
 
 /// Yield each MDL outer-cell as a substring of `html`. The end of one
 /// cell is wherever the next cell starts; the final cell runs to
@@ -83,9 +62,6 @@ pub fn iter_anchors(cell: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Decode the two HTML entities Google's MDL exporter actually emits
-/// in the fields we care about (`&amp;`, `&quot;`). Anything else
-/// passes through unchanged.
 pub fn decode_minimal(s: &str) -> String {
     s.replace("&amp;", "&").replace("&quot;", "\"")
 }
@@ -95,10 +71,6 @@ pub fn decode_minimal(s: &str) -> String {
 /// entry's body cell, after the anchors / prompt text. Returns the
 /// raw timestamp string (not parsed); the caller routes it through
 /// [`super::time::parse_mdl_grid`].
-///
-/// We scan backwards for the last `AM`/`PM` token (so an earlier
-/// mention of "AM" in the prompt text doesn't win) and slice a
-/// generous prefix so the parser sees the full timestamp.
 pub fn last_timestamp_chunk(cell: &str) -> Option<String> {
     let text = strip_tags(cell);
     let mut ampm_idx: Option<usize> = None;
@@ -131,9 +103,6 @@ pub fn last_timestamp_chunk(cell: &str) -> Option<String> {
     Some(prefix[first_letter..].to_string())
 }
 
-/// Strip every `<…>` tag from `s`, collapsing surrounding whitespace
-/// to one space. Good enough for the MDL cell shape where tag
-/// content is structured (no `<script>` / `<style>` mid-cell).
 pub fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;

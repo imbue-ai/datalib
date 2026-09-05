@@ -1,112 +1,12 @@
-//! Shared utilities for provider-specific doltlite-backed raw stores.
+//! Shared machinery for the doltlite-backed raw stores every provider
+//! writes: opening a store, the DDL every store gets for free, per-row
+//! bookkeeping, and the `dolt_diff` scan that drives incremental render.
 //!
-//! Every provider that ports its raw download to doltlite (notion,
-//! chatgpt, claude, …) ends up needing the same bookkeeping:
-//! identical `blob_refs` / `sync_runs` tables,
-//! identical "open this file with `journal_mode=DELETE`" boilerplate,
-//! identical bookkeeping columns on every object table
-//! (`payload TEXT NULL`, `fetched_at`, `attempt_count`, …), and the
-//! same primary-key policy spelled out below.
+//! Provider crates describe only their own object tables and upserts.
 //!
-//! This module owns all of that so the provider crates only have to
-//! describe the *provider-specific* object tables (pages/blocks for
-//! notion, conversations for chatgpt, …) and the upserts that
-//! populate them.
-//!
-//! ─────────────────────────────────────────────────────────────────
-//!
-//! ## PRIMARY KEY POLICY — read this before adding a new table.
-//!
-//! Every row in a raw-store database represents a *thing that exists
-//! upstream*. Each object table's PK is the **upstream identifier for
-//! that thing**, stored as TEXT. NO SURROGATE AUTOINCREMENT INTEGERS
-//! and no ROWID-as-PK tricks. The reasons are load-bearing:
-//!
-//! 1. **`dolt diff` stability.** The raw store sits on top of doltlite;
-//!    `dolt diff` compares rows by PK. Re-fetching the same upstream
-//!    row on a different day must land at the *same* row, so the diff
-//!    reflects content change only — not row-id churn.
-//!
-//! 2. **Idempotent upserts.** `ON CONFLICT(id) DO UPDATE` is meaningful
-//!    only when `id` is the upstream id. A surrogate would force a
-//!    "find then update or insert" two-query dance.
-//!
-//! 3. **Pre-seeding.** The design supports inserting `(id, NULL payload)`
-//!    rows when we know upstream that an object exists but haven't
-//!    fetched its body yet. The pre-seeded row and the eventual
-//!    detail-fetched row must collapse into the same row — only works
-//!    if both writers know the PK up front.
-//!
-//! 4. **Cross-table references** (e.g. `blocks.parent_id`,
-//!    `messages.conversation_id`) only mean something if they point at
-//!    upstream ids.
-//!
-//! Within-parent ordering (e.g. blocks within a page) is a SEPARATE
-//! concern from identity. When it matters, carry an explicit integer
-//! column. NEVER borrow the PK for ordering. Don't `ORDER BY rowid`
-//! either — doltlite hides it.
-//!
-//! Exception: [`SYNC_RUNS_DDL`] uses `AUTOINCREMENT INTEGER` because a
-//! sync invocation has no upstream identity — it's a local event.
-//!
-//! ─────────────────────────────────────────────────────────────────
-//!
-//! ## JSONB storage
-//!
-//! Per-row `payload` columns store JSON as SQLite **JSONB** (binary
-//! representation, added in SQLite 3.45 / doltlite 0.11.2+). INSERTs
-//! wrap the bound text payload in `jsonb(?)`; loads use
-//! `SELECT json(payload) AS payload` so the Rust side keeps getting
-//! text it can hand to `serde_json::from_str`.
-//!
-//! The on-wire JSON value is preserved (jsonb is a faithful binary
-//! encoding); `dolt diff` still shows row-level changes at the right
-//! granularity, since dolt diffs whole rows by PK rather than reaching
-//! inside the JSON document. `sqlite3` ad-hoc queries should select
-//! `json(payload)` rather than the raw column.
-//!
-//! `sync_runs.config` / `summary`
-//! stay as plain TEXT — they're tiny single-row bookkeeping where
-//! debug-friendly `sqlite3` SELECT matters more than parse perf.
-//!
-//! ─────────────────────────────────────────────────────────────────
-//!
-//! ## Connection pool size: ALWAYS 1 for doltlite files
-//!
-//! Doltlite's session has a per-connection HEAD pointer / working
-//! set. Connecting through a `SqlitePool` with
-//! `max_connections > 1` means individual statements in your
-//! Rust code can land on different pool connections, each of which
-//! sees its own working tree. Symptoms we've hit in practice:
-//!
-//!   * a `SELECT dolt_commit('-Am', '...')` that returns a fresh
-//!     hash but doesn't appear in the next `SELECT message FROM
-//!     dolt_log()` (read landed on a connection whose HEAD hadn't
-//!     refreshed), and
-//!   * `commit conflict: another connection committed to this
-//!     branch. Please retry your transaction.` errors when
-//!     interleaved INSERT/DELETE/`dolt_commit` calls happen to be
-//!     scheduled across two connections.
-//!
-//! The dolt maintainers confirm (2026-06-03 conversation): "we have
-//! the problem in Dolt too — connection pools are tricky, you can
-//! get around it by setting the pool size to 1". For our workload
-//! that's the right answer anyway: every doltlite file in this
-//! codebase has at most one writer at a time and one reader at a
-//! time, and the [`crate::grid_index::WriteLock`] already serializes
-//! cross-task writers at the application layer.
-//!
-//! [`open`] therefore pins `max_connections(1)`. All other code
-//! that opens a `SqlitePool` against a `.doltlite_db` file MUST
-//! do the same. If you find a callsite that doesn't, fix it.
-//!
-//! Pinning the count is only half of it: [`open`] also disables
-//! `idle_timeout` and `max_lifetime`. Those defaults (10 and 30
-//! minutes) would have the pool retire the very connection whose
-//! session state we just argued is load-bearing, and its replacement
-//! starts on `main` with a clean working set. That is why
-//! `fsindex --branch` needs both settings — see
-//! `providers/fsindex/src/download/db.rs::checkout_branch`.
+//! The rules you need before changing anything here — primary keys,
+//! bookkeeping sidecars, volatile fields, JSONB, why pools are size 1, why
+//! DDL runs in two passes — are in `datalib/backend/etl/README.md`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -118,14 +18,8 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-// ─────────────────────────────────────────────────────────────────────
-// Canonical column names
-// ─────────────────────────────────────────────────────────────────────
-//
-// Spelled out as constants so every provider agrees, and so a future
-// rename has one search target instead of N. Used only in the
-// constant DDL fragments below today — provider code references the
-// columns by name in inline SQL.
+// Constants so every provider agrees and a rename has one search target.
+// Only the DDL fragments below use them; provider SQL spells them inline.
 pub const COL_ID: &str = "id";
 pub const COL_PAYLOAD: &str = "payload";
 pub const COL_FETCHED_AT: &str = "fetched_at";
@@ -133,71 +27,9 @@ pub const COL_ATTEMPT_COUNT: &str = "attempt_count";
 pub const COL_LAST_ATTEMPT_AT: &str = "last_attempt_at";
 pub const COL_LAST_ERROR: &str = "last_error";
 
-/// `payload` is content — stays on the object table. The four
-/// bookkeeping fields (`fetched_at`, `attempt_count`,
-/// `last_attempt_at`, `last_error`) live in a sidecar
-/// `<table>_bookkeeping` table — see [`bookkeeping_ddl_for`].
-///
-/// Splitting them out means `dolt diff` over the data tables
-/// reflects only upstream content change, not bookkeeping churn
-/// from re-fetches. This is what makes the
-/// `--reset-and-redownload` sync flag's "did anything actually
-/// change?" assertion meaningful.
-///
-/// Provider DDL example:
-/// ```ignore
-/// const CREATE_PAGES: &str = "CREATE TABLE IF NOT EXISTS pages (
-///     id TEXT PRIMARY KEY,
-///     parent_id TEXT NULL,
-///     last_edited_time TEXT NULL,
-///     payload TEXT NULL
-/// )";
-/// // Plus, in the provider's DDL list:
-/// //   bookkeeping_ddl_for("pages")
-/// ```
-/// CREATE TABLE text for the sidecar bookkeeping table paired with
-/// `<table>`. PK matches the parent table's `id` so the sidecar
-/// inner-joins trivially.
-///
-/// Per the "always-paired" lifecycle: every row inserted into the
-/// object table gets a matching sidecar row in the same
-/// transaction (use [`ensure_object_row`] to seed both). The
-/// sidecar starts with `attempt_count=0` and the other columns
-/// NULL; the first fetch attempt updates them via
-/// [`record_object_attempt`].
 pub fn bookkeeping_ddl_for(table: &str) -> String {
-    // NB: `attempt_count` is `INTEGER NOT NULL` without a `DEFAULT`
-    // clause. This started as a workaround: a column with ANY
-    // `DEFAULT <const>` triggered an O(n²) `dolt_commit` in doltlite
-    // v0.11.9 — a few hundred thousand rows took minutes, a million
-    // effectively never finished (minimal repro: `CREATE TABLE t (id
-    // TEXT PRIMARY KEY, a INTEGER DEFAULT 0)` + bulk insert + commit,
-    // ≈1.3s at 40k, ~0s without the default, quadratic from there).
-    // See the fsindex perf investigation (2026-06).
-    //
-    // That bug is FIXED, and has been since v0.11.13 — i.e. it was
-    // already fixed in the version this workaround was written against
-    // (upstream dolthub/doltlite#1424 closed 2026-06-15; v0.11.13
-    // published a minute later). Re-running the same repro on both
-    // v0.11.13 and v0.11.50 measures a flat ~3-10ms commit through 80k
-    // rows with and without the default; quadratic would have predicted
-    // ~5s. There is no longer a performance reason to avoid `DEFAULT`
-    // here or in any other table.
-    //
-    // The shape stays as-is only because the default was never
-    // load-bearing: `bulk_upsert_bookkeeping` always binds
-    // `attempt_count = 1` explicitly on insert, so adding one back
-    // would be a semantic no-op rather than an improvement.
-    //
-    // `volatile_payload` holds the per-fetch *bookkeeping* fields split
-    // out of the object table's content `payload` (see
-    // [`split_volatile`] / [`overlay`]). It's a nullable JSONB blob:
-    // NULL for the common case (provider declared no volatile paths, or
-    // this row had none), an object of the split-out fields otherwise.
-    // Living on the sidecar keeps it out of the data diff, so churn in
-    // fields like Slack's channel `updated` doesn't show up as a
-    // content change. As with the other columns it carries no
-    // `DEFAULT`; writers bind it explicitly.
+    // No `DEFAULT` on any column here; writers bind every value
+    // explicitly.
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
@@ -210,75 +42,24 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     )
 }
 
-/// The two columns every wire-payload entity table requires: `id` PK
-/// and the `payload` JSONB blob holding the upstream wire bytes. Embed
-/// this struct as the **first** field of any row type that maps to a
-/// wire-payload table; the `#[derive(WirePayloadRow)]` macro (in
-/// `datalib-etl-macros`) recognizes it by *type*, not by field
-/// name, so a rename or typo is a compile error rather than a runtime
-/// SQL mismatch.
-///
-/// Per-row content fingerprints used to live next to these as a
-/// `payload_blake3` hex hash, hand-maintained by every download site
-/// and consumed by translate to drive incremental skip. That column is
-/// gone: translate now asks doltlite directly via `dolt_diff_<table>`
-/// what changed since the last render, which is both cheaper (the
-/// prolly-tree diff is already in dolt's hot path) and the single
-/// source of truth — see [`crate::render_cursor`] and the per-provider
-/// `render::parse` for the new shape.
-///
-/// Pair with [`wire_payload_table_ddl`] (the hand-written DDL helper)
-/// or — for the canonical path — the derive macro, which generates
-/// the DDL straight off the row struct's field list.
+/// The `id` PK + `payload` JSONB pair every wire-payload table needs.
+/// Embed it as the **first** field of a row struct: `#[derive(WirePayloadRow)]`
+/// recognizes it by *type*, so a rename is a compile error rather than a
+/// runtime SQL mismatch.
 #[derive(Debug, Clone)]
 pub struct WirePayload {
     pub id: String,
     pub payload: String,
 }
 
-/// Implemented for any row type whose table shape is "wire-payload":
-/// id + payload + a handful of promoted columns. The single method
-/// returns the table's DDL, suitable for splicing into a provider's
-/// `full_ddl()` vector.
-///
-/// Hand-implementing this trait is possible but unusual; the
-/// `#[derive(WirePayloadRow)]` macro in `datalib-etl-macros`
-/// generates it (and the matching `BulkUpsertable` impl) from a row
-/// struct in one shot. See `signal::download::schema_raw` for the
-/// canonical applications.
+/// A row type whose table is "wire-payload" shaped: id + payload + promoted
+/// columns. `#[derive(WirePayloadRow)]` in `datalib-etl-macros` generates
+/// this and the matching `BulkUpsertable` impl; `signal::download::schema_raw`
+/// is the canonical use.
 pub trait WirePayloadRow {
-    /// `CREATE TABLE IF NOT EXISTS …` for this row type's table.
-    /// Equivalent to calling [`wire_payload_table_ddl`] with the
-    /// promoted-column declarations derived from the struct's
-    /// non-`WirePayload` fields.
     fn ddl() -> String;
 }
 
-/// Build a `CREATE TABLE` statement for an event-shaped raw table
-/// that stores its upstream wire bytes as a `payload` JSONB blob.
-/// Every such table shares the same shape — the `id`/`payload` pair
-/// at the top, the entity's promoted columns underneath:
-///
-/// ```sql
-/// CREATE TABLE IF NOT EXISTS <table> (
-///     id             TEXT PRIMARY KEY,
-///     payload        TEXT NULL,
-///     <promoted columns>
-/// )
-/// ```
-///
-/// Callers pass `promoted_columns` as one column-declaration per slice
-/// entry, *without* commas — the helper joins them and handles the
-/// splicing so individual call sites can't drift on the comma/newline
-/// convention. Pass `&[]` when the entity has no promoted columns
-/// (`account`'s single-row case).
-///
-/// A per-row `payload_blake3` hex column used to live here for
-/// fingerprint-driven incremental render skips; it's been removed in
-/// favor of `dolt_diff_<table>`-driven incremental render, which uses
-/// doltlite's prolly-tree diff as the single source of truth. Existing
-/// rows on disk still carry the column as dead weight — `--reset-and-
-/// redownload` cleans it up.
 pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String {
     let promoted_block = if promoted_columns.is_empty() {
         String::new()
@@ -293,44 +74,18 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
     )
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Volatile-field split / overlay
-// ─────────────────────────────────────────────────────────────────────
-//
-// Some upstream payloads carry per-fetch *bookkeeping* fields that
-// describe the fetch rather than the object's state — e.g. Slack's
-// channel `updated` millis, which Slack bumps spuriously so it churns
-// on every re-fetch even when nothing about the channel changed.
-// Leaving such a field in the object table's `payload` makes
-// `dolt_diff_<table>` report a change on every re-download, which both
-// defeats incremental render and breaks the `--reset-and-redownload`
-// "did anything actually change?" guarantee.
-//
-// The fix mirrors how `fetched_at` is handled: split the volatile
-// fields OUT of the content payload and into the `<table>_bookkeeping`
-// sidecar's `volatile_payload` JSONB (see [`bookkeeping_ddl_for`]),
-// which is not part of the data diff. Overlaying the sidecar back onto
-// the content payload reconstructs exactly what came off the wire.
-//
-// Which fields are volatile is declared per-provider next to the row's
-// table definition (see `slack::download::schema_raw`) as a slice of
-// [`VolatilePath`]s.
+// Volatile-field split / overlay. See the README: some payloads carry
+// per-fetch fields that churn without meaning anything, and leaving them in
+// the content payload makes every re-download look like a change.
 
-/// One volatile field path: object keys from the payload root down to
-/// the field to split out. `&["updated"]` is a top-level field;
-/// `&["topic", "last_set"]` reaches a nested field.
+/// Object keys from the payload root down to a field to split out.
+/// `&["updated"]` is top-level; `&["topic", "last_set"]` is nested.
 pub type VolatilePath<'a> = &'a [&'a str];
 
-/// Partition `payload` into `(base, volatile)`:
-///   - `base` is `payload` with every `paths` entry removed,
-///   - `volatile` is an object holding ONLY those removed fields,
-///     rebuilt at the same nesting, or `None` if nothing was removed.
-///
-/// The split is the inverse of [`overlay`]: `overlay(&base, &volatile)`
-/// reproduces `payload` exactly (including null-valued fields and array
-/// contents). A path that doesn't exist in `payload` — or that would
-/// descend through a non-object — is silently skipped, so declaring a
-/// volatile field that some objects lack is harmless.
+/// Partition `payload` into `(base, volatile)`. `volatile` is `None` when
+/// nothing matched. Exact inverse of [`overlay`]. A path that is absent — or
+/// that would descend through a non-object — is skipped, so declaring a
+/// volatile field some objects lack is harmless.
 pub fn split_volatile(payload: &Value, paths: &[VolatilePath]) -> (Value, Option<Value>) {
     let mut base = payload.clone();
     let mut volatile = serde_json::Map::new();
@@ -347,12 +102,9 @@ pub fn split_volatile(payload: &Value, paths: &[VolatilePath]) -> (Value, Option
     (base, any.then_some(Value::Object(volatile)))
 }
 
-/// Deep-merge `volatile` onto `base`, returning the combined value.
-/// Plain recursive object overlay and the inverse of [`split_volatile`]
-/// — NOT RFC 7386 JSON Merge-Patch: a `null` in `volatile` sets the key
-/// to `null`, it does not delete it (Slack payloads legitimately carry
-/// nulls, e.g. `parent_conversation`). Where both sides hold an object
-/// at the same key the merge recurses; otherwise `volatile` wins.
+/// Deep-merge `volatile` onto `base`; the inverse of [`split_volatile`].
+/// NOT RFC 7386 merge-patch: a `null` in `volatile` sets the key to `null`
+/// rather than deleting it, because Slack payloads carry real nulls.
 pub fn overlay(base: &Value, volatile: &Value) -> Value {
     match (base, volatile) {
         (Value::Object(b), Value::Object(v)) => {
@@ -370,9 +122,6 @@ pub fn overlay(base: &Value, volatile: &Value) -> Value {
     }
 }
 
-/// Remove the value at `path` (descending object keys) from `root`,
-/// returning it. `None` if any segment is absent or descends through a
-/// non-object.
 fn remove_path(root: &mut Value, path: &[&str]) -> Option<Value> {
     let (last, parents) = path.split_last()?;
     let mut cur = root;
@@ -388,8 +137,6 @@ fn remove_path(root: &mut Value, path: &[&str]) -> Option<Value> {
     }
 }
 
-/// Insert `value` at `path` into `obj`, creating intermediate objects
-/// as needed.
 fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: Value) {
     let Some((last, parents)) = path.split_last() else {
         return;
@@ -401,23 +148,18 @@ fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: V
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         match entry {
             Value::Object(m) => cur = m,
-            // A declared parent path collided with a non-object leaf;
-            // bail rather than clobber. split_volatile only ever feeds
-            // paths it actually removed, so this is unreachable in
-            // practice.
+            // Declared parent path collided with a non-object leaf; bail
+            // rather than clobber.
             _ => return,
         }
     }
     cur.insert((*last).to_string(), value);
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Shared DDL
-// ─────────────────────────────────────────────────────────────────────
+// ── Shared DDL ──────────────────────────────────────────────────────
 
-/// Append-only log of sync invocations. One row per `download::fetch`
-/// call, stamped via [`start_run`] / [`finish_run`]. A crash mid-sync
-/// still leaves a row with `status='running'`.
+/// Append-only log of sync invocations, one row per `download::fetch`.
+/// A crash mid-sync leaves its row at `status='running'`.
 pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,
@@ -427,55 +169,33 @@ pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
     summary TEXT NULL
 )";
 
-/// Per-scope incremental-sync cursor table. Used by providers (github,
-/// gitlab) whose discovery is keyed by a search scope ("author:@me",
-/// "assigned_to_me", …) and which want to narrow each subsequent run
-/// via `updated:>=since` / `updated_after`. PK is the scope string; the
-/// `last_seen_at` value is a free-form provider-chosen timestamp (RFC
-/// 3339 in practice) that gets compared back to the configured refresh
-/// window when the next run picks a `since` floor.
+/// Per-scope incremental-sync cursor, for providers (github, gitlab) whose
+/// discovery is keyed by a search scope. `last_seen_at` is a provider-chosen
+/// timestamp, compared back against the configured refresh window when the
+/// next run picks its `since` floor.
 pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_state (
     scope TEXT PRIMARY KEY,
     last_seen_at TEXT NOT NULL
 )";
 
-/// The config subset that produced each scope's current cursor. Read at
-/// the top of a download to spot config changes the cursor would
-/// otherwise silently swallow (a widened `since`, a relaxed blob cap);
-/// written on the success path once the run has actually satisfied it.
-/// See [`crate::scope_config`] for the policy and for what belongs in
-/// the blob — deliberately *not* everything `sync_runs.config` records.
+/// The config subset that produced each scope's cursor, so a download can
+/// spot config changes the cursor would otherwise swallow (a widened
+/// `since`, a relaxed blob cap). Written only once a run has satisfied it;
+/// see [`crate::scope_config`] for what belongs in the blob.
 ///
-/// Separate table rather than a column on `sync_scope_state` because
-/// the two aren't 1:1: a provider can have config worth remembering
-/// without a `last_seen_at` cursor to hang it on (slack keeps its
-/// per-channel watermark in `messages`, not here), and the cursor
-/// column is `NOT NULL`.
+/// Separate from `sync_scope_state` because the two aren't 1:1 — a provider
+/// can have config worth remembering with no cursor to hang it on.
 pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_config (
     scope TEXT PRIMARY KEY,
     config TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )";
 
-/// DDL every provider gets for free. Concatenated after the
-/// provider-specific table list inside [`open`]. The legacy
-/// `blob_refs` + `blob_refs_bookkeeping` tables used to live here —
-/// they were retired once every provider moved to per-provider CAS
-/// edge tables (`CasEdgeRow`); see git history for the old shape.
+/// DDL every provider gets for free, appended inside [`open`].
 pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, SYNC_SCOPE_CONFIG_DDL];
 
-// ─────────────────────────────────────────────────────────────────────
-// Path helper
-// ─────────────────────────────────────────────────────────────────────
+// ── Path helper ─────────────────────────────────────────────────────
 
-/// Resolve the doltlite entity database path for a given source.
-///
-/// Accepts either an explicit `.doltlite_db` file (returned as-is) or
-/// the per-source raw directory, in which case the entity database is
-/// the [`crate::raw_layout::ENTITIES_DB`] file inside it. The directory
-/// layout (entities + blobs + event tape) is owned by
-/// [`crate::raw_layout`]; this helper just adds the file-vs-dir
-/// convenience on top.
 pub fn db_path_for(p: &Path) -> PathBuf {
     if p.extension().and_then(|s| s.to_str()) == Some("doltlite_db") {
         return p.to_path_buf();
@@ -483,36 +203,15 @@ pub fn db_path_for(p: &Path) -> PathBuf {
     crate::raw_layout::entities_db(p)
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Open
-// ─────────────────────────────────────────────────────────────────────
+// ── Open ────────────────────────────────────────────────────────────
 
-/// [`open`], but **without** the shared raw-store tables.
-///
-/// `SHARED_DDL` is `sync_runs` + the two scope-state tables: download
-/// bookkeeping, meaningful only for a store a downloader writes. A
-/// *derived* store — render output, an index — gets them as three empty
-/// tables that suggest a provenance it does not have.
-///
-/// Everything else `open` does is wanted here: the single-writer
-/// pragmas that keep the file byte-stable for golden snapshots, the
-/// idempotent DDL pass, the add-missing-column / recreate-on-removed
-/// migration, and the rescue commit.
+/// [`open`] without the shared download-bookkeeping tables. A *derived*
+/// store — render output, an index — would otherwise get `sync_runs` and the
+/// scope tables as three empty tables suggesting a provenance it lacks.
 pub async fn open_derived(db_path: &Path, ddl: &[&str]) -> Result<SqlitePool> {
     open_inner(db_path, ddl, false).await
 }
 
-/// Open (or create) the doltlite file and apply DDL idempotently.
-///
-/// `extra_ddl` carries the provider-specific tables (and indexes). The
-/// shared blobs / sync_runs are appended after.
-///
-/// The connection is configured for our raw-store use:
-///   - `journal_mode=DELETE`: single writer, single reader → no WAL
-///     sidecars and a byte-stable file on disk (matters for golden
-///     snapshots).
-///   - `synchronous=Normal`: durability isn't critical; the upstream
-///     API is the source of truth and we can always re-fetch.
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     open_inner(db_path, extra_ddl, true).await
 }
@@ -522,52 +221,27 @@ async fn open_inner(
     extra_ddl: &[&str],
     include_shared: bool,
 ) -> Result<SqlitePool> {
-    // Logged at every call so stray second-pool opens against an
-    // already-open file are visible — max_connections=1 means a second
-    // pool will surface as "database is locked" on dolt_commit, and
-    // without this log it's hard to attribute. The elapsed time on
-    // success also makes slow opens visible during long startup phases.
+    // Logged at every call so a stray second pool against an already-open
+    // file is attributable: with max_connections=1 it surfaces only as
+    // "database is locked" on dolt_commit.
     let started = std::time::Instant::now();
     tracing::info!(path = %db_path.display(), "doltlite_raw::open: opening sqlite pool");
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
-    // Don't set journal_mode here: doltlite manages its own storage
-    // via the prolly chunk store, not SQLite's pager journal, and
-    // rejects `PRAGMA journal_mode = …` with
-    // "journal_mode is not configurable on doltlite-format databases".
-    // synchronous is harmless on doltlite (it just maps to the
-    // chunk-store fsync policy) but we leave it default to avoid
-    // surprises.
+    // No `journal_mode` pragma: doltlite manages its own storage and rejects
+    // it outright.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
         .with_context(|| format!("sqlite uri for {}", db_path.display()))?
         .create_if_missing(true);
-    // Pool size 1: doltlite's HEAD pointer + working tree are
-    // per-connection. See the "Connection pool size" section in this
-    // module's docs for the full story. Multiple pool connections
-    // produce silent dolt_log dropouts and `commit conflict` errors
-    // on interleaved writes.
+    // Pool size 1, no connection recycling: doltlite's HEAD, working set and
+    // active branch are per-connection, and a replacement connection starts
+    // on `main` with a clean tree. See the README.
     //
-    // `acquire_timeout` is bumped well past sqlx's 30s default: cold
-    // opens of multi-GB raw stores spend most of their time inside
-    // `sqlite3_open_v2` (blake3-hashing the prolly root pages), and we
-    // saw legitimate 4–10s opens against `slack.doltlite_db` even with
-    // the `-O2` doltlite static archive. A 30s ceiling was tight
-    // enough that a transient slowness manifested as a hard timeout
-    // and 0-row sync. 5min is "obviously something else is wrong"
-    // territory.
-    // No connection recycling. sqlx 0.9 defaults to
-    // `idle_timeout: 10min` / `max_lifetime: 30min`, which for a normal
-    // client is housekeeping — a recycled connection is equivalent to
-    // the one it replaced. Here it is not: doltlite's HEAD pointer,
-    // working set and *active branch* are per-connection, and a fresh
-    // connection starts on `main`. Letting the pool retire our single
-    // connection therefore silently discards that state mid-run, and
-    // the failure is the quiet kind — an fsindex scan running on a
-    // non-`main` branch would simply start writing to `main` after 30
-    // minutes and report success. Multi-million-entry scans are this
-    // provider's design target, so that window is reachable.
+    // `acquire_timeout` is far past sqlx's 30s default because cold opens of
+    // multi-GB stores legitimately take 4-10s inside `sqlite3_open_v2`; 5min
+    // is "something else is wrong" territory.
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -576,38 +250,18 @@ async fn open_inner(
         .connect_with(opts)
         .await
         .context("open sqlite pool")?;
-    // Rescue commit. If a prior run crashed mid-batch we'd inherit a
-    // pile of uncommitted rows in `dolt_status`; the orchestrator's
-    // "next run picks it up" recovery only kicks in if subsequent
-    // writes actually succeed, and `dolt_log` ends up with the
-    // crashed-run state silently folded into a much-later commit
-    // (mixing audit-trail concerns). Seal it into its own commit at
-    // the start of every open so each tool entry sees a clean tree.
-    //
-    // No-op when the status is already clean (which is the common
-    // path). Failure to take the rescue is not fatal — the orchestrator
-    // will fall back to the implicit "next commit folds it in"
-    // behavior, which is what we had before.
+    // Seal anything a crashed prior run left dirty into its own commit, so
+    // this run's `dolt_log` entry describes only this run.
     rescue_dirty_working_tree(&pool, db_path).await;
-    // The DDL is applied in two passes, tables before indexes, with the
-    // schema reconcile in between. The ordering is load-bearing: an
-    // index over a column that a later schema change introduced cannot
-    // be created against a store predating that column, so a single
-    // pass fails with `no such column` and returns from `open` before
-    // the reconcile that would have ADDed it ever runs. (Live example:
-    // #206 added `content_blake3` to `pdf_documents` plus
-    // `idx_pdf_documents_content` over it; every pre-#206 pdf store was
-    // then unopenable.) `parse_create_table_name` returns `None` for
-    // exactly the statements that must wait — indexes and anything else
-    // that isn't a `CREATE TABLE`.
+    // Tables, then the reconcile, then indexes — see the README for why the
+    // order is load-bearing. `parse_create_table_name` returns `None` for
+    // exactly the statements that must wait.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let ddl = || extra_ddl.iter().chain(shared.iter());
     let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
     for stmt in ddl().filter(is_create_table) {
-        // Audited per sqlx 0.9's `SqlSafeStr` bound. DDL is not `&'static str`: every
-        // provider builds its array in `schema_raw.rs` from static consts plus
-        // `bookkeeping_ddl_for(table)`, which formats a `String` at runtime. The
-        // inputs are our own schema definitions, never user or upstream data.
+        // Audited: every DDL statement is built in a provider's `schema_raw.rs`
+        // from static consts; no user or upstream data reaches it.
         sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
             .await
@@ -618,12 +272,8 @@ async fn open_inner(
                 )
             })?;
     }
-    // Self-heal the schema. `CREATE TABLE IF NOT EXISTS` above is a no-op
-    // for a table that already exists, so a DB created under an older
-    // schema never gains columns a later DDL change introduced (e.g.
-    // `volatile_payload` on the bookkeeping sidecars). Reconcile each
-    // table against its DDL — add missing columns, or drop+recreate when
-    // ADD can't express the change. See [`reconcile_table_schema`].
+    // Add columns an older store predates, or drop+recreate when ADD
+    // can't express the change.
     for stmt in ddl() {
         reconcile_table_schema(&pool, stmt).await.with_context(|| {
             format!(
@@ -632,9 +282,8 @@ async fn open_inner(
             )
         })?;
     }
-    // Indexes last, so they see the reconciled columns. This also makes
-    // reconcile's drop+recreate path free: the dropped table's indexes
-    // hadn't been created yet this open, and are created now.
+    // Indexes last, so they see the reconciled columns — and so reconcile's
+    // drop+recreate path costs no index.
     for stmt in ddl().filter(|s| !is_create_table(s)) {
         sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
@@ -646,16 +295,9 @@ async fn open_inner(
                 )
             })?;
     }
-    // Seal the schema into its own commit before handing back the pool.
-    // doltlite only materializes the `dolt_diff_<table>` virtual table for
-    // tables that exist at HEAD, so a freshly-created (but uncommitted)
-    // table reads as "new table" in `dolt_status` while `dolt_diff_<table>`
-    // doesn't resolve at all. Committing here puts every table at HEAD, so
-    // the run's data writes diff cleanly as added/modified/removed instead
-    // of making `compute_deltas` drop the delta with a spurious warning on
-    // each provider's first sync. No-op (handled inside `commit_run`) when
-    // the tree is already clean — the common warm-DB path — and on stock
-    // libsqlite3, where there are no dolt extensions.
+    // Commit the schema before handing back the pool: doltlite only
+    // materializes `dolt_diff_<table>` for tables that exist at HEAD, so an
+    // uncommitted table makes the first sync's delta vanish with a warning.
     commit_run(&pool, "schema: apply DDL")
         .await
         .context("commit schema after DDL")?;
@@ -673,15 +315,12 @@ struct ColumnInfo {
     decl_type: String,
     not_null: bool,
     default: Option<String>,
-    /// `hidden` 2/3 ⇒ a GENERATED column. We can't reconstruct the
-    /// generation expression from `table_xinfo`, so a missing generated
-    /// column forces a drop+recreate rather than a (wrong) `ADD COLUMN`.
+    /// `hidden` 2/3. The generation expression isn't recoverable from
+    /// `table_xinfo`, so a missing generated column forces drop+recreate.
     generated: bool,
 }
 
 impl ColumnInfo {
-    /// The `<name> <type> [NOT NULL] [DEFAULT …]` fragment for
-    /// `ALTER TABLE … ADD COLUMN`. Only valid for non-generated columns.
     fn add_column_decl(&self) -> String {
         let ty = if self.decl_type.is_empty() {
             "TEXT"
@@ -700,19 +339,10 @@ impl ColumnInfo {
     }
 }
 
-/// Does `table` have a `column`?
-///
-/// For **read-only** consumers of a raw store — the render side opens
-/// its pool with `read_only(true)` and never applies DDL, so it does
-/// not get [`open`]'s schema reconcile. A store written before a
-/// column was added therefore still lacks it, and a `SELECT` naming
-/// that column fails at prepare time and sinks the whole step. Probe
-/// first and widen the projection only when the column is really
-/// there; the alternative is a render that hard-fails on any store the
-/// current downloader hasn't touched yet.
-///
-/// A missing table reads as "no such column" rather than an error,
-/// matching [`table_columns`].
+/// Whether `table` has `column`, for **read-only** consumers that never get
+/// [`open`]'s schema reconcile — the render side opens read-only, so naming a
+/// column an older store lacks would fail at prepare time and sink the step.
+/// A missing table reads as "no such column" rather than an error.
 pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
     Ok(table_columns(pool, table)
         .await?
@@ -720,12 +350,10 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
         .any(|c| c.name == column))
 }
 
-/// Introspect a table's columns via `PRAGMA table_xinfo`. Returns an
-/// empty vec if the table does not exist (no error).
+/// Empty vec if the table does not exist (no error).
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
-    // Audited: `table` is interpolated as a quoted identifier. Callers pass
-    // either a `&'static str` literal or a name parsed out of our own static
-    // DDL by `parse_create_table_name`; never user input.
+    // Audited: `table` is a quoted identifier from a `&'static str` or from
+    // `parse_create_table_name` over our own DDL; never user input.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "PRAGMA table_xinfo(\"{table}\")"
     )))
@@ -751,31 +379,18 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
     Ok(cols)
 }
 
-/// The columns a `CREATE TABLE` DDL *declares*, learned by letting
-/// SQLite parse the statement into a throwaway probe table.
+/// The columns a `CREATE TABLE` DDL declares, learned by letting SQLite
+/// parse it into a throwaway probe table so nothing here hand-rolls a parser.
 ///
-/// The probe exists so nothing here hand-rolls a parser for column
-/// definitions: whatever SQLite makes of the DDL is by definition what
-/// the real table would have got.
-///
-/// **The probe runs in memory, never against the store being opened.**
-/// A create+drop nets to nothing in the working tree — `dolt_status`
-/// stays clean and no commit is written — but both statements have
-/// already appended chunks to the file by then, and nothing collects
-/// them. Against the real store this made every `open` cost bytes
-/// *whether or not anything was ingested*: one probe per table per
-/// open, so a Signal root whose snapshot was already ingested grew
-/// 4,732 bytes (14 tables) on every press of Sync, for as long as
-/// anyone kept pressing it. Nothing about the answer needs the real
-/// store — it is a property of the DDL string — so it is read
-/// somewhere that costs nothing.
+/// The probe runs **in memory**, never against the store being opened: a
+/// create+drop nets to nothing in the working tree but still appends chunks
+/// nobody collects, so it made every `open` cost bytes. See the README.
 async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInfo>> {
     const PROBE: &str = "__datalib_schema_probe__";
     // A fresh database per call rather than one shared scratch pool:
-    // the probe table's name is a constant, so two reconciles running
-    // at once would drop each other's table out from under them. An
-    // in-memory open is cheap enough that owning one is the simpler
-    // answer than locking a shared one.
+    // A fresh in-memory database per call, not a shared scratch pool: the
+    // probe table name is a constant, so concurrent reconciles would drop
+    // each other's table.
     let probe = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
@@ -784,11 +399,9 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
         )
         .await
         .context("open the in-memory schema probe")?;
-    // The table name's first occurrence is the name itself (the CREATE /
-    // TABLE / IF NOT EXISTS keywords never equal a table name).
+    // The name's first occurrence is the name itself.
     let probe_sql = create_sql.replacen(table, PROBE, 1);
-    // Audited: `probe_sql` is a static DDL statement with its table name
-    // replaced by the `PROBE` constant. Nothing runtime-derived reaches it.
+    // Audited: static DDL with only its table name replaced.
     sqlx::query(sqlx::AssertSqlSafe(probe_sql))
         .execute(&probe)
         .await
@@ -798,10 +411,6 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
     cols
 }
 
-/// Column *names* a `CREATE TABLE` DDL declares. The name-only view of
-/// [`declared_columns`], for callers that only need to answer "does the
-/// on-disk shape still match the code's?" — see
-/// [`crate::grid_index::init_schema`].
 pub(crate) async fn declared_column_names(
     create_sql: &str,
     table: &str,
@@ -813,8 +422,7 @@ pub(crate) async fn declared_column_names(
         .collect())
 }
 
-/// Column names `table` actually has on disk. Empty when the table does
-/// not exist, matching [`table_columns`].
+/// Empty when the table does not exist, matching [`table_columns`].
 pub(crate) async fn actual_column_names(
     pool: &SqlitePool,
     table: &str,
@@ -826,9 +434,6 @@ pub(crate) async fn actual_column_names(
         .collect())
 }
 
-/// Extract the table name from a `CREATE TABLE [IF NOT EXISTS] <name>
-/// (…)` statement. `None` for anything that isn't a `CREATE TABLE`
-/// (e.g. `CREATE INDEX`), which has no columns to reconcile.
 pub(crate) fn parse_create_table_name(sql: &str) -> Option<String> {
     let s = sql.trim_start();
     if !s.get(..12)?.eq_ignore_ascii_case("CREATE TABLE") {
@@ -845,42 +450,22 @@ pub(crate) fn parse_create_table_name(sql: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-/// Reconcile one table's columns against its `CREATE TABLE` DDL.
-///
-/// The simplest mechanism that self-heals an older on-disk schema:
-///
-///   1. Learn the DESIRED columns by letting SQLite parse the DDL into a
-///      throwaway probe table (no hand-rolled SQL parsing of column
-///      definitions).
-///   2. Compare against the table's ACTUAL columns.
-///   3. If the only difference is missing, non-generated columns →
-///      `ALTER TABLE … ADD COLUMN` each one.
-///   4. Otherwise (a column was removed/renamed, a generated column is
-///      missing, or an `ADD COLUMN` fails) → `DROP TABLE` + recreate from
-///      the DDL.
-///
-/// The drop path is safe for raw stores specifically: every row is a
-/// cache of upstream and is re-fetched on the next sync, and doltlite
-/// keeps the dropped rows in history. Non-`CREATE TABLE` statements
-/// (indexes) are skipped.
-///
-/// `open` runs this between the `CREATE TABLE` and the `CREATE INDEX`
-/// halves of the DDL, so a reconciled column is in place before any
-/// index over it is created, and a drop+recreate here loses no index
-/// (they are all asserted afterwards).
+/// Add missing non-generated columns via `ALTER TABLE … ADD COLUMN`;
+/// otherwise drop and recreate from the DDL. See the README for why the drop
+/// is safe for raw stores and why `open` runs this between the table and
+/// index halves of the DDL.
 async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<()> {
     let Some(table) = parse_create_table_name(create_sql) else {
         return Ok(());
     };
 
-    // 1. Desired columns, via a probe built from this exact DDL.
+    // Desired columns, via a probe built from this exact DDL.
     let desired = declared_columns(create_sql, &table).await?;
 
-    // 2. Actual columns. Empty ⇒ table doesn't exist (defensive: the DDL
-    //    pass should have created it) ⇒ create and return.
+    // Empty ⇒ table doesn't exist (the DDL pass should have created it).
     let actual = table_columns(pool, &table).await?;
     if actual.is_empty() {
-        // Audited: `create_sql` is one of the DDL statements described above.
+        // Audited: `create_sql` is our own static DDL.
         sqlx::query(sqlx::AssertSqlSafe(create_sql))
             .execute(pool)
             .await
@@ -902,13 +487,12 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
         return Ok(());
     }
 
-    // 3. Additive-only and no generated columns missing → ALTER ADD.
+    // Additive-only, no generated columns missing → ALTER ADD.
     if !has_extra && missing.iter().all(|c| !c.generated) {
         let mut added_all = true;
         for col in &missing {
             let sql = format!("ALTER TABLE {table} ADD COLUMN {}", col.add_column_decl());
-            // Audited: `table` comes from our own static DDL and `add_column_decl()`
-            // renders a column declaration from that same parsed DDL.
+            // Audited: identifiers come from our own static DDL.
             match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
                 Ok(_) => tracing::info!(
                     table = %table,
@@ -932,8 +516,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
         }
     }
 
-    // 4. Fallback: drop + recreate. Safe for raw stores (re-fetched from
-    //    upstream; doltlite retains history).
+    // Fallback: drop + recreate.
     tracing::warn!(
         table = %table,
         "doltlite_raw: schema not reconcilable by ADD COLUMN (column removed, \
@@ -951,23 +534,14 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
     Ok(())
 }
 
-/// Stamp a dolt commit of any orphaned working-tree changes inherited
-/// from a crashed prior run. The reasons we want this at every open:
+/// Seal a crashed prior run's orphaned working-tree changes into their own
+/// commit, so the next successful commit doesn't fold two runs' work into one
+/// `dolt_log` entry — and so a dirty tree at open gets logged.
 ///
-/// 1. **Clean audit trail.** Without this, the next successful
-///    `dolt_commit()` silently folds the crashed-run rows into its
-///    own changelog entry, mixing two different runs' work under one
-///    `dolt_log` message.
-/// 2. **Health check.** A dirty tree at open is a signal worth logging
-///    even when we can rescue it — it means somebody crashed.
-///
-/// We catch and swallow errors: even a stock-libsqlite3 build (no
-/// doltlite extensions) lands here in CI, where `dolt_status` doesn't
-/// exist and `dolt_commit()` is a missing function. Logging at warn is
-/// enough — the caller still gets a usable pool.
+/// Errors are swallowed: a stock-libsqlite3 build (CI, no doltlite
+/// extensions) has no `dolt_status` at all.
 async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
-    // First: is there anything dirty? `dolt_status` is a vtab; on
-    // stock SQLite it errors with "no such table".
+    // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
         sqlx::query_scalar("SELECT count(*) FROM dolt_status")
             .fetch_one(pool)
@@ -975,9 +549,8 @@ async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
     let count = match dirty {
         Ok(n) => n,
         Err(e) => {
-            // Differentiate "no doltlite extensions" (silent) from
-            // "real error" (warn). The former shows up as a missing-
-            // table error; everything else is interesting.
+            // "no doltlite extensions" is expected and silent; anything else
+            // is worth a warning.
             let msg = e.to_string();
             if !msg.contains("no such table") {
                 tracing::warn!(
@@ -1014,11 +587,8 @@ async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// sync_runs
-// ─────────────────────────────────────────────────────────────────────
+// ── sync_runs ───────────────────────────────────────────────────────
 
-/// Record the start of a sync run; returns the new `run_id`.
 pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let cfg = serde_json::to_string(config).context("serialize run config")?;
@@ -1034,8 +604,6 @@ pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
     Ok(id)
 }
 
-/// Mark a sync run as finished with the given status (`ok` / `error`)
-/// and an arbitrary JSON summary blob.
 pub async fn finish_run(
     pool: &SqlitePool,
     run_id: i64,
@@ -1055,14 +623,10 @@ pub async fn finish_run(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// dolt commit
-// ─────────────────────────────────────────────────────────────────────
+// ── dolt commit ─────────────────────────────────────────────────────
 
-/// True iff this connection's libsqlite3 has the `dolt_commit` scalar
-/// function registered. Lets callers skip commit calls silently against
-/// stock libsqlite3 (e.g. in unit tests that build the binary without
-/// linking against doltlite).
+/// Whether this connection's libsqlite3 is doltlite rather than stock, so
+/// callers can skip commits silently in builds that don't link it.
 pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
     let res = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
@@ -1072,20 +636,6 @@ pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
     matches!(res, Ok(n) if n > 0)
 }
 
-/// Open (or no-op) a doltlite file on disk and stamp it with one
-/// commit. Returns the commit hash, `Ok(None)` if the file doesn't
-/// exist (e.g. download aborted before materializing any rows) or if
-/// the linked libsqlite3 isn't doltlite. Errors only on a real
-/// open/commit failure.
-///
-/// Used after each source's download finishes AND from the SIGINT
-/// handler to flush
-/// in-flight stores before exit. Tests live in this module.
-///
-/// The helper opens a brief pool with no extra DDL — the shared
-/// tables (sync_runs, blobs, …) are already in the file from the
-/// download pool's lifetime; `open` is CREATE-IF-NOT-EXISTS so it's a
-/// no-op for tables that already exist.
 pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<String>> {
     let db_path = db_path_for(out_dir);
     if !db_path.exists() {
@@ -1097,25 +647,12 @@ pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<Stri
     Ok(hash)
 }
 
-/// Stamp the pool's doltlite DB with one commit and return the new
-/// commit hash. No-op (returns `Ok(None)`) when the connection's
-/// libsqlite3 doesn't expose the doltlite scalars — production runs
-/// against doltlite will always populate dolt_log.
-///
-/// The commit picks up all uncommitted changes (`-A`), with `msg` as
-/// the commit message. Callers should put run-summary stats in `msg`
-/// (row counts etc.) so `dolt log` is human-auditable without
-/// cross-referencing the JSON summary.
 pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
-    // `dolt_commit` errors with "nothing to commit, working tree clean"
-    // when there's nothing dirty. That used to be a hard fail; with the
-    // rescue commit in `open()` it's a legitimate post-condition (rescue
-    // may have already swept everything into its own commit, leaving
-    // the orchestrator's trailing commit nothing to do). Treat it as
-    // Ok(None) so the caller can keep going.
+    // "nothing to commit" is a legitimate outcome: the rescue commit in
+    // `open` may already have swept everything up.
     match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
         .bind(msg)
         .fetch_optional(pool)
@@ -1127,17 +664,13 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     }
 }
 
-/// The store's current HEAD commit hash.
+/// The store's current HEAD, which is its *content version*: doltlite
+/// advances HEAD only when a commit changed something, so two downloads that
+/// pulled the same rows leave the same hash. That is what a step reports to
+/// the DAG runner, instead of hashing a multi-gigabyte store.
 ///
-/// This is the store's *content version*: doltlite advances HEAD only
-/// when a commit actually changed something, so two download waves that
-/// pulled the same rows leave the same hash behind. That makes it the
-/// version a step reports to the DAG runner — derived from content, not
-/// asserted, and far cheaper than hashing a multi-gigabyte store.
-///
-/// `Ok(None)` when the linked libsqlite3 isn't doltlite (stock-sqlite
-/// dev builds) or the log is empty; the caller then reports no version
-/// and the runner content-hashes instead.
+/// `Ok(None)` against stock libsqlite3 or an empty log; the runner then
+/// content-hashes instead.
 pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
@@ -1148,15 +681,12 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
         .context("read dolt_log head")
 }
 
-/// [`head_commit`] against a store on disk. `Ok(None)` when the file
-/// doesn't exist — a source nobody has downloaded yet.
+/// [`head_commit`] against a store on disk; `Ok(None)` if nobody has
+/// downloaded it yet.
 ///
-/// Deliberately NOT via [`open`]: that is the write path — it rescues a
-/// dirty working tree, applies the shared DDL (`sync_runs`,
-/// `sync_scope_state`, …), reconciles schemas and commits. Using it to
-/// read a version would create bookkeeping tables inside a blob CAS
-/// that has only `cas_objects`, and the resulting schema commit would
-/// advance HEAD — a version read that changes the version it reads.
+/// Deliberately not via [`open`], which is the write path: it would create
+/// bookkeeping tables inside a blob CAS and advance HEAD — a version read
+/// that changes the version it reads.
 pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     if !db_path.exists() {
         return Ok(None);
@@ -1172,24 +702,13 @@ pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     head
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Reset
-// ─────────────────────────────────────────────────────────────────────
+// ── Reset ───────────────────────────────────────────────────────────
 
-/// Truncate every per-row table in the provider's raw store, so the
-/// next `download::fetch` re-downloads everything from upstream.
+/// Truncate every per-row table and its sidecar in one transaction, so the
+/// next `download::fetch` re-downloads from upstream. `sync_runs` and
+/// `sync_scope_state` survive — audit log and resume cursor, not content.
 ///
-/// Wipes, in one transaction:
-///   - each `<table>` in `data_tables`
-///   - each `<table>_bookkeeping` paired sidecar
-///   - the shared `blobs` table and `blobs_bookkeeping` sidecar
-///
-/// Whole-table bookkeeping (`sync_runs`, `sync_scope_state`) is
-/// preserved — that's audit log + resume cursor, neither of which is
-/// "content" the reset is trying to re-pull.
-///
-/// Tables names are interpolated into SQL; callers must pass
-/// trusted identifiers, not user input.
+/// Table names are interpolated; callers pass trusted identifiers.
 pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Result<()> {
     let mut tx = pool.begin().await.context("begin truncate tx")?;
     for table in data_tables {
@@ -1197,9 +716,8 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
             format!("DELETE FROM {table}"),
             format!("DELETE FROM {table}_bookkeeping"),
         ] {
-            // Audited: table names are interpolated. This fn's doc comment already
-            // requires callers to pass trusted identifiers; every callsite passes a
-            // `&'static str`.
+            // Audited: identifiers per this fn's documented contract; every
+            // callsite passes a `&'static str`.
             sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                 .execute(&mut *tx)
                 .await
@@ -1210,43 +728,26 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Generic object-table ops
-// ─────────────────────────────────────────────────────────────────────
+// ── Generic object-table ops ────────────────────────────────────────
 
-/// Pre-seed an `id`-only row (NULL payload) into a table, AND its
-/// matching sidecar bookkeeping row. Used when we know an entity
-/// exists upstream but haven't fetched its body yet. Existing rows
-/// are left untouched (no clobber of payload or attempt counters).
+/// Pre-seed an `id`-only row (NULL payload) and its sidecar, for an entity
+/// we know exists upstream but haven't fetched. Existing rows are untouched.
+/// Takes a transaction so both inserts land atomically.
 ///
-/// Always-paired lifecycle: every object row has a matching
-/// `<table>_bookkeeping` row. The sidecar row starts with
-/// `attempt_count=0` and other columns NULL until a fetch attempt
-/// updates it via [`record_object_attempt`].
-///
-/// Takes a transaction (not a pool) so the data INSERT and the
-/// sidecar INSERT land atomically.
-///
-/// `table` is interpolated into the SQL string — callers must pass a
-/// trusted identifier, not user input. (In practice, every callsite
-/// passes a `&'static str` table name.)
+/// `table` is interpolated; callers pass a trusted identifier.
 pub async fn ensure_object_row(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     id: &str,
 ) -> Result<()> {
     let data_sql = format!("INSERT INTO {table} (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
-    // Audited: `table` interpolated as an identifier per this fn's documented
-    // contract; `id` is bound.
+    // Audited: `table` interpolated per the contract above; `id` is bound.
     sqlx::query(sqlx::AssertSqlSafe(data_sql))
         .bind(id)
         .execute(&mut **tx)
         .await
         .with_context(|| format!("ensure_object_row data {table}={id}"))?;
-    // `attempt_count` is supplied explicitly (0) rather than via a
-    // column DEFAULT: see [`bookkeeping_ddl_for`] for why the schema
-    // carries no `DEFAULT` clause (a since-fixed doltlite bug, kept
-    // only because binding it explicitly is equivalent anyway).
+
     let bk_sql = format!(
         "INSERT INTO {table}_bookkeeping (id, attempt_count) VALUES (?, 0) ON CONFLICT(id) DO NOTHING"
     );
@@ -1258,29 +759,19 @@ pub async fn ensure_object_row(
     Ok(())
 }
 
-/// Record one fetch attempt against an object row's sidecar.
+/// `result = None` is success (sets `fetched_at`, clears `last_error`);
+/// `Some(err)` is failure (leaves `fetched_at`, sets `last_error`). Both bump
+/// `attempt_count` and set `last_attempt_at`.
 ///
-/// `result = None` → success: sets `fetched_at = now`, clears
-/// `last_error`. `result = Some(err)` → failure: leaves
-/// `fetched_at` untouched, sets `last_error = err`. Both branches
-/// bump `attempt_count` and set `last_attempt_at = now`.
-///
-/// Pairs an `INSERT ... ON CONFLICT DO UPDATE` so it's safe even
-/// when the sidecar row hasn't been pre-seeded by
-/// [`ensure_object_row`] — but callers should normally pre-seed
-/// the data row and its sidecar together for the always-paired
-/// invariant.
+/// Upserts, so it is safe even when [`ensure_object_row`] hasn't pre-seeded.
 pub async fn record_object_attempt(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     id: &str,
     result: Option<&str>,
 ) -> Result<()> {
-    // Always-paired invariant: a sidecar row never exists without a
-    // matching data row. The success-branch upsert above already
-    // wrote the data row before this call; the failure-branch
-    // callers (record_object_error before any successful fetch)
-    // wouldn't have, so we INSERT OR IGNORE here. Cheap and idempotent.
+    // Keep the always-paired invariant: a failure recorded before any
+    // successful fetch has no data row yet.
     let stub_sql = format!("INSERT OR IGNORE INTO {table} (id) VALUES (?)");
     // Audited: `table` interpolated as an identifier; `id` is bound.
     sqlx::query(sqlx::AssertSqlSafe(stub_sql))
@@ -1308,7 +799,7 @@ pub async fn record_object_attempt(
                 last_error = excluded.last_error"
         ),
     };
-    // Audited: both arms interpolate only `table`; id/now/err are bound.
+    // Audited: both arms interpolate only `table`; the rest is bound.
     let q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id).bind(&now);
     let q = match result {
         None => q,
@@ -1320,31 +811,14 @@ pub async fn record_object_attempt(
     Ok(())
 }
 
-/// Persist a successful upsert into the raw storage layer: stamp
-/// per-row bookkeeping, commit the transaction, and (if a tape is
-/// attached) mirror the row as one JSONL line.
+/// The single chokepoint a provider calls once its own
+/// `INSERT … ON CONFLICT(id) DO UPDATE` has run inside `tx`: stamp
+/// bookkeeping, commit, then mirror the row to the wire tape.
 ///
-/// This is the single chokepoint a provider should call once its
-/// table-specific `INSERT … ON CONFLICT(id) DO UPDATE` has run inside
-/// `tx`. It exists so a provider author thinks about "write one event
-/// to the raw storage layer" as one operation, not three steps that
-/// have to be kept in lockstep — see `docs/dev/data_architecture_ingestion.md`
-/// § "Wire-event tape (JSONL)" for why doltlite and the tape are both
-/// parts of "the raw storage layer."
-///
-/// Semantics:
-/// - [`record_object_attempt`] runs for `(table, id)` inside `tx`.
-/// - `tx` is committed.
-/// - If `tape` is `Some`, the tape append fires AFTER the commit
-///   succeeds, so a rolled-back tx never leaves an orphan tape line
-///   describing a row that didn't land in doltlite.
-/// - Tape append errors are logged at `error!` level but do not fail
-///   the upsert. The doltlite row is already committed and is the
-///   source of truth; the tape is a write-only mirror, so failing the
-///   caller would be lying about whether the data landed. But a tape
-///   failure here is anomalous (the directory is local, the file is
-///   ours, there's no contention) — when it happens, we want it loud
-///   and visible in logs so it gets investigated.
+/// The tape append fires only after the commit succeeds, so a rolled-back tx
+/// leaves no orphan line. A tape failure logs at `error!` but does not fail
+/// the caller — the doltlite row is the source of truth, and failing here
+/// would lie about whether the data landed.
 pub async fn write_event_to_raw_storage_layer(
     tx: sqlx::Transaction<'_, sqlx::Sqlite>,
     tape: Option<&crate::event_tape::EventTape>,
@@ -1355,9 +829,6 @@ pub async fn write_event_to_raw_storage_layer(
     write_events_to_raw_storage_layer(tx, tape, &[(table, id, payload)]).await
 }
 
-/// Batch sibling of [`write_event_to_raw_storage_layer`]. Use this
-/// when one transaction covers many rows (e.g. one history / replies
-/// page upserted in a single `fsync`).
 pub async fn write_events_to_raw_storage_layer(
     mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
     tape: Option<&crate::event_tape::EventTape>,
@@ -1385,40 +856,16 @@ pub async fn write_events_to_raw_storage_layer(
     Ok(())
 }
 
-// `EventBatch` is the per-table batch shape — defined in
-// `crate::bulk` because it is a load-bearing primitive of the bulk
-// write path. The tape side (`EventTape::append_batch`) is a
-// best-effort sidecar that uses the same struct. Re-exported here
-// because providers reach for it next to the chokepoint.
+// Defined in `crate::bulk` (a primitive of the bulk write path), re-exported
+// here because providers reach for it next to the chokepoint.
 pub use crate::bulk::EventBatch;
 
-/// Chokepoint for the **successful bulk write** path against an
-/// event-shaped table (i.e. one whose rows came off a wire and have
-/// a meaningful payload to mirror). The provider has already issued
-/// its chunked multi-row entity-table UPSERTs inside `tx`; this call:
+/// Bulk sibling of [`write_event_to_raw_storage_layer`], for a provider that
+/// has already issued its chunked entity upserts inside `tx`: stamps one
+/// bookkeeping batch per [`EventBatch`], commits, then appends to the tape.
 ///
-///   1. stamps `<table>_bookkeeping` for every id (via
-///      [`crate::bulk::bulk_upsert_bookkeeping`]) in the same tx,
-///      one bookkeeping batch per `EventBatch`;
-///   2. commits `tx`;
-///   3. after the commit succeeds, appends one JSONL line per row to
-///      the tape (if attached), one
-///      [`crate::event_tape::EventTape::append_batch`] call per batch.
-///
-/// Post-commit tape errors log at `error!` but do not fail the call.
-/// The doltlite rows are already persisted and are the source of
-/// truth; the tape is a write-only mirror, so failing the caller
-/// would be lying about whether the data landed (same contract as
-/// [`write_events_to_raw_storage_layer`]).
-///
-/// Not the right tool for non-event tables (blob_refs, sidecars,
-/// file-imported data with no wire) — those want
-/// [`crate::bulk::bulk_upsert_bookkeeping`] called directly inside
-/// the caller's tx, with no tape.
-///
-/// See `docs/dev/data_architecture_ingestion.md` § "Bulk-upsert as the
-/// standard write path" for why this is the standard chokepoint for
-/// wire-event extracts.
+/// Non-event tables (sidecars, file-imported data with no wire) want
+/// [`crate::bulk::bulk_upsert_bookkeeping`] directly, with no tape.
 pub async fn bulk_upsert_events(
     mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
     tape: Option<&crate::event_tape::EventTape>,
@@ -1454,27 +901,10 @@ pub async fn bulk_upsert_events(
     Ok(())
 }
 
-/// All-in-one entity-bulk-write chokepoint paired with a JSONL
-/// wire-tape mirror. Use this when the caller already has a
-/// [`crate::bulk::BulkUpsertable`] row vec in hand (every ported
-/// download path does), since [`bulk_upsert_events`] above only
-/// handles bookkeeping + tape and assumes the entity rows were
-/// written elsewhere in the tx.
-///
-/// Flow:
-///   1. Open a tx.
-///   2. [`crate::bulk::bulk_upsert_in_tx`] — entity rows + paired
-///      `<T::TABLE>_bookkeeping` stamps.
-///   3. Commit.
-///   4. If `tape` is `Some`, fire one
-///      [`crate::event_tape::EventTape::append_batch`] for `(table,
-///      payloads)` post-commit. Errors log at `error!` but don't
-///      fail the call (same contract as
-///      [`write_events_to_raw_storage_layer`]).
-///
-/// `payloads` carries one `(id, &Value)` per row so the tape line
-/// can mirror the upstream JSON. The caller already has these from
-/// constructing the [`crate::bulk::BulkUpsertable`] rows.
+/// [`bulk_upsert_events`] for the common case where the caller has a
+/// [`crate::bulk::BulkUpsertable`] row vec rather than rows already written
+/// into a transaction. `payloads` carries one `(id, &Value)` per row so the
+/// tape line can mirror the upstream JSON.
 pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
     pool: &sqlx::SqlitePool,
     tape: Option<&crate::event_tape::EventTape>,
@@ -1484,24 +914,11 @@ pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
     bulk_upsert_with_tape_split(pool, tape, rows, payloads, &[]).await
 }
 
-/// [`bulk_upsert_with_tape`] with volatile-field splitting (see
-/// [`split_volatile`]). The caller has already partitioned each
-/// upstream payload into a **content** half and a **volatile** half:
-///
-///   - `rows` carry the *content* payload — the stable state that
-///     belongs in the object table and drives `dolt_diff_<table>`.
-///   - `volatile` carries `(id, &volatile_json)` for the split-out
-///     per-fetch fields, written to `<table>_bookkeeping.volatile_payload`
-///     in the SAME tx as the entity upsert (so the pair is atomic).
-///   - `tape_payloads` carry the FULL reconstructed wire object
-///     (content ⊕ volatile = exactly what came off the wire), so the
-///     JSONL tape stays a faithful record even though the object table
-///     no longer holds the volatile bits.
-///
-/// `volatile` need only contain rows that actually had volatile fields;
-/// ids absent from it leave `volatile_payload` NULL (its insert
-/// default). Plain [`bulk_upsert_with_tape`] is this with an empty
-/// `volatile`.
+/// [`bulk_upsert_with_tape`] where the caller has already run
+/// [`split_volatile`]: `rows` carry the content half, `volatile` the split-out
+/// fields (written to the sidecar in the same tx), and `tape_payloads` the
+/// full reconstructed wire object. Ids absent from `volatile` leave
+/// `volatile_payload` NULL.
 pub async fn bulk_upsert_with_tape_split<T: crate::bulk::BulkUpsertable>(
     pool: &sqlx::SqlitePool,
     tape: Option<&crate::event_tape::EventTape>,
@@ -1540,11 +957,6 @@ pub async fn bulk_upsert_with_tape_split<T: crate::bulk::BulkUpsertable>(
     Ok(())
 }
 
-/// Write a `volatile_payload` JSONB onto existing
-/// `<table>_bookkeeping` rows, one per `(id, value)`. The sidecar rows
-/// already exist (just stamped by [`crate::bulk::bulk_upsert_bookkeeping`]
-/// inside the same tx), so this is a plain UPDATE. Runs inside `tx`;
-/// the caller commits.
 async fn set_volatile_payloads_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1554,17 +966,14 @@ async fn set_volatile_payloads_in_tx(
         return Ok(());
     }
     let bk = format!("{table}_bookkeeping");
-    // `Arc<str>` rather than `String`: sqlx 0.9 takes the query string by
-    // value, so a per-row `AssertSqlSafe(&str)` would copy this statement
-    // once per row (0.8 borrowed it for free). Cloning the Arc is a
-    // refcount bump.
+    // `Arc<str>` because sqlx 0.9 takes the query string by value: a
+    // per-row `&str` would copy the statement once per row.
     let sql: std::sync::Arc<str> =
         format!("UPDATE {bk} SET volatile_payload = jsonb(?) WHERE id = ?").into();
     for (id, value) in volatile {
         let text = serde_json::to_string(value)
             .with_context(|| format!("serialize volatile_payload {bk}={id}"))?;
-        // Audited: only `bk` (= `{table}_bookkeeping`) is interpolated; the JSON
-        // text and id are bound.
+        // Audited: only `bk` is interpolated; JSON text and id are bound.
         sqlx::query(sqlx::AssertSqlSafe(std::sync::Arc::clone(&sql)))
             .bind(text)
             .bind(*id)
@@ -1575,67 +984,44 @@ async fn set_volatile_payloads_in_tx(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// dolt_diff incremental-render scan
-// ─────────────────────────────────────────────────────────────────────
+// ── dolt_diff incremental-render scan ───────────────────────────────
 
-/// Result of a [`scan_buckets`] dolt_diff scan. Same shape every
-/// per-provider parse step used to hand-roll; consolidated here so
-/// each `parse_doltlite_async` is a one-liner against the scan.
+/// Result of a [`scan_buckets`] scan.
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
-    /// `Some(set)` → render only the buckets whose key is in `set`.
-    /// `None` → cold start (no prior render cursor, a globally-
-    /// fanning table changed, the bucket query errored, or the
-    /// doltlite extension is unavailable). Render everything.
+    /// `Some(set)` → render only these buckets. `None` → cold start (no
+    /// cursor, a globally-fanning table changed, the query errored, or no
+    /// doltlite extension). Render everything.
     pub changed_buckets: Option<std::collections::HashSet<String>>,
-    /// HEAD commit hash at scan time, ready to stamp into the render
-    /// cursor on success. `None` if `dolt_log()` was unavailable
-    /// (e.g. stock libsqlite3); cursor stays unwritten in that case
-    /// so the next run cold-starts again.
+    /// HEAD at scan time, to stamp into the render cursor on success. `None`
+    /// leaves the cursor unwritten so the next run cold-starts again.
     pub new_head: Option<String>,
-    /// Wall-clock time spent in the union query. `None` if we
-    /// cold-started before running it (first run or global-fanout
-    /// hit).
+    /// Time in the union query; `None` if we cold-started before running it.
     pub scan_elapsed: Option<std::time::Duration>,
 }
 
-/// Spec for [`scan_buckets`]. Names the dolt_diff vtabs that fan
-/// out to "render everything" and the SQL that projects bucket keys
-/// for the per-bucket changed set.
+/// Spec for [`scan_buckets`].
 pub struct DiffScanSpec<'a> {
-    /// Bare entity-table names whose changes mean "render every
-    /// bucket" — typically tables that appear in every rendered
-    /// doc's frontmatter or header (`workspaces`, `users`,
-    /// `channels`, `me`, `recipients`, etc.). Any non-`unchanged`
-    /// row in `dolt_diff_<table>` for any of these short-circuits
-    /// the scan and returns `changed_buckets: None`.
+    /// Bare entity-table names whose changes mean "render every bucket" —
+    /// typically tables that appear in every rendered doc's header
+    /// (`workspaces`, `users`, `channels`, `me`, …). Any non-`unchanged` row
+    /// in one of these short-circuits the scan.
     pub global_fanout_tables: &'a [&'a str],
-    /// SQL that projects bucket keys for changed rows. The query is
-    /// run with `last_render_hash` bound at parameter index 1;
-    /// column 0 of each returned row is the bucket key.
+    /// SQL projecting bucket keys for changed rows, with `last_render_hash`
+    /// bound at parameter index 1 and the bucket key in column 0.
     ///
-    /// Convention: `UNION` across the relevant
-    /// `dolt_diff_<table>` vtabs with the standard
-    /// `WHERE from_ref = ?1 AND to_ref = 'HEAD' AND
-    /// diff_type != 'unchanged'` clause, projecting whichever
-    /// column on each table maps to the provider's bucket key
-    /// (`thread_root_uuid` for slack, `conversation_id` for
-    /// chatgpt, `chat_id` for signal, …). See provider parse.rs
-    /// for examples.
+    /// By convention a `UNION` across `dolt_diff_<table>` vtabs with
+    /// `WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'`.
+    /// See any provider's `parse.rs`.
     pub bucket_query: &'a str,
 }
 
-/// Two-phase dolt_diff scan. Looks up HEAD, checks
-/// [`DiffScanSpec::global_fanout_tables`] for any change, then runs
-/// [`DiffScanSpec::bucket_query`] to project the per-bucket changed
-/// set. On any failure short of "no last hash" we fall back to cold
-/// start — render-everything is always safe, partial-render against
-/// stale dolt_diff is not.
+/// Look up HEAD, short-circuit if any [`DiffScanSpec::global_fanout_tables`]
+/// changed, then project the per-bucket changed set.
 ///
-/// Same control flow every per-provider scan_diff used to hand-roll;
-/// consolidating it makes "what does the scan promise?" a one-stop
-/// answer.
+/// Any failure short of "no last hash" falls back to cold start:
+/// render-everything is always safe, partial-render against a stale diff is
+/// not.
 pub async fn scan_buckets(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
@@ -1661,8 +1047,7 @@ pub async fn scan_buckets(
             "SELECT 1 FROM dolt_diff_{table} \
               WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1"
         );
-        // Audited: `table` comes from `spec.global_fanout_tables`, a static list;
-        // `from_ref` is bound.
+        // Audited: `table` comes from a static list; `from_ref` is bound.
         let any: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(from_ref)
             .fetch_optional(pool)
@@ -1679,8 +1064,8 @@ pub async fn scan_buckets(
     }
 
     let started = std::time::Instant::now();
-    // Audited: `bucket_query` is a fixed projection each provider declares in
-    // its own source; `from_ref` is bound at parameter index 1.
+    // Audited: `bucket_query` is a fixed projection from provider source;
+    // `from_ref` is bound at parameter index 1.
     let res = sqlx::query(sqlx::AssertSqlSafe(spec.bucket_query))
         .bind(from_ref)
         .fetch_all(pool)
@@ -1689,11 +1074,9 @@ pub async fn scan_buckets(
     let rows = match res {
         Ok(r) => r,
         Err(e) => {
-            // `dolt_diff_<table>` can fail to resolve on a brand-new
-            // working set (download ran but no commit yet), or when
-            // doltlite extensions aren't linked. Fall back to
-            // cold-start so we don't return "nothing changed" when
-            // we can't tell.
+            // `dolt_diff_<table>` can fail to resolve on a brand-new working
+            // set, or without doltlite extensions. Cold-start rather than
+            // report "nothing changed" when we can't tell.
             tracing::info!(
                 error = %e,
                 "dolt_diff scan failed — falling back to cold-start (render everything)"
@@ -1715,9 +1098,6 @@ pub async fn scan_buckets(
     })
 }
 
-/// Convenience: failure branch of [`record_object_attempt`].
-/// Kept for callsite readability — same semantics as
-/// `record_object_attempt(tx, table, id, Some(err))`.
 pub async fn record_object_error(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1727,14 +1107,6 @@ pub async fn record_object_error(
     record_object_attempt(tx, table, id, Some(err)).await
 }
 
-/// Ids that should be re-fetched on a `--retry-failed` run: rows whose
-/// last attempt left an error set, or that have a NULL payload after
-/// at least one attempt.
-///
-/// Joins `<table>` (for payload) and `<table>_bookkeeping` (for
-/// attempt_count / last_error). Uses LEFT JOIN so a data row
-/// missing its sidecar (shouldn't happen post-migration, but
-/// defensively) still surfaces if payload is NULL.
 pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
     let sql = format!(
         "SELECT t.id FROM {table} t \
@@ -1753,13 +1125,9 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Snapshot every payload in `table` as a parsed JSON [`Value`],
-/// deterministically ordered by `id`. Rows with NULL payload are
-/// skipped — they're pre-seeded entries that haven't been fetched yet.
 pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
-    // Wrap in `json(payload)` so we get text JSON back regardless of
-    // whether the column stores a JSONB blob or a JSON text literal.
-    // See "JSONB storage" in `doltlite_raw.rs` module docs.
+    // `json(payload)` so we get text back whether the column holds a JSONB
+    // blob or a JSON text literal.
     let sql = format!(
         "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
@@ -1780,10 +1148,6 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     Ok(out)
 }
 
-/// Like [`load_payloads`], but also returns each row's `id` so callers
-/// can correlate the payload with a sibling table (e.g. mapping a chat
-/// group's takeout directory name to its members). Same NULL-payload
-/// skipping and `ORDER BY id` determinism.
 pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
     let sql = format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
@@ -1809,12 +1173,8 @@ pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec
     Ok(out)
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// sync_scope_state
-// ─────────────────────────────────────────────────────────────────────
+// ── sync_scope_state ────────────────────────────────────────────────
 
-/// Snapshot every scope's last-seen timestamp. Returns an empty map if
-/// the table has no rows (i.e. first run).
 pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query("SELECT scope, last_seen_at FROM sync_scope_state")
         .fetch_all(pool)
@@ -1831,8 +1191,6 @@ pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, Strin
     Ok(out)
 }
 
-/// Upsert one scope's `last_seen_at` cursor. The value is a free-form
-/// timestamp string — callers typically pass RFC 3339.
 pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &str) -> Result<()> {
     sqlx::query(
         "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?)
@@ -1847,8 +1205,8 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
 }
 
 #[cfg(test)]
-// Test diagnostics + intentional probe-failure prints under stock
-// libsqlite3 (no doltlite). cargo-test captures stderr; no MP in scope.
+// Test diagnostics print under stock libsqlite3, where the probe is meant
+// to fail.
 #[allow(clippy::disallowed_macros)]
 mod tests {
     use super::*;
@@ -1865,8 +1223,6 @@ mod tests {
         vec![WIDGETS_DDL.to_string(), bookkeeping_ddl_for("widgets")]
     }
 
-    /// A pool with no DDL and no rescue/commit — what a store looks
-    /// like to something that only means to read it.
     async fn plain_pool(p: &Path) -> SqlitePool {
         sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -1887,32 +1243,18 @@ mod tests {
 
     // ── Opening costs nothing ─────────────────────────────────────
 
-    /// Re-opening a store nobody wrote to must not change one byte of
-    /// it.
+    /// Re-opening a store nobody wrote to must not change one byte of it.
     ///
-    /// This is the regression test for a leak that was invisible from
-    /// every angle you would normally check it from. `dolt_log` never
-    /// grew, `dolt_status` was always clean, and no step reported doing
-    /// any work — the download step short-circuited on "snapshot
-    /// already ingested" and returned. The file still grew, on every
-    /// single run, because [`declared_columns`] built its probe table
-    /// *in the store*: a create and a drop net to nothing in the
-    /// working tree, so nothing commits and nothing shows as dirty, but
-    /// the chunks both statements wrote are in the file and nothing
-    /// collects them. One probe per table per open. On a real Signal
-    /// root that was 4,732 bytes per press of Sync, forever.
-    ///
-    /// Asserting on the byte size is the point. Every cheaper proxy —
-    /// commit count, dirty status, rows — was already true while the
-    /// bug was live.
+    /// Asserting on the byte size is the point: this leak left `dolt_log`
+    /// unchanged, `dolt_status` clean and every step reporting no work, so
+    /// every cheaper proxy was already true while it was live.
     #[tokio::test]
     async fn reopening_an_untouched_store_does_not_grow_it() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("entities.doltlite_db");
 
-        // First open creates the file and commits the schema, so it is
-        // the one open that is *supposed* to write. Settle it with a
-        // second before measuring.
+        // The first open creates the file and commits the schema, so it is the
+        // one open that is supposed to write. Settle it before measuring.
         open_test(&db).await.close().await;
         open_test(&db).await.close().await;
         let settled = std::fs::metadata(&db).unwrap().len();
@@ -1932,10 +1274,9 @@ mod tests {
 
     // ── HEAD as a content version ─────────────────────────────────
 
-    /// The property every reported version rests on: the same data
-    /// produces the same string. A version that moved every run would
-    /// re-render and re-index forever; one that never moved would skip
-    /// real work. Both fail silently, so pin it here.
+    /// The property every reported version rests on: the same data produces
+    /// the same string. A version that moved every run would re-render
+    /// forever; one that never moved would skip real work. Both fail silently.
     #[tokio::test]
     async fn head_commit_is_stable_across_a_no_op_run() {
         let td = tempfile::tempdir().unwrap();
@@ -1950,8 +1291,8 @@ mod tests {
         let v1 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
         pool.close().await;
 
-        // A second wave that pulls nothing new: commit_run finds a clean
-        // tree and returns None, but HEAD — and so the version — holds.
+        // A wave that pulls nothing new: commit_run finds a clean tree and
+        // returns None, but HEAD — and so the version — holds.
         let pool = open_test(&path).await;
         assert!(commit_run(&pool, "second").await.unwrap().is_none());
         let v2 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
@@ -1973,17 +1314,15 @@ mod tests {
         assert_ne!(v1, v3, "new rows must move the version");
     }
 
-    /// Reading a version must not write. `open` provisions the shared
-    /// bookkeeping DDL and commits, so using it here would create tables
-    /// inside a blob CAS and advance the very HEAD being read — one
+    /// Reading a version must not write. `open` provisions shared DDL and
+    /// commits, so using it here would advance the very HEAD being read — one
     /// spurious full re-render per source on first upgrade.
     #[tokio::test]
     async fn head_commit_at_path_does_not_touch_the_store() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("blobs.doltlite_db");
 
-        // Built the way `BlobCas::open` builds it: cas_objects only,
-        // none of the write path's shared bookkeeping.
+        // As `BlobCas::open` builds it: cas_objects only.
         let pool = plain_pool(&path).await;
         sqlx::query(crate::blob_cas::CAS_OBJECTS_DDL)
             .execute(&pool)
@@ -1997,8 +1336,8 @@ mod tests {
         let read = head_commit_at_path(&path).await.unwrap();
         assert_eq!(read, before, "the read must report HEAD as it stands");
 
-        // Inspect through a plain connection — `open` would provision
-        // the very tables we are checking for.
+        // A plain connection — `open` would provision the tables we are
+        // checking for.
         let pool = plain_pool(&path).await;
         let after = head_commit(&pool).await.unwrap();
         let tables: Vec<String> =
@@ -2026,9 +1365,8 @@ mod tests {
 
     #[test]
     fn split_overlay_roundtrip_lossless() {
-        // A real-shaped Slack channel payload: top-level volatile field
-        // (`updated`), a legitimate null (`parent_conversation`), a
-        // nested object, and an array — all must survive a round-trip.
+        // A real-shaped Slack channel payload: a top-level volatile field, a
+        // legitimate null, a nested object and an array — all must round-trip.
         let payload = json!({
             "id": "C011QT8HGAC",
             "name": "dashboard",
@@ -2038,19 +1376,17 @@ mod tests {
             "previous_names": [],
             "shared_team_ids": ["TSTHRQ7MY"],
         });
-        // Two paths, one top-level and one nested, to exercise both.
+        // One top-level path and one nested, to exercise both.
         let paths: &[VolatilePath] = &[&["updated"], &["topic", "last_set"]];
 
         let (base, volatile) = split_volatile(&payload, paths);
 
-        // Volatile fields are gone from base...
         assert!(base.get("updated").is_none());
         assert!(base["topic"].get("last_set").is_none());
-        // ...but the legitimate null and untouched fields remain.
+
         assert!(base.get("parent_conversation").unwrap().is_null());
         assert_eq!(base["topic"]["value"], json!(""));
 
-        // ...and live in the volatile object at the same nesting.
         let volatile = volatile.expect("volatile fields present");
         assert_eq!(volatile["updated"], json!(1724742699826i64));
         assert_eq!(volatile["topic"]["last_set"], json!(0));
@@ -2069,8 +1405,8 @@ mod tests {
 
     #[test]
     fn overlay_treats_null_as_a_value_not_a_delete() {
-        // Unlike RFC 7386 merge-patch, a null in the overlay sets the
-        // key to null rather than removing it.
+        // Unlike RFC 7386 merge-patch, a null sets the key to null rather than
+        // removing it.
         let base = json!({ "a": 1, "b": 2 });
         let volatile = json!({ "b": null });
         assert_eq!(overlay(&base, &volatile), json!({ "a": 1, "b": null }));
@@ -2087,9 +1423,8 @@ mod tests {
 
     #[tokio::test]
     async fn volatile_payload_roundtrips_through_sidecar() {
-        // End-to-end through the DB: split a payload, store base in the
-        // object table and volatile in the sidecar's `volatile_payload`
-        // column, read both back, and overlay → the original payload.
+        // End to end through the DB: split, store the halves, read both back,
+        // and overlay to get the original payload.
         let d = tempdir().unwrap();
         let p = d.path().join("v.doltlite_db");
         let pool = open_test(&p).await;
@@ -2156,8 +1491,8 @@ mod tests {
 
     #[tokio::test]
     async fn open_adds_missing_column_to_existing_db() {
-        // Simulate a DB created under an OLDER bookkeeping schema (no
-        // `volatile_payload`), then reopen with the CURRENT DDL.
+        // A DB created under an older bookkeeping schema (no
+        // `volatile_payload`), reopened with the current DDL.
         let d = tempdir().unwrap();
         let p = d.path().join("migrate.doltlite_db");
         let old_bk = "CREATE TABLE IF NOT EXISTS widgets_bookkeeping (
@@ -2176,7 +1511,6 @@ mod tests {
             pool.close().await;
         }
 
-        // Reopen with the current DDL (bookkeeping_ddl_for adds volatile_payload).
         let pool = open(&p, &[WIDGETS_DDL, &bookkeeping_ddl_for("widgets")])
             .await
             .unwrap();
@@ -2185,14 +1519,14 @@ mod tests {
             cols.iter().any(|c| c.name == "volatile_payload"),
             "volatile_payload should have been ADDed"
         );
-        // Pre-existing row survived → it was an ALTER ADD, not a recreate.
+        // Pre-existing row survived → ALTER ADD, not a recreate.
         let n: i64 =
             sqlx::query_scalar("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(n, 3);
-        // The new column is usable.
+
         sqlx::query(
             "UPDATE widgets_bookkeeping SET volatile_payload = jsonb('{\"updated\":1}') WHERE id = 'w1'",
         )
@@ -2203,12 +1537,10 @@ mod tests {
 
     #[tokio::test]
     async fn open_adds_column_and_its_index_together() {
-        // The shape every column-adding schema change actually takes:
-        // a new column AND an index over it, landing on a store that
-        // predates both. The index must not be created until the
-        // reconcile has ADDed the column, or `open` dies with
-        // "no such column" before it can self-heal (the pre-#206 pdf
-        // stores, 2026-09-01).
+        // The shape every column-adding schema change takes: a new column AND
+        // an index over it, landing on a store that predates both. The index
+        // must wait for the reconcile, or `open` dies with "no such column"
+        // before it can self-heal.
         let d = tempdir().unwrap();
         let p = d.path().join("col_and_index.doltlite_db");
         {
@@ -2242,7 +1574,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1);
-        // And the index really exists — the second DDL pass ran.
+        // The index exists — the second DDL pass ran.
         let idx: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master \
              WHERE type = 'index' AND name = 'idx_widgets_tag'",
@@ -2255,8 +1587,8 @@ mod tests {
 
     #[tokio::test]
     async fn open_drops_and_recreates_on_removed_column() {
-        // A table with a column the current DDL no longer declares can't
-        // be reconciled by ADD — it must drop+recreate.
+        // A column the current DDL no longer declares can't be reconciled by
+        // ADD; it must drop+recreate.
         let d = tempdir().unwrap();
         let p = d.path().join("recreate.doltlite_db");
         let stale = "CREATE TABLE IF NOT EXISTS widgets (
@@ -2274,14 +1606,13 @@ mod tests {
             pool.close().await;
         }
 
-        // Reopen with the canonical widgets DDL (no legacy_col).
         let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
         let cols = table_columns(&pool, "widgets").await.unwrap();
         assert!(
             !cols.iter().any(|c| c.name == "legacy_col"),
             "legacy_col should be gone after drop+recreate"
         );
-        // Recreate wipes rows — acceptable for a raw store (re-fetched).
+        // Recreate wipes rows — acceptable for a raw store, which re-fetches.
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
             .fetch_one(&pool)
             .await
@@ -2294,9 +1625,8 @@ mod tests {
         let d = tempdir().unwrap();
         let p = d.path().join("x.doltlite_db");
         let _ = open_test(&p).await;
-        // Re-opening doesn't error (DDL is IF NOT EXISTS).
+        // Re-opening doesn't error, and the shared tables exist.
         let pool = open_test(&p).await;
-        // Shared tables exist.
         sqlx::query("SELECT COUNT(*) FROM sync_runs")
             .fetch_one(&pool)
             .await
@@ -2314,17 +1644,12 @@ mod tests {
         assert_eq!(db_path_for(q), q);
     }
 
-    /// `commit_run` against a connection without dolt extensions
-    /// returns `Ok(None)` rather than failing — the production
-    /// behavior on stock libsqlite3 (e.g. cargo-only unit tests).
+    /// `commit_run` returns `Ok(None)` rather than failing on stock
+    /// libsqlite3, and under bazel exercises the real path: a real hash, in
+    /// `dolt_log`, with the message we passed.
     ///
-    /// Under bazel (with doltlite linked) this test exercises the
-    /// full path: the call returns a real hash, `dolt_log` carries
-    /// the new entry with that hash, and the commit message we passed
-    /// is the one stored.
-    /// Diagnostic — prints what the linked libsqlite3 actually is.
-    /// Helps catch the "we thought we were on doltlite but the build
-    /// is actually stock SQLite" failure mode.
+    /// Prints which libsqlite3 is linked, to catch "we thought we were on
+    /// doltlite" builds.
     #[tokio::test]
     async fn diagnostic_print_sqlite_identity() {
         let d = tempdir().unwrap();
@@ -2343,9 +1668,8 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        // Also try a direct call against `dolt_commit` — virtual tables
-        // and eponymous functions don't always appear in
-        // pragma_function_list.
+        // Also call `dolt_commit` directly — eponymous functions don't always
+        // appear in pragma_function_list.
         let direct_call = sqlx::query("SELECT dolt_commit('-Am', 'probe')")
             .execute(&pool)
             .await;
@@ -2364,8 +1688,8 @@ mod tests {
         let pool = open_test(&d.path().join("commit.doltlite_db")).await;
 
         if !has_dolt_extensions(&pool).await {
-            // Stock SQLite path: commit_run should return None without
-            // error, and there's no dolt_log to inspect.
+            // Stock SQLite: commit_run returns None without error, and there
+            // is no dolt_log to inspect.
             let hash = commit_run(&pool, "stock-sqlite probe")
                 .await
                 .expect("commit_run ok");
@@ -2377,9 +1701,8 @@ mod tests {
             return;
         }
 
-        // Doltlite path. Configure committer identity (per-session,
-        // not persisted) so dolt_commit doesn't error on a missing
-        // user.email when it tries to stamp the commit author.
+        // Per-session committer identity, so dolt_commit doesn't error on a
+        // missing user.email.
         sqlx::query("SELECT dolt_config('user.name', 'datalib-test')")
             .execute(&pool)
             .await
@@ -2389,7 +1712,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Make an uncommitted change so dolt has something to record.
+        // Give dolt something to record.
         sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'first')")
             .execute(&pool)
             .await
@@ -2402,9 +1725,9 @@ mod tests {
             .expect("doltlite linked but commit_run returned None");
         assert!(!hash.is_empty(), "doltlite returned empty commit hash");
 
-        // The hash dolt_commit returns must appear in dolt_log with
-        // the message we passed — confirms the version-control SQL
-        // surface is really live (not just that the function exists).
+        // The returned hash must appear in dolt_log with our message —
+        // confirms the version-control SQL surface is really live, not just
+        // that the function exists.
         let logged_msg: String =
             sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
                 .bind(&hash)
@@ -2414,19 +1737,13 @@ mod tests {
         assert_eq!(logged_msg, msg, "dolt_log message mismatch");
     }
 
-    /// End-to-end test of the per-source download commit path:
-    /// the download step calls `commit_run_at_path`
-    /// after each provider's download finishes, against the doltlite_db
-    /// the provider wrote during the run. This test mirrors that
-    /// pattern: stage a row via `open` + `start_run` + insert + drop
-    /// pool (simulating a download closing its pool), then reopen via
-    /// `commit_run_at_path` (the orchestrator's hook) and verify the
-    /// commit lands in dolt_log with the expected message.
+    /// The per-source download commit path end to end: stage a row and drop
+    /// the pool as a download does, then reopen through `commit_run_at_path`
+    /// as the step does, and check the commit lands in `dolt_log`.
     ///
-    /// Also exercises `commit_run_at_path`'s no-op behavior for a
-    /// non-existent path (download aborted before the file was created
-    /// — `interrupt_commit_all` walks every enabled-source path and
-    /// some may not yet exist).
+    /// Also covers the no-op for a path that was never created —
+    /// `interrupt_commit_all` walks every enabled source, and some have no
+    /// file yet.
     #[tokio::test]
     async fn commit_run_at_path_persists_across_pool_lifetimes() {
         let d = tempdir().unwrap();
@@ -2437,8 +1754,7 @@ mod tests {
             let pool = open_test(&db).await;
             if !has_dolt_extensions(&pool).await {
                 eprintln!("[commit_run_at_path test] stock libsqlite3 — full assertion skipped");
-                // Still exercise the no-op-on-missing-file path; it
-                // shouldn't depend on doltlite being linked.
+                // The no-op-on-missing-file path shouldn't depend on doltlite.
                 let missing = d.path().join("never_created.doltlite_db");
                 let hash = commit_run_at_path(&missing, "ignored")
                     .await
@@ -2467,14 +1783,9 @@ mod tests {
             pool.close().await;
         }
 
-        // Phase 2: reopen via the orchestrator's hook and commit. Under
-        // the rescue-commit-on-open policy in `open()`, phase 1's
-        // orphaned writes are already sealed by the time `commit_run`
-        // runs here, so the orchestrator's trailing commit is a no-op
-        // (returns None). This is the documented post-condition: a
-        // crashed run produces a `rescue: ...` commit in dolt_log, and
-        // the next run's trailing commit_run is allowed to find
-        // nothing dirty.
+        // Phase 2: the orchestrator's hook. `open`'s rescue commit has already
+        // sealed phase 1's orphaned writes, so this trailing commit finds
+        // nothing dirty and returns None — the documented post-condition.
         let msg = "download source: rows=1 commit_run_at_path test";
         let trailing = commit_run_at_path(&db, msg)
             .await
@@ -2484,10 +1795,8 @@ mod tests {
             "trailing commit should be a no-op after rescue swept the orphaned writes; got {trailing:?}"
         );
 
-        // Phase 3: verify the rescue commit is durable by reopening
-        // AGAIN and querying dolt_log. This is the load-bearing
-        // assertion — proves the orphaned writes were sealed by the
-        // rescue at phase 2's open(), not lost.
+        // Reopening a third time proves the orphaned writes were sealed by the
+        // rescue at phase 2's open, not lost.
         let verify = open_test(&db).await;
         let logged: Vec<String> =
             sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC")
@@ -2499,8 +1808,7 @@ mod tests {
             "expected a rescue commit in dolt_log; got {logged:?}"
         );
 
-        // No-op path: pointing at a never-created file should NOT
-        // create one and should NOT error.
+        // Pointing at a never-created file must neither create one nor error.
         let missing = d.path().join("never_created.doltlite_db");
         let h2 = commit_run_at_path(&missing, "ignored")
             .await
@@ -2526,8 +1834,8 @@ mod tests {
     async fn error_and_retry_flow() {
         let d = tempdir().unwrap();
         let pool = open_test(&d.path().join("z.doltlite_db")).await;
-        // Pre-seed the data row + sidecar via ensure_object_row, then
-        // record two failures in their own transactions.
+        // Pre-seed the row + sidecar, then record two failures in their own
+        // transactions.
         {
             let mut tx = pool.begin().await.unwrap();
             ensure_object_row(&mut tx, "widgets", "w1").await.unwrap();
@@ -2543,7 +1851,6 @@ mod tests {
         let failed = failed_ids(&pool, "widgets").await.unwrap();
         assert_eq!(failed, vec!["w1".to_string()]);
 
-        // Verify the sidecar carries the expected attempt count.
         let attempts: i64 =
             sqlx::query_scalar("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
                 .fetch_one(&pool)
@@ -2552,36 +1859,22 @@ mod tests {
         assert_eq!(attempts, 2);
     }
 
-    /// Regression guard for the "always pool size 1 against
-    /// doltlite" rule (see this module's docs for the full story
-    /// and the dolt-team-confirmed advice).
+    /// Regression guard for "pool size 1 against doltlite" (see the README).
     ///
-    /// At `max_connections=1`: a `dolt_commit` followed by a
-    /// `dolt_log()` query produces a consistent view — the new
-    /// commit's message appears in the log. ASSERT this — if it
-    /// ever stops being true, our connection-pool assumption has
-    /// regressed.
+    /// At `max_connections=1` a `dolt_commit` followed by `dolt_log()` must
+    /// produce a consistent view; that is asserted. At 2 and 4 we only run the
+    /// path and print what happens, so a future doltlite upgrade can be
+    /// compared against the historical shape — asserting there would codify a
+    /// bug as a requirement.
     ///
-    /// At `max_connections=2` and `4`: we also exercise the path
-    /// and just OBSERVE the failure mode (via eprintln) so a
-    /// future doltlite upgrade can be diff'd against the
-    /// historical shape. Two outcomes we've seen empirically:
-    ///   - `commit conflict: another connection committed to
-    ///     this branch` errors on the second commit,
-    ///   - the commit succeeding but its message not appearing in
-    ///     `dolt_log()` (stale-HEAD reader connection).
-    /// We DO NOT assert on these — that'd codify a bug as a test
-    /// requirement.
-    ///
-    /// A skip-out path covers stock libsqlite3 (cargo-only runs).
+    /// Skips out on stock libsqlite3.
     #[tokio::test]
     async fn dolt_log_visibility_across_pool_sizes() {
         for max_conns in [1u32, 2, 4] {
             let d = tempdir().unwrap();
             let db_path = d.path().join(format!("probe_{max_conns}.doltlite_db"));
-            // Apply DDL (incl. shared blobs) via the normal open() so
-            // we get the canonical shape, then close and re-open with
-            // a tunable pool size.
+            // Apply DDL through the normal open() for the canonical shape,
+            // then re-open with a tunable pool size.
             let _ = open_test(&db_path).await;
 
             let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
@@ -2597,7 +1890,7 @@ mod tests {
                 eprintln!("[pool_probe] stock libsqlite3 — skipping (max_conns={max_conns})");
                 continue;
             }
-            // Per-session committer identity.
+
             sqlx::query("SELECT dolt_config('user.name', 'pool-probe')")
                 .execute(&pool)
                 .await
@@ -2607,9 +1900,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Helper closure: stage a write + return any sqlx error
-            // instead of panicking, so we can observe the failure
-            // mode at each pool size.
+            // Return the sqlx error rather than panicking, so the failure mode
+            // at each pool size is observable.
             let try_exec = |sql: &'static str| {
                 let pool = pool.clone();
                 async move {
@@ -2621,7 +1913,6 @@ mod tests {
                 }
             };
 
-            // Stage row + sidecar.
             let mut errs: Vec<String> = Vec::new();
             for sql in [
                 "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
@@ -2632,15 +1923,14 @@ mod tests {
                 }
             }
 
-            // First commit.
             let h1: Result<Option<String>, String> =
                 sqlx::query_scalar("SELECT dolt_commit('-Am', 'pool-probe-first')")
                     .fetch_optional(&pool)
                     .await
                     .map_err(|e| e.to_string());
 
-            // Reset: delete + reinsert IDENTICAL data, plus new
-            // fetched_at on the sidecar — the integration-test shape.
+            // Delete + reinsert IDENTICAL data, plus a new fetched_at — the
+            // integration-test shape.
             for sql in [
                 "DELETE FROM widgets",
                 "DELETE FROM widgets_bookkeeping",
@@ -2659,7 +1949,6 @@ mod tests {
                     .await
                     .map_err(|e| e.to_string());
 
-            // dolt_log readback.
             let messages: Result<Vec<String>, String> =
                 sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date ASC")
                     .fetch_all(&pool)
@@ -2704,23 +1993,17 @@ mod tests {
                     "max_conns=1: second commit message missing from dolt_log: {msgs:?}"
                 );
             }
-            // For max_conns ∈ {2, 4} we deliberately don't assert —
-            // the eprintln above logs whatever doltlite happens to do.
+            // Deliberately no assertion at 2 and 4 — the eprintln above just
+            // records whatever doltlite does.
 
             pool.close().await;
         }
     }
 
-    /// `open` must leave its single connection alone for the life of
-    /// the pool.
-    ///
-    /// doltlite's active branch, HEAD pointer and working set are all
-    /// per-connection, and a replacement connection starts on `main`.
-    /// sqlx's stock `idle_timeout` / `max_lifetime` would retire our
-    /// connection out from under that state after 10 / 30 minutes —
-    /// long enough that nothing short of a real multi-million-entry
-    /// scan would ever notice, and the symptom would be rows quietly
-    /// landing on the wrong branch rather than an error.
+    /// `open` must leave its single connection alone for the life of the
+    /// pool. sqlx's stock `idle_timeout` / `max_lifetime` would retire it, and
+    /// a replacement starts on `main` — rows would quietly land on the wrong
+    /// branch with no error.
     #[tokio::test]
     async fn open_disables_connection_recycling() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2746,12 +2029,8 @@ mod tests {
         pool.close().await;
     }
 
-    /// The fact the setting above defends against: a *different*
-    /// connection to the same file does not inherit the active branch.
-    ///
-    /// Recorded as a test rather than a comment because it is the whole
-    /// reason `checkout_branch` cannot be treated as a property of the
-    /// file.
+    /// What the setting above defends against: a *different* connection to
+    /// the same file does not inherit the active branch.
     #[tokio::test]
     async fn a_fresh_connection_starts_on_main() {
         let tmp = tempfile::tempdir().unwrap();

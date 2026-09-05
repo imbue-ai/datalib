@@ -17,9 +17,6 @@ use datalib_etl_signal_config::{SignalConfig, SignalSync};
 
 use crate::download;
 
-/// Download wave. Signal REQUIRES a `sync.snapshot_dir`: a managed
-/// signal source without a `sync:` block has nowhere to read snapshots
-/// from, so error exactly as the old orchestrator's `for_source` did.
 pub fn plan_download(
     ctx: PlanContext,
     config: SignalConfig,
@@ -42,8 +39,6 @@ pub fn plan_download(
     })])
 }
 
-/// Render wave. The period comes from the render step's own params
-/// (default `month`).
 pub fn plan_render(
     ctx: PlanContext,
     config: SignalRenderConfig,
@@ -116,8 +111,6 @@ impl DataProcessor for SignalRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

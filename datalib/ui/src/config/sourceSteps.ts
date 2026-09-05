@@ -1,53 +1,24 @@
 // Per-*entry* view of a DAG config, for the Manager2 grid.
 //
-// The grid is a picture of the pipeline, so every row here is one thing
-// the config declares — one `[[steps]]` entry or one `[[applets]]`
-// entry, never a group of them.
-//
-// **There is no "data source" here, deliberately.** A source used to be
-// a row: a `<name>/raw` + `<name>/rendered_md` pair fused into one
-// entry, edited by one form, run as one unit. It was never a config
-// entity — the grouping was invented here and reconstructed by
-// splitting paths — and it cost more than it bought. A fetch step and a
-// render step have separate options, separate outputs, separate disk
-// footprints and separate reasons to re-run; the runner has always
-// treated them as two steps. So does this now.
-//
-// What survives is a *display* relationship: two steps sharing an id
-// stem (`work-slack/raw`, `work-slack/rendered_md`) are siblings under
-// one directory, which the table shows and the wizard uses to propose
-// the second step's id. Nothing resolves anything by it.
-//
-// Two kinds of row:
-//
-//   step    a `[[steps]]` entry. `phase` classifies it for display —
-//           fetch, render, or index — from the shape of its id.
-//   applet  an `[[applets]]` entry: a server the http gateway spawns on
-//           demand. Never scheduled and owns no artifacts, so most row
-//           actions don't apply to it — but it is configured, it can
-//           fail to start, and that failure should be visible here
-//           rather than as a 502 in another tab.
-//
-// `configSources.ts` is the older, narrower thing: fringe *step ids*,
-// which is what `--sync` accepts.
-//
-// Every entry has exactly two names, and the distinction is the whole
-// point:
-//
-//   id    identity. Path-safe, unique, and what the directory structure
-//         is formed from, so changing it moves data on disk and strands
-//         the paths the index recorded. Chosen once, at creation.
-//   name  what a person types and what the screen shows. Free text,
-//         freely changed, meaningless to every program. Derived from
-//         the id when a step declares none, so a config that never set
-//         one reads exactly as it always did.
-//
-// Writes are whole-text: a source's steps occupy a contiguous-ish set
-// of character ranges, and add/delete splice the text the editor holds.
-// Field-level editing that preserves comments needs a format-preserving
-// TOML writer (`toml_edit`, backend-side) — see docs/dev/source_wizard.md.
-// Until then `paramsAreRepresentable` gates the Edit button, so the
+// Writes are whole-text: add/delete splice the text the editor holds.
+// Field-level editing that preserves comments needs a format-preserving TOML
+// writer, so until then `paramsAreRepresentable` gates the Edit button and the
 // wizard never silently drops something it can't model.
+//
+// A step's `id` is its identity — path-safe, unique, and what the directory
+// structure is formed from — while `name` is free text meaning nothing to any
+// program, derived from the id when a step declares none.
+//
+// **There is no "data source" here, deliberately.** A source used to be one
+// row fusing a fetch step and a render step. It was never a config entity —
+// the grouping was invented here and reconstructed by splitting paths — and
+// the two halves have separate options, outputs, disk footprints and reasons
+// to re-run. The grid is a picture of the pipeline, so every row is one thing
+// the config declares: one `[[steps]]` or one `[[applets]]` entry.
+//
+// An applet is never scheduled and owns no artifacts, so most row actions
+// don't apply to it — but it is configured, it can fail to start, and that
+// should be visible here rather than as a 502 in another tab.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { catalogForStep } from "./catalog";
@@ -56,11 +27,6 @@ import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Derived from the shape of the id,
 /// never from anything load-bearing.
-///
-///   fetch   `<stem>/raw` — brings data in
-///   render  `<stem>/rendered_md` — turns it into markdown
-///   index   anything under `unified_index/` — the shared fan-ins
-///   other   any other step: a custom executable doing its own thing
 export type StepPhase = "fetch" | "render" | "index" | "other";
 
 export type EntryKind = "step" | "applet";
@@ -104,22 +70,9 @@ const PHASE_BY_LEAF: Record<string, StepPhase> = {
   rendered_md: "render",
 };
 
-/// What to call the shared entries when nobody has named them.
-///
-/// Three of a config's rows are not anybody's data source: two fan-in
-/// steps and the applet that serves what they build. Their ids say what
-/// they *write* — `unified_index/grid`, `unified_index/qmd` — which is
-/// the right identity and a poor label, and one of them (the applet)
-/// has no `name` key to set at all: `AppletEntry` deliberately has
-/// none, because an applet's own params carry whatever label it wants
-/// (see the type's docs, and 00633dd5).
-///
-/// So the default lives here rather than in the config. Nothing is
-/// written to anyone's file, every existing root gets the better label
-/// without being rewritten, and a `name =` someone did set still wins —
-/// this is consulted only when a step declares none. The id stays
-/// visible beside the name in the grid, so the tree on disk is never
-/// hidden by the label.
+/// What to call the shared entries when nobody has named them — a default
+/// that lives here rather than in anyone's config file. A `name =` someone did
+/// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid": "Unified Index (table)",
   "unified_index/qmd": "Unified Index (QMD)",
@@ -143,11 +96,6 @@ export function phaseOf(id: string): StepPhase {
 /// Parse the config text and list every entry it declares, one row per
 /// entry. Throws with the parser's message (and line, when it has one)
 /// on malformed TOML.
-///
-/// Steps in the order the file writes them, then applets. File order is
-/// what someone editing the config expects to see, and it puts sibling
-/// fetch/render steps adjacent for free, since that is how they are
-/// written.
 export function listSteps(text: string): ConfiguredStep[] {
   let ast;
   try {
@@ -299,12 +247,6 @@ function leafPaths(value: unknown, prefix = ""): string[] {
 }
 
 /// Can the wizard round-trip this step without losing anything?
-///
-/// Editing regenerates the step from the form, so any params key the
-/// descriptor doesn't model would be dropped. Rather than silently lose
-/// a hand-written `common.download_params` block, the grid disables
-/// Edit and points at the config editor. A form that quietly drops a
-/// setting is worse than no form.
 export function paramsAreRepresentable(
   step: ConfiguredStep,
   entry: CatalogEntry,
@@ -330,17 +272,6 @@ export function presetsFor(entry: CatalogEntry, phase: FieldPhase): Preset[] {
 }
 
 /// The step whose output this one reads — its producer.
-///
-/// A render step is configured against the *account* its fetch step
-/// mirrors, not against anything in its own params, so two things need
-/// this: picking the right catalog entry for it (a Fastmail render step
-/// and a Gmail render step are both `datalib-step render email`, and
-/// only the producer says which), and probing (a render step holds no
-/// credentials).
-///
-/// Resolved by `inputs` first, because that is the real declaration.
-/// The `<stem>/raw` sibling is the fallback, for a render step written
-/// by hand with no `inputs` — a config the loader accepts.
 export function producerOf(
   step: ConfiguredStep,
   all: ConfiguredStep[],
@@ -354,12 +285,6 @@ export function producerOf(
 
 /// The catalog entry describing a step, in the context of the config it
 /// sits in.
-///
-/// [`catalogForStep`] is enough for a fetch step: its own params carry
-/// the `variantKey`. A render step's do not — its params are render
-/// knobs — so this reaches through [`producerOf`] to the step that
-/// does. Without that, every email render step would resolve to the
-/// catch-all `email` entry and lose its form.
 export function entryForStep(
   step: ConfiguredStep,
   all: ConfiguredStep[],
@@ -388,35 +313,20 @@ export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
 export type FieldValues = Record<string, unknown>;
 
 /// The option a stored value corresponds to, or the value unchanged.
-///
-/// The backends parse these strings case-insensitively, so a config
-/// holding `"Month"` means the `month` option and should show as it —
-/// but a value that matches nothing is left alone rather than snapped
-/// to the default, so editing an unrelated field can't quietly rewrite
-/// a knob the wizard doesn't recognize. The form then shows it as
-/// "(not a known value)".
 function matchOption(options: { value: string }[], value: unknown): unknown {
   if (typeof value !== "string") return value;
   const hit = options.find((o) => o.value === value.toLowerCase());
   return hit ? hit.value : value;
 }
 
-/// The form's starting values for one descriptor: what the config
-/// already says, else the descriptor's default, else empty.
+/// The form's starting values for one descriptor: what the config already
+/// says, else the descriptor's default, else empty.
 ///
-/// `step` present means *editing* that step; absent means *creating*.
-/// That distinction is load-bearing for one case — see the `int` arm
-/// of `Field` in catalog.ts. An `int` default is a policy this wizard
-/// imposes where the backend has none (`blob_size_limit_bytes` absent
-/// means "no limit"), so it seeds only on create; applying it on edit
-/// would cap a deliberately-uncapped source the next time someone
-/// opened the form to change something else. `bool` and `select`
-/// defaults mirror the backend's own, so they seed either way.
-///
-/// Lives here rather than in the component because it is the mirror of
-/// `paramsToml` — descriptor + config → form values, where that one is
-/// descriptor + form values → config — and because a rule this quiet
-/// needs to be testable without mounting anything.
+/// `step` present means *editing*, absent means *creating*, and the difference
+/// is load-bearing for `int` fields: an `int` default is a policy this wizard
+/// imposes where the backend has none, so applying it on edit would cap a
+/// deliberately-uncapped source. `bool` and `select` defaults mirror the
+/// backend's own and seed either way.
 export function seedFieldValues(entry: CatalogEntry, step?: ConfiguredStep): FieldValues {
   const next: FieldValues = {};
   for (const field of entry.fields ?? []) {
@@ -443,17 +353,11 @@ export function seedFieldValues(entry: CatalogEntry, step?: ConfiguredStep): Fie
   return next;
 }
 
-// ---------------------------------------------------------------------------
 // Writing
-// ---------------------------------------------------------------------------
 
 /// Every `(dotted target, value)` pair this descriptor writes for one
 /// phase, in the order they should appear: presets first (they are what
 /// the step *is*), then the fields that are active and set.
-///
-/// The one place the two sources of a param are combined, so the TOML
-/// writer and the probe's params object cannot disagree about what a
-/// step's config actually contains.
 function paramEntries(
   entry: CatalogEntry,
   values: FieldValues,
@@ -474,10 +378,6 @@ function paramEntries(
 /// The same params as a nested object, for anything that has to *send*
 /// a step's config rather than write it — today the wizard's "Test
 /// connection", which POSTs it to `/api/probe`.
-///
-/// Deliberately built from [`paramEntries`] rather than by parsing the
-/// TOML back: what the probe tests has to be exactly what Save would
-/// write, and a second derivation is a second thing to drift.
 export function paramsObject(
   entry: CatalogEntry,
   values: FieldValues,
@@ -493,12 +393,9 @@ export function paramsObject(
     }
     cur[segs[segs.length - 1]] = jsonValue(field, value);
   }
-  // A mode-selecting table with no keys of its own still has to exist
-  // — `gmail_api = {}` is how a config says "this is a Gmail source" —
-  // and the same is true of the params object the probe receives. A
-  // preset always puts a key in one today, so this is a guard rather
-  // than a workaround; it costs a line and prevents a probe that
-  // mysteriously reports "no live download mode".
+    // A mode-selecting table with no keys of its own still has to exist —
+    // `gmail_api = {}` is how a config says "this is a Gmail source" — and so
+    // does the params object the probe receives.
   for (const preset of presetsFor(entry, phase)) {
     const head = preset.target.split(".")[0];
     if (!(head in root)) root[head] = {};
@@ -558,11 +455,6 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
 }
 
 /// Is this field's gate open? A field with no `requires` always is.
-///
-/// Gates both the form row and the TOML the form writes, so the wizard
-/// cannot emit a value whose enabling switch is off — for `slack_api`
-/// that combination is a hard config error, not a shrug. See
-/// `Field.requires`.
 export function fieldIsActive(field: Field, values: FieldValues): boolean {
   return field.requires === undefined || !!values[field.requires];
 }
@@ -572,12 +464,10 @@ function isSet(field: Field, value: unknown): boolean {
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
   if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
   if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
-  // A select normally holds one of its options (the form seeds the
-  // default), so it is always written. The membership test is
-  // deliberately *not* here: a hand-edited config can hold a value the
-  // dropdown doesn't know, and dropping it on save would silently
-  // rewrite someone's config. Carry it through and let the backend
-  // reject it loudly.
+    // A select normally holds one of its options, so it is always written. The
+    // membership test is deliberately *not* here: a hand-edited config can hold
+    // a value the dropdown doesn't know, and dropping it on save would silently
+    // rewrite someone's config.
   if (field.kind === "select") return String(value).trim() !== "";
   // A boolean is always meaningful — false is a real setting, and for
   // `media` (which defaults true) omitting it would change behavior.
@@ -607,11 +497,6 @@ function tomlValue(field: Field | undefined, value: unknown): string {
 
 /// TOML basic string. Dates are quoted too: a bare `2026-01-01` parses
 /// as a TOML date, and the providers validate a *string*.
-///
-/// Control characters are escaped rather than passed through: a raw
-/// newline or tab inside a basic string is a parse error, so a label or
-/// a pasted value containing one would write a `config.toml` that no
-/// longer loads.
 function quote(s: string): string {
   const escaped = s
     .replace(/\\/g, "\\\\")
@@ -627,19 +512,6 @@ function quote(s: string): string {
 }
 
 /// One step, as a `[[steps]]` block with a divider above it.
-///
-/// `id` is the identity — the tree the step writes. `name` is written
-/// only when it says something the id doesn't: a `name` that respells
-/// the id would be a second, silent spelling of one string, which is
-/// what got the applet `title` key deleted (00633dd5), and it would
-/// churn every existing config the first time someone opened its Edit
-/// form.
-///
-/// `phase` picks which half of the descriptor's fields to write and
-/// which `datalib-step` subcommand to invoke. `inputs` is written when
-/// non-empty — a fetch step has none (its real input is a remote
-/// service or a path in its params), a render step names the fetch step
-/// it reads.
 export function buildStep(opts: {
   entry: CatalogEntry;
   id: string;
@@ -666,28 +538,15 @@ command = "datalib-step ${subcommand} ${entry.type}"${inputsLine}${params ? `\n$
 
 /// The id of the render step that would read `fetchId`: its sibling
 /// under the same stem.
-///
-/// The one place a `/` is split off an id to mint another, and
-/// deliberately the only one — the chained wizard and the standalone
-/// "render this" action both come through here, because two code paths
-/// minting one string is how they drift. It proposes a default from a
-/// string the user just chose; nothing resolves identity by it.
 export function renderIdFor(fetchId: string): string {
   return `${stemOf(fetchId)}/rendered_md`;
 }
 
 /// Wire a render step into every fan-in that consumes rendered markdown.
 ///
-/// The fan-ins name their inputs by id, so a source added without this
-/// renders happily and is never indexed — invisible in search, with
-/// nothing on screen to say why. The old `**/rendered_md` glob made
-/// this automatic; naming steps is the trade, and the wizard paying it
-/// is what keeps the config honest rather than implicit.
-///
-/// Textual, like every other write here: it rewrites the `inputs = [
-/// … ]` line of each step whose id is a `unified_index/…` tree, leaving
-/// the rest of the file — comments included — exactly as it was. A
-/// config with no fan-ins is left alone.
+/// The fan-ins name their inputs by id, so a source added without this renders
+/// happily and is never indexed — invisible in search, with nothing on screen
+/// to say why.
 export function wireIntoFanIns(text: string, renderStepId: string): string {
   return text.replace(
     // `id = "unified_index/…"` followed, within its own table, by an
@@ -733,16 +592,6 @@ export function appendSource(text: string, body: string): string {
 }
 
 /// Remove entries from the config text.
-///
-/// Takes a list because deleting a fetch step usually means deleting
-/// the render step that reads it too: an input naming a step that no
-/// longer exists is a config the loader refuses outright, so a partial
-/// delete produces a file that will not load.
-///
-/// Splices each range back to front, so offsets stay valid as earlier
-/// text shifts. A divider comment above a step isn't part of any AST
-/// node, so it's swept by extending each cut back over
-/// immediately-preceding comment lines.
 export function removeSteps(text: string, steps: ConfiguredStep[]): string {
   const cuts = steps
     .filter((s) => s.end > 0)
@@ -773,12 +622,6 @@ function extendOverComments(text: string, start: number): number {
 
 /// Replace one step with a freshly generated one. Only safe when
 /// `paramsAreRepresentable` said so — see this module's header.
-///
-/// The replacement is appended rather than spliced in place, since the
-/// end of the file is the only safe insertion point in TOML (every key
-/// after a `[[steps]]` header belongs to that table). A step therefore
-/// moves to the bottom when edited, which is cosmetic: the DAG reads
-/// `inputs`, not file order.
 export function replaceStep(text: string, step: ConfiguredStep, body: string): string {
   return appendSource(removeSteps(text, [step]), body);
 }
@@ -786,15 +629,6 @@ export function replaceStep(text: string, step: ConfiguredStep, body: string): s
 /// A human name reduced to something that can be a directory: NFKD
 /// normalize, drop combining marks, lowercase, every run of
 /// non-alphanumerics to a single `-`, trimmed, capped.
-///
-/// Word order is preserved — "Work Slack" is `work-slack`. The cap is
-/// 40 because this becomes a path component inside paths that already
-/// carry UUIDs.
-///
-/// Returns `""` when nothing survives, which is the normal outcome for
-/// a name written in a non-Latin script or made only of punctuation.
-/// Callers fall back to the catalog's default rather than inventing
-/// something — see [`suggestId`].
 export function slugify(name: string): string {
   const ascii = name
     .normalize("NFKD")
@@ -813,14 +647,6 @@ const RESERVED_IDS = new Set(["system", "unified_index"]);
 
 /// Propose an id for a new entry: `base` if it is free, else
 /// `base-2`, `base-3`, …
-///
-/// `taken` holds the ids already in the config. A source reserves its
-/// whole stanza, since its two steps are `<id>.download` / `<id>.render`
-/// writing `<id>/raw` and `<id>/rendered_md` — so the caller passes
-/// stanza ids, not step ids.
-///
-/// `fallback` is used when `base` is empty, which happens whenever the
-/// name slugifies to nothing.
 export function suggestId(taken: Set<string>, base: string, fallback: string): string {
   const stem = base || fallback || "source";
   if (!taken.has(stem) && !RESERVED_IDS.has(stem)) return stem;
@@ -835,16 +661,9 @@ export function suggestId(taken: Set<string>, base: string, fallback: string): s
 /// Why the table is empty, when it shouldn't be.
 ///
 /// The grid derives its rows from the config text in the browser, while
-/// `GET /api/config` reports what the *backend's* loader made of the
-/// same file. Those two must agree. When they don't — the server counts
-/// sources and the table shows none — the bug is on this side, and the
-/// empty state has to say so instead of offering a friendly "nothing
-/// configured yet" that sends someone looking at their own config.
-///
-/// This exists because that exact disagreement was reported from the
-/// desktop app and could not be reproduced against the same backend in
-/// a browser. A silent empty table gives an investigation nothing to
-/// go on; this makes the next occurrence self-describing.
+/// `GET /api/config` reports what the backend's loader made of the same file.
+/// When those disagree the bug is on this side, and the empty state has to say
+/// so rather than offering a friendly "nothing configured yet".
 export function emptyTableDiagnosis(input: {
   /// Entries the browser parsed out of the config text.
   parsedCount: number;

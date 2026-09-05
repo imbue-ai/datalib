@@ -51,9 +51,6 @@ describe("revealInFileManager", () => {
     // this mock replaces. So if a Tauri upgrade renames the command or
     // the argument, THIS TEST GOES RED — which is the whole reason to
     // depend on the package rather than hand-rolling the invoke.
-    //
-    // (`paths` is plural and an array; the singular form is accepted by
-    // the IPC layer and then ignored, which looks exactly like a no-op.)
     const invoke = fakeTauri();
     await expect(revealInFileManager("/tmp/x.pdf")).resolves.toBe(true);
     const [cmd, args] = invoke.mock.calls[0];

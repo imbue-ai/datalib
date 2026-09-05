@@ -4,20 +4,6 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live GitLab single-MR download + render test.
-//!
-//! Hits real `gitlab.com/api/v4` via `latchkey curl`, downloads ONE MR
-//! into a hermetic tempdir, renders it, and insta-snapshots a
-//! stable view.
-//!
-//! Default target is generally_intelligent MR !7643. Override with
-//! `GITLAB_TEST_MR=<namespace/project!IID-or-URL>`.
-//!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Run with:
-//!
-//! ```sh
-//! export LATCHKEY_CURL=$(pwd)/datalib/backend/target/debug/latchkey-curl-impersonate
-//! cargo test -p datalib-etl-gitlab --test gitlab_live -- --ignored
-//! ```
 
 use datalib_etl_gitlab::download::{self as gitlab, parse_mr_ref, FetchOptions};
 use datalib_etl_gitlab::render::{parse_api_dir, render_gitlab};

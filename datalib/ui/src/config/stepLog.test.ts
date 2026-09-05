@@ -1,12 +1,4 @@
 // The per-step log reader behind double-clicking a Status cell.
-//
-// Every fixture below is a verbatim line from a real job log
-// (`<root>/system/job-logs/<job>.log`), taken from the run that failed
-// with the wizard's bad render-step id. Synthesizing them would have
-// missed the two things that actually make this function necessary:
-// a step's `log` events carry a whole `tracing` envelope escaped inside
-// `msg`, and the steps emit the envelope *and* a bare copy of the same
-// sentence back to back.
 
 import { describe, expect, it } from "vitest";
 import { stepLogLines } from "./stepLog";

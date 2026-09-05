@@ -3,10 +3,6 @@
 //! opted-in feeds into a provider-owned doltlite raw store; render renders
 //! the chat-shaped feeds (Google Chat / Google Voice). The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
-//!
-//! This is where the SyncFlags duplication the refactor kills now lives: the
-//! mapping `GoogleTakeoutSync` → `download::SyncFlags` is provider-owned here
-//! (it used to be hand-copied in the orchestrator's `ExtractPlan::for_source`).
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::collections::HashMap;
@@ -21,8 +17,6 @@ use datalib_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
 
 use crate::download;
 
-/// Download wave: mirror the export tree at input_path into the raw
-/// store, gated by the per-part `sync:` flags.
 pub fn plan_download(
     ctx: PlanContext,
     config: GoogleTakeoutConfig,
@@ -52,9 +46,6 @@ pub fn plan_render(
     })])
 }
 
-/// Map the provider-owned config `GoogleTakeoutSync` onto the download crate's
-/// `SyncFlags`, field-for-field — the duplication this refactor moves out of
-/// the orchestrator and into the provider.
 fn sync_flags(s: GoogleTakeoutSync) -> download::SyncFlags {
     download::SyncFlags {
         maps_reviews: s.maps_reviews,
@@ -128,8 +119,6 @@ impl DataProcessor for GoogleTakeoutRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::RENDER_VERSION)
     }

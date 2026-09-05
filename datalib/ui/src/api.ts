@@ -1,17 +1,4 @@
 // Thin fetch wrapper for the Datalib HTTP API.
-//
-// In dev (vite), `/api/*` is proxied to the Rust backend via vite.config.ts.
-// In Tauri/openhost packaging, the same relative paths are served by the
-// embedded backend.
-//
-// Authentication is deliberately absent from this file. The backend
-// requires its per-process API token on every route (see
-// datalib/backend/http/src/auth.rs), but the browser gets it as an
-// HttpOnly session cookie when it loads the app, and the dev-mode Vite
-// proxy stamps it on server-side — so `fetch`, `EventSource`, and
-// `<img src="/applet/unified_index/asset/…">` all authenticate without any call site
-// here knowing about it. That is the point of carrying it in a cookie:
-// there is no per-request token plumbing to forget.
 
 import type { FeedbackContext } from "./feedback/context";
 import { pushToast } from "./toasts";
@@ -65,10 +52,6 @@ export type SearchRow = {
   // ported onto `datalib_id` yet. This is what "Copy source ID(s)"
   // copies, as opposed to `uuid` — ours resolves inside datalib, this
   // one resolves upstream.
-  //
-  // For Perseus it's the locator path — `"1"` (book), `"1.2"`
-  // (chapter), `"1.2.3"` (section) — which perseusView parses to build
-  // its book→chapter→section tree.
   upstream_id: string;
   // What sort of upstream thing the row is, in the provider's own
   // vocabulary (`"pull_request"`, `"pr_review_comment"`, `"page"`).
@@ -150,17 +133,6 @@ export type DocEntry = {
   created_at: string | null;
 };
 // --- The unified_index applet --------------------------------------------
-//
-// Search, the document list, one document, and the files beside it are
-// served by `datalib-applet unified_index`, reached through the
-// gateway's applet proxy. `datalib-http` does not know these routes
-// exist — it forwards `/applet/<id>/…` to whatever the config declares
-// under that id.
-//
-// Consequence worth knowing: a data root whose `config.toml` does not
-// declare this applet has no grid. The scaffold writes it, and the
-// gateway answers 502 with the applet named when it is configured but
-// not running, so the failure says which file to fix.
 export const UNIFIED_INDEX = "/applet/unified_index";
 
 
@@ -170,18 +142,6 @@ export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
 }
 
 // --- qmd index state -------------------------------------------------------
-//
-// What the qmd index currently holds for a set of rendered documents,
-// behind the grid's `Indexed` / `Embedded` columns. Two separate
-// booleans because `qmd update` and `qmd embed` are separate passes: a
-// document can be findable by keyword and still invisible to semantic
-// search for as long as the embed pass takes.
-//
-// `null` means "we could not determine this" (no rendered file, file
-// unreadable, index unavailable) — distinct from `false`, which is a
-// positive claim that the document is absent from the index. The grid
-// renders the two differently, because a red ❌ we can't back up is
-// worse than an honest blank.
 export type QmdDocState = {
   indexed: boolean | null;
   embedded: boolean | null;
@@ -321,29 +281,10 @@ export function fetchChat(
 }
 
 // --- Config / setup API ----------------------------------------------------
-//
-// The data root is self-contained: its config lives at
-// `<root>/config.toml` and is read/written through these endpoints. A
-// fresh root has no config (`exists: false`); the Setup view scaffolds
-// one, lets the user edit, and PUTs it back.
-//
-// TOML is the only format these endpoints handle. A data root written
-// before the switch is converted once, out of band, by the separate
-// `datalib-migrate-config` program; `legacy_yaml_path` below exists
-// only so the UI can say so instead of showing an empty setup screen.
 
 // One thing wrong with the config, and how much of it that costs.
 // Mirrors `datalib_dag::diagnostics` — see that module for why there
 // are four severities and not two. In short:
-//
-//   fatal    — the file is not a config; nothing loaded, the app is
-//              blocked (this is what `app_ready: false` reports).
-//   rejected — this entry is unusable and was dropped; everything else
-//              loaded and still runs.
-//   blocked  — this entry is fine and cannot run anyway, because what
-//              it names is missing or was itself dropped. The fix is at
-//              another entry, and `help` says which.
-//   warning  — valid, probably a mistake. Nothing was dropped.
 export type Severity = "fatal" | "rejected" | "blocked" | "warning";
 
 export type Diagnostic = {
@@ -674,9 +615,6 @@ export type SyncTask = {
 // these the instant they write a job's state, so the UI updates without
 // polling. `tasks` is the per-task board (also recoverable from
 // `progress_msg`, which carries it as JSON — see src/sync/progress.ts).
-//
-// The same stream also carries named `root` frames for everything that
-// changes without a job behind it; those are `RootEvent` in `@/live`.
 export type JobProgressEvent = {
   id: string;
   kind: string;
@@ -739,15 +677,6 @@ export async function fetchJobLog(id: string, signal?: AbortSignal): Promise<str
 }
 
 // --- Authoring the `user` namespace ----------------------------------------
-//
-// GET  /api/lib/{name}          → the component's JS source
-// PUT  /api/lib/{name}          → create/overwrite, body {source, …}
-// POST /api/lib/{name}/rename   → move to {new_name}, leaving a tombstone
-//
-// A writer only. Everything read back — the manifest, the gallery, what
-// `comp.user.x` resolves to — comes from /api/frontend, which reads the
-// filesystem and cannot tell a user-written component from an
-// applet-written one.
 
 // What a write to the `user` namespace returns: the name, the content
 // hash of the source just stored, and the metadata document as written.
@@ -849,16 +778,7 @@ export async function submitFeedback(
   return (await r.json()) as FeedbackResponse;
 }
 
-// ---------------------------------------------------------------------
 // Credentials and connection testing, for the Add-a-source wizard.
-//
-// These four deliberately do NOT go through `getJson`, which toasts
-// every failure. A wizard failure belongs *in the wizard*, next to the
-// field it is about — "that account has no Gmail credential" is not
-// news for the whole app, and a toast would have said it while the
-// dialog stayed silent. They throw the server's own message instead, so
-// the dialog can print it.
-// ---------------------------------------------------------------------
 
 export type StoredAccount = {
   /// latchkey's account key. The empty string is a real value: it is

@@ -143,12 +143,6 @@ function injectCopyUuidButtons() {
   // is the attribute value as-is (prefixed `tu-`/`tr-`/`th-` for
   // blocks, bare for messages) — that's the form the grid row carries
   // and the deeplink consumes, so "copy section ID" round-trips.
-  //
-  // Sub-section spans (the perseus first-word wrappers) also carry
-  // `data-section-uuid` but as inline elements, not block divs — they
-  // have no `.msg-meta` host and no `<p><em>…</em></p>` meta line.
-  // Skip inline spans here; the copy-uuid button only makes sense on
-  // top-level block sections.
   for (const el of root.value.querySelectorAll<HTMLElement>(
     "div[data-section-uuid], section[data-section-uuid]",
   )) {

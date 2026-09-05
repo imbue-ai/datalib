@@ -1,12 +1,4 @@
 //! Atomic counters + phase timings for fsindex.
-//!
-//! USE-method-ish: utilization, saturation, errors. Single-process
-//! single-threaded walker today, so true U/S/U is moot — what we
-//! track is throughput (entries/sec, bytes/sec hashed), the
-//! producer→consumer channel high-water-mark (the only real
-//! saturation signal here), and per-phase wall time. Atomic
-//! increments are submicrosecond so the cost is negligible vs the
-//! syscalls per entry.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 

@@ -1,20 +1,10 @@
 //! Failure classification + per-provider auth remediation hints.
-//!
-//! The hint table is carried over from the retired sync orchestrator's
-//! `auth_hint_for` (sync is a binary crate, so it isn't importable;
-//! this becomes the single copy when sync retires). On an
-//! auth-classified failure the hint is emitted as a structured
-//! `{"event":"hint",…}` so the runner/UI can surface it prominently
-//! instead of burying it in log text.
 
 use anyhow::Result;
 use datalib_dag::events::Event;
 
 use crate::events::{Emitter, OutputClaim};
 
-/// Map an error chain to the DAG failure taxonomy (`FailureKind` wire
-/// values). Heuristic — same signal sync's auth-hint detection used —
-/// until providers classify their own errors.
 pub fn classify(e: &anyhow::Error) -> &'static str {
     let s: String = e
         .chain()

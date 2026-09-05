@@ -1,50 +1,4 @@
 //! The metadata-excluding payload hash: `media_items.payload_blake3`.
-//!
-//! # What it is for
-//!
-//! Retag an MP3 and every byte of its ID3v2 frame moves, so
-//! `blake3(file)` moves, so the file reads as a new item. Adjust a DNG
-//! in Lightroom and the embedded JPEG preview is rewritten, with the
-//! same result. In a personal library those two operations are most of
-//! what ever happens to a file, which makes the file hash — the right
-//! primary key — the wrong answer to "is this the same recording?"
-//!
-//! So each container gets a second digest over the part of it that
-//! carries the actual signal: the MPEG frames, the `data` chunk, the
-//! entropy-coded scan, the strips the IFD points at. Tags, EXIF, XMP,
-//! ICC profiles, embedded previews and container padding are left out.
-//!
-//! # The posture, borrowed wholesale from `pdf`
-//!
-//! This is an **indexed secondary hint, never a key**, for the same
-//! reason `pdf_documents.content_blake3` is (see that provider's
-//! `schema_raw.rs` §"Ship of Theseus"). Re-encode a JPEG at the same
-//! quality, run an MP3 through a different LAME build, or let a tool
-//! recompress a PNG's IDAT at a different zlib level, and the payload
-//! hash moves even though nothing you can see or hear changed. It
-//! splits where it ideally would have merged.
-//!
-//! That direction is chosen, not accidental: **a false split costs a
-//! duplicate row, a false merge hides a file.** The primary key stays
-//! `blake3(bytes)`.
-//!
-//! Three rules follow, and all three are load-bearing:
-//!
-//! 1. **A container we cannot parse gets NULL, not a fallback.**
-//!    Falling back to the file hash would make the column claim
-//!    metadata-independence that the format never gave it, and every
-//!    downstream `GROUP BY payload_blake3` would silently believe it.
-//!    NULL says "we did not compute one," which is true and queryable.
-//! 2. **[`Plan::scheme`] is recorded next to the digest.** Two payload
-//!    hashes are only comparable if the same recipe produced them, so
-//!    the recipe name and version live in
-//!    `media_items.payload_scheme`. Changing what a scheme excludes
-//!    means bumping its version, which makes the mismatch visible
-//!    instead of turning a fixed bug into a silent false merge.
-//! 3. **This is not a perceptual hash.** A perceptual hash answers a
-//!    different question with the opposite failure mode (it merges
-//!    things that differ). If we ever want one it gets its own column
-//!    and its own name.
 
 pub mod bmff;
 pub mod flac;
@@ -66,10 +20,6 @@ use super::kind::Container;
 pub type Range = (u64, u64);
 
 /// What to hash, and under what name.
-///
-/// A plan is pure structure — deciding it reads only the container's
-/// skeleton (headers, box tables, IFD entries), never the bulk data.
-/// The bulk is streamed exactly once, afterwards, by [`hash_plan`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     /// Recipe name and version, e.g. `mp3.frames.v1`. Stored beside the
@@ -83,7 +33,6 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// A one-group plan.
     pub fn flat(scheme: &'static str, ranges: Vec<Range>) -> Self {
         Self {
             scheme,
@@ -91,7 +40,6 @@ impl Plan {
         }
     }
 
-    /// Total bytes this plan will read.
     pub fn total_bytes(&self) -> u64 {
         self.groups
             .iter()
@@ -129,11 +77,6 @@ const MAX_STRUCT_READ: u64 = 8 * 1024 * 1024;
 
 /// A seekable byte source with the range-reading helpers every parser
 /// here needs.
-///
-/// Parsers work through this rather than over a `&[u8]` of the whole
-/// file on purpose: a video is routinely larger than RAM, and every
-/// parser in this module needs only kilobytes of structure to decide
-/// where the megabytes are.
 pub struct Src {
     file: File,
     len: u64,
@@ -190,14 +133,6 @@ impl Src {
     }
 }
 
-/// Decide and compute the payload hash for one file.
-///
-/// `Ok(None)` is the ordinary answer for a container we do not have a
-/// recipe for, and is recorded as a NULL `payload_blake3`. `Err` is
-/// reserved for I/O failures — a malformed file inside a container we
-/// *do* parse comes back as `Ok(None)` too, since "this file's
-/// structure did not make sense" is a fact about the file, not a
-/// failure of the scan.
 pub fn compute(path: &Path, container: Container) -> Result<Option<Payload>> {
     let mut src = Src::open(path)?;
     if src.is_empty() {
@@ -227,8 +162,6 @@ pub fn compute(path: &Path, container: Container) -> Result<Option<Payload>> {
     }))
 }
 
-/// Route to the container's recipe. Containers with no recipe yet come
-/// back `Ok(None)`.
 fn plan_for(src: &mut Src, container: Container) -> Result<Option<Plan>> {
     Ok(match container {
         Container::Wav => riff::plan_wav(src)?,
@@ -251,13 +184,6 @@ fn plan_for(src: &mut Src, container: Container) -> Result<Option<Plan>> {
     })
 }
 
-/// Stream a plan's bytes through blake3.
-///
-/// One group hashes its bytes directly, so a WAV's `payload_blake3` is
-/// exactly `b3sum` of its extracted `data` chunk and can be checked by
-/// hand. More than one group hashes each group separately and then
-/// digests the concatenated group digests, which is what keeps a
-/// track's identity independent of its siblings.
 pub fn hash_plan(src: &mut Src, plan: &Plan) -> Result<String> {
     if plan.groups.len() == 1 {
         let mut h = blake3::Hasher::new();
@@ -302,7 +228,6 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Shared integer decoding. Every container here is built out of these.
 
 pub(crate) fn be_u16(b: &[u8], at: usize) -> Option<u16> {
@@ -347,8 +272,6 @@ pub(crate) mod testutil {
         }
     }
 
-    /// blake3 of a byte slice, hex — the expected value for a
-    /// single-group plan.
     pub fn b3(bytes: &[u8]) -> String {
         super::hex(blake3::hash(bytes).as_bytes())
     }

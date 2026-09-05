@@ -7,10 +7,6 @@
 // in the editor; the chips append a template step pair and select it.
 // Save PUTs the text to the backend, which validates with the real
 // config loader before writing. Below all that, the recent-jobs table.
-//
-// TOML is the only format this edits. A data root written before the
-// switch is converted once, out of band, by `datalib-migrate-config`;
-// all this view does is notice the stray config.yaml and say so.
 import { computed, nextTick, ref, onMounted, onUnmounted } from "vue";
 import {
   fetchConfig,
@@ -121,11 +117,6 @@ async function loadConfig() {
 // With no unsaved edits the editor reloads silently; with unsaved edits
 // we keep the user's text and raise the diskChanged banner instead of
 // clobbering.
-//
-// Driven by the server telling us the file moved, not by a timer. This
-// used to run every 2 seconds and pull the whole config text down each
-// time, so an editor left open all afternoon fetched it ~1,800 times to
-// learn nothing. See `@/live` and `backend/http/src/watch.rs`.
 async function reloadIfDiskMoved() {
   // Our own PUT is in flight — whatever we read now is stale.
   if (saving.value) return;

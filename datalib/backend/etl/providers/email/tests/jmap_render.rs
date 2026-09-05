@@ -205,7 +205,6 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     assert_eq!(rows[0].source_label, "Mail");
 }
 
-/// Find the single file under `root` whose name ends with `suffix`.
 fn find_one(root: &std::path::Path, suffix: &str) -> PathBuf {
     fn walk(dir: &std::path::Path, suffix: &str, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
@@ -227,9 +226,7 @@ fn find_one(root: &std::path::Path, suffix: &str) -> PathBuf {
     found.pop().unwrap()
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Calendar invites: the same payload arriving twice
-// ─────────────────────────────────────────────────────────────────────
 
 /// The iCalendar payload, byte-identical in both places it arrives.
 const ICS: &str = "BEGIN:VCALENDAR\r\n\
@@ -252,9 +249,6 @@ fn invite_eml() -> String {
     )
 }
 
-/// One payload carried twice: an inline `alt_type` part inside a
-/// `multipart/alternative`, and an `att_name` attachment part with the
-/// very same bytes.
 fn two_copy_eml(alt_type: &str, att_type: &str, att_name: &str, payload: &str) -> String {
     format!(
         "From: Organizer <o@x.test>\r\n\

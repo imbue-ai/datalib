@@ -1,27 +1,4 @@
 //! ChatGPT (openai) entity ids.
-//!
-//! Every id this provider mints goes through
-//! [`datalib_id::entity_id_str`]; see `docs/dev/entity_ids.md` for the
-//! rule.
-//!
-//! ## Scope
-//!
-//! [`Scope::ProviderGlobal`]. OpenAI's `conversation_id` and
-//! `message_id` are unique across the service, so no further scoping
-//! is needed — and unlike claude's `org_uuid`, there is no optional
-//! account field here that could tempt a scope which sometimes exists
-//! and sometimes doesn't (`conv.account_id` is itself `Option`, so
-//! using it would re-key rows the first time an ingest saw it).
-//!
-//! ## What this replaces
-//!
-//! Nothing was minted at all: `conversation_id` and `message_id` were
-//! used verbatim as our primary keys. They are not UUIDs — the TNG
-//! fixture's are `msg-fake-poly-0001`-shaped, and real ones are
-//! `aaa1bbb2-...`-ish but not guaranteed — so `grid_rows.uuid` held a
-//! foreign namespace inside ours, where a single upstream id reuse
-//! becomes our collision. This provider was one of the two on
-//! `NON_UUID_PK_PROVIDERS`.
 
 use datalib_id::{entity_id_str, Scope};
 
@@ -48,13 +25,10 @@ fn identity(entity_kind: &'static str, natural_key: String) -> Identity {
     }
 }
 
-/// One conversation — its grid row, its `markdown_uuid`, and the
-/// `conversation_uuid` every message row carries.
 pub fn conversation(conversation_id: &str) -> Identity {
     identity(KIND_CONVERSATION, conversation_id.to_string())
 }
 
-/// One message.
 pub fn message(message_id: &str) -> Identity {
     identity(KIND_MESSAGE, message_id.to_string())
 }

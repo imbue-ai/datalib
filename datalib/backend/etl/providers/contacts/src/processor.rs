@@ -4,11 +4,6 @@
 //! processor ([`CarddavRender`]). [`plan_download`] / [`plan_render`] build the
 //! per-wave processors the orchestrator drives, owning every carddav-specific decision (which
 //! download mode) so the orchestrator destructures nothing.
-//!
-//! Storage ownership lives here, not in the orchestrator: [`CarddavDownload`]
-//! opens its own raw doltlite store, registers an opaque [`PoolCheckpoint`]
-//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
-//! orchestrator never sees a pool or a commit.
 
 use std::path::PathBuf;
 
@@ -163,8 +158,6 @@ impl DataProcessor for CarddavRender {
         &self.id
     }
 
-    /// The value every sidecar this processor writes carries; the
-    /// render step refuses to finish if the two disagree.
     fn render_version(&self) -> Option<u32> {
         Some(crate::render::render::RENDER_VERSION)
     }

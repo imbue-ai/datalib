@@ -1,18 +1,4 @@
 //! CardDAV downloader entry point.
-//!
-//! See [`super`] for the overall provider story. This module owns
-//! the orchestration:
-//!
-//!   1. Discover the principal URL + addressbook-home-set (PROPFIND).
-//!   2. List addressbooks under the home set (PROPFIND, depth=1).
-//!   3. For each addressbook: incremental `sync-collection` REPORT
-//!      against the persisted sync-token, falling back to an etag
-//!      walk via `addressbook-multiget` when the server refuses.
-//!   4. Upsert raw vCards + bookkeeping into the doltlite store.
-//!
-//! Auth headers are injected by latchkey based on the URL host
-//! (see `datalib_etl::http`). The provider does NOT touch
-//! credentials directly.
 
 pub mod api;
 pub mod db;
@@ -73,7 +59,6 @@ pub struct FetchSummary {
     pub requests: usize,
 }
 
-/// Run one download pass against `opts.server_url`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,
@@ -327,9 +312,6 @@ async fn apply_multistatus(
     Ok(())
 }
 
-/// Resolve `href` (possibly relative) against the server-root URL.
-/// CardDAV servers commonly emit hrefs like `/dav/principals/u/`
-/// (root-relative); the spec also allows fully-qualified URLs.
 fn absolutize(base: &str, href: &str) -> Result<String> {
     if href.starts_with("http://") || href.starts_with("https://") {
         return Ok(href.to_string());

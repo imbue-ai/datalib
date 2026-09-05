@@ -1,14 +1,4 @@
 //! Program-A `DataProcessor` for the `media` source.
-//!
-//! `media` is **download-only** — it indexes a tree of audio, images,
-//! video and playlists into a doltlite raw store and renders nothing.
-//! So [`plan_download`] contributes a single processor and
-//! [`plan_render`] returns none: "download-only" is structural (a
-//! missing processor), not a flag. Same shape as `fsindex`.
-//!
-//! The source owns its raw store end to end (open, register the
-//! interrupt hook, write, commit) via the standard `RawStoreSession`;
-//! the orchestrator only drives `run`.
 
 use std::path::PathBuf;
 

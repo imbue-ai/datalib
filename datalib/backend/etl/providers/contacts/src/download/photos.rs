@@ -1,15 +1,5 @@
 //! Lift inline vCard `PHOTO` bytes into the per-source CAS, mapped by a
 //! `contact_photos` edge row.
-//!
-//! The vCard text (with its base64 `PHOTO`) stays the canonical wire
-//! data in `contacts.payload`; this is an *additional* content-addressed
-//! copy so the contact→photo-blob mapping matches the LinkedIn provider's
-//! [`contact_photos`](super::schema_raw::CONTACT_PHOTOS_TABLE) shape.
-//! (The two providers deliberately don't share code — raw data is owned
-//! per-provider — only the table shape.)
-//!
-//! Runs once per contact: we only lift a `contacts.id` that has no
-//! `contact_photos` row yet, so re-extraction is a cheap no-op.
 
 use anyhow::{Context, Result};
 use base64::Engine;

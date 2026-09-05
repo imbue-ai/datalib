@@ -1,16 +1,6 @@
 //! Shared helpers for doltlite-backed data sources — the "easy button" that
 //! lets every such source follow one storage-ownership pattern under the
 //! [`crate::processor`] model.
-//!
-//! Program A's rule is that the orchestrator is storage-agnostic: a source that
-//! keeps a doltlite store owns it end to end (open, schema, write, commit) and
-//! exposes one opaque seam — an interrupt [`Checkpoint`] — so the orchestrator
-//! never reads the store.
-//!
-//! [`RawStoreSession`] is that easy button: open it over a source's write pool
-//! (registers the interrupt hook), then `finish(ctx, summary)` after the fetch
-//! (commit + close). The interrupt hook ([`Checkpoint`]) does the same commit
-//! on Ctrl-C, so both paths are source-side.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,9 +20,6 @@ pub struct RawStoreSession {
 }
 
 impl RawStoreSession {
-    /// Open over a source's write `pool` (entity doltlite at `entity_path`)
-    /// and register the interrupt-commit `Checkpoint`. Prefer
-    /// [`RunCtx::open_store`](crate::processor::RunCtx::open_store).
     pub async fn open(pool: SqlitePool, _entity_path: PathBuf, ctx: &RunCtx<'_>) -> Self {
         let session = Self {
             pool,

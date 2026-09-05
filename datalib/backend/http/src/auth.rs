@@ -1,74 +1,21 @@
 //! Per-process API token — the front door's only authentication.
 //!
-//! # Why this exists
+//! The server binds loopback, but loopback is not a security boundary against
+//! the *browser*: any page the user has open can `fetch()`
+//! `http://127.0.0.1:8731/…`. With no auth that page could `PUT /api/config` a
+//! step whose `command` is an arbitrary shell string and then run it.
 //!
-//! The server binds loopback, but loopback is not a security boundary
-//! against the *browser*: any web page the user has open can `fetch()`
-//! `http://127.0.0.1:8731/...`. With no auth, that page could `PUT
-//! /api/config` a step whose `command:` is an arbitrary shell string
-//! and then `POST /api/sync/jobs` to run it — remote code execution
-//! from a visited web page. See issue #138.
+//! So one random token is minted per process and required on every request,
+//! accepted as `Authorization: Bearer`, `X-Datalib-Token`, `?token=` (the
+//! launch URL), or the cookie. A request that presents the token by header or
+//! query *and* asks for a document gets it back as a cookie, so the rest of
+//! the page authenticates with no per-callsite changes.
 //!
-//! # The scheme (Jupyter's, with the same reasoning)
-//!
-//! One random token is minted per process and required on **every**
-//! request. It is accepted from, in order:
-//!
-//!   1. `Authorization: Bearer <token>`  — scripts, agents, curl
-//!   2. `X-Datalib-Token: <token>`       — ditto, when Authorization is taken
-//!   3. `?token=<token>`                 — the launch URL
-//!   4. `Cookie: <cookie_name>=<token>`  — the browser, after step 3
-//!
-//! A request that presents the token by header or query *and* asks for
-//! a document (anything outside `/api/`) gets the token back as a
-//! cookie, so the rest of the page — `<img src="/api/asset/…">`, the
-//! `EventSource` on `/api/sync/stream`, the DACTAL iframe's own
-//! `/api/search` calls — authenticates with no per-call-site changes.
-//! When the token arrived in the query string we redirect to the same
-//! URL without it, so it doesn't linger in history, bookmarks, or a
-//! `Referer`.
-//!
-//! ## Why a cookie is the right carrier here, not a header
-//!
-//! Two properties, neither of which a token injected into the HTML has:
-//!
-//! * **Cross-site requests can't get one.** A page on `evil.com` cannot
-//!   read our cookie (`HttpOnly`) and cannot make the browser send it
-//!   (`SameSite=Lax` — see below). A token pasted into the served HTML,
-//!   by contrast, is readable by anything that can read the page.
-//! * **DNS rebinding fails closed.** An attacker who rebinds
-//!   `evil.com` to `127.0.0.1` is same-origin with us as far as the
-//!   browser is concerned, so it *could* read a token out of the HTML —
-//!   but the cookie was set for host `127.0.0.1`, and the rebound page
-//!   is on host `evil.com`, so the browser never sends it. Same reason
-//!   the attacker can't guess the token: it never touched their origin.
-//!
-//! ## `SameSite=Lax`, not `Strict`
-//!
-//! `Lax` withholds the cookie from every cross-site *subresource*
-//! request (`fetch`, `XHR`, `<img>`, `<iframe>`, form POST) — which is
-//! the entire attack in #138 — while still sending it on a top-level
-//! GET navigation, so bookmarks, a link from a chat app, and the
-//! post-`?token=` redirect all just work. That leaves exactly one
-//! cross-site capability: an attacker page can navigate a popup to one
-//! of our `GET` routes with the cookie attached. It cannot read the
-//! response (cross-origin), so this is only safe as long as **no `GET`
-//! route mutates state**. That holds today (every writer is POST/PUT,
-//! and form-POST navigations don't carry `Lax` cookies) and is an
-//! invariant worth keeping.
-//!
-//! # Where the token comes from
-//!
-//! `$DATALIB_TOKEN` when set — how `dev.sh` hands one token to both the
-//! backend and the Vite proxy, and how the Playwright suite pins one —
-//! otherwise 244 random bits as hex. Either way it is written to
-//! `<root>/system/api-token` (mode 0600) so anything running as
-//! the user can authenticate without scraping process output:
-//!
-//! ```sh
-//! curl -H "Authorization: Bearer $(cat ~/Documents/datalib/system/api-token)" \
-//!   http://127.0.0.1:8731/api/health
-//! ```
+//! The cookie is the right carrier here, and a token injected into the HTML
+//! is not: a page on `evil.com` can neither read ours (`HttpOnly`) nor make
+//! the browser send it (`SameSite=Lax`), and DNS rebinding fails closed,
+//! whereas a token in the served HTML is readable by anything that can read
+//! the page.
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -95,9 +42,6 @@ pub const TOKEN_QUERY_KEY: &str = "token";
 /// `Authorization` is already spoken for.
 pub const TOKEN_HEADER: &str = "x-datalib-token";
 
-/// The characters an env-supplied token may use. Restricting to the
-/// URL-unreserved set is what lets us compare `?token=…` byte-for-byte
-/// with no percent-decoding step (and no decoder to get subtly wrong).
 fn is_url_safe(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
@@ -143,8 +87,6 @@ impl ApiToken {
         Ok(Self::from_value(value, root))
     }
 
-    /// Build from an explicit token. Public for tests and for callers
-    /// that source the token themselves.
     pub fn from_value(value: impl Into<String>, root: &Path) -> Self {
         let value = value.into();
         // Cookies ignore the port, so two datalib instances on
@@ -170,15 +112,10 @@ impl ApiToken {
         &self.0.value
     }
 
-    /// Absolute path of the file [`Self::write_token_file`] publishes
-    /// the token to. Reported by `/api/health` so the UI can tell an
-    /// agent where to read it.
     pub fn token_file(&self) -> &Path {
         &self.0.token_file
     }
 
-    /// Publish the token to `<root>/system/api-token`, mode 0600.
-    /// Callers run this once the data root exists.
     pub fn write_token_file(&self) -> anyhow::Result<()> {
         let path = self.token_file();
         let dir = path.parent().expect("token file always has a parent");
@@ -193,7 +130,6 @@ impl ApiToken {
         Ok(())
     }
 
-    /// `Set-Cookie` value handing this token to the browser.
     fn cookie_header(&self) -> HeaderValue {
         // No `Secure`: we're on plain http over loopback, and `Secure`
         // would make the browser drop the cookie entirely. No
@@ -206,7 +142,6 @@ impl ApiToken {
         .expect("token and cookie name are URL-safe ASCII")
     }
 
-    /// Which credential the request presented, if any.
     fn credential(&self, req: &Request<Body>) -> Option<Credential> {
         let headers = req.headers();
 
@@ -281,13 +216,10 @@ enum Credential {
     Query,
 }
 
-/// `<root>/system/api-token`.
 pub fn token_file_path(root: &Path) -> PathBuf {
     datalib_core::layout::system_dir(root).join(TOKEN_FILE)
 }
 
-/// `chmod 0600` — the token is a credential, and on a shared machine
-/// the data root may well be group- or world-readable.
 pub fn restrict_to_owner(path: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
@@ -310,8 +242,6 @@ fn query_token(query: &str) -> Option<&str> {
         .map(|(_, v)| v)
 }
 
-/// The same query string with the `token` key removed, or `None` when
-/// nothing else was in it.
 fn query_without_token(query: &str) -> Option<String> {
     let rest: Vec<&str> = query
         .split('&')
@@ -323,25 +253,14 @@ fn query_without_token(query: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.join("&"))
 }
 
-/// Routes served without a token.
-///
-/// Only the agent onboarding guides. They are public documentation
-/// whose whole job is to tell an agent *how to authenticate*, so
-/// requiring the token to read them is a bootstrap loop; and they carry
-/// nothing an attacker doesn't already have (they ship in the binary
-/// and in the repo).
 fn is_public(path: &str) -> bool {
     path == "/agent.md" || path.starts_with("/agent/")
 }
 
-/// API routes get machine-readable failures; everything else is a
-/// document load by a browser and gets a human-readable page.
 fn is_api(path: &str) -> bool {
     path.starts_with("/api/")
 }
 
-/// The gate. Wraps the whole router — every route, the SPA fallback,
-/// and the `/api/media` static mount included.
 pub async fn require_token(
     State(auth): State<ApiToken>,
     req: Request<Body>,

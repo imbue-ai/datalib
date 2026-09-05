@@ -1,21 +1,4 @@
 // The row-struct write contract, shared by both schema families.
-//
-// This trait started in `datalib_etl::bulk`, where the raw-download
-// derives (`WirePayloadRow`, `RawTable`, `CasEdgeRow`) emit impls of
-// it. The render-schema derive (`PortableTable`) could not: `datalib_etl`
-// depends on `datalib_schema`, so a `datalib_schema` struct implementing
-// a `datalib_etl` trait is a dependency cycle. That is the whole reason
-// the render schema had no generated write path and `grid_index`
-// hand-wrote its INSERTs.
-//
-// Moving the trait down here — a leaf both sides can see — lets one
-// contract serve both. `datalib_etl::bulk` re-exports it, so every
-// existing `datalib_etl::bulk::BulkUpsertable` path still resolves and
-// no provider code changed.
-//
-// The bulk *helpers* (`bulk_upsert_in_tx` and friends) stay in
-// `datalib_etl`: they carry the bookkeeping-table and wire-tape
-// concerns, which are raw-store ideas the render schema has no use for.
 
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
@@ -23,47 +6,6 @@ use sqlx::Sqlite;
 
 /// Row-struct contract that lets the generic [`bulk_upsert_in_tx`]
 /// helper write a batch into a table.
-///
-/// **The universal entity-table shape.** Most raw entity tables are
-/// `(id, …typed_columns, payload)`:
-///
-///   - `id` — TEXT primary key, the upstream identifier (or a
-///     UUIDv5 synthesized from upstream-stable components when no
-///     stable id exists).
-///   - `…typed_columns` — zero or more writer-supplied fields that
-///     aren't in the payload (synthesized-PK components, FK
-///     references, namespace discriminators). Plain `?` binds.
-///   - `payload` — JSON text, stored as JSONB via `jsonb(?)` on
-///     write. The full upstream message, losslessly transcoded if
-///     necessary (see `docs/dev/data_architecture_ingestion.md`
-///     §"Wire-fidelity of the raw store").
-///
-/// **Some tables have no payload column** — N:M edge / attachment
-/// tables in particular (e.g. Signal's `chat_item_attachments`)
-/// just record the join. Set [`Self::PAYLOAD_COLUMN`] to `None` for
-/// those; the helper will emit a payload-less INSERT and
-/// `bind_into` should not bind anything past the typed columns.
-///
-/// **Where impls live.** By convention, the row struct and its
-/// `BulkUpsertable` impl live in the provider's `schema_raw.rs`,
-/// right next to the matching `CREATE TABLE` DDL constant, so that
-/// the rust struct's fields and the SQL columns are visibly aligned
-/// at the same vertical position in the file.
-///
-/// **Required correspondence.** [`Self::TYPED_COLUMNS`] must list
-/// the non-PK, non-payload columns in the same order as
-/// [`Self::bind_into`] binds them, and that order must match the
-/// DDL's column declarations between `id` and the payload column
-/// (if any). [`Self::bind_into`] binds id first, then each typed
-/// column in order, then the payload as a JSON text string (when
-/// [`Self::PAYLOAD_COLUMN`] is `Some`). Mismatch → mis-binding at
-/// runtime.
-///
-/// **One writer per row.** Per
-/// `docs/dev/data_architecture_ingestion.md` §"One writer per row," the
-/// ON CONFLICT clause is uniform across all tables: every non-PK
-/// column is set to `excluded.<col>`. There is no per-table or
-/// per-column override.
 pub trait BulkUpsertable: Sync {
     /// Target table name. Must match the DDL.
     const TABLE: &'static str;

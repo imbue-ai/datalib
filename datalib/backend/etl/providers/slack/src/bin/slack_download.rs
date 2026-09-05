@@ -1,26 +1,5 @@
 //! `slack-download` — drives [`datalib_etl_slack::download::fetch`] from
 //! the command line with structured tracing.
-//!
-//! On a TTY this renders progress bars (one per channel) plus pretty
-//! event lines on stderr. When stderr is piped, it switches to NDJSON so
-//! a pipeline orchestrator can scrape structured events without parsing
-//! ANSI. Adding `--otlp-endpoint http://collector:4317` *also* exports
-//! spans + events to OTLP for centralized monitoring.
-//!
-//! ```sh
-//! slack-download --out ~/slack-mirror --channels thad-testing-channel
-//! slack-download --out ~/slack-mirror --since 2025-01-01 --no-media \
-//!     --otlp-endpoint http://localhost:4317
-//! ```
-//!
-//! Manual live test via Bazel (talks to the real Slack workspace — needs
-//! `latchkey` creds on the host):
-//!
-//! ```sh
-//! bazelisk run //datalib/backend/etl/providers/slack:slack_download -- \
-//!     --out ~/backups/slack \
-//!     --channel imbue-announce --channel chat-thad --channel chat-glenn
-//! ```
 
 use std::path::PathBuf;
 

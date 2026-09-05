@@ -1,12 +1,4 @@
 //! Append-only JSONL mirror of every upsert that hits the raw store.
-//!
-//! See `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)" for the
-//! principle. This module is the plumbing: a small handle that owns a
-//! directory and lazily opens one append-mode file per entity table.
-//!
-//! The pipeline never reads from these files. They exist so a human
-//! (or `tail -f`, `grep`, `jq`) can watch the wire payload come off
-//! the upstream without opening doltlite.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -29,8 +21,6 @@ pub struct EventTape {
 }
 
 impl EventTape {
-    /// Create (or attach to) a tape at `<dir>/`. Files appear under
-    /// `<dir>/<table>.jsonl` on first append.
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
@@ -38,14 +28,10 @@ impl EventTape {
         }
     }
 
-    /// The directory we write into. Useful for tests and for logging.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
-    /// Append one line for the given (table, id) and payload. The line
-    /// shape is `{"_recorded_at", "table", "id", "payload"}`. Flushed
-    /// after every line so a `tail -f` watcher sees rows promptly.
     pub fn append(&self, table: &str, id: &str, payload: &Value) -> Result<()> {
         let row = [(id, payload)];
         self.append_batch(&EventBatch { table, rows: &row })

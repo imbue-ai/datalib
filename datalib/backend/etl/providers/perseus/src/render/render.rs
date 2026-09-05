@@ -2,23 +2,6 @@
 //! edition) under `<out_dir>/<stanza>/rendered_md/thucydides/histories/`,
 //! each emitting into the render store all rows for
 //! that doc.
-//!
-//! Per chapter/edition doc, we emit:
-//!   * one chapter-level row (kind = "Chapter (<edition-id>)") whose
-//!     `uuid` equals the (chapter, edition) uuid;
-//!   * one section-level row per section the edition covers (kind =
-//!     "Section (<edition-id>)") whose `uuid` equals the (section,
-//!     edition) uuid and `markdown_uuid` equals the chapter uuid.
-//!
-//! `conversation_name` carries `"<b>.<c> <edition-title>"`, where the
-//! title is CTS-derived; the leading locator lets the UI's control
-//! panel (`perseusView`) recover the edition title by stripping it.
-//!
-//! Each section is wrapped in `<div data-section-uuid="…">` so the SPA
-//! scrolls/highlights it on a row click. Editions that participate in a
-//! configured `alignment_pairs` entry additionally get one
-//! `<span data-section-uuid="…">` per sentence plus `bilingual-alignment`
-//! edges to the paired edition's sentences.
 
 use std::collections::HashMap;
 use std::fs;
@@ -45,11 +28,6 @@ use super::RENDER_VERSION;
 
 /// Synthetic `when_ts` base. Drives the grid's global sort so default
 /// ordering yields reading order (Book 1 Chapter 1 first).
-///
-/// **Known violation of "no fabricated timestamps"**: Perseus is an
-/// immutable upstream corpus with no per-section timestamps, so we
-/// synthesize a deterministic ordering stamp. See
-/// `data_architecture_ingestion.md` "Entities without a time-shape".
 fn ts_base() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
 }
@@ -66,12 +44,6 @@ pub struct RenderSummary {
     pub rows_emitted: usize,
 }
 
-/// Render entry point. Mirrors `contacts::render::render::render_all`
-/// so the sync orchestrator's match arm wires up the same way.
-///
-/// `alignments` carries the per-section sentence alignments for the
-/// configured edition pairs (empty when none configured). Editions not
-/// in any pair render with section-level anchors only.
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     parsed: &ParsedPerseus,
@@ -140,7 +112,6 @@ pub fn render_all(
     Ok(summary)
 }
 
-/// Whether `edition_id` has any non-empty section text in `chapter`.
 fn chapter_covers(chapter: &Chapter, edition_id: &str) -> bool {
     chapter
         .sections
@@ -294,8 +265,6 @@ fn book_content_rel(book_n: &str) -> PathBuf {
     PathBuf::from(format!("thucydides/histories/book_{bn:02}"))
 }
 
-/// Book directory as a `<data_root>`-relative path string:
-/// `<stanza>/rendered_md/thucydides/histories/book_{NN}`.
 fn book_dir_rel(stanza: &str, book_n: &str) -> PathBuf {
     PathBuf::from(stanza)
         .join("rendered_md")
@@ -320,9 +289,6 @@ fn chapter_locator(book_n: &str, ch_n: &str) -> String {
     format!("{bn}.{ci}")
 }
 
-/// Grid `conversation_name` / markdown title for a (chapter, edition):
-/// `"<b>.<c> <edition-title>"`. The leading locator lets `perseusView`
-/// recover the bare edition title (it strips the `^[\d.]+\s` prefix).
 fn conversation_name(book_n: &str, ch_n: &str, edition: &Edition) -> String {
     format!("{} {}", chapter_locator(book_n, ch_n), edition.title)
 }
@@ -409,9 +375,6 @@ fn render_chapter_md(
     out
 }
 
-/// Wrap each sentence of `text` in its own inline
-/// `<span data-section-uuid="…">…</span>`. Whitespace between sentences
-/// is preserved outside the spans. Empty `sentences` → text unchanged.
 fn wrap_sentences(
     text: &str,
     sentences: &[Sentence],

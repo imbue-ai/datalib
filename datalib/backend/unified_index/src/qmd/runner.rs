@@ -1,21 +1,4 @@
 //! Thin wrapper around the `qmd` CLI.
-//!
-//! Shells out via [`crate::qmd::qmd_command`] (the app-bundled Node
-//! runtime when staged, else `npx -y @tobilu/qmd@<version>`) — same
-//! incantation as `datalib_qmd_indexer`. The runner does NOT build
-//! the index; it
-//! expects one already present at `<root>/unified_index/qmd/index.sqlite`
-//! ([`crate::qmd::qmd_index_path`]).
-//!
-//! Search modes:
-//!   * `query`   — hybrid (BM25 + vectors + reranker). What a user types
-//!     into the search bar maps to this.
-//!   * `vsearch` — vector-only. Faster, no LLM reranking. Used by the
-//!     `qmd_vsearch:"..."` predicate.
-//!
-//! Output parsing: qmd prints a non-JSON status banner before its JSON
-//! array on stdout. We find the first `[` at a line start and parse from
-//! there.
 
 use crate::qmd::mapping::{QmdHit, QueryMode};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
@@ -123,9 +106,6 @@ impl QmdRunner {
     }
 }
 
-/// Parse qmd's stdout into `QmdHit`s. qmd prints a status banner before
-/// the JSON array; banners can contain `[…]`-shaped fragments, so look
-/// for `[` at the start of a line.
 pub fn parse_stdout(stdout: &str) -> Result<Vec<QmdHit>> {
     let Some(start) = find_json_start(stdout) else {
         return Ok(Vec::new());
@@ -175,7 +155,6 @@ fn find_json_start(s: &str) -> Option<usize> {
     None
 }
 
-/// `qmd://mirror/foo/bar.qmd` → `foo/bar.qmd`.
 pub fn strip_uri(uri: &str) -> &str {
     let Some(after_scheme) = uri.strip_prefix("qmd://") else {
         return uri;
@@ -186,30 +165,6 @@ pub fn strip_uri(uri: &str) -> &str {
     }
 }
 
-/// Rewrite a free-text search bar query into a qmd query string that
-/// honors phrase + negation syntax.
-///
-/// qmd treats a single-line untyped query as an *expand query* and
-/// rewrites it via the local LLM — the model sees `"earl grey"` as text
-/// and may discard or reorder the phrase, so quoted exact-matching does
-/// not survive. By contrast, qmd's `lex:` typed lines support FTS5
-/// syntax directly: `"phrase"` is an exact phrase, `-word` excludes a
-/// term, `-"phrase"` excludes a phrase.
-///
-/// Strategy: if the input contains lex-meaningful syntax (any `"` or
-/// any `-`-prefixed token), emit a query document:
-///
-/// ```text
-/// lex: <input verbatim>
-/// vec: <input with quotes stripped and `-`-prefixed tokens removed>
-/// ```
-///
-/// The `lex:` line enforces phrase + exclusion semantics; the `vec:`
-/// line (when non-empty) gives the vector/RRF half something
-/// natural-language to embed.
-///
-/// Plain free-text with no lex syntax passes through unchanged — qmd's
-/// default expand path stays the recommended hot path.
 pub fn build_qmd_query(free_text: &str) -> String {
     if !has_lex_syntax(free_text) {
         return free_text.to_string();
@@ -224,9 +179,6 @@ pub fn build_qmd_query(free_text: &str) -> String {
     doc
 }
 
-/// True when `s` contains qmd lex-meaningful syntax — any quoted token
-/// or any `-`-prefixed token. Plain words/phrases without these markers
-/// return `false`.
 pub fn has_lex_syntax(s: &str) -> bool {
     tokenize_query(s)
         .iter()
@@ -237,10 +189,6 @@ pub fn has_lex_syntax(s: &str) -> bool {
 /// (exclusions are meaningless to vector search), strip surrounding
 /// quotes from phrases, and rejoin with single spaces. Returns an empty
 /// string if every token is an exclusion.
-///
-/// Used to derive the `vec:` companion line in [`build_qmd_query`] and
-/// by the daemon when feeding the same user text into MCP's typed
-/// `vec` sub-query.
 pub fn strip_lex_syntax(s: &str) -> String {
     tokenize_query(s)
         .into_iter()
@@ -259,9 +207,6 @@ fn strip_outer_quotes(s: &str) -> &str {
     }
 }
 
-/// Whitespace tokenizer that respects `"..."` spans (with `\\` and `\"`
-/// escapes). Mirrors `query::tokenize` — kept private here so the qmd
-/// runner doesn't depend on the query parser's internals.
 fn tokenize_query(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();

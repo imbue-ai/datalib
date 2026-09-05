@@ -1,25 +1,18 @@
-// HTTP daemon — runs as its own process via `datalib-http`, not
-// inside the pipeline binaries. No MultiProgress / no indicatif bars in
-// this process; request-error logging legitimately writes to stderr.
-// Exempt from the workspace-wide ban defined in clippy.toml. (If this
-// ever gets embedded into a process that *does* have bars, switch
-// these to `tracing::warn!` / `error!`.)
+// Runs as its own process via `datalib-http`, so there are no indicatif bars
+// here and request-error logging legitimately writes to stderr — hence the
+// exemption from the workspace-wide ban in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
 //! axum router for the Datalib HTTP API.
 //!
-//! Endpoints:
-//!   GET /api/health
-//!   GET /api/search?q=…&limit=…  → grid_rows query against the managed Dolt repo
-//!   GET /api/columns             → grid column metadata
-//!   GET /api/chat/{uuid}         → conversation header (from grid_rows) + raw QMD body
-//!   GET /api/latchkey/{service}  → stored accounts for a latchkey service
-//!   POST /api/probe              → what an account can reach (see connect.rs)
+//! Dolt is the source of truth. **QMDs are write-only output**: `/api/chat`
+//! serves the file body verbatim, sans frontmatter, and the UI renders it. We
+//! never parse a QMD back into structured data — structured fields come from
+//! `grid_rows`.
 //!
-//! Dolt is the source of truth. **QMDs are write-only output** — the
-//! `/api/chat` endpoint serves the file body verbatim (sans frontmatter)
-//! and lets the UI render markdown once. We never parse a QMD back into
-//! structured data; structured fields come from `grid_rows`.
+//! TOML is the only config format this side handles; a data root predating
+//! the switch is converted out of band by `datalib-migrate-config`, and all
+//! this does is notice the stray `config.yaml` and say so.
 
 use app_schema::feedback::FeedbackRow;
 use app_schema::sync_jobs::SyncJobRow;
@@ -68,12 +61,10 @@ pub struct AppState {
     /// `GET /api/sync/stream` subscribes and pushes them to the UI over
     /// SSE, so progress is realtime push, not poll.
     pub progress_tx: worker::ProgressTx,
-    /// Fan-out channel for everything that changes in the data root
-    /// *without* a job behind it: the config, the runner's own record,
-    /// the component store — plus a heartbeat so a client can tell an
-    /// idle stream from a dead one. Published by [`crate::watch`] and
-    /// merged into the same SSE response as `progress_tx`. See that
-    /// module for why this exists rather than a timer in the browser.
+    /// Fan-out channel for everything that changes in the data root *without*
+    /// a job behind it — the config, the runner's record, the component store
+    /// — plus a heartbeat, so a client can tell an idle stream from a dead
+    /// one. Merged into the same SSE response as `progress_tx`.
     pub root_tx: watch::RootTx,
     /// The configured applets: their components, their gallery
     /// entries, the module store behind `/modules/`, and the
@@ -84,21 +75,16 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
-    /// Bytes on disk, over time. A background task walks the root on a
-    /// tick and folds what it finds in here; `GET
-    /// /api/pipeline/storage` reads it rather than walking the disk
-    /// itself, so the answer's cost no longer scales with the number
-    /// of open tabs. See [`crate::usage`].
+    /// Bytes on disk, over time. A background task folds what it finds in
+    /// here so `GET /api/pipeline/storage` reads a snapshot rather than
+    /// walking the disk per open tab. See [`crate::usage`].
     pub usage: Arc<usage::UsageMonitor>,
 }
 
 impl AppState {
-    /// Self-contained config path for this data root:
-    /// `<root>/config.toml`. The config + setup endpoints read and
-    /// write it, and the sync worker drives `datalib-dag <this>`.
-    /// Keeping the config inside the root is what lets the app
-    /// bootstrap from an empty directory with no external `~/.config`
-    /// file.
+    /// `<root>/config.toml`. Keeping the config inside the root is what lets
+    /// the app bootstrap from an empty directory with no external
+    /// `~/.config` file.
     pub fn config_path(&self) -> PathBuf {
         datalib_dag::config::root_config_path(&self.root)
     }
@@ -116,11 +102,9 @@ pub struct Health {
     pub token_file: String,
 }
 
-/// Client-supplied portion of a feedback submission. The server stamps
-/// the rest (UUID, timestamp, app_version, git_hash) at insert time, so
-/// the client only has to describe what was being clicked on and what the
-/// user typed. `context` is whatever shape `feedback/context.ts` produced;
-/// we round-trip it as JSON straight into the `context_json` column.
+/// Client-supplied portion of a feedback submission. The server stamps the
+/// rest (UUID, timestamp, app_version, git_hash) at insert time. `context` is
+/// whatever shape `feedback/context.ts` produced, round-tripped as JSON.
 #[derive(Debug, Deserialize)]
 pub struct FeedbackRequest {
     /// Optional thumb up/down — `null` when the user submitted just a
@@ -144,19 +128,6 @@ pub struct FeedbackResponse {
     pub git_hash: &'static str,
 }
 
-/// `~/.datalib/bin` — the blessed drop spot for user- (and agent-)
-/// provided programs a config names by bare command.
-///
-/// Prepended to the child PATH by both things that run config
-/// commands: the sync worker, for step subprocesses
-/// ([`worker::run_job`]), and the applet gateway, for applet servers
-/// ([`applets`]). Those are the only two, and they must agree —
-/// `/agent/config.md` advertises this as *the* predictable install
-/// location without qualifying which kind of entry it works for, and a
-/// binary that resolves for a step but not for an applet is exactly the
-/// surprise that promise rules out.
-///
-/// `None` when no home directory is discoverable.
 pub fn user_bin_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     let home = std::env::var_os("USERPROFILE")?;
@@ -170,11 +141,9 @@ pub fn router(state: AppState) -> Router {
     // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
     // QMD-embedded `![](...)` URLs resolve.
     let media_dir = datalib_core::layout::media_dir(&state.root);
-    // Served attachments are re-materializable from the raw blob CAS,
-    // so mark the tree as derived cache for `--exclude-caches` backups.
-    // Nothing writes media yet (see layout.rs), so this usually no-ops;
-    // it's here (rather than in a pipeline step) because no step owns
-    // the dir and the server is its one consumer.
+    // Served attachments are re-materializable from the raw blob CAS, so mark
+    // the tree as derived cache for `--exclude-caches` backups. Here rather
+    // than in a pipeline step because no step owns the dir.
     datalib_core::layout::mark_derived_cache(&media_dir);
     // Cloned out before `state` is moved into `with_state` below.
     let api_token = state.api_token.clone();
@@ -232,16 +201,10 @@ pub fn router(state: AppState) -> Router {
         // into `index.html`.
         .fallback(embed::serve_ui)
         .with_state(state)
-        // Outermost, so it covers every route above plus the SPA
-        // fallback and the `/api/media` static mount. `CorsLayer::
-        // permissive()` used to sit here; it is gone deliberately.
-        // With the token gate in front, a cross-origin page cannot get
-        // a usable response anyway, and `Access-Control-Allow-Origin:
-        // *` on a 401 is just a misleading advertisement. Nothing
-        // in-tree needs cross-origin access: the browser UI is
-        // same-origin in every packaging, and `pnpm dev` reaches the
-        // API through Vite's *server-side* proxy, which no CORS policy
-        // applies to.
+        // Outermost, so it covers every route plus the SPA fallback and the
+        // static mount. `CorsLayer::permissive()` is gone deliberately: with
+        // the token gate in front a cross-origin page cannot get a usable
+        // response anyway, and nothing in-tree needs cross-origin access.
         .layer(axum::middleware::from_fn_with_state(
             api_token,
             auth::require_token,
@@ -314,33 +277,22 @@ async fn submit_feedback(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Applets
-// ---------------------------------------------------------------------------
 
 /// The frontend as the UI consumes it: every namespace the store found
 /// — `user` plus one per applet — and the applets whose write failed.
 /// A broken applet is named rather than merely absent, since an empty
 /// gallery looks the same as a config that never saved.
 async fn get_frontend(State(s): State<AppState>) -> Json<applets::FrontendView> {
-    // Pick up a config edit before answering. Cheap when nothing moved
-    // (one `stat`); blocking when it did, since a rebuild execs one
-    // child per applet — hence the blocking thread. The UI calls this
-    // on `config_changed`, so a saved config becomes a live gallery
-    // update. That it *reads* the store here is why `crate::watch`
-    // must not treat a read as a change: the two would drive each
-    // other. See the `Access` filter there.
+    // Pick up a config edit before answering. Cheap when nothing moved (one
+    // `stat`), blocking when it did, since a rebuild execs one child per
+    // applet. That it *reads* the store here is why `crate::watch` must not
+    // treat a read as a change — the two would drive each other.
     let registry = s.applets.clone();
     let _ = tokio::task::spawn_blocking(move || registry.refresh_if_config_changed()).await;
     Json(s.applets.frontend_view())
 }
 
-/// Serve one component by content hash.
-///
-/// Immutable forever: the URL names the bytes, so changed code is a
-/// different URL. That is also what makes the browser's
-/// one-module-per-URL rule do the deduplication for us — across
-/// namespaces, not just across applet instances.
 async fn get_module(
     State(s): State<AppState>,
     Path(hash): Path<String>,
@@ -438,25 +390,6 @@ fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
 }
 
 // --- Authoring the `user` namespace ----------------------------------------
-//
-// `/api/lib` is how a person or an agent puts a component into the
-// store. It is *only* a writer: everything read back — by the gallery,
-// by a card resolving `comp.user.foo` — comes from
-// `system/frontend/user/` through [`frontend::FrontendStore`], the same
-// scan that reads an applet's namespace. There is one component
-// mechanism, and this endpoint is a convenience for filling one corner
-// of it without a text editor.
-//
-// A PUT writes two files, which is the whole storage format:
-//
-//   system/frontend/user/<sha256>.js   the source, addressed by content
-//   system/frontend/user/<name>.json   { title, description,
-//                                        component_hash, component_args }
-//
-// Re-PUTting a name repoints its `.json` at new bytes. The old `.js`
-// is left in place — it is content-addressed, so it is still a correct
-// answer for anything mid-render, and a later refresh does not sweep
-// `user`.
 
 #[derive(Debug, Deserialize)]
 pub struct PutLibRequest {
@@ -485,8 +418,6 @@ pub struct LibEntry {
     pub meta: frontend::Meta,
 }
 
-/// Lowercase hex sha256. The single definition in this crate: every
-/// component in the frontend store is named by its own bytes.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -538,7 +469,6 @@ async fn get_lib(
     ))
 }
 
-/// `PUT /api/lib/{name}` — write a component into the `user` namespace.
 async fn put_lib(
     State(s): State<AppState>,
     Path(name): Path<String>,
@@ -604,7 +534,6 @@ async fn put_lib(
     Ok(Json(LibEntry { name, hash, meta }))
 }
 
-/// Read a `user` metadata document, if it parses.
 fn read_user_meta(dir: &std::path::Path, name: &str) -> Option<frontend::Meta> {
     let text = std::fs::read_to_string(dir.join(format!("{name}.json"))).ok()?;
     serde_json::from_str(&text).ok()
@@ -619,9 +548,6 @@ pub struct RenameLibRequest {
 /// leaving `{"renamed_to": …}` behind so cards still saying
 /// `comp.user.{name}(…)` can follow. This is how an agent gives a
 /// placeholder its formal name once the component works.
-///
-/// 404 when `name` holds no component, 409 when `new_name` is taken,
-/// 400 when either name is not an identifier.
 async fn rename_lib(
     State(s): State<AppState>,
     Path(name): Path<String>,
@@ -738,41 +664,15 @@ pub struct JobsAllParams {
 }
 
 // --- Config / setup --------------------------------------------------------
-//
-// These three endpoints make the data root self-contained: the app reads
-// and writes its own `<root>/config.toml` instead of relying on a
-// separate external file. An empty data root opens with no config; the
-// UI's Setup tab scaffolds one, lets the user edit it, and saves it
-// back here, after which `/api/sync/*` lights up.
-//
-// TOML is the only format any of this handles. A data root predating
-// the switch is converted once, out of band, by the separate
-// `datalib-migrate-config` program; all this side does is notice the
-// stray `config.yaml` and say so (`legacy_yaml_path`).
 
-/// Check the DAG config at `path` exactly as the runner does
-/// (`config::load_graded` → the same rules, the same graph), keeping
-/// whatever loads.
-///
-/// Only an unreadable file is an `Err`. Everything the config itself
-/// gets wrong is a diagnostic on the returned [`ConfigCheck`], because
-/// that is the whole point of #209: a broken step costs that step, not
-/// the app.
 fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config::ConfigCheck> {
     let (checked, _root) = datalib_dag::config::load_graded(path)?;
     Ok(checked)
 }
 
 /// The source step ids of a checked config: the steps with no declared
-/// `inputs`, which is exactly what the runner's `--sync` can target
-/// (their real input is outside the DAG — a remote service, a
-/// user-staged tree). Nothing about the step's command matters here;
-/// the derivation is fully generic.
-///
-/// Taken from the built graph rather than from `cfg.steps` so the list
-/// is what `--sync` will actually accept — a step the loader dropped
-/// is not syncable, and offering it would be offering a button that
-/// cannot work.
+/// `inputs`, which is exactly what `--sync` can target. Their real input is
+/// outside the DAG — a remote service, a user-staged tree.
 fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
     checked
         .graph
@@ -783,30 +683,8 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 }
 
 /// The applet id that serves the grid, search and the document view.
-///
-/// Named here because its absence is not an ordinary missing applet:
-/// every view in the app depends on it, so a config that loads without
-/// it leaves a running server with nothing to show. `GET /api/config`
-/// reports that as `app_ready: false` and the UI blocks on it, rather
-/// than letting each view discover its own 502.
 const UNIFIED_INDEX_APPLET: &str = "unified_index";
 
-/// How many of those fringe steps are *data sources* — which is a
-/// different question from "what can `--sync` target", and the one the
-/// onboarding flow asks.
-///
-/// The shared index steps are fringe on a freshly scaffolded root, and
-/// legitimately so: they declare no inputs because no source exists to
-/// name yet, and syncing one is a valid (if empty) thing to do. But
-/// they are pipeline plumbing that every config carries, not data
-/// anybody configured — counting them would tell a user with an empty
-/// library that they have two sources, which is exactly the confusion
-/// `POST /api/config/init` exists to end.
-///
-/// Identified by the tree they write, since a step's id *is* that tree.
-/// This is a display rule, deliberately not a validity rule: nothing
-/// stops you writing a step under `unified_index/`, and the loader has
-/// no opinion about it.
 fn configured_source_count(fringe: &[String]) -> usize {
     let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
     fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
@@ -834,39 +712,28 @@ pub struct ConfigResponse {
     /// renders — inline in the editor by `span`, and per-row in the
     /// pipeline table by the entry's `id`.
     pub diagnostics: Vec<datalib_dag::Diagnostic>,
-    /// Whether the app can serve its own views at all.
-    ///
-    /// False in two cases, which the UI shows one screen for because
-    /// they have one consequence: the file is not a config, or it
-    /// declares no usable `unified_index` applet. That applet serves
-    /// the grid, search and the document view, so without it every
-    /// view is a 502 — the mystery this whole graded loader exists to
-    /// end. A root with no config at all is `exists: false` and the
-    /// first-run screen's business, not this flag's.
+    /// Whether the app can serve its own views at all. False in two cases,
+    /// which the UI shows one screen for because they have one consequence:
+    /// the file is not a config, or it declares no usable `unified_index`
+    /// applet. That applet serves the grid, search and the document view, so
+    /// without it every view is a 502.
     pub app_ready: bool,
     /// Number of data sources the user has configured (0 when the
     /// config is missing or invalid). See [`configured_source_count`]
     /// for why this is not simply the fringe's length.
     pub source_count: usize,
-    /// How the user should invoke the latchkey CLI on this install:
-    /// the app-bundled launcher's absolute path (shell-quoted if
-    /// needed) when running from the packaged app, else
-    /// `npx -y latchkey@<pin>`. The Setup UI splices this into its
-    /// copy-pasteable credential-setup snippets.
+    /// How the user should invoke the latchkey CLI on this install: the
+    /// bundled launcher's absolute path when running from the packaged app,
+    /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
+    /// copy-pasteable snippets.
     pub latchkey_cli: String,
-    /// Absolute path of a pre-TOML `<root>/config.yaml`, when one is
-    /// sitting there and `config.toml` is not. Purely a signpost: the
-    /// UI tells the user to convert it rather than leaving them
-    /// staring at an apparently-empty data root that visibly has a
-    /// config in it. Nothing here reads or parses the file — this is
-    /// an fs::exists check, and the legacy schemas live in the
-    /// migration tool alone.
+    /// Absolute path of a pre-TOML `<root>/config.yaml`, when one is there and
+    /// `config.toml` is not. Purely a signpost, and an `fs::exists` check —
+    /// the legacy schemas live in the migration tool alone.
     pub legacy_yaml_path: Option<String>,
-    /// The exact command that converts it, set whenever
-    /// `legacy_yaml_path` is. Resolved rather than hard-coded because
-    /// the packaged desktop app installs `datalib-migrate-config`
-    /// inside the bundle, where it is not on the user's `$PATH` — a
-    /// bare command name would be a dead end there.
+    /// The exact command that converts it, set whenever `legacy_yaml_path`
+    /// is. Resolved rather than hard-coded: the packaged app installs
+    /// `datalib-migrate-config` inside the bundle, off the user's `$PATH`.
     pub legacy_migrate_cmd: Option<String>,
 }
 
@@ -904,7 +771,6 @@ fn migrate_cmd(root: &std::path::Path) -> String {
     format!("{prog} {}", shell_quote(&root.to_string_lossy()))
 }
 
-/// `GET /api/config` — current `<root>/config.toml` plus a parse check.
 async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
     let legacy = legacy_yaml_hint(&s.root);
@@ -963,19 +829,10 @@ pub struct ConfigCheckResponse {
     pub source_count: usize,
 }
 
-/// `POST /api/config/check` — say what is wrong with some config text,
-/// writing nothing.
-///
-/// The editor's linter: it can ask on every pause without saving, and
-/// get back every problem with a span to underline. Without it the only
-/// way to find out was to save, which is a poor thing to have to do to
-/// a config you know is half-written.
 async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
     Json(config_verdict(&req.text))
 }
 
-/// The verdict on some config text: what the loader makes of it, in the
-/// shape both config-writing endpoints answer in.
 fn config_verdict(text: &str) -> ConfigCheckResponse {
     let checked = datalib_dag::config::check_text(text);
     ConfigCheckResponse {
@@ -986,26 +843,18 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
     }
 }
 
-/// `PUT /api/config` — validate then atomically write
-/// `<root>/config.toml`.
+/// `PUT /api/config` — validate then atomically write.
 ///
 /// **This door is stricter than the loader, deliberately.** The loader
-/// tolerates a config with a broken entry because it has to: the file
-/// is already on disk, a hand-edit put it there, and refusing to load
-/// it would cost the user their whole app (#209). A PUT is a different
-/// situation — the caller is holding the text and can fix it now — so
-/// the old guarantee is kept: only a config with no problems at all is
-/// ever written. `docs/agent_user.md` and the agent config guide both
-/// promise that, and an agent relies on it to know its edit landed
-/// clean.
+/// tolerates a config with a broken entry because it has to: the file is
+/// already on disk and refusing to load it would cost the user their whole
+/// app. A PUT is a different situation — the caller is holding the text and
+/// can fix it now — so nothing with a diagnostic is written.
 ///
-/// Every diagnostic comes back, not just the first, so a caller fixing
-/// a config needs one round-trip rather than one per mistake.
-///
-/// Writes via a sibling `.tmp` + `rename`, so a rejected — or
-/// half-written — config never clobbers the existing one. Validation
-/// failures return `200 {ok:false, …}` (the UI shows them inline); only
-/// genuine I/O failures are 5xx.
+/// Every diagnostic comes back, not just the first, so a caller fixing a
+/// config needs one round-trip rather than one per mistake. Writes via a
+/// sibling `.tmp` + `rename`, so a rejected or half-written config never
+/// clobbers the existing one; only genuine I/O failures are 5xx.
 async fn put_config(
     State(s): State<AppState>,
     Json(req): Json<PutConfigRequest>,
@@ -1056,21 +905,14 @@ pub struct InitConfigResponse {
     pub error: Option<String>,
 }
 
-/// `POST /api/config/init` — initialize an empty data library: write
-/// the starter `config.toml` into a root that has none.
+/// `POST /api/config/init` — initialize an empty data library: write the
+/// starter `config.toml` into a root that has none.
 ///
-/// This is the onboarding action behind the UI's first-run screen. It
-/// exists as its own endpoint rather than the UI PUT-ing the scaffold
-/// back because "only if it isn't there yet" has to be decided where
-/// the file is: `create_new` makes the check and the write one
-/// operation, so a config that appeared in between — a second window,
-/// a migration, an agent editing the root — is never clobbered.
-///
-/// A root holding a pre-TOML `config.yaml` is refused. Writing a
-/// `config.toml` next to it would retire the migration hint
-/// ([`legacy_yaml_hint`] goes quiet as soon as a TOML config exists)
-/// and leave the user with an empty library plus a file full of
-/// sources nothing reads.
+/// Its own endpoint rather than the UI PUT-ing a scaffold back, because "only
+/// if it isn't there yet" has to be decided where the file is: `create_new`
+/// makes the check and the write one operation. A root holding a pre-TOML
+/// `config.yaml` is refused — writing a `config.toml` beside it would retire
+/// the migration hint and leave the user with an empty library.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
     if let Some((yaml, cmd)) = legacy_yaml_hint(&s.root) {
@@ -1127,9 +969,6 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     }
 }
 
-/// `GET /api/config/scaffold` — a minimal starter `config.toml` for this
-/// data root. The UI drops it into the editor when the root has no config
-/// yet; the user then fills in sources via the Setup tab's buttons.
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
     let legacy = legacy_yaml_hint(&s.root);
@@ -1166,10 +1005,6 @@ pub struct DagStepInfo {
     pub deps: Vec<String>,
     /// What this step did the last time a run reached it, from the
     /// runner's own state. `None` when it has never been reached.
-    ///
-    /// This is per *step*, which is what makes it honest: the job queue
-    /// records whole runs, so a run naming several steps could only
-    /// ever attribute one timestamp to all of them.
     pub last_run: Option<DagStepRun>,
     /// What this step is doing in the run currently in flight, when
     /// there is one: `running`, `succeeded`, `blocked`, … `None` means
@@ -1182,10 +1017,6 @@ pub struct DagStepInfo {
 }
 
 /// A step's live position, from `system/progress.sqlite`.
-///
-/// Separate from `current_state` on purpose: state is the scheduler's,
-/// recorded durably in `system/dag_state.json`, while this is the
-/// step's own running commentary and survives only as long as the run.
 #[derive(Debug, Serialize)]
 pub struct DagStepProgress {
     /// Work units completed.
@@ -1216,12 +1047,6 @@ pub struct DagRunInfo {
     /// `None` while the run is going.
     pub finished_at: Option<String>,
     /// True when a runner actually holds this root right now.
-    ///
-    /// `finished_at == None` alone is not enough: a runner killed
-    /// mid-run leaves the record open forever. The lock is the truth —
-    /// the kernel drops it when the holder dies — so a record with no
-    /// `finished_at` and no live holder is a crashed run, and the UI
-    /// can say so instead of showing a spinner until someone reboots.
     pub live: bool,
 }
 
@@ -1249,14 +1074,6 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     // Racy by nature — a run could start a microsecond later — but the
     // answer is only ever used to say "that open record belongs to a
     // run that died", where being one poll stale costs nothing.
-    //
-    // `is_held` rather than `acquire(...).is_err()`: acquiring creates
-    // the lock file when it is absent and rewrites its contents on
-    // success, so a root that had never synced grew a `system/runner-
-    // lock` from being *looked at*, and a live holder's own
-    // description — the only thing a refused runner has to name it
-    // with — was overwritten by whoever polled last. This endpoint is
-    // polled every few seconds by every open tab.
     let live = datalib_dag::lock::FileLock::runner_is_held(&s.root);
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
@@ -1433,34 +1250,10 @@ struct StorageParams {
     refresh: Option<String>,
 }
 
-/// Is a query flag set? A bare `?refresh`, `=1`, `=true` and `=yes` all
-/// mean yes; anything else, including absence, means no.
 fn flag_is_set(v: Option<&str>) -> bool {
     matches!(v, Some("") | Some("1") | Some("true") | Some("yes"))
 }
 
-/// Bytes on disk — the whole data root, and each declared output tree
-/// inside it — with the recent history of each behind the number.
-///
-/// The walk itself is not here: [`crate::usage`] owns it, on a tick
-/// while a run is in flight, so the numbers exist whether or not a tab
-/// is open and one reader costs no more than none. This handler only
-/// names the trees (from the config, in config order) and reads the
-/// snapshot.
-///
-/// Keyed on the **declared output path**, not on a source, because the
-/// grid groups steps into rows and that grouping rule should live in
-/// exactly one place. Duplicating "what counts as a source" here would
-/// give it a second home to drift from.
-///
-/// `?refresh=1` walks before answering, for the two moments the stored
-/// answer is wrong on screen rather than merely old: the first paint of
-/// the page, and a sync going terminal. It matters more than it looks
-/// like it should — between runs nothing walks at all, so on an idle
-/// root the snapshot is as old as the last run. Refreshes that arrive
-/// together share one walk; one that arrives after every finished walk
-/// gets its own, because that is the only way it can see a change made
-/// since. The routine poll doesn't pass the flag and doesn't walk.
 async fn pipeline_storage(
     State(s): State<AppState>,
     Query(p): Query<StorageParams>,
@@ -1536,23 +1329,6 @@ async fn sync_enqueue(
     Ok(Json(row))
 }
 
-/// SSE stream of everything live: sync-job progress, and everything
-/// that changes in the data root without a job behind it.
-///
-/// **Two event types on one connection, and the split is load-bearing.**
-/// Job updates stay *unnamed* frames carrying a JSON
-/// [`worker::ProgressEvent`], which is what `EventSource.onmessage`
-/// receives — so every existing consumer of this endpoint keeps working
-/// untouched. Root updates are named `root` frames carrying a JSON
-/// [`watch::RootEvent`], delivered only to
-/// `addEventListener("root", …)`. Adding the second kind therefore
-/// cannot disturb the first: a client that has never heard of `root`
-/// frames does not see them at all.
-///
-/// The two channels are merged rather than served as two endpoints
-/// because a client wants one connection, one reconnect policy, and one
-/// answer to "have I heard from the server lately" — which is what the
-/// heartbeat riding the `root` channel provides.
 async fn sync_stream(
     State(s): State<AppState>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
@@ -1664,7 +1440,6 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
 mod tests {
     use super::*;
 
-    /// The fringe of a checked config text, for the tests below.
     fn fringe_of(text: &str) -> Vec<String> {
         let checked = datalib_dag::config::check_text(text);
         assert!(

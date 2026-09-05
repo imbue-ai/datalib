@@ -1,89 +1,4 @@
 //! Raw-store schema for the Signal provider.
-//!
-//! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! and [`docs/dev/archived/data_architecture_plan.md`](/docs/dev/archived/data_architecture_plan.md)
-//! §P0.1 for the conventions every `schema_raw.rs` follows.
-//!
-//! ## Five object tables
-//!
-//! All keyed by Signal's natural ids so re-fetches across snapshots
-//! dedupe cleanly:
-//!
-//!   * `account`               — one row, `id = 'self'`. The
-//!     `Frame::Account` JSON payload.
-//!   * `recipients`            — PK = the in-backup `recipient_id`
-//!     (`uint64`). Promoted columns: `identifier` (e164 / aci hex),
-//!     `display_name`.
-//!   * `chats`                 — PK = `chat_id`. `recipient_id`
-//!     promoted for joins.
-//!   * `chat_items`            — PK =
-//!     `"{chat_id}#{author_id}#{date_sent}"`. Promoted columns let
-//!     SQL queries filter/sort without cracking the JSON payload
-//!     open.
-//!   * `chat_item_attachments` — N:M edge between a `chat_items`
-//!     attachment slot and a `cas_objects` blob. PK =
-//!     `"{chat_item_id}#{slot}"`; columns: `chat_item_id` (FK + index),
-//!     `ref_id` (Signal's `media_name`), `blake3` (NULL until CAS
-//!     write succeeds). Replaces this provider's use of the shared
-//!     `blob_refs` table — see [issue
-//!     #14](https://github.com/imbue-ai/datalib/issues/14)
-//!     for the design.
-//!
-//! ## Row structs and the bulk-upsert path
-//!
-//! Each wire-payload entity table is declared as a Rust row struct
-//! with `#[derive(WirePayloadRow)]` (`AccountRow`, `RecipientRow`,
-//! `ChatRow`, `ChatItemRow`); the derive generates both the table's
-//! DDL and its [`datalib_etl::bulk::BulkUpsertable`] impl from the
-//! struct's field list, so the schema and the bind code can't drift.
-//! The N:M edge table (`ChatItemAttachmentRow`) is hand-rolled since
-//! it doesn't fit the wire-payload shape. All four go through the
-//! generic [`datalib_etl::bulk::bulk_upsert_in_tx`] helper for
-//! writes — no table-specific bulk SQL anywhere in this provider's
-//! code.
-//!
-//! ## Attachment bytes
-//!
-//! Attachment bytes live in the sibling per-source CAS file managed
-//! by [`datalib_etl::blob_cas`]. The download path bulk-writes via
-//! [`datalib_etl::blob_cas::BlobCas::put_many`] paired with a
-//! bulk UPSERT into `chat_item_attachments`. Render joins
-//! `chat_item_attachments` → `cas_objects` on `blake3` via
-//! [`BlobBundle::load`](datalib_etl::blob_cas::BlobBundle::load),
-//! one bundle per rendered chat bucket.
-//!
-//! ## Signal-specific notes:
-//!
-//! - **Payloads are JSONB**, same convention as every other
-//!   provider. Signal's backup format is a stream of prost-encoded
-//!   `Frame` protobuf messages; we decode each frame in download via
-//!   the serde derive macros injected on the prost types (see
-//!   `tools/prost_toolchain/BUILD.bazel`) and store the resulting
-//!   JSON. The decode is lossless: every field upstream sent is
-//!   present in the JSON. See
-//!   `docs/dev/data_architecture_ingestion.md` §"Wire-fidelity of the
-//!   raw store" for the principle. The `jsonb(?)` / `json(payload)`
-//!   round-trip used by JSON-shaped providers (claude, chatgpt,
-//!   notion, …) applies here too.
-//!
-//! - **No live upstream UUIDs.** Signal's in-backup `recipient_id`
-//!   and `chat_id` are `uint64` ids local to that snapshot. We use
-//!   them as string PKs since they're stable across re-imports of
-//!   the same backup. `chat_items` has no per-item id of its own —
-//!   we synthesize a composite PK; see
-//!   [`chat_item_id_recipe`].
-//!
-//! - **`when_ts` is not declared here.** `chat_items.date_sent` is
-//!   the closest event-shaped value and is what the render side
-//!   uses as `GridRow.when_ts`. `account`, `recipients`, `chats`
-//!   are not event-shaped.
-//!
-//! - **Backup-file ingestion, not API.** No cursor, no listing pass,
-//!   no UPSERT-as-cheap-noop story. The cursor we use is
-//!   [`INGESTED_BACKUPS_DDL`]: a Blake3 hash of the snapshot's
-//!   three on-disk files. Re-ingesting the same snapshot is a
-//!   single-row PK-lookup skip. See plan §P1.12.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
@@ -92,10 +7,6 @@ use uuid::Uuid;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
-///
-/// Used by `download::db::RawDb::reset` to wipe per-row state without
-/// touching blobs or bookkeeping. Also drives [`full_ddl`] when it
-/// asks the shared layer for paired `<table>_bookkeeping` DDLs.
 pub const DATA_TABLES: &[&str] = &[
     "account",
     "recipients",
@@ -105,18 +16,6 @@ pub const DATA_TABLES: &[&str] = &[
 ];
 
 /// `account` — exactly one row holding the Signal account proto frame.
-///
-/// Columns:
-/// - `id` — always the string literal `'self'`. The PK is a literal
-///   rather than a Signal-side id because the backup format only
-///   ever carries one account entity per file.
-/// - `payload` — JSONB of the `Frame::Account` message.
-///
-/// `id_and_payload.id` is always the literal `"self"`. `id_and_payload.payload` is the
-/// JSON-serialized `Frame::Account`. The per-row content fingerprint
-/// (`payload_blake3`) that used to ride alongside is gone — render
-/// drives incremental skip via `dolt_diff_<table>` now; see
-/// `super::super::render::parse`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "account")]
 pub struct AccountRow {
@@ -124,16 +23,6 @@ pub struct AccountRow {
 }
 
 /// `recipients` — one row per Signal recipient (peer / group).
-///
-/// Columns:
-/// - `id` — the in-backup `recipient_id` (`uint64` upstream),
-///   stringified. Primary key. Stable across re-imports of the same
-///   backup.
-/// - `identifier` — promoted from the payload; either the e164
-///   phone number or the ACI hex string. Lets the render /
-///   indexer joins avoid cracking the protobuf payload open.
-/// - `display_name` — promoted from the payload for the same reason.
-/// - `payload` — JSONB of the `Frame::Recipient` message.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "recipients")]
 pub struct RecipientRow {
@@ -143,13 +32,6 @@ pub struct RecipientRow {
 }
 
 /// `chats` — one row per Signal chat (DM or group thread).
-///
-/// Columns:
-/// - `id` — the in-backup `chat_id` (`uint64` upstream),
-///   stringified. Primary key.
-/// - `recipient_id` — promoted FK into [`RecipientRow`]; joins
-///   `chats` to its peer / group without cracking the payload.
-/// - `payload` — JSONB of the `Frame::Chat` message.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "chats")]
 pub struct ChatRow {
@@ -159,19 +41,6 @@ pub struct ChatRow {
 
 /// `chat_items` — one row per Signal message / call / system event
 /// inside a chat.
-///
-/// Signal's wire format does **not** expose a stable per-item id, so
-/// the PK is synthesized; see [`chat_item_id_recipe`].
-///
-/// Columns:
-/// - `id` — synthesized composite PK
-///   (`"{chat_id}#{author_id}#{date_sent}"`). Primary key.
-/// - `chat_id` — promoted FK into [`ChatRow`].
-/// - `author_id` — promoted FK into [`RecipientRow`].
-/// - `date_sent` — upstream `chat_item.date_sent`, integer Unix-ms.
-///   The closest thing this provider has to an event-shaped
-///   timestamp; sourced into `GridRow.when_ts` by render.
-/// - `payload` — JSONB of the `Frame::ChatItem` message.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "chat_items")]
 pub struct ChatItemRow {
@@ -192,22 +61,9 @@ pub const CHATS_BY_RECIPIENT_INDEX_DDL: &str =
 pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS chat_items_by_chat ON chat_items(chat_id, date_sent)";
 
-/// `chat_item_attachments` — N:M edge between one chat_item's
-/// attachment slot and a `cas_objects` blob. Universal CAS-edge
-/// shape (see [`datalib_etl::blob_cas::CasEdgeRow`]):
-/// `id` (synth PK) + `chat_item_id` (owning FK, indexed) +
-/// `ref_id` (= Signal `media_name`, indexed for the skip-check)
-/// + `blake3` (CAS hash, NULL until decrypt+store succeed).
-///
-/// Replaces this provider's use of the shared `blob_refs` table;
-/// see [issue #14](https://github.com/imbue-ai/datalib/issues/14).
-///
-/// **Signal-specific:** the PK recipe is `"{chat_item_id}#{slot}"`,
-/// not the trait's default `"{chat_item_id}#{ref_id}"` — one
-/// chat_item can attach the same `media_name` to multiple slots,
-/// so the PK has to include the slot index. Signal calls
-/// [`chat_item_attachment_id_recipe`] directly; the trait-derived
-/// `pk_recipe` is not used for this table.
+/// `chat_item_attachments` — the universal CAS-edge shape between one chat
+/// item's attachment slot and a `cas_objects` blob. `ref_id` is Signal's
+/// `media_name`, indexed for the skip-check.
 #[derive(Debug, Clone, CasEdgeRow)]
 #[cas_edge_row(table = "chat_item_attachments")]
 pub struct ChatItemAttachmentRow {
@@ -224,55 +80,23 @@ pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String
     format!("{chat_item_id}#{slot}")
 }
 
-/// `ingested_backups` — Signal's resume cursor. One row per Signal
-/// snapshot we have already processed.
+/// `ingested_backups` — Signal's resume cursor, one row per snapshot already
+/// processed.
 ///
-/// **Why this exists.** Signal downloads run against a backup-file
-/// snapshot directory (`metadata` + `main` + `files`). Walking and
-/// upserting every frame in `main` is idempotent (UPSERT dedup), but
-/// still does the work of decrypting and decoding tens of MB of
-/// protobuf for nothing. This cursor lets fetch short-circuit at
-/// "have we ever ingested this snapshot?" before any of that work.
+/// Walking every frame in `main` is idempotent, but still decrypts and decodes
+/// tens of MB of protobuf for nothing. This lets fetch short-circuit before
+/// any of that work.
 ///
-/// **PK choice — `fingerprint`.** The blake3 of `metadata`, `main` and
-/// `files`, joined in that order, read through the host-wide
-/// fingerprint cache — so an unchanged snapshot costs three `stat()`s
-/// and no file reads.
+/// PK choice: `fingerprint`, the blake3 of `metadata`, `main` and `files`
+/// joined in that order and read through the host-wide cache, so an unchanged
+/// snapshot costs three `stat()`s and no reads. `blake3` is the digest of the
+/// three concatenated, computed only once the skip misses and kept purely so
+/// someone inspecting the table can verify which bytes these were — never read
+/// on the hot path. `snapshot_dir` and `total_byte_size` are informational.
 ///
-/// It was a stat-derived string of each file's `(mtime, size)`, which
-/// was wrong in both directions: `touch`ing a backup changed the
-/// fingerprint and forced a full re-decrypt, while a file swapped for
-/// a same-size copy at the same mtime was invisible.
-///
-/// **Forensic — `blake3`.** Hex-encoded Blake3 of
-/// `metadata || main || files` concatenated in that order. Computed
-/// only after the fingerprint skip misses (so a repeat-skip pays
-/// zero I/O). Kept as a forensic column so a user inspecting the
-/// table later can verify "yes, that was definitely those bytes."
-/// See [`SNAPSHOT_BLAKE3_RECIPE_DOC`].
-///
-/// **Lifecycle.**
-/// - `download` `stat()`s the three files, builds the fingerprint,
-///   looks it up. If present → skip immediately (no I/O on file
-///   bodies, no crypto, no walk). If absent → compute blake3,
-///   decrypt + walk, then `INSERT` a row with both fingerprint and
-///   blake3.
-/// - `--reset-and-redownload` wipes this table along with the
-///   entity tables, so an explicit reset will re-process even a
-///   previously-ingested snapshot.
-///
-/// Columns:
-/// - `fingerprint` — composite stat-derived string. Primary key.
-/// - `blake3` — hex-encoded Blake3 of the snapshot's three files.
-///   Forensic; never read on the hot path.
-/// - `snapshot_dir` — directory the snapshot was read from, recorded
-///   so a user can correlate cursor rows with on-disk locations.
-///   Informational only.
-/// - `total_byte_size` — combined byte size of `metadata + main +
-///   files`. Informational only.
-/// - `ingested_at` — ISO-8601 UTC stamp of when we recorded
-///   ingestion. NOT NULL: an `ingested_backups` row only exists once
-///   ingestion has finished successfully.
+/// A row exists only once ingestion finished successfully, and
+/// `--reset-and-redownload` wipes the table so an explicit reset re-processes
+/// even a snapshot already seen.
 pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_backups (
     fingerprint TEXT PRIMARY KEY,
     blake3 TEXT NOT NULL,
@@ -286,29 +110,17 @@ pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_back
 /// function because the actual hashing happens in `download/mod.rs`
 /// with streaming I/O — the recipe is a one-line invariant rather
 /// than a callable helper.
-///
-/// Format: `blake3.hex(metadata || main || files)`, where the three
-/// names refer to the on-disk files under a Signal snapshot
-/// directory and `||` is byte-concatenation in that fixed order.
 pub const SNAPSHOT_BLAKE3_RECIPE_DOC: &str =
     "blake3.hex(snapshot_dir/metadata || snapshot_dir/main || snapshot_dir/files)";
 
-/// A content fingerprint for one Signal snapshot: the blake3 of each
-/// of its three files, joined in `(metadata, main, files)` order.
+/// A content fingerprint for one Signal snapshot: the blake3 of each of its
+/// three files, joined in `(metadata, main, files)` order.
 ///
-/// Used as the [`INGESTED_BACKUPS_DDL`] PK, so it answers "have I
-/// already ingested exactly this snapshot?" without decrypting a byte.
+/// The digests come from this host's shared fingerprint cache, so a snapshot
+/// another scan already walked costs three stat calls.
 ///
-/// The digests come from this host's shared fingerprint cache, so a
-/// snapshot another scan already walked costs three stat calls. It
-/// used to be `(mtime, size)` pairs, which was wrong in both
-/// directions: `touch`ing a backup changed the fingerprint and forced
-/// a full re-decrypt, while a file swapped for a same-size copy at the
-/// same mtime was invisible.
-///
-/// Errors if any of the three is missing or unreadable; that is the
-/// same condition that would later fail the decrypt pass, so failing
-/// fast here is correct.
+/// Errors if any of the three is missing or unreadable — the same condition
+/// that would later fail the decrypt pass, so failing fast here is correct.
 pub async fn snapshot_fingerprint(
     cache: &datalib_etl::fingerprint_cache::FingerprintCache,
     snapshot_dir: &std::path::Path,
@@ -342,18 +154,6 @@ pub async fn snapshot_fingerprint(
 }
 
 /// Recipe for the synthesized [`ChatItemRow`] primary key.
-///
-/// Signal's backup format does not carry a per-item id. We hand-roll
-/// a composite PK from `(chat_id, author_id, date_sent)` — the only
-/// triple guaranteed unique within a single backup. Format is
-/// `"{chat_id}#{author_id}#{date_sent}"`.
-///
-/// This is Signal's analogue of the UUIDv5 recipes other providers
-/// document under their (eventual, plan §P0.4) `uuid.rs` modules.
-/// For now we keep the recipe **here** with the schema it keys into,
-/// so that "what does the PK mean?" is one rustdoc-hop from the DDL.
-/// When P0.4 lands we'll decide whether to relocate this recipe into
-/// a sibling `uuid.rs` or leave it inline.
 pub fn chat_item_id_recipe(chat_id: &str, author_id: &str, date_sent: i64) -> String {
     format!("{chat_id}#{author_id}#{date_sent}")
 }
@@ -388,9 +188,6 @@ pub fn signal_message_uuid(source: &str, chat_id: &str, author_id: &str, date_se
     .to_string()
 }
 
-/// Per-bucket document UUID. Stable for the lifetime of a
-/// `(chat, period_key)` pair regardless of how many times we
-/// re-render — the load step foreign-keys against this consistently.
 pub fn signal_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
     Uuid::new_v5(
         &SIGNAL_UUID_NS,
@@ -403,10 +200,6 @@ pub fn signal_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
 /// [`datalib_etl::doltlite_raw::open`]: every entity table DDL,
 /// each entity's CREATE-INDEX statements, and the paired
 /// `<table>_bookkeeping` DDL produced by the shared layer.
-///
-/// Schema-local glue, kept here so the "what tables exist?" answer
-/// is one function call from this file. Heavier composition (e.g. a
-/// repo-wide bookkeeping macro) is deferred to P1.1.
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         AccountRow::ddl(),

@@ -7,15 +7,6 @@
 // a CardRender: a function that takes a ShadowRoot and a CardCtx and
 // returns a Teardown. The host (MillerView) mounts each card inside
 // its own Shadow DOM and runs the render function there.
-//
-// Structural operations — opening and closing cards — are host
-// commands on the ctx, NOT bus messages. When the grid card wants a
-// document card to appear next to it, it calls
-// `ctx.host.openCards('documentView("abcd…")')` with the source of
-// the new card. The bus is reserved for ambient cross-card events:
-// today, the document view advertises the edge under the cursor on
-// `edge.hover` so whichever card shows the destination doc can
-// highlight the target span.
 
 export type Teardown = () => void;
 

@@ -7,9 +7,6 @@ import { test, expect } from "@playwright/test";
 // behind a picker: the gallery's "Document" entry opens
 // documentPickerView (a /applet/unified_index/docs listing), which in turn replaces
 // itself with `documentView("<uuid>")` on pick.
-//
-// Dev mode is off by default (fresh browser context), so these tests
-// exercise exactly the non-dev affordances.
 
 test.describe("new-card gallery (non-dev mode)", () => {
   test("+ strip → gallery → Document → picker → document card", async ({

@@ -1,13 +1,5 @@
 //! The `grid_index` step type: Load, un-fused into a first-class
 //! fan-in step — everything lands in the unified grid table.
-//!
-//! Refreshes `unified_index/grid/db.doltlite_db` from every stanza's
-//! render store via [`datalib_etl::grid_index::build_grid_index`],
-//! which asks each store what changed since the commit this index last
-//! consumed. An up-to-date index costs one `dolt_diff` per source and
-//! reads no documents at all.
-//! Closes with a `dolt_commit`; the resulting commit hash is the
-//! output's content version.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -113,21 +105,6 @@ mod tests {
 
     /// The step marks the whole `unified_index/` tree as derived cache, and
     /// leaves `system/` alone.
-    ///
-    /// This is the cheap pin on which directory `mark_derived_cache` is
-    /// called with. `layout`'s own test covers the helper — tempdir, tag
-    /// written, idempotent — but nothing there says which path this step
-    /// passes it, and that argument is a one-line edit away from silently
-    /// tagging the wrong tree. Until this existed the only assertion on it
-    /// lived in the manual live-sync golden, which needs credentials for
-    /// sixteen live sources: a refactor moved the call from
-    /// `unified_index/grid/` to `unified_index/` and the mismatch sat
-    /// undetected because that golden had not been run green since.
-    ///
-    /// Deliberately asserts the tag is at the parent rather than merely
-    /// present somewhere: one tag covering `grid/` and `qmd/` together is the
-    /// property the layout intends, and "somewhere at or below" would pass
-    /// for the per-index tagging this replaced.
     #[tokio::test]
     async fn grid_index_marks_the_index_tree_as_derived_cache() {
         let td = tempfile::tempdir().unwrap();

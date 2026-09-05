@@ -1,27 +1,4 @@
 //! Parse the email raw store, driven by **`dolt_diff_<table>`**.
-//!
-//! Incrementality is no longer maintained by per-row content
-//! fingerprints (`emails.blake3`-style aggregates over a SQL CTE) and
-//! a `prior_fingerprints` map. We ask doltlite directly which threads
-//! touched any row since the cursor's commit, load envelopes/joins
-//! only for those threads, and re-render every email in each. Source
-//! of truth for "did anything change?" is the prolly-tree diff,
-//! period.
-//!
-//! Phase 1 — union over `dolt_diff_emails`,
-//! `dolt_diff_email_mailboxes`, `dolt_diff_email_keywords`,
-//! `dolt_diff_email_attachments`, `dolt_diff_threads`. The first
-//! three project `to_email_id`/`from_email_id` and join back to the
-//! live `emails` table to find each touched email's `(account_id,
-//! thread_id)`; thread changes project `thread_id` directly.
-//!
-//! Phase 2 — existing targeted `SELECT … WHERE thread_id IN (?, …)`
-//! over `emails` + the three join tables. No change in shape from the
-//! previous bucket-fingerprint era; just a smaller `to_load` set
-//! filter coming in.
-//!
-//! Cold start (no cursor, or `dolt_diff_<table>` unavailable) loads
-//! every thread that has at least one email.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -93,13 +70,10 @@ pub struct EmailThreadBucket {
     pub blobs: BlobBundle,
 }
 
-/// Compatibility entry point for tests / ad-hoc repros that don't
-/// have a render cursor. Forces a cold start.
 pub fn parse_export(input: &Path) -> Result<ParsedEmail> {
     parse(input, None)
 }
 
-/// Two-phase parse driven by `dolt_diff_<table>`.
 pub fn parse(input: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail> {
     let db_path = db_path_for(input);
     if !db_path.is_file() {
@@ -290,13 +264,6 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
 /// claude / signal). Bucket key shape is `"<account_id>|<thread_id>"`
 /// so it fits the helper's `HashSet<String>` API; we split it back
 /// into a `(String, String)` pair locally for the load step.
-///
-/// Tables that fan out to "render everything" — `accounts` and
-/// `mailboxes` — are intentionally NOT in `global_fanout_tables`
-/// because their changes do not affect rendered thread bytes:
-/// account renames just relabel the per-thread frontmatter on the
-/// next cold start, and mailbox renames already propagate via
-/// `email_mailboxes` diffs.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
@@ -382,7 +349,6 @@ async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// Phase 2: pull envelopes + joins for the to-render thread set.
 async fn load_buckets(
     pool: &SqlitePool,
     to_load: &HashSet<(String, String)>,

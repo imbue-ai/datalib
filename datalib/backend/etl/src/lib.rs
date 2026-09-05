@@ -1,21 +1,6 @@
 //! Datalib ETL framework crate. Per-provider download +
 //! render code lives in sibling crates named `datalib-etl-<provider>`
 //! (e.g. [`datalib_etl_slack`]). The framework provides:
-//!
-//! - [`grid_index`] — the provider-agnostic grid-index (Load) step; ships as the
-//!   `grid-rows-load` binary. The cross-provider render→grid-index
-//!   wire contract (sidecar shape, `emit_sidecar` helper) now lives
-//!   in the standalone `datalib-index-lib` crate; grid_index just
-//!   reads through it.
-//! - [`events`] — stable structured event vocabulary used by every
-//!   download/render step. Initialization of the tracing subscriber
-//!   that consumes these events lives in the shared `datalib_obs`
-//!   crate so non-ETL binaries can use it too.
-//!
-//! Incrementality is driven end-to-end by a `source_fingerprint`
-//! stamped into each sidecar; the loader stores it on
-//! `documents.source_fingerprint` and skips unchanged inputs on
-//! subsequent runs.
 
 pub mod blob_cas;
 pub mod bulk;

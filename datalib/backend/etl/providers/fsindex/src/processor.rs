@@ -1,19 +1,4 @@
 //! Program-A `DataProcessor` for the `fsindex` source.
-//!
-//! fsindex is **download-only** — it indexes a directory tree into a doltlite
-//! raw store and has no render/render side (filesystem entries aren't
-//! chat-shaped; see the crate-level docs). So [`plan_download`] contributes a single
-//! download processor and leaves `render` empty — "download-only" is
-//! structural (a missing processor), not a flag.
-//!
-//! The source owns its raw store end to end (open, DDL, write, commit,
-//! interrupt `Checkpoint`) through the standard
-//! [`RawStoreSession`](datalib_etl::raw_store::RawStoreSession); the
-//! orchestrator only drives `run`. The bespoke `dolt_gc` + provenance commit
-//! message that the standalone `fsindex` CLI emits stay exclusive to that
-//! binary — under the orchestrator the uniform per-source `dolt_commit` from
-//! `session.finish` is the durable result (gc is best-effort, and the
-//! config-driven scans are small).
 
 use std::path::PathBuf;
 
@@ -28,7 +13,6 @@ use datalib_etl_fsindex_config::FsindexRenderConfig;
 
 use crate::download;
 
-/// Download wave: the directory scan into the raw store.
 pub fn plan_download(
     ctx: PlanContext,
     config: FsindexConfig,

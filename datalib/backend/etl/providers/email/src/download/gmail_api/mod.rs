@@ -1,35 +1,4 @@
 //! Gmail REST API downloader — the third mode of `type: email`.
-//!
-//! The path for a Gmail account. It writes the same raw schema as JMAP
-//! and mbox, so render is unchanged and a mailbox already mirrored from a
-//! Google Takeout export dedupes against it rather than doubling (see
-//! [`super::labels`] and [`super::envelope`] for the two places that
-//! property is actually enforced).
-//!
-//! ## What it costs to set up: nothing
-//!
-//! latchkey's built-in `google-gmail` service routes by URL host, so the
-//! ordinary `latchkey curl` path injects and refreshes the token. One
-//! `latchkey auth browser google-gmail` and the config needs nothing but
-//! an empty stanza.
-//!
-//! ## Sync
-//!
-//! Cursor is the mailbox `historyId`, stored per account in the shared
-//! `sync_scope_state` table — the same discipline as the JMAP path's
-//! state tokens, under a `gmail:` key prefix instead of `jmap:`.
-//!
-//! * no cursor, or `full_resync` → full sync: `messages.list` paged,
-//!   then `messages.get?format=RAW` per id.
-//! * a cursor → `history.list`. `messagesAdded` and the relabeled ids are
-//!   fetched; `messagesDeleted` hard-deletes the row (doltlite history
-//!   retains the prior state), matching what the JMAP path does with
-//!   `Email/changes` destroyed ids. Deletions arriving as explicit events
-//!   is the main reason this mode is pleasant to run incrementally.
-//! * `history.list` 404 means the cursor aged out of Google's retention
-//!   window ("typically at least one week"). That is not an error — it is
-//!   the documented signal to fall back to a full sync, exactly like
-//!   JMAP's `cannotCalculateChanges`.
 
 pub mod api;
 pub mod ingest;
@@ -118,8 +87,6 @@ pub struct FetchSummary {
     pub full_sync: bool,
 }
 
-/// Scope key for the Gmail API cursor. Namespaced like the JMAP path's
-/// `jmap:` keys so several accounts can share one raw store.
 fn state_scope(account_id: &str) -> String {
     format!("gmail:{account_id}:historyId")
 }
@@ -352,7 +319,6 @@ fn is_history_too_old(e: &anyhow::Error) -> bool {
         .is_some_and(|e| matches!(e, api::GmailApiError::HistoryTooOld))
 }
 
-/// Drain every page of `history.list` from `cursor`.
 async fn collect_history(
     user_id: &str,
     latchkey: &LatchkeySettings,
@@ -590,15 +556,6 @@ async fn flush(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<(
     Ok(())
 }
 
-/// One `threads` row per conversation touched this run, with membership
-/// read back out of the `emails` table.
-///
-/// Reading it back is the point. An incremental run only fetches the
-/// messages that changed, so building the row from *this run's* messages
-/// would rewrite a ten-message thread to contain the one message that
-/// got relabeled — silently discarding the other nine from the thread
-/// the UI groups by. The emails table already holds the full membership
-/// (and `thread_id` is a promoted column), so ask it.
 async fn flush_threads(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<()> {
     let threads = std::mem::take(&mut state.threads);
     if threads.is_empty() {
@@ -639,18 +596,6 @@ async fn flush_threads(state: &mut RunState<'_>, summary: &mut FetchSummary) -> 
     super::upsert_threads(state.db, state.now, &rows).await
 }
 
-/// Hard-delete the rows for messages Gmail reports as gone.
-///
-/// Matches the JMAP path's handling of `Email/changes` destroyed ids:
-/// doltlite's history retains the prior state, so the row is recoverable
-/// from a previous commit and needs no tombstone.
-///
-/// Gmail's ids are per-transport and our rows are keyed by `Message-ID`,
-/// so the mapping is not local — it comes from `gmail_messages`. An
-/// earlier version scanned `payload LIKE '%"gmailMessageId":"<id>"%'`
-/// instead, which was O(rows) per deletion *and* silently dependent on
-/// serde's exact key spacing: one formatting change upstream and every
-/// delete becomes a no-op that nothing would notice.
 async fn destroy(db: &RawDb, gmail_ids: &[String]) -> Result<usize> {
     if gmail_ids.is_empty() {
         return Ok(0);
@@ -682,7 +627,6 @@ async fn destroy(db: &RawDb, gmail_ids: &[String]) -> Result<usize> {
     Ok(destroyed)
 }
 
-/// Every Gmail id already mirrored into this store.
 async fn load_known_gmail_ids(db: &RawDb) -> Result<BTreeSet<String>> {
     let ids: Vec<String> = sqlx::query_scalar("SELECT gmail_id FROM gmail_messages")
         .fetch_all(db.pool())

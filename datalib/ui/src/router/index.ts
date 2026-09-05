@@ -10,11 +10,6 @@ import { createRouter, createWebHistory } from "vue-router";
 // The catchall MUST come after the explicit routes (`/sources` and the
 // legacy redirects); Vue Router does prefer specific over param routes by
 // path-rank, but order is the simpler invariant.
-//
-// History mode also requires the backend to fall back to `index.html`
-// for unknown paths. The embedded server already does this — see
-// `datalib/backend/http/src/embed.rs`'s `serve_ui` fallback —
-// and Vite's dev server does it out of the box for SPAs.
 const router = createRouter({
   history: createWebHistory(),
   routes: [

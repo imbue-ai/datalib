@@ -36,8 +36,9 @@ is the single source of truth, with no codegen step. Each field carries:
 - `#[derived(name = "…", sql = "…")]` — a column computed at grid-index time
   (e.g. `when_ts_utc` / `when_offset`, derived from `when_ts`). Present in
   the DDL but absent from the struct.
-- doc comment — the per-provider mapping documenting how the column is
-  derived, kept next to the field so it can't drift.
+- doc comment — one or two lines saying what the column *means*. How each
+  provider fills it in is in [Per-provider mappings](#per-provider-mappings)
+  below; the authority is always the provider's own `render/grid_rows.rs`.
 
 `#[derive(PortableTable)]` (in `datalib/backend/etl/macros`) produces
 from the struct the `DDL`, `COLUMNS`, and `TABLES` module consts. The
@@ -101,3 +102,180 @@ always pure SQL — timestamps get bumped to synthesize per-block
 ordering, JSON fields get parsed out of raw payloads — so a generated
 table built next to the rest of the translator code keeps the mapping
 legible and avoids depending on Dolt-specific features.
+
+## Per-provider mappings
+
+How each provider derives each column. This is a reading aid, not a
+contract — when it disagrees with a provider's `render/grid_rows.rs`, the
+code is right and this table is stale.
+
+### `uuid`
+
+Minted by `datalib_id::entity_id` for ported providers; the others pass an
+upstream id through directly.
+
+| provider.kind | value |
+|---|---|
+| claude.chat | `claude_conversations.conversation_uuid` |
+| claude.message | `claude_messages.message_uuid` |
+| claude.block | `{message_uuid}:{block_index}` |
+| openai.chat | `openai_conversations.conversation_id` |
+| openai.message | `openai_messages.message_id` |
+| slack.thread | `uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')` |
+| slack.message | `uuidv5(SLACK_NS, 'slack:{team}:{channel}:{ts}')` |
+| github.pr | `uuidv5(GITHUB_NS, 'github:{repo}:pr:{number}')` |
+| github.issue_comment | `uuidv5(GITHUB_NS, 'github:{repo}:issue_comment:{id}')` |
+| github.pr_review | `uuidv5(GITHUB_NS, 'github:{repo}:pr_review:{id}')` |
+| github.pr_review_comment | `uuidv5(GITHUB_NS, 'github:{repo}:pr_review_comment:{id}')` |
+| gitlab.mr | `uuidv5(GITLAB_NS, 'gitlab:{project}:mr:{iid}')` |
+| gitlab.note | `uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')` |
+| notion.page | `page_id` (already a Notion UUID) |
+| notion.heading | `uuidv5(NOTION_NS, 'notion:heading:{page_id}:{block_id}')` |
+| notion.thread | `discussion_id` |
+| notion.comment | `comment_id` |
+
+### `kind` — the display label
+
+| provider.kind | label |
+|---|---|
+| claude.chat, openai.chat | `Chat` |
+| claude.message.human, openai.message.user | `User Input` |
+| claude.message.assistant | `LLM Response` |
+| claude.block.thinking | `LLM Thinking` |
+| claude.block.tool_* | `Tool Call` |
+| openai.message.assistant.thoughts / reasoning_recap | `LLM Thinking` |
+| openai.message.assistant.* | `LLM Response` |
+| openai.message.system / other | `Tool Call` |
+| slack.thread / slack.message | `Slack Thread` / `Slack Message` |
+| github.pr | `GitHub PR` |
+| github.issue_comment | `GitHub PR Comment` |
+| github.pr_review | `GitHub Review` |
+| github.pr_review_comment | `GitHub Review Comment` |
+| gitlab.mr | `GitLab MR` |
+| gitlab.note | `GitLab Discussion Note` |
+| notion.page | `Notion Page` (`Notion Database` for a collection_view_page) |
+| notion.heading.h1/h2/h3 | `Notion Heading 1` / `2` / `3` |
+| notion.thread / notion.comment | `Notion Comment Thread` / `Notion Comment` |
+
+`source_label` is the plain product name: `Claude`, `ChatGPT`, `Slack`,
+`GitHub`, `GitLab`, `Notion`.
+
+### `when_ts`
+
+| provider.kind | value |
+|---|---|
+| claude.chat | `IFNULL(created_at, updated_at)` |
+| claude.message | `messages.created_at` |
+| claude.block | `blocks.start_timestamp`, else `bump_micros(parent.created_at, block_index+1)` |
+| openai.chat | `IFNULL(create_time, update_time)` |
+| openai.message | `messages.create_time`, else `bump_micros(parent.create_time, msg_idx+1)` |
+| slack.message | `slack_messages.ts`, formatted ISO-8601 UTC |
+| github.pr | `pull_request.updated_at`, else `created_at` |
+| github.comment | `comment.created_at` |
+| gitlab.mr | `merge_request.updated_at`, else `created_at` |
+| gitlab.note | `note.created_at` |
+| notion.page | `block.last_edited_time` (ms epoch → ISO-8601 UTC) |
+| notion.heading | the parent page's `last_edited_time` |
+| notion.thread | the first comment's `created_time` |
+| notion.comment | `comment.created_time` |
+
+### `author`
+
+| provider.kind | value |
+|---|---|
+| claude.chat | `''` |
+| claude.message.human | `account_uuid` |
+| claude.message.assistant | `conversation.raw_json.model`, else `sender` |
+| openai.message.user | `account_id` |
+| openai.message.assistant | `model_slug`, else `role` |
+| slack.message | `users.real_name`, else `users.name` |
+| github | `comment.user.login`, else `pull_request.user.login` |
+| gitlab | `note.author.username`, else `merge_request.author.username` |
+| notion.page | the `notion_user.name` for `block.last_edited_by_id` |
+| notion.heading | the `notion_user.name` for the parent page's `last_edited_by_id` |
+| notion.thread / notion.comment | the `notion_user.name` for the comment's `created_by_id` |
+
+### `account`, `project`, `channel`
+
+| provider | account | project | channel |
+|---|---|---|---|
+| claude | `claude_conversations.account_uuid` | the `projects.name` of the conversation's project (bare UUID when projects aren't mirrored) | — |
+| openai | `openai_conversations.account_id` | — | — |
+| slack | `slack_workspaces.team_id` | — | `slack_channels.channel_name` |
+| github | `self_identity.viewer.login` | `pull_request.base.repo.full_name` | — |
+| gitlab | `self_identity.current_user.username` | `merge_request.references.full`, else `project_path` | — |
+| notion | `notion_space.name` | — | — |
+| whatsapp | — | — | `wa_chat.subject` for groups, JID label for 1:1 |
+| signal | — | — | `recipients.display_name`, else phone number |
+
+`org_uuid` / `org_name` are Claude-only, from
+`claude_conversations._source`.
+
+### `conversation_name`, `conversation_uuid`, `text`
+
+`conversation_uuid` is the row's own `uuid` for thread-level rows
+(claude.chat, openai.chat, slack.thread, github.pr, gitlab.mr, notion.page,
+notion.thread) and the parent's for everything below them.
+
+| provider.kind | conversation_name | text |
+|---|---|---|
+| claude.chat | `claude_conversations.name` | `summary`, else `name` |
+| claude.message | (parent's) | `messages.text` |
+| claude.block | (parent's) | `blocks.text`, else `raw_json.thinking`, else `type` |
+| openai.chat | `openai_conversations.title` | `title` |
+| openai.message | (parent's) | `messages.text` |
+| slack.thread | `channel_name` + root snippet | root message text |
+| slack.message | (parent's) | `messages.text`, mentions and emoji rendered |
+| github.pr | `pull_request.title` | `title` + `body` |
+| github.comment | (the PR's title) | `comment.body` |
+| gitlab.mr | `merge_request.title` | `title` + `description` |
+| gitlab.note | (the MR's title) | `note.body` |
+| notion.page | `block.properties.title` | title + recursive plain text of all child blocks |
+| notion.heading | (the page's title) | the heading's plain text |
+| notion.thread | (the page's title) | every comment in the discussion, concatenated |
+| notion.comment | (the page's title) | `comment.text` as plain text |
+
+### `source_url`, `git_sha`
+
+| provider.kind | source_url | git_sha |
+|---|---|---|
+| github.pr | `pull_request.html_url` | `pull_request.head.sha` |
+| github.comment | `comment.html_url` | — |
+| github.pr_review | — | `review.commit_id` |
+| github.pr_review_comment | — | `comment.commit_id`, else `original_commit_id` |
+| gitlab.mr | `merge_request.web_url` | `merge_request.sha` |
+| gitlab.note | `merge_request.web_url#note_{id}` | `note.position.head_sha` for a diff note |
+
+### `upstream_id`
+
+| provider.kind | value |
+|---|---|
+| github.pr | `pull_request.number` |
+| github.issue_comment / pr_review / pr_review_comment | the id |
+| gitlab.mr | `merge_request.iid` |
+| gitlab.note | `note.id` |
+| pdf.document / pdf.page | `blake3` / `{blake3}#{page_number}` |
+| email.thread | `thread_id` |
+| perseus | the locator path (`1`, `1.2`, `1.2.3`) |
+
+### `qmd_path`
+
+`<source_name>/rendered_md/<renderer-specific tail>`, where `<source_name>`
+is the config step's name. Verified against the TNG fixture:
+
+```text
+claude   claude-api/rendered_md/{conversation_uuid}/all.md
+openai   chatgpt-api/rendered_md/{conversation_id}/all.md
+slack    slack/rendered_md/{thread_uuid}/all.md
+beeper   beeper/rendered_md/{network}/{chat_uuid}/{YYYY-MM}.md
+github   github/rendered_md/{owner}/{repo}/pr-{number}/index.md
+gitlab   gitlab/rendered_md/{group}/{project}/mr-{iid}/index.md
+notion   notion/rendered_md/pages/{page_uuid}/index.md
+pdf      tng_pdfs/rendered_md/docs/{blake3}.md
+```
+
+For a given `markdown_uuid`, `grid_rows.qmd_path` must be byte-equal to
+that markdown's `markdowns.md_path` — `GridIndex` keys rows by this path to
+resolve qmd search hits, and a row whose path doesn't match what qmd
+reports is silently dropped from free-text results.
+`//tests/fixtures:ingested_tng_test` asserts it across providers.

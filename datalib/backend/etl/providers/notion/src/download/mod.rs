@@ -1,11 +1,5 @@
 //! Notion downloader: BFS-mirror pages via the official API, with
 //! optional inbox discovery via the unofficial `getNotificationLog`.
-//!
-//! Writes into a single doltlite database file
-//! (`<data_root>/<name>/raw/entities.doltlite_db`) — one row per page / block /
-//! comment, full payload in a JSON column. See `DOLTLITE_RAW.md` for the
-//! schema and rationale. The downstream `render::parse` and
-//! `synthesize` stages consume the DB directly.
 
 pub mod db;
 pub mod official;
@@ -110,22 +104,10 @@ pub struct FetchSummary {
 }
 
 /// True when pages were attempted and not one of them worked out.
-///
-/// `mirror_page` records a failed page fetch and carries on, which is right
-/// when one page of many is unreadable. It is wrong when the failure is
-/// systemic — a bad credential fails identically on every page — because the
-/// run then reports success having stored nothing, and the render step
-/// dutifully emits no markdown from the empty raw store.
-///
-/// A *skipped* page counts as working: the skip only happens after we've
-/// confirmed our stored copy is current, which means the credential is fine.
 fn all_pages_failed(s: &FetchSummary) -> bool {
     s.failed_pages > 0 && s.new_pages == 0 && s.upd_pages == 0 && s.skipped_pages == 0
 }
 
-/// Download the URL of an image block's underlying file. Notion stores
-/// uploads under `image.file.url` (signed S3, rotates) and externally
-/// hosted images under `image.external.url`.
 fn image_url_and_kind(block: &Value) -> Option<(String, &'static str)> {
     let img = block.get("image")?;
     if let Some(u) = img
@@ -879,10 +861,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // being completely dead. That is exactly how a missing `Notion-Version`
     // header (latchkey injects it; the client deliberately doesn't) hid for
     // two months.
-    //
-    // So: if pages were attempted and EVERY one failed, the run failed.
-    // Deliberately narrow — a single success anywhere means the credential
-    // works and the rest are genuine per-page problems worth tolerating.
     if result.is_ok() && all_pages_failed(&summary) {
         result = Err(anyhow::anyhow!(
             "every page fetch failed ({} attempted, 0 succeeded) — the raw store \

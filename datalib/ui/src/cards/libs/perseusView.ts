@@ -9,23 +9,6 @@
 // the panels as columns to the right of this one (and re-clicking swaps
 // them out), which is the scaife "open the same passage side-by-side in
 // every version" gesture.
-//
-// All of the hierarchy + the version list is derived from one
-// structured search (`source:Perseus`). Each grid row carries an
-// `upstream_id` locator path — `"1"` (book), `"1.2"` (chapter),
-// `"1.2.3"` (section) — plus a `kind` naming the edition
-// (`"Chapter (perseus-grc2)"`, `"Section (1st1K-eng1)"`, …) and a
-// `conversation_name` of the form `"<b>.<c> <edition-title>"`. A chapter
-// row's `uuid`/`markdown_uuid` is the rendered chapter doc for that
-// edition; a section row's `markdown_uuid` is the same chapter doc and
-// its `uuid` is the anchor the reader scrolls to. So one fetch is
-// enough to build the whole tree, list the editions, and know exactly
-// what `documentView(...)` source each (locator, version) opens.
-//
-// Plain-DOM (no Vue), same shape as aliasView: paint once, then re-paint
-// the parts that change on toggle/expand. Persisted state is the set of
-// enabled versions (an opaque JSON string round-tripped through
-// ctx.setState); expansion is transient in-memory UI only.
 import { fetchSearch } from "@/api";
 import type { CardRender } from "../types";
 

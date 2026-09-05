@@ -1,10 +1,4 @@
 //! One Gmail API message → one `EmailRow`, plus its CAS entry.
-//!
-//! All of the interesting work is shared: [`super::super::envelope`]
-//! builds the JMAP-shaped envelope, [`super::super::labels`] resolves the
-//! label vocabulary, and the id derivation is the same `Message-ID`
-//! rule every mode uses. What is left here is the Gmail-specific
-//! translation into those shared shapes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,12 +23,6 @@ impl LabelIndex {
         }
     }
 
-    /// The display name for a label id.
-    ///
-    /// Falls back to the id itself for a label the list call didn't
-    /// return — better a mailbox named `Label_7` than a silently dropped
-    /// one, since the alternative loses the fact that the message was
-    /// filed somewhere.
     fn name(&self, id: &str) -> String {
         match self.by_id.get(id) {
             Some(label) => label.name.clone(),
@@ -50,8 +38,6 @@ impl LabelIndex {
         self.by_id.get(id).is_some_and(|l| l.is_system)
     }
 
-    /// Every label that should become a `mailboxes` row, as
-    /// `(mailbox_id, canonical_name, role)`.
     pub fn mailboxes(&self, account_id: &str) -> Vec<(String, String, Option<&'static str>)> {
         let mut out: BTreeMap<String, (String, Option<&'static str>)> = BTreeMap::new();
         for label in self.by_id.values() {
@@ -84,7 +70,6 @@ impl LabelIndex {
         }
     }
 
-    /// Split a message's `labelIds` into mailbox ids and JMAP keywords.
     pub fn resolve(&self, account_id: &str, label_ids: &[String]) -> (Vec<String>, Vec<String>) {
         let mut mailbox_ids: Vec<String> = Vec::new();
         let mut keywords: BTreeSet<String> = BTreeSet::new();
@@ -119,13 +104,6 @@ impl LabelIndex {
         (mailbox_ids, keywords.into_iter().collect())
     }
 
-    /// Resolve configured label *names* to Gmail label *ids*, for the
-    /// server-side `messages.list?labelIds=` filter.
-    ///
-    /// Errors on a name that matches nothing rather than silently
-    /// returning an empty filter: an empty filter means "every message in
-    /// the account", so a typo'd label would quietly turn a small
-    /// targeted mirror into a full one.
     pub fn ids_for_names(&self, names: &[String]) -> anyhow::Result<Vec<String>> {
         let mut out = Vec::with_capacity(names.len());
         for name in names {
@@ -149,7 +127,6 @@ impl LabelIndex {
         Ok(out)
     }
 
-    /// Label names as a user would write them in `only_extract_labels`.
     fn known_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .by_id
@@ -167,9 +144,6 @@ impl LabelIndex {
         names
     }
 
-    /// The canonical label names a message carries, for the download-time
-    /// `only_extract_labels` filter. Matched against the same
-    /// `Parent/Child` paths as every other mode.
     pub fn label_paths(&self, label_ids: &[String]) -> Vec<String> {
         label_ids
             .iter()
@@ -185,12 +159,6 @@ impl LabelIndex {
     }
 }
 
-/// Gmail thread ids are hex; Google Takeout's `X-GM-THRID` header spells
-/// the same 64-bit number in decimal.
-///
-/// Normalizing to decimal is what lets a mailbox ingested from a Takeout
-/// export and then from the API land on **one** thread per conversation
-/// instead of two. Anything that isn't hex passes through unchanged.
 pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
     match u64::from_str_radix(gmail_thread_id, 16) {
         Ok(n) => n.to_string(),
@@ -210,7 +178,6 @@ pub struct Ingested {
     pub label_paths: Vec<String>,
 }
 
-/// Translate one `messages.get?format=RAW` response into a row.
 pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Result<Ingested> {
     let parsed = envelope::parse(&msg.raw)?;
     let blob_id = blake3_hex(&msg.raw);
@@ -266,12 +233,6 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
     })
 }
 
-/// `internalDate` (epoch **milliseconds**) → an offset-bearing ISO-8601
-/// string.
-///
-/// Per the repo-wide timestamp convention, an epoch number carries no
-/// source offset, so it renders as UTC with an explicit `+00:00` — never
-/// a bare `Z`-suffixed `strftime`.
 fn internal_date_to_iso(ms: i64) -> String {
     use chrono::TimeZone;
     match chrono::Utc.timestamp_millis_opt(ms).single() {

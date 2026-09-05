@@ -1,22 +1,9 @@
 //! Publishing the event stream to the progress bus.
 //!
-//! The bus ([`datalib_progress`]) holds one row per step: the current
-//! state, an absolute `done`/`total`, and the step's own last message.
-//! The event stream is the only place progress ticks exist, so this is
-//! the adapter between them.
-//!
-//! # Why the accumulator is here and not in the bus
-//!
-//! [`Event::ProgressInc`] carries a **delta**, not a position. The bus
-//! coalesces — of the ticks that arrive between two flushes, only the
-//! newest is written — and coalescing deltas would silently lose work,
-//! turning "347 of 900" into whatever fraction of the increments
-//! happened to land on a flush boundary.
-//!
-//! So the running total is kept here, per step, and what reaches the
-//! bus is always an absolute position. Dropping one of those is
-//! lossless, which is what makes the coalescing correct rather than
-//! merely cheap.
+//! The per-step running total lives here, not in the bus: `ProgressInc`
+//! carries a delta, the bus coalesces, and coalescing deltas loses work.
+//! What reaches the bus is always an absolute position, so dropping one is
+//! lossless.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -53,7 +40,6 @@ impl ProgressBusSink {
         })
     }
 
-    /// Apply `f` to a step's accumulator, then publish the result.
     fn update(&self, step: &StepId, f: impl FnOnce(&mut Acc)) {
         let row = {
             let mut steps = self.steps.lock().expect("progress bus sink mutex");
@@ -116,7 +102,6 @@ mod tests {
     use super::*;
     use datalib_progress::snapshot;
 
-    /// Drive a sink, then let it flush and read the bus back.
     async fn run(events: &[Event]) -> Vec<datalib_progress::ProgressRow> {
         let td = tempfile::tempdir().unwrap();
         {

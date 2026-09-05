@@ -1,14 +1,5 @@
 //! `datalib-migrate-config` — convert a pre-TOML `config.yaml` into the
 //! `config.toml` the pipeline reads today.
-//!
-//! This crate exists so the shipping programs don't have to. `datalib-dag`
-//! and `datalib-http` know exactly one config format; every legacy schema,
-//! and the only YAML parser left in the tree, lives here. That keeps the
-//! runner's config module a single `toml::from_str` and means a format we
-//! stopped writing years ago can't affect what a running pipeline accepts.
-//!
-//! Two legacy formats are recognized, and which one a file is gets decided
-//! by its content rather than asked of the user — see [`LegacyFormat`].
 
 pub mod convert;
 pub mod legacy_stanza;
@@ -40,11 +31,6 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     // — `data_root = "x"` — it reads as a bare scalar). No legacy
     // config can be mistaken for TOML in the other direction: `steps:`
     // and `sources:` are not TOML key-value syntax.
-    //
-    // `is_toml` and not the full loader: an already-converted config
-    // that has a *problem* in it is still already converted, and
-    // sending it to the YAML parser would bury that problem under a
-    // parse error about a file that was never YAML.
     if !text.trim().is_empty() && datalib_dag::config::is_toml(text) {
         bail!("this config is already TOML — there is nothing to migrate");
     }
@@ -60,13 +46,6 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     }
 }
 
-/// Convert legacy YAML config text to TOML, detecting the format.
-///
-/// The result is verified before it is returned: it must re-parse as a
-/// `DagConfig` and build a valid graph, the same chain the runner runs.
-/// A conversion that produced something the runner would reject is a bug
-/// in this tool, and it should surface here rather than at the user's
-/// next sync.
 pub fn convert(text: &str) -> Result<String> {
     let format = detect(text)?;
     let out = match format {
@@ -81,8 +60,6 @@ pub fn convert(text: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Re-parse converted TOML through the runner's own load → specs →
-/// graph chain.
 fn verify(toml_text: &str) -> Result<()> {
     let cfg = datalib_dag::config::parse(toml_text)?;
     let specs = datalib_dag::config::to_specs(&cfg)?;
@@ -90,11 +67,6 @@ fn verify(toml_text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Where a legacy config lives, given whatever the user pointed us at.
-///
-/// A data root is the common case (`datalib-migrate-config ~/datalib`),
-/// so a directory resolves to the `config.yaml` inside it; anything else
-/// is taken as the config file itself.
 pub fn resolve_input(arg: &Path) -> PathBuf {
     if arg.is_dir() {
         arg.join("config.yaml")
@@ -103,9 +75,6 @@ pub fn resolve_input(arg: &Path) -> PathBuf {
     }
 }
 
-/// Where the converted config should land for a given input: `config.toml`
-/// beside it, which for the data-root case is exactly where the pipeline
-/// looks.
 pub fn default_output(input: &Path) -> PathBuf {
     input.with_file_name("config.toml")
 }

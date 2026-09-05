@@ -1,50 +1,4 @@
 //! Raw-store schema for the Slack provider.
-//!
-//! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! and [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`] for the
-//! conventions every `schema_raw.rs` follows.
-//!
-//! Slack-specific notes:
-//!
-//! - **Most entities key off the upstream Slack id directly**
-//!   (`team_id`, `user_id`, `channel_id`). The wrinkle is `messages`:
-//!   Slack history exposes `ts` which is unique only within a
-//!   `(team, channel)` scope, so the PK is a UUIDv5 derived from
-//!   `(team_id, channel_id, ts)` via [`slack_message_uuid`]. Threads
-//!   are likewise keyed by [`slack_thread_uuid`]. Both recipes live
-//!   in this file so the writer and the reader can't drift.
-//!
-//! - **`replies_pages` is a bookkeeping table**, not an entity: one
-//!   row per `(channel_id, thread_ts)` for which we have a
-//!   `conversations.replies` capture. Bodies land in [`MessageRow`]
-//!   alongside top-level messages. Doesn't fit `WirePayloadRow` (no
-//!   wire payload), so it's hand-rolled as `BulkUpsertable`.
-//!
-//! ## Row structs and the bulk-upsert path
-//!
-//! `WorkspaceRow`, `UserRow`, `ChannelRow`, `MessageRow` derive
-//! [`WirePayloadRow`] (field `id_and_payload: WirePayload`) — the
-//! macro emits both the DDL and the [`BulkUpsertable`] impl. The two
-//! non-payload tables (`RepliesPagesRow`, `SlackAttachmentRow`) hand-
-//! roll `BulkUpsertable`. All six tables go through the generic
-//! [`datalib_etl::bulk::bulk_upsert_in_tx`] helper for writes.
-//!
-//! ## No listing pre-seed
-//!
-//! Rows only exist after a successful detail fetch (history, replies,
-//! users.list, conversations.list, auth.test). See
-//! [`docs/dev/data_architecture_ingestion.md`] §"No-preseed listing flow".
-//!
-//! ## Attachment bytes
-//!
-//! Attachment bytes live in the sibling per-source CAS file managed
-//! by [`datalib_etl::blob_cas`]. The download path bulk-writes via
-//! [`datalib_etl::blob_cas::BlobCas::put_many`] paired with a
-//! bulk UPSERT into `slack_attachments`. The render path's per-thread
-//! [`datalib_etl::blob_cas::BlobBundle`] joins `slack_attachments`
-//! → `cas_objects` on `blake3`. Replaces this provider's use of the
-//! shared `blob_refs` table.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable;
@@ -101,49 +55,10 @@ pub struct UserRow {
 /// top-level `updated` epoch on every user object; it churns across
 /// re-fetches without reflecting a state change, so it must not live in
 /// the content payload that drives `dolt_diff_users`.
-///
-/// **Known gap, deliberately not fixed: `profile.status_*`.** A user's
-/// Slack status — `status_text`, `status_emoji`, `status_expiration`,
-/// `status_emoji_display_info` — is per-fetch state of the same kind as
-/// `updated`, and it is still in the content payload. Nothing reads it
-/// (`render::User::label` uses `real_name` / `name`), so when a
-/// colleague sets or clears a status it produces a `dolt_diff_users`
-/// change and a re-render that carry no information.
-///
-/// It also breaks the manual-e2e golden's `--reset-and-redownload`
-/// stability check, which asserts that re-fetching unchanged upstream
-/// objects lands identical bytes — observed 2026-08-31, when someone's
-/// "In a meeting" status cleared partway through a bake.
-///
-/// Left alone because it is rare (it needs a status change inside the
-/// ~90s a bake takes) and harmless when it happens: a spurious
-/// re-render, not wrong data. If it starts costing bake reruns, the fix
-/// is to add those four paths here — `split_volatile` already walks
-/// nested paths, so `&["profile", "status_text"]` works as written.
 pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
 
 /// `channels` — one row per Slack chat surface: public channel,
 /// private channel, DM, or MPIM.
-///
-/// **Channels vs. conversations:** in Slack's wire vocabulary
-/// "conversations" is the umbrella term covering all four surfaces;
-/// we use `channels` because it matches the user-facing concept. The
-/// upstream API names (`conversations.info` / `conversations.list`)
-/// are an implementation detail of where the payload came from.
-///
-/// Columns: `name`, `is_member`, `is_archived` drive the
-/// listing filter and per-channel-sweep TTL; `is_dm` / `dm_user_id`
-/// do the same for the DM half. Full payload retained.
-///
-/// **A DM answers a different set of columns.** Checked against the
-/// live API (2026-08-31): an `im` carries `user`, `is_archived` and
-/// `is_user_deleted`, but no `name` and — the load-bearing gap — no
-/// `is_member`, so the `members_only` predicate that selects channels
-/// rejects every 1:1 DM. `is_dm` keeps the two populations apart in
-/// one table: the `is_member` predicate runs only against `is_dm = 0`.
-///
-/// The new columns are added to already-existing stores by
-/// [`datalib_etl::doltlite_raw::open`]'s schema reconcile.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "channels")]
 pub struct ChannelRow {
@@ -159,18 +74,9 @@ pub struct ChannelRow {
     /// Who is in this DM, comma-joined, exactly as Slack listed them:
     /// an `im`'s single `user`, or an `mpim`'s `members` array (which
     /// *does* include the account itself). NULL for a channel.
-    ///
-    /// One column rather than an `im` field and an `mpim` field,
-    /// because both surfaces answer the same two questions — is this a
-    /// conversation with someone on the `dm_users` allowlist, and whose
-    /// names title it — and a single participant list answers both for
-    /// either shape. Self is subtracted at read time via
-    /// [`dm_counterparts`] rather than at write time, so the column
-    /// stays a faithful copy of the wire.
     pub dm_user_ids: Option<String>,
 }
 
-/// Split [`ChannelRow::dm_user_ids`] back into participant ids.
 pub fn parse_dm_user_ids(joined: Option<&str>) -> Vec<String> {
     joined
         .unwrap_or("")
@@ -181,7 +87,6 @@ pub fn parse_dm_user_ids(joined: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Join participant ids for [`ChannelRow::dm_user_ids`].
 pub fn join_dm_user_ids(ids: &[String]) -> Option<String> {
     if ids.is_empty() {
         None
@@ -190,13 +95,6 @@ pub fn join_dm_user_ids(ids: &[String]) -> Option<String> {
     }
 }
 
-/// The people in a DM other than the account doing the mirroring.
-///
-/// An `mpim`'s `members` includes you; an `im`'s `user` does not. Both
-/// are stored verbatim, so this is where the difference is reconciled —
-/// once, for the allowlist and the display label alike. Falls back to
-/// the full list when subtracting self would leave nothing, which is a
-/// real case: a DM with yourself.
 pub fn dm_counterparts(participants: &[String], self_user_id: Option<&str>) -> Vec<String> {
     let Some(me) = self_user_id else {
         return participants.to_vec();
@@ -209,20 +107,6 @@ pub fn dm_counterparts(participants: &[String], self_user_id: Option<&str>) -> V
     }
 }
 
-/// What to call a DM: `@` plus the people in it — `@Jean-Luc Picard`,
-/// or `@William Riker, Data` for a group.
-///
-/// Shared by the downloader (progress lines, logs) and the renderer
-/// (document titles, the grid's `conversation_name`) so the two can't
-/// drift — a DM announced as one thing while syncing and titled
-/// another once rendered reads as two different conversations.
-///
-/// `counterparts` comes from [`dm_counterparts`]; `labels` maps user id
-/// → display name. The fallbacks matter: `name` is Slack's own
-/// `mpdm-…` handle, and it is not split back into people because a
-/// Slack handle may itself contain dashes. Reaching `channel_id` means
-/// a store written before `dm_user_ids` existed, or a DM with someone
-/// `users.list` didn't return.
 pub fn dm_display_name(
     counterparts: &[String],
     name: Option<&str>,
@@ -249,33 +133,10 @@ pub fn dm_display_name(
 /// it in the content payload would make `dolt_diff_channels` report a
 /// change on every re-download — defeating incremental render and the
 /// `--reset-and-redownload` "nothing changed" guarantee.
-///
-/// `num_members` belongs here for the same reason, and the manual-e2e
-/// live golden is what proved it: a channel went 37 -> 38 members between
-/// the cold run and the `--reset-and-redownload` run because somebody
-/// joined while the test was running. It is a live membership counter, not
-/// content — nobody re-renders a channel because its member count moved,
-/// and leaving it in the content payload means `dolt_diff_channels` reports
-/// a change every time anyone joins or leaves any mirrored channel.
 pub const CHANNEL_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"], &["num_members"]];
 
 /// `messages` — one row per Slack message (top-level or threaded
 /// reply).
-///
-/// Columns:
-/// - `id` — `slack_message_uuid(team_id, channel_id, ts)`. The v5
-///   hash is one-way, so the three components stay as their own
-///   columns for cross-table queries.
-/// - `team_id`, `channel_id`, `ts` — the three v5 inputs.
-/// - `thread_ts` — upstream `thread_ts` when this row is part of a
-///   thread (root or reply); NULL for standalone messages.
-/// - `thread_root_uuid` — `slack_thread_uuid(team_id, channel_id,
-///   effective_thread_ts)`. For standalone messages, the effective
-///   thread_ts is the message's own ts, so every row has a non-NULL
-///   value — the `messages_by_thread` index covers everything.
-/// - `is_thread_root` — 1 iff this row is the first message of a
-///   thread.
-/// - `user_id` — denormalized author for cheap "messages by X" queries.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "messages")]
 pub struct MessageRow {
@@ -302,13 +163,6 @@ pub const MESSAGES_BY_THREAD_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS messages_by_thread ON messages(thread_root_uuid)";
 
 /// `replies_pages` — bookkeeping for `conversations.replies` walks.
-///
-/// One row per `(channel_id, thread_ts)` we have walked. Reply bodies
-/// land in `messages`; this table tracks the highwater reply ts so a
-/// re-run can decide whether to ask Slack for more.
-///
-/// // FIXME: Seems like we could have a utility to generate the SQL and BulkUpsertable impl from the struct below (we may have to annotated it a bit more?)
-/// Hand-rolled `BulkUpsertable` (no wire payload).
 pub const REPLIES_PAGES_DDL: &str = "CREATE TABLE IF NOT EXISTS replies_pages (
     id           TEXT PRIMARY KEY,
     channel_id   TEXT NOT NULL,
@@ -388,8 +242,6 @@ pub fn replies_page_id_recipe(channel_id: &str, thread_ts: &str) -> String {
     format!("{channel_id}:{thread_ts}")
 }
 
-/// Compose the full DDL list passed to
-/// [`datalib_etl::doltlite_raw::open`].
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         WorkspaceRow::ddl(),

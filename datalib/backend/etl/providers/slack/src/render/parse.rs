@@ -1,14 +1,4 @@
 //! Doltlite-aware parse entry point. Two-phase:
-//!
-//!   1. `dolt_diff_<table>` scan — ask doltlite which thread roots
-//!      changed since the last successful render.
-//!   2. Filtered load — pull only changed threads' messages out of
-//!      the DB, then load each thread's per-bucket [`BlobBundle`]
-//!      from `slack_attachments` + `cas_objects` in two SQL queries.
-//!
-//! Cold start (`last_render_hash = None`) loads every thread. Same
-//! path is taken when the JSON-tree fallback fires (in-crate render
-//! fixture).
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
@@ -79,8 +69,6 @@ pub struct ParsedSlack {
 
 impl ParsedSlack {}
 
-/// Two-phase parse. Cold start (`last_render_hash = None`) renders
-/// every thread; same path when `path` resolves to a legacy JSON tree.
 pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack> {
     let db_path = db_path_for(path);
     if db_path.exists() {
@@ -462,8 +450,6 @@ fn loaded_to_message(m: &LoadedMessageWithThread, default_team_id: &str) -> Mess
     }
 }
 
-/// Walk all messages in a thread to enumerate the attachment file_ids
-/// it references. Same shape as render's `files()` extraction.
 fn collect_attachment_ref_ids(msgs: &[Message]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
@@ -482,9 +468,7 @@ fn collect_attachment_ref_ids(msgs: &[Message]) -> Vec<String> {
     out
 }
 
-// ---------------------------------------------------------------------------
 // Legacy JSON-tree reader (kept for the in-crate TNG render fixture).
-// ---------------------------------------------------------------------------
 
 pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
     let raw_dir = out_dir.join("raw_api");
@@ -761,14 +745,6 @@ mod legacy_schema_tests {
 
     /// Render must survive a raw store written before the DM columns
     /// existed.
-    ///
-    /// The render pool is opened `read_only(true)` and never runs
-    /// `doltlite_raw::open`'s schema reconcile, so those stores really
-    /// do still lack `is_dm` / `dm_user_ids` — and a SELECT naming a
-    /// missing column fails at *prepare* time, which no amount of
-    /// `try_get` tolerance downstream can catch. This is the one shape
-    /// of that bug that a test can pin: build the old table by hand and
-    /// read it.
     #[tokio::test]
     async fn load_channels_tolerates_a_store_without_the_dm_columns() {
         let d = tempfile::tempdir().unwrap();

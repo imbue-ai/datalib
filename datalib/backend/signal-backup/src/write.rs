@@ -3,18 +3,6 @@
 //! special "unencrypted" mode into the reader. The fixture's AEP is
 //! published right alongside the fixture (`"0".repeat(64)`); every
 //! crypto step runs exactly the way it would against a real backup.
-//!
-//! Reverses [`crate::crypto`]:
-//!
-//! * `metadata` — build `local::Metadata` with a fresh `backup_id`,
-//!   AES-CTR-encrypt it under the metadata key, prost-encode.
-//! * `main` — length-delimit `BackupInfo` + each `Frame`, gzip, AES-CBC
-//!   encrypt (PKCS7 pad), HMAC-SHA256 trailer.
-//! * `files` — length-delimited `local::FilesFrame` per media name.
-//!
-//! IVs and `backup_id` are passed in by the caller (not generated
-//! here) so the fixture is byte-deterministic. Pass any fixed
-//! 16-byte / 12-byte value you like; the test fixture passes zeros.
 
 use std::path::Path;
 
@@ -61,8 +49,6 @@ pub struct SnapshotInput<'a> {
     pub file_names: &'a [String],
 }
 
-/// Write the three files (`metadata`, `main`, `files`) into `out_dir`.
-/// `out_dir` is created if missing.
 pub fn write_snapshot(out_dir: &Path, input: &SnapshotInput<'_>) -> Result<()> {
     std::fs::create_dir_all(out_dir)
         .map_err(|e| anyhow!("create snapshot dir {}: {e}", out_dir.display()))?;

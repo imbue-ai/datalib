@@ -1,23 +1,6 @@
 // What a broken `config.toml` does to the app — and, just as much,
 // what it must *not* do.
 //
-// The bug (#209): `config.toml` declares the `unified_index` applet,
-// and that applet is the grid, the search and the document view. The
-// loader was all-or-nothing, so one stray key anywhere in the file cost
-// every one of them, and each screen discovered its own
-// `502 no applet "unified_index"` — a symptom a whole screen away from
-// its cause. 00633dd5 is that happening: a leftover `title =` took the
-// e2e suite from 25 passing to 5.
-//
-// So there are two behaviors here and the line between them is the
-// point:
-//
-//   * a config with a **broken entry** loads. The app works, the other
-//     sources still sync, and the dropped entry is explained on its own
-//     row. Nothing blocks.
-//   * a config that is **not a config** blocks, with a screen that says
-//     so, instead of letting every view fail separately.
-//
 // Both are driven by writing the file directly rather than through
 // `PUT /api/config`, and that is deliberate on two counts. The PUT
 // refuses a bad config on purpose, so it cannot reach either state.

@@ -6,15 +6,6 @@
 //! arguments concatenated — e.g. `urlOpenAIhttps://openai.com`
 //! becomes `urlOpenAIhttps://openai.com` in the rendered markdown,
 //! which is both ugly and breaks the link.
-//!
-//! We can't recover every sentinel kind faithfully (their schemas are
-//! undocumented and shift over time), so the rule here is:
-//!
-//! * `url<text><href>` → `[text](href)` (the one
-//!   shape we see consistently and can render correctly).
-//! * Everything else (`filecite`, `cite`, `search`, `nav`, …) is
-//!   stripped silently. Better an absence than a garbled glob of
-//!   identifiers leaking into the prose.
 
 const START: char = '\u{e200}';
 const END: char = '\u{e201}';

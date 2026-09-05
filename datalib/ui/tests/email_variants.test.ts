@@ -7,11 +7,6 @@
 // with no `gmail_api` table falls through to the mbox path and fails
 // with "no live download mode"; a Fastmail step read back as the
 // catch-all `email` entry loses its form and its Edit button.
-//
-// The expected strings here are the backend's, not this file's:
-// `only_extract_labels`, `gmail_api.user_id` and `sync.hostname` come
-// from `datalib/backend/etl/providers/email_config/src/lib.rs`, and
-// `outlink_format` from `EmailRenderConfig`.
 import { describe, expect, it } from "vitest";
 import { CATALOG, catalogFor, catalogForStep, entryKey } from "../src/config/catalog";
 import {

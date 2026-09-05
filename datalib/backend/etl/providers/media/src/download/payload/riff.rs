@@ -1,22 +1,4 @@
 //! RIFF payloads: WAV's `data` chunk and AVI's `movi` list.
-//!
-//! RIFF is the easiest case in this module and shows the shape of all
-//! of them. The file is a flat sequence of `id[4] len[u32le] bytes`
-//! chunks inside one outer `RIFF` chunk; the signal lives in exactly
-//! one of them, and everything a tagger writes — `LIST INFO`, `id3 `,
-//! Broadcast-Wave's `bext`, `JUNK` padding a DAW left behind — lives in
-//! the others.
-//!
-//! What that buys, concretely: adding an artist tag to a WAV appends a
-//! `LIST INFO` chunk and rewrites the outer size field, so `blake3`
-//! moves. The samples did not, so `payload_blake3` holds.
-//!
-//! AVI is the same walk one level deeper. `movi` is a `LIST` rather
-//! than a plain chunk, so its first four bytes are the list type rather
-//! than data. Excluding the sibling `idx1` matters more than it looks:
-//! it is a table of *file offsets*, so inserting any metadata chunk
-//! ahead of `movi` rewrites every entry in it even though no frame
-//! changed.
 
 use anyhow::Result;
 
@@ -39,12 +21,6 @@ pub struct Chunk {
     pub data_len: u64,
 }
 
-/// Walk the chunks of the outer RIFF form, top level only.
-///
-/// Stops at the first structurally impossible chunk rather than
-/// erroring: RIFF files in the wild routinely carry trailing garbage
-/// after the last real chunk, and refusing the whole file over it would
-/// throw away a payload we can compute perfectly well.
 pub fn chunks(src: &mut Src) -> Result<Vec<Chunk>> {
     let head = src.read_upto(0, 12)?;
     anyhow::ensure!(
@@ -81,7 +57,6 @@ pub fn chunks(src: &mut Src) -> Result<Vec<Chunk>> {
     Ok(out)
 }
 
-/// The sample bytes of a WAVE file: the `data` chunk and nothing else.
 pub fn plan_wav(src: &mut Src) -> Result<Option<Plan>> {
     let found = chunks(src)?
         .into_iter()
@@ -90,8 +65,6 @@ pub fn plan_wav(src: &mut Src) -> Result<Option<Plan>> {
     Ok(found.and_then(|r: Range| Plan::flat(WAV_SCHEME, vec![r]).non_empty()))
 }
 
-/// The frame data of an AVI file: the `movi` list's contents, past its
-/// four-byte list type.
 pub fn plan_avi(src: &mut Src) -> Result<Option<Plan>> {
     for c in chunks(src)? {
         if &c.id != b"LIST" || c.data_len < 4 {
@@ -111,7 +84,6 @@ mod tests {
     use super::super::testutil::{b3, src_of};
     use super::*;
 
-    /// Assemble a RIFF file from `(id, data)` pairs.
     fn riff(form: &[u8; 4], parts: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
         let mut body = form.to_vec();
         for (id, data) in parts {

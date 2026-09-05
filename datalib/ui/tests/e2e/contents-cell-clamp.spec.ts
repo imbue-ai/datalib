@@ -9,16 +9,6 @@ import { test, expect } from "@playwright/test";
 //   third line leaks out the bottom of the row, or the snippet
 //   collapses to a single line and wastes half the row's vertical space.
 //
-// Why a test is warranted:
-//   The clamp is implemented with -webkit-line-clamp, which is famously
-//   finicky — it only acts on the element directly containing the text
-//   (so it has to land on a div we render ourselves, not on AG Grid's
-//   outer .ag-cell), and that element has to be width:100% or it
-//   collapses to one line. We've now hit both failure modes once, so
-//   the contract is worth pinning before a future refactor (different
-//   cellRenderer, AG Grid upgrade, CSS-in-JS migration, etc.) silently
-//   regresses one of them.
-//
 // How it checks:
 //   1. Find a fixture row whose snippet overflows two lines, so the
 //      clamp must actually be doing work.

@@ -1,78 +1,19 @@
-//! The DAG config file, `config.toml` — the format that replaced the
-//! old stanza-based `sources:` config. The user declares the steps
-//! directly; edges are still derived from artifact-path overlap, never
-//! written by hand.
-//!
-//! ```toml
-//! data_root = "~/datalib-data"     # default: the config file's dir
-//! binary_dir = "/opt/datalib/bin"  # optional: prepended to PATH
-//!
-//! [[steps]]
-//! id = "slack.download"
-//! name = "Work Slack"             # optional, and read only by the UI
-//! command = "datalib-step download slack_api"
-//! outputs = ["slack/raw"]
-//! # `params` is the provider's own config subtree. As a sub-table it
-//! # must come after this step's plain keys — a TOML header ends the
-//! # table it appears in.
-//! [steps.params.sync]
-//! channels = ["chat-qi"]
-//!
-//! [[steps]]
-//! id = "grid_index"
-//! command = "datalib-step grid_index"
-//! inputs = ["**/rendered_md"]
-//! outputs = ["unified_index/grid"]
-//!
-//! [[steps]]
-//! id = "custom"
-//! command = "my-exporter --flag"   # any executable on PATH
-//! outputs = ["custom/out"]
-//!
-//! [[applets]]
-//! id = "slack_view"                # a JS identifier: it reaches
-//!                                  # card source as a bare name
-//! command = "datalib-applet slack"
-//! [applets.params]
-//! tree = "slack/rendered_md"
-//! ```
-//!
-//! There are two kinds of entry. A **step** is scheduled: it reads and
-//! writes artifacts, and the DAG is derived from those. An **applet**
-//! is never scheduled — it is a long-lived server the http gateway
-//! spawns on demand, contributing frontend components plus the
-//! endpoints behind them, and it declares no inputs/outputs because it
-//! owns no artifacts. See `docs/dev/applets.md`. This module parses and
+//! The DAG config file, `config.toml`: `[[steps]]` the scheduler runs, and
+//! `[[applets]]` the http gateway spawns on demand. This module parses and
 //! validates both; only steps reach the scheduler.
 //!
-//! Note that top-level `data_root` / `binary_dir` must be written
-//! *above* the first `[[steps]]`, since everything after a table
-//! header belongs to that table.
+//! `configs/dag_example.toml` is a complete commented example, and
+//! `docs/dev/step_protocol.md` is the contract a step command implements.
 //!
-//! A step body is a `command` — a single string split shell-style
-//! (quotes and backslash escapes, but no variable expansion or
-//! globbing; wrap in `sh -c '…'` for real shell). The declared
-//! `params` / `inputs` / `outputs` are appended to the argv as
-//! `--params JSON` / `--inputs JSON` / `--outputs JSON`, each only
-//! when present, so the command needs no TOML parser and the argv
-//! stays reproducible. Any executable that understands those flags
-//! (and optionally the NDJSON stdout protocol) can be a step — see
-//! docs/dev/step_protocol.md.
+//! Two things about the format bite people. Top-level `data_root` /
+//! `binary_dir` must be written *above* the first `[[steps]]`, since
+//! everything after a table header belongs to that table. And a step's `id`
+//! is its identity — path-safe, unique, and the string the directory
+//! structure is formed from — so changing it is a migration rather than an
+//! edit; `name` carries the half that is safe to change.
 //!
-//! A step's `id` is its identity: unique, path-safe, and the string the
-//! directory structure is formed from, which makes changing it a
-//! migration rather than an edit. `name` carries the half that is safe
-//! to change — see [`StepEntry::name`].
-//!
-//! TOML has no anchors, so a params subtree shared between a download
-//! and a render step is written out twice. In practice the two halves
-//! want different knobs anyway, so this is rarely the duplication it
-//! looks like.
-//!
-//! This is the *only* config format the runner accepts. Data roots
-//! written before the TOML switch are converted once, out of band, by
-//! the separate `datalib-migrate-config` program — which is where every
-//! legacy schema and the last YAML parser live.
+//! This is the only config format the runner accepts; older roots are
+//! converted out of band by `datalib-migrate-config`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -87,56 +28,39 @@ use crate::step::{StepRun, StepSpec};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DagConfig {
-    /// Root for all artifacts. Optional: defaults to the directory the
-    /// config file lives in, so a data root containing its own config
-    /// is self-contained (same rule as the old format).
+    /// Root for all artifacts. Defaults to the directory the config file
+    /// lives in, so a data root containing its own config is self-contained.
     #[serde(default)]
     pub data_root: Option<PathBuf>,
-    /// Directory prepended to `PATH` for every step subprocess, so
-    /// commands can name binaries bare (`datalib-step …`). Optional;
-    /// see [`resolve_binary_dir`] for the fallback chain.
+    /// Directory prepended to `PATH` for every step subprocess, so commands
+    /// can name binaries bare. See [`resolve_binary_dir`] for the fallback.
     #[serde(default)]
     pub binary_dir: Option<PathBuf>,
-    /// Defaults to empty: a config with no steps yet (a bare
-    /// `data_root:` file) is valid — it just runs nothing.
+    /// A config with no steps yet is valid — it just runs nothing.
     #[serde(default)]
     pub steps: Vec<StepEntry>,
-    /// Long-lived servers that contribute the app's frontend and its
-    /// data endpoints. Unlike steps these are never scheduled: the
-    /// http gateway spawns one on demand when a request for its
-    /// prefix arrives. Empty is normal — a data root with no applets
-    /// still syncs and still serves the builtin UI.
+    /// Long-lived servers contributing the app's frontend and its data
+    /// endpoints. Never scheduled: the http gateway spawns one on demand when
+    /// a request for its prefix arrives. Empty is normal.
     #[serde(default)]
     pub applets: Vec<AppletEntry>,
 }
 
-/// One applet instance. Deliberately a subset of [`StepEntry`]: an
-/// applet declares no `inputs`/`outputs` because it is not scheduled
-/// and owns no artifacts of its own — it reads what steps already
-/// wrote. Everything else (`command` splitting, `params` as JSON,
-/// `env` merge, cwd = data root) follows the step's conventions so
-/// there is one set of rules to learn.
-///
-/// There is no `title`, and `deny_unknown_fields` means a config
-/// carrying one is rejected by name. The field existed and nothing
-/// read it: the label the component gallery shows is written by the
-/// applet itself into its namespace metadata, so a config-level title
-/// was a second, silent spelling of a label that lives elsewhere. An
-/// applet that wants one takes it through `params` — the slack
-/// applet's `workspace`, for instance.
+/// One applet instance. Deliberately a subset of [`StepEntry`]: an applet
+/// declares no `inputs`/`outputs` because it is not scheduled and owns no
+/// artifacts. There is no `title` either — the label the gallery shows is
+/// written by the applet itself into its namespace metadata.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletEntry {
-    /// Instance name. Doubles as the mount prefix (`/applet/<id>/`) *and*
-    /// as an identifier injected into card-source scope, so it is
-    /// restricted to what JavaScript will accept as a variable name —
-    /// see [`validate_applets`].
+    /// Instance name. Doubles as the mount prefix (`/applet/<id>/`) *and* as
+    /// an identifier injected into card-source scope, so it is restricted to
+    /// what JavaScript accepts as a variable name.
     pub id: String,
-    /// The command to run, split shell-style into an argv, resolved
-    /// the same way a step's is (`binary_dir`, then `PATH`).
+    /// The command to run, split shell-style, resolved the same way a step's
+    /// is (`binary_dir`, then `PATH`).
     pub command: String,
-    /// Arbitrary applet parameters, forwarded verbatim as JSON via
-    /// `--params` — to both the manifest dump and the server.
+    /// Arbitrary applet parameters, forwarded verbatim as JSON via `--params`.
     #[serde(default)]
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
@@ -145,8 +69,6 @@ pub struct AppletEntry {
 }
 
 impl AppletEntry {
-    /// `params` as JSON, ready for `--params`. `None` when the entry
-    /// declared none.
     pub fn params_json(&self) -> Result<Option<serde_json::Value>> {
         match &self.params {
             Some(v) => Ok(Some(params_to_json(v, &self.id)?)),
@@ -159,53 +81,25 @@ impl AppletEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepEntry {
     pub id: String,
-    /// What to call this step on screen. Free text, freely changed.
+    /// What to call this step on screen. Free text, freely changed: the runner
+    /// never reads it and it is absent from
+    /// [`StepSpec::fingerprint_material`], so renaming re-runs nothing.
     ///
-    /// The runner never reads it: it is not passed to the child, and it
-    /// is deliberately absent from [`StepSpec::fingerprint_material`],
-    /// so renaming a step does not make it stale and does not re-run
-    /// anything. Its consumers are both grids — the Pipeline table
-    /// shows it in place of the step's `id`, and the unified index
-    /// grid shows it beside the rows that step produced
-    /// (`datalib/ui/src/config/sourceSteps.ts`).
-    ///
-    /// **`name` and `id` are the two halves of one identity, and only
-    /// this half is malleable.** The `id` is the identity: it is
-    /// path-safe, unique, and the directory structure is formed from
-    /// it, so changing it moves data on disk and strands the paths the
-    /// index recorded — a migration, not an edit. The `name` is what a
-    /// person types and what they see; it carries no meaning to any
-    /// program. The wizard derives an `id` from the `name` once, at
-    /// creation, and never again.
-    ///
-    /// Written only when it differs from the `id`. A name that merely
-    /// respells the id would be the second, silent spelling of one
-    /// string, which is what got the applet `title` key deleted
-    /// (00633dd5) — so an unnamed step is displayed by its id, and its
-    /// config stays as it was.
-    ///
-    /// Any step may carry one: the shared `grid_index` / `qmd_index`
-    /// fan-ins are rows in the same table and are named the same way.
-    /// [`AppletEntry`] deliberately has no counterpart — an applet's
-    /// own `params` already carry whatever label it wants (see that
-    /// type's docs), and it is displayed by its `id`.
+    /// **`name` and `id` are two halves of one identity, and only this half is
+    /// malleable** — the directory structure is formed from the `id`, so
+    /// changing that moves data on disk and strands recorded paths. Written
+    /// only when it differs from the `id`.
     #[serde(default)]
     pub name: Option<String>,
-    /// The ids of the steps this one reads.
-    ///
-    /// A step id *is* the tree that step writes, so an entry here is
-    /// simultaneously a step reference and an artifact path — which is
-    /// why there is nothing to match and nothing to glob. Every entry
-    /// must name a declared step; a directory staged by hand is named
-    /// by `params.common.input_path` instead, and is not an artifact
-    /// the DAG knows about.
+    /// The ids of the steps this one reads. A step id *is* the tree that step
+    /// writes, so an entry here is both a step reference and an artifact path.
+    /// A directory staged by hand is named by `params.common.input_path`
+    /// instead, and is not an artifact the DAG knows about.
     #[serde(default)]
     pub inputs: Vec<String>,
-    /// The command to run, split shell-style into an argv. Note the
-    /// child runs with its cwd set to `data_root`, so a relative
-    /// multi-component argv[0] resolves against the data root; use a
-    /// bare name (PATH — see `binary_dir`) or an absolute path for
-    /// binaries that live elsewhere.
+    /// The command to run, split shell-style into an argv. The child's cwd is
+    /// `data_root`, so a relative multi-component argv[0] resolves against the
+    /// data root; use a bare name or an absolute path for binaries elsewhere.
     pub command: String,
     /// Arbitrary step parameters, forwarded verbatim as JSON via
     /// `--params`.
@@ -214,18 +108,13 @@ pub struct StepEntry {
     /// Extra environment for the child process.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Optional version of the step's own behavior, for steps whose
-    /// output can change without their command line changing (a
-    /// renderer that was reworked, a binary that was upgraded in
-    /// place). Bumping it makes the runner re-run the step once, even
-    /// though none of its inputs moved.
+    /// Version of the step's own behavior, for steps whose output can change
+    /// without their command line changing. Bumping it re-runs the step once,
+    /// even though none of its inputs moved.
     #[serde(default)]
     pub code_version: Option<String>,
 }
 
-/// The config file inside a data root: `<data_root>/config.toml`. The
-/// app reads and writes only this, which is what makes a data root
-/// self-contained.
 pub fn root_config_path(data_root: &Path) -> PathBuf {
     data_root.join(CONFIG_FILE_NAME)
 }
@@ -233,14 +122,10 @@ pub fn root_config_path(data_root: &Path) -> PathBuf {
 /// The canonical config filename.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
-/// Parse config text, strictly: any problem at all is an error.
-///
-/// The strict view of [`parse_graded`]. Two callers want exactly this
-/// — `datalib-migrate-config`, which must not emit a config with a
-/// known problem in it, and `PUT /api/config`, which refuses to write
-/// one. The error is the first diagnostic, with its line; call
-/// `parse_graded` when you want all of them, which is what anything
-/// reporting to a human should do.
+/// Parse config text, strictly: the first problem is an error. For
+/// `datalib-migrate-config` and `PUT /api/config`, which must not write a
+/// config with a known problem. Anything reporting to a human wants
+/// [`parse_graded`].
 pub fn parse(text: &str) -> Result<DagConfig> {
     let (cfg, diagnostics) = parse_graded(text);
     if let Some(d) = diagnostics.first() {
@@ -249,15 +134,10 @@ pub fn parse(text: &str) -> Result<DagConfig> {
     Ok(cfg)
 }
 
-/// Whether this text is TOML that could be a config at all.
-///
-/// The file-level question, and only that: it has no opinion on
-/// whether the config the file spells is *valid*, which is
-/// [`check_text`]'s job. `datalib-migrate-config` asks it to notice a
-/// config that has already been converted, and that guard has to hold
-/// for a converted config with a problem in it too — otherwise the
-/// second run of the migrator falls through to the YAML parser and
-/// produces exactly the baffling error the guard exists to prevent.
+/// Whether this text is TOML that could be a config at all — the file-level
+/// question only, with no opinion on whether the config is *valid*
+/// ([`check_text`]'s job). It has to answer yes for a converted config that
+/// still has a problem in it, or `datalib-migrate-config` re-converts one.
 pub fn is_toml(text: &str) -> bool {
     !parse_graded(text)
         .1
@@ -265,12 +145,8 @@ pub fn is_toml(text: &str) -> bool {
         .any(|d| d.severity == Severity::Fatal)
 }
 
-/// Load + resolve a config file, strictly. `data_root` defaults to the
-/// config file's directory and gets `~` expanded.
-///
-/// The strict view of [`load_graded`], and the same trade: one error
-/// instead of every problem. Prefer `load_graded` anywhere the result
-/// reaches a person.
+/// Load + resolve a config file, strictly. The strict view of
+/// [`load_graded`]: one error instead of every problem.
 pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let cfg = parse(&text).with_context(|| format!("parse {}", path.display()))?;
@@ -278,12 +154,8 @@ pub fn load(path: &Path) -> Result<(DagConfig, PathBuf)> {
     Ok((cfg, root))
 }
 
-/// Read and check a config file, keeping whatever loads.
-///
-/// Only I/O failures are `Err`: a file that cannot be read has no
-/// diagnostics to give. Everything the file itself gets wrong comes
-/// back in [`ConfigCheck::diagnostics`], including the case where it
-/// is not a config at all.
+/// Read and check a config file, keeping whatever loads. Only I/O failures
+/// are `Err`: a file that cannot be read has no diagnostics to give.
 pub fn load_graded(path: &Path) -> Result<(ConfigCheck, PathBuf)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let checked = check_text(&text);
@@ -291,9 +163,6 @@ pub fn load_graded(path: &Path) -> Result<(ConfigCheck, PathBuf)> {
     Ok((checked, root))
 }
 
-/// Where this config's artifacts live: its own `data_root`, else the
-/// directory the config file sits in — which is what makes a data root
-/// holding its own config self-contained.
 fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
     match &cfg.data_root {
         Some(p) => expand_tilde(p),
@@ -307,29 +176,16 @@ fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
     }
 }
 
-/// The one reserved top-level directory: the runner's and the server's
-/// own state (`system/dag_state.json`, `system/jobs.doltlite_db`, the
-/// job logs). A step writing there would put the scheduler's own
-/// bookkeeping under its change detection.
-///
-/// `unified_index` used to be reserved alongside it, back when a
-/// source's identity was the first segment of a free-form output path
-/// and nothing stopped a stanza from claiming that segment. It needs no
-/// rule now: the index steps' ids *are* `unified_index/grid` and
-/// `unified_index/qmd`, and id uniqueness does the rest.
-///
-/// This is the *policy*. The path constants live in
-/// `datalib_core::layout`, which this crate deliberately doesn't depend
-/// on — the runner is lean on purpose. `layout.rs` points here.
+/// The one reserved top-level directory: the runner's and the server's own
+/// state. A step writing there would put the scheduler's own bookkeeping
+/// under its change detection. This is the policy; the path constants live in
+/// `datalib_core::layout`, which this crate deliberately doesn't depend on.
 pub const SYSTEM_DIR: &str = "system";
 
-/// One id segment: what a directory name may contain.
-///
-/// Deliberately narrower than the filesystem allows. An id is a path
-/// component on every platform we ship to, it appears inside
-/// `markdowns.md_path` and `grid_rows.qmd_path`, and it is compared as
-/// a whole string everywhere — so the portable-filename character set
-/// plus `.` is all it needs to be.
+/// One id segment: what a directory name may contain. Deliberately narrower
+/// than the filesystem allows — an id is a path component on every platform
+/// we ship to and appears inside `markdowns.md_path`, so the portable
+/// filename character set plus `.` is all it needs to be.
 fn valid_id_segment(seg: &str) -> bool {
     !seg.is_empty()
         && seg != "."
@@ -340,12 +196,6 @@ fn valid_id_segment(seg: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
-/// Validate the `[[steps]]` array as a whole, strictly — the checks
-/// that need to see every entry, not just one.
-///
-/// The strict view of [`accept_steps`], which is where the rules
-/// actually live and which is documented with them. Kept because
-/// [`to_specs`] and its callers want the first problem as an `Err`.
 pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
     let (_, diags) = accept_steps(
         candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
@@ -357,12 +207,9 @@ pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
     Ok(())
 }
 
-/// Turn config entries into scheduler specs, strictly.
-///
-/// The strict view of [`accept_steps`]. Note what this does *not* do:
-/// it resolves nothing between steps, so an `inputs` entry naming no
-/// declared step passes here and is caught by [`crate::Graph::build`],
-/// which is the first place the full set of ids exists.
+/// The strict view of [`accept_steps`]. Note what this does *not* do: it
+/// resolves nothing between steps, so an `inputs` entry naming no declared
+/// step passes here and is caught by [`crate::Graph::build`].
 pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
     let (accepted, diags) = accept_steps(
         candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
@@ -376,14 +223,9 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
 
 /// A step's `params` subtree as the JSON the child gets on `--params`.
 ///
-/// Serializing `toml::Value` straight through serde would be wrong:
-/// TOML's date/time types have no JSON counterpart, and the `toml`
-/// crate smuggles them past a non-TOML serializer as a one-key map
-/// (`{"$__toml_private_datetime": …}`), which is what the step would
-/// then try to deserialize. So walk the tree and render every datetime
-/// as its RFC-3339-ish string — `since = 2026-06-15` and
-/// `since = "2026-06-15"` reach the step identically, which is what a
-/// user writing either one expects.
+/// Walks the tree rather than serializing through serde, because TOML's
+/// date/time types have no JSON counterpart and the `toml` crate smuggles
+/// them past a non-TOML serializer as a one-key map.
 fn params_to_json(v: &toml::Value, step: &str) -> Result<serde_json::Value> {
     use serde_json::Value as J;
     Ok(match v {
@@ -393,9 +235,9 @@ fn params_to_json(v: &toml::Value, step: &str) -> Result<serde_json::Value> {
         toml::Value::Datetime(d) => J::String(d.to_string()),
         toml::Value::Float(f) => match serde_json::Number::from_f64(*f) {
             Some(n) => J::Number(n),
-            // TOML has nan/inf literals; JSON has no way to say them,
-            // so refuse here rather than hand the child a null it
-            // would read as "unset".
+            // TOML has nan/inf literals and JSON has no way to say them, so
+            // refuse rather than hand the child a null it would read as
+            // "unset".
             None => bail!(
                 "step {step:?}: params has a non-finite float ({f}), which JSON can't represent"
             ),
@@ -413,17 +255,9 @@ fn params_to_json(v: &toml::Value, step: &str) -> Result<serde_json::Value> {
     })
 }
 
-/// Locate the directory prepended to every step's `PATH`. Precedence:
-/// CLI override (`--binary-dir`), then config `binary_dir:`, then the
-/// running executable's own directory — a packaged release lays the
-/// step binaries next to the runner. `None` only when even the
-/// executable path is unknowable; steps then get the inherited `PATH`
-/// untouched.
-///
-/// Relative paths are absolutized against the *runner's* cwd, because
-/// steps are spawned with their cwd set to `data_root` — a relative
-/// `--binary-dir bazel-bin/...` would otherwise be re-resolved against
-/// the data root.
+/// The directory prepended to every step's `PATH`. Precedence: CLI override,
+/// config `binary_dir`, then this executable's own directory. Relative paths
+/// are absolutized against the *runner's* cwd, since steps run in `data_root`.
 pub fn resolve_binary_dir(cfg: &DagConfig, cli_override: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = cli_override {
         return Some(absolutize(expand_tilde(p)));
@@ -456,20 +290,11 @@ fn expand_tilde(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
-/// The one namespace an applet may not claim.
-///
-/// Frontend components all live under `system/frontend/<namespace>/`,
-/// and starting an applet *deletes* its namespace directory first, so
-/// it rewrites the whole thing. `user` holds hand- and agent-authored
-/// components, which nothing regenerates — so an applet allowed to take
-/// that id would have its directory wiped the next time it started,
-/// taking the user's own work with it.
+/// The one namespace an applet may not claim. Starting an applet deletes and
+/// rewrites its `system/frontend/<namespace>/` directory, and `user` holds
+/// hand- and agent-authored components that nothing regenerates.
 pub const RESERVED_APPLET_ID: &str = "user";
 
-/// Check the applet list before anything tries to use it, strictly.
-///
-/// The strict view of [`accept_applets`], where the rules and the
-/// reason for each of them live.
 pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
     let (_, diags) = accept_applets(
         candidates(&cfg.applets, EntryRef::applet, |a| Some(a.id.clone())),
@@ -481,10 +306,9 @@ pub fn validate_applets(cfg: &DagConfig) -> Result<()> {
     Ok(())
 }
 
-/// Conservative subset of what JavaScript accepts: ASCII only. The
-/// language would allow plenty of Unicode, but an id is also a URL
-/// path segment and a directory-safe token elsewhere, so the narrow
-/// rule is the useful one.
+/// A conservative ASCII-only subset of what JavaScript accepts: an id is
+/// also a URL path segment and a directory-safe token, so the narrow rule is
+/// the useful one.
 fn is_js_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
@@ -541,35 +365,18 @@ fn is_js_identifier(s: &str) -> bool {
     )
 }
 
-// ---------------------------------------------------------------------------
-// The graded loader
-// ---------------------------------------------------------------------------
-//
-// Everything above this line is the strict door: first problem wins and
-// the caller gets an `Err`. Everything below is the graded one, which
-// keeps what loads and reports the rest. Both run the same rules — the
-// strict functions are thin wrappers, so there is no second spelling of
-// what a valid config is. See `crate::diagnostics` for what the
-// severities mean and why there are four of them.
+// ── The graded loader. Above this line is the strict door: first problem
+// wins and the caller gets an `Err`. Both run the same rules — the strict
+// functions are thin wrappers — so there is one spelling of what is valid.
 
 /// The file's own shape, with the entries left opaque.
 ///
-/// This split is what makes a graded load possible. Deserializing
-/// straight into [`DagConfig`] makes serde's first objection — an
-/// unknown key three steps down — the whole file's error, because
-/// serde has no way to say "skip that one and keep going". Taking the
-/// entries as `toml::Value` first, and deserializing each on its own,
-/// turns that objection back into what it is: one entry's problem.
-///
-/// `deny_unknown_fields` stays here and stays fatal, because at *this*
-/// level it means something different: an unknown top-level key is a
-/// statement about the file, and there is no smaller thing to drop.
-///
-/// `Spanned` wraps the entries and not their fields. The location a
-/// reader wants is the `[[steps]]` header the entry begins at; a
-/// per-field span would only ever point somewhere that header already
-/// leads, at the cost of `Spanned` infecting every field of
-/// [`StepEntry`].
+/// This split is what makes a graded load possible: deserializing straight
+/// into [`DagConfig`] makes serde's first objection the whole file's error,
+/// because serde cannot skip one entry and keep going. `deny_unknown_fields`
+/// stays fatal *here*, where an unknown top-level key is a statement about
+/// the file. `Spanned` wraps entries and not their fields, because the
+/// location a reader wants is the `[[steps]]` header.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
@@ -584,28 +391,17 @@ struct RawConfig {
 }
 
 /// One entry on its way in: where it sits in the file, and what it
-/// deserialized to.
-///
-/// Generic over the entry type so steps and applets share the
-/// bookkeeping. The *rules* are not shared, because they are not the
-/// same rules — an applet owns no artifacts, so nothing about trees,
-/// nesting or `system/` applies to it.
+/// deserialized to. Generic so steps and applets share the bookkeeping — but
+/// not the rules, which are not the same rules.
 struct Candidate<T> {
     entry: T,
     reference: EntryRef,
-    /// Byte range of the entry's header. `None` when the caller came
-    /// in through the strict, text-less door ([`to_specs`]), which
-    /// holds a `DagConfig` and no file to point into.
+    /// Byte range of the entry's header. `None` when the caller came in
+    /// through the strict, text-less door, which holds no file to point into.
     span: Option<std::ops::Range<usize>>,
 }
 
 impl<T> Candidate<T> {
-    /// A diagnostic about this entry, located when we have a location.
-    ///
-    /// `key` narrows the location from the entry's header to the one
-    /// key the complaint is about — which is where a reader is looking
-    /// and where the UI editor should put its highlight. Pass `None`
-    /// when the entry as a whole is the problem.
     fn diag(
         &self,
         severity: Severity,
@@ -627,9 +423,6 @@ impl<T> Candidate<T> {
     }
 }
 
-/// Wrap already-deserialized entries as candidates with no spans — the
-/// adapter that lets the strict, `DagConfig`-shaped callers run the
-/// very same rules as the graded one.
 fn candidates<T: Clone>(
     entries: &[T],
     make_ref: fn(usize, Option<String>) -> EntryRef,
@@ -646,38 +439,18 @@ fn candidates<T: Clone>(
         .collect()
 }
 
-/// Every step rule that can be decided from the `[[steps]]` array
-/// alone, applied entry by entry, dropping what fails and saying why.
+/// Every step rule decidable from the `[[steps]]` array alone, applied entry
+/// by entry, dropping what fails and saying why. Ids must be well-formed
+/// (an id is the tree the step writes), unique (they key the persisted
+/// scheduler state), un-nested, and outside `system/`; the command must be
+/// runnable and `params` must be JSON-able.
 ///
-///   * **Ids are well-formed.** An id is the tree the step writes, so
-///     it has to be a usable relative path: non-empty segments from the
-///     portable filename character set, no `.`/`..`, no leading `-`.
-///   * **Ids are unique.** They key the persisted scheduler state
-///     (`DagState.steps`, a map), so two entries sharing an id get one
-///     bookkeeping slot between them and clobber each other's
-///     up-to-date bookkeeping in turn — while both still run, against
-///     the same tree. TOML cannot enforce it for us, since `[[steps]]`
-///     is an array.
-///   * **No id is nested inside another.** `unified_index` and
-///     `unified_index/grid` are two steps writing one tree, which is
-///     the same violation as a duplicate — and it was silently accepted
-///     until #209, because uniqueness was checked as string equality
-///     while a step's id is a *path*. This is the load-bearing one:
-///     two writers under one tree is two writers on one
-///     `.doltlite_db`, whose working set is shared across processes,
-///     so they commit each other's in-flight rows. Corruption with no
-///     failed step and no log line.
-///   * **Nothing writes under `system/`.** See [`SYSTEM_DIR`].
-///   * **The command is runnable** — it splits shell-style and is not
-///     empty — **and `params` can be JSON**, since that is how the
-///     child receives them.
+/// The nesting rule is the load-bearing one: two steps under one tree is two
+/// writers on one `.doltlite_db`, whose working set is shared across
+/// processes, so they commit each other's in-flight rows.
 ///
-/// Later entries lose to earlier ones, so a config's first spelling of
-/// an id survives and the diagnostic names both.
-///
-/// Inputs are deliberately *not* checked here: an input names another
-/// step, and [`crate::Graph::build_graded`] is the first place the full
-/// set of surviving ids exists.
+/// Later entries lose to earlier ones. Inputs are checked in
+/// [`crate::Graph::build_graded`], the first place the full id set exists.
 fn accept_steps(
     candidates: Vec<Candidate<StepEntry>>,
     text: Option<&str>,
@@ -730,10 +503,8 @@ fn accept_steps(
             );
             continue;
         }
-        // Containment, which the string equality above cannot see.
-        // Checked both ways: this id may sit inside an accepted one, or
-        // an accepted one may sit inside this id. Either is two steps
-        // writing one tree.
+        // Containment, which the string equality above cannot see. Checked
+        // both ways: either direction is two steps writing one tree.
         if let Some(other) = seen.iter().find(|other| nests_with(other, &id)) {
             diags.push(
                 c.diag(
@@ -767,18 +538,10 @@ fn accept_steps(
     (accepted, diags)
 }
 
-/// Whether two step ids name trees where one contains the other.
-///
-/// Equal ids answer `false`: that is a duplicate, a different rule with
-/// a different message, and it is checked first.
 fn nests_with(a: &str, b: &str) -> bool {
     a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
-/// One entry's `command`/`params`/`inputs` as the spec the scheduler
-/// runs: split the command shell-style and append the declared
-/// params/inputs/outputs as `--flag JSON` pairs (each only when
-/// present).
 fn spec_of(e: &StepEntry) -> Result<StepSpec> {
     let mut argv = shlex::split(&e.command)
         .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
@@ -795,10 +558,8 @@ fn spec_of(e: &StepEntry) -> Result<StepSpec> {
         argv.push("--inputs".to_string());
         argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
     }
-    // The step protocol is unchanged: a child still receives
-    // `--outputs`, now with the single tree its id names. Steps written
-    // against the old contract keep working without knowing the config
-    // stopped declaring it.
+    // A child still receives `--outputs`, now with the single tree its id
+    // names, so steps written against the old contract keep working.
     argv.push("--outputs".to_string());
     argv.push(serde_json::to_string(&[&e.id]).expect("string vec → JSON"));
 
@@ -816,24 +577,13 @@ fn spec_of(e: &StepEntry) -> Result<StepSpec> {
     Ok(spec)
 }
 
-/// The applet rules, applied entry by entry. Three, all load-bearing
-/// rather than stylistic:
+/// The applet rules, applied entry by entry. All three are load-bearing: an
+/// id is injected into card source as a bare name and evaluated by
+/// `new Function`, so it must be a JS identifier; ids are the proxy prefix and
+/// namespace, so they must be unique; and `user` is reserved (see
+/// [`RESERVED_APPLET_ID`]).
 ///
-///   * **Ids are JavaScript identifiers.** An applet id is injected
-///     into card-source scope as a bare name (`slack_work.channels()`),
-///     and card source is evaluated by `new Function`, so an id like
-///     `slack.work` or `2fa` would be a syntax error at the point a
-///     card renders — far from the config that caused it.
-///   * **Ids are unique.** They are the proxy prefix and the namespace;
-///     two entries claiming one id would make `/applet/<id>/`
-///     ambiguous. TOML cannot enforce this for us since `[[applets]]`
-///     is an array.
-///   * **`user` is reserved.** See [`RESERVED_APPLET_ID`].
-///
-/// Nothing here looks at step ids: an applet writes no artifacts, so
-/// the two namespaces cannot collide. The scaffold depends on that —
-/// its `unified_index` applet sits beside its `unified_index/grid`
-/// step.
+/// Step ids are deliberately not consulted — an applet writes no artifacts.
 fn accept_applets(
     candidates: Vec<Candidate<AppletEntry>>,
     text: Option<&str>,
@@ -891,28 +641,15 @@ fn accept_applets(
     (accepted, diags)
 }
 
-/// The key serde is complaining about: the first backticked word in
-/// its message (`unknown field \`title\`, expected one of …`).
 fn complained_about(message: &str) -> Option<&str> {
     message.split('`').nth(1)
 }
 
 /// Narrow a diagnostic about an entry to the one key it is about.
 ///
-/// `toml::Value::try_into` reports no span — the value came from a
-/// tree, not from text — so all we start with is the entry's
-/// `[[steps]]` header. That is never *wrong*, just coarse: it puts the
-/// caret a few lines above the actual mistake, and puts the UI
-/// editor's highlight there too.
-///
-/// The message does name the key (serde's "unknown field `title`"), and
-/// the key is almost always written plainly inside the entry, so look
-/// for it. The search stops at the next table header, which keeps it
-/// out of a following `[steps.params]` — where an arbitrary key is
-/// legal and finding one would be a lie.
-///
-/// Falls back to the header span whenever anything about that doesn't
-/// hold, so this can improve a location and never invent one.
+/// `toml::Value::try_into` reports no span, so we start from the entry header
+/// and look for the key serde named. Falls back to that header whenever the
+/// search doesn't hold, so this can improve a location and never invent one.
 fn key_span(text: &str, header: std::ops::Range<usize>, key: &str) -> std::ops::Range<usize> {
     if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return header;
@@ -922,9 +659,8 @@ fn key_span(text: &str, header: std::ops::Range<usize>, key: &str) -> std::ops::
         let line_start = at;
         at += line.len();
         let trimmed = line.trim_start();
-        // A table header ends this entry's body. Stopping here keeps
-        // the search out of a following `[steps.params]`, where an
-        // arbitrary key is legal and a match would be a lie.
+        // A table header ends this entry's body, which keeps the search out of
+        // a following `[steps.params]` where an arbitrary key is legal.
         if trimmed.starts_with('[') {
             break;
         }
@@ -941,26 +677,22 @@ fn key_span(text: &str, header: std::ops::Range<usize>, key: &str) -> std::ops::
     header
 }
 
-/// What the entry-level pass produced: the config that survived, the
-/// specs to graph, where each surviving step sits in the file, and one
-/// diagnostic per entry that did not make it.
+/// What the entry-level pass produced.
 struct Entries {
     cfg: DagConfig,
     specs: Vec<StepSpec>,
-    /// step id → byte range of the `[[steps]]` header declaring it.
-    /// Includes dropped steps: a graph diagnostic naming one still
-    /// wants somewhere to point.
+    /// step id → byte range of the `[[steps]]` header. Includes dropped
+    /// steps: a graph diagnostic naming one still wants somewhere to point.
     spans: BTreeMap<String, std::ops::Range<usize>>,
-    /// The ids of the steps this pass threw out. Handed to graph
-    /// assembly so that a step whose input names one of them is told
-    /// its input was *dropped*, rather than that it never existed —
-    /// different sentences, and different entries to go and fix.
+    /// The ids this pass threw out. Handed to graph assembly so a step whose
+    /// input names one of them is told its input was *dropped* rather than
+    /// that it never existed — different sentences, different entries to fix.
     dropped: BTreeSet<String>,
     diagnostics: Vec<Diagnostic>,
 }
 
-/// Deserialize every entry on its own and apply every rule that does
-/// not need the graph.
+/// Deserialize every entry on its own and apply every rule that does not
+/// need the graph.
 fn entries_of(text: &str) -> Entries {
     let raw: RawConfig = match toml::from_str(text) {
         Ok(r) => r,
@@ -985,19 +717,16 @@ fn entries_of(text: &str) -> Entries {
     let mut diags = Vec::new();
     let mut spans: BTreeMap<String, std::ops::Range<usize>> = BTreeMap::new();
 
-    // Each entry deserialized on its own, so one bad key costs one
-    // entry. The id is read straight off the raw value rather than
-    // taken from the deserialized entry, because a *rejected* entry
-    // still has to be nameable — and the key that failed is usually not
-    // the id.
+    // Each entry deserialized on its own, so one bad key costs one entry. The
+    // id is read off the raw value rather than the deserialized entry, because
+    // a rejected entry still has to be nameable.
     let mut step_candidates = Vec::with_capacity(raw.steps.len());
     for (i, spanned) in raw.steps.into_iter().enumerate() {
         let span = spanned.span();
         let value = spanned.into_inner();
         let id = value.get("id").and_then(|v| v.as_str()).map(str::to_string);
         if let Some(id) = &id {
-            // First spelling wins, matching which entry `accept_steps`
-            // keeps when two claim one id.
+            // First spelling wins, matching `accept_steps`.
             spans.entry(id.clone()).or_insert_with(|| span.clone());
         }
         let reference = EntryRef::step(i, id);
@@ -1061,9 +790,8 @@ fn entries_of(text: &str) -> Entries {
         specs.push(spec);
     }
 
-    // Every step id the file declares that is not in the surviving set.
-    // Read off the diagnostics rather than tracked as they are dropped,
-    // so a rule added above cannot forget to report here.
+    // Read off the diagnostics rather than tracked as entries are dropped, so
+    // a rule added above cannot forget to report here.
     let kept: BTreeSet<&str> = steps.iter().map(|e| e.id.as_str()).collect();
     let dropped: BTreeSet<String> = diags
         .iter()
@@ -1087,15 +815,9 @@ fn entries_of(text: &str) -> Entries {
     }
 }
 
-/// Parse config text, keeping every entry that loads.
-///
-/// Stops at the file level only: malformed TOML, or a top-level key we
-/// do not know, leaves nothing to salvage and comes back as a single
-/// [`Severity::Fatal`] diagnostic with an empty config. Anything
-/// smaller costs its own entry and nothing else.
-///
-/// Does not build the graph, so `inputs` are unresolved here. Callers
-/// that want the whole answer want [`check_text`].
+/// Parse config text, keeping every entry that loads; only a file-level
+/// problem leaves nothing to salvage. Builds no graph, so `inputs` are
+/// unresolved — [`check_text`] is the whole answer.
 pub fn parse_graded(text: &str) -> (DagConfig, Vec<Diagnostic>) {
     let e = entries_of(text);
     (e.cfg, e.diagnostics)
@@ -1103,36 +825,30 @@ pub fn parse_graded(text: &str) -> (DagConfig, Vec<Diagnostic>) {
 
 /// Everything the loader can say about one config text.
 pub struct ConfigCheck {
-    /// The exact bytes checked. Diagnostics carry byte spans into it,
-    /// so rendering one needs it — keeping it here means no caller has
-    /// to remember to carry the two together.
+    /// The exact bytes checked. Diagnostics carry byte spans into it, so
+    /// keeping it here means no caller has to carry the two together.
     pub text: String,
-    /// The entries that survived — exactly the steps in `graph`, plus
-    /// the applets that loaded. A valid config: a caller may use it
-    /// without looking at the diagnostics at all.
+    /// The entries that survived. A valid config: a caller may use it without
+    /// looking at the diagnostics at all.
     pub cfg: DagConfig,
-    /// The graph built from `cfg`, ready to run. Empty when the file is
-    /// not a config.
+    /// The graph built from `cfg`. Empty when the file is not a config.
     pub graph: Graph,
-    /// One per problem, in file order — the order someone fixing them
-    /// reads. Sort by [`Severity`] for worst-first; its `Ord` is blast
-    /// radius.
+    /// One per problem, in file order — the order someone fixing them reads.
+    /// Sort by [`Severity`] for worst-first; its `Ord` is blast radius.
     pub diagnostics: Vec<Diagnostic>,
 }
 
 impl ConfigCheck {
-    /// Nothing loaded: the file is not a config. The one state that
-    /// should stop the whole app.
+    /// Nothing loaded: the file is not a config. The one state that should
+    /// stop the whole app.
     pub fn is_fatal(&self) -> bool {
         self.worst() == Some(Severity::Fatal)
     }
 
-    /// Everything in the file loaded.
     pub fn is_clean(&self) -> bool {
         self.diagnostics.is_empty()
     }
 
-    /// The largest blast radius in the file, if any.
     pub fn worst(&self) -> Option<Severity> {
         self.diagnostics.iter().map(|d| d.severity).max()
     }
@@ -1145,7 +861,6 @@ impl ConfigCheck {
             .count()
     }
 
-    /// Every diagnostic rendered for a terminal, newline-separated.
     pub fn render(&self, path: &Path) -> String {
         self.diagnostics
             .iter()
@@ -1155,33 +870,26 @@ impl ConfigCheck {
     }
 }
 
-/// The whole chokepoint: config text in, the graph that will actually
-/// run out, plus one diagnostic per entry that will not.
-///
-/// This is what every entry point should call — the `datalib-dag`
-/// binary, `datalib-http`'s config load, and its `PUT /api/config`
-/// validation. One function rather than a rule in each caller is
-/// deliberate: the config file is the source of truth, so a rule one
-/// caller enforces alone is a rule a hand-edit silently breaks.
+/// The whole chokepoint: config text in, the graph that will actually run
+/// out, plus one diagnostic per entry that will not. Every entry point calls
+/// this, because a rule enforced in one caller is a rule a hand-edit
+/// silently breaks.
 pub fn check_text(text: &str) -> ConfigCheck {
     let mut entries = entries_of(text);
     let (graph, mut graph_diags) =
         Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
 
-    // Graph assembly drops more than the entry pass could see — a step
-    // whose input names nothing, a ring — so the surviving *config* is
-    // narrowed to what the graph kept. Leaving the entries in would
-    // give `cfg` and `graph` two different answers to "what survived",
-    // and every caller would have to know which one it meant.
+    // Graph assembly drops more than the entry pass could see — a step whose
+    // input names nothing, a ring — so narrow the surviving config to what the
+    // graph kept. Otherwise `cfg` and `graph` disagree about what survived.
     entries
         .cfg
         .steps
         .retain(|s| graph.by_id.contains_key(&s.id));
 
-    // Graph diagnostics know a step id but not where it sits in the
-    // file — the graph is built from specs, which carry no spans. Lend
-    // them the location here, where both are in hand, rather than
-    // threading the text through graph assembly.
+    // Graph diagnostics know a step id but not where it sits in the file, so
+    // lend them the location here rather than threading the text through
+    // graph assembly.
     for d in &mut graph_diags {
         if let Some(span) = d.id().and_then(|id| entries.spans.get(id)).cloned() {
             d.set_span(text, span);
@@ -1198,9 +906,8 @@ pub fn check_text(text: &str) -> ConfigCheck {
 }
 
 impl DagConfig {
-    /// A config with nothing in it — what a fatal diagnostic leaves
-    /// behind. Deliberately not `Default`: "empty" here is a failure
-    /// state and should read as one at the call site.
+    /// What a fatal diagnostic leaves behind. Deliberately not `Default`:
+    /// "empty" here is a failure state and should read as one.
     fn empty() -> Self {
         DagConfig {
             data_root: None,
@@ -1493,10 +1200,8 @@ mod tests {
         }
     }
 
-    /// `unified_index` needs no reserved-name rule any more: the index
-    /// steps' ids *are* those trees, so anything else claiming one is
-    /// an ordinary duplicate id. What must keep working is the index
-    /// steps themselves.
+    /// `unified_index` needs no reserved-name rule: the index steps' ids *are*
+    /// those trees, so anything else claiming one is an ordinary duplicate.
     #[test]
     fn the_index_steps_own_unified_index_by_being_it() {
         let cfg: DagConfig = toml::from_str(
@@ -1633,11 +1338,10 @@ tree = "slack_work/rendered_md"
         assert!(c.applets[0].params_json().unwrap().is_none());
     }
 
-    /// `title` was accepted and read by nothing; removing it makes a
-    /// config that still carries one fail to parse. Pinned because
-    /// that is what a user upgrading hits, and the message has to name
-    /// the key so the fix is obvious — `deny_unknown_fields` is what
-    /// makes it name the key rather than ignore it.
+    /// `title` was accepted and read by nothing. Removing it makes a config
+    /// that still carries one fail to parse — pinned because that is what a
+    /// user upgrading hits, and `deny_unknown_fields` is what makes the
+    /// message name the key.
     #[test]
     fn a_leftover_title_is_rejected_by_name() {
         let err = parse("[[applets]]\nid = \"grid\"\ntitle = \"Grid\"\ncommand = \"x\"\n")
@@ -1785,14 +1489,9 @@ command = "datalib-applet unified_index"
         );
     }
 
-    /// Nested ids were **silently accepted** before #209: uniqueness was
-    /// string equality, and a step's id is a path. Two steps writing
-    /// under one tree is two writers on one `.doltlite_db`, whose
-    /// working set is shared across processes — so they commit each
-    /// other's in-flight rows, with no failed step and no log line.
-    ///
-    /// Checked both ways round, because the file can declare them in
-    /// either order.
+    /// Two steps writing under one tree is two writers on one `.doltlite_db`,
+    /// which commit each other's in-flight rows with no failed step and no log
+    /// line. Checked both ways round, since either order can be declared first.
     #[test]
     fn nested_ids_are_two_writers_on_one_tree() {
         for (first, second) in [
@@ -1831,10 +1530,9 @@ command = "datalib-applet unified_index"
         assert!(check.is_clean(), "{:?}", check.diagnostics);
     }
 
-    /// An applet id and a step id are separate namespaces, and the
-    /// scaffold depends on it: `unified_index` the applet sits beside
-    /// `unified_index/grid` the step. A containment check that spanned
-    /// both would reject every default config.
+    /// Applet ids and step ids are separate namespaces, and the scaffold
+    /// depends on it: `unified_index` the applet sits beside
+    /// `unified_index/grid` the step.
     #[test]
     fn the_scaffold_shape_loads_clean() {
         let check = check_text(
@@ -1950,14 +1648,9 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
         );
     }
 
-    /// The commonest cascade of all, and the one that decides whether
-    /// the message sends you to the right line: a render step whose
-    /// fetch step was rejected for a bad key.
-    ///
-    /// The fetch step never reaches graph assembly — the entry pass
-    /// dropped it — so without being told what that pass threw out,
-    /// the graph would report "names no declared step" and send the
-    /// user looking for a step that is right there in the file.
+    /// The commonest cascade: a render step whose fetch step was rejected for
+    /// a bad key. The fetch step never reaches graph assembly, so without being
+    /// told what the entry pass threw out the graph would blame the render step.
     #[test]
     fn a_step_whose_input_was_rejected_is_told_where_the_fix_is() {
         let check = check_text(
@@ -2143,11 +1836,9 @@ command = "x"
         assert!(!is_toml("sources:\n  - name: slack\n"));
     }
 
-    /// A diagnostic points at the key it is about, not at the entry it
-    /// is in — which is where a reader looks and where the UI editor
-    /// puts its highlight. `toml::Value::try_into` reports no span at
-    /// all, so this is found rather than given, and the fallback is
-    /// the entry header.
+    /// A diagnostic points at the key it is about, not at the entry it is in.
+    /// `toml::Value::try_into` reports no span at all, so the location is
+    /// found rather than given, and falls back to the entry header.
     #[test]
     fn a_diagnostic_points_at_the_offending_key() {
         let text = "[[steps]]\nid = \"a/raw\"\ncommand = \"x\"\ntitle = \"nope\"\n";

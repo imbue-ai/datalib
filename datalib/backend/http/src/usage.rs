@@ -1,45 +1,24 @@
 //! Bytes on disk, over time.
 //!
-//! One background task walks the data root and keeps the newest
-//! measurement of every tree (the Pipeline table's size column) plus a
-//! short window of samples (its sparklines). The same samples are
-//! appended to `system/usage.doltlite_db`, which nothing prunes — so it
-//! answers "how has this root grown" long after the window scrolled by.
+//! One background task walks the data root and keeps the newest measurement
+//! of every tree, plus a short window of samples for the sparklines. The same
+//! samples are appended to `system/usage.doltlite_db`, which nothing prunes.
 //!
-//! **It walks only while a run is in flight, and has no timer.** Nothing
-//! else writes the data root, so between runs there is nothing to find;
-//! an idle server measuring forever would read tens of gigabytes an
-//! hour to learn a number that cannot have moved. The loop wakes on
-//! [`crate::watch::RootEvent`] and asks [`pipeline_is_running`] whether
-//! to walk. A run rewrites `system/dag_state.json` and the progress bus
-//! continuously, so those events are its pulse; otherwise the only
-//! traffic is that channel's ten-second heartbeat, which costs one
-//! `flock` and walks nothing. (The heartbeat is load-bearing, and
-//! [`crate::watch::spawn`] starts it even when the watcher itself fails
-//! to build — so an unwatchable filesystem still gets the run-ended
-//! walk, just later.)
+//! **It walks only while a run is in flight, and has no timer.** Nothing else
+//! writes the data root, so between runs there is nothing to find, and an
+//! idle server measuring forever would read tens of gigabytes an hour to
+//! learn a number that cannot have moved. The cost is resolution, not
+//! correctness: a change made from outside datalib carries the instant it was
+//! next *measured*.
 //!
-//! The cost of the gate is resolution, not correctness: a change made
-//! from outside datalib is not seen until the next walk, and its sample
-//! carries the instant it was *measured*. Readers already treat the
-//! series that way — see Compaction.
+//! **One walk, not one per tree.** Every declared tree is under the root, so
+//! [`measure`] totals the root and records each subtree's subtotal on the way
+//! back up.
 //!
-//! **One walk, not one per tree.** Every declared tree is under the
-//! root, so [`measure`] totals the root and records each subtree's
-//! subtotal on the way back up. Walking each tree and then the root
-//! again would read most of the disk twice.
-//!
-//! **Compaction**, in [`UsageMonitor::observe`]: a value equal to the
-//! series' last recorded value is dropped (a repeat says nothing), and
-//! two samples of one series are never recorded closer than
-//! [`MIN_SAMPLE_GAP`]. So a reader must carry the last value forward
-//! rather than assume a fixed interval.
-//!
-//! `GET /api/pipeline/storage` used to do this walk itself, per poll,
-//! per open tab — the same I/O minus a timeseries, with the answer's
-//! cost scaling by reader. If this ever needs to be cheaper, the move
-//! is to let the watcher say which subtree changed rather than
-//! re-reading the tree.
+//! **The series is compacted**: a value equal to the last recorded one is
+//! dropped, and two samples of one series are never closer than
+//! [`MIN_SAMPLE_GAP`]. Readers must carry the last value forward rather than
+//! assume a fixed interval.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -148,15 +127,6 @@ pub struct TreeUsage {
     pub blob_bytes: u64,
 }
 
-/// Walk `root` once, totalling every byte under it and recording the
-/// subtotal of each tree in `want` on the way back up.
-///
-/// `want` holds data-root-relative paths with `/` separators — step
-/// ids, which are exactly the trees their steps write.
-///
-/// Symlinks are counted as their own (tiny) entry and never followed:
-/// following them risks both a cycle that never returns and
-/// double-counting a tree some other output already reported.
 pub fn measure(root: &Path, want: &BTreeSet<String>) -> Measurement {
     let mut trees: BTreeMap<String, TreeUsage> = want
         .iter()
@@ -260,13 +230,6 @@ impl UsageMonitor {
         }
     }
 
-    /// Has a walk *finished* since `arrived`?
-    ///
-    /// The coalescing test for an on-demand refresh. A caller whose
-    /// question is already answered by somebody else's completed walk
-    /// can skip its own; one whose arrival predates every completed
-    /// walk cannot, because the change it is asking about may have
-    /// landed after the last walk read that tree.
     pub async fn walked_since(&self, arrived: Instant) -> bool {
         self.state
             .read()
@@ -275,11 +238,6 @@ impl UsageMonitor {
             .is_some_and(|t| t >= arrived)
     }
 
-    /// Fold a walk's results in and return the rows worth persisting.
-    ///
-    /// `now_mono` is the caller's monotonic clock reading; `now_iso` is
-    /// the wall-clock stamp that goes into the row. Both are passed in
-    /// so a test can drive this without sleeping.
     pub async fn observe(
         &self,
         m: &Measurement,
@@ -340,14 +298,6 @@ impl UsageMonitor {
         rows
     }
 
-    /// Seed the window from what a previous run recorded, so a restart
-    /// doesn't blank every sparkline for five minutes.
-    ///
-    /// `rows` arrive newest-first by `measured_at`, which is an ISO
-    /// string carrying its own offset — so the DB's ordering is only
-    /// approximate across an offset change. That is fine for a bounded
-    /// "newest N" read: the ordering that matters is redone here,
-    /// against parsed instants.
     pub async fn seed(&self, rows: Vec<DiskUsageRow>) {
         let mut by_series: BTreeMap<String, Vec<(i64, UsageSample)>> = BTreeMap::new();
         for r in rows {
@@ -451,12 +401,6 @@ fn parse_ms(at: &str) -> Option<i64> {
         .map(|t| t.inner().timestamp_millis())
 }
 
-/// Drop samples that have scrolled out of the window, keeping the
-/// newest one from before it as the carry-in value.
-///
-/// The carry-in is what makes a flat series draw as a line rather than
-/// as nothing: a tree whose size last moved an hour ago has no sample
-/// inside the window at all, and its value is precisely that last one.
 fn prune(history: &mut VecDeque<UsageSample>) {
     let Some(newest) = history.back().and_then(|s| parse_ms(&s.at)) else {
         return;
@@ -474,9 +418,6 @@ fn prune(history: &mut VecDeque<UsageSample>) {
     }
 }
 
-/// The trees a config declares — one per step, and it is the step's id.
-/// An unreadable or invalid config yields none, which is the same
-/// answer the Pipeline table's own empty state gives.
 pub fn declared_trees(config_path: &Path) -> Vec<String> {
     match datalib_dag::config::load(config_path) {
         Ok((cfg, _root)) => {
@@ -493,14 +434,6 @@ pub fn declared_trees(config_path: &Path) -> Vec<String> {
 
 /// Walk the root once and fold what it finds into the monitor and the
 /// store. Returns false when the walk did not happen.
-///
-/// `coalesce_since` is the on-demand path's arrival time: if some other
-/// walk has already *finished* since then, this caller's question is
-/// answered and it does no work. The tick passes `None` — it is the
-/// series' own heartbeat and skipping one would leave a gap.
-///
-/// Shared by both callers, so there is exactly one description of what
-/// a measurement is.
 pub async fn sample_once(
     monitor: &UsageMonitor,
     repo: &DynAppRepo,
@@ -537,55 +470,15 @@ pub async fn sample_once(
 }
 
 /// A measurement asked for by a request, rather than by the clock.
-///
-/// The endpoint takes `?refresh=1` at the two moments the stored number
-/// is wrong on screen rather than merely old: a page load, and a sync
-/// going terminal. On an idle root this is the *only* thing that
-/// walks — the tick is gated on a run being in flight. Callers that arrive together share one walk;
-/// a caller that arrives after every finished walk gets its own,
-/// because that is the only way it can see a change made since.
 pub async fn sample_on_demand(monitor: &UsageMonitor, repo: &DynAppRepo, root: Arc<PathBuf>) {
     let arrived = Instant::now();
     sample_once(monitor, repo, root, Some(arrived)).await;
 }
 
-/// Is a `datalib-dag` run holding this root right now?
-///
-/// The runner lock, read-only — so this covers a run started from a
-/// terminal exactly as it covers one this server spawned, and asking
-/// neither creates the lock file nor rewrites what the holder wrote in
-/// it. `GET /api/dag` asks the same question the same way.
-///
-/// The lock rather than the run record, for the reason the record's
-/// own `live` flag exists: a runner killed mid-run leaves the record
-/// open forever, and a sampler trusting it would walk the disk until
-/// someone rebooted.
-///
-/// One caveat, since this now runs on a timer rather than only inside
-/// a request: `flock` has no read-only query, so asking takes the lock
-/// for the few microseconds it holds it, and a runner starting in
-/// exactly that window would be refused. The window shrank rather than
-/// grew when this landed — `GET /api/dag` used to ask by *acquiring*,
-/// which on success also truncated and rewrote the file, holding it
-/// for a write's worth of time on every poll from every open tab.
 pub fn pipeline_is_running(root: &Path) -> bool {
     datalib_dag::lock::FileLock::runner_is_held(root)
 }
 
-/// Should this wake-up walk?
-///
-/// Split out from the loop so the four cases can be stated once and
-/// tested without a clock:
-///
-///   * a run just started — walk now, so the series has a point at the
-///     beginning of it rather than only after the first interval;
-///   * a run is continuing — walk on [`SAMPLE_INTERVAL`], however many
-///     events arrive in between;
-///   * a run just ended — walk once more. **This is the load-bearing
-///     one.** It records where the run left the disk; without it the
-///     series would stop at the last mid-run sample and the final size
-///     would wait for whoever next opened the page;
-///   * nothing is running — don't walk at all. That is the whole point.
 fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> bool {
     let started = running && !was_running;
     let ended = !running && was_running;
@@ -593,18 +486,6 @@ fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> b
     started || ended || due
 }
 
-/// The sampling loop.
-///
-/// Walks once at startup — an idle root is the usual state, and the
-/// table needs a number before anyone asks — and then only around a
-/// run. See the module docs for why there is no timer here, and
-/// [`should_walk`] for exactly when it walks.
-///
-/// `events` is the data root's own change channel. What arrives on it
-/// is ignored: a run's events and the idle heartbeat are equally good
-/// as "look again", and the lock — not the event — is what says
-/// whether a run is in flight. Subscribing rather than polling is what
-/// makes the idle case free.
 pub async fn run(
     monitor: Arc<UsageMonitor>,
     repo: DynAppRepo,
@@ -782,12 +663,6 @@ mod tests {
     }
 
     /// When the loop walks, stated as a table.
-    ///
-    /// The case that made this worth pulling out of the loop is the
-    /// last one: a two-second sync — which is what a small root
-    /// actually takes — begins and ends well inside one walk interval,
-    /// so "walk every interval while running" caught nothing at all.
-    /// The edges are what make a short run visible.
     #[test]
     fn a_walk_is_owed_at_the_edges_of_a_run_and_never_between_them() {
         let idle = Duration::ZERO;
@@ -812,12 +687,6 @@ mod tests {
     }
 
     /// The sampler runs while a run holds the root, and not otherwise.
-    ///
-    /// This is the gate the whole loop hangs on, and it reads the
-    /// runner's lock rather than its state file on purpose: a run
-    /// killed mid-flight leaves the record open forever, so a sampler
-    /// trusting the record would keep walking the disk every five
-    /// seconds until the machine was restarted.
     #[test]
     fn the_sampler_runs_only_while_a_runner_holds_the_root() {
         let td = tempfile::tempdir().unwrap();
@@ -843,14 +712,6 @@ mod tests {
     }
 
     /// Refreshes coalesce on *finished* walks, not on recent ones.
-    ///
-    /// The distinction is the whole reason this is not a plain
-    /// debounce, and it is what a sync's own numbers depend on: a walk
-    /// that started before the sync ended read the tree before the
-    /// files landed, so a refresh arriving after it must still walk. A
-    /// debounce measured from the walk's *start* skipped exactly that
-    /// case, and the size column read "—" one frame after a successful
-    /// sync.
     #[tokio::test]
     async fn a_refresh_coalesces_only_on_a_walk_that_finished_after_it_arrived() {
         let mon = UsageMonitor::new();

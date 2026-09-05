@@ -1,11 +1,5 @@
 //! Integration test for authoring the `user` namespace:
 //! `PUT`/`GET /api/lib/{name}` and `POST /api/lib/{name}/rename`.
-//!
-//! The endpoints are a *writer*. What they produce is two ordinary
-//! files in `system/frontend/user/`, indistinguishable from what an
-//! applet writes into its own namespace — so these tests check the
-//! files as much as the responses. Everything read back comes from
-//! `/api/frontend`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -60,7 +54,6 @@ async fn get_text(app: &axum::Router, uri: &str) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
-/// The `user` namespace as `/api/frontend` reports it.
 async fn user_entries(app: &axum::Router) -> serde_json::Value {
     let resp = send(
         app,

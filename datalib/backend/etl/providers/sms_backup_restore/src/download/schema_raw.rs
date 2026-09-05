@@ -1,40 +1,4 @@
 //! Raw-store schema for the "SMS Backup & Restore" provider.
-//!
-//! Declarations-only, mirroring the convention in `google_voice` /
-//! `google_takeout`. Row structs derive
-//! [`datalib_etl_macros::WirePayloadRow`] (entity tables) or
-//! [`datalib_etl_macros::CasEdgeRow`] (the per-provider CAS edge
-//! table), so the DDL + `BulkUpsertable` plumbing comes from the macros
-//! and this file is just the schema description.
-//!
-//! ## Tables
-//!
-//! Entity (wire-payload) tables — each gets a paired `_bookkeeping`
-//! sidecar via the crate's [`full_ddl`] loop:
-//!
-//!   - `sms_messages` — one row per `<sms>` *and* per `<mms>` record.
-//!   - `sms_calls`    — one row per `<call>` record.
-//!
-//! CAS edge table — maps `(message_id, ref_name) → blake3`:
-//!
-//!   - `sms_attachments` — MMS image / audio / recording part bytes.
-//!
-//! ## Identity (idempotent)
-//!
-//! The app gives us no stable per-record id, so every row's PK is a
-//! uuidv5 over a recipe of the most stable fields. Re-ingesting the same
-//! (or a superset) export reproduces identical ids, so an
-//! `ON CONFLICT(id) DO UPDATE` upsert collapses re-exports to no-op
-//! writes rather than duplicating:
-//!
-//!   - sms:  `sms:{address}:{date_ms}:{type}:{sha8(body)}`
-//!   - mms:  `mms:{address}:{date_ms}:{m_id|tr_id|sha8(text)}`
-//!   - call: `call:{number}:{date_ms}:{type}:{duration}`
-//!
-//! Attachment ref names are the part filename *prefixed with the owning
-//! message id* (`{message_id}/{partname}`) so the non-unique MMS part
-//! names the app emits (`image000000.jpg`, `recording000000.m4a`, …)
-//! can't collide within a conversation's blob bundle at render time.
 
 use datalib_etl::doltlite_raw::{WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
@@ -52,20 +16,16 @@ pub const EDGE_TABLES: &[&str] = &["sms_attachments"];
 /// go via `clear_scope_prefix`.
 pub const CURSOR_SCOPE_PREFIX: &str = "sms_backup_restore/";
 
-/// Per-provider uuidv5 namespace.
 fn sms_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"sms-backup-restore.datalib")
 }
 
-/// uuidv5 of a recipe under this provider's namespace.
 pub fn ns_id(recipe: &str) -> String {
     Uuid::new_v5(&sms_ns(), recipe.as_bytes())
         .as_hyphenated()
         .to_string()
 }
 
-/// First 8 hex chars of the sha256 of `s` — a short, stable content tag
-/// for identity recipes.
 pub fn sha8(s: &str) -> String {
     let digest = Sha256::digest(s.as_bytes());
     let mut out = String::with_capacity(8);
@@ -117,9 +77,6 @@ pub struct SmsAttachmentRow {
     pub blake3: Option<String>,
 }
 
-/// Full DDL list passed to [`datalib_etl::doltlite_raw::open`].
-/// Composes every entity table + its `_bookkeeping` sidecar, the CAS
-/// edge DDL, and the shared `ingested_files` resume-cursor table.
 pub fn full_ddl() -> Vec<String> {
     use datalib_etl::blob_cas::CasEdgeRow as _;
     use datalib_etl::doltlite_raw::bookkeeping_ddl_for;

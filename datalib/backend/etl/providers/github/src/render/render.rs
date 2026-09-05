@@ -1,21 +1,4 @@
 //! Render captured GitHub PRs to **one** markdown document per PR.
-//!
-//! Layout:
-//! ```text
-//! <root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/index.md
-//! <root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/index.grid_rows.json
-//! ```
-//!
-//! Section order in the doc:
-//! 1. Front matter + title + PR meta (state, head/base, author)
-//! 2. **Description** — `pull_request.body`
-//! 3. **Reviews** — one block per `pr_review` summary, oldest first
-//! 4. **General discussion** — `issue_comments`, oldest first
-//! 5. **Inline comments** — grouped by (`path`, `line`), then within each
-//!    group chronologically (parent then replies)
-//!
-//! Every individual comment block carries its `html_url` as `[link]` so
-//! a reader can pop the original conversation on github.com.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -63,7 +46,6 @@ pub fn slugify(name: &str) -> String {
     }
 }
 
-/// Relative path from the data root to a PR's `index.md`.
 pub fn pr_qmd_path_rel(stanza: &str, repo_full_name: &str, pr_number: u32) -> String {
     let (owner, repo) = repo_full_name
         .split_once('/')

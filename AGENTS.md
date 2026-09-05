@@ -13,10 +13,15 @@ are relative to the repo root.
 
 **Pipeline / sync engine**
 
+- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the
+  runner's current rules: how the graph is built and what gets dropped
+  from it, what makes a step stale, why versions are reported by the step
+  rather than measured by the runner, what each diagnostic severity
+  costs, and the two locks.
 - [`docs/dev/pipeline_dag_architecture.md`](docs/dev/pipeline_dag_architecture.md)
-  — how the sync pipeline works: the `datalib-dag` runner, step contract,
-  scheduler (edge derivation, skipping, retry, subtree poisoning), and
-  the implementation decisions.
+  — the design history behind that: why a DAG at all, the node contract
+  as it was proposed, the implementation decisions and the open
+  questions.
 - [`docs/dev/step_identity.md`](docs/dev/step_identity.md) — *proposal*:
   making a step's `id` the path it writes, so `inputs` name step ids and
   the six places that recover an identity by splitting a string go away.
@@ -68,6 +73,14 @@ are relative to the repo root.
 
 **Data architecture**
 
+- [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the
+  rules for the shared ingest machinery: raw-store primary keys, the
+  bookkeeping sidecar, volatile fields, JSONB payloads, why every doltlite
+  pool is size 1, and why the DDL runs in two passes.
+- [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md)
+  — the four table derives (`WirePayloadRow`, `RawTable`, `CasEdgeRow`,
+  `PortableTable`): required struct shape, attributes, and the Rust→SQL
+  type mapping.
 - [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md)
   — the download (ingestion) architecture: raw stores, incrementality,
   resumability, wire tape. Companion:
@@ -209,10 +222,56 @@ change.
 
 ## Write plainspoken
 
-Be clear and unhurried, explain a term the first time it appears, and
-don't assume the reader already shares your context — and note that a lot
-of the docs and comments already here are terser and more jargony than
-they should be, so the surrounding prose is not the register to match.
+In docs — and in the few comments you keep — be clear and unhurried,
+explain a term the first time it appears, and don't assume the reader
+already shares your context. A lot of the prose already here is terser and
+more jargony than it should be, so the surrounding text is not the register
+to match. Plainspoken means *clear*, not *long*: see the next section for
+how little of it belongs in the code itself.
+
+## Comments: few, short, and about *why*
+
+**Write the code as if comments did not exist.** A comment is the fallback
+for what you could not say in a name or a shape. Reach for a better name,
+a smaller function, or a named intermediate variable first; add the comment
+only when you have run out of code to say it with.
+
+Keep these:
+
+- **A file header.** One to three sentences or bullets: what this file is
+  for, what belongs here, and — where it is not obvious — what does not.
+- **A type header.** Same shape, for a struct/enum/trait/class that is not
+  self-evident from its name and fields.
+- **A *why* that the code cannot carry.** A non-obvious constraint, a
+  workaround for someone else's bug, a trap the next person will fall into.
+  Say it in a sentence or two, and prefer stating the rule over narrating
+  how we arrived at it.
+
+Delete these on sight:
+
+- **Function-level doc blocks.** If a function needs a paragraph to explain
+  what it does, rename it or split it. The name should give it all away.
+- **Restatement.** `// increment the counter` above `counter += 1`.
+- **Changelog.** "used to", "before #209", "this replaced the old…",
+  "as of 2026-08-31 we…". Git already knows. So does the issue tracker.
+  A comment that dates itself is a comment that will be wrong.
+- **Essays.** Section banners, numbered arguments, transcripts of a
+  decision. If it is genuinely worth several paragraphs it is documentation,
+  not a comment — put it in a `README.md` beside the code (or under `docs/`)
+  and, if the reader really needs the pointer, link it in one line.
+
+Tests are the one place a short doc comment on a function earns its keep: a
+sentence or two naming the regression it guards, especially where the test
+would otherwise look like it asserts nothing interesting. Still a sentence or
+two — not the incident report.
+
+Rule of thumb: if you are about to write a fourth consecutive comment line,
+you are writing a document. Stop and decide where it belongs.
+
+Every comment is a claim that has to be re-verified on every edit, and an
+unverified claim in this repo has already burned us more than once — see
+[Prose can be stale](#prose-can-be-stale--verify-claims-against-the-tree).
+Fewer, truer comments beat more of them.
 
 ## Repo layout
 

@@ -3,36 +3,6 @@
 //! JSON spec. AEP defaults to `"0" * 64` (the fixture AEP) so the
 //! extractor sees a real backup it can decrypt with a known-public
 //! passphrase.
-//!
-//! The output is byte-stable across runs: every random byte (IVs +
-//! backup_id) is held to a deterministic value, so the genrule
-//! caches cleanly under Bazel and golden tests are stable.
-//!
-//! Spec shape:
-//!
-//! ```jsonc
-//! {
-//!   "aep": "0000…",                        // 64 chars; optional, default all zeros
-//!   "snapshot_dir_name": "signal-backup-…",// optional, default fixed string
-//!   "backup_time_ms": 1701000000000,        // BackupInfo.backup_time_ms
-//!   "recipients": [
-//!     { "id": 1, "self": true, "name": "Captain Jean-Luc Picard" },
-//!     { "id": 2, "name": "Will Riker",  "e164": 17015551111 },
-//!     …
-//!   ],
-//!   "chats": [{ "id": 100, "recipient_id": 1 }],
-//!   "chat_items": [
-//!     { "chat_id": 100, "author_id": 1, "date_sent": 1700000000000,
-//!       "text": "Make it so." },
-//!     …
-//!   ]
-//! }
-//! ```
-//!
-//! Single `println!` reports the produced snapshot path on stdout so
-//! a genrule can capture it — that one call has the lint suppressed
-//! at the callsite; the rest of the binary follows the workspace's
-//! "no println / eprintln" convention.
 
 use std::path::PathBuf;
 

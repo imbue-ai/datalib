@@ -1,21 +1,4 @@
 //! Ancient-Greek-BERT sentence embedder via candle-transformers.
-//!
-//! Loads `pranaydeeps/Ancient-Greek-BERT` (BERT-base, continued-
-//! pretrained from mBERT on Ancient Greek — the experiment showed
-//! this is the best off-the-shelf option for grc-eng cross-lingual
-//! similarity, beating mBERT, XLM-R, and pure-Greek GreBerta).
-//!
-//! On first use, weights / tokenizer / config are pulled from
-//! HuggingFace into the standard HF Hub cache under `~/.cache/
-//! huggingface/hub/` via `hf-hub`. Subsequent runs read from cache.
-//!
-//! Embeddings are mean-pooled over real (non-padding) tokens and
-//! L2-normalized, so cosine similarity reduces to a dot product —
-//! the form `dp::align` expects.
-//!
-//! Bit-equivalence with the Python reference verified on the
-//! Thucydides opening: candle and HF transformers produce embeddings
-//! that agree to four decimal places on identical input.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -51,8 +34,6 @@ struct EmbedderInner {
 }
 
 impl Embedder {
-    /// Fetch (or hit cache) the model + tokenizer + config and
-    /// construct an Embedder ready to take sentences.
     pub async fn load() -> Result<Self> {
         let device = Device::Cpu;
         let api = Api::new().context("init hf-hub Api")?;
@@ -99,8 +80,6 @@ impl Embedder {
         })
     }
 
-    /// Encode a sentence to a mean-pooled, L2-normalized embedding.
-    /// Returns an owned `Vec<f32>` of length `config.hidden_size`.
     pub fn embed_one(&self, sentence: &str) -> Result<Vec<f32>> {
         let i = &self.inner;
         let enc = i

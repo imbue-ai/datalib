@@ -6,9 +6,6 @@
 // first. Picking one REPLACES this card with `documentView("<uuid>")`
 // via ctx.host.setSource, so the picker acts as a transient "new card"
 // step rather than a lingering column.
-//
-// Plain-DOM (no Vue), same pattern as aliasView: paint once from a
-// fetch, nothing reactive to watch.
 import type { CardRender } from "../types";
 import { fetchDocs } from "@/api";
 

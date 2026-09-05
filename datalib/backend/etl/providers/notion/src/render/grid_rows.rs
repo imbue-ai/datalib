@@ -1,16 +1,4 @@
 //! Port of `_notion_rows` from `src/ingest/grid_rows.py`. Emits:
-//!
-//! - One `Notion Page` row per page.
-//! - One `Notion Comment Thread` row per discussion.
-//! - One `Notion Comment` row per individual comment.
-//!
-//! We group rows per *document*. There are two
-//! kinds of documents on the Notion side:
-//!
-//! - A page → a document keyed `<page_uuid>` carrying the single
-//!   `Notion Page` row.
-//! - A discussion → a document keyed `<discussion_uuid>` carrying
-//!   the thread row + its comment rows.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -183,8 +171,6 @@ fn short_author(uid: &str, user_names: &HashMap<String, String>) -> Option<Strin
     }
 }
 
-/// The page's own row, or `None` with the reason recorded on
-/// `problems` — see `GridRowBuilder::build_or_record`.
 fn page_row(
     page: &Value,
     title: &str,
@@ -226,7 +212,6 @@ fn page_row(
         .build_or_record(stanza, &pid, RENDER_VERSION, problems)
 }
 
-/// Rows for one discussion: the thread row + per-comment rows.
 #[allow(clippy::too_many_arguments)]
 fn thread_rows(
     disc_id: &str,
@@ -716,30 +701,6 @@ mod tests {
 
     // Regression test for a quadratic blow-up in `gather_documents`.
     // History:
-    //
-    //   v1 bug: rebuilt the `block_parent` map (an inner O(N) scan
-    //   over `parsed.blocks`) inside the outer `for b in
-    //   &parsed.blocks` loop. Real ~10K-block notion sources pegged
-    //   a core indefinitely.
-    //
-    //   v2 fix: build `block_parent` once outside the loop. But the
-    //   owner-walk itself was still O(depth) per block; on the
-    //   pathological linear-chain test fixture below (N=4_000, each
-    //   block parents the previous one) the walk did ~8M HashMap
-    //   lookups and took 6s in debug. Real notion trees are depth
-    //   ~10 so production was fine, but the test budget was 30s and
-    //   the test binary's wall was dominated by this one test.
-    //
-    //   v3 (current): memoize `block → owning_page` during the walk.
-    //   Each block resolves in O(1) amortized regardless of tree
-    //   shape; the same N=4_000 fixture finishes in ~50ms.
-    //
-    // Budget below stays generous (1s) so we catch a regression to
-    // the v1/v2 cliff long before someone sees production wedge,
-    // without flaking on CI under load. If anything in this file
-    // pushes wall above ~200ms the per-phase
-    // `notion_gather_documents_phase` debug events surface where —
-    // run with `--test_output=streamed --cache_test_results=no`.
     #[test]
     fn gather_documents_is_linear_in_blocks() {
         init_tracing();

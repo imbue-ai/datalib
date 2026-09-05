@@ -1,19 +1,4 @@
 //! Long-lived `qmd mcp` subprocess.
-//!
-//! Per-search shell-outs to `npx -y @tobilu/qmd@<ver> query …` were
-//! costing ~4s/call: Node startup, model reload, index open. The MCP
-//! server keeps all of that resident; first call still pays the model
-//! load, every subsequent call is sub-second.
-//!
-//! Protocol: JSON-RPC over the child's stdio, one message per line.
-//! The MCP handshake (`initialize` + `notifications/initialized`) runs
-//! once on the first request. We hold the child for the lifetime of
-//! the daemon and respawn lazily on any I/O error.
-//!
-//! Concurrency: a single child is shared behind a `std::sync::Mutex`.
-//! MCP-over-stdio is request/response per session, so serializing here
-//! is necessary; callers run inside `tokio::task::spawn_blocking` so
-//! the tokio runtime is never blocked.
 
 use crate::qmd::mapping::{QmdHit, QueryMode};
 use crate::qmd::runner::{
@@ -97,14 +82,6 @@ impl QmdDaemon {
         // for Vsearch we send vec only. First sub-query gets 2× weight,
         // so lex goes first when present (better behavior on exact terms
         // like UUIDs, channel names, usernames).
-        //
-        // The user may type qmd lex syntax (`"phrase"`, `-word`,
-        // `-"phrase"`) in the search bar. The `lex:` sub-query takes
-        // it verbatim — qmd's FTS5 layer interprets the syntax. The
-        // `vec:` sub-query gets a stripped version: quotes removed,
-        // exclusions dropped, since vector search has no notion of
-        // either. When every token is an exclusion the vec sub-query
-        // would be empty, so we omit it entirely.
         let searches = build_daemon_searches(mode, q);
         let mut guard = self
             .state
@@ -289,9 +266,6 @@ fn send_request(state: &mut DaemonState, req: &serde_json::Value) -> Result<()> 
     Ok(())
 }
 
-/// Read until we see a JSON-RPC response with our id. MCP servers may
-/// emit unrelated notifications (logs, progress) on the same channel,
-/// so we skip non-matching messages.
 fn read_response(state: &mut DaemonState, id: u64) -> Result<serde_json::Value> {
     let stdout = state
         .stdout

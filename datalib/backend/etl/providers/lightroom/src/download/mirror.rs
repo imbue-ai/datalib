@@ -1,85 +1,4 @@
 //! The SQLite→doltlite mirror engine.
-//!
-//! Every run rebuilds every mirrored table from the source and drops
-//! whatever the source no longer has, then commits. That is the whole
-//! model:
-//!
-//! ```text
-//! drop EVERY table in the mirror
-//! for each SOURCE table:  CREATE TABLE main.t (…);
-//!                         INSERT INTO main.t SELECT … FROM src.t;
-//! dolt_commit
-//! ```
-//!
-//! The drop is unconditional — every mirror table, not just the ones the
-//! source still has. That is what makes a table the source *removed*
-//! disappear from HEAD instead of sitting there frozen and
-//! indistinguishable from a live one, and it means there is no "is this
-//! one stale?" question to get wrong.
-//! `a_table_the_source_dropped_is_dropped_from_the_mirror` fails if the
-//! drop is narrowed to the source's tables.
-//!
-//! ## Why rebuilding from scratch is free
-//!
-//! It looks wasteful and isn't, because doltlite stores a table as a
-//! content-addressed prolly tree. A row written back byte-identical to
-//! the row already at HEAD produces the same chunk and lands in the same
-//! place, and a `CREATE TABLE` identical to the one already at HEAD is
-//! likewise not a change. Drop a table, recreate it, refill it with the
-//! same 419 rows, and `dolt_status` comes back **clean** — so an ingest
-//! of an unchanged catalog produces no commit at all.
-//!
-//! Everything an incremental backup needs falls out of that:
-//!
-//! - **Diff quality is unaffected.** An edited row still reads as
-//!   `modified` in `dolt_diff_<table>`, not as a removal plus an
-//!   addition — dolt matches rows by primary key, and it neither knows
-//!   nor cares that the table was dropped in between.
-//! - **History is unaffected.** `dolt_history_<table>` keeps every prior
-//!   version of a row across the drop, including across a schema change.
-//! - **Schema evolution needs no code.** A new table, a new column, a
-//!   removed column, a retyped one, a moved key — every one of them is
-//!   just "the CREATE TABLE we emit this run differs from last run's",
-//!   which is not a case to handle. There is no reconciliation logic in
-//!   this crate, and there was: an earlier version compared the mirror's
-//!   introspected shape against the source's and chose between ADD
-//!   COLUMN and drop-and-recreate. It also had a bug that version cannot
-//!   have — ten of a stock catalog's 133 tables recreated on *every* run
-//!   because SQLite reports a non-`INTEGER PRIMARY KEY` column as
-//!   nullable while dolt stores it NOT NULL, and the two shapes never
-//!   compared equal. Nothing compares shapes now.
-//!
-//! It also means the ingester needs no cursor, no watermark, and no
-//! change-tracking of its own: whatever the catalog says today becomes
-//! HEAD, and history accumulates behind it.
-//!
-//! ## The copy runs inside SQLite, not inside Rust
-//!
-//! doltlite's amalgamation reads ordinary SQLite files as well as
-//! `.doltlite_db` ones, so the mirror `ATTACH`es the catalog and moves
-//! rows with `INSERT … SELECT`. No value ever crosses into Rust, which
-//! is both much faster and — the part that matters — perfectly faithful:
-//! SQLite's dynamic typing survives the hop, so a column holding an
-//! integer in one row and a blob in the next arrives with both types
-//! intact. Marshalling through Rust would force a decision about what
-//! such a column "is".
-//!
-//! ## Scaling caveat
-//!
-//! Each table is filled inside its own transaction, so peak memory
-//! scales with the largest single table rather than the whole catalog.
-//! That split is not stylistic: doltlite holds a transaction's writes in
-//! memory at roughly 3–4x the data size, so wrapping a whole run in one
-//! transaction costs ~510 MB peak RSS for 150 MB of rows — fine here,
-//! ~15 GB for a 4–5 GB catalog, which is not. The dolt commit at the end
-//! still covers the whole run, so the run is still atomic *as history*:
-//! a crash mid-run leaves HEAD untouched and a dirty working tree, which
-//! `doltlite_raw::open` seals into its own rescue commit next time.
-//!
-//! A multi-hundred-GB database would want the copy chunked by
-//! primary-key range too; a Lightroom catalog (tens of MB, low hundreds
-//! of thousands of rows) is nowhere near that, and a 3.3 MB / 133-table
-//! catalog mirrors in ~220 ms.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -149,27 +68,11 @@ impl Snapshot {
     pub fn path(&self) -> &Path {
         &self.path
     }
-    /// Whether this is a real snapshot or a pass-through of the live file.
     pub fn is_copy(&self) -> bool {
         self.dir.is_some()
     }
 }
 
-/// Take a consistent point-in-time copy of `source` via `VACUUM INTO`.
-///
-/// Lightroom keeps its catalog open — and in WAL mode — for as long as
-/// it is running, so reading the live file can observe a torn view or
-/// fail outright on a lock. `VACUUM INTO` runs inside a read transaction
-/// on the source, so what lands is one coherent snapshot; it also drops
-/// the freelist, which is why the snapshot is usually a little smaller
-/// than the catalog.
-///
-/// If the read-only open fails — the classic case being a WAL catalog
-/// whose `-shm` file we're not allowed to touch — this falls back to a
-/// plain file copy of the catalog and its sidecars. That copy can be
-/// torn if Lightroom writes mid-copy; SQLite's own WAL recovery repairs
-/// the common cases, and the honest advice, logged at `warn`, is to
-/// close Lightroom before backing up.
 pub async fn snapshot(source: &Path) -> Result<Snapshot> {
     let dir = tempfile::tempdir().context("create snapshot tempdir")?;
     let dest = dir.path().join("snapshot.sqlite");
@@ -247,8 +150,6 @@ pub async fn open_mirror(db_path: &Path) -> Result<SqlitePool> {
     datalib_etl::doltlite_raw::open(db_path, &[]).await
 }
 
-/// Open a plain (non-doltlite) SQLite pool. Used by the tests and by
-/// anything that wants to poke the source catalog directly.
 pub async fn open_sqlite(path: &Path, create: bool) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
         .with_context(|| format!("sqlite uri for {}", path.display()))?
@@ -261,22 +162,6 @@ pub async fn open_sqlite(path: &Path, create: bool) -> Result<SqlitePool> {
         .with_context(|| format!("open sqlite pool at {}", path.display()))
 }
 
-/// Mirror `opts.source_path` into the doltlite store behind `pool`.
-///
-/// Does **not** commit — the caller owns that, because under the
-/// orchestrator the commit is `RawStoreSession::finish`'s job (so a
-/// Ctrl-C mid-run commits the same way a clean finish does).
-///
-/// With `opts.gc`, collects unreachable chunks *before* the copy rather
-/// than after the commit. Same garbage either way — a run's leftovers
-/// are collected by the next run — but this way gc happens while the
-/// working tree is provably clean (`open_mirror` has just committed the
-/// schema) and outside the commit lifecycle the orchestrator owns. It is
-/// worth doing: on a 3.3 MB catalog with two versions of history the
-/// store shrinks from 5.2 MB to 1.3 MB, with `dolt_log` and
-/// `dolt_history_*` intact. It is off by default because it rewrites the
-/// whole chunk store, which is time the routine no-op run shouldn't
-/// spend.
 pub async fn run(
     pool: &SqlitePool,
     opts: &MirrorOptions,
@@ -384,8 +269,6 @@ async fn mirror_attached(
     Ok(stats)
 }
 
-/// Introspect the attached source and decide, per table, what the mirror
-/// should look like.
 async fn build_specs(conn: &mut SqliteConnection, opts: &MirrorOptions) -> Result<Vec<TableSpec>> {
     let names = plan::table_names(&mut *conn, SRC_SCHEMA).await?;
     let mut specs = Vec::new();
@@ -416,8 +299,6 @@ fn wants_table(opts: &MirrorOptions, name: &str) -> bool {
             .any(|p| datalib_etl_lightroom_config::glob_match(p, name))
 }
 
-/// Column filter + key selection for one table. Split out from
-/// [`build_specs`] so it can be unit-tested without a database.
 pub fn build_spec(
     opts: &MirrorOptions,
     name: &str,
@@ -491,36 +372,6 @@ pub fn build_spec(
     })
 }
 
-/// Rebuild one table: drop it, recreate it from the source's current
-/// shape, refill it. Returns the row count written.
-///
-/// One transaction per table, DDL included — doltlite rolls back a
-/// `DROP`/`CREATE` like any other statement, so a failure mid-run leaves
-/// this table exactly as the previous run left it rather than empty or
-/// half-filled.
-///
-/// The drop is unconditional and costs nothing: a table recreated with
-/// the same shape and refilled with the same rows hashes to the chunks
-/// already at HEAD, so `dolt_status` stays clean. That is what lets this
-/// function be the *entire* schema story — no comparison against the
-/// mirror's current shape, and so no way for the two to disagree.
-///
-/// The refill is one `INSERT … SELECT` from the `ATTACH`ed source. It
-/// used to detour through a keyless staging table whenever the
-/// destination's key was not a rowid alias, to route around a doltlite
-/// bug ([dolthub/doltlite#2327]) that silently gave every row after the
-/// first the *first* row's bytes for values past the source file's
-/// local-payload limit — lengths and `typeof()` still right, no error,
-/// and the damage survived `dolt_commit`. Fixed upstream in v0.11.53
-/// ([dolthub/doltlite#2329]), which is what `MODULE.bazel` now pins, so
-/// the detour is gone. The regression test that caught it guards its
-/// absence: `large_values_round_trip_byte_for_byte` in
-/// `mirror_roundtrip.rs` fails against the old pin without the detour.
-/// `hack/doltlite_blob_bug/run.sh` re-checks the upstream behaviour
-/// directly, without going through this crate.
-///
-/// [dolthub/doltlite#2327]: https://github.com/dolthub/doltlite/issues/2327
-/// [dolthub/doltlite#2329]: https://github.com/dolthub/doltlite/pull/2329
 async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u64> {
     let mut tx = conn
         .begin()
@@ -560,21 +411,6 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     Ok(n as u64)
 }
 
-/// Drop every table in the mirror. Returns the names dropped.
-///
-/// Unconditional, and that is the point: narrowing this to "tables the
-/// source still has" would leave a table the source *removed* frozen at
-/// HEAD forever, indistinguishable from a live one. Dropping everything
-/// and rebuilding from the source means HEAD always means "the catalog
-/// as it is now", with no notion of staleness to compute or get wrong.
-///
-/// Cheap, because dropping a table and recreating it identically is not
-/// a change to doltlite — see this module's header. The rows stay
-/// recoverable from history either way (branch at an earlier commit).
-///
-/// Runs in its own transaction, before any rebuild. The raw store's own
-/// bookkeeping ([`RESERVED_TABLES`]) is excluded, as is anything
-/// `sqlite_%` (filtered out by [`plan::table_names`]).
 async fn drop_all_mirror_tables(conn: &mut SqliteConnection) -> Result<Vec<String>> {
     let existing = plan::table_names(&mut *conn, "main").await?;
     let mut tx = conn.begin().await.context("begin drop-all tx")?;
@@ -597,7 +433,6 @@ async fn drop_all_mirror_tables(conn: &mut SqliteConnection) -> Result<Vec<Strin
 }
 
 impl MirrorStats {
-    /// One-line run summary, in the shape the DAG's step protocol shows.
     pub fn summary(&self) -> String {
         format!(
             "tables={} rows={} stale_tables_dropped={} dropped_columns={} \

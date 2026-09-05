@@ -20,16 +20,9 @@ pub fn depth(path: &str) -> usize {
     }
 }
 
-// ---------------------------------------------------------------------
 // correspondences
-// ---------------------------------------------------------------------
 
 /// A correspondence between one path on the left and one on the right.
-///
-/// Covers both "same bytes elsewhere" relations the viewer reports — a
-/// move (gone from the left, present on the right) and a copy (present
-/// on both) — and, with both sides pointing into the same tree, an
-/// in-tree duplicate. One shape, so [`roll_up`] serves all three.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
     pub src: String,
@@ -53,13 +46,6 @@ impl Link {
     }
 }
 
-/// The outermost accepted directory link that already implies `i`.
-///
-/// Anchored on `dst`: the candidate has to sit under the parent's
-/// destination *and* its source has to be the parent's source plus the
-/// identical relative suffix. Both halves matter — without the second,
-/// a file that moved somewhere unrelated would be absorbed by whatever
-/// directory happened to move above it.
 fn covering(links: &[Link], accepted: &[usize], i: usize) -> Option<usize> {
     for &p in accepted {
         if p == i || links[p].dst == links[i].dst {
@@ -77,14 +63,6 @@ fn covering(links: &[Link], accepted: &[usize], i: usize) -> Option<usize> {
     None
 }
 
-/// Collapse a related subtree into the single outermost directory.
-///
-/// Moving `docs/` to `archive/` moves every descendant with it, and
-/// copying a directory copies every descendant with it; either way each
-/// descendant arrives as its own link, and reporting all of them buries
-/// the one fact worth reading. A link is marked `covered` when an
-/// ancestor directory made exactly the same journey, and the surviving
-/// ancestor carries a count of what it absorbed.
 pub fn roll_up(links: &mut [Link]) {
     let mut dir_idx: Vec<usize> = (0..links.len())
         .filter(|&i| links[i].kind == "dir")
@@ -117,9 +95,7 @@ pub fn roll_up(links: &mut [Link]) {
     }
 }
 
-// ---------------------------------------------------------------------
 // move pairing
-// ---------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct Move {
@@ -127,12 +103,6 @@ pub struct Move {
     pub dst: Entry,
 }
 
-/// Match removed rows against added rows carrying the same digest.
-///
-/// A pair is a move: the same bytes at a different path. Pairing is
-/// greedy and prefers a candidate that kept its basename, which is what
-/// makes `docs/reports` pair with `archive/reports` rather than with
-/// some unrelated directory holding identical content.
 pub fn pair_moves(diff: &Diff) -> (Vec<Move>, Vec<Entry>, Vec<Entry>) {
     let key = |e: &Entry| (e.kind.clone(), e.digest.clone());
 
@@ -183,17 +153,8 @@ pub fn pair_moves(diff: &Diff) -> (Vec<Move>, Vec<Entry>, Vec<Entry>) {
     (moves, residual_removed, residual_added)
 }
 
-// ---------------------------------------------------------------------
 // in-tree duplicates
-// ---------------------------------------------------------------------
 
-/// Group one tree's entries by digest, keeping only the repeats.
-///
-/// Answers a question the left/right diff cannot: is this tree storing
-/// the same bytes more than once? Directories count, because a
-/// directory's digest covers its whole subtree — so a folder copied to
-/// a second place inside the same tree is one finding, not one per file
-/// in it.
 pub fn group_duplicates(entries: &[Entry]) -> Vec<DupGroup> {
     let mut buckets: BTreeMap<(String, String), Vec<Entry>> = BTreeMap::new();
     for entry in entries.iter().filter(|e| !e.path.is_empty()) {
@@ -220,7 +181,6 @@ pub fn group_duplicates(entries: &[Entry]) -> Vec<DupGroup> {
     roll_up_duplicates(groups)
 }
 
-/// Drop duplicate groups that a duplicated parent directory implies.
 fn roll_up_duplicates(mut groups: Vec<DupGroup>) -> Vec<DupGroup> {
     let mut links: Vec<Link> = Vec::new();
     let mut owner: Vec<usize> = Vec::new();
@@ -256,9 +216,7 @@ fn roll_up_duplicates(mut groups: Vec<DupGroup>) -> Vec<DupGroup> {
     out
 }
 
-// ---------------------------------------------------------------------
 // classification
-// ---------------------------------------------------------------------
 
 /// One reportable row on one side.
 #[derive(Debug, Clone)]
@@ -288,13 +246,6 @@ impl Finding {
     }
 }
 
-/// Turn a raw diff into the two sides' findings.
-///
-/// `copies_right` maps a digest that vanished from the left to a path
-/// where those bytes still live on the right; `copies_left` is the
-/// mirror. Both are empty when copy detection is off, which downgrades
-/// "gone but a copy remains" to a plain delete and "copy" to a plain
-/// add — never the other way round.
 #[allow(clippy::type_complexity)]
 pub fn classify(
     diff: &Diff,
@@ -485,9 +436,7 @@ pub fn classify(
     (left, right, summary)
 }
 
-// ---------------------------------------------------------------------
 // tree assembly
-// ---------------------------------------------------------------------
 
 fn with_ancestors(paths: &BTreeSet<String>) -> BTreeSet<String> {
     let mut out = paths.clone();
@@ -500,7 +449,6 @@ fn with_ancestors(paths: &BTreeSet<String>) -> BTreeSet<String> {
     out
 }
 
-/// Per-path duplicate detail, for every member of every group.
 fn dup_annotations(groups: &[DupGroup]) -> BTreeMap<String, DupInfo> {
     let mut out = BTreeMap::new();
     for group in groups {
@@ -587,21 +535,6 @@ fn build_nodes(
 
 /// Roll each subtree's diff weight up to the directories above it, so a
 /// reader can sort by "where is the action" rather than by name.
-///
-/// Two numbers, because they answer different questions and only one of
-/// them can be summed naively:
-///
-/// - **entries** counts every finding in the subtree, plus what its
-///   rollups absorbed. Directories included: a new directory is itself
-///   a thing that changed, and counting it double-counts nothing.
-/// - **bytes** counts only **maximal** findings — a finding with no
-///   other finding beneath it. A directory's `size` is the recursive
-///   sum of its contents, so a brand-new tree would otherwise have the
-///   directory's bytes counted again for every file inside it. Taking
-///   only the outermost fixes that, and still gives a rolled-up move
-///   (whose interior is absent from the node set) its full weight.
-///
-/// `nodes` must be sorted by path, which [`build_nodes`] guarantees.
 fn attach_diff_weights(nodes: &mut [Node]) {
     let findings: BTreeSet<String> = nodes
         .iter()
@@ -671,15 +604,8 @@ fn attach_diff_weights(nodes: &mut [Node]) {
     }
 }
 
-// ---------------------------------------------------------------------
 // the seam
-// ---------------------------------------------------------------------
 
-/// Turn everything that was read into everything that is concluded.
-///
-/// Pure: the same [`Inputs`] always produce the same [`DiffResult`], so
-/// every behaviour worth testing can be tested by building an `Inputs`
-/// literal.
 pub fn analyze(inputs: &Inputs) -> DiffResult {
     let (left_findings, right_findings, counts) =
         classify(&inputs.diff, &inputs.copies_right, &inputs.copies_left);
@@ -727,7 +653,6 @@ pub fn analyze(inputs: &Inputs) -> DiffResult {
     }
 }
 
-/// Convenience for callers that only want one side's view.
 pub fn side_of(result: &DiffResult, side: Side) -> &SideResult {
     result.side(side)
 }

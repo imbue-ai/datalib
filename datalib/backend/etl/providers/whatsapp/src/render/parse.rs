@@ -1,8 +1,5 @@
 //! Read the `wa_*` tables out of the raw doltlite store and assemble
 //! `Vec<NormalizedChat>` for chat-common's renderer.
-//!
-//! Pulls all rows up-front (the raw stores in scope here are tens of
-//! MB at most) so the renderer can walk in memory without re-querying.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -35,26 +32,16 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
       FROM wa_media_files
      WHERE blake3 IN ({placeholders})";
 
-/// What `parse` returns to render: the chat tree plus a per-chat
-/// `BlobBundle` (keyed by `NormalizedChat::id`) carrying every
-/// attachment's bytes pre-loaded from the sibling CAS. Mirrors slack's
-/// `(ParsedSlack { threads: SlackThreadBucket{ blobs }, … })` shape —
-/// the bundle is the synchronous bag the chat-common renderer reads
-/// at `materialize_to_dir` time.
+/// What `parse` returns to render: the chat tree plus a per-chat `BlobBundle`
+/// carrying every attachment's bytes pre-loaded from the sibling CAS — the
+/// synchronous bag the chat-common renderer reads at `materialize_to_dir`
+/// time, mirroring slack's shape.
 #[derive(Default)]
 pub struct ParsedWhatsApp {
     pub chats: Vec<NormalizedChat>,
     pub blobs_by_chat: HashMap<String, BlobBundle>,
 }
 
-/// Open the raw store and build the normalized chat tree.
-///
-/// `raw_dir` is the source's `input_path` (sync sets it to
-/// `<data_root>/whatsapp/raw/`); the doltlite file is found via
-/// `doltlite_raw::db_path_for`. `period` controls how items are
-/// bucketed into rendered .md files.
-/// `source_name` is the YAML source name; goes into every UUID seed
-/// so two YAML sources backed by different phones don't collide.
 pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
@@ -149,12 +136,9 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
         let mime_type: Option<String> = r.get("mime_type");
         let file_size: Option<i64> = r.get("file_size");
         let media_caption: Option<String> = r.get("media_caption");
-        // `blake3` is the `blob_refs.ref_id` download stored at put time
-        // (see `download::mirror_media_files`). `None` here means either
-        // the file went missing between scan and put, or the message's
-        // `file_path` didn't resolve to a row in `wa_media_files`
-        // (corrupted backup, partial Media/ tree, …). In either case the
-        // renderer's "(not yet fetched)" placeholder fires.
+        // `None` means either the file went missing between scan and put, or
+        // the message's `file_path` didn't resolve to a `wa_media_files` row.
+        // Either way the renderer's "(not yet fetched)" placeholder fires.
         media_by_msg
             .entry(key)
             .or_default()
@@ -469,9 +453,6 @@ struct ChatHeader {
     _subject_kept_for_search: Option<String>,
 }
 
-/// Pull a short human label out of a JID. "17015550101@s.whatsapp.net"
-/// → "+17015550101"; "bridge-crew@g.us" → "bridge-crew@g.us" (kept
-/// verbatim so the group's stable id is visible to the reader).
 fn label_from_jid(jid: &str) -> String {
     if let Some((user, server)) = jid.split_once('@') {
         if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us"))

@@ -1,11 +1,4 @@
 // Lexical helpers over card source.
-//
-// Deliberately its own module with no imports: these are pure string
-// functions, and the registries that use them pull in every view in
-// the app. Keeping the scanner separate is what lets it be tested
-// without loading the UI, and what lets both the alias registry and
-// the applet registry share one definition of "a name this source
-// refers to".
 
 // Identifiers a piece of source references "freely" — every identifier
 // token not immediately preceded by `.` (so `obj.foo` doesn't count as

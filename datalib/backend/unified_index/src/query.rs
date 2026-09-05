@@ -1,19 +1,5 @@
 //! F4: Query parser. Tokenizes the search-bar string into structured filters
 //! plus free-text. Pure function, table-driven tests.
-//!
-//! Syntax (Gmail-flavored, with Lucene-style escapes for the rough edges
-//! Gmail leaves implicit):
-//!
-//! - `field:value` — include
-//! - `-field:value` — exclude
-//! - `field:"some value"` — quote when value has whitespace, `:`, leading
-//!   `-`, or is empty
-//! - Inside quotes: `\"` for literal quote, `\\` for literal backslash
-//!
-//! Each occurrence is its own AND clause downstream — repeating
-//! `source:Slack channel:announce` zooms in tree-style; repeating the same
-//! field with different values produces an empty result, which is the
-//! correct read of "keep only X then keep only Y."
 
 use std::collections::BTreeMap;
 
@@ -66,9 +52,6 @@ impl Field {
         }
     }
 
-    /// True when this field stores a UUID in the underlying column and so
-    /// expects `slug-uuid` Notion-shaped token values (the slug rides along
-    /// for display; only the trailing UUID is used for SQL comparison).
     pub fn is_uuid_bearing(&self) -> bool {
         matches!(
             self,
@@ -81,13 +64,6 @@ impl Field {
 /// UUID-shaped suffix (8-4-4-4-12 lowercase hex), return that suffix; else
 /// return the input unchanged. The leading slug is non-load-bearing — it
 /// exists only to make URLs/tokens self-describing.
-///
-/// Examples:
-/// - `"picard-jean-luc-00000001-1701-4d00-8000-000000000001"`
-///   → `"00000001-1701-4d00-8000-000000000001"`
-/// - `"00000001-1701-4d00-8000-000000000001"`
-///   → unchanged (slug is empty / absent)
-/// - `"plain-name"` → unchanged (no UUID suffix matched)
 pub fn extract_uuid_suffix(value: &str) -> &str {
     if value.len() < 36 {
         return value;
@@ -237,8 +213,6 @@ pub fn parse_query(s: &str) -> ParsedQuery {
     }
 }
 
-/// Split a token at the first unquoted `:` into (key, unquoted_value).
-/// Returns None if no `:` outside quotes is found.
 fn split_field(tok: &str) -> Option<(&str, String)> {
     let mut in_quote = false;
     let mut escape = false;
@@ -261,7 +235,6 @@ fn split_field(tok: &str) -> Option<(&str, String)> {
     None
 }
 
-/// Strip surrounding quotes (if present) and unescape `\"` and `\\`.
 fn unquote(s: &str) -> String {
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
         let inner = &s[1..s.len() - 1];

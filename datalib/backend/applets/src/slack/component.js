@@ -2,33 +2,11 @@
 // store at /modules/<sha256> and evaluated by the browser exactly once
 // no matter how many applet instances offer it.
 //
-// That sharing is the reason for the shape below. The module closes
-// over nothing instance-specific: the namespace arrives as an argument
-// to the factory, supplied by the gallery entry the applet wrote
-// (`comp.slack_work.channels("slack_work")`). Two workspaces are two
-// calls into one module, not two modules.
-//
-// The default export is the factory card source calls. Its return value
-// is a CardRender — `(root, ctx) => teardown` — the same contract every
-// builtin card view honors, so nothing about the host had to change to
-// host this.
-//
-// ## Three levels, mirroring Slack
-//
-//   channels          every channel, with its thread and message counts
-//     └ one channel   each thread's *opening message*, replies collapsed
-//         └ a thread  the whole conversation
-//
 // The first two are this card, navigating in place with a back link —
 // the same card, so a workspace never costs more than one column. The
 // third opens the rendered document as its own card, which in the
 // miller layout lands beside this one, the way Slack opens a thread in
 // a side panel.
-//
-// Level three delegates to `documentView` on purpose: the thread
-// document is real rendered markdown with formatting, media and edges,
-// and reimplementing that here would be a worse copy of something the
-// app already does.
 
 export default function channels(appletId) {
   const base = `/applet/${appletId}`;

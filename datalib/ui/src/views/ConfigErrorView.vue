@@ -1,23 +1,6 @@
 <script setup lang="ts">
 // The blocking screen for a data root the app cannot open.
 //
-// Why this exists, and why it blocks: `config.toml` declares the
-// `unified_index` applet, and that applet *is* the grid, the search and
-// the document view. So a config the server cannot use leaves every
-// view in the app answering `502 {"error":"no applet
-// \"unified_index\""}` — technically accurate, and a mystery, because
-// the symptom and the cause are a whole screen apart (#199, #209). The
-// app used to carry on in that state and let each view discover its own
-// failure. It now stops here and says the one true thing.
-//
-// **It blocks for exactly two states, and no others.** `app_ready` is
-// false when the file is not a config at all, or when it loads without
-// a usable `unified_index` applet. A config with a *broken step* is
-// neither: it loads, the app works, and that step's diagnostic belongs
-// on its row in the Pipeline table, not in front of everything. Getting
-// that line right is the whole point of the graded loader — before it,
-// one stray key put you here.
-//
 // This screen is also reachable at any moment, not just at startup. An
 // agent or an editor can break the file while the app is running, so
 // `App.vue` drives this off the `config_changed` event and both

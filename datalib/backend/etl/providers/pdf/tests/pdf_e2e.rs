@@ -1,8 +1,4 @@
 //! End-to-end over the fixture corpus: scan → store → render.
-//!
-//! Asserts against the raw store and the emitted markdown rather than
-//! against log lines, per AGENTS.md §"Inspecting doltlite stores" — a
-//! log line says what the code *said*, the store says what it *did*.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -170,13 +166,6 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
 
 /// Regression for #173: a `Mixed` document — some pages readable, some
 /// not — must render the pages that are.
-///
-/// The rule used to be `needs_ocr = 0`, and a Mixed document always has
-/// a non-empty `pages_needing_ocr` (that is what makes it Mixed), so no
-/// Mixed document ever rendered. On the fixture corpus that cost one
-/// page; on a 200-page report with three scanned inserts it costs 197.
-/// The corpus had no Mixed document at all, which is why nothing caught
-/// it — hence `engineering/hull_survey.pdf`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     let h = Harness::new();
@@ -360,12 +349,10 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
         Some("2364-04-13T08:45:00-07:00")
     );
 
-    // The document with no Info dict, no /ID and no XMP: every
-    // *identity* column must come back NULL rather than the scan
-    // failing. `title` is deliberately not asserted NULL here — with no
-    // Info title, pdf-inspector may still infer one from the page's
-    // largest text, and that inferred value is a better grid label than
-    // nothing.
+    // The document with no Info dict, no /ID and no XMP: every *identity*
+    // column must come back NULL rather than the scan failing. `title` is
+    // deliberately not asserted NULL — pdf-inspector may infer one from the
+    // page's largest text, which is a better grid label than nothing.
     let u = sqlx::query(
         "SELECT d.author, d.pdf_id_permanent, d.xmp_document_id
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
@@ -427,17 +414,12 @@ async fn rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
     assert_eq!(first.reused, 0, "nothing to reuse on a cold scan");
 
     let second = h.scan().await?;
-    // Nothing is re-read. The host fingerprint cache vouches for every
-    // byte, including `holodeck/corrupt.pdf`.
-    //
-    // That file still has to be *retried* — a PDF that could not be
-    // parsed (mid-write, partially synced) must not be cached as
-    // permanently broken — and it is, because the retry is gated on
-    // `pdf_documents` rather than on the hash being stale. It failed to
-    // identify, so it has no document row, so `identify` runs again and
-    // fails again. This used to also re-read the bytes, which was a
-    // side effect of how reuse was gated rather than the point: there
-    // is nothing to learn from recomputing a digest we already hold.
+    // Nothing is re-read — the host fingerprint cache vouches for every
+    // byte, `holodeck/corrupt.pdf` included. That file is still *retried*,
+    // because the retry is gated on `pdf_documents` rather than on the hash
+    // being stale: it has no document row, so `identify` runs and fails
+    // again. A PDF that failed to parse must not be cached as permanently
+    // broken.
     assert_eq!(
         second.hashed, 0,
         "the shared cache should vouch for every byte on a rescan"
@@ -467,12 +449,10 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     h.scan().await?;
     let (s, emitted) = h.render(&HashMap::new()).await?;
 
-    // Exactly the four renderable documents, and 5 pages between
-    // them. Pinned rather than bounded: every page here is embedded by
-    // the qmd indexer on every full fixture build, so growth should be
-    // a deliberate edit, not a silent drift. The mixed survey's second
-    // page is deliberately not among them — it converts to a note in
-    // the markdown, which costs no row and no embedding.
+    // Exactly the four renderable documents, and 5 pages between them.
+    // Pinned rather than bounded: every page here is embedded by the qmd
+    // indexer on every full fixture build, so growth should be a deliberate
+    // edit rather than silent drift.
     assert_eq!(s.converted, 4, "four renderable documents");
     assert_eq!(s.failed, 0);
     let total_pages: usize = emitted
@@ -534,16 +514,6 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
 /// Regression: `grid_rows.qmd_path` must be the *data-root*-relative
 /// path, byte-equal to what `grid_index::apply_one` stores in
 /// `markdowns.md_path` for the same file.
-///
-/// It used to be the out-dir-relative `docs/<blake3>.md`, which is what
-/// `GridIndex::new` keyed its rows by while `rows_for_hit` looked hits
-/// up by their data-root-relative path. The two could never match, so
-/// every qmd hit inside a PDF resolved to zero grid rows and was
-/// dropped — PDFs were simply absent from free-text search, with only
-/// an applet-side `qmd hit resolved to no grid rows` error to show for
-/// it. Comparing against the path derived from `md_path` (rather than
-/// against a hardcoded string) is the point: it is the same derivation
-/// the index performs, so the two cannot drift apart again.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
     let h = Harness::new();

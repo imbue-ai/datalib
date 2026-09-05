@@ -2,9 +2,6 @@
 //! [`datalib_etl::http::latchkey_curl`], which captures the full
 //! response (status + every header + body) and supports playback from
 //! disk fixtures. Mirrors `src/download/claude_web.py:_get`.
-//!
-//! Blob downloads live in `download::mod` against the doltlite `blobs`
-//! table; this module is transport-only.
 
 use std::time::Duration;
 
@@ -49,8 +46,6 @@ impl ClaudeClient {
         Self::default()
     }
 
-    /// Build a client that authenticates as the source's configured
-    /// latchkey identity. Every request it issues carries the settings.
     pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
         Self {
             latchkey,
@@ -90,7 +85,6 @@ impl ClaudeClient {
         Ok(value)
     }
 
-    /// `GET /api/account` — current authenticated user.
     pub async fn current_account(&mut self) -> Result<Value, ClaudeError> {
         self.get("/account").await
     }

@@ -147,8 +147,10 @@ async fn main() -> Result<()> {
 
 async fn single_count(pool: &sqlx::SqlitePool, table: &str) -> Result<i64> {
     // Audited: inspector CLI; `table` is a literal at every callsite.
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) AS n FROM {table}")))
-        .fetch_one(pool)
-        .await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) AS n FROM {table}"
+    )))
+    .fetch_one(pool)
+    .await?;
     Ok(row.try_get("n")?)
 }

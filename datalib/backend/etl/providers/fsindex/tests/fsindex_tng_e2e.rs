@@ -1,14 +1,4 @@
 //! End-to-end scan of the checked-in TNG-themed directory tree.
-//!
-//! Points `download::fetch` at the `fsindex_tng/` fixture (the same tree
-//! `materialize_tng_root.sh` drops into the dev/e2e data root as
-//! `fsindex_scan/`) and asserts the landed `files` rows: the right entry
-//! set, the `'*.tmp'` cascade-ignore taking effect, and `.fsindex.yaml`
-//! never appearing as a content row.
-//!
-//! fsindex is download-only — there is no rendered Markdown to check, so this
-//! is the TNG-fixture analogue of the other providers' `*_e2e` tests, scoped
-//! to the raw store the scan produces.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -20,8 +10,6 @@ use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
 use tempfile::TempDir;
 
-/// The fixture dir, from the env var the BUILD sets (workspace-relative path,
-/// resolved against the test's runfiles cwd).
 fn fixture_dir() -> PathBuf {
     let dir = std::env::var("FSINDEX_TNG_DIR")
         .expect("FSINDEX_TNG_DIR must be set by the BUILD rule's env");

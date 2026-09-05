@@ -1,71 +1,9 @@
 //! Per-scope record of the config that produced the current cursor.
-//!
-//! Every incremental downloader answers "what can I skip this run?" one
-//! of two ways. Either it re-fetches the upstream listing and filters it
-//! (claude, chatgpt) — in which case the config is consulted every
-//! run and stays live — or it stores a bookmark and resumes from it
-//! (slack, github, gitlab, email, yolink). A bookmark is a *place*, not
-//! a *rule*: once it exists it answers "where do I start?" all by
-//! itself, and the config that originally set it never gets a second
-//! vote. That is why widening `slack.sync.since` after the first sync
-//! silently does nothing — the forward walk resumes from the channel's
-//! stored watermark and `since` is only read on the cold-start arm.
-//!
-//! This module closes that gap by recording, next to each cursor, the
-//! config subset that produced it. A later run diffs current-vs-stored
-//! and reacts *proportionally*: a widened `since` backfills just the
-//! newly-in-scope window instead of forcing a full re-download.
-//!
-//! # What belongs in the blob
-//!
-//! Only params that change **which data ends up on disk**. Not per-run
-//! budgets (`max_prs`, `limit`), not one-off overrides (`conv_uuids`,
-//! `targets`, `full_sync`), not paths or credentials. A `--max-prs 5`
-//! smoke run must not read as a config change to the next real run.
-//!
-//! That curation is why this is a separate blob rather than a diff of
-//! `sync_runs.config`: the latter is an audit log and deliberately
-//! records everything, including the knobs above.
-//!
-//! Params that are already re-evaluated every run don't belong here
-//! either — recording them just invites a pointless re-walk. Slack's
-//! `refresh_window_days` is applied fresh on every sync, and a channel
-//! newly added to `channels:` has no rows so it cold-starts on its own.
-//! Neither needs remembering.
-//!
-//! # An absent blob is not "changed"
-//!
-//! [`load`] returns `None` for a store written before this table
-//! existed — which is every installed data root the first time this
-//! ships. Callers **must** treat `None` as "adopt the current config,
-//! take no action". Treating it as "unknown, therefore re-download"
-//! would kick off a simultaneous full backfill on every mirror in the
-//! field, which is a much worse failure than the bug being fixed.
-//!
-//! The same tolerance applies per-key: a blob written by an older
-//! version won't have keys added later, and a missing key reads as
-//! "no information", never as "changed". The [`turned_on`] /
-//! [`limit_relaxed`] / [`strings_added`] helpers all encode that.
-//!
-//! # Write on the success path only
-//!
-//! [`store`] belongs after the work future succeeds. A run that fails
-//! or is cancelled partway hasn't actually satisfied the new config, so
-//! leaving the previous blob in place is what makes the next run retry
-//! the adjustment. (Slack's SIGINT handler exits the process, so a
-//! cancelled sync never reaches the store call at all — which is the
-//! behavior we want.)
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 
-/// Read the config recorded for `scope` by the last run that completed
-/// successfully.
-///
-/// `None` means "never recorded" — a fresh store, or one that predates
-/// the `sync_scope_config` table. See the module docs: that is *not* a
-/// signal to re-download.
 pub async fn load(pool: &SqlitePool, scope: &str) -> Result<Option<Value>> {
     let row = sqlx::query("SELECT config FROM sync_scope_config WHERE scope = ?")
         .bind(scope)
@@ -93,7 +31,6 @@ pub async fn load(pool: &SqlitePool, scope: &str) -> Result<Option<Value>> {
     }
 }
 
-/// Upsert the config blob for `scope`. Call on the success path only.
 pub async fn store(pool: &SqlitePool, scope: &str, config: &Value) -> Result<()> {
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let body = serde_json::to_string(config).context("serialize scope config")?;
@@ -112,12 +49,6 @@ pub async fn store(pool: &SqlitePool, scope: &str, config: &Value) -> Result<()>
 }
 
 /// [`store`], but only when `satisfied` — and never fatal.
-///
-/// Encodes the rule every consumer needs: the record describes work that
-/// has *actually happened*, so a run that failed, was cancelled, or
-/// stepped over part of its scope must leave the previous record in
-/// place for the next run to re-plan against. Bookkeeping failures are
-/// logged and swallowed; they must never mask the run's own error.
 pub async fn store_if_satisfied(
     pool: &SqlitePool,
     scope: &str,
@@ -162,16 +93,7 @@ pub async fn load_or_none(pool: &SqlitePool, scope: &str) -> Option<Value> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Field comparisons
-// ─────────────────────────────────────────────────────────────────────
-//
-// Deliberately small. Each helper answers exactly one question — "did
-// this knob start admitting more data than it used to?" — because that
-// is the only direction that needs work: a *narrowed* knob leaves the
-// on-disk superset alone (nothing in the pipeline deletes), so it is
-// always a no-op. Providers own anything richer; parsing a `since`
-// string is the provider's business, not this module's.
 
 /// A `bool` knob that went `false` → `true` since the recorded run.
 ///
@@ -187,12 +109,6 @@ pub fn turned_on(prev: Option<&Value>, key: &str, cur: bool) -> bool {
     )
 }
 
-/// An upper-bound knob (`Option<u64>`, `None` = unlimited) that now
-/// admits strictly more than it did.
-///
-/// `false` when the blob is absent or the key is missing. A stored JSON
-/// `null` means the bound was already unlimited, so nothing can relax
-/// past it.
 pub fn limit_relaxed(prev: Option<&Value>, key: &str, cur: Option<u64>) -> bool {
     let Some(stored) = prev.and_then(|p| p.get(key)) else {
         return false;
@@ -212,14 +128,6 @@ pub fn limit_relaxed(prev: Option<&Value>, key: &str, cur: Option<u64>) -> bool 
 /// How a list-shaped filter moved, for the common convention where an
 /// **empty list means "no filter"** — i.e. the *widest* setting, not the
 /// narrowest.
-///
-/// That convention is easy to get wrong with [`strings_added`] alone:
-/// `[] -> ["Sent"]` looks like an addition but is a *narrowing*, and
-/// `["Sent"] -> []` looks like nothing changed but admits everything.
-/// Both directions are inverted from the naive reading, so the rule
-/// lives here rather than in each provider. Compare
-/// [`crate::scope_state::since_for_scope`], which has the identical
-/// shape for `refresh_window_days: 0`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilterChange {
     /// Nothing newly in scope. Includes every narrowing, and the case
@@ -231,8 +139,6 @@ pub enum FilterChange {
     Added(Vec<String>),
 }
 
-/// Classify a list-shaped filter change under the empty-means-all
-/// convention. See [`FilterChange`].
 pub fn filter_widened(prev: Option<&Value>, key: &str, cur: &[String]) -> FilterChange {
     let Some(stored) = prev.and_then(|p| p.get(key)).and_then(Value::as_array) else {
         return FilterChange::Unchanged;
@@ -250,15 +156,6 @@ pub fn filter_widened(prev: Option<&Value>, key: &str, cur: &[String]) -> Filter
     }
 }
 
-/// Entries in `cur` that aren't in the stored string array at `key`.
-///
-/// Raw set difference: it knows nothing about the empty-means-all
-/// convention. Reach for [`filter_widened`] when the list is a filter.
-///
-/// Empty when the blob is absent or the key is missing — an unknown
-/// prior set can't tell us anything was added. Useful for providers
-/// whose scope is a list (mailbox labels, notion subtree seeds) and
-/// which can cold-start just the new members.
 pub fn strings_added(prev: Option<&Value>, key: &str, cur: &[String]) -> Vec<String> {
     let Some(stored) = prev.and_then(|p| p.get(key)).and_then(Value::as_array) else {
         return Vec::new();

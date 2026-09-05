@@ -1,9 +1,4 @@
 //! Deep-link grammar shared between Tauri (`datalib://`) and the web hash.
-//!
-//! v0 implements parse/unparse for two routes:
-//!     search?q=<text>&type=<message|chat>&before=<date>&after=<date>&grid=<b64>
-//!     chat/<markdown_uuid>?msg=<message_uuid>&grid=<b64>
-//!     prefs
 
 use std::collections::BTreeMap;
 
@@ -29,8 +24,6 @@ pub enum ParseError {
     MissingChatUuid,
 }
 
-/// Parse a `datalib://` URL or a `#…` hash. Both forms share the same
-/// grammar after the leading `datalib://` or `#` is stripped.
 pub fn parse(url: &str) -> Result<Route, ParseError> {
     let s = url
         .strip_prefix("datalib://")
@@ -64,7 +57,6 @@ pub fn parse(url: &str) -> Result<Route, ParseError> {
     }
 }
 
-/// Render a route to its hash form (without the leading `#`).
 pub fn to_hash(route: &Route) -> String {
     match route {
         Route::Search { params } => with_query("search", params),
@@ -76,7 +68,6 @@ pub fn to_hash(route: &Route) -> String {
     }
 }
 
-/// Render a route to its `datalib://` form.
 pub fn to_deeplink(route: &Route) -> String {
     format!("datalib://{}", to_hash(route))
 }

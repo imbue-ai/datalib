@@ -1,16 +1,4 @@
 //! `Google Chat/` walker.
-//!
-//! Surfaces three on-disk shapes:
-//!
-//!   - `Google Chat/Groups/<dir>/group_info.json` → `chat_groups` row
-//!     keyed by the takeout directory name.
-//!   - `Google Chat/Groups/<dir>/messages.json` → one `chat_messages`
-//!     row per entry; `group_id` references the parent dir name.
-//!   - `Google Chat/Users/User <id>/user_info.json` → `chat_users` row.
-//!
-//! Attachments referenced by message rows land in `chat_attachments`
-//! (the per-provider CAS edge) + `cas_objects` via the shared
-//! `CasEdgeAccumulator` / `flush_cas_edges` primitives.
 
 use datalib_etl::fsscan;
 use std::path::Path;

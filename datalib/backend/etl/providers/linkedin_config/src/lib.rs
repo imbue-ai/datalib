@@ -1,9 +1,4 @@
 //! Schema-only config crate for the `linkedin` source (Program A goal #1).
-//!
-//! A LinkedIn export is a file-backed "takeout": [`LinkedinConfig`] carries
-//! the one source-specific knob — `fetch_photos` — at the top level (there is
-//! no `sync:` block), plus the shared `common:` envelope. Bazel-only by design
-//! (no Cargo.toml).
 
 use anyhow::Result;
 use datalib_source_common::SourceCommon;
@@ -23,7 +18,6 @@ pub struct LinkedinConfig {
 }
 
 impl LinkedinConfig {
-    /// No cross-field constraints to check.
     pub fn validate(&self) -> Result<()> {
         Ok(())
     }

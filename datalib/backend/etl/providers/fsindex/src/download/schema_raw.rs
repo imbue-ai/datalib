@@ -1,163 +1,4 @@
 //! Raw-store schema for the `fsindex` provider.
-//!
-//! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! §"Schema first" for the conventions every `schema_raw.rs` follows.
-//!
-//! ## What this provider is
-//!
-//! `fsindex` is a directory-tree scanner. The "upstream" is a local
-//! filesystem subtree rooted at some absolute path; the entity rows
-//! are files and directories under that root.
-//!
-//! Two design choices distinguish it from every other provider in
-//! the tree, and both are load-bearing for everything below:
-//!
-//! 1. **Content is here; the cursor is not.** `files` carries the
-//!    semantic content (kind, size, blake3, symlink target, optional
-//!    identity uuid) and nothing filesystem-mechanical, so `dolt diff`
-//!    on it is a diff of the bytes. The Unison fast-rescan cursor —
-//!    mtime, inode, dev, and the digest that went with them — is host
-//!    state, and lives in this machine's
-//!    [`datalib_etl::fingerprint_cache`], a plain-SQLite file outside
-//!    version control.
-//!
-//!    It used to be a sibling `file_stats` table here. Moving it out
-//!    is what stops an inode number — meaningless on any other machine
-//!    — from reaching a branch that may be fetched elsewhere, and it
-//!    halves the store: 291 B/row to 148 B/row at 100k entries, since
-//!    `file_stats` re-stored the whole path as its own primary key.
-//!    See `STORAGE_NOTES.md` §3.
-//!
-//!    fsindex runs the bookkeeping-free write path (no `_bookkeeping`
-//!    sidecars — truncate-and-rebuild plus a single `dolt_commit` per
-//!    scan is its attempt model). That is orthogonal to the
-//!    framework's events-vs-bookkeeping split (which is about attempt
-//!    tracking); see
-//!    [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//!    §"Events vs bookkeeping".
-//!
-//! 2. **Multi-root via doltlite branches, one db per source.** Per
-//!    §"Operating assumptions" we keep "one writer per doltlite
-//!    file." Two scan roots that want to share storage and gain
-//!    prolly-tree dedup pick the same `<name>.doltlite_db` and
-//!    different `target_doltlite_branch` values in their `sources:`
-//!    entries; sync's orchestrator serializes them. Branch-level
-//!    diff (`SELECT … FROM main.files m FULL JOIN b.files l USING(id)
-//!    WHERE m.blake3 IS NOT l.blake3`) is the comparison/sync UX
-//!    we're building toward.
-//!
-//! ## PK choice
-//!
-//! Every entry row keys by **root-relative path** as a `TEXT` PK,
-//! posix-style ("dir/sub/leaf.txt", forward slashes, no leading
-//! slash, no trailing slash even for directories). The path is the
-//! upstream identifier in the §"Object identity" sense — stable
-//! across re-scans of the same tree, distinct from any
-//! filesystem-side identity (inode, fs uuid, etc.).
-//! `ON CONFLICT(id) DO UPDATE` works because rescans hit the same
-//! paths.
-//!
-//! Identity *across* renames/moves is a separate concern handled by
-//! the breadcrumb UUID — see [Identity UUIDs](#identity-uuids) below.
-//!
-//! ## Why typed columns and not JSONB payloads
-//!
-//! Every other entity table in the framework uses a JSONB `payload`
-//! column to preserve verbatim upstream wire bytes (§"Wire-fidelity
-//! of the raw store"). `fsindex` deviates: every column is typed,
-//! none of the rows carry a `payload`.
-//!
-//! Two reasons:
-//!
-//! 1. **There is no opaque upstream wire to preserve.** The
-//!    "upstream" is the OS `stat` call; we control its encoding into
-//!    columns 1:1. Wire-fidelity collapses to "preserve the stat
-//!    fields the OS gave us, do not synthesize ones it didn't" —
-//!    symmetric with the §"No fabricated timestamps" rule. There is
-//!    no opaque-bag-of-fields to round-trip.
-//! 2. **Per-row size matters at fsindex's scale.** Tens of millions
-//!    of rows are the design target. A JSONB envelope (`{"kind":
-//!    "file","size":N,"blake3":"<64 hex>"}`) adds ~20 bytes of
-//!    key/quote/delimiter overhead per row over typed columns,
-//!    every read pays a `jsonb_extract` per virtual column, and
-//!    every write pays a JSON encode. At 50M rows that overhead is
-//!    ~1 GB of bloat plus measurable CPU on every scan.
-//!
-//! The trade-off: adding a column later is `ALTER TABLE ADD COLUMN`,
-//! not a no-op payload-key addition. For a schema this small and
-//! stable, that's acceptable.
-//!
-//! ## Identity UUIDs
-//!
-//! Optionally, directories carry a **Ship-of-Theseus identity UUID**
-//! stamped into a `.fsindex.yaml` breadcrumb file inside the
-//! directory. The UUID survives renames and moves because it travels
-//! with the directory's content. The breadcrumb is opt-in per
-//! `stamp_me_with_uuid: true` in an ancestor `.fsindex.yaml`; the
-//! scanner mutating the filesystem to write breadcrumbs is the one
-//! side effect this provider performs — see
-//! [`EXTRACT.md`](../../EXTRACT.md) §"Stamping policy" for the
-//! gating rules.
-//!
-//! **The UUID is not a PK.** A `cp -r` of a stamped directory
-//! produces two copies of the same UUID at different paths. That is
-//! a real and expected case, surfaced as a fork finding via
-//! `SELECT identity_uuid, COUNT(*) FROM files
-//!  WHERE identity_uuid IS NOT NULL
-//!  GROUP BY identity_uuid HAVING COUNT(*) > 1`. The path remains
-//! the PK; the UUID is a *secondary identity hint*. It is not
-//! indexed today (the column is almost entirely NULL — see
-//! `STORAGE_NOTES.md` §2); add an index if a real move/fork workload
-//! needs it.
-//!
-//! ## Directory tree-hash canonicalization
-//!
-//! `files.blake3` for a directory is defined as blake3 over a
-//! canonical encoding of its immediate children, sorted by name.
-//! The encoding for each child is:
-//!
-//! ```text
-//!   name_bytes ‖ 0x00 ‖ kind_tag ‖ child_blake3 (32 raw bytes) ‖ 0x0a
-//! ```
-//!
-//! where `kind_tag` is one ASCII byte: `F` (file), `D` (directory),
-//! `L` (symlink). Children are sorted by byte-lexical order of
-//! `name_bytes` before concatenation. The hash is over the
-//! concatenation of all children's encodings (empty string → empty
-//! dir hash).
-//!
-//! Two rules govern what counts as a "child":
-//!
-//! 1. **Scanner-controlled files are excluded.** `.fsindex.yaml`
-//!    (both the options file and the breadcrumb — same file) is not
-//!    a child for tree-hash purposes. Otherwise the act of stamping
-//!    a directory would invalidate its own blake3, fanning out a
-//!    rehash storm to every ancestor on first scan.
-//! 2. **Ignored entries are excluded.** Entries matched by the
-//!    cascaded `ignore` patterns are absent from `files` entirely
-//!    and contribute nothing to the parent's tree-hash. To detect
-//!    the case "same content, different ignore config" the parent
-//!    `scan_meta` row carries an `options_fingerprint` so two
-//!    superficially-equal dir hashes computed under different
-//!    visibility configs are distinguishable at the meta layer.
-//!
-//! The encoding matches git's tree-object spirit (sorted children
-//! with name + kind + child-hash) without being byte-identical to
-//! git's; we don't need git compatibility, we need stable canonical
-//! ordering and resilience against name collisions across kinds.
-//!
-//! ## Hand-rolled `BulkUpsertable` impls
-//!
-//! Without a JSONB `payload` column, `#[derive(WirePayloadRow)]`
-//! does not apply — its macro contract is specifically the
-//! `WirePayload { id, payload }` shape. The hand-rolled
-//! `BulkUpsertable` impls below follow the same pattern slack's
-//! `RepliesPagesRow` uses. The right long-term fix is a
-//! `#[derive(BulkUpsertable)]` macro for non-payload tables, called
-//! out in [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-//! §"Deferred work" — when that lands, every impl in this file
-//! collapses to its struct definition.
 
 use datalib_etl::bulk::BulkUpsertable;
 use sqlx::query::Query;
@@ -166,45 +7,10 @@ use sqlx::Sqlite;
 
 pub const DATA_TABLES: &[&str] = &["files", "scan_meta"];
 
-// ─────────────────────────────────────────────────────────────────────
 // files
-// ─────────────────────────────────────────────────────────────────────
 
 /// `files` — one row per entry visible to the indexer (after
 /// `ignore` filtering), including directories and symlinks.
-///
-/// This is the **content entity**. Its columns carry the semantic
-/// identity of the entry — what would have to change for a rescan
-/// to register a real diff. Filesystem-mechanical fields (mtime,
-/// inode, dev) live in the sibling [`FILE_STATS_DDL`] table so that
-/// `dolt diff files` shows content changes only.
-///
-/// Columns:
-/// - `id` — root-relative posix path. Primary key. See "PK choice"
-///   in the module docstring.
-/// - `kind` — `'file'` | `'dir'` | `'symlink'`. Not indexed (no column
-///   is — see the "ZERO secondary indexes" note above `FileRow`).
-/// - `size` — bytes. For a file, the byte length of its contents.
-///   For a directory, the sum of the sizes of its visible children
-///   (recursive). For a symlink, the byte length of the link
-///   target.
-/// - `blake3` — the raw 32-byte blake3 digest, stored as a `BLOB`
-///   (not 64-char hex — saves ~35 B/row; see `STORAGE_NOTES.md` §2).
-///   For files: of the file bytes. For directories: of the canonical
-///   tree encoding (see "Directory tree-hash canonicalization" in the
-///   module docstring). For symlinks: of the link target bytes (so a
-///   retarget registers as a content change). Not indexed; dup
-///   detection (`GROUP BY blake3`) and cross-branch move/sync diffs are
-///   whole-corpus scans done in RAM, not point lookups — see the
-///   "ZERO secondary indexes" note above `FileRow`.
-/// - `symlink_target` — link target string. NULL unless
-///   `kind = 'symlink'`.
-/// - `identity_uuid` — directory breadcrumb UUID. NULL for
-///   unstamped directories and for every file/symlink row. Not
-///   indexed. Fork detection
-///   (`GROUP BY identity_uuid HAVING COUNT(*) > 1`) and
-///   move-across-rename detection (`JOIN … USING(identity_uuid)`) run
-///   in RAM after a full load.
 pub const FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS files (
     id              TEXT PRIMARY KEY,
     kind            TEXT NOT NULL,
@@ -217,25 +23,6 @@ pub const FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS files (
 // fsindex carries ZERO secondary indexes — only the two path primary
 // key (on `files`), which in dolt is the clustered
 // storage order and the row identity, not optional indexes.
-//
-// The raw store's only jobs are durable content-addressed storage and
-// prolly-tree diff between commits/branches; neither touches a secondary
-// index (diff walks the PK-ordered chunks). Every analysis query —
-// dup clustering (`GROUP BY blake3`), fork/move detection
-// (`GROUP BY identity_uuid`, JOIN on blake3), even the cross-branch sync
-// diff (`m.blake3 IS NOT l.blake3`) — is a whole-corpus scan, so the
-// intended workflow streams the full table into RAM once and indexes it
-// there. A secondary index only earns its keep for selective point
-// lookups against the on-disk store without a full scan, which this
-// store never does.
-//
-// And the cost is steep: each secondary index on a TEXT-PK table
-// re-stores the full path as its row back-reference (~130–166 B/row at
-// 60-char paths — about the size of the rest of the row), so even one
-// blake3 index nearly doubled the per-row footprint (215 MB → 346 MB at
-// 1M rows). See `STORAGE_NOTES.md` §2. Re-adding any of these is a
-// one-line `CREATE INDEX` if a SQL-side, too-big-for-RAM workload ever
-// materializes.
 
 /// One row in [`FILES_DDL`].
 #[derive(Debug, Clone)]
@@ -290,50 +77,10 @@ impl BulkUpsertable for FileRow {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // scan_meta
-// ─────────────────────────────────────────────────────────────────────
 
 /// `scan_meta` — one row per scan source, recording the per-root
 /// state that doesn't belong on any individual entry.
-///
-/// In the single-root-per-branch model the table holds exactly one
-/// row. The table shape is preserved for symmetry with other
-/// providers' "small metadata table" pattern (contacts'
-/// `accounts`, signal's `ingested_backups`) and so a future "merge
-/// two scan roots into one branch" path stays trivial.
-///
-/// Columns:
-/// - `id` — the `name:` of the `sources:` entry that produced this
-///   scan (e.g. `"laptop_home"`). Stable across moves of the data
-///   root because it's user-supplied in config, not derived from
-///   the filesystem. This is the same per-source stable identifier
-///   used everywhere else in the framework — `.doltlite_db`
-///   filenames, log lines, cursor file paths. Primary key.
-/// - `abs_path` — current absolute path of the scan root. May
-///   change between scans if the user moves the data root; `id`
-///   stays stable, this updates.
-/// - `os` — `'macos'` | `'linux'` | `'windows'` | ... at scan time.
-///   Drives `stamp_kind` defaults in the fingerprint cache.
-/// - `case_sensitive` — 0/1 bool. Captured at first scan; macOS's
-///   default HFS+/APFS is case-insensitive, which matters for
-///   collation when comparing branches across roots from different
-///   OSes.
-/// - `inode_stable` — 0/1 bool. 0 on filesystems where we choose
-///   `stamp_kind = 'nostamp'` for every row.
-/// - `options_fingerprint` — hex blake3 over the resolved cascaded
-///   options (`ignore` patterns, `stamp_me_with_uuid` configuration,
-///   etc.) that were active for this scan. Two branches with the
-///   same tree but different `options_fingerprint` may legitimately
-///   have different `files.blake3` for dir rows because their
-///   visible-children sets differ; the fingerprint is what tells a
-///   diff tool "those aren't really the same tree."
-/// - `last_scan_at` — ISO-8601 with explicit offset, produced via
-///   `datalib_time::IsoOffsetTimestamp::now_local()`.
-/// - `scanner_version` — semver string of the
-///   `datalib-etl-fsindex` crate at scan time. Bump invalidates
-///   the tree-hash canonicalization if the algorithm ever needs to
-///   change (analogous to a provider's `RENDER_VERSION` lever).
 pub const SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS scan_meta (
     id                  TEXT PRIMARY KEY,
     abs_path            TEXT NOT NULL,
@@ -388,32 +135,8 @@ impl BulkUpsertable for ScanMetaRow {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // Composer
-// ─────────────────────────────────────────────────────────────────────
 
-/// Full DDL block.
-///
-/// **No `<t>_bookkeeping` sidecars.** Unlike every other provider,
-/// fsindex deliberately omits the framework's per-row attempt-tracking
-/// sidecars (`attempt_count`, `last_attempt_at`, `last_error`). Two
-/// reasons:
-///
-/// 1. **There's no retry/attempt model to track.** A `read(2)` either
-///    succeeds or it's a real error; there's no flaky upstream API to
-///    re-poll. Unreadable entries are logged + counted (`read_errors`,
-///    `stat_errors` in the `fsindex_phase_breakdown` event), which is
-///    all the durable evidence we need.
-/// 2. **They double the row count.** Each sidecar mirrors its parent
-///    1:1, so keeping them roughly doubles the bytes written and
-///    committed at the tens-of-millions-of-rows design scale — and the
-///    extra prolly-tree novelty makes `dolt_gc` (the only thing that
-///    reclaims write-amplification) materially harder on a full disk.
-///
-/// fsindex therefore writes through
-/// [`datalib_etl::bulk::bulk_upsert_entity_in_tx`] (no bookkeeping
-/// stamp) and resets via a bookkeeping-free truncate (see
-/// `download::db::RawDb::reset`).
 pub fn full_ddl() -> Vec<String> {
     vec![FILES_DDL.to_string(), SCAN_META_DDL.to_string()]
 }

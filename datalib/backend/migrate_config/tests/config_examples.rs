@@ -1,36 +1,9 @@
 //! Parse-and-validate the checked-in example configs — those under
 //! `docs/user/config_examples/` plus `configs/dag_example.toml` — which
 //! are in the current TOML steps format.
-//!
-//! This test lives in the migration crate for one reason: `SourceConfig`
-//! does. The stanza envelope around it is retired, but its `type:`-tagged
-//! union is still the only mapping from a source type string to that
-//! provider's config schema — which is exactly what layer 2 below needs.
-//!
-//! Three layers of validation:
-//!
-//! 1. Each file loads as a `DagConfig` and builds a valid `Graph` —
-//!    the same `load → to_specs → Graph::build` chain the runner uses,
-//!    so cycle / output-ownership / bad-command errors are caught, not
-//!    just TOML syntax.
-//! 2. Every `datalib-step download <type>` step's `params` round-trip
-//!    into `SourceConfig` (the subcommand's type re-injected as the
-//!    serde tag), which is `deny_unknown_fields` — this test fails the
-//!    moment a documented knob drifts from the real schema: a
-//!    misspelled field, a renamed `type`, or a removed source variant.
-//! 3. Every `datalib-step render <type>` step carrying `params`
-//!    deserializes into that provider's `<P>RenderConfig` (also
-//!    `deny_unknown_fields`).
-//!
-//! `all_sources.toml` is the important one: it enumerates every source
-//! `type` plus both input modes for `email` and `carddav`, so this test
-//! doubles as a "did someone add a source without documenting it?" nudge.
 
 use datalib_migrate_config::legacy_stanza::SourceConfig;
 
-/// Resolve a repo-relative config file from the test's runfiles tree
-/// (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles
-/// lookup in `fixture_db_snapshot.rs`.
 fn example_config(repo_rel: &str) -> std::path::PathBuf {
     let r = runfiles::Runfiles::create().expect("runfiles tree");
     let rel = format!("_main/{repo_rel}");
@@ -41,9 +14,6 @@ fn example_config(repo_rel: &str) -> std::path::PathBuf {
     path
 }
 
-/// `"datalib-step download slack_api"` → `Some(("download", "slack_api"))`.
-/// Non-`datalib-step` commands and the source-independent subcommands
-/// (`grid_index`, `qmd_index`) return `None`.
 fn step_phase_and_type(command: &str) -> Option<(&str, &str)> {
     let mut words = command.split_whitespace();
     if words.next()? != "datalib-step" {
@@ -55,9 +25,6 @@ fn step_phase_and_type(command: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// Rebuild the value `datalib-step download <ty>` deserializes: the
-/// step's `params` table with the subcommand's type re-injected as
-/// the `type` tag `SourceConfig` discriminates on.
 fn params_with_type(ty: &str, params: Option<&toml::Value>) -> toml::Value {
     let mut m = toml::Table::new();
     m.insert("type".into(), ty.into());
@@ -69,9 +36,6 @@ fn params_with_type(ty: &str, params: Option<&toml::Value>) -> toml::Value {
     toml::Value::Table(m)
 }
 
-/// Validate a render step's `params` against the provider's
-/// `<P>RenderConfig`. Only the types the examples actually give render
-/// params to are matched; a new one panics with a pointer here.
 fn validate_render_params(file: &str, id: &str, ty: &str, params: &toml::Value) {
     macro_rules! check {
         ($t:ty) => {{
@@ -151,17 +115,6 @@ fn example_configs_parse_and_validate() {
 /// Same validation, applied to the manual-e2e live-golden config — which lives
 /// OUTSIDE this repo (it names real accounts), in the private dir given by
 /// `DATALIB_MANUAL_E2E_DIR`. See `docs/dev/testing.md`.
-///
-/// `#[ignore]` because it depends on a host path that only exists on the one
-/// machine that runs the live golden; it is otherwise cheap — pure parsing, no
-/// network, no credentials, no subprocess. That makes it the fast way to catch
-/// the config drifting from the provider schemas *without* paying for a live
-/// re-bake:
-///
-/// ```sh
-/// bazel test //datalib/backend/migrate_config:config_examples_test \
-///     --test_arg=--ignored --test_env=DATALIB_MANUAL_E2E_DIR --test_output=all
-/// ```
 #[test]
 #[ignore]
 fn manual_e2e_config_parses_and_validates() {

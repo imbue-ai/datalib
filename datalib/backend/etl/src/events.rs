@@ -15,7 +15,6 @@ pub fn item_fetched(url: &str, bytes: u64, duration_ms: u64) {
     );
 }
 
-/// A batch of records was diffed against prior state and persisted.
 pub fn indexed_batch(entity: &str, count: usize, duration_ms: u64) {
     tracing::info!(
         event = "indexed_batch",

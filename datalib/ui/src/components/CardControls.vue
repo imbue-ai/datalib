@@ -26,10 +26,6 @@ const props = defineProps<{
 // namespace is deleted and rewritten on every refresh, so an edit there
 // would vanish the next time the config is touched. Builtins never
 // match either — they live in the app bundle, not in the store.
-//
-// Detected from the source's leading `comp.user.<name>(` against the
-// reactive manifest, so the button appears the moment the store loads
-// (idempotent kick below) and follows renames and deletes.
 void ensureFrontend();
 const aliasName = computed(() => {
   const m = props.source.match(/^\s*comp\s*\.\s*user\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
@@ -49,17 +45,6 @@ const aloneHref = computed(() =>
 );
 
 // ---- back / forward over the card's own source history ----
-//
-// A card can navigate in place — the gallery becomes a picker becomes
-// a document (host.setSource), the agent hand-off repoints it, a dev
-// edits the source box. Each is a step in this card's history, tracked
-// here as the classic stack + cursor: a new source truncates any
-// forward entries and appends; back/forward move the cursor and replay
-// the entry through host.setSource. Our own replay comes back as a
-// prop change that matches the cursor, which the watcher ignores.
-// History is per chrome-bar instance, so it lives exactly as long as
-// the card does in its layout (source only — state is cleared by
-// setSource, so navigating restores a fresh card, like a page reload).
 const history = ref<string[]>([props.source]);
 const cursor = ref(0);
 

@@ -8,10 +8,6 @@
 // table's "Locate config" button can select it in the editor. The
 // text itself is the single source of truth — there is no fragment
 // editing or reassembly.
-//
-// TOML is the only format here, as it is everywhere else in the app.
-// A data root written before the switch is converted once, out of
-// band, by the `datalib-migrate-config` program.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 

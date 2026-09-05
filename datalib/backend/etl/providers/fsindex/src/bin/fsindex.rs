@@ -1,15 +1,4 @@
 //! `fsindex` — directory-tree indexer CLI.
-//!
-//! Walks a local root, hashes everything visible, and lands the
-//! result in a doltlite raw store. See the crate's `EXTRACT.md` for
-//! the design.
-//!
-//! This binary is fsindex's own orchestrator: it opens the raw db,
-//! runs `download::fetch` (which writes + gc's), and then issues the
-//! single per-scan `dolt_commit`. Committing here (rather than inside
-//! `fetch`) keeps the provider's download code commit-free per the
-//! framework's commit-lifecycle rule, while still leaving a clean
-//! working tree so the next open skips the rescue commit.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -36,20 +25,6 @@ struct Args {
 
     /// Stable identifier for this scan source, stored as the
     /// `scan_meta.id` PK.
-    ///
-    /// An **id**, not a display name: nothing shows it to a person, and
-    /// re-scanning the same source must reuse it or the upsert writes a
-    /// second `scan_meta` row instead of updating the first.
-    ///
-    /// Defaults to the scan root's directory name, which is what you
-    /// want standalone. The flag is here for the pipeline's sake: there
-    /// a source's identity comes from its config entry
-    /// (`PlanContext::name`), which is chosen once and deliberately
-    /// outlives any particular path, so it cannot be derived from the
-    /// root.
-    ///
-    /// `--source-name` is accepted as an alias; it was this flag's name
-    /// when it was mandatory.
     #[arg(long, alias = "source-name")]
     source_id: Option<String>,
 
@@ -58,19 +33,6 @@ struct Args {
     root: PathBuf,
 
     /// Where this host keeps its fingerprint cache.
-    ///
-    /// The cache is what makes a rescan fast: it remembers each path's
-    /// `(mtime, size, inode, dev)` and the hash that went with them, so
-    /// an unchanged file is never re-read. It is host state and
-    /// deliberately *not* part of the scan store — inode numbers mean
-    /// nothing on another machine, a data root may be synced between
-    /// machines, and a fresh branch of the scan data should not cost
-    /// you a full rehash.
-    ///
-    /// Defaults to this machine's cache directory
-    /// (`$DATALIB_CACHE_DIR`, else `$XDG_CACHE_HOME/datalib`, else
-    /// `~/Library/Caches/datalib` or `~/.cache/datalib`). Deleting it
-    /// is always safe: the next scan rebuilds it, slowly.
     #[arg(long)]
     cache_db: Option<PathBuf>,
 
@@ -264,11 +226,6 @@ async fn main() -> Result<()> {
 /// exists, so they live in the post-commit `fsindex_diff_summary` log.
 /// The scan root's own directory name, used when `--source-id` is not
 /// given.
-///
-/// The root is canonicalized first so `.`, `..` and a trailing slash
-/// all resolve to a real directory name rather than to an empty or
-/// misleading one. A root that *is* the filesystem root has no name to
-/// take, so it falls back to `root`.
 fn default_source_id(root: &Path) -> Result<String> {
     let canonical = root
         .canonicalize()

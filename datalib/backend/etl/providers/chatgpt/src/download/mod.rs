@@ -1,17 +1,4 @@
 //! ChatGPT downloader entry point. Port of `src/download/chatgpt_web.py`.
-//!
-//! Writes into a single doltlite database file
-//! (`<data_root>/<name>/raw/entities.doltlite_db`) — one row per `/me` response,
-//! per conversation, and per attached file. See `db.rs` for the schema
-//! and `datalib_etl::doltlite_raw` for the design rationale.
-//!
-//! The `_fetched_at` synthetic key that the Python downloader stamped
-//! into per-conversation JSON files has been promoted to a real
-//! bookkeeping column (`conversations_bookkeeping.fetched_at`) — the
-//! stored payload is now the raw upstream response byte-for-byte.
-//!
-//! Auth + Cloudflare clearance is still delegated to `latchkey curl`
-//! with `LATCHKEY_CURL=/path/to/curl_impersonate-chrome`.
 
 pub mod api;
 pub mod db;
@@ -232,11 +219,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // we don't have at all → missing. Rows whose stored update_time
         // differs from the listing's → stale. Both fall into the work
         // queue; everything else is up-to-date and skipped.
-        //
-        // No pre-seed: we only ever write a row after a successful
-        // detail fetch. The next sync's listing is the source of truth
-        // for "what should exist." A previously-failed fetch is
-        // naturally retried because no row exists yet.
         let listed_ids: Vec<&str> = listing
             .iter()
             .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
@@ -387,22 +369,6 @@ fn title_and_update_time(full: &Value) -> (Option<String>, Option<String>) {
     (title, update_time)
 }
 
-/// Reduce an `update_time` value to a whole-second Unix epoch for the
-/// listing skip-check.
-///
-/// The two endpoints disagree on shape: the `/conversations` listing
-/// returns `update_time` as an ISO-8601 string
-/// (`"2024-03-20T18:28:51.420159+00:00"`) while `/conversation/{id}`
-/// returns it as a Unix-epoch float (`1710959331.420159`). We store the
-/// detail float in `conversations.update_time`, then compare it against
-/// the listing string on the next sync — so a raw byte comparison never
-/// matches and every conversation looks stale, defeating incremental
-/// resume (this regressed the Python-era fix in commit 1fc3ee8).
-/// Canonicalizing both sides to whole seconds restores a like-for-like
-/// comparison. Sub-second precision is dropped on purpose: a
-/// conversation's `update_time` only advances when it gains a message,
-/// so seconds suffice to spot real changes and we side-step float/ISO
-/// sub-second formatting noise.
 fn update_time_secs(v: &Value) -> Option<i64> {
     match v {
         Value::Number(n) => n.as_f64().map(|f| f.floor() as i64),
@@ -436,8 +402,6 @@ struct ConversationUpsert {
     payload: String,
 }
 
-/// Build a `MeRow` and bulk-upsert it. Same `now` everywhere so the
-/// `me_bookkeeping.fetched_at` stamp matches the rest of the fetch.
 async fn upsert_me(db: &RawDb, payload: &Value, now: &str) -> Result<()> {
     let id = payload
         .get("id")
@@ -501,13 +465,6 @@ async fn upsert_conversations(db: &RawDb, rows: &[ConversationUpsert], now: &str
 /// blob into the DB. Per the design doc we skip when we already have
 /// bytes (signed URLs rotate; bytes don't). Failures bump
 /// `attempt_count` and record `last_error`; they don't fail the sync.
-///
-/// Pending state accumulates in a [`BlobBundle`] — successful fetches
-/// go through `bundle.add(...)`, failures through `bundle.add_error(...)`.
-/// One flush at end-of-conversation drains the bundle into the CAS
-/// (via `BlobCas::put_many`) + the per-provider `chatgpt_attachments`
-/// edge table (via `bulk_upsert_in_tx`) + the bookkeeping sidecar
-/// (`record_object_error`).
 async fn fetch_attachments_for(
     client: &mut ChatGPTClient,
     db: &RawDb,
@@ -787,9 +744,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Derive the ISO-8601 string the *listing* endpoint would report
-    /// for a given detail-endpoint epoch float, using the same format
-    /// the live API emits (microseconds, explicit `+00:00`).
     fn iso_for_epoch(epoch: f64) -> String {
         let micros = (epoch * 1_000_000.0).round() as i64;
         DateTime::from_timestamp_micros(micros)

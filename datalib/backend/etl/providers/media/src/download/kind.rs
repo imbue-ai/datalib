@@ -1,24 +1,5 @@
 //! What a file *is*: media class, container format, and whether we know
 //! how to compute a metadata-excluding payload hash for it.
-//!
-//! # Two-stage classification, and why
-//!
-//! The walk decides what to visit from the **extension** alone
-//! ([`accept`]), because that decision runs for every entry in the tree
-//! and must not cost a `read(2)`. Everything downstream decides from
-//! the file's **leading bytes** ([`Container::sniff`]), because
-//! extensions lie in ways that matter here:
-//!
-//! - `.m4a`, `.m4v`, `.mp4`, `.mov` and `.heic` are all ISO base media
-//!   files. The extension is a hint about intent; the `ftyp` brand is
-//!   the fact. A `.mov` holding an `M4A ` brand is an audio file.
-//! - `.jpg` files that are really PNGs are common enough in exported
-//!   libraries to be worth not mis-parsing.
-//! - `.dng` is a TIFF, and so is `.tif`. One reader serves both.
-//!
-//! Extension still breaks ties the bytes cannot: a bare `ftyp` brand
-//! of `isom` says nothing about whether the file carries video, so the
-//! extension picks the class and the track census corrects it later.
 
 use std::path::Path;
 
@@ -92,13 +73,6 @@ impl Container {
         }
     }
 
-    /// Identify from the first bytes of the file. `head` should be at
-    /// least [`SNIFF_LEN`] bytes when the file is that long.
-    ///
-    /// Returns `Unknown` rather than guessing from the extension: a row
-    /// that says `unknown` is a true statement about the bytes, where a
-    /// row that says `jpeg` because the name ended in `.jpg` is a lie
-    /// that every later query inherits.
     pub fn sniff(head: &[u8]) -> Self {
         // ID3v2 tags precede the audio in MP3 and can precede it in
         // several other containers, so this test has to come before the
@@ -155,13 +129,6 @@ impl Container {
         Container::Unknown
     }
 
-    /// Whether this container can carry audio tags — an ID3 block,
-    /// Vorbis comments, an MP4 `ilst`, a RIFF `INFO` list.
-    ///
-    /// Used to decide whether to *attempt* the tag reader, not what to
-    /// do with the answer. Asking is cheap but not free (an open, a
-    /// parse, and a log line per failure), and a photo library would
-    /// otherwise pay it once per JPEG for a guaranteed miss.
     pub fn may_have_tags(self) -> bool {
         matches!(
             self,
@@ -213,8 +180,6 @@ pub const SNIFF_LEN: usize = 16;
 /// Extensions we index, and the class we assume for each before reading
 /// a byte. The bytes get the final say on `container`; this table gets
 /// the final say on `class` for the containers that carry either.
-///
-/// Kept lowercase; [`class_for_extension`] lowercases before lookup.
 const EXTENSIONS: &[(&str, MediaClass)] = &[
     // ── audio ────────────────────────────────────────────────────────
     ("mp3", MediaClass::Audio),
@@ -292,11 +257,6 @@ pub fn is_playlist_extension(p: &Path) -> bool {
     lower_ext(p).is_some_and(|e| PLAYLIST_EXTENSIONS.contains(&e.as_str()))
 }
 
-/// The walk predicate: a media file or a playlist.
-///
-/// Deliberately extension-only. This runs once per entry in a tree that
-/// may hold millions of them, and the alternative — opening every file
-/// to sniff it — is exactly the cost the Unison cursor exists to avoid.
 pub fn accept(p: &Path) -> bool {
     class_for_extension(p).is_some() || is_playlist_extension(p)
 }

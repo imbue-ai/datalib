@@ -2,14 +2,6 @@
 //! plus its comments + reviews. Writes a single doltlite database at
 //! `<data_root>/<name>/raw/entities.doltlite_db`; see [`db`] for the schema and
 //! [`datalib_etl::doltlite_raw`] for the design rationale.
-//!
-//! Port of `src/download/github_web.py`. Two refinements vs Python:
-//!
-//! - **Single-PR mode** (`--pull-request owner/repo#NUM`) skips
-//!   discovery, fetches that one PR + its children.
-//! - **Incremental sync state** lives in the DB itself (`sync_scope_state`
-//!   table), so re-runs narrow each search to `updated:>=since` without
-//!   needing a sidecar JSON file.
 
 pub mod client;
 pub mod db;
@@ -101,14 +93,6 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-/// Pick the `since` date for a GitHub search scope.
-///
-/// Thin wrapper around the canonical
-/// [`datalib_etl::scope_state::since_for_scope`] that truncates the returned RFC 3339 timestamp to `YYYY-MM-DD` (what
-/// GitHub's `updated:>=` syntax expects). Behavior is otherwise
-/// identical to gitlab's: state is the cursor, the window is a
-/// cold-start floor, and `prior` lets a *widened* window reach back
-/// past the cursor to cover the range it never walked.
 fn since_for_scope(
     state: &HashMap<String, String>,
     scope: &str,
@@ -158,7 +142,6 @@ struct Discovery {
     failed_scopes: usize,
 }
 
-/// Union-of-scopes discovery.
 async fn discover_prs(
     client: &GitHubClient,
     scopes: &[String],
@@ -368,7 +351,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-/// Parse `owner/repo#123` (or `owner/repo/pull/123`) into `(repo, number)`.
 pub fn parse_pr_ref(s: &str) -> Result<(String, u32)> {
     if let Some((repo, num)) = s.split_once('#') {
         let n: u32 = num

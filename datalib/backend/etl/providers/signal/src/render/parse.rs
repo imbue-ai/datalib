@@ -1,25 +1,5 @@
 //! Parse the doltlite raw store into a small in-memory `ParsedSignal`
 //! that the renderer can walk without re-querying.
-//!
-//! Incrementality is driven by **`dolt_diff_<table>`**, not by Rust- or
-//! SQL-side content hashes. The caller passes the doltlite commit hash
-//! the renderer last successfully completed against (from
-//! [`datalib_etl::render_cursor`]); we union the per-table diff
-//! vtabs to enumerate the `chat_id`s touched between that hash and
-//! `HEAD`, and load full chat data only for those. Cold start (no
-//! cursor, or `dolt_diff_<table>` unavailable / non-doltlite sqlite)
-//! falls back to "every chat with any chat_items" — the existing full
-//! load.
-//!
-//! The trade we accept: when ANY row in a chat changes — message edit,
-//! reaction, attachment swap — every period bucket of that chat
-//! re-renders, including buckets whose markdown bytes would have
-//! ended up identical. In exchange we drop a few hundred lines of
-//! bucket-fingerprint bookkeeping (the per-row `payload_blake3` column,
-//! the `bucket_fingerprint_query` CTE, and the `prior_fingerprints`
-//! plumbing through render/render/orchestrator). The dolt prolly-
-//! tree diff itself is timed on every run and logged in the render
-//! cursor — see `render::render`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -147,22 +127,10 @@ pub struct ParsedAttachment {
     pub is_image: bool,
 }
 
-/// Compatibility wrapper for callers that don't have a render cursor
-/// (older unit tests, ad-hoc repros). Forces a cold start — every
-/// chat renders.
 pub fn parse_raw_dir(input: &Path) -> Result<ParsedSignal> {
     parse(input, Period::Month, "signal", None)
 }
 
-/// Two-phase parse driven by `dolt_diff_<table>`.
-///
-/// Phase 1 — ask doltlite which chats changed since `last_render_hash`.
-/// Cold start (`last_render_hash = None`) loads every chat; same path
-/// also taken when doltlite extensions aren't linked.
-///
-/// Phase 2 — `SELECT … WHERE chat_id IN (?, …)` over `chat_items` for
-/// the surviving chats only, build [`DocBucket`]s with one entry per
-/// period the chat spans.
 pub fn parse(
     input: &Path,
     period: Period,
@@ -325,15 +293,6 @@ async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
     Ok(out)
 }
 
-/// Phase 1: ask doltlite which chats touched any row since
-/// `last_render_hash`. Returns the change set + current HEAD + the
-/// wall-clock time the diff query took.
-///
-/// `recipients` changes propagate as "every chat needs re-render"
-/// because rendered chat names dereference recipient display names —
-/// a renamed recipient must repaint every chat they appear in, and we
-/// don't keep the recipient→chats reverse index handy. Cheap and
-/// correct.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
@@ -395,8 +354,6 @@ fn period_key_sql(period: Period) -> String {
     }
 }
 
-/// Phase 2: pull `chat_items.payload` for the chats we decided to
-/// render, decode the items, and shape into per-period `DocBucket`s.
 async fn load_buckets(
     pool: &sqlx::SqlitePool,
     period: Period,
@@ -493,8 +450,6 @@ fn decode_chat_item(payload: &str) -> (Option<String>, bool, Vec<ParsedAttachmen
     }
 }
 
-/// Pull a `ParsedAttachment` out of a `MessageAttachment` if it has
-/// the fields we need to address its bytes in the CAS.
 fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAttachment> {
     let ptr = att.pointer.as_ref()?;
     let li = ptr.locator_info.as_ref()?;
