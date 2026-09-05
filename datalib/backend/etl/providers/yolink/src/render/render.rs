@@ -153,6 +153,7 @@ pub fn render_all(
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
+        problems: Vec::new(),
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
     progress.inc(1);

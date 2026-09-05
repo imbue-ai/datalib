@@ -289,6 +289,7 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
+        problems: Vec::new(),
     })
     .with_context(|| format!("on_doc_complete {markdown_uuid}"))?;
 

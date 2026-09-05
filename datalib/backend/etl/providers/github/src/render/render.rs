@@ -370,6 +370,7 @@ pub fn render_github(
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
+            problems: Vec::new(),
         })?;
         summary.rendered += 1;
         progress.inc(1);

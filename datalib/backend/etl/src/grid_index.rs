@@ -657,6 +657,19 @@ pub struct RenderedMarkdown {
     /// don't emit edges yet — the Load step still issues the DELETE so
     /// stale rows from a previous render get cleaned up.
     pub edges: Vec<EdgeRow>,
+    /// What render could not do while producing this document: records
+    /// dropped, fields nulled, deliberate lossy rules that fired.
+    ///
+    /// Travels with the document rather than through a side channel so
+    /// the rows and the record of what was lost getting them commit
+    /// together — and so a renderer reports a problem by returning it,
+    /// with no context to thread and no ambient sink to install.
+    ///
+    /// Empty when read back by
+    /// [`crate::indexed_markdown::IndexedMarkdownStore::documents`]: by
+    /// then the problems are already rows in the store, and re-applying
+    /// them on the way to the index would double-count.
+    pub problems: Vec<datalib_schema::render_problems::RenderProblemRow>,
 }
 
 /// Write one rendered document into Dolt unconditionally.
@@ -830,6 +843,9 @@ async fn load_all_batch(
         // unchanged, because the store holds what the renderer emitted.
         let md = RenderedMarkdown {
             source_name,
+            // Already rows in the store; re-applying them on the way to
+            // the index would double-count.
+            problems: Vec::new(),
             ..md.clone()
         };
         let inserted = apply_one(write_lock, out_dir, &md, now_override)
@@ -1408,6 +1424,7 @@ mod write_lock_tests {
             render_version: 1,
             rows: vec![row],
             edges: Vec::new(),
+            problems: Vec::new(),
         }
     }
 

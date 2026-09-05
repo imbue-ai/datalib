@@ -269,6 +269,7 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
+        problems: Vec::new(),
     })
 }
 

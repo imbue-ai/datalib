@@ -175,6 +175,7 @@ fn render_one(
         render_version: profile.render_version,
         rows: vec![row],
         edges: Vec::new(),
+        problems: Vec::new(),
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 

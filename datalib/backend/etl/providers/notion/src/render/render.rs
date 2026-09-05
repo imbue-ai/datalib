@@ -1205,6 +1205,7 @@ pub fn render_notion_official(
                 render_version: RENDER_VERSION,
                 rows: pd.rows.clone(),
                 edges: Vec::new(),
+                problems: Vec::new(),
             })?;
         }
 
@@ -1307,6 +1308,7 @@ pub fn render_notion_official(
                 render_version: RENDER_VERSION,
                 rows: td.rows.clone(),
                 edges: Vec::new(),
+                problems: Vec::new(),
             })?;
         }
 

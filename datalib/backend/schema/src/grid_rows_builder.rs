@@ -14,6 +14,20 @@
 
 use datalib_time::validate_iso_offset;
 
+use crate::render_problems::{sample_of, Outcome, Problem, Reason, RenderProblemRow};
+
+/// Short content hash for a record with no usable identity.
+///
+/// Not `blake3` the crate — `datalib_schema` has no hashing dependency
+/// and does not need one for a 16-char surrogate whose only job is to be
+/// stable for the same bad record across runs.
+fn blake3_hex(s: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    format!("{:016x}{:016x}", h.finish(), s.len())
+}
+
 /// Why a [`GridRowBuilder::build`] call was rejected.
 #[derive(Debug)]
 pub enum GridRowError {
@@ -181,6 +195,92 @@ impl GridRowBuilder {
     pub fn message_index(mut self, v: impl Into<Option<i64>>) -> Self {
         self.message_index = v.into();
         self
+    }
+
+    /// Validate and finalize the row, or report why it could not be
+    /// built and return `None` so the caller drops it and keeps going.
+    ///
+    /// This is R2's second category made expressible. `build` offers one
+    /// failure mode, and every callsite in the tree propagated it with
+    /// `?` — so a single row with an unparseable `when_ts` failed the
+    /// whole source's render, which the DAG then classified as `data`
+    /// and used to poison every step below it, `grid_index` included.
+    /// One bad record out of forty thousand stopped the grid updating
+    /// for every provider.
+    ///
+    /// A dropped row is pushed onto `problems` as a `Dropped` /
+    /// `NoIdentity`-or-`CoercionFailed` entry, so the record of what was
+    /// lost lands beside the rows that survived — never a count without
+    /// a reason, never a reason without a sample.
+    ///
+    /// The caller supplies `scope_key` (the `markdown_uuid` this row
+    /// belongs to) and `source_name`, because a `GridRow` on its own
+    /// does not know which document it was headed for.
+    pub fn build_or_record(
+        self,
+        source_name: &str,
+        scope_key: &str,
+        render_version: u32,
+        now: &str,
+        problems: &mut Vec<RenderProblemRow>,
+    ) -> Option<GridRow> {
+        // Keep the identity before `build` consumes the builder, so a
+        // rejected row can still be named.
+        let uuid = self.uuid.clone();
+        match self.build() {
+            Ok(row) => Some(row),
+            Err(e) => {
+                let (field, reason, sample) = match &e {
+                    GridRowError::EmptyField { field } => (
+                        Some((*field).to_string()),
+                        Reason::NoIdentity,
+                        String::new(),
+                    ),
+                    GridRowError::InvalidWhenTs { value, .. } => (
+                        Some("when_ts".to_string()),
+                        Reason::CoercionFailed,
+                        value.clone(),
+                    ),
+                };
+                // A row with no uuid has no identity to key the problem
+                // on either; give it the content-derived surrogate so
+                // the same bad record does not accumulate a new row
+                // every run.
+                let key = if uuid.trim().is_empty() {
+                    format!(
+                        "noid:{}",
+                        &blake3_hex(&format!("{source_name}\x1f{scope_key}\x1f{e}"))[..16]
+                    )
+                } else {
+                    uuid
+                };
+                let problem = Problem {
+                    field,
+                    path: None,
+                    reason,
+                    rule: None,
+                    sample: sample_of(&sample),
+                };
+                problems.push(RenderProblemRow {
+                    uuid: key,
+                    scope_key: scope_key.to_string(),
+                    scope_kind: "markdown".to_string(),
+                    source_name: source_name.to_string(),
+                    stage: "grid_row".to_string(),
+                    outcome: Outcome::Dropped.as_str().to_string(),
+                    problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),
+                    first_seen_at: now.to_string(),
+                    last_seen_at: now.to_string(),
+                    render_version: render_version as i64,
+                });
+                // Deliberately no `warn!` here. The render path's
+                // diagnostics buffer is not installed (see the audit's
+                // §1), so a log line from here reaches nobody — that is
+                // the gap this sink exists to close, and logging into
+                // the void beside it would only look like coverage.
+                None
+            }
+        }
     }
 
     /// Validate and finalize the row.

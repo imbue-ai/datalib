@@ -194,6 +194,7 @@ fn render_book(
         render_version: RENDER_VERSION,
         rows,
         edges,
+        problems: Vec::new(),
     })
     .with_context(|| format!("on_doc_complete book {}", book.n))?;
 
@@ -270,6 +271,7 @@ fn render_chapter(
         render_version: RENDER_VERSION,
         rows,
         edges,
+        problems: Vec::new(),
     })
     .with_context(|| {
         format!(

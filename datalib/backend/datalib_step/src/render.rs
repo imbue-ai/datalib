@@ -437,6 +437,7 @@ mod stale_tree_tests {
                     render_version: version,
                     rows: vec![row],
                     edges: Vec::new(),
+                    problems: Vec::new(),
                 },
                 &[],
             )

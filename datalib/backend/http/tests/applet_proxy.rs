@@ -77,38 +77,97 @@ fn applet_command() -> String {
     format!("{} slack", bin.display())
 }
 
+/// Write one document through the store the slack applet reads.
+///
+/// `msgs` is `(message_index, author, text, when_ts)`; the thread row
+/// itself carries no index, which is how the applet tells the document
+/// row from the messages inside it.
+fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
+    use datalib_etl::grid_index::RenderedMarkdown;
+    use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+    use datalib_schema::grid_rows::GridRow;
+
+    let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
+        GridRow::builder()
+            .uuid(uuid)
+            .provider("slack")
+            .kind(if index.is_some() {
+                "Slack Message"
+            } else {
+                "Slack Thread"
+            })
+            .source_label("Slack")
+            .channel(Some(channel.to_string()))
+            .when_ts(Some(when.to_string()))
+            .author(author.map(str::to_string))
+            .message_index(index)
+            .conversation_uuid(md)
+            .entire_chat(format!("/chat/{md}"))
+            .text(text)
+            .markdown_uuid(Some(md.to_string()))
+            .build()
+            .unwrap()
+    };
+
+    let first = msgs.first().expect("a thread has at least one message");
+    let mut rows = vec![mk(md.to_string(), None, None, first.2, first.3)];
+    for (index, author, text, when) in msgs {
+        rows.push(mk(
+            format!("{md}-m{index}"),
+            Some(*index),
+            Some(author),
+            text,
+            when,
+        ));
+    }
+
+    let store = IndexedMarkdownStore::open(tree).unwrap();
+    store
+        .put_document(
+            tree,
+            &RenderedMarkdown {
+                markdown_uuid: md.to_string(),
+                source_name: "slack".into(),
+                source_fingerprint: format!("fp-{md}"),
+                upstream_cursor: None,
+                md_path: tree.join(format!("{md}.md")),
+                render_version: 1,
+                rows,
+                edges: Vec::new(),
+                problems: Vec::new(),
+            },
+            &[],
+        )
+        .unwrap();
+    store.close();
+}
+
 /// A rendered tree shaped the way Slack renders: one document per
 /// thread, with the thread row and its messages all carrying that
 /// document's `markdown_uuid`.
 fn seed_tree(root: &Path, rel: &str, channel: &str) {
     let tree = root.join(rel);
     std::fs::create_dir_all(&tree).unwrap();
-    std::fs::write(
-        tree.join("md1.grid_rows.json"),
-        format!(
-            r#"{{"rows":[
-              {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":null,"text":"first thread"}},
-              {{"channel":"{channel}","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":0,"author":"ann","text":"first thread"}},
-              {{"channel":"{channel}","when_ts":"2026-01-01T00:01:00Z","markdown_uuid":"md1","message_index":1,"author":"bob","text":"a reply"}}
-            ]}}"#
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        tree.join("md2.grid_rows.json"),
-        format!(
-            r#"{{"rows":[
-              {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":null,"text":"second thread"}},
-              {{"channel":"{channel}","when_ts":"2026-02-01T00:00:00Z","markdown_uuid":"md2","message_index":0,"author":"cid","text":"second thread"}}
-            ]}}"#
-        ),
-    )
-    .unwrap();
+    seed_doc(
+        &tree,
+        "md1",
+        channel,
+        &[
+            (0, "ann", "first thread", "2026-01-01T00:00:00Z"),
+            (1, "bob", "a reply", "2026-01-01T00:01:00Z"),
+        ],
+    );
+    seed_doc(
+        &tree,
+        "md2",
+        channel,
+        &[(0, "cid", "second thread", "2026-02-01T00:00:00Z")],
+    );
 }
 
 /// End to end against the shipped applet: discovery, module store,
 /// lazy spawn, proxy, and the applet's own response parsing.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_reference_applet_round_trips_through_the_gateway() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path(), "slack/rendered_md", "#eng");
@@ -175,7 +234,7 @@ workspace = "Work"
 
 /// Two instances of the reference binary over two trees: one module in
 /// the store, two independently-served datasets.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn two_reference_instances_share_a_module_and_serve_their_own_data() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path(), "work/rendered_md", "#eng");
@@ -288,7 +347,7 @@ fn one_shot_server(response: &'static [u8]) -> (u16, std::thread::JoinHandle<Str
     (port, handle)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn forwards_the_callers_content_type_verbatim() {
     let (port, seen) =
         one_shot_server(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}");
@@ -312,7 +371,7 @@ async fn forwards_the_callers_content_type_verbatim() {
     assert!(req.ends_with("a,b\n1,2"), "{req:?}");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn preserves_an_arbitrary_status_and_type() {
     let (port, seen) = one_shot_server(
         b"HTTP/1.1 418 I'm a teapot\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nshort and stout",

@@ -35,19 +35,82 @@ fn applet_command() -> String {
     format!("{} slack", bin.display())
 }
 
+/// Write one document through the store the slack applet reads.
+///
+/// `msgs` is `(message_index, author, text, when_ts)`; the thread row
+/// itself carries no index, which is how the applet tells the document
+/// row from the messages inside it.
+fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
+    use datalib_etl::grid_index::RenderedMarkdown;
+    use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+    use datalib_schema::grid_rows::GridRow;
+
+    let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
+        GridRow::builder()
+            .uuid(uuid)
+            .provider("slack")
+            .kind(if index.is_some() {
+                "Slack Message"
+            } else {
+                "Slack Thread"
+            })
+            .source_label("Slack")
+            .channel(Some(channel.to_string()))
+            .when_ts(Some(when.to_string()))
+            .author(author.map(str::to_string))
+            .message_index(index)
+            .conversation_uuid(md)
+            .entire_chat(format!("/chat/{md}"))
+            .text(text)
+            .markdown_uuid(Some(md.to_string()))
+            .build()
+            .unwrap()
+    };
+
+    let first = msgs.first().expect("a thread has at least one message");
+    let mut rows = vec![mk(md.to_string(), None, None, first.2, first.3)];
+    for (index, author, text, when) in msgs {
+        rows.push(mk(
+            format!("{md}-m{index}"),
+            Some(*index),
+            Some(author),
+            text,
+            when,
+        ));
+    }
+
+    let store = IndexedMarkdownStore::open(tree).unwrap();
+    store
+        .put_document(
+            tree,
+            &RenderedMarkdown {
+                markdown_uuid: md.to_string(),
+                source_name: "slack".into(),
+                source_fingerprint: format!("fp-{md}"),
+                upstream_cursor: None,
+                md_path: tree.join(format!("{md}.md")),
+                render_version: 1,
+                rows,
+                edges: Vec::new(),
+                problems: Vec::new(),
+            },
+            &[],
+        )
+        .unwrap();
+    store.close();
+}
+
 /// A rendered tree the slack applet can read, so a started applet has
 /// something to report.
 fn seed_tree(root: &Path) {
     let tree = root.join("slack/rendered_md");
     std::fs::create_dir_all(&tree).unwrap();
-    std::fs::write(
-        tree.join("md1.grid_rows.json"),
-        r##"{"rows":[
-          {"channel":"#eng","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":null,"text":"a thread"},
-          {"channel":"#eng","when_ts":"2026-01-01T00:00:00Z","markdown_uuid":"md1","message_index":0,"author":"ann","text":"a thread"}
-        ]}"##,
-    )
-    .unwrap();
+    seed_doc(
+        &tree,
+        "md1",
+        "#eng",
+        &[(0, "ann", "a thread", "2026-01-01T00:00:00Z")],
+    );
 }
 
 /// A config declaring one instance of the real applet per id.
@@ -135,7 +198,7 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Val
 
 /// The whole loop: the applet is started, writes its namespace before
 /// binding, and the store scan that follows finds it.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_started_applet_has_already_written_its_namespace() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -175,7 +238,7 @@ async fn a_started_applet_has_already_written_its_namespace() {
 
 /// A component written by hand and one written by an applet are read
 /// the same way. This is the whole claim of the design.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hand_written_namespace_reads_like_an_applet_one() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -193,7 +256,7 @@ async fn a_hand_written_namespace_reads_like_an_applet_one() {
 
 /// Two instances of one command: one component address, two
 /// namespaces, each carrying its own argument.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn two_instances_share_a_component_and_own_their_arguments() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -215,7 +278,7 @@ async fn two_instances_share_a_component_and_own_their_arguments() {
 
 /// A restart rebuilds applet namespaces so the store tracks the config
 /// — and must leave `user` alone, which is why that id is reserved.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_restart_rebuilds_applet_namespaces_and_spares_user() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -251,7 +314,7 @@ async fn a_restart_rebuilds_applet_namespaces_and_spares_user() {
 }
 
 /// A broken applet must not take the others down, and must be named.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_failing_applet_is_reported_without_hiding_the_others() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -286,7 +349,7 @@ async fn a_failing_applet_is_reported_without_hiding_the_others() {
 /// An applet that never comes up must not hang the boot: the start
 /// runs after the listener is already accepting, so an unbounded wait
 /// would leave a tab whose requests queue with nothing logged.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_applet_that_never_binds_is_bounded() {
     let tmp = tempfile::tempdir().unwrap();
     let script = write_script(tmp.path(), "hang.sh", "#!/bin/sh\nsleep 600\n");
@@ -320,7 +383,7 @@ async fn an_applet_that_never_binds_is_bounded() {
 /// genuinely written its namespace; only its announcement is thrown
 /// away. The gateway must still refuse to call it started, because a
 /// port it cannot hear about is a port it has no business proxying to.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_listening_applet_that_never_announces_is_not_adopted() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -346,7 +409,7 @@ async fn a_listening_applet_that_never_announces_is_not_adopted() {
 }
 
 /// A config edit shows up without restarting the server.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_config_edit_is_picked_up_without_a_restart() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -411,7 +474,7 @@ fn applet_stanza(id: &str, command: &str, workspace: Option<&str>) -> String {
 
 /// Adding an applet must not disturb the ones already running: they
 /// keep their process, and whatever it holds in memory.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn adding_an_applet_leaves_the_running_ones_alone() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -449,7 +512,7 @@ async fn adding_an_applet_leaves_the_running_ones_alone() {
 /// Editing one applet's config restarts that one and only that one.
 /// An applet writes its components as it starts, so a changed entry
 /// has to restart for its output to follow the edit.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn editing_one_applet_restarts_only_it() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -489,7 +552,7 @@ async fn editing_one_applet_restarts_only_it() {
 
 /// Restarting sits on a polled endpoint, so an unchanged config must
 /// not restart every applet each tick.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_unchanged_config_does_not_restart_anything() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -522,7 +585,7 @@ async fn an_unchanged_config_does_not_restart_anything() {
     assert_eq!(starts(), 1, "polling restarted the applets");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn no_applets_and_no_store_is_an_empty_view() {
     let tmp = tempfile::tempdir().unwrap();
     let app = router(state_with(tmp.path(), "").await);
@@ -536,7 +599,7 @@ async fn no_applets_and_no_store_is_an_empty_view() {
 /// applet" — so a syntax error in `config.toml` reported itself as
 /// `no applet "unified_index"` and sent people looking in the wrong
 /// place entirely.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_unloadable_config_says_so_instead_of_blaming_the_applet() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -564,7 +627,7 @@ async fn an_unloadable_config_says_so_instead_of_blaming_the_applet() {
 
 /// The other half of the pair: with a config that loads fine, an applet
 /// nobody declared is still reported as simply absent.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_genuinely_missing_applet_still_reads_as_missing() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
@@ -582,7 +645,7 @@ async fn a_genuinely_missing_applet_still_reads_as_missing() {
 
 /// A hand-written component needs no applet, no config, and no
 /// restart — the store is just files.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_user_namespace_needs_no_applet_at_all() {
     let tmp = tempfile::tempdir().unwrap();
     let app = router(state_with(tmp.path(), "").await);
@@ -605,7 +668,7 @@ async fn the_user_namespace_needs_no_applet_at_all() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn component_paths_cannot_escape_the_store() {
     let tmp = tempfile::tempdir().unwrap();
     let app = router(state_with(tmp.path(), "").await);
@@ -634,7 +697,7 @@ async fn component_paths_cannot_escape_the_store() {
 /// protect. The gate is an outermost layer, so this holds by
 /// construction; the test is here so a route added outside it fails
 /// loudly.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn frontend_routes_are_behind_the_token_gate() {
     let tmp = tempfile::tempdir().unwrap();
     let hash = seed_user(tmp.path(), "tetris", "Tetris");

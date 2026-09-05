@@ -99,9 +99,35 @@ pub struct IndexedMarkdownStore {
     path: PathBuf,
 }
 
-/// Run a future to completion from the render path's sync context.
-fn blocking<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
+/// Run a future to completion from a synchronous caller.
+///
+/// Two callers, two situations, and getting this wrong is a panic
+/// rather than a wrong answer — so it handles both explicitly:
+///
+///   * **Inside a runtime** (the render step, which runs under
+///     `#[tokio::main]` on a `spawn_blocking` thread): borrow that
+///     runtime with `block_in_place`. This is what the providers
+///     already do to reach their raw stores.
+///   * **With no runtime at all** (the slack applet is a plain blocking
+///     TCP server): build one for the call. There is nothing to nest
+///     inside, so this cannot deadlock.
+///
+/// The in-runtime branch needs a **multi-threaded** runtime —
+/// `block_in_place` panics on a current-thread one. Production always
+/// qualifies (`#[tokio::main]` is multi-threaded); a test that reaches
+/// the store has to say `#[tokio::test(flavor = "multi_thread")]`.
+/// Building a private runtime *inside* an existing one instead would
+/// panic with "cannot start a runtime from within a runtime", so the
+/// two branches are not interchangeable.
+pub fn blocking<F: std::future::Future>(fut: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build a runtime for a blocking store call")
+            .block_on(fut),
+    }
 }
 
 impl IndexedMarkdownStore {
@@ -315,6 +341,7 @@ impl IndexedMarkdownStore {
                     render_version,
                     rows,
                     edges,
+                    problems: Vec::new(),
                 });
             }
             Ok(out)
@@ -393,6 +420,7 @@ mod tests {
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             edges: Vec::new(),
+            problems: Vec::new(),
         }
     }
 

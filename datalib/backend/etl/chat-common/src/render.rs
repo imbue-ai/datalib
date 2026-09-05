@@ -220,6 +220,7 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         edges: Vec::new(),
+        problems: Vec::new(),
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
 

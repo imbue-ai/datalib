@@ -209,98 +209,104 @@ type Channels = BTreeMap<String, BTreeMap<String, ThreadData>>;
 fn scan(tree: &Path) -> (Channels, Vec<String>) {
     let mut by_channel: Channels = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
-    let mut stack = vec![tree.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && dir == tree => {
-                // A tree no step has written yet is an empty listing,
-                // not a failure — the card renders a first-run message.
-                continue;
-            }
-            Err(e) => {
-                // Anything else (EACCES, EIO, a vanished subdirectory
-                // mid-walk) means the listing below is incomplete.
-                warnings.push(format!("{}: {e}", dir.display()));
-                continue;
-            }
-        };
-        for ent in rd.flatten() {
-            let path = ent.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if !path.to_string_lossy().ends_with(".grid_rows.json") {
-                continue;
-            }
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(e) => {
-                    warnings.push(format!("{}: {e}", path.display()));
-                    continue;
-                }
-            };
-            let v: serde_json::Value = match serde_json::from_str(&text) {
-                Ok(v) => v,
-                // A sidecar half-written by a running sync is expected
-                // and transient, so it is a warning rather than a
-                // failure — but the user still learns the list is
-                // incomplete.
-                Err(e) => {
-                    warnings.push(format!("{}: {e}", path.display()));
-                    continue;
-                }
-            };
-            let Some(rows) = v.get("rows").and_then(|r| r.as_array()) else {
-                continue;
-            };
-            for row in rows {
-                let Some(channel) = row.get("channel").and_then(|c| c.as_str()) else {
-                    continue;
-                };
-                let Some(md) = row.get("markdown_uuid").and_then(|m| m.as_str()) else {
-                    continue;
-                };
-                let thread = by_channel
-                    .entry(channel.to_string())
-                    .or_default()
-                    .entry(md.to_string())
-                    .or_default();
 
-                // `message_index` is absent on the row that *is* the
-                // document and present on each message inside it, so it
-                // is the discriminator — sturdier than matching the
-                // `kind` display string.
-                let index = row.get("message_index").and_then(|i| i.as_i64());
-                let when_raw = row.get("when_ts").and_then(|w| w.as_str()).unwrap_or("");
-                if let Some(index) = index {
-                    thread.messages += 1;
-                    // The opening message is the lowest index present.
-                    if thread.opening_index.is_none_or(|prev| index < prev) {
-                        thread.opening_index = Some(index);
-                        thread.author = row
-                            .get("author")
-                            .and_then(|a| a.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        thread.text = row
-                            .get("text")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        thread.when_raw = when_raw.to_string();
-                        thread.when = when_key(when_raw);
-                    }
-                } else if thread.when.is_none() {
-                    // The document row, when no message has landed yet.
-                    thread.when_raw = when_raw.to_string();
-                    thread.when = when_key(when_raw);
-                }
+    // One query, where this used to walk the whole rendered tree,
+    // read every `*.grid_rows.json`, and parse each one as untyped
+    // JSON. The renderer writes its rows into the source's
+    // `indexed_markdown.doltlite_db` now, so the six columns this card
+    // needs are a `SELECT`.
+    //
+    // The columns are still read defensively — a NULL `channel` or
+    // `markdown_uuid` skips the row rather than failing the card — but
+    // they are typed on the way out, so a shape change is a decode
+    // error naming the column instead of a silent `None` from
+    // `as_str()`.
+    let store_path = datalib_etl::indexed_markdown::path_for(tree);
+    if !store_path.is_file() {
+        // No store: either nothing has rendered yet (the card shows its
+        // first-run message) or the tree is elsewhere. Both are an empty
+        // listing, not a failure.
+        return (by_channel, warnings);
+    }
+    let rows = match read_rows(&store_path) {
+        Ok(rows) => rows,
+        Err(e) => {
+            // The listing below would be empty, and an empty listing
+            // reads as authoritative — say so instead.
+            warnings.push(format!("{}: {e:#}", store_path.display()));
+            return (by_channel, warnings);
+        }
+    };
+
+    for (channel, md, index, when_raw, author, text) in rows {
+        let thread = by_channel
+            .entry(channel)
+            .or_default()
+            .entry(md)
+            .or_default();
+
+        // `message_index` is absent on the row that *is* the document
+        // and present on each message inside it, so it is the
+        // discriminator — sturdier than matching the `kind` display
+        // string.
+        if let Some(index) = index {
+            thread.messages += 1;
+            // The opening message is the lowest index present.
+            if thread.opening_index.is_none_or(|prev| index < prev) {
+                thread.opening_index = Some(index);
+                thread.author = author;
+                thread.text = text;
+                thread.when = when_key(&when_raw);
+                thread.when_raw = when_raw;
             }
+        } else if thread.when.is_none() {
+            // The document row, when no message has landed yet.
+            thread.when = when_key(&when_raw);
+            thread.when_raw = when_raw;
         }
     }
     (by_channel, warnings)
+}
+
+/// The six `grid_rows` columns this card groups by, for one source.
+///
+/// Rows with a NULL `channel` or `markdown_uuid` are filtered in SQL:
+/// they cannot be placed in the two-level channel→thread shape, and
+/// dropping them here keeps the grouping loop free of the checks.
+#[allow(clippy::type_complexity)]
+fn read_rows(
+    store: &Path,
+) -> anyhow::Result<Vec<(String, String, Option<i64>, String, String, String)>> {
+    use sqlx::Row as _;
+    // `blocking` copes with both situations this applet is in: no
+    // ambient runtime when serving (a plain blocking TCP accept loop),
+    // and an ambient one under test.
+    datalib_etl::indexed_markdown::blocking(async {
+        let pool = datalib_etl::doltlite_raw::open_derived(store, &[]).await?;
+        let rows = sqlx::query(
+            "SELECT channel, markdown_uuid, message_index, \
+                        IFNULL(when_ts, ''), IFNULL(author, ''), text \
+                 FROM grid_rows \
+                 WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
+        )
+        .fetch_all(&pool)
+        .await?;
+        let out = rows
+            .into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get::<String, _>(0)?,
+                    r.try_get::<String, _>(1)?,
+                    r.try_get::<Option<i64>, _>(2)?,
+                    r.try_get::<String, _>(3)?,
+                    r.try_get::<String, _>(4)?,
+                    r.try_get::<String, _>(5)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        pool.close().await;
+        Ok(out)
+    })
 }
 
 /// One line for a row label, trimmed so a long paste does not fill the
@@ -508,27 +514,113 @@ fn query_param(query: &str, key: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// One sidecar per thread, with the thread row and its messages all
-    /// carrying the same markdown_uuid — the real Slack shape.
+    /// One document per thread, with the thread row and its messages
+    /// all carrying the same markdown_uuid — the real Slack shape.
+    ///
+    /// Written through the store, because that is what the card reads
+    /// now. Building the fixture the same way production does is the
+    /// point: a fixture that hand-wrote rows could drift from what a
+    /// renderer actually emits and the card would still pass.
     fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
-        std::fs::create_dir_all(dir).unwrap();
-        let mut rows = vec![serde_json::json!({
-            "uuid": md, "kind": "Slack Thread", "channel": channel,
-            "when_ts": when, "markdown_uuid": md, "message_index": null,
-            "text": msgs.first().map(|m| m.1).unwrap_or(""),
-        })];
+        use datalib_etl::grid_index::RenderedMarkdown;
+        use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+        use datalib_schema::grid_rows::GridRow;
+
+        let row = |uuid: &str, index: Option<i64>, author: &str, text: &str| {
+            GridRow::builder()
+                .uuid(uuid)
+                .provider("slack")
+                .kind(if index.is_some() {
+                    "Slack Message"
+                } else {
+                    "Slack Thread"
+                })
+                .source_label("Slack")
+                .channel(Some(channel.to_string()))
+                .when_ts(Some(when.to_string()))
+                .author((!author.is_empty()).then(|| author.to_string()))
+                .message_index(index)
+                .conversation_uuid(md)
+                .entire_chat(format!("/chat/{md}"))
+                .text(text)
+                .markdown_uuid(Some(md.to_string()))
+                .build()
+                .unwrap()
+        };
+
+        let mut rows = vec![row(md, None, "", msgs.first().map(|m| m.1).unwrap_or(""))];
         for (i, (author, text)) in msgs.iter().enumerate() {
-            rows.push(serde_json::json!({
-                "uuid": format!("{md}-m{i}"), "kind": "Slack Message", "channel": channel,
-                "when_ts": when, "markdown_uuid": md, "message_index": i,
-                "author": author, "text": text,
-            }));
+            rows.push(row(&format!("{md}-m{i}"), Some(i as i64), author, text));
         }
-        std::fs::write(
-            dir.join(format!("{md}.grid_rows.json")),
-            serde_json::json!({ "header": { "markdown_uuid": md }, "rows": rows }).to_string(),
-        )
-        .unwrap();
+
+        let store = IndexedMarkdownStore::open(dir).unwrap();
+        store
+            .put_document(
+                dir,
+                &RenderedMarkdown {
+                    markdown_uuid: md.to_string(),
+                    source_name: "slack".into(),
+                    source_fingerprint: format!("fp-{md}"),
+                    upstream_cursor: None,
+                    md_path: dir.join(format!("{md}.md")),
+                    render_version: 1,
+                    rows,
+                    edges: Vec::new(),
+                    problems: Vec::new(),
+                },
+                &[],
+            )
+            .unwrap();
+        store.close();
+    }
+
+    /// Like [`write_thread`], but the caller supplies each message's
+    /// index explicitly — so a test can insert them out of order.
+    fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
+        use datalib_etl::grid_index::RenderedMarkdown;
+        use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+        use datalib_schema::grid_rows::GridRow;
+
+        let rows: Vec<GridRow> = msgs
+            .iter()
+            .map(|(index, author, text, when)| {
+                GridRow::builder()
+                    .uuid(format!("{md}-m{index}"))
+                    .provider("slack")
+                    .kind("Slack Message")
+                    .source_label("Slack")
+                    .channel(Some(channel.to_string()))
+                    .when_ts(Some((*when).to_string()))
+                    .author(Some((*author).to_string()))
+                    .message_index(Some(*index))
+                    .conversation_uuid(md)
+                    .entire_chat(format!("/chat/{md}"))
+                    .text(*text)
+                    .markdown_uuid(Some(md.to_string()))
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+
+        let store = IndexedMarkdownStore::open(dir).unwrap();
+        store
+            .put_document(
+                dir,
+                &RenderedMarkdown {
+                    markdown_uuid: md.to_string(),
+                    source_name: "slack".into(),
+                    source_fingerprint: format!("fp-{md}"),
+                    upstream_cursor: None,
+                    md_path: dir.join(format!("{md}.md")),
+                    render_version: 1,
+                    rows,
+                    edges: Vec::new(),
+                    problems: Vec::new(),
+                },
+                &[],
+            )
+            .unwrap();
+        store.close();
     }
 
     /// The namespace is read off the directory, and it lands in
@@ -592,8 +684,8 @@ mod tests {
     /// Level 1 counts threads and messages; the regression guard is
     /// that a channel with several threads reports all of them rather
     /// than collapsing to one document.
-    #[test]
-    fn channels_count_every_thread_and_message() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn channels_count_every_thread_and_message() {
         let tmp = tempfile::tempdir().unwrap();
         write_thread(
             tmp.path(),
@@ -626,8 +718,8 @@ mod tests {
 
     /// Level 2 is the one that mimics Slack: each thread shows its
     /// *opening message*, with the rest counted as replies.
-    #[test]
-    fn a_channel_shows_each_threads_opening_message() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_channel_shows_each_threads_opening_message() {
         let tmp = tempfile::tempdir().unwrap();
         write_thread(
             tmp.path(),
@@ -662,27 +754,31 @@ mod tests {
 
     /// Row order inside a sidecar is not guaranteed, so "opening
     /// message" has to mean lowest index rather than first seen.
-    #[test]
-    fn the_opening_message_is_the_lowest_index_not_the_first_row() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_opening_message_is_the_lowest_index_not_the_first_row() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("t.grid_rows.json"),
-            serde_json::json!({ "rows": [
-                {"channel":"#c","markdown_uuid":"t","message_index":2,"author":"c","text":"third","when_ts":"2026-07-01T00:00:02Z"},
-                {"channel":"#c","markdown_uuid":"t","message_index":0,"author":"a","text":"first","when_ts":"2026-07-01T00:00:00Z"},
-                {"channel":"#c","markdown_uuid":"t","message_index":1,"author":"b","text":"second","when_ts":"2026-07-01T00:00:01Z"},
-            ]})
-            .to_string(),
-        )
-        .unwrap();
+        // Deliberately inserted out of index order: nothing about the
+        // read path promises rows come back in `message_index` order —
+        // the query has no ORDER BY — so "the opening message" has to be
+        // the lowest index, not whichever row arrived first.
+        write_thread_rows(
+            tmp.path(),
+            "t",
+            "#c",
+            &[
+                (2, "c", "third", "2026-07-01T00:00:02Z"),
+                (0, "a", "first", "2026-07-01T00:00:00Z"),
+                (1, "b", "second", "2026-07-01T00:00:01Z"),
+            ],
+        );
         let resp = channel_response(tmp.path(), "#c");
         assert_eq!(resp.threads[0].author, "a");
         assert_eq!(resp.threads[0].text, "first");
         assert_eq!(resp.threads[0].replies, 2);
     }
 
-    #[test]
-    fn an_unknown_channel_is_empty_not_an_error() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unknown_channel_is_empty_not_an_error() {
         let tmp = tempfile::tempdir().unwrap();
         write_thread(tmp.path(), "t", "#a", "2026-07-01T00:00:00Z", &[("x", "y")]);
         assert!(channel_response(tmp.path(), "#nope").threads.is_empty());
@@ -690,8 +786,8 @@ mod tests {
 
     /// Thread order must not depend on the directory walk, which is a
     /// LIFO stack over unordered `read_dir`.
-    #[test]
-    fn thread_order_is_stable_across_runs() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn thread_order_is_stable_across_runs() {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..5 {
             let tmp = tempfile::tempdir().unwrap();
@@ -719,19 +815,22 @@ mod tests {
 
     /// An unreadable file makes the listing partial, and the caller is
     /// told so rather than handed a short list that looks whole.
-    #[test]
-    fn unreadable_input_is_reported_not_swallowed() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unreadable_input_is_reported_not_swallowed() {
+        // The store is one file now, so "unreadable input" is a store
+        // that will not open rather than one bad document among many.
+        // The card must say the listing is empty *because something
+        // broke* — an empty listing with no warning reads as
+        // authoritative, which is the worse failure.
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("bad.grid_rows.json"), "{not json").unwrap();
-        write_thread(
-            tmp.path(),
-            "ok",
-            "#c",
-            "2026-07-01T00:00:00Z",
-            &[("x", "y")],
-        );
+        std::fs::write(
+            datalib_etl::indexed_markdown::path_for(tmp.path()),
+            "not a doltlite database",
+        )
+        .unwrap();
+
         let resp = channels_response(tmp.path(), "ws");
-        assert_eq!(resp.channels.len(), 1);
+        assert!(resp.channels.is_empty());
         assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
     }
 
