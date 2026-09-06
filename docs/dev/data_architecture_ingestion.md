@@ -151,6 +151,7 @@ We use doltlite because:
     - Different versions of the data are stored space-efficiently.
     - SQL operations (even DROP TABLE) do not actually delete anything.
     - It can enumerate deltas between any two versions of the data (including "DROP TABLE" and recreate with new schema), enabling incremental processing ("what changed since commit X (the last I saw)?")
+    - The same deltas answer a question a plain mirror can't: **what did the upstream quietly change or delete since we last looked?** See [Noticing when the *upstream* loses data](#noticing-when-the-upstream-loses-data).
 - Thad believes it is the future for local-first software: "skate to where the puck is going to be."
 
 We acknowledge these risks:
@@ -253,6 +254,94 @@ A long chain of incremental syncs can in principle silently drop data (an upstre
 The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS, and `--reset-and-redownload` is the "invalidate entity data, keep the cache" path.
 
 `cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. A `blob_cas::gc_orphans()` sweep existed once and was removed, uncalled, in `7f588ba1`; three docs went on recommending it for months. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
+
+## Noticing when the *upstream* loses data
+
+The versioned raw store is usually argued for on incrementality — "what
+changed since commit X" is how render and the grid index avoid redoing
+work. The same property answers a question a plain mirror cannot answer
+at all: **what did the provider quietly change or delete since we last
+looked?**
+
+A "download the latest state" mirror overwrites itself, so an upstream
+deletion is indistinguishable from a row that was never there. Here
+every sync is a commit, so a row that vanished upstream is a `removed`
+in `dolt_diff` with its last value still on disk. That is close to the
+point of the project: the reason to keep your own copy is that the
+provider's copy is not under your control.
+
+It is also the good side of a property we criticize elsewhere.
+"doltlite never deletes anything" is a real cost for
+[derived intermediates](data_lib_as_a_library/toolchain_for_agents.md),
+which we could always rebuild. On the raw store it is the feature.
+
+### What is on disk today
+
+The commits are the durable record: `dolt_diff` between any two refs
+answers this for any window, for every provider, and always will.
+
+There is also a precomputed per-run summary, and it is narrower than it
+looks. `DownloadRun::finish`
+([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) reads
+`dolt_status` for dirty tables, counts `dolt_diff_<table>` by
+`diff_type`, and writes `{table: {added, modified, removed}}` to
+`sync_runs.summary.deltas`. It runs before the store's end-of-run
+`dolt_commit` (`RawStoreSession::finish`), so the numbers cover the
+whole run rather than a tail.
+
+**Only 8 of the 20 providers with a download side use `DownloadRun`**
+(beeper, chatgpt, claude, email, github, gitlab, notion, slack; checked
+2026-09-05). The other twelve write no `sync_runs` row and no deltas at
+all — their history is still in the commits, but nothing precomputes it.
+
+One thing `removed` does *not* mean: it counts rows **our downloader
+deleted**, not rows the provider stopped serving. Those coincide only
+for a provider that deletes on absence.
+
+### What limits it
+
+**Detection needs a re-enumeration.** A downloader that walks forward
+from a cursor never asks about rows it already has, so a deletion never
+enters the diff. You need a periodic full listing or tombstones from the
+API. Verified to notice today: `email` (JMAP `Email/changes` `destroyed`
+and the Gmail path's `deleted`, both into `db.delete_emails`), `media`
+and `fsindex` (truncate-and-refill, asserted by `media`'s
+`deletions_are_reconciled_without_a_clock`), and `claude_export`
+(`prune_to`). The rest is an unwritten per-provider audit; assume a
+cursor-driven walker's deletions are invisible until someone checks.
+
+**The two lists barely overlap**, which is the awkward part. `media` and
+`fsindex` detect deletions structurally and record no deltas; most of
+the eight that record deltas are cursor-driven API walkers that may not
+detect deletions at all. Only `email` and `claude_export` currently sit
+in both.
+
+**`deleted_upstream_at` is specified but not built.** [Transient vs
+non-transient](#transient-vs-non-transient) below says a confirmed 404
+should carry that marker. No such column exists anywhere in the tree
+(checked 2026-09-05). A provider that hard-deletes the row instead keeps
+the fact only in history, not in current state.
+
+**False positives track canonicalization.** An unchanged record that
+serializes differently from itself manufactures a `modified`. That is
+why [AGENTS.md's "give a bag an order before storing it"](/AGENTS.md) is
+load-bearing rather than tidy — claude.ai returning a project's
+`permissions` in a different order on different fetches is the worked
+example. A spurious re-render wastes CPU; a spurious "your provider
+changed this" wastes trust.
+
+### The gap
+
+Nothing reads `summary.deltas` back — zero hits in
+`datalib/backend/http` and `datalib/ui` (checked 2026-09-05). The only
+place any of this reaches a human is `fsindex`'s standalone CLI printing
+`vs last scan: N added, M modified, K removed`, which is one provider's
+local convenience rather than a product surface. `sync_runs` also
+records no commit hashes (`run_id`, `started_at`, `finished_at`,
+`config`, `status`, `summary`), so recovering the exact commit range for
+a past run means reading `dolt_log` by hand.
+
+Detection is available, not delivered. See [`TODO.md`](/TODO.md).
 
 ## Timestamps: one clock, no fabrication
 

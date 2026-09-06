@@ -182,6 +182,39 @@ Watch the filter column names — these vtabs accept `from_ref` /
 `to_ref` (not `from_commit` / `to_commit`, even though the result row
 has `to_commit` / `from_commit` data columns).
 
+### What the upstream deleted on you
+
+The reason to run the diff the other way around: a `removed` row is one
+the *provider* no longer has, and the raw store still does. This is the
+capability the versioned store buys that a plain mirror can't — see
+[Noticing when the *upstream* loses data](/docs/dev/data_architecture_ingestion.md#noticing-when-the-upstream-loses-data)
+for the preconditions (chiefly: the downloader has to re-enumerate, or
+this diff is empty no matter what happened upstream).
+
+```sh
+doltlite -readonly claude/raw/entities.doltlite_db \
+  "SELECT from_id, diff_type
+     FROM dolt_diff_conversations
+    WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
+      AND diff_type = 'removed';"
+```
+
+To read back what a deleted row actually said, ask the commit where it
+still existed — the table name goes *in* the vtab name and the ref is
+the argument, which is the opposite order from `dolt_diff_<table>`:
+
+```sh
+doltlite -readonly claude/raw/entities.doltlite_db \
+  "SELECT * FROM dolt_at_conversations('HEAD^1') WHERE id = '<the id>';"
+```
+
+A download normally makes exactly one commit, at the end
+(`download <name>: <summary>`), so `HEAD^1` is usually the previous
+sync. The exception is an interrupted run, which leaves a
+`download <name>: interrupted (Ctrl-C)` commit — check `dolt_log`
+messages before trusting `HEAD^1`, and walk further back (`HEAD~10`, or
+a hash from `dolt_log`) for a wider window.
+
 ### History of a single table
 
 ```sh
