@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Repo-hygiene lints that cannot run as Bazel tests.
 
-Both checks here need to enumerate *every* file in the repo, which is
-exactly what a Bazel sandbox exists to prevent, so neither can be a
-`bazel test` target. They run instead from `bazel run //:precommit` and
-as a plain step in `.github/workflows/test.yml`.
+These checks need to look at the repo as a whole — every tracked file,
+or git's own view of it — which is exactly what a Bazel sandbox exists
+to prevent, so none of them can be a `bazel test` target. They run
+instead from `bazel run //:precommit` and as a plain step in
+`.github/workflows/test.yml`.
 
   1. `no-sandbox` tags in BUILD.bazel files must be allowlisted.
   2. Every first-party Python file must be reachable by the Bazel lint
      targets, so a new script can't silently escape ruff and pyright.
+  3. MODULE.bazel.lock must match the commit, because bazel repairs it
+     silently and CI aborts on it.
+  4. Render code must not read a doltlite content table unpinned, since
+     an unpinned read returns uncommitted rows once producers stream.
 
 Check 1: why it exists
 ----------------------
@@ -290,7 +295,122 @@ def main() -> int:
     rc = _check_no_sandbox(root)
     rc |= _check_python_coverage(root)
     rc |= _check_module_lock_committed(root)
+    rc |= _check_unpinned_render_reads(root)
     return rc
+
+
+# --- Check 4: unpinned content reads in render code ------------------
+#
+# A plain `SELECT` against a doltlite store reads its working set, which
+# is shared across processes and holds rows a writer has not committed.
+# That is harmless today because a render step only runs after its
+# download step has exited, and it stops being harmless the moment the
+# scheduler is allowed to start a consumer early -- the consumer gets a
+# *torn* view, part of one commit and part of a batch still being
+# written, with no error anywhere.
+#
+# The fix is per query: name the commit with `dolt_at_<table>(...)`,
+# which `datalib_etl::pin::Pin::sql` does from a `{table}` placeholder.
+# The fix is also across ~50 sites in ten crates, and one missed site is
+# a silent data bug -- so this is a ratchet rather than a review
+# question. See `docs/dev/streaming_steps_plan.md`.
+#
+# `EXPECTED_UNPINNED_READS` is the baseline being worked off. Numbers may
+# only go down; a file that reaches zero comes out of the dict. Both
+# directions fail, so the sweep cannot stall silently and new code cannot
+# quietly add a site.
+EXPECTED_UNPINNED_READS: dict[str, int] = {
+    "datalib/backend/etl/providers/beeper/src/render/parse.rs": 6,
+    "datalib/backend/etl/providers/chatgpt/src/render/parse.rs": 4,
+    "datalib/backend/etl/providers/claude/src/render/parse.rs": 1,
+    "datalib/backend/etl/providers/email/src/render/parse.rs": 8,
+    "datalib/backend/etl/providers/google_takeout/src/render.rs": 1,
+    "datalib/backend/etl/providers/signal/src/render/parse.rs": 6,
+    "datalib/backend/etl/providers/slack/src/render/parse.rs": 9,
+    "datalib/backend/etl/providers/sms_backup_restore/src/render.rs": 1,
+    "datalib/backend/etl/providers/whatsapp/src/render/parse.rs": 7,
+    "datalib/backend/etl/providers/yolink/src/render/parse.rs": 5,
+}
+
+# `dolt_*` are the history vtabs (already committed-only), `pragma_*` and
+# `sqlite_*` are engine tables with no working set of their own.
+_PINNED_OK_PREFIXES = ("dolt_", "pragma_", "sqlite_")
+
+# A table named directly after FROM or JOIN. A `{placeholder}` does not
+# match (it starts with `{`), which is what makes a swept site invisible
+# here, and neither does `FROM (` for a subquery.
+_TABLE_READ = re.compile(r"\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)")
+
+
+def _render_sources(root: Path) -> list[str]:
+    return [
+        p
+        for p in _git_ls_files(root, "datalib/backend/etl/providers")
+        if "/src/render" in p and p.endswith(".rs")
+    ]
+
+
+def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
+    out: list[tuple[int, str]] = []
+    text = (root / rel).read_text(encoding="utf-8", errors="replace")
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for table in _TABLE_READ.findall(line):
+            if not table.startswith(_PINNED_OK_PREFIXES):
+                out.append((lineno, table))
+    return out
+
+
+def _check_unpinned_render_reads(root: Path) -> int:
+    actual = {
+        rel: len(hits)
+        for rel in _render_sources(root)
+        if (hits := _unpinned_reads(root, rel))
+    }
+    if actual == EXPECTED_UNPINNED_READS:
+        total = sum(actual.values())
+        print(f"OK: {total} unpinned render read(s), matching the baseline.")
+        return 0
+
+    added = {
+        rel: n for rel, n in actual.items() if n > EXPECTED_UNPINNED_READS.get(rel, 0)
+    }
+    fixed = {
+        rel: n for rel, n in EXPECTED_UNPINNED_READS.items() if n > actual.get(rel, 0)
+    }
+
+    if added:
+        print("ERROR: unpinned content read(s) added in render code:", file=sys.stderr)
+        for rel in sorted(added):
+            was = EXPECTED_UNPINNED_READS.get(rel, 0)
+            print(f"  - {rel}: {was} -> {added[rel]}", file=sys.stderr)
+            for lineno, table in _unpinned_reads(root, rel):
+                print(f"      {rel}:{lineno}: {table}", file=sys.stderr)
+        print(
+            "\nA plain SELECT reads doltlite's working set, so it can return\n"
+            "rows the producer has not committed. Name the commit instead:\n"
+            "write the table as `{table}` in the query and run it through\n"
+            "`datalib_etl::pin::Pin::sql`. See docs/dev/streaming_steps_plan.md.",
+            file=sys.stderr,
+        )
+
+    if fixed:
+        print(
+            "\nERROR: unpinned read(s) fixed without updating the baseline:",
+            file=sys.stderr,
+        )
+        for rel in sorted(fixed):
+            print(
+                f"  - {rel}: {fixed[rel]} -> {actual.get(rel, 0)}",
+                file=sys.stderr,
+            )
+        print(
+            "\nGood news, but the ratchet has to move with it. Update\n"
+            "EXPECTED_UNPINNED_READS in scripts/lint_repo.py (drop the entry\n"
+            "entirely when it reaches zero).",
+            file=sys.stderr,
+        )
+
+    return 1
 
 
 # --- Check 3: MODULE.bazel.lock is committed -------------------------

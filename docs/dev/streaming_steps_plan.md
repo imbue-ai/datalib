@@ -1,10 +1,11 @@
 # Streaming steps: the build plan
 
-**Status: plan (2026-09-07). Nothing here is built yet.** The design
-this implements is [`streaming_steps.md`](streaming_steps.md); read that
+**Status: agreed plan (2026-09-07), being built.** The design this
+implements is [`streaming_steps.md`](streaming_steps.md); read that
 first for *why*. This file is the *how*: what already exists, what has
 to be written, in what order, and the traps that were measured rather
-than guessed.
+than guessed. [Order of work](#order-of-work) is the checklist; update
+it as slices land, and treat anything it still lists as unbuilt.
 
 Every claim below marked "measured" was checked against the tree or
 against the Bazel-built doltlite CLI (`bazel-bin/third-party/doltlite/doltlite`,
@@ -126,11 +127,13 @@ have expressed it.
 
 Both measured:
 
-- **It composes normally.** It works with aliases, in `JOIN`s, under
-  `WHERE`, and its argument is evaluated at runtime rather than needing
-  to be a parse-time literal (a subquery works). The bind-parameter form
-  should therefore work too — confirm it through sqlx in the first
-  patch rather than assuming it.
+- **It composes normally.** It works with aliases, in `JOIN`s and under
+  `WHERE`, and `pin.rs`'s `a_pinned_read_ignores_the_working_set` now
+  proves the whole thing end to end through sqlx rather than through the
+  shell: against a store with a dirty working set, the unpinned read
+  sees three rows and the pinned one sees the two that were committed.
+  That test is the premise of this entire plan, so it was checked
+  against a deliberate break to confirm it can fail.
 - **It does not exist for a table that has never been committed.**
   `SELECT … FROM dolt_at_fresh('HEAD')` on a brand-new table is
   `no such table: dolt_at_fresh`, not an empty result.
@@ -210,38 +213,65 @@ work below starts where it does.
 [`indexed_markdown.rs::documents_matching`](../../datalib/backend/etl/src/indexed_markdown.rs)
 — `markdowns`, `grid_rows`, `edges` — in one shared file.
 
-`download → render` is **40**, across 10 provider crates: slack 8,
-beeper 6, yolink 5, whatsapp 5, signal 5, email 5, chatgpt 3,
-sms_backup_restore 1, google_takeout 1, claude 1. Measured over every
-`providers/*/src/render*` file (some providers have a `render/`
-directory and some a single `render.rs` — a grep over only the
-directories undercounts), excluding `dolt_*`/`pragma_*`/`sqlite_*`.
-Attachment bytes ride along: [`blob_cas.rs::BlobBundle::load`](../../datalib/backend/etl/src/blob_cas.rs)
+`download → render` is **48**, across 10 provider crates: slack 9,
+email 8, whatsapp 7, beeper 6, signal 6, yolink 5, chatgpt 4, claude 1,
+google_takeout 1, sms_backup_restore 1. Attachment bytes ride along:
+[`blob_cas.rs::BlobBundle::load`](../../datalib/backend/etl/src/blob_cas.rs)
 is two more sites in one shared file, on this edge rather than the
-other, and its per-provider projection SQL is among the 40.
+other, and its per-provider projection SQL is among the 48.
 
-A 40-site mechanical sweep where one miss is a silent tearing bug needs
-an enforceable shape, not care. Proposal: one template helper on the
-store handle,
+That number was 40 until the lint below was written and counted for
+itself, which is the argument for writing the lint first in miniature.
+Two things a hand count missed:
+
+- **`JOIN <table>` is a content read too**, and eight of the sites are
+  joins rather than `FROM`s.
+- **Several of those joins are inside the `dolt_diff_*` bucket queries**
+  — `slack/parse.rs:213` joins live `messages` against the diff,
+  `email/parse.rs:285` joins live `emails`. So the "already safe" scan
+  path has unpinned reads sitting in the middle of it, which is exactly
+  the kind of thing a mechanical check finds and a careful reader does
+  not.
+
+A 48-site sweep where one miss is a silent tearing bug needs an
+enforceable shape, not care. Both halves of that are now built.
+
+**The helper** is [`datalib_etl::pin::Pin`](../../datalib/backend/etl/src/pin.rs):
 
 ```rust
 // before
 sqlx::query("SELECT id, json(payload) AS payload FROM users")
 // after
-sqlx::query(sqlx::AssertSqlSafe(store.sql("SELECT id, json(payload) AS payload FROM {users}")))
+sqlx::query(pin.sql("SELECT id, json(payload) AS payload FROM {users}"))
 ```
 
-where `sql()` substitutes `{users}` → `dolt_at_users('<pin>')` when the
-store is pinned and → `users` when it is not. The `AssertSqlSafe`
-justification is the one AGENTS.md already blesses: a static template
-plus a table name that is `&'static str` at every callsite, and a hash
-we minted ourselves.
+Three decisions that came out of writing it rather than planning it:
 
-Then a repo-hygiene check in `scripts/lint_repo.py` fails on any
-`FROM <bare-content-table>` under `providers/*/src/render/` — turning
-"did we get all 38?" from a review question into a build failure. That
-lint is the deliverable that makes the sweep safe; write it before the
-sweep, not after.
+- **A free-standing `Pin`, not a method on a store handle.** The plan
+  said `store.sql(…)`, but `BlobBundle::load` takes raw pools and has no
+  handle to hang it on.
+- **The hash is interpolated, not bound.** Binding it would prepend a
+  positional parameter to every query and break each callsite's existing
+  bind order — 48 chances to get an off-by-one wrong, for no gain.
+  `Pin::at` instead validates the hash as 40 lowercase hex characters at
+  construction (which is exactly what the engine accepts — it rejects
+  even a shortened prefix with `ref not found`), so `sql()` is infallible
+  and the interpolated value cannot be anything else.
+- **`AssertSqlSafe` is asserted once, inside `Pin::sql`**, rather than at
+  48 callsites with 48 audit comments. That is the one place the claim
+  can actually be justified: static template, table name checked to be a
+  plain identifier, and a hash we minted and validated.
+
+`Pin` also **cannot hold `HEAD`** — only a full hash. That makes the
+`to_ref = 'HEAD'` race below unrepresentable rather than merely
+discouraged, which is most of what the type is for.
+
+**The lint** is check 4 in `scripts/lint_repo.py`, and it is a
+**ratchet with a baseline** rather than a hard zero — which is what lets
+it land before the sweep instead of after. It fails in both directions:
+a new unpinned read added, or an existing one fixed without moving the
+baseline down. A swept site is invisible to it, because `{table}` does
+not match the detector.
 
 ## The protocol
 
@@ -436,13 +466,16 @@ whole change and should be the visible proof it works.
 
 Each of these is a reviewable PR that leaves the tree green.
 
-1. **The lint and the helper.** `store.sql("… FROM {t}")`, the
-   cold-start fallback, and the `lint_repo.py` check that fails on a
-   bare content-table read in render code. No behavior change; the sweep
-   becomes mechanical and enforced.
-2. **The sweep.** 3 sites in `indexed_markdown.rs` first, then the 40
-   provider sites + 2 in `blob_cas.rs`, all still passing `None` for the
-   pin. Still no behavior change — this is the patch to review carefully
+1. ~~**The lint and the helper.**~~ **Done.**
+   [`etl/src/pin.rs`](../../datalib/backend/etl/src/pin.rs) (`Pin`, the
+   `{table}` template, the cold-start fallback) and check 4 in
+   `scripts/lint_repo.py`, holding a baseline of 48. No behavior change:
+   nothing constructs a pin yet, so every expansion is still the bare
+   table. Carries the end-to-end test that a pinned read through sqlx
+   ignores a dirty working set — the assertion the rest of this plan
+   rests on.
+2. **The sweep.** 3 sites in `indexed_markdown.rs` first, then the 48
+   provider sites + 2 in `blob_cas.rs`, all still `Pin::Unpinned`. Still no behavior change — this is the patch to review carefully
    and the one that is boring on purpose. Splitting it in two along the
    edge boundary keeps the first streaming edge unblocked by the wide
    half.
@@ -509,10 +542,6 @@ judge the idea by before committing to the wide half.
   and because it keeps the fact out of the config file. A manifest or a
   field on the first event would also work. Settle it in step 5, not
   before.
-- **Whether `dolt_at_` takes a bound parameter through sqlx**, or
-  whether the hash has to be interpolated into the template. Measured
-  far enough to be confident it will (the argument is evaluated at
-  runtime), not far enough to promise it. First thing to check in step 1.
 - **What the task board shows** when a step and its consumer are both
   running. The design doc raises this and it is still open; "running,
   with a committed-so-far count" is the obvious answer and step 3 makes
