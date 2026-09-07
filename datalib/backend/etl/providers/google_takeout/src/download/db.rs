@@ -40,6 +40,13 @@ impl RawDb {
         &self.cas
     }
 
+    /// Wait for both connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+        self.cas.close().await;
+    }
+
     /// `--reset-and-redownload`. Truncates every entity / edge data
     /// table + bookkeeping sidecar and clears the per-feed file
     /// cursors. CAS bytes (`cas_objects`) survive — same convention

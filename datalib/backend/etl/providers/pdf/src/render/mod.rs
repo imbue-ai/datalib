@@ -45,11 +45,18 @@ pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
         return Ok(Vec::new());
     }
     let db = RawDb::open(&db_path).await?;
-    let Some(root) = db.scan_root().await? else {
-        // No scan has run against this store yet.
-        return Ok(Vec::new());
-    };
-    db.convertible_documents(&root).await
+    let targets = async {
+        match db.scan_root().await? {
+            Some(root) => db.convertible_documents(&root).await,
+            // No scan has run against this store yet.
+            None => Ok(Vec::new()),
+        }
+    }
+    .await;
+    // Closed before returning, on the error path too: the next open of
+    // this store is a second connection until this one is gone.
+    db.close().await;
+    targets
 }
 
 pub fn render_targets(

@@ -42,6 +42,12 @@ impl RawDb {
         &self.pool
     }
 
+    /// Wait for the connection to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     pub async fn load_payloads(&self, table: &str) -> Result<Vec<Value>> {
         dr::load_payloads(&self.pool, table).await
     }

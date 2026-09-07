@@ -167,7 +167,9 @@ async fn gmail_live_one_label_roundtrip() {
         "every row needs its Gmail-id mapping, or deletions can't find it",
     );
 
-    drop(db);
+    // Closed, not dropped: run 2 reopens this store, and a dropped pool
+    // is still a live connection for a moment.
+    db.close().await;
 
     // ── run 2: incremental, and a no-op ─────────────────────────────
     let second = gmail_api::fetch(opts(&tmp, &label))

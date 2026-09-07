@@ -48,6 +48,13 @@ impl RawDb {
         &self.cas
     }
 
+    /// Wait for both connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+        self.cas.close().await;
+    }
+
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
         let mut tx = self.pool.begin().await.context("begin reset tx")?;

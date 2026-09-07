@@ -38,8 +38,7 @@ fn copy_deref(src: &std::path::Path, dst: &std::path::Path) {
     }
 }
 
-async fn file_ids(db_path: &std::path::Path) -> Vec<(String, String)> {
-    let db = RawDb::open(db_path).await.unwrap();
+async fn file_ids(db: &RawDb) -> Vec<(String, String)> {
     let rows = sqlx::query("SELECT id, kind FROM files ORDER BY id")
         .fetch_all(db.pool())
         .await
@@ -73,9 +72,12 @@ async fn scans_tng_tree() {
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
         .await
         .unwrap();
+    // The test owns the store: one connection for the scan and the
+    // assertions both, because two is what breaks a doltlite file.
+    let db = RawDb::open(&db_path).await.unwrap();
     let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
-        db: None,
+        db: Some(db.clone()),
         source_id: "fsindex-tng".to_string(),
         root: root.clone(),
         target_doltlite_branch: None,
@@ -99,7 +101,7 @@ async fn scans_tng_tree() {
     assert_eq!(summary.symlinks, 0);
     assert_eq!(summary.entries_scanned, 7);
 
-    let rows = file_ids(&db_path).await;
+    let rows = file_ids(&db).await;
     let ids: BTreeSet<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
     let expected: BTreeSet<&str> = [
         "",
