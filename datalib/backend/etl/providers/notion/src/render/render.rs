@@ -7,7 +7,7 @@
 //! block-type matrix maintained against Notion's evolving block set is
 //! now Notion's problem.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -338,13 +338,7 @@ pub fn render_notion(
     root: &Path,
     stanza: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name. Reporting only what was
-    // re-rendered would delete the steady state.
-    seen: &mut HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let pages_root = datalib_etl::layout::rendered_md_root(root, stanza).join("pages");
@@ -371,14 +365,6 @@ pub fn render_notion(
         } = doc;
         let page_dir = pages_root.join(page_dir_segment(page_uuid));
         let md_path = page_dir.join("index.md");
-        // Before the skip, so an unchanged page reads as present rather
-        // than as one this run stopped producing.
-        seen.insert(page_uuid.clone());
-        if prior_fingerprints.get(page_uuid) == Some(source_fingerprint) && md_path.exists() {
-            summary.skipped += 1;
-            progress.inc(1);
-            continue;
-        }
         let Some(page) = pages_by_id.get(page_uuid.as_str()) else {
             continue;
         };
@@ -433,14 +419,6 @@ pub fn render_notion(
             ..
         } = doc;
         let thread_path = root.join(thread_qmd_path_rel(stanza, page_uuid, discussion_uuid));
-        seen.insert(discussion_uuid.clone());
-        if prior_fingerprints.get(discussion_uuid) == Some(source_fingerprint)
-            && thread_path.exists()
-        {
-            summary.skipped += 1;
-            progress.inc(1);
-            continue;
-        }
         let Some(members) = by_disc.get(discussion_uuid.as_str()) else {
             continue;
         };
@@ -466,6 +444,17 @@ pub fn render_notion(
         })?;
         summary.rendered += 1;
         progress.inc(1);
+    }
+    // Only once every document landed. A cursor written over a failed
+    // render would tell the next run those pages were already done.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = datalib_etl::render_cursor::cursor_path(root, stanza);
+        datalib_etl::render_cursor::write(
+            &cursor_path,
+            head,
+            parsed.scan.scan_elapsed,
+            &datalib_etl::render_cursor::no_params(),
+        )?;
     }
     Ok(summary)
 }
@@ -536,16 +525,7 @@ mod tests {
             }
             Ok(())
         };
-        render_notion(
-            &parsed,
-            d.path(),
-            "notion",
-            &Progress::noop(),
-            &HashMap::new(),
-            &mut on_doc,
-            &mut HashSet::new(),
-        )
-        .unwrap();
+        render_notion(&parsed, d.path(), "notion", &Progress::noop(), &mut on_doc).unwrap();
         assert!(!advertised.is_empty(), "expected rows with a qmd_path");
         for rel in advertised {
             assert!(

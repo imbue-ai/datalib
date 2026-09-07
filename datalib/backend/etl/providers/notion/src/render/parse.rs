@@ -24,16 +24,35 @@ pub struct ParsedNotion {
     /// A comment names its block and carries no quote, so without this
     /// a thread's anchor is an opaque uuid.
     pub anchor_text: HashMap<String, String>,
+    /// What the `dolt_diff` scan concluded, carried through so render
+    /// can advance the cursor on success.
+    pub scan: datalib_etl::doltlite_raw::DiffScan,
+    /// Pages Notion no longer has, and discussions whose last comment
+    /// went. Both are documents to remove, and they are separate
+    /// removals: a page and its threads carry different
+    /// `conversation_uuid`s.
+    pub vanished_pages: Vec<String>,
+    pub vanished_discussions: Vec<String>,
     /// Attachment bytes per page, pre-loaded from the sibling CAS.
     /// Render calls `bundle.materialize_to_dir(<page_dir>/blobs)` once
     /// per page and resolves each slot with `bundle.filename_for`.
     pub blobs_by_page: HashMap<String, datalib_etl::blob_cas::BlobBundle>,
 }
 
-/// Read raw payloads out of the doltlite DB. The `page_id` column of
-/// each comment is injected back into the JSON value so downstream
-/// consumers can group without a second lookup.
-pub fn parse_api_dir(path: &Path) -> Result<ParsedNotion> {
+/// Read the pages that changed since `last_render_hash`, and say which
+/// documents went away.
+///
+/// The filtering is what makes render incremental: a steady-state run
+/// gets an empty changed set and renders nothing. It narrows the
+/// *render*, which is where the cost is — writing files, building
+/// `grid_rows`, hashing — and not the read, which still walks the
+/// store's rows once. Say so plainly; the scan is not a substitute for
+/// a narrower query, and if the read ever dominates, that is the thing
+/// to fix.
+///
+/// The `page_id` column of each comment is injected back into the JSON
+/// value so downstream consumers can group without a second lookup.
+pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedNotion> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         return Ok(ParsedNotion::default());
@@ -45,7 +64,10 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedNotion> {
         user_names,
         comment_anchors,
         blobs_by_page,
-    } = block_on_load_all(&db_path)?;
+        scan,
+        vanished_pages,
+        vanished_discussions,
+    } = block_on_load_all(&db_path, last_render_hash)?;
 
     let comments: Vec<Value> = comments
         .into_iter()
@@ -64,6 +86,9 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedNotion> {
         user_names,
         anchor_text: comment_anchors,
         blobs_by_page,
+        scan,
+        vanished_pages,
+        vanished_discussions,
     })
 }
 
@@ -97,7 +122,7 @@ mod tests {
         // Closed, not dropped: `parse_api_dir` reopens this store.
         db.close().await;
 
-        let parsed = parse_api_dir(&db_file).unwrap();
+        let parsed = parse_api_dir(&db_file, None).unwrap();
         assert_eq!(parsed.pages.len(), 1);
         assert_eq!(parsed.pages[0]["id"], "p1");
         assert_eq!(parsed.markdown_by_page.get("p1").unwrap(), "# Hello\n");
@@ -121,7 +146,7 @@ mod tests {
         .unwrap();
         // Closed, not dropped: `parse_api_dir` reopens this store.
         db.close().await;
-        let parsed = parse_api_dir(&db_file).unwrap();
+        let parsed = parse_api_dir(&db_file, None).unwrap();
         assert_eq!(parsed.pages.len(), 1);
         assert!(parsed.markdown_by_page.is_empty());
     }

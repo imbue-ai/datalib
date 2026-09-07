@@ -496,19 +496,32 @@ Don't refactor that signature mid-migration.
   to find the owning PR/issue), `dolt_diff_users` (likely fan-out
   to "render everything").
 
-### Notion
+### Notion — ported
 
-- Schema: pages + blocks, both wire-payload.
-- Attachments: blocks with image/file content carry external URLs;
-  bytes are downloaded into the shared blob CAS today via
-  `blob_refs`.
-- **Recommended edge: Shape A** on `blocks` if blocks carry the
-  attachment ref, otherwise Shape B with a `notion_attachments`
-  table keyed by `block_uuid`.
-- Bucket: one rendered .md per page. Bucket key: `page_uuid`.
-- dolt_diff union: `dolt_diff_pages`, `dolt_diff_blocks` (joined
-  to `pages` to project page_uuid via `pages.id` /
-  `blocks.parent_page_id`).
+There is no `blocks` table. Notion renders the page body itself
+(`GET /v1/pages/{id}/markdown`), so the store holds `pages`,
+`page_markdown`, `comments`, `comment_anchors` and `users`.
+
+- Edge: Shape B, `notion_attachments`, keyed by **`page_id`** — not a
+  block, since blocks are not mirrored. `ref_id` is the attachment's
+  unsigned URL, because Notion re-signs every file URL on each fetch
+  and the signature must never reach the store.
+- Bucket: one rendered .md per page, plus one per comment thread.
+  Bucket key: `page_uuid`.
+- dolt_diff union: `dolt_diff_pages` and `dolt_diff_page_markdown`
+  project `id`; `dolt_diff_comments`, `dolt_diff_comment_anchors` and
+  `dolt_diff_notion_attachments` project `page_id` **directly, with no
+  join** — the download side records the owning page on all three.
+- Global fanout: `users`. A display name reaches every page that
+  person authored and the store does not say which, so resolving one
+  new user re-renders everything. Cheap in practice: a user is fetched
+  once ever.
+- Deletions need two passes, because a page and its threads are
+  separate documents with separate `conversation_uuid`s:
+  `buckets_without_rows` over `("pages", "id")` for vanished pages,
+  and over `("comments", "discussion_id")` for a thread whose last
+  comment went while its page survived. A vanished page also names
+  the discussions still hanging off it, or its threads are orphaned.
 
 ### Beeper
 
