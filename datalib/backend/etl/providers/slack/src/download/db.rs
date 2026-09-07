@@ -478,26 +478,11 @@ impl RawDb {
         if gone.is_empty() {
             return Ok(0);
         }
-        // The window is bounded and small (`refresh_window_days`), so the
-        // blast-radius guard is about a walk that came back short — a
-        // truncated page, a `has_more` we mis-read — not about a user
-        // clearing a channel.
-        if !datalib_etl::prune::approve(
+        self.delete_messages(&gone).await?;
+        datalib_etl::prune::record(
             &format!("slack channel {channel_id} history window"),
             stored.len(),
             gone.len(),
-            datalib_etl::prune::PruneLimit::default(),
-        ) {
-            return Ok(0);
-        }
-        self.delete_messages(&gone).await?;
-        tracing::info!(
-            event = "slack_history_pruned",
-            channel = %channel_id,
-            oldest = oldest_ts,
-            latest = latest_ts,
-            removed = gone.len(),
-            "these messages are gone from Slack's history for a range we re-walked",
         );
         Ok(gone.len())
     }

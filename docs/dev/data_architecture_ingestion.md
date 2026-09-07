@@ -350,13 +350,24 @@ empty list, which is byte-identical to "everything was deleted", so
 `unwrap_or_default` on a listing is now a correctness bug rather than a
 convenience.
 
-On top of each gate sits [`prune::PruneLimit`](/datalib/backend/etl/src/prune.rs),
-which refuses a prune that would take more than half of a collection of
-more than ten. It is not there for users who delete a lot. It is there
-because *our* enumeration narrowing — a new page cap, a changed filter,
-a downgraded token — looks exactly like a mass deletion, and the two
-outcomes are not symmetric: refusing costs a stale row until someone
-looks, proceeding costs the archive.
+**The gate is the whole safety story; nothing second-guesses how much a
+prune deletes.** There was briefly a blast-radius veto here — refuse a
+prune taking most of a collection, on the theory that our enumeration
+narrowing is as likely an explanation as a real mass delete. The premise
+holds and the conclusion did not. A prune is a commit, so the previous
+commit still has the rows: `dolt_diff_<table>` names them and
+`dolt_at_<table>('HEAD^1')` reads them back
+([`doltlite.md`](doltlite.md)). Nothing is lost, so there was nothing to
+protect. Refusing was worse than acting, too — it left the store holding
+rows upstream no longer had with nothing recording the divergence, and
+its remedy was a full re-download.
+
+This is the concrete payoff of a version-controlled raw store, and it is
+worth naming because it changes what "careful" means: we can act on our
+best reading of an ambiguous signal and let the history be the safety
+net, where a plain mirror would have to choose between guessing and
+freezing. What remains is `prune::record`, which WARNs on an unusually
+large prune — a signal to investigate, not a veto.
 
 **A deletion the download notices now reaches the grid.** That used to
 be a second gap and is not any more — see

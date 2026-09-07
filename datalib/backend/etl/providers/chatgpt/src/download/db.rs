@@ -108,9 +108,9 @@ impl RawDb {
     /// Delete every conversation not in `keep`, and its attachment edges.
     ///
     /// Only for a caller holding a **complete** listing — see the gate at
-    /// the callsite. Guarded by [`datalib_etl::prune::PruneLimit`], because
-    /// the failure that matters here is not a user deleting their history
-    /// but our enumeration quietly narrowing.
+    /// the callsite. That gate is the whole safety story: nothing here
+    /// second-guesses how much it deletes, because the rows stay in
+    /// doltlite history either way.
     pub async fn prune_conversations(&self, keep: &HashSet<String>) -> Result<usize> {
         let held: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations")
             .fetch_all(&self.pool)
@@ -124,15 +124,6 @@ impl RawDb {
         if gone.is_empty() {
             return Ok(0);
         }
-        if !datalib_etl::prune::approve(
-            "chatgpt conversations",
-            held.len(),
-            gone.len(),
-            datalib_etl::prune::PruneLimit::default(),
-        ) {
-            return Ok(0);
-        }
-
         let mut tx = self.pool.begin().await.context("begin prune tx")?;
         for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
@@ -156,11 +147,7 @@ impl RawDb {
             }
         }
         tx.commit().await.context("commit prune tx")?;
-        tracing::info!(
-            event = "chatgpt_conversations_pruned",
-            removed = gone.len(),
-            "a complete listing did not name these; deleting our copies",
-        );
+        datalib_etl::prune::record("chatgpt conversations", held.len(), gone.len());
         Ok(gone.len())
     }
 

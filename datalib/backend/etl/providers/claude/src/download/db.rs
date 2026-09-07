@@ -194,9 +194,10 @@ impl RawDb {
     /// an API sync has no standing to say an export's conversations are
     /// gone.
     ///
-    /// Guarded by [`datalib_etl::prune::PruneLimit`]: `/chat_conversations`
-    /// is a single unpaginated GET, and if claude.ai ever starts capping it
-    /// the symptom is indistinguishable from a mass deletion.
+    /// `/chat_conversations` is a single unpaginated GET, so if claude.ai
+    /// ever starts capping it the symptom is a large prune rather than an
+    /// error. That is what `prune::record`'s WARN is for — and why the rows
+    /// go to history rather than away.
     pub async fn prune_org_conversations(
         &self,
         org_uuid: &str,
@@ -216,15 +217,6 @@ impl RawDb {
         if gone.is_empty() {
             return Ok(0);
         }
-        if !datalib_etl::prune::approve(
-            &format!("claude org {org_uuid} conversations"),
-            held.len(),
-            gone.len(),
-            datalib_etl::prune::PruneLimit::default(),
-        ) {
-            return Ok(0);
-        }
-
         let mut tx = self.pool.begin().await.context("begin prune tx")?;
         for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
@@ -248,11 +240,10 @@ impl RawDb {
             }
         }
         tx.commit().await.context("commit prune tx")?;
-        tracing::info!(
-            event = "claude_conversations_pruned",
-            org = org_uuid,
-            removed = gone.len(),
-            "this org's listing did not name these; deleting our copies",
+        datalib_etl::prune::record(
+            &format!("claude org {org_uuid} conversations"),
+            held.len(),
+            gone.len(),
         );
         Ok(gone.len())
     }

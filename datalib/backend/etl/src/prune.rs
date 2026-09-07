@@ -82,137 +82,131 @@ pub async fn prune_scope(
     Ok(gone)
 }
 
-/// How much of a collection one run is allowed to delete before we treat
-/// the enumeration itself as the more likely explanation.
+/// Note that a prune took place, loudly when it was a big one.
 ///
-/// The failure this exists for is not a provider deleting your data — it is
-/// *our* enumeration silently narrowing: an undocumented page cap appears, a
-/// filter param changes meaning, an auth downgrade starts returning only
-/// public items. Every one of those looks exactly like "almost everything
-/// was deleted", and acting on it removes a mirror the user keeps precisely
-/// because the provider's copy is not under their control.
+/// This used to be a veto: a prune taking most of a collection was refused
+/// on the theory that our own enumeration narrowing — a new page cap, a
+/// changed filter, a downgraded token — looks exactly like a mass deletion.
+/// The premise was right and the conclusion was wrong. Deleting a row here
+/// is a commit, so the previous commit still has it: `dolt_diff_<table>`
+/// names what went and `dolt_at_<table>('HEAD^1')` reads it back (see
+/// `docs/dev/doltlite.md`). Nothing is lost, so there is nothing to protect
+/// against by refusing.
 ///
-/// Refusing costs a stale row until someone looks. Proceeding costs the
-/// archive. The asymmetry is the whole argument, and it is why this is a
-/// hard stop rather than a warning.
-#[derive(Debug, Clone, Copy)]
-pub struct PruneLimit {
-    /// Never refuse a prune of at most this many rows, whatever the
-    /// fraction. Deleting three of your four conversations is an ordinary
-    /// afternoon; the percentage rule alone would block it forever.
-    pub always_allow_up_to: usize,
-    /// Above that, refuse when the prune would take more than this share of
-    /// what we hold.
-    pub max_fraction: f64,
-}
-
-impl Default for PruneLimit {
-    fn default() -> Self {
-        Self {
-            always_allow_up_to: 10,
-            max_fraction: 0.5,
-        }
+/// Refusing was also worse than it looked. It left the store holding rows
+/// upstream no longer has, with nothing recording the divergence, and its
+/// remedy was a full re-download — a bigger hammer than the prune it
+/// blocked. A version-controlled store means we can afford to act on our
+/// best reading and let the history be the safety net.
+///
+/// What survives is the signal, because an unusually large prune really is
+/// worth a look, whichever explanation turns out to be right.
+pub fn record(collection: &str, held: usize, gone: usize) {
+    if gone == 0 {
+        return;
     }
-}
-
-/// What [`PruneLimit::check`] decided, so the caller can log it and carry a
-/// count into its run summary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PruneVerdict {
-    /// Delete them.
-    Proceed,
-    /// Delete nothing, and say why. The `reason` is user-facing.
-    Refuse { reason: String },
-}
-
-impl PruneLimit {
-    /// `held` is what we have in this collection, `gone` how many the
-    /// enumeration did not mention.
-    pub fn check(&self, held: usize, gone: usize) -> PruneVerdict {
-        if gone <= self.always_allow_up_to || held == 0 {
-            return PruneVerdict::Proceed;
-        }
-        let fraction = gone as f64 / held as f64;
-        if fraction <= self.max_fraction {
-            return PruneVerdict::Proceed;
-        }
-        PruneVerdict::Refuse {
-            reason: format!(
-                "the listing accounted for only {kept} of {held} stored row(s), so \
-                 pruning would delete {gone} ({pct:.0}%). Refusing: an enumeration \
-                 that lost most of a collection at once is more often a narrowed \
-                 enumeration — a page cap, a changed filter, a downgraded token — \
-                 than a real deletion, and the rows are the copy the provider does \
-                 not control. Re-run with --reset-and-redownload to rebuild from \
-                 scratch if the loss is real.",
-                kept = held - gone,
-                held = held,
-                gone = gone,
-                pct = fraction * 100.0,
-            ),
-        }
-    }
-}
-
-/// [`PruneLimit::check`] plus the logging, since every caller wants both.
-/// Returns whether to go ahead.
-pub fn approve(what: &str, held: usize, gone: usize, limit: PruneLimit) -> bool {
-    match limit.check(held, gone) {
-        PruneVerdict::Proceed => true,
-        PruneVerdict::Refuse { reason } => {
-            tracing::warn!(
-                event = "prune_refused",
-                collection = what,
-                held,
-                would_delete = gone,
-                "{reason}",
-            );
-            false
-        }
+    // A prune of most of a collection is either a real clear-out or a
+    // narrowed enumeration, and this line is where someone starts telling
+    // them apart.
+    let mostly = held > 10 && gone * 2 > held;
+    if mostly {
+        tracing::warn!(
+            event = "prune_large",
+            collection,
+            held,
+            removed = gone,
+            "this run deleted most of a collection. If that is not what you \
+             did upstream, our enumeration may have narrowed — the old rows \
+             are still in history: dolt_diff_<table> names them and \
+             dolt_at_<table>('HEAD^1') reads them back",
+        );
+    } else {
+        tracing::info!(event = "pruned", collection, held, removed = gone);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
-    /// The small-collection escape hatch. Without it a user with four
-    /// conversations who deletes three gets a refusal every run forever,
-    /// and learns to ignore the warning.
-    #[test]
-    fn a_small_absolute_prune_is_always_allowed() {
-        let l = PruneLimit::default();
-        assert_eq!(l.check(4, 3), PruneVerdict::Proceed);
-        assert_eq!(l.check(10, 10), PruneVerdict::Proceed);
+    /// `prune_scope` must delete inside its scope and nowhere else. The
+    /// scope is the whole safety story now that nothing vetoes a large
+    /// prune: a scope that leaks deletes rows the caller never enumerated.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn prune_scope_deletes_only_inside_its_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("t.doltlite_db");
+        // With its bookkeeping sidecar, because that is the shape every
+        // caller has and `prune_scope` clears both. A table without one is
+        // not an entity table and has no business being pruned here.
+        let ddl = [
+            "CREATE TABLE IF NOT EXISTS notes (
+             id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT )"
+                .to_string(),
+            crate::doltlite_raw::bookkeeping_ddl_for("notes"),
+        ];
+        let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
+        let pool = crate::doltlite_raw::open_derived(&db, &slices)
+            .await
+            .unwrap();
+        for (id, owner) in [("a", "x"), ("b", "x"), ("c", "y")] {
+            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .bind(id)
+                .bind(owner)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Owner x was re-enumerated and only `a` came back.
+        let keep: HashSet<String> = ["a".to_string()].into_iter().collect();
+        let gone = prune_scope(&pool, "notes", &[("owner", "x")], &keep)
+            .await
+            .unwrap();
+        assert_eq!(gone, vec!["b".to_string()]);
+
+        let mut left: Vec<String> = sqlx::query_scalar("SELECT id FROM notes ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        left.sort();
+        assert_eq!(
+            left,
+            vec!["a".to_string(), "c".to_string()],
+            "`c` belongs to another owner, which this walk said nothing about",
+        );
     }
 
-    /// The case this exists for: a listing that came back nearly empty
-    /// against a store that is not.
-    #[test]
-    fn losing_most_of_a_large_collection_is_refused() {
-        let l = PruneLimit::default();
-        let PruneVerdict::Refuse { reason } = l.check(1000, 990) else {
-            panic!("990 of 1000 must be refused");
-        };
-        // The message has to name both numbers: "prune refused" alone
-        // leaves the reader unable to tell a bug from a real mass delete.
-        assert!(reason.contains("1000"), "{reason}");
-        assert!(reason.contains("990"), "{reason}");
-    }
-
-    /// Ordinary churn is not blocked — a tenth of a big mailbox going is
-    /// well within what a real archive clear-out looks like.
-    #[test]
-    fn ordinary_churn_proceeds() {
-        let l = PruneLimit::default();
-        assert_eq!(l.check(1000, 100), PruneVerdict::Proceed);
-        assert_eq!(l.check(1000, 500), PruneVerdict::Proceed);
-        assert!(matches!(l.check(1000, 501), PruneVerdict::Refuse { .. }));
-    }
-
-    /// An empty store cannot lose anything, and must not divide by zero.
-    #[test]
-    fn an_empty_collection_proceeds() {
-        assert_eq!(PruneLimit::default().check(0, 0), PruneVerdict::Proceed);
+    /// An empty scope is the whole table, and an empty `keep` with it would
+    /// delete everything — correct, but only for a caller that really did
+    /// enumerate the whole collection and get nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_empty_scope_covers_the_table() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("t.doltlite_db");
+        // With its bookkeeping sidecar, because that is the shape every
+        // caller has and `prune_scope` clears both. A table without one is
+        // not an entity table and has no business being pruned here.
+        let ddl = [
+            "CREATE TABLE IF NOT EXISTS notes (
+             id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT )"
+                .to_string(),
+            crate::doltlite_raw::bookkeeping_ddl_for("notes"),
+        ];
+        let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
+        let pool = crate::doltlite_raw::open_derived(&db, &slices)
+            .await
+            .unwrap();
+        for id in ["a", "b"] {
+            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let keep: HashSet<String> = ["a".to_string()].into_iter().collect();
+        let gone = prune_scope(&pool, "notes", &[], &keep).await.unwrap();
+        assert_eq!(gone, vec!["b".to_string()]);
     }
 }
