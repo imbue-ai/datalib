@@ -33,7 +33,7 @@ async fn github_live_single_pr_snapshot() {
     };
     github::fetch(opts).await.expect("github fetch failed");
 
-    let parsed = parse_api_dir(&tmp).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.pull_requests.len(), 1, "expected exactly one PR");
     let pr = &parsed.pull_requests[0];
 
@@ -50,7 +50,6 @@ async fn github_live_single_pr_snapshot() {
             docs.push(doc);
             Ok(())
         },
-        &mut std::collections::HashSet::new(),
     )
     .expect("render_github failed");
 
