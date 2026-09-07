@@ -38,6 +38,13 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     })
     .await
     .expect("mbox download fetch");
+    // Commit what the fetch wrote, the way the processor's `RawStoreSession`
+    // does in production. Render reads committed state only, so a store left
+    // dirty here would render as empty — which is right, and not what this
+    // test is about.
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: mbox fetch")
+        .await
+        .expect("commit the mbox fetch");
     // Closed, not dropped: the caller reopens this store, and a dropped
     // pool is still a live connection for a moment.
     db.close().await;

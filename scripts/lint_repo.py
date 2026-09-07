@@ -365,16 +365,14 @@ def _check_render_opens_read_only(root: Path) -> int:
 # directions fail, so the sweep cannot stall silently and new code cannot
 # quietly add a site.
 EXPECTED_UNPINNED_READS: dict[str, int] = {
+    # Still to pin: these four do no `dolt_diff` scan at all, so they have no
+    # commit in hand and need a HEAD lookup added before they can pin.
     "datalib/backend/etl/providers/beeper/src/render/parse.rs": 6,
-    "datalib/backend/etl/providers/chatgpt/src/render/parse.rs": 4,
-    "datalib/backend/etl/providers/claude/src/render/parse.rs": 1,
-    "datalib/backend/etl/providers/email/src/render/parse.rs": 8,
-    "datalib/backend/etl/providers/google_takeout/src/render.rs": 1,
-    "datalib/backend/etl/providers/signal/src/render/parse.rs": 6,
-    "datalib/backend/etl/providers/slack/src/render/parse.rs": 9,
-    "datalib/backend/etl/providers/sms_backup_restore/src/render.rs": 1,
-    "datalib/backend/etl/providers/whatsapp/src/render/parse.rs": 7,
     "datalib/backend/etl/providers/yolink/src/render/parse.rs": 5,
+    "datalib/backend/etl/providers/google_takeout/src/render.rs": 1,
+    "datalib/backend/etl/providers/sms_backup_restore/src/render.rs": 1,
+    # whatsapp scans, but by hand rather than through `scan_buckets`.
+    "datalib/backend/etl/providers/whatsapp/src/render/parse.rs": 7,
 }
 
 # `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it

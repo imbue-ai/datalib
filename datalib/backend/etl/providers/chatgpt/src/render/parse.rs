@@ -24,7 +24,7 @@ use crate::download::db::{db_path_for, LoadedConversation, LoadedRaw};
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM chatgpt_attachments
+      FROM pinned_chatgpt_attachments chatgpt_attachments
      WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
@@ -488,7 +488,35 @@ async fn parse_doltlite_async(
         None
     };
 
-    let scan = scan_diff(&pool, last_render_hash).await?;
+    // Pin before anything reads this store. The diff below and the rows
+
+    // behind it have to name one commit, and the `pinned_<table>` views must
+
+    // already exist when the diff runs — its bucket query joins live tables.
+
+    // No commit at all means nothing has been committed here to render, which
+
+    // is emptiness, not a reason to read the working set.
+
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedChatGPTApi::default());
+    };
+
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the chatgpt raw store for render")?;
+
+    // The CAS is a separate file with its own HEAD, so it takes its own pin.
+
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        if let Some(cas_pin) = datalib_etl::pin::head(cas_pool).await? {
+            datalib_etl::pin::install_views(cas_pool, &cas_pin)
+                .await
+                .context("pin the chatgpt CAS for render")?;
+        }
+    }
+
+    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // Load `me` + `conversations` payloads (filtered if Phase 1
     // narrowed the set).
@@ -606,7 +634,7 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 }
 
 async fn load_me_payload(pool: &SqlitePool) -> Result<Option<Value>> {
-    let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
+    let row = sqlx::query("SELECT json(payload) AS payload FROM pinned_me me ORDER BY id LIMIT 1")
         .fetch_optional(pool)
         .await
         .context("select me")?;
@@ -618,8 +646,8 @@ async fn load_me_payload(pool: &SqlitePool) -> Result<Option<Value>> {
 async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
         "SELECT c.id, json(c.payload) AS payload, b.fetched_at
-           FROM conversations c
-           LEFT JOIN conversations_bookkeeping b ON b.id = c.id
+           FROM pinned_conversations c
+           LEFT JOIN pinned_conversations_bookkeeping b ON b.id = c.id
           WHERE c.payload IS NOT NULL
           ORDER BY c.id",
     )
@@ -649,10 +677,15 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
 /// touched conversation ids. `dolt_diff_me` propagates as
 /// "render everything" because a renamed account shows up in every
 /// rendered conversation's frontmatter.
-async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+async fn scan_diff(
+    pool: &SqlitePool,
+    last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &["me"],
             bucket_query: "

@@ -75,6 +75,24 @@ impl Pin {
     }
 }
 
+/// The commit this store is at now, or `None` when it has no commits.
+///
+/// For a consumer driven by [`crate::doltlite_raw::scan_buckets`], prefer the
+/// `new_head` that scan already returned: the diff and the reads that follow
+/// it must name one commit, and sampling HEAD a second time can pick up a
+/// commit the diff did not see. This is for the consumers that do no diff at
+/// all, and for a sibling store (a blob CAS) with a HEAD of its own.
+pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
+    let commit: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            // No `dolt_log` at all is a build without the extensions, which
+            // reads the same as a store with nothing committed: no pin.
+            .unwrap_or(None);
+    Pin::from_scan(commit.as_deref())
+}
+
 /// Create one `pinned_<table>` view per table on this connection, and return
 /// how many. Call it once, when a store is opened for reading.
 ///

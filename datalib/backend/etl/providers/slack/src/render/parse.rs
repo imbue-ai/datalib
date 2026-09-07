@@ -23,7 +23,7 @@ use super::{ts_to_iso, Channel, Message, User, Workspace};
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, MAX(blake3) AS blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM slack_attachments
+      FROM pinned_slack_attachments slack_attachments
      WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL
      GROUP BY file_id";
 
@@ -115,7 +115,35 @@ async fn parse_doltlite_async(
         None
     };
 
-    let scan = scan_diff(&pool, last_render_hash).await?;
+    // Pin before anything reads this store. The diff below and the rows
+
+    // behind it have to name one commit, and the `pinned_<table>` views must
+
+    // already exist when the diff runs — its bucket query joins live tables.
+
+    // No commit at all means nothing has been committed here to render, which
+
+    // is emptiness, not a reason to read the working set.
+
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedSlack::default());
+    };
+
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the slack raw store for render")?;
+
+    // The CAS is a separate file with its own HEAD, so it takes its own pin.
+
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        if let Some(cas_pin) = datalib_etl::pin::head(cas_pool).await? {
+            datalib_etl::pin::install_views(cas_pool, &cas_pin)
+                .await
+                .context("pin the slack CAS for render")?;
+        }
+    }
+
+    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // Workspace + users + channels are cheap and shared across threads.
     let workspace = load_workspace(&pool).await?;
@@ -205,10 +233,15 @@ async fn parse_doltlite_async(
 /// touched `thread_root_uuid`s. Workspace / users / channels changes
 /// fan out to "render everything" — channel renames + user renames
 /// appear inside every thread we render.
-async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+async fn scan_diff(
+    pool: &SqlitePool,
+    last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &["workspaces", "users", "channels"],
             bucket_query: "
@@ -219,7 +252,7 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                     UNION
                     SELECT m.thread_root_uuid
                       FROM dolt_diff_slack_attachments d
-                      JOIN messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
+                      JOIN pinned_messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                 )
                 WHERE thread_root_uuid IS NOT NULL
@@ -235,10 +268,12 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
 }
 
 async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
-    let row = sqlx::query("SELECT json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("select workspace")?;
+    let row = sqlx::query(
+        "SELECT json(payload) AS payload FROM pinned_workspaces workspaces ORDER BY id LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .context("select workspace")?;
     let Some(row) = row else { return Ok(None) };
     let Ok(s): Result<String, _> = row.try_get("payload") else {
         return Ok(None);
@@ -259,7 +294,7 @@ async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
 }
 
 async fn load_users(pool: &SqlitePool) -> Result<BTreeMap<String, User>> {
-    let rows = sqlx::query("SELECT id, team_id, json(payload) AS payload FROM users")
+    let rows = sqlx::query("SELECT id, team_id, json(payload) AS payload FROM pinned_users")
         .fetch_all(pool)
         .await
         .context("select users")?;
@@ -308,9 +343,9 @@ async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
         .await?
         && datalib_etl::doltlite_raw::column_exists(pool, "channels", "dm_user_ids").await?;
     let sql = if has_dm_columns {
-        "SELECT id, name, is_dm, dm_user_ids FROM channels"
+        "SELECT id, name, is_dm, dm_user_ids FROM pinned_channels"
     } else {
-        "SELECT id, name FROM channels"
+        "SELECT id, name FROM pinned_channels"
     };
     let rows = sqlx::query(sql)
         .fetch_all(pool)
@@ -356,7 +391,7 @@ struct LoadedMessageWithThread {
 
 async fn thread_count(pool: &SqlitePool) -> Result<usize> {
     let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL",
+        "SELECT COUNT(DISTINCT thread_root_uuid) FROM pinned_messages messages WHERE payload IS NOT NULL",
     )
     .fetch_one(pool)
     .await
@@ -368,7 +403,7 @@ async fn load_all_messages(pool: &SqlitePool) -> Result<Vec<LoadedMessageWithThr
     let rows = sqlx::query(
         "SELECT team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                 json(payload) AS payload, thread_root_uuid
-           FROM messages
+           FROM pinned_messages messages
           WHERE payload IS NOT NULL
           ORDER BY thread_root_uuid, ts",
     )
@@ -395,7 +430,7 @@ async fn load_messages_for_threads(
         let sql = format!(
             "SELECT team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                     json(payload) AS payload, thread_root_uuid
-               FROM messages
+               FROM pinned_messages messages
               WHERE payload IS NOT NULL AND thread_root_uuid IN ({placeholders})
               ORDER BY thread_root_uuid, ts"
         );
@@ -783,6 +818,18 @@ mod legacy_schema_tests {
             .execute(&pool)
             .await
             .unwrap();
+
+        // Read it the way render does: committed, pinned, through the views.
+        // The store still lacks the DM columns, which is what this guards —
+        // pinning does not conjure a column the store never had.
+        datalib_etl::doltlite_raw::commit_run(&pool, "legacy store")
+            .await
+            .unwrap();
+        let pin = datalib_etl::pin::head(&pool)
+            .await
+            .unwrap()
+            .expect("the legacy store has a commit now");
+        datalib_etl::pin::install_views(&pool, &pin).await.unwrap();
 
         let channels = load_channels(&pool)
             .await
