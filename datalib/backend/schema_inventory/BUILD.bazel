@@ -1,0 +1,44 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+# What every store in this build declares, as one golden. Links every
+# provider so the inventory is complete rather than a sample; see
+# tests/inventory.rs for why it exists.
+rust_test(
+    name = "inventory",
+    size = "small",
+    srcs = ["tests/inventory.rs"],
+    crate_root = "tests/inventory.rs",
+    # insta reads the committed snapshot from the source tree; inside
+    # the sandbox it is only there if it is a data dep.
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    deps = [
+        "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
+        "//datalib/backend/etl/providers/chatgpt:datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/claude:datalib_etl_claude",
+        "//datalib/backend/etl/providers/contacts:datalib_etl_contacts",
+        "//datalib/backend/etl/providers/email:datalib_etl_email",
+        "//datalib/backend/etl/providers/fsindex:datalib_etl_fsindex",
+        "//datalib/backend/etl/providers/github:datalib_etl_github",
+        "//datalib/backend/etl/providers/gitlab:datalib_etl_gitlab",
+        "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",
+        "//datalib/backend/etl/providers/media:datalib_etl_media",
+        "//datalib/backend/etl/providers/notion:datalib_etl_notion",
+        "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",
+        "//datalib/backend/etl/providers/signal:datalib_etl_signal",
+        "//datalib/backend/etl/providers/slack:datalib_etl_slack",
+        "//datalib/backend/etl/providers/sms_backup_restore:datalib_etl_sms_backup_restore",
+        "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
+        "//datalib/backend/etl/providers/yolink:datalib_etl_yolink",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:insta",
+    ],
+)
+
+insta_update(
+    name = "inventory.update",
+    test = ":inventory",
+)
