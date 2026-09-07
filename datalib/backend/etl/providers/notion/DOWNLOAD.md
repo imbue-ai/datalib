@@ -1,97 +1,163 @@
-# Notion Extract
+# Notion
 
-`notion-download` mirrors Notion pages via the public `api.notion.com/v1`
-API, with optional inbox discovery via the unofficial
-`www.notion.so/api/v3/getNotificationLog` endpoint when the public API
-isn't enough (it has no notifications equivalent).
+Mirrors a Notion workspace through the official REST API
+(`api.notion.com/v1`) at `Notion-Version: 2026-03-11`.
 
-Output is an **event-store JSONL** layout — one append-only stream per
-entity, keyed by stable Notion ID, so reruns are incremental and
-self-describing:
+## Auth: one credential, and the version rides with it
 
-```
-<out>/
-  notion_official_page/{created,updated}/events.jsonl     # page records
-  notion_official_block/{created,updated}/events.jsonl    # block records
-  notion_official_comment/{created,updated}/events.jsonl  # comment records
-```
+A **personal access token**, stored under the latchkey `notion` service.
+A PAT acts as the person who created it and inherits their permissions,
+so nothing has to be shared with an integration — which is what lets the
+mirror default to the whole workspace with no configured starting point.
 
-Each line is `{ "key": {...}, "raw": {...}, "ts": "<iso8601>" }`. New
-ids land in `created/`, ones whose key fields change get appended to
-`updated/`. The `key` is a minimal stable identity (id +
-last_edited_time, etc.) used for change detection; `raw` carries the
-full untouched Notion payload for the translate stage to chew on.
-
-## Auth
-
-Two latchkey services must be registered. The `notion` service is
-required; `notion_unofficial` is only needed for `--inbox` discovery.
-
-| Service             | Used for                                        | Wire auth        |
-|---------------------|-------------------------------------------------|------------------|
-| `notion`            | `api.notion.com/v1` (pages, blocks, comments)   | Bearer token (PAT or integration token); latchkey also injects `Notion-Version` |
-| `notion_unofficial` | `www.notion.so/api/v3` (getNotificationLog etc.) | Cookie session via a logged-in browser |
-
-See `src/download/NOTION_AUTH.md` for the keyring / cookie setup.
-
-## Cloudflare
-
-`api.notion.com` accepts vanilla HTTP, but `www.notion.so` sits behind
-Cloudflare and rejects anything without a browser TLS fingerprint.
-`notion-download` shells out via `latchkey curl` and expects
-`LATCHKEY_CURL` to point at a Chrome-impersonating curl. The in-tree
-`latchkey-curl-impersonate` binary (Chrome 131 fingerprint via `wreq`) is the
-canonical choice:
+The stored credential must carry **both** headers:
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL=$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate
+latchkey auth set notion \
+  -H "Authorization: Bearer ntn_..." \
+  -H "Notion-Version: 2026-03-11"
 ```
 
-If `LATCHKEY_CURL` is unset, the downloader looks for the shim in the
-standard `target/{debug,release}/` locations and auto-sets it.
+The version cannot be set per request. A second `Notion-Version` on the
+wire does not override the stored one — it concatenates, and Notion
+rejects the pair with `instead was "2022-06-28, 2026-03-11"`. Bumping
+the version means re-running `auth set`.
 
-## Modes
+Two limits worth knowing: `GET /v1/users` (list all) is unavailable to
+PATs, and `latchkey auth list` reports this service's
+`credentialStatus` as `invalid` even when it works — only a real request
+tells you.
 
-Two source modes; combine them or pass one alone.
+## What a run does
 
-**Subtree**: BFS-mirror one page hierarchy. Uses only the official API.
+**Discovery.** `POST /v1/search`, sorted `last_edited_time` descending,
+100 at a time, stopping at the first result older than the stored
+watermark. Results are page and data_source objects. Page objects come
+back **complete**, properties included — so for a database row with no
+body, that single response is the entire record.
 
-```sh
-notion-download --out ~/backups/notion --subtree-page <page_id>
-```
+`sync.roots` narrows this to named pages and everything under them.
+Empty means the whole workspace.
 
-`child_page` blocks are enqueued as new BFS roots; `child_database`
-blocks are recorded but not walked into. UUIDs may be dashed or
-undashed.
+**Per page**, two requests where the block walk needed one per container
+block:
 
-**Inbox**: walk `getNotificationLog` per visible space, then fetch
-every referenced page via the official API. Requires
-`notion_unofficial`.
+1. `GET /v1/pages/{id}` — properties, parent, icon, cover, `in_trash`.
+2. `GET /v1/pages/{id}/markdown` — the body, already rendered.
 
-```sh
-notion-download --out ~/backups/notion --inbox
-notion-download --out ~/backups/notion --inbox --space <space_id>
-```
+Plus `GET /v1/comments?block_id={page_id}` when comments are enabled;
+one call returns the page's whole discussion set, including threads
+anchored to blocks inside it.
 
-**Single page**: fetch just one page (handy for snapshot tests).
+Measured over 12 pages of a real workspace: the old block walk needed a
+median of 11 requests per page (≥60 on the deepest), 241 in total
+against 36 for the same pages now.
 
-```sh
-notion-download --out ~/backups/notion --page <page_id>
-```
+**The block tree is not mirrored.** There is no `blocks` table and no
+block renderer. Notion renders the page; we store what it returns.
 
-## Reliability
+## The one rule about stored markdown
 
-`429`/`502`/`503`/`504` responses are retried (with `Retry-After` /
-exponential backoff) centrally by the shared `latchkey_curl` chokepoint,
-bounded by the source's `extract_params` give-up policy. Per-page errors
-are logged and the BFS continues — one bad page doesn't kill the whole
-mirror.
+**Never store a Notion file URL as returned.** Every Notion-hosted file
+link is pre-signed and re-minted on each fetch, valid about an hour. Two
+fetches of an unchanged page differ only in `X-Amz-Signature` and
+friends — proven against a live page whose `last_edited_time` had not
+moved.
+
+Left alone, that makes an unchanged page differ from itself every run:
+`dolt_diff_page_markdown` reports a modification, the page re-renders,
+and the `--reset-and-redownload` stability check fails on content nobody
+touched.
+
+So every signed URL is reduced to its **slot** — scheme + host + path,
+query discarded — before the body is stored (`download::slots`). The
+slot is also the CAS edge's `ref_id`, because it is the one identifier
+upstream keeps stable across both re-signing and a byte replacement.
+
+The rewrite is deliberately narrow: it fires only on a Notion file host
+**and** a signature parameter. A measured page carried 1,472 ordinary
+links with meaningful query strings (DoorDash orders, Google Docs
+`gid=`) against 26 real attachments; stripping queries indiscriminately
+would have corrupted all 1,472.
+
+## Truncation: two cases, one attribute tells them apart
+
+A response may set `truncated: true`. Every hole leaves a marker; what
+differs is whether it can be filled.
+
+| marker | means | follow-up |
+|---|---|---|
+| `<unknown url="…#id"/>` — **no `alt`** | subtree too large to inline | fetch it as its own page of markdown; it resolves |
+| `<unknown url="…#id" alt="button"/>` — **has `alt`** | a block type markdown cannot express | never resolves — the fetch returns a stub carrying the same id, an infinite regress |
+
+`alt` present ⇒ record it and stop. `alt` absent ⇒ fetch and splice.
+Unrepresentable types seen so far: `button`, `alias`, `drive`.
+
+Always read `unresolved_block_ids` rather than inferring the hole set
+from the text: an id can be listed with no marker in the body.
+
+Follow-ups are capped per page (`MAX_HOLE_FOLLOWUPS`) — one measured
+page wanted ~1,385 of them, which would otherwise dominate a run.
+
+## Most pages have no body
+
+In a random 70-page sample of a real workspace, **50 (71%) returned
+empty markdown**, and 63 of the 70 were database rows. A database row's
+content usually *is* its properties. Render must not treat an empty body
+as nothing to render; for those pages the properties table is the
+document.
+
+## Rate limits
+
+~3 requests/second per connection, plus a workspace-wide limit that
+scales with plan. `429`/`5xx` retry with `Retry-After` is handled
+centrally in `latchkey_curl`. Expect roughly one empty-body response per
+130 requests on a long walk — retry covers it, but a naive loop would
+silently truncate.
 
 ## Schema
 
-| Entity                    | Key fields                                                                                  |
-|---------------------------|---------------------------------------------------------------------------------------------|
-| `notion_official_page`    | `id`, `last_edited_time`, `parent`                                                          |
-| `notion_official_block`   | `id`, `page_id`, `type`, `last_edited_time`                                                 |
-| `notion_official_comment` | `id`, `page_id`, `discussion_id`, `parent_block_id`, `parent_page_id`, `created_time`, `last_edited_time` |
+`<root>/<name>/raw/entities.doltlite_db`:
+
+| table | holds |
+|---|---|
+| `pages` | the page object: properties, parent, `in_trash`, timestamps |
+| `page_markdown` | the body, slots not signatures |
+| `comments` | one row per comment, with `page_id` and `discussion_id` |
+| `comment_anchors` | the text a block-anchored comment hangs off |
+| `users` | display names, resolved one id at a time |
+| `notion_attachments` | CAS edge, `ref_id` = the slot |
+
+`page_markdown` is its own table so `dolt_diff_page_markdown` means
+exactly "the body changed", separate from "a property changed".
+
+## People and anchors
+
+Two things Notion does not hand over with the object that needs them.
+
+**Comment authors need nothing** — every comment carries
+`display_name.resolved_name`.
+
+**Page authors do.** A page object gives only `created_by.id`, so ids
+seen on pages, people properties and comments are resolved with
+`GET /v1/users/{id}` and cached in `users`. One request per user, once
+ever. It has to work this way: `GET /v1/users` (list all) is not
+available to a personal access token. A user that cannot be read falls
+back to an id prefix rather than failing the page.
+
+**A comment names a `block_id` and carries no quote of what it is
+about.** So `GET /v1/blocks/{id}` runs for **commented blocks only** —
+one request per commented block, not per block (11 across 25 pages in a
+measured workspace) — and the text lands in `comment_anchors`. The
+thread file opens with it as a blockquote, and it leads the thread row's
+searchable text. When `original_content_deleted` is set, the thread says
+so instead of quoting something that no longer exists.
+
+## Not built yet
+
+- Deletion pass (`filter: {in_trash: true}`), data-source row
+  enumeration, and the `entity_id_str` port (see
+  `docs/dev/entity_ids.md`, which still lists notion as pending).
+
+The design and the measurements behind it are in
+[`docs/dev/notion_redesign.md`](../../../../../docs/dev/notion_redesign.md).

@@ -15,7 +15,7 @@ use datalib_etl::http::HttpResponse;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::NotionRenderConfig;
-use datalib_etl_notion_config::{NotionApiSync, NotionConfig};
+use datalib_etl_notion_config::{NotionConfig, NotionSync};
 
 use crate::download;
 
@@ -58,7 +58,7 @@ pub fn plan_render(
 struct NotionDownload {
     id: String,
     raw_path: PathBuf,
-    sync: NotionApiSync,
+    sync: NotionSync,
     playback_root: Option<PathBuf>,
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block.
@@ -75,15 +75,10 @@ impl DataProcessor for NotionDownload {
         let entity_db = download::db_path_for(&self.raw_path);
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        // Notion has no listing endpoint; in playback mode we derive seeds by
-        // scanning the fixture tree for every synthesized page response.
-        // Outside playback we honor the configured subtree seeds verbatim.
-        let mut seeds: Vec<String> = self
-            .sync
-            .subtrees
-            .as_ref()
-            .map(|t| t.pages.clone())
-            .unwrap_or_default();
+        // `roots` narrows the mirror; empty means the whole workspace.
+        // In playback mode the fixture tree is the workspace, so seeds
+        // are derived from every synthesized page response.
+        let mut seeds: Vec<String> = self.sync.roots.clone();
         if let Some(pb) = self.playback_root.as_ref() {
             let derived = derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
             seeds.extend(derived);
@@ -95,14 +90,7 @@ impl DataProcessor for NotionDownload {
             db: Some(db),
             latchkey: self.latchkey.clone(),
             subtree_pages: seeds,
-            inbox: self.sync.inbox.as_ref().is_some_and(|i| i.enabled),
-            inbox_mirror_referenced: self
-                .sync
-                .inbox
-                .as_ref()
-                .and_then(|i| i.mirror_referenced_pages)
-                .unwrap_or(true),
-            space: self.sync.inbox.as_ref().and_then(|i| i.space.clone()),
+            max_pages: self.sync.max_pages.map(|m| m as usize),
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
@@ -110,15 +98,8 @@ impl DataProcessor for NotionDownload {
         })
         .await?;
         let summary = format!(
-            "pages(new={}/upd={}) blocks(new={}/upd={}) comments(new={}/upd={}) requests(official={}/unofficial={})",
-            s.new_pages,
-            s.upd_pages,
-            s.new_blocks,
-            s.upd_blocks,
-            s.new_comments,
-            s.upd_comments,
-            s.official_requests,
-            s.unofficial_requests,
+            "pages(new={}/upd={}) comments(new={}/upd={}) requests={}",
+            s.new_pages, s.upd_pages, s.new_comments, s.upd_comments, s.official_requests,
         );
         Ok(session.finish(ctx, summary).await)
     }
@@ -140,11 +121,11 @@ impl DataProcessor for NotionRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render::{parse_api_dir, render::render_notion_official};
+        use crate::render::{parse_api_dir, render::render_notion};
         let parsed = parse_api_dir(&self.raw_path)
             .with_context(|| format!("notion parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_notion_official(
+        render_notion(
             &parsed,
             ctx.root,
             ctx.name,
@@ -152,7 +133,7 @@ impl DataProcessor for NotionRender {
             ctx.prior_fingerprints,
             &mut on_doc,
         )
-        .context("render_notion_official")?;
+        .context("render_notion")?;
         Ok("rendered".into())
     }
 }

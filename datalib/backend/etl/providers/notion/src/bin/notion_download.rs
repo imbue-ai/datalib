@@ -25,26 +25,9 @@ struct Args {
     /// Root page id (UUID, dashed or undashed) to BFS-mirror. Repeatable.
     #[arg(long = "subtree-page", value_name = "ID")]
     subtree_page: Vec<String>,
-
-    /// Discover pages via the unofficial `getNotificationLog` endpoint.
+    /// Stop after this many pages. Omit for no limit.
     #[arg(long)]
-    inbox: bool,
-
-    /// Inbox mode: restrict to one space id (default: all visible spaces).
-    #[arg(long)]
-    space: Option<String>,
-
-    #[arg(long, default_value_t = 40)]
-    notification_page_size: u32,
-
-    #[arg(long, default_value_t = 50)]
-    max_notification_pages: u32,
-
-    #[arg(long = "inbox-type", default_values_t = vec!["unread_and_read".to_string()])]
-    inbox_type: Vec<String>,
-
-    #[arg(long, default_value_t = 5000)]
-    max_pages: usize,
+    max_pages: Option<usize>,
 
     /// Fetch a single page by UUID instead of BFS-walking a subtree.
     #[arg(long, value_name = "UUID")]
@@ -52,7 +35,7 @@ struct Args {
 
     /// Re-fetch every page in the DB whose last attempt failed (or which
     /// has a NULL payload after at least one attempt). Ignores subtree /
-    /// inbox / page.
+    /// roots / page.
     #[arg(long)]
     retry_failed: bool,
 
@@ -68,18 +51,13 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "notion-download")?;
 
-    if !args.retry_failed && args.subtree_page.is_empty() && !args.inbox && args.page.is_none() {
-        anyhow::bail!("must specify --inbox, --subtree-page, --page, or --retry-failed");
+    if !args.retry_failed && args.subtree_page.is_empty() && args.page.is_none() {
+        anyhow::bail!("must specify --subtree-page, --page, or --retry-failed");
     }
 
     let opts = FetchOptions {
         db_path: args.out.clone(),
         subtree_pages: args.subtree_page.clone(),
-        inbox: args.inbox,
-        space: args.space.clone(),
-        notification_page_size: args.notification_page_size,
-        max_notification_pages: args.max_notification_pages,
-        inbox_types: args.inbox_type.clone(),
         max_pages: args.max_pages,
         page: args.page.clone(),
         retry_failed: args.retry_failed,
@@ -93,8 +71,9 @@ async fn main() -> Result<()> {
         event = "notion_download_complete",
         new_pages = summary.new_pages,
         upd_pages = summary.upd_pages,
-        new_blocks = summary.new_blocks,
-        upd_blocks = summary.upd_blocks,
+        bodies = summary.bodies,
+        empty_bodies = summary.empty_bodies,
+        failed_bodies = summary.failed_bodies,
         new_comments = summary.new_comments,
         upd_comments = summary.upd_comments,
         skipped_pages = summary.skipped_pages,
@@ -102,7 +81,6 @@ async fn main() -> Result<()> {
         skipped_blobs = summary.skipped_blobs,
         failed_blobs = summary.failed_blobs,
         official_requests = summary.official_requests,
-        unofficial_requests = summary.unofficial_requests,
     );
     Ok(())
 }

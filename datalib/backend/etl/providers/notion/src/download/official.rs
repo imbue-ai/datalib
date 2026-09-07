@@ -1,7 +1,12 @@
 //! Notion official API client (`api.notion.com/v1`) via `latchkey curl`.
-//! Latchkey injects the Bearer token + `Notion-Version` header for the
-//! `notion` service; don't add them here or Notion 400s on duplicate.
-//! Port of `NotionOfficialClient` in `src/download/notion_official.py`.
+//!
+//! Latchkey injects the Bearer token **and** the `Notion-Version` header
+//! for the `notion` service. Do not set either here: a second
+//! `Notion-Version` does not override the stored one, it concatenates
+//! with it, and Notion rejects the pair with
+//! `"instead was \"2022-06-28, 2026-03-11\""`. The version is a
+//! property of the stored credential, so bumping it means
+//! `latchkey auth set notion -H ... -H "Notion-Version: <new>"`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -139,6 +144,60 @@ impl NotionOfficialClient {
         }
         self.request("GET", &format!("/blocks/{block_id}/children{q}"), None)
             .await
+    }
+
+    /// The page body, already rendered by Notion as enhanced markdown.
+    ///
+    /// This replaces walking the block tree: one request instead of one
+    /// per container block. The response carries `truncated` and
+    /// `unresolved_block_ids` for anything it could not inline — see
+    /// [`crate::download::markdown`] for what those mean and which of
+    /// them are worth a follow-up.
+    pub async fn get_page_markdown(&self, page_id: &str) -> Result<Value, NotionOfficialError> {
+        self.request("GET", &format!("/pages/{page_id}/markdown"), None)
+            .await
+    }
+
+    /// One user. There is deliberately no list-all counterpart:
+    /// `GET /v1/users` is unavailable to personal access tokens, which
+    /// is what this provider authenticates with, so users are resolved
+    /// one id at a time and cached.
+    pub async fn get_user(&self, user_id: &str) -> Result<Value, NotionOfficialError> {
+        self.request("GET", &format!("/users/{user_id}"), None)
+            .await
+    }
+
+    /// One block. Used only to recover the text a comment is anchored
+    /// to — the block tree itself is not mirrored.
+    pub async fn get_block(&self, block_id: &str) -> Result<Value, NotionOfficialError> {
+        self.request("GET", &format!("/blocks/{block_id}"), None)
+            .await
+    }
+
+    /// One page of `POST /v1/search`, newest-edited first.
+    ///
+    /// With a personal access token this enumerates everything its
+    /// creator can see, which is what removes the need for
+    /// hand-configured seeds. Results are page and data_source objects,
+    /// and page objects come back complete — properties included — so
+    /// for a database row with no body this single response is the
+    /// whole record.
+    pub async fn search(
+        &self,
+        start_cursor: Option<&str>,
+        in_trash: bool,
+    ) -> Result<Value, NotionOfficialError> {
+        let mut body = serde_json::json!({
+            "page_size": PAGE_SIZE,
+            "sort": { "timestamp": "last_edited_time", "direction": "descending" },
+        });
+        if in_trash {
+            body["filter"] = serde_json::json!({ "in_trash": true });
+        }
+        if let Some(c) = start_cursor {
+            body["start_cursor"] = Value::String(c.to_string());
+        }
+        self.request("POST", "/search", Some(&body)).await
     }
 
     pub async fn get_comments(

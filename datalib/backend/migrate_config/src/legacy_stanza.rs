@@ -609,8 +609,7 @@ sources:
     source:
       type: notion_api
       sync:
-        inbox: {enabled: true}
-        subtrees: {pages: ['p1']}
+        roots: ['p1']
 ",
         );
         let cfg = load_config(&cfg_path).unwrap();
@@ -805,21 +804,26 @@ sources:
         assert!(err.to_string().contains("at least one device"));
     }
 
+    /// The schema used to *reject* a notion sync that named no starting
+    /// point, because there was no way to discover pages without a
+    /// seed. `POST /v1/search` enumerates the workspace, so an empty
+    /// sync block is now the whole-workspace mirror and must load.
     #[test]
-    fn rejects_notion_sync_without_inbox_or_subtrees() {
+    fn a_notion_sync_without_roots_means_the_whole_workspace() {
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 sources:
   - name: n
     source:
       type: notion_api
-      sync:
-        inbox: {enabled: false}
+      sync: {}
 ",
         );
-        let err = load_config(&cfg_path).unwrap_err();
-        assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
-        assert!(err.to_string().contains("inbox or list at least one"));
+        let cfg = load_config(&cfg_path).expect("legacy notion config should migrate");
+        let SourceConfig::NotionApi(n) = &cfg.sources[0].source else {
+            panic!("expected notion_api");
+        };
+        assert!(n.sync.as_ref().unwrap().roots.is_empty());
     }
 
     #[test]

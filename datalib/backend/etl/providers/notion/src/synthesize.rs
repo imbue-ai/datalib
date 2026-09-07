@@ -10,7 +10,9 @@ use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Sy
 use serde_json::{json, Value};
 
 use crate::download::official::{BASE, PAGE_SIZE};
-use crate::download::{ENTITY_BLOCK, ENTITY_COMMENT, ENTITY_PAGE};
+use crate::download::{
+    ENTITY_ANCHOR_BLOCK, ENTITY_COMMENT, ENTITY_MARKDOWN, ENTITY_PAGE, ENTITY_USER,
+};
 
 pub struct NotionSynth {
     pub api_dir: PathBuf,
@@ -35,19 +37,6 @@ fn key_id(r: &Value) -> String {
         .to_string()
 }
 
-fn parent_id_of(block_raw: &Value, fallback_page_id: &str) -> String {
-    let parent = block_raw.get("parent");
-    if let Some(p) = parent {
-        if let Some(bid) = p.get("block_id").and_then(|v| v.as_str()) {
-            return bid.to_string();
-        }
-        if let Some(pid) = p.get("page_id").and_then(|v| v.as_str()) {
-            return pid.to_string();
-        }
-    }
-    fallback_page_id.to_string()
-}
-
 impl Synthesizer for NotionSynth {
     fn name(&self) -> &'static str {
         "notion"
@@ -60,8 +49,10 @@ impl Synthesizer for NotionSynth {
         let mut count = 0usize;
 
         let pages = load_latest_by_key(&self.api_dir, ENTITY_PAGE, key_id)?;
-        let blocks = load_latest_by_key(&self.api_dir, ENTITY_BLOCK, key_id)?;
+        let bodies = load_latest_by_key(&self.api_dir, ENTITY_MARKDOWN, key_id)?;
         let comments = load_latest_by_key(&self.api_dir, ENTITY_COMMENT, key_id)?;
+        let users = load_latest_by_key(&self.api_dir, ENTITY_USER, key_id)?;
+        let anchors = load_latest_by_key(&self.api_dir, ENTITY_ANCHOR_BLOCK, key_id)?;
 
         // /pages/{id}
         let mut page_ids: Vec<String> = Vec::new();
@@ -80,31 +71,28 @@ impl Synthesizer for NotionSynth {
         }
         page_ids.sort();
 
-        // Group blocks by parent id. Seed every page id so each page gets
-        // its own children fixture even when it has no recorded blocks.
-        let mut children_by_parent: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        // /pages/{id}/markdown — one per page. A page with no recorded
+        // body still gets a fixture with empty markdown, which is the
+        // common shape for a database row.
+        let body_by_page: BTreeMap<String, Value> = bodies
+            .iter()
+            .filter_map(|(id, rec)| rec.get("raw").map(|r| (id.clone(), r.clone())))
+            .collect();
         for pid in &page_ids {
-            children_by_parent.entry(pid.clone()).or_default();
-        }
-        for (_, rec) in &blocks {
-            let raw = match rec.get("raw") {
-                Some(r) => r.clone(),
-                None => continue,
-            };
-            let page_id = rec.get("page_id").and_then(|v| v.as_str()).unwrap_or("");
-            let parent = parent_id_of(&raw, page_id);
-            children_by_parent.entry(parent).or_default().push(raw);
-        }
-
-        for (parent, children) in &children_by_parent {
-            let url = format!("{BASE}/blocks/{parent}/children?page_size={PAGE_SIZE}");
-            let body = json!({
-                "object": "list",
-                "results": children,
-                "has_more": false,
-                "next_cursor": Value::Null,
+            let body = body_by_page.get(pid).cloned().unwrap_or_else(|| {
+                json!({
+                    "object": "page_markdown",
+                    "id": pid,
+                    "markdown": "",
+                    "truncated": false,
+                    "unresolved_block_ids": [],
+                })
             });
-            write_fixture(out_root, &req_get(&url), &json_response(&body))?;
+            write_fixture(
+                out_root,
+                &req_get(&format!("{BASE}/pages/{pid}/markdown")),
+                &json_response(&body),
+            )?;
             count += 1;
         }
 
@@ -136,6 +124,36 @@ impl Synthesizer for NotionSynth {
             count += 1;
         }
 
+        // /v1/users/{id} — resolved one at a time, because
+        // `GET /v1/users` is unavailable to personal access tokens.
+        for (id, rec) in &users {
+            if id.is_empty() {
+                continue;
+            }
+            let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
+            write_fixture(
+                out_root,
+                &req_get(&format!("{BASE}/users/{id}")),
+                &json_response(&raw),
+            )?;
+            count += 1;
+        }
+
+        // /v1/blocks/{id} — only for blocks a comment hangs off, which
+        // is the sole reason this provider reads a block at all.
+        for (id, rec) in &anchors {
+            if id.is_empty() {
+                continue;
+            }
+            let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
+            write_fixture(
+                out_root,
+                &req_get(&format!("{BASE}/blocks/{id}")),
+                &json_response(&raw),
+            )?;
+            count += 1;
+        }
+
         Ok(SynthesizeReport {
             fixtures_written: count,
         })
@@ -158,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn emits_pages_blocks_and_comments() {
+    fn emits_page_markdown_and_comment_fixtures() {
         let d = tempdir().unwrap();
         let api = d.path().join("notion_api");
         fs::create_dir_all(&api).unwrap();
@@ -173,34 +191,15 @@ mod tests {
             json!({"id": pid, "object": "page", "parent": {"type": "workspace"}}),
         );
 
-        // one direct child block of the page
         let mut k = Map::new();
-        k.insert("id".into(), json!("b1"));
-        k.insert("page_id".into(), json!(pid));
+        k.insert("id".into(), json!(pid));
         write_event(
             &api,
-            ENTITY_BLOCK,
+            ENTITY_MARKDOWN,
             k,
-            json!({
-                "id": "b1", "type": "paragraph", "has_children": false,
-                "parent": {"type": "page_id", "page_id": pid},
-            }),
-        );
-        // one nested block under b1
-        let mut k = Map::new();
-        k.insert("id".into(), json!("b2"));
-        k.insert("page_id".into(), json!(pid));
-        write_event(
-            &api,
-            ENTITY_BLOCK,
-            k,
-            json!({
-                "id": "b2", "type": "paragraph", "has_children": false,
-                "parent": {"type": "block_id", "block_id": "b1"},
-            }),
+            json!({"object": "page_markdown", "id": pid, "markdown": "# Hi\n", "truncated": false}),
         );
 
-        // one comment on the page
         let mut k = Map::new();
         k.insert("id".into(), json!("c1"));
         k.insert("page_id".into(), json!(pid));
@@ -208,39 +207,44 @@ mod tests {
             &api,
             ENTITY_COMMENT,
             k,
-            json!({"id": "c1", "rich_text": []}),
+            json!({"id": "c1", "object": "comment", "discussion_id": "d1"}),
         );
 
-        let out = d.path().join("playback");
+        let out = d.path().join("fixtures");
         let report = NotionSynth::new(&api).synthesize(&out).unwrap();
-        // 1 page + (children for p1 and b1 = 2) + 1 comments = 4
-        assert_eq!(report.fixtures_written, 4);
+        assert_eq!(report.fixtures_written, 3, "page + markdown + comments");
 
-        // page fixture
-        let req = req_get(&format!("{BASE}/pages/{pid}"));
-        let p = out.join("notion").join(fixture_key(&req));
-        assert!(p.exists());
+        for url in [
+            format!("{BASE}/pages/{pid}"),
+            format!("{BASE}/pages/{pid}/markdown"),
+            format!("{BASE}/comments?block_id={pid}&page_size={PAGE_SIZE}"),
+        ] {
+            let path = out.join("notion").join(fixture_key(&req_get(&url)));
+            assert!(path.exists(), "missing fixture for {url}");
+        }
+    }
 
-        // children of page contains b1
-        let url = format!("{BASE}/blocks/{pid}/children?page_size={PAGE_SIZE}");
-        let p = out.join("notion").join(fixture_key(&req_get(&url)));
-        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+    /// A page with no stored body still needs a markdown fixture —
+    /// otherwise playback 404s on the majority of a real workspace,
+    /// where most pages are database rows with no body at all.
+    #[test]
+    fn a_page_with_no_body_still_gets_an_empty_markdown_fixture() {
+        let d = tempdir().unwrap();
+        let api = d.path().join("notion_api");
+        fs::create_dir_all(&api).unwrap();
+        let pid = "row1";
+        let mut k = Map::new();
+        k.insert("id".into(), json!(pid));
+        write_event(&api, ENTITY_PAGE, k, json!({"id": pid, "object": "page"}));
+
+        let out = d.path().join("fixtures");
+        NotionSynth::new(&api).synthesize(&out).unwrap();
+        let path = out.join("notion").join(fixture_key(&req_get(&format!(
+            "{BASE}/pages/{pid}/markdown"
+        ))));
+        assert!(path.exists(), "body-less page must still have a fixture");
+        let resp: HttpResponse = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let body: Value = serde_json::from_slice(&resp.body).unwrap();
-        assert_eq!(body["results"][0]["id"], "b1");
-        assert_eq!(body["has_more"], false);
-
-        // children of b1 contains b2
-        let url = format!("{BASE}/blocks/b1/children?page_size={PAGE_SIZE}");
-        let p = out.join("notion").join(fixture_key(&req_get(&url)));
-        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
-        let body: Value = serde_json::from_slice(&resp.body).unwrap();
-        assert_eq!(body["results"][0]["id"], "b2");
-
-        // comments
-        let url = format!("{BASE}/comments?block_id={pid}&page_size={PAGE_SIZE}");
-        let p = out.join("notion").join(fixture_key(&req_get(&url)));
-        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
-        let body: Value = serde_json::from_slice(&resp.body).unwrap();
-        assert_eq!(body["results"][0]["id"], "c1");
+        assert_eq!(body["markdown"], "");
     }
 }

@@ -15,7 +15,7 @@ use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, NotionImageAttachmentRow, DATA_TABLES};
+use super::schema_raw::{full_ddl, NotionAttachmentRow, DATA_TABLES};
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
 #[derive(Clone, Debug)]
@@ -24,10 +24,20 @@ pub struct RawDb {
     cas: BlobCas,
 }
 
-/// `(id, parent_id, last_edited_time, payload_json)` — one row for
-/// [`RawDb::upsert_pages`]. `payload_json` is `None` for discovery
-/// upserts that must not clobber a previously-fetched body.
-pub type PageUpsertRow = (String, Option<String>, Option<String>, Option<String>);
+/// One row for [`RawDb::upsert_pages`]. `payload` is `None` for a
+/// discovery upsert that records a page exists without clobbering a
+/// body already fetched.
+#[derive(Debug, Clone, Default)]
+pub struct PageUpsert {
+    pub id: String,
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
+    pub in_trash: bool,
+    pub created_time: Option<String>,
+    pub last_edited_time: Option<String>,
+    pub url: Option<String>,
+    pub payload: Option<String>,
+}
 
 /// What the download loop wants to know about a page before it decides
 /// whether to issue a detail fetch.
@@ -37,16 +47,44 @@ pub struct PageState {
     pub has_payload: bool,
 }
 
-/// One row of input to [`RawDb::upsert_blocks`]. `page_order` is the
-/// 0-based index of this block within its owning page's BFS walk.
-#[derive(Debug, Clone)]
-pub struct BlockUpsert {
+/// One page's body for [`RawDb::upsert_page_markdown`].
+///
+/// `markdown` must already have had its attachment URLs reduced to
+/// slots (`download::slots::rewrite`). Storing what the API returned
+/// would make an unchanged page differ from itself on every run.
+#[derive(Debug, Clone, Default)]
+pub struct PageMarkdownUpsert {
     pub id: String,
+    pub markdown: String,
+    pub truncated: bool,
+    /// JSON array of block ids the response could not inline.
+    pub unresolved_block_ids: Option<String>,
+    /// The `last_edited_time` this body was fetched at, so a later run
+    /// can tell whether the stored body is current without re-fetching.
+    pub source_last_edited_time: Option<String>,
+}
+
+/// One anchor for [`RawDb::upsert_comment_anchors`]: the block a
+/// comment hangs off, and the text it hangs off of.
+#[derive(Debug, Clone, Default)]
+pub struct CommentAnchorUpsert {
+    pub id: String,
+    pub page_id: Option<String>,
+    pub block_type: Option<String>,
+    pub plain_text: Option<String>,
+}
+
+/// One comment for [`RawDb::upsert_comments`].
+#[derive(Debug, Clone, Default)]
+pub struct CommentUpsert {
+    pub id: String,
+    pub discussion_id: Option<String>,
+    pub parent_type: Option<String>,
     pub parent_id: Option<String>,
     pub page_id: Option<String>,
-    pub page_order: Option<i64>,
+    pub created_time: Option<String>,
     pub last_edited_time: Option<String>,
-    pub payload: Option<String>,
+    pub payload: String,
 }
 
 impl RawDb {
@@ -105,119 +143,246 @@ impl RawDb {
     /// list pass shouldn't clobber a freshly-fetched detail body with a
     /// truncated list-only payload). When the incoming
     /// `last_edited_time` differs, payload is overwritten verbatim.
-    pub async fn upsert_pages(&self, rows: &[PageUpsertRow]) -> Result<()> {
+    pub async fn upsert_pages(&self, rows: &[PageUpsert]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin pages tx")?;
-        for (id, parent_id, last_edited_time, payload) in rows {
-            let sql = if payload.is_some() {
-                "INSERT INTO pages (id, parent_id, last_edited_time, payload)
-                 VALUES (?, ?, ?, jsonb(?))
+        for r in rows {
+            let sql = if r.payload.is_some() {
+                "INSERT INTO pages (id, parent_type, parent_id, in_trash, created_time, last_edited_time, url, payload)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?))
                  ON CONFLICT(id) DO UPDATE SET
+                    parent_type = COALESCE(excluded.parent_type, pages.parent_type),
                     parent_id = COALESCE(excluded.parent_id, pages.parent_id),
+                    in_trash = excluded.in_trash,
+                    created_time = COALESCE(excluded.created_time, pages.created_time),
                     last_edited_time = excluded.last_edited_time,
+                    url = COALESCE(excluded.url, pages.url),
                     payload = excluded.payload"
             } else {
-                "INSERT INTO pages (id, parent_id, last_edited_time)
-                 VALUES (?, ?, ?)
+                "INSERT INTO pages (id, parent_type, parent_id, in_trash, created_time, last_edited_time, url)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET
+                    parent_type = COALESCE(excluded.parent_type, pages.parent_type),
                     parent_id = COALESCE(excluded.parent_id, pages.parent_id),
-                    last_edited_time = COALESCE(excluded.last_edited_time, pages.last_edited_time)"
+                    in_trash = excluded.in_trash,
+                    created_time = COALESCE(excluded.created_time, pages.created_time),
+                    last_edited_time = COALESCE(excluded.last_edited_time, pages.last_edited_time),
+                    url = COALESCE(excluded.url, pages.url)"
             };
             let mut q = sqlx::query(sql)
-                .bind(id)
-                .bind(parent_id)
-                .bind(last_edited_time);
-            if let Some(p) = payload {
+                .bind(&r.id)
+                .bind(&r.parent_type)
+                .bind(&r.parent_id)
+                .bind(r.in_trash as i64)
+                .bind(&r.created_time)
+                .bind(&r.last_edited_time)
+                .bind(&r.url);
+            if let Some(p) = &r.payload {
                 q = q.bind(p);
             }
             q.execute(&mut *tx)
                 .await
-                .with_context(|| format!("upsert page {id}"))?;
-            // Sidecar update: success attempt when payload arrived,
-            // bare pre-seed (attempt_count=0) otherwise.
-            if payload.is_some() {
-                dr::record_object_attempt(&mut tx, "pages", id, None).await?;
+                .with_context(|| format!("upsert page {}", r.id))?;
+            if r.payload.is_some() {
+                dr::record_object_attempt(&mut tx, "pages", &r.id, None).await?;
             } else {
                 sqlx::query("INSERT OR IGNORE INTO pages_bookkeeping (id) VALUES (?)")
-                    .bind(id)
+                    .bind(&r.id)
                     .execute(&mut *tx)
                     .await
-                    .with_context(|| format!("pre-seed pages_bookkeeping {id}"))?;
+                    .with_context(|| format!("pre-seed pages_bookkeeping {}", r.id))?;
             }
         }
         tx.commit().await.context("commit pages tx")?;
         Ok(())
     }
 
-    pub async fn upsert_blocks(&self, rows: &[BlockUpsert]) -> Result<()> {
+    pub async fn upsert_page_markdown(&self, rows: &[PageMarkdownUpsert]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin blocks tx")?;
-        for BlockUpsert {
-            id,
-            parent_id,
-            page_id,
-            page_order,
-            last_edited_time,
-            payload,
-        } in rows
-        {
+        let mut tx = self.pool.begin().await.context("begin page_markdown tx")?;
+        for r in rows {
             sqlx::query(
-                "INSERT INTO blocks (id, parent_id, page_id, page_order, last_edited_time, payload)
-                 VALUES (?, ?, ?, ?, ?, jsonb(?))
+                "INSERT INTO page_markdown (id, markdown, truncated, unresolved_block_ids, source_last_edited_time)
+                 VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET
-                    parent_id = COALESCE(excluded.parent_id, blocks.parent_id),
-                    page_id = COALESCE(excluded.page_id, blocks.page_id),
-                    page_order = COALESCE(excluded.page_order, blocks.page_order),
-                    last_edited_time = excluded.last_edited_time,
-                    payload = excluded.payload",
+                    markdown = excluded.markdown,
+                    truncated = excluded.truncated,
+                    unresolved_block_ids = excluded.unresolved_block_ids,
+                    source_last_edited_time = excluded.source_last_edited_time",
             )
-            .bind(id)
-            .bind(parent_id)
-            .bind(page_id)
-            .bind(page_order)
-            .bind(last_edited_time)
-            .bind(payload)
+            .bind(&r.id)
+            .bind(&r.markdown)
+            .bind(r.truncated as i64)
+            .bind(&r.unresolved_block_ids)
+            .bind(&r.source_last_edited_time)
             .execute(&mut *tx)
             .await
-            .with_context(|| format!("upsert block {id}"))?;
-            dr::record_object_attempt(&mut tx, "blocks", id, None).await?;
+            .with_context(|| format!("upsert page_markdown {}", r.id))?;
+            dr::record_object_attempt(&mut tx, "page_markdown", &r.id, None).await?;
         }
-        tx.commit().await.context("commit blocks tx")?;
+        tx.commit().await.context("commit page_markdown tx")?;
         Ok(())
     }
 
-    pub async fn upsert_comments(
-        &self,
-        rows: &[(String, String, Option<String>, String)],
-    ) -> Result<()> {
+    pub async fn upsert_comments(&self, rows: &[CommentUpsert]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin comments tx")?;
-        for (id, parent_id, page_id, payload) in rows {
+        for r in rows {
             sqlx::query(
-                "INSERT INTO comments (id, parent_id, page_id, payload)
-                 VALUES (?, ?, ?, jsonb(?))
+                "INSERT INTO comments (id, discussion_id, parent_type, parent_id, page_id, created_time, last_edited_time, payload)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?))
                  ON CONFLICT(id) DO UPDATE SET
+                    discussion_id = COALESCE(excluded.discussion_id, comments.discussion_id),
+                    parent_type = excluded.parent_type,
                     parent_id = excluded.parent_id,
                     page_id = COALESCE(excluded.page_id, comments.page_id),
+                    created_time = COALESCE(excluded.created_time, comments.created_time),
+                    last_edited_time = excluded.last_edited_time,
                     payload = excluded.payload",
             )
-            .bind(id)
-            .bind(parent_id)
-            .bind(page_id)
-            .bind(payload)
+            .bind(&r.id)
+            .bind(&r.discussion_id)
+            .bind(&r.parent_type)
+            .bind(&r.parent_id)
+            .bind(&r.page_id)
+            .bind(&r.created_time)
+            .bind(&r.last_edited_time)
+            .bind(&r.payload)
             .execute(&mut *tx)
             .await
-            .with_context(|| format!("upsert comment {id}"))?;
-            dr::record_object_attempt(&mut tx, "comments", id, None).await?;
+            .with_context(|| format!("upsert comment {}", r.id))?;
+            dr::record_object_attempt(&mut tx, "comments", &r.id, None).await?;
         }
         tx.commit().await.context("commit comments tx")?;
         Ok(())
+    }
+
+    pub async fn upsert_users(&self, rows: &[(String, Option<String>, String)]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin users tx")?;
+        for (id, name, payload) in rows {
+            sqlx::query(
+                "INSERT INTO users (id, name, payload) VALUES (?, ?, jsonb(?))
+                 ON CONFLICT(id) DO UPDATE SET
+                    name = COALESCE(excluded.name, users.name),
+                    payload = excluded.payload",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(payload)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("upsert user {id}"))?;
+            dr::record_object_attempt(&mut tx, "users", id, None).await?;
+        }
+        tx.commit().await.context("commit users tx")?;
+        Ok(())
+    }
+
+    /// Ids already stored, so a run only spends a request on a user it
+    /// has never seen.
+    pub async fn known_user_ids(&self) -> Result<HashSet<String>> {
+        let rows = sqlx::query("SELECT id FROM users WHERE payload IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .context("select known user ids")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("id").ok())
+            .collect())
+    }
+
+    /// `(user_id, display name)` for every user we resolved.
+    pub async fn load_user_names(&self) -> Result<HashMap<String, String>> {
+        let rows = sqlx::query("SELECT id, name FROM users WHERE name IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .context("select user names")?;
+        let mut out = HashMap::new();
+        for r in rows {
+            if let (Ok(id), Ok(name)) =
+                (r.try_get::<String, _>("id"), r.try_get::<String, _>("name"))
+            {
+                out.insert(id, name);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn upsert_comment_anchors(&self, rows: &[CommentAnchorUpsert]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin comment_anchors tx")?;
+        for CommentAnchorUpsert {
+            id,
+            page_id,
+            block_type,
+            plain_text: text,
+        } in rows
+        {
+            sqlx::query(
+                "INSERT INTO comment_anchors (id, page_id, block_type, plain_text)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                    page_id = COALESCE(excluded.page_id, comment_anchors.page_id),
+                    block_type = excluded.block_type,
+                    plain_text = excluded.plain_text",
+            )
+            .bind(id)
+            .bind(page_id)
+            .bind(block_type)
+            .bind(text)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("upsert comment anchor {id}"))?;
+            dr::record_object_attempt(&mut tx, "comment_anchors", id, None).await?;
+        }
+        tx.commit().await.context("commit comment_anchors tx")?;
+        Ok(())
+    }
+
+    pub async fn known_anchor_ids(&self) -> Result<HashSet<String>> {
+        let rows = sqlx::query("SELECT id FROM comment_anchors")
+            .fetch_all(&self.pool)
+            .await
+            .context("select known anchor ids")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("id").ok())
+            .collect())
+    }
+
+    /// `(block_id, anchor text)` for every block a comment hangs off.
+    pub async fn load_comment_anchors(&self) -> Result<HashMap<String, String>> {
+        let rows = sqlx::query(
+            "SELECT id, plain_text FROM comment_anchors WHERE plain_text IS NOT NULL AND plain_text <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select comment anchors")?;
+        let mut out = HashMap::new();
+        for r in rows {
+            if let (Ok(id), Ok(t)) = (
+                r.try_get::<String, _>("id"),
+                r.try_get::<String, _>("plain_text"),
+            ) {
+                out.insert(id, t);
+            }
+        }
+        Ok(out)
     }
 
     pub async fn record_page_error(&self, id: &str, err: &str) -> Result<()> {
@@ -239,55 +404,40 @@ impl RawDb {
         dr::load_payloads(&self.pool, "pages").await
     }
 
-    /// Stored child-page block ids for `page_id`. Used by the
-    /// "unchanged page" skip path: when a page's `last_edited_time`
-    /// hasn't moved since our last fetch, we elide the block walk —
-    /// but the BFS still needs to recurse into known children in case
-    /// a *child*'s `last_edited_time` advanced even when the parent's
-    /// did not.
-    pub async fn stored_child_page_ids(&self, page_id: &str) -> Result<Vec<String>> {
-        let rows = sqlx::query(
-            "SELECT json_extract(payload, '$.id') AS id \
-             FROM blocks \
-             WHERE page_id = ? \
-               AND json_extract(payload, '$.type') = 'child_page' \
-               AND payload IS NOT NULL",
-        )
-        .bind(page_id)
-        .fetch_all(&self.pool)
-        .await
-        .context("select stored child_page block ids")?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            if let Ok(id) = r.try_get::<String, _>("id") {
-                out.push(id);
-            }
-        }
-        Ok(out)
+    /// Child pages linked from `page_id`'s stored body.
+    ///
+    /// Used by the "unchanged page" skip path: when a page's
+    /// `last_edited_time` hasn't moved we don't re-fetch its markdown,
+    /// but the walk still has to descend into known children in case a
+    /// *child* moved when the parent didn't.
+    pub async fn stored_child_pages(&self, page_id: &str) -> Result<Vec<String>> {
+        let row = sqlx::query("SELECT markdown FROM page_markdown WHERE id = ?")
+            .bind(page_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("select stored markdown for child discovery")?;
+        let Some(row) = row else {
+            return Ok(Vec::new());
+        };
+        let md: String = row.try_get("markdown").unwrap_or_default();
+        Ok(super::markdown::parse(&serde_json::json!({ "markdown": md })).child_pages)
     }
 
-    pub async fn load_blocks(&self) -> Result<Vec<(Value, Option<String>)>> {
-        // ORDER BY (page_id, page_order) reproduces BFS discovery
-        // order from download/mod.rs::walk_page_blocks; render relies
-        // on this for section / toggle layout. `id` ties the tail so
-        // results stay deterministic when page_order is NULL.
-        let rows = sqlx::query(
-            "SELECT json(payload) AS payload, page_id FROM blocks WHERE payload IS NOT NULL \
-             ORDER BY page_id, page_order, id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("select blocks")?;
+    /// Every stored page body, as `(page_id, markdown)`.
+    pub async fn load_page_markdown(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT id, markdown FROM page_markdown ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .context("select page_markdown")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let payload: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
+            let (Ok(id), Ok(md)) = (
+                r.try_get::<String, _>("id"),
+                r.try_get::<String, _>("markdown"),
+            ) else {
+                continue;
             };
-            let page_id: Option<String> = r.try_get("page_id").ok();
-            if let Ok(v) = serde_json::from_str::<Value>(&payload) {
-                out.push((v, page_id));
-            }
+            out.push((id, md));
         }
         Ok(out)
     }
@@ -314,25 +464,25 @@ impl RawDb {
     }
 
     /// Have we already stored bytes for this image-block's ref_id?
-    /// One SELECT against `notion_image_attachments` — the universal
+    /// One SELECT against `notion_attachments` — the universal
     /// CAS-edge "have we got these bytes yet?" skip-check shape every
     /// other ported provider uses (`wa_media_files`, `slack_attachments`,
     /// …). NULL `blake3` means "we know the ref exists but haven't
     /// fetched bytes yet" — returns false so the caller fetches.
     pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
         let row = sqlx::query(
-            "SELECT 1 FROM notion_image_attachments \
+            "SELECT 1 FROM notion_attachments \
              WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1",
         )
         .bind(ref_id)
         .fetch_optional(&self.pool)
         .await
-        .context("notion_image_attachments skip-check")?;
+        .context("notion_attachments skip-check")?;
         Ok(row.is_some())
     }
 
     /// Hash + store the bytes in the per-source CAS, then land an edge
-    /// row on `notion_image_attachments`. No writes to the shared
+    /// row on `notion_attachments`. No writes to the shared
     /// `blob_refs` table — Notion uses the per-provider edge shape
     /// every other provider settled on.
     pub async fn store_blob(
@@ -343,9 +493,9 @@ impl RawDb {
         bytes: &[u8],
     ) -> Result<String> {
         let hash = self.cas.put(bytes, content_type).await?;
-        let edge = NotionImageAttachmentRow {
-            id: NotionImageAttachmentRow::pk_recipe(block_id, ref_id),
-            block_id: block_id.to_string(),
+        let edge = NotionAttachmentRow {
+            id: NotionAttachmentRow::pk_recipe(block_id, ref_id),
+            page_id: block_id.to_string(),
             ref_id: ref_id.to_string(),
             blake3: Some(hash.clone()),
         };
@@ -354,11 +504,9 @@ impl RawDb {
             .pool
             .begin()
             .await
-            .context("begin notion_image_attachments tx")?;
+            .context("begin notion_attachments tx")?;
         datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
-        tx.commit()
-            .await
-            .context("commit notion_image_attachments tx")?;
+        tx.commit().await.context("commit notion_attachments tx")?;
         Ok(hash)
     }
 
@@ -367,9 +515,9 @@ impl RawDb {
     /// "we know about this attachment but haven't pulled bytes" —
     /// blake3 stays NULL until the CAS write lands.
     pub async fn record_blob_error(&self, block_id: &str, ref_id: &str) -> Result<()> {
-        let edge = NotionImageAttachmentRow {
-            id: NotionImageAttachmentRow::pk_recipe(block_id, ref_id),
-            block_id: block_id.to_string(),
+        let edge = NotionAttachmentRow {
+            id: NotionAttachmentRow::pk_recipe(block_id, ref_id),
+            page_id: block_id.to_string(),
             ref_id: ref_id.to_string(),
             blake3: None,
         };
@@ -390,14 +538,18 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
             let pages = db.load_pages().await?;
-            let blocks = db.load_blocks().await?;
+            let page_markdown = db.load_page_markdown().await?;
             let comments = db.load_comments().await?;
+            let user_names = db.load_user_names().await?;
+            let comment_anchors = db.load_comment_anchors().await?;
             let blobs_by_page =
-                load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path), &blocks).await?;
+                load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path)).await?;
             Ok::<_, anyhow::Error>(LoadedRaw {
                 pages,
-                blocks,
+                page_markdown,
                 comments,
+                user_names,
+                comment_anchors,
                 blobs_by_page,
             })
         })
@@ -410,7 +562,7 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type,
            NULL AS upstream_name
-      FROM notion_image_attachments
+      FROM notion_attachments
      WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Build the per-page BlobBundle map render reads from. Walks every
@@ -422,23 +574,25 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
 async fn load_blobs_by_page(
     refs_pool: &SqlitePool,
     cas_path: &Path,
-    blocks: &[(Value, Option<String>)],
 ) -> Result<HashMap<String, BlobBundle>> {
+    // The edge table already says which slots belong to which page, so
+    // this reads it directly rather than re-deriving the mapping from
+    // block payloads the way it had to when blocks were mirrored.
     let mut by_page: HashMap<String, Vec<String>> = HashMap::new();
-    for (block, page_id) in blocks {
-        let Some(page_id) = page_id.as_deref() else {
+    let rows = sqlx::query(
+        "SELECT page_id, ref_id FROM notion_attachments WHERE blake3 IS NOT NULL ORDER BY page_id, ref_id",
+    )
+    .fetch_all(refs_pool)
+    .await
+    .context("select notion_attachments for render")?;
+    for r in rows {
+        let (Ok(page_id), Ok(ref_id)) = (
+            r.try_get::<String, _>("page_id"),
+            r.try_get::<String, _>("ref_id"),
+        ) else {
             continue;
         };
-        if block.get("type").and_then(|v| v.as_str()) != Some("image") {
-            continue;
-        }
-        let Some(block_id) = block.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        by_page
-            .entry(page_id.to_string())
-            .or_default()
-            .push(format!("{block_id}:image"));
+        by_page.entry(page_id).or_default().push(ref_id);
     }
     if by_page.is_empty() || !cas_path.is_file() {
         return Ok(HashMap::new());
@@ -470,15 +624,22 @@ async fn load_blobs_by_page(
     Ok(out)
 }
 
-/// Bag of payload arrays returned by [`block_on_load_all`]. Attachment
-/// bytes arrive per-page in `blobs_by_page` — one `BlobBundle` per
-/// page that has at least one image block whose bytes are in the
-/// CAS — same shape slack / whatsapp / email use.
+/// Bag of payloads returned by [`block_on_load_all`]. Attachment bytes
+/// arrive per-page in `blobs_by_page` — one `BlobBundle` per page with
+/// at least one attachment in the CAS — the same shape slack /
+/// whatsapp / email use.
 #[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub pages: Vec<Value>,
-    pub blocks: Vec<(Value, Option<String>)>,
+    /// `(page_id, markdown)` — bodies as Notion rendered them, with
+    /// attachment URLs already reduced to slots.
+    pub page_markdown: Vec<(String, String)>,
     pub comments: Vec<(Value, Option<String>)>,
+    /// `user_id -> display name`, for the authors Notion does not
+    /// resolve inline (page `created_by`, people properties).
+    pub user_names: HashMap<String, String>,
+    /// `block_id -> the text a comment on that block hangs off`.
+    pub comment_anchors: HashMap<String, String>,
     pub blobs_by_page: HashMap<String, BlobBundle>,
 }
 
@@ -503,12 +664,13 @@ mod tests {
         let db = RawDb::open(&dir.path().join("x.doltlite_db"))
             .await
             .unwrap();
-        db.upsert_pages(&[(
-            "p1".into(),
-            Some("root".into()),
-            Some("2026-05-21T19:37:00Z".into()),
-            Some(serde_json::to_string(&json!({"id": "p1", "title": "hi"})).unwrap()),
-        )])
+        db.upsert_pages(&[PageUpsert {
+            id: "p1".into(),
+            parent_id: Some("root".into()),
+            last_edited_time: Some("2026-05-21T19:37:00Z".into()),
+            payload: Some(serde_json::to_string(&json!({"id": "p1", "title": "hi"})).unwrap()),
+            ..Default::default()
+        }])
         .await
         .unwrap();
         let states = db.page_states().await.unwrap();
@@ -520,11 +682,11 @@ mod tests {
 
     #[tokio::test]
     async fn store_blob_succeeds_and_records_edge() {
-        // Regression: `notion_image_attachments` was created without its
+        // Regression: `notion_attachments` was created without its
         // paired `_bookkeeping` sidecar (the table was missing from
         // DATA_TABLES, unlike every other provider's CAS-edge table). So
         // `store_blob` -> `bulk_upsert_in_tx` -> `bulk_upsert_bookkeeping`
-        // failed with "no such table: notion_image_attachments_bookkeeping"
+        // failed with "no such table: notion_attachments_bookkeeping"
         // and the fetched image bytes were dropped on every run.
         let dir = tempfile::tempdir().unwrap();
         let db = RawDb::open(&dir.path().join("blob.doltlite_db"))
@@ -566,12 +728,13 @@ mod tests {
             .await
             .unwrap();
         db.record_page_error("p1", "fail").await.unwrap();
-        db.upsert_pages(&[(
-            "p1".into(),
-            None,
-            Some("2026-01-01T00:00:00Z".into()),
-            Some("{}".into()),
-        )])
+        db.upsert_pages(&[PageUpsert {
+            id: "p1".into(),
+            parent_id: None,
+            last_edited_time: Some("2026-01-01T00:00:00Z".into()),
+            payload: Some("{}".into()),
+            ..Default::default()
+        }])
         .await
         .unwrap();
         let failed = db.failed_page_ids().await.unwrap();
@@ -588,12 +751,13 @@ mod tests {
         let db = RawDb::open(&dir.path().join("j.doltlite_db"))
             .await
             .unwrap();
-        db.upsert_pages(&[(
-            "p1".into(),
-            None,
-            Some("2026-01-01T00:00:00Z".into()),
-            Some(serde_json::to_string(&json!({"a": [1, 2, 3], "b": "hi"})).unwrap()),
-        )])
+        db.upsert_pages(&[PageUpsert {
+            id: "p1".into(),
+            parent_id: None,
+            last_edited_time: Some("2026-01-01T00:00:00Z".into()),
+            payload: Some(serde_json::to_string(&json!({"a": [1, 2, 3], "b": "hi"})).unwrap()),
+            ..Default::default()
+        }])
         .await
         .unwrap();
         let row = sqlx::query("SELECT typeof(payload) AS t FROM pages WHERE id='p1'")

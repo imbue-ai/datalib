@@ -1,95 +1,81 @@
-//! Provider-owned config schema for the `notion_api` source (Program A
-//! goal #1). Schema-only (serde + anyhow), so the orchestrator and `http`
-//! can name `NotionConfig` without linking the provider.
+//! Provider-owned config schema for the `notion_api` source. Schema-only
+//! (serde + anyhow), so the orchestrator and `http` can name
+//! `NotionConfig` without linking the provider.
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The notion-owned slice of a `notion_api` source. `sync:` present → live
-/// Notion mirror (the download path); absent → no download wave, and
-/// render reads whatever an earlier run already mirrored.
+/// The notion-owned slice of a `notion_api` source. `sync:` present →
+/// live Notion mirror (the download path); absent → no download wave,
+/// and render reads whatever an earlier run already mirrored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotionConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
-    /// Which latchkey identity this source mirrors. Composed only by the
-    /// providers that authenticate through the `latchkey` CLI, and
-    /// forwarded whole to the download client — see [`LatchkeySettings`].
+    /// Which latchkey identity this source mirrors. The stored
+    /// credential must carry both the bearer token and the
+    /// `Notion-Version` header: the two cannot be split, because a
+    /// second `Notion-Version` on the wire concatenates with the stored
+    /// one and Notion rejects the pair.
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
-    pub sync: Option<NotionApiSync>,
+    pub sync: Option<NotionSync>,
 }
 
 impl NotionConfig {
-    /// Per-source sync constraint (moved out of `core::config::Config::validate`):
-    /// when `sync:` is present it must enable the inbox or list at least one
-    /// subtree page, else there is nothing to seed the BFS with.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
         if let Some(sync) = &self.sync {
-            let inbox_on = sync.inbox.as_ref().is_some_and(|i| i.enabled);
-            let subtrees_on = sync.subtrees.as_ref().is_some_and(|t| !t.pages.is_empty());
-            if !inbox_on && !subtrees_on {
-                return Err(anyhow::anyhow!(
-                    "notion_api source sync: must enable inbox or list at least one \
-                     subtree page"
-                ));
-            }
+            sync.validate()?;
         }
         Ok(())
     }
 }
 
-/// Notion sync knobs (inbox discovery + explicit subtree seeds).
+/// Notion sync knobs.
+///
+/// There is deliberately no "you must name a starting point" rule. A
+/// personal access token sees what its creator sees, and `POST
+/// /v1/search` enumerates that, so the useful default is the whole
+/// workspace. `roots` narrows it; it never enables it.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct NotionApiSync {
+pub struct NotionSync {
+    /// Re-examine anything edited within this many days even when the
+    /// stored watermark is newer. Zero (or absent) means no floor.
     #[serde(default)]
-    pub refresh_window_days: Option<i64>,
+    pub refresh_window_days: Option<u32>,
+    /// Optional allowlist. Each entry is a page id or a paste-able
+    /// browser URL; the mirror is then that page plus everything under
+    /// it (child pages, and the rows of databases embedded in it).
+    /// Empty means the whole workspace.
     #[serde(default)]
-    pub inbox: Option<NotionInbox>,
+    pub roots: Vec<String>,
+    /// Stop after this many pages. A guard against a mis-scoped run,
+    /// not a tuning knob.
     #[serde(default)]
-    pub subtrees: Option<NotionSubtrees>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NotionInbox {
+    pub max_pages: Option<u32>,
     #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub types: Option<Vec<String>>,
-    #[serde(default)]
-    pub notification_page_size: Option<i64>,
-    #[serde(default)]
-    pub max_notification_pages: Option<i64>,
-    #[serde(default)]
-    pub space: Option<String>,
-    /// When `false`, walk the inbox to discover referenced page IDs (and
-    /// log them) but don't BFS into them. Useful for keeping the inbox
-    /// signal without dragging hundreds of unrelated pages through the
-    /// mirror. Defaults to `true` for back-compat.
-    #[serde(default)]
-    pub mirror_referenced_pages: Option<bool>,
+    pub comments: bool,
+    #[serde(default = "default_true")]
+    pub attachments: bool,
+    /// Walk databases found under a root and mirror their rows.
+    #[serde(default = "default_true")]
+    pub databases: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct NotionSubtrees {
-    /// Page IDs at the root of each subtree to walk. Accepts bare page
-    /// IDs (dashed or undashed) or paste-able browser URLs
-    /// (`https://www.notion.so/<workspace>/<title>-<hex32>`); URLs are
-    /// reduced to the trailing 32-hex token before being passed through
-    /// `format_uuid` in the notion extractor.
-    #[serde(default)]
-    pub pages: Vec<String>,
-    #[serde(default)]
-    pub max_pages: Option<i64>,
+impl NotionSync {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(0) = self.max_pages {
+            return Err(anyhow::anyhow!(
+                "notion_api sync.max_pages = 0 mirrors nothing; omit it for no limit"
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn default_true() -> bool {
@@ -105,79 +91,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn translate_only_config_validates() {
-        // No `sync:` → no download wave; the inbox-or-subtree rule
-        // doesn't apply.
+    fn render_only_config_validates() {
         assert!(NotionConfig::default().validate().is_ok());
     }
 
+    /// The rule this replaces: the old schema *rejected* a sync block
+    /// that named neither an inbox nor a subtree page, because there
+    /// was no way to discover pages without a seed. Search removed that
+    /// constraint, so an empty sync block is now the whole-workspace
+    /// mirror and must validate.
     #[test]
-    fn sync_with_inbox_enabled_validates() {
+    fn empty_sync_means_whole_workspace_and_validates() {
         let cfg = NotionConfig {
-            common: Default::default(),
-            latchkey_settings: Default::default(),
-            sync: Some(NotionApiSync {
-                inbox: Some(NotionInbox {
-                    enabled: true,
-                    types: None,
-                    notification_page_size: None,
-                    max_notification_pages: None,
-                    space: None,
-                    mirror_referenced_pages: None,
-                }),
-                ..Default::default()
-            }),
+            sync: Some(NotionSync::default()),
+            ..Default::default()
         };
         assert!(cfg.validate().is_ok());
+        assert!(cfg.sync.unwrap().roots.is_empty());
     }
 
     #[test]
-    fn sync_with_subtree_pages_validates() {
-        let cfg = NotionConfig {
-            common: Default::default(),
-            latchkey_settings: Default::default(),
-            sync: Some(NotionApiSync {
-                subtrees: Some(NotionSubtrees {
-                    pages: vec!["abc123".into()],
-                    max_pages: None,
-                }),
-                ..Default::default()
-            }),
-        };
+    fn roots_narrow_the_mirror() {
+        let cfg: NotionConfig = serde_json::from_str(
+            r#"{"sync":{"roots":["https://app.notion.com/p/Proj-348a550faf9580a08973e679d9e1c6c9"]}}"#,
+        )
+        .unwrap();
         assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.sync.unwrap().roots.len(), 1);
+    }
+
+    /// The three include-toggles default ON, so a bare `sync = {}`
+    /// mirrors everything rather than quietly mirroring only bodies.
+    #[test]
+    fn include_toggles_default_on() {
+        let s: NotionSync = serde_json::from_str("{}").unwrap();
+        assert!(s.comments && s.attachments && s.databases);
     }
 
     #[test]
-    fn sync_without_inbox_or_subtrees_is_rejected() {
+    fn zero_max_pages_is_rejected() {
         let cfg = NotionConfig {
-            common: Default::default(),
-            latchkey_settings: Default::default(),
-            sync: Some(NotionApiSync::default()),
+            sync: Some(NotionSync {
+                max_pages: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
         };
-        let err = cfg.validate().unwrap_err();
-        assert!(err
+        assert!(cfg
+            .validate()
+            .unwrap_err()
             .to_string()
-            .contains("must enable inbox or list at least one"));
-    }
-
-    #[test]
-    fn sync_with_inbox_disabled_and_empty_subtrees_is_rejected() {
-        let cfg = NotionConfig {
-            common: Default::default(),
-            latchkey_settings: Default::default(),
-            sync: Some(NotionApiSync {
-                inbox: Some(NotionInbox {
-                    enabled: false,
-                    types: None,
-                    notification_page_size: None,
-                    max_notification_pages: None,
-                    space: None,
-                    mirror_referenced_pages: None,
-                }),
-                subtrees: Some(NotionSubtrees::default()),
-                ..Default::default()
-            }),
-        };
-        assert!(cfg.validate().is_err());
+            .contains("mirrors nothing"));
     }
 }
