@@ -558,6 +558,11 @@ async fn export_channel(
                 } else {
                     since_ts.to_string()
                 };
+                // Track this pass's own returns separately: `collected`
+                // accumulates across every pass, and reconciling a window
+                // against messages the forward walk found outside it would
+                // spare nothing while widening what looks "seen".
+                let before = collected.len();
                 list_history(
                     db,
                     team_id,
@@ -575,6 +580,20 @@ async fn export_channel(
                     latchkey,
                 )
                 .await?;
+
+                // The pass above enumerated `[effective, latest_ts]`
+                // completely, which is the one thing that makes a deletion
+                // visible: Slack has no tombstones and no changes cursor, so
+                // a message that is simply absent from a range we re-walked
+                // is a message that was deleted.
+                let seen_ts: std::collections::HashSet<String> = collected[before..]
+                    .iter()
+                    .filter_map(|m| m.get("ts").and_then(|v| v.as_str()))
+                    .map(String::from)
+                    .collect();
+                totals.pruned += db
+                    .prune_history_window(channel_id, &effective, latest_ts, &seen_ts)
+                    .await?;
             }
         }
     }
@@ -682,6 +701,9 @@ async fn export_channel(
 struct ChannelTotals {
     messages: usize,
     replies: usize,
+    /// Messages and replies Slack has stopped serving inside a range we
+    /// re-walked. See `RawDb::prune_history_window`.
+    pruned: usize,
     media: BTreeMap<String, usize>,
 }
 
@@ -810,6 +832,10 @@ async fn paginate_replies(
 
     let mut cursor: Option<String> = None;
     let mut last_seen_reply: Option<String> = None;
+    // Every message id this walk returned. `conversations.replies` hands
+    // back the thread whole (across pages), so once the walk finishes, a
+    // stored message on this thread that is not here was deleted.
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         let mut p = base.clone();
         if let Some(c) = &cursor {
@@ -821,6 +847,11 @@ async fn paginate_replies(
             .and_then(|v| v.as_array())
             .map(|a| a.to_vec())
             .unwrap_or_default();
+        for m in &msgs {
+            if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
+                seen_ids.insert(schema_raw::slack_message_uuid(team_id, channel_id, ts));
+            }
+        }
 
         let rows: Vec<MessageInput> = msgs
             .iter()
@@ -859,6 +890,15 @@ async fn paginate_replies(
         }
     }
     db.upsert_replies_page(channel_id, thread_ts, last_seen_reply.as_deref())
+        .await?;
+    // Only after the loop drained: a walk that stopped early saw part of
+    // the thread, and reconciling against a partial read deletes replies
+    // that are still there. Every `?` above returns before reaching this.
+    totals.pruned += db
+        .prune_thread_replies(
+            &schema_raw::slack_thread_uuid(team_id, channel_id, thread_ts),
+            &seen_ids,
+        )
         .await?;
     Ok(())
 }
@@ -957,6 +997,8 @@ impl Default for FetchOptions {
 pub struct FetchSummary {
     pub messages: usize,
     pub replies: usize,
+    /// Messages Slack no longer serves inside a range this run re-walked.
+    pub pruned: usize,
     pub media: BTreeMap<String, usize>,
 }
 
@@ -1032,6 +1074,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut grand = FetchSummary {
         messages: 0,
         replies: 0,
+        pruned: 0,
         media: BTreeMap::new(),
     };
     // Channels whose export errored. A per-channel failure is warned and
@@ -1145,6 +1188,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 Ok(()) => {
                     grand.messages += totals.messages;
                     grand.replies += totals.replies;
+                    grand.pruned += totals.pruned;
                     for (k, v) in totals.media {
                         *grand.media.entry(k).or_insert(0) += v;
                     }

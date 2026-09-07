@@ -249,7 +249,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
     match plan {
         Plan::Full => {
             summary.full_sync = true;
-            full_sync(
+            let enumerated = full_sync(
                 &mut state,
                 &mut throttle,
                 opts,
@@ -257,6 +257,28 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
                 &mut summary,
             )
             .await?;
+            // A cursor that aged out costs a full re-enumeration, and that
+            // re-enumeration is the one moment this provider can see a
+            // deletion it missed while the cursor was stale: `history.list`
+            // only reports what happened inside its retention window.
+            //
+            // Two conditions, both about whether the walk was authoritative
+            // over the whole mailbox. A label filter narrows it server-side,
+            // so messages outside those labels are unlisted rather than
+            // deleted; a budget-limited walk never asked for its remaining
+            // pages. Either one makes absence meaningless.
+            match (&enumerated, filter_label_ids.is_empty()) {
+                (Some(seen), true) => {
+                    summary.emails_destroyed += prune_to_enumeration(db, seen).await?;
+                }
+                _ => info!(
+                    event = "gmail_prune_skipped",
+                    label_filtered = !filter_label_ids.is_empty(),
+                    budget_exhausted = summary.budget_exhausted,
+                    "re-enumeration was not authoritative over the whole mailbox; \
+                     not treating unlisted messages as deleted",
+                ),
+            }
         }
         Plan::Partial(changes) => {
             summary.emails_destroyed = destroy(db, &changes.deleted).await?;
@@ -392,14 +414,21 @@ struct Pending {
     seen_blob_ids: BTreeSet<String>,
 }
 
+/// Walk every message id Gmail will name, fetching the ones we lack.
+///
+/// Returns the ids the walk saw, or `None` when the walk did not finish —
+/// it stopped at `message_budget`. The distinction is what makes pruning
+/// safe: a budget-limited walk has pages it never asked for, and the
+/// messages in them still exist.
 async fn full_sync(
     state: &mut RunState<'_>,
     throttle: &mut QuotaThrottle,
     opts: &FetchOptions,
     label_ids: &[String],
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<Option<BTreeSet<String>>> {
     let mut token: Option<String> = None;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     loop {
         throttle.acquire(api::UNITS_MESSAGES_LIST).await;
         let page = api::list_messages(
@@ -410,13 +439,14 @@ async fn full_sync(
             label_ids,
         )
         .await?;
+        seen.extend(page.ids.iter().cloned());
         fetch_ids(state, throttle, &page.ids, opts, summary).await?;
         if summary.budget_exhausted {
-            return Ok(());
+            return Ok(None);
         }
         match page.next_page_token {
             Some(t) => token = Some(t),
-            None => return Ok(()),
+            None => return Ok(Some(seen)),
         }
     }
 }
@@ -624,6 +654,36 @@ async fn destroy(db: &RawDb, gmail_ids: &[String]) -> Result<usize> {
     // exists.
     db.delete_emails(&email_ids).await?;
     Ok(email_ids.len())
+}
+
+/// Delete every mirrored Gmail message the enumeration did not name.
+///
+/// Callers must have established that the walk covered the whole mailbox —
+/// see the gate at the callsite. Guarded by
+/// [`datalib_etl::prune::PruneLimit`] on top of that, because an
+/// enumeration this destructive deserves a second opinion: a token that
+/// quietly lost a scope lists far fewer messages rather than failing.
+async fn prune_to_enumeration(db: &RawDb, seen: &BTreeSet<String>) -> Result<usize> {
+    let held = load_known_gmail_ids(db).await?;
+    let gone: Vec<String> = held.difference(seen).cloned().collect();
+    if gone.is_empty() {
+        return Ok(0);
+    }
+    if !datalib_etl::prune::approve(
+        "gmail messages",
+        held.len(),
+        gone.len(),
+        datalib_etl::prune::PruneLimit::default(),
+    ) {
+        return Ok(0);
+    }
+    let n = destroy(db, &gone).await?;
+    info!(
+        event = "gmail_pruned_after_reenumeration",
+        removed = n,
+        "a full re-enumeration did not name these; deleting our copies",
+    );
+    Ok(n)
 }
 
 async fn load_known_gmail_ids(db: &RawDb) -> Result<BTreeSet<String>> {

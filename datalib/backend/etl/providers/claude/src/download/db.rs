@@ -1,6 +1,6 @@
 //! Doltlite-backed raw store for the Claude provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -182,6 +182,79 @@ impl RawDb {
 
     pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
         load_project_docs_from(&self.pool).await
+    }
+
+    /// Delete this org's conversations that a **complete** listing of that
+    /// org did not name.
+    ///
+    /// Scoped to one `org_uuid`, and that scope is load-bearing twice over.
+    /// An org whose listing 403'd was never enumerated, so it must not be
+    /// passed here at all. And rows with a NULL `org_uuid` are the ones
+    /// `claude_export` ingested — the two source types share this store, and
+    /// an API sync has no standing to say an export's conversations are
+    /// gone.
+    ///
+    /// Guarded by [`datalib_etl::prune::PruneLimit`]: `/chat_conversations`
+    /// is a single unpaginated GET, and if claude.ai ever starts capping it
+    /// the symptom is indistinguishable from a mass deletion.
+    pub async fn prune_org_conversations(
+        &self,
+        org_uuid: &str,
+        keep: &HashSet<String>,
+    ) -> Result<usize> {
+        let held: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM conversations WHERE org_uuid = ?")
+                .bind(org_uuid)
+                .fetch_all(&self.pool)
+                .await
+                .context("list org conversation ids for prune")?;
+        let gone: Vec<String> = held
+            .iter()
+            .filter(|id| !keep.contains(*id))
+            .cloned()
+            .collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        if !datalib_etl::prune::approve(
+            &format!("claude org {org_uuid} conversations"),
+            held.len(),
+            gone.len(),
+            datalib_etl::prune::PruneLimit::default(),
+        ) {
+            return Ok(0);
+        }
+
+        let mut tx = self.pool.begin().await.context("begin prune tx")?;
+        for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            let mut placeholders = String::new();
+            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+            for sql in [
+                format!(
+                    "DELETE FROM claude_attachments WHERE conversation_uuid IN ({placeholders})"
+                ),
+                format!("DELETE FROM conversations WHERE id IN ({placeholders})"),
+                format!("DELETE FROM conversations_bookkeeping WHERE id IN ({placeholders})"),
+            ] {
+                // Audited: static table names; the IN-list is a `?,?,?` run
+                // sized from the chunk and every id is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for id in chunk {
+                    q = q.bind(id.clone());
+                }
+                q.execute(&mut *tx)
+                    .await
+                    .context("prune claude conversations")?;
+            }
+        }
+        tx.commit().await.context("commit prune tx")?;
+        tracing::info!(
+            event = "claude_conversations_pruned",
+            org = org_uuid,
+            removed = gone.len(),
+            "this org's listing did not name these; deleting our copies",
+        );
+        Ok(gone.len())
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {

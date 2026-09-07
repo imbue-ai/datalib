@@ -114,6 +114,38 @@ impl RawDb {
 
     // ── loads ───────────────────────────────────────────────────────
 
+    /// Drop this PR's rows in `table` that the fresh listing did not name.
+    ///
+    /// Scoped to the one PR: the endpoint enumerated that PR's children and
+    /// nothing else, so it says nothing about any other PR's.
+    pub async fn prune_pr_children(
+        &self,
+        table: &'static str,
+        repo: &str,
+        num: u32,
+        keep: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        let num = num.to_string();
+        let gone = datalib_etl::prune::prune_scope(
+            &self.pool,
+            table,
+            &[("repo_full_name", repo), ("pr_number", &num)],
+            keep,
+        )
+        .await?;
+        if !gone.is_empty() {
+            tracing::info!(
+                event = "github_children_pruned",
+                table,
+                repo,
+                pr = %num,
+                removed = gone.len(),
+                "GitHub no longer lists these; deleting our copies",
+            );
+        }
+        Ok(gone.len())
+    }
+
     pub async fn load_pull_requests(&self) -> Result<Vec<LoadedPullRequest>> {
         let rows = sqlx::query(
             "SELECT id, repo_full_name, pr_number, json(payload) AS payload
