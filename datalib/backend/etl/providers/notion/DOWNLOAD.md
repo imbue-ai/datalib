@@ -174,19 +174,43 @@ thread file opens with it as a blockquote, and it leads the thread row's
 searchable text. When `original_content_deleted` is set, the thread says
 so instead of quoting something that no longer exists.
 
+## Incremental render, and what it costs
+
+Render asks the raw store what changed since the commit it last
+completed against (`dolt_diff`, via the shared `scan_buckets`), and is
+handed only those pages. The resume cursor lives at
+`<root>/<name>/rendered_md/_render_cursor.json` and is written only
+after every document lands.
+
+Every table that can change a page projects a page id directly, so the
+union needs no joins — `comments`, `comment_anchors` and
+`notion_attachments` all carry `page_id`. `users` is the one global
+fanout: a display name reaches every page that person authored, so
+resolving a new user re-renders everything.
+
+What this narrows is the **render** — writing files, building
+`grid_rows`, hashing — which is where the cost is. It does not narrow
+the read: the store's rows are still walked once and filtered in
+memory. If that read ever dominates, it is the thing to fix, and this
+paragraph is the honest description of what is and is not incremental
+today.
+
 ## Deletions
 
-Render walks the whole raw store every run and hands the driver every
-document it considered — skipped ones included — through
-`RunCtx::retain_documents`. Anything the render store holds and that set
-does not name is a document whose source is gone, and the driver sweeps
-it.
+Render no longer walks everything, so absence from a run means nothing
+and a deletion has to be **named**. Two passes, because a page and its
+threads are separate documents with separate `conversation_uuid`s:
 
-This is the stronger of the two mechanisms the tree offers: it needs no
-`dolt_diff` (which notion is not on yet) and cannot miss a deletion a
-diff failed to mention. The cost is that render re-reads the local store
-each run — no API requests, but real work, and porting notion to
-incremental render is the follow-up.
+- a page the diff named whose `pages` row is gone — the page document,
+  and every discussion the store still remembers hanging off it, or its
+  threads become orphans nothing will ever name again;
+- a discussion the diff named with no `comments` rows left — a thread
+  resolved away while its page survived.
+
+Both ask the store rather than inferring from what the parse returned.
+`load_pages` filters on `payload IS NOT NULL`, so a page missing from a
+parse result may simply be one whose body has not arrived yet; deleting
+on that reading would destroy a live document.
 
 ## Not built yet
 

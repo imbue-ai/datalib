@@ -558,17 +558,140 @@ impl RawDb {
 /// Synchronous helper for non-async callers (render, synthesize) that
 /// already run under `#[tokio::main]`. Uses `block_in_place` + the
 /// current Handle, so it must be invoked on a multi-thread runtime.
-pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
+/// Which pages changed since `last_render_hash`.
+///
+/// Every table that can change a rendered page projects a page id
+/// directly, so the union needs no joins — `comments`, `comment_anchors`
+/// and `notion_attachments` all carry `page_id` because the download
+/// side records it. That is the payoff for storing it there rather than
+/// deriving it at render time from a block tree.
+///
+/// `users` fans out globally: a display name reaches every page that
+/// person authored, and the store does not say which those are.
+/// Resolving a single new user therefore re-renders everything — which
+/// is rare, because a user is fetched once ever.
+async fn scan_changed_pages(
+    pool: &sqlx::SqlitePool,
+    last_render_hash: Option<&str>,
+) -> Result<dr::DiffScan> {
+    dr::scan_buckets(
+        pool,
+        last_render_hash,
+        &dr::DiffScanSpec {
+            global_fanout_tables: &["users"],
+            bucket_query: "
+                SELECT DISTINCT page_uuid FROM (
+                    SELECT coalesce(to_id, from_id) AS page_uuid
+                      FROM dolt_diff_pages
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_id, from_id)
+                      FROM dolt_diff_page_markdown
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_page_id, from_page_id)
+                      FROM dolt_diff_comments
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_page_id, from_page_id)
+                      FROM dolt_diff_comment_anchors
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_page_id, from_page_id)
+                      FROM dolt_diff_notion_attachments
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                )
+                WHERE page_uuid IS NOT NULL
+            ",
+        },
+    )
+    .await
+}
+
+/// The discussions named by the diff, so a thread whose last comment
+/// went away can be noticed.
+///
+/// A page and its threads are separate documents with separate
+/// `conversation_uuid`s, so removing the page does not remove them: each
+/// has to be named. This asks the diff which discussions were touched;
+/// [`RawDb::discussions_without_comments`] then asks which of those have
+/// no comment rows left.
+async fn scan_touched_discussions(
+    pool: &sqlx::SqlitePool,
+    last_render_hash: Option<&str>,
+    to_ref: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let Some(from_ref) = last_render_hash else {
+        return Ok(Default::default());
+    };
+    let rows = sqlx::query(
+        "SELECT DISTINCT coalesce(to_discussion_id, from_discussion_id) AS d
+           FROM dolt_diff_comments
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+    )
+    .bind(from_ref)
+    .bind(to_ref)
+    .fetch_all(pool)
+    .await
+    .context("scan touched discussions")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| r.try_get::<Option<String>, _>("d").ok().flatten())
+        .collect())
+}
+
+pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
+    let last = last_render_hash.map(str::to_string);
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open_reader(&path).await?;
             let loaded = async {
-                let pages = db.load_pages().await?;
-                let page_markdown = db.load_page_markdown().await?;
-                let comments = db.load_comments().await?;
+                let scan = scan_changed_pages(db.pool(), last.as_deref()).await?;
+
+                // A bucket the diff named whose `pages` row is gone is a
+                // page Notion no longer has. Asked of the store, not
+                // inferred from the load: `load_pages` filters on
+                // `payload IS NOT NULL`, so a page absent from the result
+                // may simply be one whose body never arrived.
+                let (vanished_pages, vanished_discussions) = match scan.changed_buckets.as_ref() {
+                    Some(changed) => {
+                        let pages =
+                            dr::buckets_without_rows(db.pool(), changed, &[("pages", "id")])
+                                .await?;
+                        let touched = scan_touched_discussions(
+                            db.pool(),
+                            last.as_deref(),
+                            scan.new_head.as_deref().unwrap_or("HEAD"),
+                        )
+                        .await?;
+                        let discussions = dr::buckets_without_rows(
+                            db.pool(),
+                            &touched,
+                            &[("comments", "discussion_id")],
+                        )
+                        .await?;
+                        (pages, discussions)
+                    }
+                    // A cold start examined nothing to compare against.
+                    None => (Vec::new(), Vec::new()),
+                };
+
+                let keep = scan.changed_buckets.clone();
+                let in_scope = |id: &str| keep.as_ref().is_none_or(|k| k.contains(id));
+
+                // The two lookup maps stay whole: any page being rendered
+                // may reference any user or any anchor.
                 let user_names = db.load_user_names().await?;
                 let comment_anchors = db.load_comment_anchors().await?;
+
+                let mut pages = db.load_pages().await?;
+                pages.retain(|p| p.get("id").and_then(|v| v.as_str()).is_some_and(&in_scope));
+                let mut page_markdown = db.load_page_markdown().await?;
+                page_markdown.retain(|(id, _)| in_scope(id));
+                let mut comments = db.load_comments().await?;
+                comments.retain(|(_, pid)| pid.as_deref().is_some_and(&in_scope));
+
                 let blobs_by_page =
                     load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path)).await?;
                 Ok::<_, anyhow::Error>(LoadedRaw {
@@ -578,6 +701,9 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
                     user_names,
                     comment_anchors,
                     blobs_by_page,
+                    scan,
+                    vanished_pages,
+                    vanished_discussions,
                 })
             }
             .await;
@@ -674,6 +800,13 @@ pub struct LoadedRaw {
     /// `block_id -> the text a comment on that block hangs off`.
     pub comment_anchors: HashMap<String, String>,
     pub blobs_by_page: HashMap<String, BlobBundle>,
+    /// What the `dolt_diff` scan concluded. `changed_buckets: None` is a
+    /// cold start — render everything.
+    pub scan: dr::DiffScan,
+    /// Pages the diff named whose row is gone: deleted upstream.
+    pub vanished_pages: Vec<String>,
+    /// Discussions the diff named that have no comment rows left.
+    pub vanished_discussions: Vec<String>,
 }
 
 #[cfg(test)]
