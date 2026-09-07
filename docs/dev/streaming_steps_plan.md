@@ -140,26 +140,25 @@ Both measured:
   `SELECT … FROM dolt_at_fresh('HEAD')` on a brand-new table is
   `no such table: dolt_at_fresh`, not an empty result.
 
-  To be clear about why that matters, because "read a table nobody has
-  committed" is not a thing we should ever want to do: the point is not
-  that we process uncommitted tables, it is that **the pin can
-  legitimately be absent**, and when it is, the pinned form *crashes*
-  rather than returning nothing. Two ways it goes absent today, both
-  already handled by `scan_buckets`'s cold-start branch:
+  Within one store that is handled per table: a table absent at the pin
+  gets an empty view rather than a missing one (below). The harder
+  version is a store where *nothing* is committed, which happens two
+  ways — a dev build against stock libsqlite3, where `dolt_log()` does
+  not resolve at all, and a store whose download wrote rows and whose
+  commit failed, since `commit_with_suffix` is best-effort.
 
-  - a **dev build against stock libsqlite3**, where there are no dolt
-    extensions at all, so `dolt_log()` does not resolve and `new_head`
-    is `None`;
-  - a store with **zero commits** — a download that wrote rows and
-    whose commit failed, since `commit_with_suffix` is best-effort and
-    logs rather than failing the step.
-
-  So the fallback is crash-avoidance on paths that already exist, not a
-  feature. And it needs one new restriction under streaming, which is
-  the real answer to the question: an unpinned read *is* a working-set
-  read, so a consumer with no pin must not read a store while its
-  producer is live. It should do nothing that pass and wait for the
-  final one, rather than fall back to reading torn rows.
+  **There is no unpinned fallback for that case, deliberately.** An
+  earlier draft had `install_views` build views over the bare tables
+  when it had no commit, warning as it went. That is the shape
+  `AGENTS.md` warns about: a fallback that *succeeds*, handing back the
+  working set to a caller who asked for committed state. `Pin` now has
+  no "unpinned" variant at all, so the situation cannot be reached by
+  accident — a scan that named no commit returns `None`, and the caller
+  has to say what to do with it. For a streaming consumer the answer is
+  to do nothing that pass and wait for the final one; for a render step
+  finding a store with nothing in it, it is the "never downloaded is not
+  a failure" path `step_protocol.md` already describes. Neither is
+  "read it anyway".
 
 ### A second way to tear: one download, two stores
 
@@ -505,14 +504,16 @@ Each of these is a reviewable PR that leaves the tree green.
 1. ~~**The lint and the helper.**~~ **Done.**
    [`etl/src/pin.rs`](../../datalib/backend/etl/src/pin.rs) (`Pin`, the
    `install_views`, the `pinned_<table>` naming, the empty view for a
-   table absent at the pin) and check 4 in `scripts/lint_repo.py`,
+   table absent at the pin, and no unpinned path at all) and check 4 in
+   `scripts/lint_repo.py`,
    holding a baseline of 48. No behavior change: nothing calls
    `install_views` yet. Carries the tests that a pinned view ignores a
    dirty working set, that a missing view fails loudly, and that the
    views are connection-scoped — the three assertions the rest of this
    plan rests on.
 2. **The sweep.** 3 sites in `indexed_markdown.rs` first, then the 48
-   provider sites + 2 in `blob_cas.rs`, all still `Pin::Unpinned`. Still no behavior change — this is the patch to review carefully
+   provider sites + 2 in `blob_cas.rs`, with nothing yet calling
+   `install_views`. Still no behavior change — this is the patch to review carefully
    and the one that is boring on purpose. Splitting it in two along the
    edge boundary keeps the first streaming edge unblocked by the wide
    half.

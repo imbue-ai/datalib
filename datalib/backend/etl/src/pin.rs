@@ -26,20 +26,22 @@ use anyhow::{bail, Result};
 /// `pinned_users`.
 pub const VIEW_PREFIX: &str = "pinned_";
 
-/// The commit a store is read at.
+/// The commit a store is read at: a full hash, and nothing else.
 ///
-/// **Holds a full commit hash and nothing else.** Not `HEAD`, deliberately:
-/// `HEAD` resolves when the query runs rather than when the pin was taken, so
-/// a pin that could carry it would let one pass's diff and its content reads
-/// name two different commits — which is the exact race streaming introduces.
-/// Making that unrepresentable is most of what this type is for.
+/// Two states this deliberately cannot hold, because each is a way to end up
+/// reading rows nobody committed.
+///
+/// **Not `HEAD`.** It resolves when the query runs rather than when the pin
+/// was taken, so a pin carrying it would let one pass's diff and its content
+/// reads name two different commits — the exact race streaming introduces.
+///
+/// **Not "no pin".** A store with nothing committed has nothing to read, so
+/// there is no such thing as pinning to it. Callers that find no commit must
+/// decide what to do — a consumer should do nothing that pass and wait — and
+/// having no variant for it is what stops that decision from being made by
+/// accident, silently, in favour of the working set.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Pin {
-    /// No commit to read at: a store with no commits, or a build with no dolt
-    /// extensions. Views over it read the working set — see [`install_views`].
-    Unpinned,
-    At(String),
-}
+pub struct Pin(String);
 
 /// Doltlite commit hashes are 40 lowercase hex characters, and the engine
 /// rejects a shortened prefix (`ref not found`), so there is no shorter form
@@ -59,27 +61,17 @@ impl Pin {
                  (want {HASH_LEN} lowercase hex characters)"
             );
         }
-        Ok(Pin::At(commit))
+        Ok(Pin(commit))
     }
 
-    /// The pin a scan produced, where `None` is a store the scan could not
-    /// name a commit for — no commits yet, or no dolt extensions at all.
-    pub fn from_scan(commit: Option<&str>) -> Result<Pin> {
-        match commit {
-            Some(c) => Pin::at(c),
-            None => Ok(Pin::Unpinned),
-        }
+    /// The pin a scan produced. `None` out means the scan named no commit —
+    /// no commits yet, or no dolt extensions — and is the caller's to handle.
+    pub fn from_scan(commit: Option<&str>) -> Result<Option<Pin>> {
+        commit.map(Pin::at).transpose()
     }
 
-    pub fn commit(&self) -> Option<&str> {
-        match self {
-            Pin::Unpinned => None,
-            Pin::At(c) => Some(c),
-        }
-    }
-
-    pub fn is_pinned(&self) -> bool {
-        matches!(self, Pin::At(_))
+    pub fn commit(&self) -> &str {
+        &self.0
     }
 }
 
@@ -92,11 +84,10 @@ impl Pin {
 /// `doltlite_raw`'s `open_disables_connection_recycling`) because doltlite's
 /// own session state is per-connection, so one call covers the pool's life.
 ///
-/// [`Pin::Unpinned`] builds the same views over the bare tables, so queries
-/// keep working against a store with nothing committed — but they then read
-/// the working set, which is only safe while nothing else writes the file. It
-/// warns when it does that, because a fallback which succeeds quietly is how
-/// you end up reading torn rows and never finding out.
+/// There is deliberately no "install them unpinned" path. A caller with no
+/// commit to pin to is already in trouble — the store has nothing committed —
+/// and building views over the bare tables would answer that by handing back
+/// the working set, which is the failure this module exists to prevent.
 pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> {
     // `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses to
     // create a view over some of them, and a reader has no business in them.
@@ -106,18 +97,7 @@ pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> 
     .fetch_all(pool)
     .await?;
     let tables: Vec<&String> = names.iter().filter(|t| is_table_name(t)).collect();
-
-    let Pin::At(commit) = pin else {
-        tracing::warn!(
-            tables = tables.len(),
-            "install_views: no commit to pin to, so the views read the working set. \
-             Safe only while nothing else writes this store."
-        );
-        for t in &tables {
-            create_view(pool, t, &format!("SELECT * FROM main.{t}")).await?;
-        }
-        return Ok(tables.len());
-    };
+    let commit = pin.commit();
 
     let modules: Vec<String> =
         sqlx::query_scalar("SELECT name FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
@@ -190,10 +170,14 @@ mod tests {
         }
     }
 
+    /// A scan that named no commit hands back `None`, not a pin that reads
+    /// the working set. The caller has to say what to do about it, which is
+    /// the point: for a streaming consumer the answer is "do nothing this
+    /// pass", and that must never be reached by default.
     #[test]
-    fn a_scan_that_named_no_commit_is_unpinned() {
-        assert_eq!(Pin::from_scan(None).unwrap(), Pin::Unpinned);
-        assert!(Pin::from_scan(Some(HASH)).unwrap().is_pinned());
+    fn a_scan_that_named_no_commit_has_no_pin() {
+        assert_eq!(Pin::from_scan(None).unwrap(), None);
+        assert_eq!(Pin::from_scan(Some(HASH)).unwrap().unwrap().commit(), HASH);
         assert!(Pin::from_scan(Some("nonsense")).is_err());
     }
 }
@@ -327,11 +311,18 @@ mod view_tests {
         )
         .await
         .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&a).await {
+            return;
+        }
         sqlx::query("INSERT INTO notes VALUES (1)")
             .execute(&a)
             .await
             .unwrap();
-        install_views(&a, &Pin::Unpinned).await.unwrap();
+        let commit = crate::doltlite_raw::commit_run(&a, "one note")
+            .await
+            .unwrap()
+            .unwrap();
+        install_views(&a, &Pin::at(&commit).unwrap()).await.unwrap();
 
         for _ in 0..3 {
             let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_notes")
