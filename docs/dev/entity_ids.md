@@ -110,7 +110,8 @@ no YoLink-side object behind it.
 
 **The source *type* was never the missing piece.** It is already the
 first recipe component: `provider` is a hardcoded `&'static str` per
-provider (`"slack"`, `"openai"`, `"jmap"`), never a config string. What
+provider (`IdNamespace::Slack`, `::Chatgpt`, `::Claude`), never a config
+string. What
 the type cannot supply is instance-level discrimination:
 
 - signal's `chat_id` is an autoincrement local to one backup file, so
@@ -243,10 +244,10 @@ fixture is UUID-shaped.
 | Provider | Status | Scope |
 |---|---|---|
 | claude | ported | `ProviderGlobal` |
-| openai (chatgpt) | ported | `ProviderGlobal` |
+| chatgpt | ported | `ProviderGlobal` |
 | slack | ported | `Upstream(team_id)` |
 | github, gitlab | pending | `Upstream(repo)` — recipe already carries it |
-| email (jmap) | pending | `Upstream(account_id)` — already carries it |
+| email | pending | `Upstream(account_id)` — already carries it |
 | beeper | pending | `Upstream(store)` — already carries it |
 | notion | pending | `ProviderGlobal` — page ids are Notion UUIDs |
 | pdf, perseus | pending | `Content` |

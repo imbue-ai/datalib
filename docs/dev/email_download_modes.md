@@ -305,8 +305,9 @@ failure is visible from a single run:
   let the live test's invariants run hermetically in CI.
 - **`DOWNLOAD.md` is titled "JMAP Extract"** and documents only that
   mode. It predates the other two.
-- **Render stamps `provider: jmap`** in QMD frontmatter and
-  `class="msg msg--jmap"` in the body, whatever mode produced the row.
+- **Render stamps `provider: email`** in QMD frontmatter and
+  `class="msg msg--email"` in the body, whatever mode produced the row —
+  the tag names the source, not the protocol a given mirror used.
   Pre-existing (the mbox mode has always done it too) and harmless —
   nothing keys off it — but misleading to read.
 

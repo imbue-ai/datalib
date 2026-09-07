@@ -22,7 +22,7 @@ fixtures/
 │   ├── users.json
 │   └── conversations.json
 │
-├── chatgpt_api/               `provider: openai, kind: chatgpt_api_dir, provenance: api`
+├── chatgpt_api/               `provider: chatgpt, kind: chatgpt_api_dir, provenance: api`
 │   ├── me.json                user record
 │   ├── conversations.json     listing index
 │   └── conversations/<id>.json   per-conversation node tree (message mapping with parent/children)

@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use datalib_etl::http::{
     default_retryability, latchkey_curl_classified, HttpError, HttpRequest, HttpResponse,
-    LatchkeySettings, Retryability,
+    HttpService, LatchkeySettings, Retryability,
 };
 
 pub const BASE: &str = "https://api.github.com";
@@ -82,7 +82,7 @@ impl GitHubClient {
     }
 
     async fn request_once(&self, url: &str) -> Result<HttpResponse, GitHubError> {
-        let req = HttpRequest::get("github", url)
+        let req = HttpRequest::get(HttpService::Github, url)
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
         // Rate-limit (429 + primary-limit 403) and 5xx retry — including the

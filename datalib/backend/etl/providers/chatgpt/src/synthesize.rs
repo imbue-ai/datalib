@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::http::HttpRequest;
+use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
@@ -28,7 +28,7 @@ impl ChatgptSynth {
 }
 
 fn req_get(url: &str) -> HttpRequest {
-    HttpRequest::get("chatgpt", url).header("Accept", "application/json")
+    HttpRequest::get(HttpService::Chatgpt, url).header("Accept", "application/json")
 }
 
 fn strip_synthetic_keys(mut v: Value) -> Value {

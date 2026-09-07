@@ -14,7 +14,10 @@ rust_library(
     crate_name = "datalib_id",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
-    deps = ["@datalib_crates//:uuid"],
+    deps = [
+        "@datalib_crates//:strum",
+        "@datalib_crates//:uuid",
+    ],
 )
 
 rust_test(

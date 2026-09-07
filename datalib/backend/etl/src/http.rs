@@ -47,13 +47,87 @@ impl HttpMethod {
     }
 }
 
-/// A single outbound HTTP request. `provider` is a short tag used to
-/// namespace playback fixtures (`"slack"`, `"github"`, etc.) and tag
-/// telemetry events; do **not** include the Authorization header — that
-/// is injected by `latchkey` based on the URL host.
+/// Which upstream service a request goes to.
+///
+/// **Not the same vocabulary as `grid_rows.provider`**, and the two must
+/// not be merged. One provider can speak to two services (`email` uses
+/// both [`HttpService::Jmap`] and [`HttpService::Gmail`]; Notion has an
+/// official API and an unofficial one), one service can be reached by
+/// providers that share no code, and plenty of providers — anything
+/// file-backed — never make a request at all. This names the *service*:
+/// which latchkey credential applies, which playback-fixture directory
+/// the response is stored under, and whether the request needs Chrome
+/// impersonation to get past a JA3 wall.
+///
+/// The strings are directory names under a playback root, so changing
+/// one orphans every fixture recorded under the old spelling.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+    strum::Display,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum HttpService {
+    /// Contacts over CardDAV. Named for the protocol because that is
+    /// what latchkey registers.
+    Carddav,
+    Chatgpt,
+    Claude,
+    Github,
+    Gitlab,
+    /// The Gmail API, one of the `email` source's three download modes.
+    Gmail,
+    /// A JMAP server (Fastmail and friends), another `email` mode.
+    Jmap,
+    Linkedin,
+    Notion,
+    /// Notion's unofficial web API, used only where the official one
+    /// cannot answer — see `notion/src/download/unofficial.rs`.
+    NotionUnofficial,
+    Slack,
+    /// Fixture-synthesis tests only.
+    #[strum(serialize = "test_provider")]
+    Test,
+}
+
+impl HttpService {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// Whether this service's requests must carry the
+    /// Chrome-impersonation marker, so the dispatch curl routes them to
+    /// the impersonating curl: these hosts reject a vanilla curl TLS
+    /// fingerprint. Services that return false still go through the
+    /// dispatch curl, unmarked, and so use the system curl.
+    ///
+    /// The single source of truth for which services impersonate.
+    pub const fn impersonates(self) -> bool {
+        matches!(
+            self,
+            HttpService::Claude
+                | HttpService::Chatgpt
+                | HttpService::Slack
+                | HttpService::Github
+                | HttpService::Gitlab
+                | HttpService::Notion
+                | HttpService::NotionUnofficial
+        )
+    }
+}
+
+/// A single outbound HTTP request. Do **not** include the Authorization
+/// header — that is injected by `latchkey` based on the URL host.
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
-    pub provider: &'static str,
+    pub service: HttpService,
     pub method: HttpMethod,
     pub url: String,
     pub headers: BTreeMap<String, String>,
@@ -73,9 +147,9 @@ pub struct HttpRequest {
 }
 
 impl HttpRequest {
-    pub fn get(provider: &'static str, url: impl Into<String>) -> Self {
+    pub fn get(service: HttpService, url: impl Into<String>) -> Self {
         Self {
-            provider,
+            service,
             method: HttpMethod::Get,
             url: url.into(),
             headers: BTreeMap::new(),
@@ -86,11 +160,11 @@ impl HttpRequest {
         }
     }
 
-    pub fn post_json(provider: &'static str, url: impl Into<String>, body: Vec<u8>) -> Self {
+    pub fn post_json(service: HttpService, url: impl Into<String>, body: Vec<u8>) -> Self {
         let mut headers = BTreeMap::new();
         headers.insert("Content-Type".into(), "application/json".into());
         Self {
-            provider,
+            service,
             method: HttpMethod::Post,
             url: url.into(),
             headers,
@@ -151,30 +225,30 @@ impl HttpResponse {
 
 #[derive(thiserror::Error, Debug)]
 pub enum HttpError {
-    #[error("{provider}: spawn latchkey failed: {message}")]
+    #[error("{service}: spawn latchkey failed: {message}")]
     Spawn {
-        provider: &'static str,
+        service: HttpService,
         message: String,
     },
-    #[error("{provider}: latchkey curl timed out after {timeout_ms}ms ({url})")]
+    #[error("{service}: latchkey curl timed out after {timeout_ms}ms ({url})")]
     Timeout {
-        provider: &'static str,
+        service: HttpService,
         url: String,
         timeout_ms: u64,
     },
     /// `latchkey curl` exited non-zero. This is a transport-level failure
     /// (DNS, TLS, allowlist) — *not* a non-2xx HTTP status. For HTTP
     /// errors, inspect `HttpResponse::status` on the Ok path.
-    #[error("{provider}: latchkey curl exit {exit} ({url}): {stderr}")]
+    #[error("{service}: latchkey curl exit {exit} ({url}): {stderr}")]
     Curl {
-        provider: &'static str,
+        service: HttpService,
         url: String,
         exit: i32,
         stderr: String,
     },
-    #[error("{provider}: malformed response from latchkey curl ({url}): {message}")]
+    #[error("{service}: malformed response from latchkey curl ({url}): {message}")]
     Malformed {
-        provider: &'static str,
+        service: HttpService,
         url: String,
         message: String,
     },
@@ -186,9 +260,9 @@ pub enum HttpError {
     /// orchestrator's give-up policy ([`crate::retry::RetryGuard`]) tripped
     /// before the request ever succeeded. Terminal — the caller should
     /// surface it as a hard error for this source.
-    #[error("{provider}: gave up retrying ({url}): {reason}")]
+    #[error("{service}: gave up retrying ({url}): {reason}")]
     GaveUp {
-        provider: &'static str,
+        service: HttpService,
         url: String,
         reason: String,
     },
@@ -263,22 +337,6 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
     None
 }
 
-/// Providers whose requests must carry the Chrome-impersonation marker, so the
-/// dispatch curl routes them to the impersonating curl: their hosts reject a
-/// vanilla curl TLS fingerprint. Providers not listed still go through the
-/// dispatch curl, unmarked, and so use the system curl.
-///
-/// The single source of truth for which providers impersonate.
-const IMPERSONATE_PROVIDERS: &[&str] = &[
-    "claude",
-    "chatgpt",
-    "slack",
-    "github",
-    "gitlab",
-    "notion",
-    "notion_unofficial",
-];
-
 /// The marker header the dispatch curl routes on (see
 /// `src/bin/latchkey_curl_dispatch.rs`, which matches it by name and
 /// ignores the value).
@@ -307,8 +365,8 @@ pub const DESKTOP_PROXY_HEADER_ENV: &str = "MINDS_DESKTOP_PROXY_HEADER";
 
 /// The `-H` argument marking a request for desktop egress, when this request
 /// should leave from the user's machine; `None` otherwise.
-fn maybe_desktop_proxy_header(provider: &str, bypass_latchkey: bool) -> Option<String> {
-    if bypass_latchkey || !IMPERSONATE_PROVIDERS.contains(&provider) {
+fn maybe_desktop_proxy_header(service: HttpService, bypass_latchkey: bool) -> Option<String> {
+    if bypass_latchkey || !service.impersonates() {
         return None;
     }
     match std::env::var(DESKTOP_PROXY_HEADER_ENV) {
@@ -317,8 +375,8 @@ fn maybe_desktop_proxy_header(provider: &str, bypass_latchkey: bool) -> Option<S
     }
 }
 
-fn maybe_via_desktop_url(url: &str, provider: &str, bypass_latchkey: bool) -> String {
-    if bypass_latchkey || !IMPERSONATE_PROVIDERS.contains(&provider) {
+fn maybe_via_desktop_url(url: &str, service: HttpService, bypass_latchkey: bool) -> String {
+    if bypass_latchkey || !service.impersonates() {
         return url.to_string();
     }
     match std::env::var(VIA_DESKTOP_URL_PREFIX_ENV) {
@@ -399,7 +457,7 @@ where
                 Err(e) => e.to_string(),
             };
             return Err(HttpError::GaveUp {
-                provider: req.provider,
+                service: req.service,
                 url: req.url.clone(),
                 reason: format!("{reason}; last attempt: {detail}"),
             });
@@ -409,7 +467,7 @@ where
             .map(|d| d.min(MAX_RETRY_AFTER))
             .unwrap_or(backoff);
         tracing::warn!(
-            provider = req.provider,
+            service = %req.service,
             url = %req.url,
             wait_ms = wait.as_millis() as u64,
             "rate-limited / transient; backing off then retrying",
@@ -426,7 +484,7 @@ mod live {
 
     pub(super) async fn send(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         let body_file = tempfile::NamedTempFile::new().map_err(|e| HttpError::Spawn {
-            provider: req.provider,
+            service: req.service,
             message: format!("tempfile: {e}"),
         })?;
         let body_path = body_file.path().to_path_buf();
@@ -457,13 +515,13 @@ mod live {
         // dispatch curl's marker header. Only on the latchkey path -- a
         // bypass_latchkey request uses plain curl, which has no dispatch
         // curl to act on the marker and would just send it upstream.
-        if !req.bypass_latchkey && IMPERSONATE_PROVIDERS.contains(&req.provider) {
+        if !req.bypass_latchkey && req.service.impersonates() {
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
         }
         // Same providers, same reasoning: ask for the request to leave from
         // the user's machine when minds says this workspace's egress differs
         // from it (see `DESKTOP_PROXY_HEADER_ENV`).
-        if let Some(header) = maybe_desktop_proxy_header(req.provider, req.bypass_latchkey) {
+        if let Some(header) = maybe_desktop_proxy_header(req.service, req.bypass_latchkey) {
             cmd.arg("-H").arg(header);
         }
         let writes_body_to_stdin = req.body.is_some();
@@ -476,7 +534,7 @@ mod live {
         }
         cmd.arg(maybe_via_desktop_url(
             &req.url,
-            req.provider,
+            req.service,
             req.bypass_latchkey,
         ));
         cmd.stdout(Stdio::piped());
@@ -486,7 +544,7 @@ mod live {
         let t0 = std::time::Instant::now();
         let proc_result = tokio::time::timeout(req.timeout, async {
             let mut child = cmd.spawn().map_err(|e| HttpError::Spawn {
-                provider: req.provider,
+                service: req.service,
                 message: e.to_string(),
             })?;
             if writes_body_to_stdin {
@@ -495,11 +553,11 @@ mod live {
                         .write_all(payload)
                         .await
                         .map_err(|e| HttpError::Spawn {
-                            provider: req.provider,
+                            service: req.service,
                             message: format!("write stdin: {e}"),
                         })?;
                     stdin.shutdown().await.map_err(|e| HttpError::Spawn {
-                        provider: req.provider,
+                        service: req.service,
                         message: format!("close stdin: {e}"),
                     })?;
                 }
@@ -508,13 +566,13 @@ mod live {
                 .wait_with_output()
                 .await
                 .map_err(|e| HttpError::Spawn {
-                    provider: req.provider,
+                    service: req.service,
                     message: e.to_string(),
                 })
         })
         .await
         .map_err(|_| HttpError::Timeout {
-            provider: req.provider,
+            service: req.service,
             url: req.url.clone(),
             timeout_ms,
         })?;
@@ -524,7 +582,7 @@ mod live {
         if !proc.status.success() {
             let stderr = String::from_utf8_lossy(&proc.stderr);
             return Err(HttpError::Curl {
-                provider: req.provider,
+                service: req.service,
                 url: req.url.clone(),
                 exit: proc.status.code().unwrap_or(-1),
                 stderr: stderr.chars().take(400).collect(),
@@ -534,7 +592,7 @@ mod live {
         let header_dump = String::from_utf8_lossy(&proc.stdout).into_owned();
         let (status, headers) =
             parse_header_block(&header_dump).ok_or_else(|| HttpError::Malformed {
-                provider: req.provider,
+                service: req.service,
                 url: req.url.clone(),
                 message: format!(
                     "no HTTP status line in header dump: {:?}",
@@ -542,7 +600,7 @@ mod live {
                 ),
             })?;
         let body = std::fs::read(&body_path).map_err(|e| HttpError::Malformed {
-            provider: req.provider,
+            service: req.service,
             url: req.url.clone(),
             message: format!("read body tempfile: {e}"),
         })?;
@@ -608,7 +666,7 @@ mod playback {
 
     pub(super) async fn lookup(req: &HttpRequest, root: &Path) -> Result<HttpResponse, HttpError> {
         let key = fixture_key(req);
-        let path = root.join(req.provider).join(&key);
+        let path = root.join(req.service.as_str()).join(&key);
         let bytes = tokio::fs::read(&path).await.map_err(|_| {
             HttpError::PlaybackMiss(format!(
                 "{}: no fixture for {} {} (key={})",
@@ -716,13 +774,13 @@ mod tests {
     fn desktop_proxy_header_marks_impersonating_providers_with_whatever_name_minds_gives() {
         with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
             assert_eq!(
-                maybe_desktop_proxy_header("slack", false).as_deref(),
+                maybe_desktop_proxy_header(HttpService::Slack, false).as_deref(),
                 Some("X-Imbue-Desktop-Proxy: 1"),
             );
         });
         with_desktop_proxy_header(Some("X-Some-Other-Marker"), || {
             assert_eq!(
-                maybe_desktop_proxy_header("slack", false).as_deref(),
+                maybe_desktop_proxy_header(HttpService::Slack, false).as_deref(),
                 Some("X-Some-Other-Marker: 1"),
             );
         });
@@ -735,7 +793,7 @@ mod tests {
         // must add no header rather than producing a nameless one.
         for header_name in [Some(""), None] {
             with_desktop_proxy_header(header_name, || {
-                assert_eq!(maybe_desktop_proxy_header("slack", false), None);
+                assert_eq!(maybe_desktop_proxy_header(HttpService::Slack, false), None);
             });
         }
     }
@@ -758,7 +816,7 @@ mod tests {
     fn via_desktop_prefix_wraps_impersonating_providers_when_minds_sets_one() {
         with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
             assert_eq!(
-                maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", false),
+                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, false),
                 "https://latchkey-self.invalid/via-desktop/https://slack.com/api/auth.test",
             );
         });
@@ -772,7 +830,11 @@ mod tests {
         for prefix in [Some(""), None] {
             with_via_desktop_prefix(prefix, || {
                 assert_eq!(
-                    maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", false),
+                    maybe_via_desktop_url(
+                        "https://slack.com/api/auth.test",
+                        HttpService::Slack,
+                        false
+                    ),
                     "https://slack.com/api/auth.test",
                 );
             });
@@ -783,11 +845,11 @@ mod tests {
     fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
         with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
             assert_eq!(
-                maybe_via_desktop_url("https://example.com/x", "linear", false),
+                maybe_via_desktop_url("https://example.com/x", HttpService::Linkedin, false),
                 "https://example.com/x",
             );
             assert_eq!(
-                maybe_via_desktop_url("https://slack.com/api/auth.test", "slack", true),
+                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, true),
                 "https://slack.com/api/auth.test",
             );
         });
@@ -803,7 +865,7 @@ mod tests {
                 "https://slack.com/api/conversations.history?channel=C1&limit=100",
                 "https://slack.com/files/a%20b?u=x%2Fy",
             ] {
-                let wrapped = maybe_via_desktop_url(url, "slack", false);
+                let wrapped = maybe_via_desktop_url(url, HttpService::Slack, false);
                 assert_eq!(
                     wrapped.strip_prefix(&format!("{TEST_VIA_DESKTOP_PREFIX}/")),
                     Some(url),
@@ -817,21 +879,24 @@ mod tests {
         with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
             // A provider that does not need impersonation does not need the
             // user's IP either, and pays no extra hop for it.
-            assert_eq!(maybe_desktop_proxy_header("linear", false), None);
+            assert_eq!(
+                maybe_desktop_proxy_header(HttpService::Linkedin, false),
+                None
+            );
             // A bypass_latchkey request runs plain curl, with no dispatch curl
             // to act on the marker, so it would only leak upstream.
-            assert_eq!(maybe_desktop_proxy_header("slack", true), None);
+            assert_eq!(maybe_desktop_proxy_header(HttpService::Slack, true), None);
         });
     }
 
     #[test]
     fn fixture_key_is_stable_under_query_param_order() {
         let a = HttpRequest::get(
-            "slack",
+            HttpService::Slack,
             "https://slack.com/api/conversations.history?channel=C1&limit=100",
         );
         let b = HttpRequest::get(
-            "slack",
+            HttpService::Slack,
             "https://slack.com/api/conversations.history?limit=100&channel=C1",
         );
         assert_eq!(fixture_key(&a), fixture_key(&b));
@@ -839,21 +904,24 @@ mod tests {
 
     #[test]
     fn fixture_key_distinguishes_methods() {
-        let g = HttpRequest::get("notion", "https://api.notion.com/v1/search");
-        let p =
-            HttpRequest::post_json("notion", "https://api.notion.com/v1/search", b"{}".to_vec());
+        let g = HttpRequest::get(HttpService::Notion, "https://api.notion.com/v1/search");
+        let p = HttpRequest::post_json(
+            HttpService::Notion,
+            "https://api.notion.com/v1/search",
+            b"{}".to_vec(),
+        );
         assert_ne!(fixture_key(&g), fixture_key(&p));
     }
 
     #[test]
     fn fixture_key_distinguishes_post_bodies() {
         let a = HttpRequest::post_json(
-            "notion",
+            HttpService::Notion,
             "https://api.notion.com/v1/search",
             b"{\"q\":\"a\"}".to_vec(),
         );
         let b = HttpRequest::post_json(
-            "notion",
+            HttpService::Notion,
             "https://api.notion.com/v1/search",
             b"{\"q\":\"b\"}".to_vec(),
         );
@@ -863,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn playback_miss_returns_named_error() {
         let dir = tempfile::tempdir().unwrap();
-        let req = HttpRequest::get("slack", "https://slack.com/api/auth.test");
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
         let err = with_playback(dir.path(), latchkey_curl(&req))
             .await
             .unwrap_err();
@@ -876,7 +944,7 @@ mod tests {
     #[tokio::test]
     async fn playback_round_trips_a_synthetic_fixture() {
         let dir = tempfile::tempdir().unwrap();
-        let req = HttpRequest::get("slack", "https://slack.com/api/auth.test");
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
         let key = fixture_key(&req);
         let provider_dir = dir.path().join("slack");
         std::fs::create_dir_all(&provider_dir).unwrap();
@@ -950,7 +1018,7 @@ mod tests {
     #[tokio::test]
     async fn retries_429_then_gives_up_per_guard() {
         let dir = tempfile::tempdir().unwrap();
-        let req = HttpRequest::get("slack", "https://slack.com/api/auth.test");
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
         let key = fixture_key(&req);
         let provider_dir = dir.path().join("slack");
         std::fs::create_dir_all(&provider_dir).unwrap();
