@@ -52,6 +52,9 @@ pub fn render_connections(
             let payloads = db.load_payloads("connections").await.unwrap_or_default();
             // Photos, if any were fetched, keyed by connection_uuid.
             let photos = load_photo_blobs(&db, &db_path).await.unwrap_or_default();
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            db.close().await;
             Ok::<_, anyhow::Error>((payloads, photos))
         })
     })?;

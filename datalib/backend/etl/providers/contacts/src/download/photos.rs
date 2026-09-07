@@ -33,35 +33,42 @@ pub async fn lift_photos_to_cas(db: &RawDb, entity_db_path: &std::path::Path) ->
         .context("open contacts CAS")?;
 
     let mut stored = 0usize;
-    for r in rows {
-        let id: String = r.try_get("id").unwrap_or_default();
-        let vcard: Option<String> = r.try_get("vcard").ok();
-        let Some(vcard) = vcard else { continue };
-        if id.is_empty() {
-            continue;
-        }
-        let Some((bytes, content_type)) = decode_inline_photo(&vcard) else {
-            // No inline photo on this card — don't record a row, so a
-            // later card edit that adds one still gets picked up.
-            continue;
-        };
-        let blake3 = cas
-            .put(&bytes, Some(&content_type))
+    let lifted = async {
+        for r in rows {
+            let id: String = r.try_get("id").unwrap_or_default();
+            let vcard: Option<String> = r.try_get("vcard").ok();
+            let Some(vcard) = vcard else { continue };
+            if id.is_empty() {
+                continue;
+            }
+            let Some((bytes, content_type)) = decode_inline_photo(&vcard) else {
+                // No inline photo on this card — don't record a row, so
+                // a later card edit that adds one still gets picked up.
+                continue;
+            };
+            let blake3 = cas
+                .put(&bytes, Some(&content_type))
+                .await
+                .context("cas put contact photo")?;
+            sqlx::query(
+                "INSERT OR REPLACE INTO contact_photos (id, owner_id, source_url, blake3) \
+                 VALUES (?, ?, 'vcard:inline', ?)",
+            )
+            .bind(format!("{id}#vcard:inline"))
+            .bind(&id)
+            .bind(&blake3)
+            .execute(pool)
             .await
-            .context("cas put contact photo")?;
-        sqlx::query(
-            "INSERT OR REPLACE INTO contact_photos (id, owner_id, source_url, blake3) \
-             VALUES (?, ?, 'vcard:inline', ?)",
-        )
-        .bind(format!("{id}#vcard:inline"))
-        .bind(&id)
-        .bind(&blake3)
-        .execute(pool)
-        .await
-        .context("insert contact_photos row")?;
-        stored += 1;
+            .context("insert contact_photos row")?;
+            stored += 1;
+        }
+        Ok(stored)
     }
-    Ok(stored)
+    .await;
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    cas.close().await;
+    lifted
 }
 
 /// First inline (base64 / `data:`) `PHOTO` in a vCard → `(bytes,
