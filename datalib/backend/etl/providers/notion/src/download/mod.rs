@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -164,7 +164,7 @@ async fn fetch_attachments(
         let Some(url) = signed.get(slot) else {
             continue;
         };
-        let mut req = HttpRequest::get("notion", url);
+        let mut req = HttpRequest::get(HttpService::Notion, url);
         if !host_is_notion(url) {
             req = req.plain();
         }

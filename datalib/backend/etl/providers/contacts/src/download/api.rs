@@ -7,14 +7,14 @@ use quick_xml::Reader;
 use thiserror::Error;
 
 use datalib_etl::http::{
-    latchkey_curl, HttpError, HttpMethod, HttpRequest, HttpResponse, LatchkeySettings,
+    latchkey_curl, HttpError, HttpMethod, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
 };
 
-/// Latchkey provider tag for every CardDAV request. The trailing
+/// The latchkey service every CardDAV request runs under. The trailing
 /// host-specific keying happens inside latchkey based on the URL
 /// host; this value is just what shows up in playback fixtures +
 /// telemetry events.
-pub const PROVIDER: &str = "carddav";
+pub const HTTP_SERVICE: HttpService = HttpService::Carddav;
 
 #[derive(Error, Debug)]
 pub enum CarddavError {
@@ -159,7 +159,7 @@ pub async fn propfind(
     latchkey: &LatchkeySettings,
 ) -> Result<Multistatus, CarddavError> {
     let req = HttpRequest {
-        provider: PROVIDER,
+        service: HTTP_SERVICE,
         method: HttpMethod::Propfind,
         url: url.to_string(),
         headers: {
@@ -187,7 +187,7 @@ pub async fn report(
     latchkey: &LatchkeySettings,
 ) -> Result<Multistatus, CarddavError> {
     let req = HttpRequest {
-        provider: PROVIDER,
+        service: HTTP_SERVICE,
         method: HttpMethod::Report,
         url: url.to_string(),
         headers: {

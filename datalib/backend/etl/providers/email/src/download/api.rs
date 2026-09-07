@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 use super::session::{Session, CAP_CORE, CAP_MAIL};
 
@@ -25,7 +25,7 @@ pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value>
         "methodCalls": [[method, args, CALL_ID]],
     });
     let body = serde_json::to_vec(&envelope).context("serialize JMAP envelope")?;
-    let req = HttpRequest::post_json("jmap", &session.api_url, body)
+    let req = HttpRequest::post_json(HttpService::Jmap, &session.api_url, body)
         .latchkey(session.latchkey.clone())
         .timeout(REQUEST_TIMEOUT);
     let resp = latchkey_curl(&req).await.map_err(map_http_err)?;
@@ -71,7 +71,7 @@ pub async fn download_bytes(
     timeout: Duration,
     latchkey: &LatchkeySettings,
 ) -> Result<(Vec<u8>, Option<String>)> {
-    let req = HttpRequest::get("jmap", url)
+    let req = HttpRequest::get(HttpService::Jmap, url)
         .latchkey(latchkey.clone())
         .timeout(timeout);
     let resp = latchkey_curl(&req).await.map_err(map_http_err)?;

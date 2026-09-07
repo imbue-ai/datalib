@@ -1,8 +1,8 @@
 //! Slack entity ids.
 
-use datalib_id::{composite_key, entity_id_str, Scope};
+use datalib_id::{composite_key, entity_id_str, IdNamespace, Scope};
 
-pub const PROVIDER: &str = "slack";
+pub const ID_NAMESPACE: IdNamespace = IdNamespace::Slack;
 
 pub const KIND_THREAD: &str = "thread";
 pub const KIND_MESSAGE: &str = "message";
@@ -21,7 +21,7 @@ pub struct Identity {
 fn identity(team_id: &str, entity_kind: &'static str, natural_key: String) -> Identity {
     Identity {
         uuid: entity_id_str(
-            PROVIDER,
+            ID_NAMESPACE,
             Scope::Upstream(team_id),
             entity_kind,
             &natural_key,
@@ -87,7 +87,7 @@ mod tests {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
-                    PROVIDER,
+                    ID_NAMESPACE,
                     Scope::Upstream(team),
                     got.entity_kind,
                     &got.natural_key
