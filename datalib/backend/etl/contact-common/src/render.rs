@@ -42,6 +42,11 @@ pub struct RenderSummary {
     pub contacts_rendered: usize,
     pub contacts_skipped: usize,
     pub photos_materialized: usize,
+    /// Every document this call considered, rendered and skipped alike —
+    /// and the ones whose render failed, which are documents we could not
+    /// rewrite rather than contacts the address book lost. See
+    /// `datalib_etl_chat_common::render::RenderSummary::documents`.
+    pub documents: Vec<String>,
 }
 
 pub fn render_all(
@@ -60,6 +65,7 @@ pub fn render_all(
     progress.set_length(Some(summary.contacts_total as u64));
 
     for contact in contacts {
+        summary.documents.push(contact.contact_uuid.clone());
         match render_one(
             profile,
             contact,

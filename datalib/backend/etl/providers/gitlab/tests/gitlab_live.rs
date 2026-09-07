@@ -50,6 +50,7 @@ async fn gitlab_live_single_mr_snapshot() {
             docs.push(doc);
             Ok(())
         },
+        &mut std::collections::HashSet::new(),
     )
     .expect("render_gitlab failed");
 

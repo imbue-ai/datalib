@@ -298,6 +298,28 @@ One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
 for a provider that deletes on absence.
 
+### Snapshot inputs: `always_clear_before_ingest`
+
+A source whose input is a *complete* snapshot — a Takeout export, a
+phone backup, a directory of `.vcf` files — gets deletion detection for
+free by not being clever: set `common.always_clear_before_ingest = true`
+and the download wipes the source's entity tables and cursors before
+each ingest, then rewrites them from what the input holds now. Anything
+the input dropped is simply not written back. The old rows stay in
+history, so `dolt_diff` still says what went.
+
+Mechanically it is the config-driven form of `--reset-and-redownload`:
+[`download.rs`](/datalib/backend/datalib_step/src/download.rs) ORs the
+two together, and every provider already truncates on that knob. The
+blob CAS keeps its bytes — orphans there wait on a collector we have not
+built.
+
+The condition is the whole rule: **absence in the input has to mean
+deletion.** For an input that is itself an evicting cache it means "not
+cached here," and the wipe destroys real history — which is why
+[`beeper`](/datalib/backend/etl/providers/beeper/DOWNLOAD.md) must not
+use it. A partial export of a normally-complete source is the same trap.
+
 ### What limits it
 
 **Detection needs a re-enumeration.** A downloader that walks forward
@@ -306,9 +328,19 @@ enters the diff. You need a periodic full listing or tombstones from the
 API. Verified to notice today: `email` (JMAP `Email/changes` `destroyed`
 and the Gmail path's `deleted`, both into `db.delete_emails`), `media`
 and `fsindex` (truncate-and-refill, asserted by `media`'s
-`deletions_are_reconciled_without_a_clock`), and `claude_export`
-(`prune_to`). The rest is an unwritten per-provider audit; assume a
-cursor-driven walker's deletions are invisible until someone checks.
+`deletions_are_reconciled_without_a_clock`), `claude_export`
+(`prune_to`), and every source carrying
+[`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest).
+The rest is an unwritten per-provider audit; assume a cursor-driven
+walker's deletions are invisible until someone checks.
+
+**A deletion the download notices now reaches the grid.** That used to
+be a second gap and is not any more — see
+[parse and render](data_architecture_parse_and_render.md), "Two
+mechanisms, because there are two kinds of renderer". It is worth
+keeping the two apart when reading a bug report: "we never noticed"
+(this section) and "we noticed and the grid still shows it" (that one)
+look identical from the UI.
 
 **The two lists barely overlap**, which is the awkward part. `media` and
 `fsindex` detect deletions structurally and record no deltas; most of

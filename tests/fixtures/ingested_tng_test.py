@@ -233,6 +233,16 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Signal's raw entity store, which holds `ingested_backups`."""
         return self.workspace / "signal" / "raw" / "entities.doltlite_db"
 
+    @property
+    def _claude_entities_db(self) -> Path:
+        """Claude's raw entity store, where run 5 stages a deletion."""
+        return self.workspace / "claude-api" / "raw" / "entities.doltlite_db"
+
+    @property
+    def _github_entities_db(self) -> Path:
+        """GitHub's raw entity store, where run 6 stages a deletion."""
+        return self.workspace / "github" / "raw" / "entities.doltlite_db"
+
     def _query(self, db: Path, sql: str) -> list[str]:
         """Run one SQL statement, returning stripped non-empty lines."""
         self.assertTrue(db.is_file(), f"expected a doltlite store at {db}")
@@ -294,6 +304,32 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _providers(self) -> frozenset[str]:
         return frozenset(
             self._query(self._index_db, "SELECT DISTINCT provider FROM grid_rows;")
+        )
+
+    def _sources_missing_a_storage_report(self) -> list[str]:
+        """Sources that rendered documents but carry no storage rows.
+
+        Every source's render wave ends by measuring its raw store, so
+        every source in `markdowns` should also appear as an `account`
+        on some `provider='datalib'` row.
+
+        The failure this catches is silent and partial. Eight providers
+        declare their whole document set via `RunCtx::retain_documents`,
+        and the sweep that follows deletes anything they did not name —
+        which is every storage report, since a provider's processors
+        know nothing about them. `render.rs` exempts the report by id,
+        and if that exemption breaks, only those eight sources lose
+        theirs. `EXPECTED_PROVIDERS` would not notice: the other eight
+        keep `datalib` in the set. Nothing else would either, until
+        someone spotted a source missing from the grid.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT DISTINCT m.source_name FROM markdowns m "
+            "WHERE m.source_name NOT IN ("
+            "  SELECT account FROM grid_rows "
+            "  WHERE provider = 'datalib' AND account IS NOT NULL"
+            ") ORDER BY m.source_name;",
         )
 
     def _pdf_shape(self) -> dict[str, int]:
@@ -594,6 +630,35 @@ class IngestedTngPipelineTest(unittest.TestCase):
         result.check_returncode()
         return result
 
+    def _run_step(self, step_id: str, *argv: str) -> subprocess.CompletedProcess:
+        """Run one `datalib-step` invocation the way the runner would.
+
+        Steps take their identity from `$DATALIB_DAG_STEP` and their data
+        root from `$DATALIB_DAG_DATA_ROOT`, so a single step is drivable
+        without the runner. Used to re-render and re-index one source
+        without the download step in front of it — `datalib-dag --sync`
+        cannot express that, since it only accepts source steps (those with
+        no inputs) and pulls in everything downstream of them.
+        """
+        env = {
+            **os.environ,
+            "DATALIB_DAG_DATA_ROOT": str(self.workspace),
+            "DATALIB_DAG_STEP": step_id,
+            "DATALIB_DAG_NOW": self.now,
+        }
+        result = subprocess.run(
+            [str(Path(self.cwd) / self.step_bin), *argv],
+            check=False,
+            cwd=str(self.cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        result.check_returncode()
+        return result
+
     def test_pipeline_resume_and_reset(self) -> None:
         # --- Run 1: fresh workspace. Full ingest.
         run1 = self._run_pipeline(reset=False)
@@ -619,6 +684,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._providers(),
             EXPECTED_PROVIDERS,
             "grid_rows providers after a full run",
+        )
+        self.assertEqual(
+            self._sources_missing_a_storage_report(),
+            [],
+            "every source that rendered must also have measured itself",
         )
 
         # PDFs specifically: 4 renderable documents, 5 pages between
@@ -791,6 +861,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # idempotent. Re-rendering and re-loading the same documents
         # must not duplicate rows (upserts keyed correctly) or drop
         # them (a cursor short-circuit skipping too much).
+        # Checked before the shape assertion below, which would also
+        # fail but only as an opaque row-count mismatch.
+        #
+        # Run 2, not run 1, is where a lost storage report shows up. Run
+        # 1 writes the report *after* the retain sweep, so it always
+        # survives its own run; it is the next run that sweeps it and
+        # then declines to write it back, because its fingerprint has
+        # not moved. Asserting this only after run 1 would pass against
+        # the broken behaviour — verified by removing the exemption in
+        # `render.rs` and watching run 1 stay green.
+        self.assertEqual(
+            self._sources_missing_a_storage_report(),
+            [],
+            "a source lost its storage report on a steady-state re-run, "
+            "most likely to the retain sweep in render.rs",
+        )
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
         )
@@ -919,6 +1005,183 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "a fresh data root over the same fixture must mint "
             "byte-identical ids — an id recipe that reads the clock, the "
             "scan order, or the config would differ here and nowhere else",
+        )
+
+        # --- Run 5: the upstream lost a conversation.
+        #
+        # Everything above proves the pipeline ADDS and KEEPS. This proves
+        # it can SUBTRACT, which is a separate mechanism and was missing
+        # entirely: render only ever had `emit_doc`, so a raw row that went
+        # away left its markdown on disk and its rows in the grid forever.
+        #
+        # The deletion is made in the raw store rather than in the fixture
+        # because the two halves are independent. Whether claude's DOWNLOAD
+        # can notice that claude.ai dropped a conversation is a question
+        # about re-enumeration and pruning; this is the question downstream
+        # of it — given a raw store that lost a row, does the loss reach the
+        # grid? Simulating it directly is what keeps this test honest about
+        # which half it covers.
+        victim = self._scalar(
+            self._index_db,
+            "SELECT upstream_id FROM grid_rows "
+            "WHERE provider = 'claude' AND upstream_entity_kind = 'conversation' "
+            "ORDER BY upstream_id LIMIT 1;",
+        )
+        conversation_uuid = self._scalar(
+            self._index_db,
+            "SELECT DISTINCT conversation_uuid FROM grid_rows "
+            f"WHERE provider = 'claude' AND upstream_id = '{victim}';",
+        )
+        doomed_docs = self._query(
+            self._index_db,
+            "SELECT DISTINCT markdown_uuid FROM grid_rows "
+            f"WHERE conversation_uuid = '{conversation_uuid}' "
+            "AND markdown_uuid IS NOT NULL;",
+        )
+        self.assertTrue(
+            doomed_docs,
+            f"fixture must have rendered claude conversation {victim}, "
+            "or this run asserts nothing",
+        )
+        doomed_files = [
+            self.workspace / p
+            for p in self._query(
+                self._index_db,
+                "SELECT md_path FROM markdowns "
+                f"WHERE markdown_uuid IN ({_sql_in(doomed_docs)}) "
+                "AND md_path IS NOT NULL;",
+            )
+        ]
+        for f in doomed_files:
+            self.assertTrue(f.is_file(), f"expected a rendered markdown at {f}")
+        survivors = set(self._index_ids()["grid_rows"]) - set(
+            self._query(
+                self._index_db,
+                "SELECT uuid FROM grid_rows "
+                f"WHERE conversation_uuid = '{conversation_uuid}';",
+            )
+        )
+
+        # Delete it the way an upstream loss reaches us: the row goes, and
+        # the store commits, so the render step's `dolt_diff` names the
+        # bucket as changed and finds nothing behind it.
+        self._query(
+            self._claude_entities_db,
+            f"DELETE FROM conversations WHERE id = '{victim}'; "
+            f"DELETE FROM conversations_bookkeeping WHERE id = '{victim}'; "
+            "SELECT dolt_commit('-Am', 'test: upstream dropped a conversation');",
+        )
+
+        # Render + index only. A full pipeline run would replay the
+        # playback tape and put the conversation straight back — correct
+        # behavior for the download step, and it would make this assert
+        # nothing.
+        self._run_step("claude-api/rendered_md", "render", "claude_api")
+        self._run_step("unified_index/grid", "grid_index")
+
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT uuid FROM grid_rows "
+                f"WHERE conversation_uuid = '{conversation_uuid}';",
+            ),
+            [],
+            "every grid row of a conversation the raw store lost must go",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT markdown_uuid FROM markdowns "
+                f"WHERE markdown_uuid IN ({_sql_in(doomed_docs)});",
+            ),
+            [],
+            "and so must its markdowns rows",
+        )
+        for f in doomed_files:
+            self.assertFalse(
+                f.is_file(),
+                f"{f} outlived the conversation it renders. The grid no "
+                "longer lists it, but /applet/unified_index/chat/{uuid} "
+                "still resolves and qmd still finds it — a deletion the "
+                "user can read",
+            )
+        # Nothing else moved. A sweep that takes the neighbours with it is
+        # worse than one that never fires.
+        self.assertEqual(
+            set(self._index_ids()["grid_rows"]),
+            survivors,
+            "removing one conversation must leave every other row alone",
+        )
+        self.assertEqual(
+            self._providers(),
+            EXPECTED_PROVIDERS,
+            "run 5 removed one conversation, not a provider",
+        )
+
+        # --- Run 6: the same, for a whole-store renderer.
+        #
+        # A separate mechanism, so it needs its own coverage. Claude's
+        # renderer is narrowed by a `dolt_diff` scan and names the vanished
+        # ids it found; github's walks its whole raw store every run and
+        # instead declares the complete set it saw, letting the driver
+        # sweep the difference. The two cannot share a test: what proves
+        # one says nothing about the other.
+        #
+        # The sweep is the more dangerous of the two — it deletes on the
+        # *absence* of a name rather than the presence of one — so what
+        # matters most here is the second assertion, that the untouched PRs
+        # survived. A renderer that reported only what it re-rendered
+        # would pass the first and wipe the source on the second.
+        victim_pr = self._scalar(
+            self._github_entities_db,
+            "SELECT id FROM pull_requests ORDER BY id LIMIT 1;",
+        )
+        github_docs_before = set(
+            self._query(
+                self._index_db,
+                "SELECT markdown_uuid FROM markdowns WHERE provider = 'github';",
+            )
+        )
+        self.assertGreater(
+            len(github_docs_before),
+            1,
+            "the fixture needs more than one github document, or 'the sweep "
+            "kept the others' is not a claim this can check",
+        )
+
+        self._query(
+            self._github_entities_db,
+            f"DELETE FROM pull_requests WHERE id = '{victim_pr}'; "
+            f"DELETE FROM pull_requests_bookkeeping WHERE id = '{victim_pr}'; "
+            "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
+        )
+        self._run_step("github/rendered_md", "render", "github_api")
+        self._run_step("unified_index/grid", "grid_index")
+
+        github_docs_after = set(
+            self._query(
+                self._index_db,
+                "SELECT markdown_uuid FROM markdowns WHERE provider = 'github';",
+            )
+        )
+        self.assertEqual(
+            len(github_docs_after),
+            len(github_docs_before) - 1,
+            "the deleted PR's document must be swept out of the index, and "
+            "exactly one document with it",
+        )
+        # The sweep deletes on the ABSENCE of a name, so a renderer that
+        # under-reports what it saw takes the whole source with it. This is
+        # the assertion that catches that, and it matters more than the one
+        # above.
+        self.assertTrue(
+            github_docs_after < github_docs_before,
+            "the survivors must be the same documents, not re-minted ones",
+        )
+        self.assertEqual(
+            self._providers(),
+            EXPECTED_PROVIDERS,
+            "run 6 removed one pull request, not a provider",
         )
 
 

@@ -95,6 +95,10 @@ impl DataProcessor for PdfRender {
         let targets = render::load_targets(&self.raw_path)
             .await
             .context("pdf load render targets")?;
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render::render_targets(
             &targets,
@@ -103,8 +107,10 @@ impl DataProcessor for PdfRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("pdf render")?;
+        ctx.retain_documents(&seen);
         Ok(format!(
             "converted={} unchanged={} failed={}",
             s.converted, s.skipped_unchanged, s.failed

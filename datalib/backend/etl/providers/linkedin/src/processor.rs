@@ -105,6 +105,10 @@ impl DataProcessor for LinkedinRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.
@@ -115,6 +119,7 @@ impl DataProcessor for LinkedinRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("linkedin render")?;
         // Connections render as first-class contacts via the shared contact
@@ -126,6 +131,7 @@ impl DataProcessor for LinkedinRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("linkedin connections render")?;
         // Your own posts (Shares) and the comments you left, grouped one
@@ -137,9 +143,14 @@ impl DataProcessor for LinkedinRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("linkedin posts render")?;
 
+        // One sweep over the union of all three feeds: each contributes a
+        // slice of this source's documents, and sweeping per feed would
+        // have each delete the other two's.
+        ctx.retain_documents(&seen);
         Ok("rendered".into())
     }
 }

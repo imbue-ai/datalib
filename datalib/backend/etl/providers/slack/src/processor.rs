@@ -143,9 +143,20 @@ impl DataProcessor for SlackRender {
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
         .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
+        // Threads no message belongs to any more — a deleted thread, or
+        // one whose every message was deleted. The bucket key is already
+        // the uuid render keys the thread's documents by.
+        let mut dropped = 0usize;
+        for thread_uuid in &parsed.vanished_buckets {
+            dropped += ctx.remove_conversation(thread_uuid)?;
+        }
         let mut on_doc = |md| ctx.emit_doc(md);
         render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("slack render_all")?;
-        Ok("rendered".into())
+        Ok(if dropped == 0 {
+            "rendered".into()
+        } else {
+            format!("rendered, {dropped} document(s) gone upstream")
+        })
     }
 }
