@@ -104,7 +104,6 @@ impl Harness {
             &datalib_etl::progress::Progress::noop(),
             prior,
             &mut sink,
-            &mut std::collections::HashSet::new(),
         )
         .await?;
         Ok((s, emitted))
