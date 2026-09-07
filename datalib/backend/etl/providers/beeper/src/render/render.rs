@@ -549,21 +549,29 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
                 .await
                 .with_context(|| format!("open CAS at {}", cas_path.display()))?;
             let mut written = 0usize;
-            for (hash, _ct) in &needed {
-                let Some(obj) = cas.get(hash).await? else {
-                    continue;
-                };
-                let short = &hash[..16.min(hash.len())];
-                let ext =
-                    datalib_etl::blob_cas::extension_for_content_type(obj.content_type.as_deref())
-                        .unwrap_or_else(|| "bin".to_string());
-                let filename = format!("{short}.{ext}");
-                let path = blobs_dir.join(&filename);
-                fs::write(&path, &obj.bytes)
-                    .with_context(|| format!("write {}", path.display()))?;
-                written += 1;
+            let result = async {
+                for (hash, _ct) in &needed {
+                    let Some(obj) = cas.get(hash).await? else {
+                        continue;
+                    };
+                    let short = &hash[..16.min(hash.len())];
+                    let ext = datalib_etl::blob_cas::extension_for_content_type(
+                        obj.content_type.as_deref(),
+                    )
+                    .unwrap_or_else(|| "bin".to_string());
+                    let filename = format!("{short}.{ext}");
+                    let path = blobs_dir.join(&filename);
+                    fs::write(&path, &obj.bytes)
+                        .with_context(|| format!("write {}", path.display()))?;
+                    written += 1;
+                }
+                Ok::<usize, anyhow::Error>(written)
             }
-            Ok::<usize, anyhow::Error>(written)
+            .await;
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            cas.close().await;
+            result
         })
     })
     .map_err(|e| anyhow::anyhow!("{e:#}"))

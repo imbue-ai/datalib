@@ -34,22 +34,39 @@ struct Harness {
     _tmp: tempfile::TempDir,
     raw_dir: PathBuf,
     root: PathBuf,
+    /// One handle, shared by every scan and every assertion. A second
+    /// connection to the same store makes the first one's `dolt_commit`
+    /// fail with "another connection committed to this branch", and a
+    /// dropped pool is still open for a moment — see
+    /// `datalib/backend/etl/README.md`.
+    db: RawDb,
 }
 
 impl Harness {
-    fn new() -> Self {
-        let tmp = tempfile::tempdir().unwrap();
-        let raw_dir = tmp.path().join("raw");
-        std::fs::create_dir_all(&raw_dir).unwrap();
-        Self {
-            root: fixture_dir(),
-            _tmp: tmp,
-            raw_dir,
-        }
+    /// The fixture corpus, scanned where it lies.
+    async fn new() -> Result<Self> {
+        Self::at(tempfile::tempdir()?, fixture_dir()).await
     }
 
-    async fn db(&self) -> Result<RawDb> {
-        RawDb::open(&download::db_path_for(&self.raw_dir)).await
+    /// A writable copy of the fixture corpus, for the tests that edit
+    /// it between scans.
+    async fn on_a_copy() -> Result<Self> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().join("corpus");
+        copy_tree(&fixture_dir(), &root)?;
+        Self::at(tmp, root).await
+    }
+
+    async fn at(tmp: tempfile::TempDir, root: PathBuf) -> Result<Self> {
+        let raw_dir = tmp.path().join("raw");
+        std::fs::create_dir_all(&raw_dir)?;
+        let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
+        Ok(Self {
+            root,
+            raw_dir,
+            db,
+            _tmp: tmp,
+        })
     }
 
     async fn scan(&self) -> Result<download::FetchSummary> {
@@ -60,7 +77,7 @@ impl Harness {
     where
         F: FnOnce(download::FetchOptions) -> download::FetchOptions,
     {
-        let db = self.db().await?;
+        let db = self.db.clone();
         // A temp cache per harness: tests must never touch this host's
         // real one.
         let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
@@ -147,14 +164,14 @@ async fn assert_metadata_only_variant(db: &RawDb, a: &str, b: &str, scheme: &str
 
 #[tokio::test]
 async fn scan_records_every_class_and_ignores_non_media() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     let s = h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     assert_eq!(s.errors, 0, "no errors expected on the fixture corpus");
     assert!(s.audio > 0 && s.images > 0 && s.videos > 0, "{s:?}");
 
-    let f = files(&db).await?;
+    let f = files(db).await?;
     assert!(f.contains_key("music/ode_to_spot.mp3"));
     assert!(f.contains_key("photos/bridge.jpg"));
     assert!(f.contains_key("video/holodeck_clip.mp4"));
@@ -163,7 +180,7 @@ async fn scan_records_every_class_and_ignores_non_media() -> Result<()> {
     // Playlists are not items.
     assert!(!f.contains_key("playlists/bridge_ambience.m3u"));
 
-    let items = items(&db).await?;
+    let items = items(db).await?;
     let classes: HashSet<&str> = items.values().map(|v| v.2.as_str()).collect();
     assert_eq!(
         classes,
@@ -175,10 +192,10 @@ async fn scan_records_every_class_and_ignores_non_media() -> Result<()> {
 
 #[tokio::test]
 async fn one_item_two_paths_when_a_file_is_copied() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
-    let f = files(&db).await?;
+    let db = &h.db;
+    let f = files(db).await?;
 
     let original = &f["music/ode_to_spot.mp3"];
     let copy = &f["archive/ode_to_spot_copy.mp3"];
@@ -197,11 +214,11 @@ async fn one_item_two_paths_when_a_file_is_copied() -> Result<()> {
 
 #[tokio::test]
 async fn retagging_an_mp3_leaves_the_payload_hash_alone() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
     assert_metadata_only_variant(
-        &db,
+        db,
         "music/ode_to_spot.mp3",
         "music/ode_to_spot_retagged.mp3",
         "mp3.frames.v1",
@@ -211,19 +228,19 @@ async fn retagging_an_mp3_leaves_the_payload_hash_alone() -> Result<()> {
     // The untagged file has no ID3 block and no Xing frame at all, and
     // still lands on the same payload hash — which is what proves the
     // VBR header frame is excluded rather than merely tolerated.
-    let (bare, _) = payload_of(&db, "music/untagged_hum.mp3").await?;
-    let (tagged, _) = payload_of(&db, "music/ode_to_spot.mp3").await?;
+    let (bare, _) = payload_of(db, "music/untagged_hum.mp3").await?;
+    let (tagged, _) = payload_of(db, "music/ode_to_spot.mp3").await?;
     assert_eq!(bare, tagged);
     Ok(())
 }
 
 #[tokio::test]
 async fn flac_cover_art_and_tags_are_excluded() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
     assert_metadata_only_variant(
-        &db,
+        db,
         "music/warp_core_hum.flac",
         "music/warp_core_hum_with_art.flac",
         "flac.frames.v1",
@@ -233,11 +250,11 @@ async fn flac_cover_art_and_tags_are_excluded() -> Result<()> {
 
 #[tokio::test]
 async fn wav_info_chunks_are_excluded() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
     assert_metadata_only_variant(
-        &db,
+        db,
         "music/tea_earl_grey.wav",
         "music/tea_earl_grey_untagged.wav",
         "wav.data.v1",
@@ -247,11 +264,11 @@ async fn wav_info_chunks_are_excluded() -> Result<()> {
 
 #[tokio::test]
 async fn rewriting_a_jpegs_exif_leaves_the_payload_hash_alone() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
     assert_metadata_only_variant(
-        &db,
+        db,
         "photos/bridge.jpg",
         "photos/bridge_recaptioned.jpg",
         "jpeg.scan.v1",
@@ -259,19 +276,19 @@ async fn rewriting_a_jpegs_exif_leaves_the_payload_hash_alone() -> Result<()> {
     .await?;
 
     // A JPEG with no EXIF block at all, same scan: also the same hash.
-    let (none, _) = payload_of(&db, "photos/no_exif.jpg").await?;
-    let (with, _) = payload_of(&db, "photos/bridge.jpg").await?;
+    let (none, _) = payload_of(db, "photos/no_exif.jpg").await?;
+    let (with, _) = payload_of(db, "photos/bridge.jpg").await?;
     assert_eq!(none, with);
     Ok(())
 }
 
 #[tokio::test]
 async fn png_text_chunks_are_excluded() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
     assert_metadata_only_variant(
-        &db,
+        db,
         "photos/holodeck.png",
         "photos/holodeck_untagged.png",
         "png.idat.v1",
@@ -283,11 +300,11 @@ async fn png_text_chunks_are_excluded() -> Result<()> {
 /// reduced-resolution IFDs.
 #[tokio::test]
 async fn re_rendering_a_dng_preview_leaves_the_sensor_data_identity_intact() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
     assert_metadata_only_variant(
-        &db,
+        db,
         "photos/sensor.dng",
         "photos/sensor_edited.dng",
         "tiff.strips.v1",
@@ -297,10 +314,10 @@ async fn re_rendering_a_dng_preview_leaves_the_sensor_data_identity_intact() -> 
 
 #[tokio::test]
 async fn a_video_gets_per_track_sample_hashes() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
-    let (p, s) = payload_of(&db, "video/holodeck_clip.mp4").await?;
+    let db = &h.db;
+    let (p, s) = payload_of(db, "video/holodeck_clip.mp4").await?;
     assert!(p.is_some(), "the clip should have a payload hash");
     assert_eq!(s.as_deref(), Some("bmff.samples.v1"));
     Ok(())
@@ -309,13 +326,13 @@ async fn a_video_gets_per_track_sample_hashes() -> Result<()> {
 /// The rule that keeps `GROUP BY payload_blake3` honest.
 #[tokio::test]
 async fn an_unparsable_container_gets_null_rather_than_the_file_hash() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
-    let f = files(&db).await?;
+    let db = &h.db;
+    let f = files(db).await?;
 
     for path in ["video/mystery.avi", "music/corrupt.mp3"] {
-        let (p, s) = payload_of(&db, path).await?;
+        let (p, s) = payload_of(db, path).await?;
         assert_eq!(p, None, "{path} should have no payload hash");
         assert_eq!(s, None, "{path} should have no payload scheme");
         // …and specifically must NOT have fallen back to the file hash.
@@ -332,7 +349,7 @@ async fn an_unparsable_container_gets_null_rather_than_the_file_hash() -> Result
 
 #[tokio::test]
 async fn the_payload_ceiling_leaves_null_and_is_counted() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     // Below every fixture's size, so nothing gets a payload hash.
     let s = h
         .scan_with(|o| download::FetchOptions {
@@ -343,7 +360,7 @@ async fn the_payload_ceiling_leaves_null_and_is_counted() -> Result<()> {
     assert_eq!(s.payload_hashed, 0);
     assert!(s.payload_skipped > 0, "the skips must be visible: {s:?}");
 
-    let db = h.db().await?;
+    let db = &h.db;
     let n: i64 =
         sqlx::query("SELECT COUNT(*) AS n FROM media_items WHERE payload_blake3 IS NOT NULL")
             .fetch_one(db.pool())
@@ -357,9 +374,9 @@ async fn the_payload_ceiling_leaves_null_and_is_counted() -> Result<()> {
 
 #[tokio::test]
 async fn audio_tags_are_hoisted_into_columns() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let row = sqlx::query(
         "SELECT a.* FROM media_files f JOIN media_audio a ON a.blake3 = f.blake3
@@ -409,9 +426,9 @@ async fn audio_tags_are_hoisted_into_columns() -> Result<()> {
 
 #[tokio::test]
 async fn exif_is_hoisted_including_the_capture_offset_and_gps() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let row = sqlx::query(
         "SELECT v.* FROM media_files f JOIN media_visual v ON v.blake3 = f.blake3
@@ -446,9 +463,9 @@ async fn exif_is_hoisted_including_the_capture_offset_and_gps() -> Result<()> {
 
 #[tokio::test]
 async fn dimensions_come_from_the_container_when_there_is_no_exif() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let dims = |path: &'static str| {
         let pool = db.pool().clone();
@@ -492,9 +509,9 @@ async fn dimensions_come_from_the_container_when_there_is_no_exif() -> Result<()
 
 #[tokio::test]
 async fn a_video_reports_duration_codecs_and_its_own_capture_metadata() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let row = sqlx::query(
         "SELECT i.duration_ms AS d, v.video_codec AS vc, v.audio_codec AS ac,
@@ -530,9 +547,9 @@ async fn a_video_reports_duration_codecs_and_its_own_capture_metadata() -> Resul
 /// recording date.
 #[tokio::test]
 async fn a_bmff_file_keeps_both_its_tags_and_its_capture_metadata() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let both = |path: &'static str| {
         let pool = db.pool().clone();
@@ -589,9 +606,9 @@ async fn a_bmff_file_keeps_both_its_tags_and_its_capture_metadata() -> Result<()
 /// must not gain an all-NULL row in the other table.
 #[tokio::test]
 async fn single_purpose_files_get_exactly_one_class_row() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     for (path, want_audio, want_visual) in [
         ("music/ode_to_spot.mp3", true, false),
@@ -630,9 +647,9 @@ async fn single_purpose_files_get_exactly_one_class_row() -> Result<()> {
 
 #[tokio::test]
 async fn a_playlist_keeps_its_order_and_its_unresolvable_entries() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     let s = h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let pl = sqlx::query(
         "SELECT title, entry_count, format FROM media_playlists
@@ -738,9 +755,9 @@ async fn a_playlist_keeps_its_order_and_its_unresolvable_entries() -> Result<()>
 
 #[tokio::test]
 async fn a_latin1_playlist_decodes_and_keeps_duplicate_entries() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     let rows = sqlx::query(
         "SELECT position, target_raw, ext_title FROM media_playlist_entries
@@ -763,9 +780,9 @@ async fn a_latin1_playlist_decodes_and_keeps_duplicate_entries() -> Result<()> {
 
 #[tokio::test]
 async fn hls_manifests_are_skipped_and_counted() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     let s = h.scan().await?;
-    let db = h.db().await?;
+    let db = &h.db;
 
     assert_eq!(s.hls_skipped, 1, "the stream manifest should be recognized");
     let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM media_playlists WHERE id LIKE '%.m3u8'")
@@ -780,11 +797,11 @@ async fn hls_manifests_are_skipped_and_counted() -> Result<()> {
 
 #[tokio::test]
 async fn a_rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     let first = h.scan().await?;
-    let db = h.db().await?;
-    let files_before = files(&db).await?;
-    let items_before = items(&db).await?;
+    let db = &h.db;
+    let files_before = files(db).await?;
+    let items_before = items(db).await?;
 
     let second = h.scan().await?;
     // Nothing changed on disk, so the Unison cursor should carry every
@@ -793,10 +810,9 @@ async fn a_rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
     assert_eq!(second.hashed, 0, "no file should be rehashed: {second:?}");
     assert_eq!(second.items, 0, "no item should be re-identified");
 
-    let db = h.db().await?;
-    assert_eq!(files(&db).await?, files_before, "path rows must be stable");
+    assert_eq!(files(db).await?, files_before, "path rows must be stable");
     assert_eq!(
-        items(&db).await?.len(),
+        items(db).await?.len(),
         items_before.len(),
         "item rows must be stable"
     );
@@ -813,10 +829,10 @@ async fn a_rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
 /// A scan that dies partway must leave its rescan cursors behind.
 #[tokio::test]
 async fn a_failed_scan_leaves_the_rescan_cursors_intact() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     let first = h.scan().await?;
-    let db = h.db().await?;
-    let before = files(&db).await?;
+    let db = &h.db;
+    let before = files(db).await?;
     assert!(!before.is_empty());
 
     let err = h
@@ -830,9 +846,8 @@ async fn a_failed_scan_leaves_the_rescan_cursors_intact() -> Result<()> {
     assert!(err.is_err(), "the malformed pattern should fail the scan");
 
     // Truncating up front would have emptied this before the failure.
-    let db = h.db().await?;
     assert_eq!(
-        files(&db).await?,
+        files(db).await?,
         before,
         "a failed scan must not discard the path table"
     );
@@ -851,26 +866,20 @@ async fn a_failed_scan_leaves_the_rescan_cursors_intact() -> Result<()> {
 /// just happens at the end.
 #[tokio::test]
 async fn deletions_are_reconciled_without_a_clock() -> Result<()> {
-    let tmp = tempfile::tempdir()?;
-    let root = tmp.path().join("corpus");
-    copy_tree(&fixture_dir(), &root)?;
-    let work = tempfile::tempdir()?;
-    let raw_dir = work.path().join("raw");
-    std::fs::create_dir_all(&raw_dir)?;
-
-    let first = scan_root(&root, &raw_dir).await?;
+    let h = Harness::on_a_copy().await?;
+    let first = h.scan().await?;
     assert_eq!(first.removed, 0);
 
-    std::fs::remove_file(root.join("music/untagged_hum.mp3"))?;
-    std::fs::remove_file(root.join("playlists/bridge_ambience.m3u"))?;
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
     // Both scans use the same pinned `NOW`, deliberately: a
     // `WHERE last_seen_at <> ?` sweep would delete nothing here, which
     // is exactly why reconciliation is a set difference instead.
-    let second = scan_root(&root, &raw_dir).await?;
+    let second = h.scan().await?;
     assert_eq!(second.removed, 2, "one file and one playlist: {second:?}");
 
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
-    let f = files(&db).await?;
+    let db = &h.db;
+    let f = files(db).await?;
     assert!(!f.contains_key("music/untagged_hum.mp3"));
     let n: i64 = sqlx::query(
         "SELECT COUNT(*) AS n FROM media_playlist_entries
@@ -888,22 +897,15 @@ async fn deletions_are_reconciled_without_a_clock() -> Result<()> {
 /// positions that no longer exist.
 #[tokio::test]
 async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
-    let tmp = tempfile::tempdir()?;
-    let root = tmp.path().join("corpus");
-    copy_tree(&fixture_dir(), &root)?;
-    let work = tempfile::tempdir()?;
-    let raw_dir = work.path().join("raw");
-    std::fs::create_dir_all(&raw_dir)?;
-
-    scan_root(&root, &raw_dir).await?;
-    let pl = root.join("playlists/bridge_ambience.m3u");
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
     std::fs::write(
-        &pl,
+        h.root.join("playlists/bridge_ambience.m3u"),
         "#EXTM3U\n#PLAYLIST:Bridge Ambience\n../music/ode_to_spot.mp3\n",
     )?;
-    scan_root(&root, &raw_dir).await?;
+    h.scan().await?;
 
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
+    let db = &h.db;
     let rows = sqlx::query(
         "SELECT position FROM media_playlist_entries
           WHERE playlist_id = 'playlists/bridge_ambience.m3u' ORDER BY position",
@@ -916,10 +918,10 @@ async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
 
 #[tokio::test]
 async fn force_rehash_re_reads_everything_without_changing_a_row() -> Result<()> {
-    let h = Harness::new();
+    let h = Harness::new().await?;
     let first = h.scan().await?;
-    let db = h.db().await?;
-    let before = files(&db).await?;
+    let db = &h.db;
+    let before = files(db).await?;
 
     let forced = h
         .scan_with(|o| download::FetchOptions {
@@ -930,9 +932,8 @@ async fn force_rehash_re_reads_everything_without_changing_a_row() -> Result<()>
     assert_eq!(forced.hashed, first.entries_scanned, "every file re-read");
     assert_eq!(forced.reused, 0);
 
-    let db = h.db().await?;
     assert_eq!(
-        files(&db).await?,
+        files(db).await?,
         before,
         "re-reading unchanged bytes must produce identical rows"
     );
@@ -942,30 +943,22 @@ async fn force_rehash_re_reads_everything_without_changing_a_row() -> Result<()>
 #[tokio::test]
 async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() -> Result<()> {
     // Scan a copy of the corpus so a file can be removed.
-    let tmp = tempfile::tempdir()?;
-    let root = tmp.path().join("corpus");
-    copy_tree(&fixture_dir(), &root)?;
+    let h = Harness::on_a_copy().await?;
+    let db = &h.db;
+    h.scan().await?;
+    let hash = files(db).await?["music/untagged_hum.mp3"].clone();
 
-    let work = tempfile::tempdir()?;
-    let raw_dir = work.path().join("raw");
-    std::fs::create_dir_all(&raw_dir)?;
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    h.scan().await?;
 
-    scan_root(&root, &raw_dir).await?;
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
-    let hash = files(&db).await?["music/untagged_hum.mp3"].clone();
-
-    std::fs::remove_file(root.join("music/untagged_hum.mp3"))?;
-    scan_root(&root, &raw_dir).await?;
-
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
     assert!(
-        !files(&db).await?.contains_key("music/untagged_hum.mp3"),
+        !files(db).await?.contains_key("music/untagged_hum.mp3"),
         "the path row should fall out with the truncate"
     );
     // The item survives: it is keyed on content, which has no notion of
     // "no longer present", and keeping it preserves `first_seen_at`.
     assert!(
-        items(&db).await?.contains_key(&hash),
+        items(db).await?.contains_key(&hash),
         "the item row should remain (see DOWNLOAD.md §Orphaned items)"
     );
     Ok(())
@@ -975,19 +968,15 @@ async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() ->
 /// what moved.
 #[tokio::test]
 async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
-    let tmp = tempfile::tempdir()?;
-    let root = tmp.path().join("corpus");
-    copy_tree(&fixture_dir(), &root)?;
-    let work = tempfile::tempdir()?;
-    let raw_dir = work.path().join("raw");
-    std::fs::create_dir_all(&raw_dir)?;
+    let h = Harness::on_a_copy().await?;
+    let root = &h.root;
+    let db = &h.db;
 
     // ── Scan 1: the baseline ─────────────────────────────────────────
-    let first = scan_root(&root, &raw_dir).await?;
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
-    let files_before = files(&db).await?;
-    let items_before = items(&db).await?;
-    let hum_payload_before = payload_of(&db, "music/untagged_hum.mp3").await?.0;
+    let first = h.scan().await?;
+    let files_before = files(db).await?;
+    let items_before = items(db).await?;
+    let hum_payload_before = payload_of(db, "music/untagged_hum.mp3").await?.0;
     assert!(hum_payload_before.is_some());
     assert_eq!(
         first.hashed, first.entries_scanned,
@@ -1036,7 +1025,7 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     )?;
 
     // ── Scan 2: the accounting ───────────────────────────────────────
-    let second = scan_root(&root, &raw_dir).await?;
+    let second = h.scan().await?;
     assert_eq!(
         second.files_seen,
         first.files_seen - 1 + 2,
@@ -1059,9 +1048,8 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     assert_eq!(second.items, 2, "{second:?}");
     assert_eq!(second.removed, 1, "the deleted file's path row");
 
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
-    let files_after = files(&db).await?;
-    let items_after = items(&db).await?;
+    let files_after = files(db).await?;
+    let items_after = items(db).await?;
 
     // (1) Retag: new file hash, SAME payload hash — a new row that is
     //     recognizably the same recording.
@@ -1070,7 +1058,7 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
         "the file changed"
     );
     assert_eq!(
-        payload_of(&db, "music/untagged_hum.mp3").await?.0,
+        payload_of(db, "music/untagged_hum.mp3").await?.0,
         hum_payload_before,
         "…but the audio did not"
     );
@@ -1098,8 +1086,8 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     // (4) New file: a new item with its own payload.
     assert!(files_after.contains_key("music/new_track.wav"));
     assert_ne!(
-        payload_of(&db, "music/new_track.wav").await?.0,
-        payload_of(&db, "music/tea_earl_grey.wav").await?.0,
+        payload_of(db, "music/new_track.wav").await?.0,
+        payload_of(db, "music/tea_earl_grey.wav").await?.0,
         "a changed sample is a different recording"
     );
 
@@ -1125,12 +1113,11 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     assert_eq!(n, 1, "a shortened playlist loses its tail");
 
     // ── Scan 3: settled ──────────────────────────────────────────────
-    let third = scan_root(&root, &raw_dir).await?;
+    let third = h.scan().await?;
     assert_eq!(third.hashed, 0, "nothing left to read: {third:?}");
     assert_eq!(third.items, 0);
     assert_eq!(third.removed, 0);
-    let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
-    assert_eq!(files(&db).await?, files_after, "a settled tree is stable");
+    assert_eq!(files(db).await?, files_after, "a settled tree is stable");
     Ok(())
 }
 
@@ -1157,30 +1144,6 @@ fn id3v2_with_title(title: &str) -> Vec<u8> {
     tag.extend_from_slice(&syncsafe(frame.len() as u32));
     tag.extend_from_slice(&frame);
     tag
-}
-
-/// Scan a caller-owned tree, for the tests that mutate the corpus.
-async fn scan_root(
-    root: &std::path::Path,
-    raw_dir: &std::path::Path,
-) -> Result<download::FetchSummary> {
-    let db = RawDb::open(&download::db_path_for(raw_dir)).await?;
-    let cache = FingerprintCache::open(&raw_dir.join("fingerprints.sqlite")).await?;
-    download::fetch(download::FetchOptions {
-        db,
-        source_name: STANZA.to_string(),
-        root: root.to_path_buf(),
-        cache,
-        ignore: vec![],
-        max_bytes: None,
-        payload_max_bytes: None,
-        playlists: true,
-        skip_dataless: true,
-        force_rehash: false,
-        now: NOW.to_string(),
-        progress: datalib_etl::progress::Progress::noop(),
-    })
-    .await
 }
 
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {

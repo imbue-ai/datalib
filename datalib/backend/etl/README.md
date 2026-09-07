@@ -86,7 +86,27 @@ branch would silently start writing to `main` after 30 minutes and report
 success — and multi-million-entry scans reach that window.
 
 Any other code opening a `SqlitePool` against a `.doltlite_db` must do the
-same.
+same — and one pool, not two. Size 1 is necessary, not sufficient: a store
+guards itself with a lock it never waits on, so whichever connection is
+holding it makes the other one's `dolt_commit` fail. The message that comes
+back, `commit conflict: another connection committed to this branch`, names
+a commit that need not have happened; read it as "someone else has this
+store open right now".
+
+That makes a second pool a timing bug rather than an immediate one, and a
+pool you dropped is not yet a pool that is gone: sqlx closes its connections
+on a background task, so a store reopened right after the previous handle
+went out of scope can still find the old connection there.
+
+So there are two ways to be right, and dropping a handle is neither. Hold
+one handle for as long as the store is in use — that is what `fetch`'s
+`db: Option<RawDb>` is for, and a caller that also wants to read the store
+afterwards should pass its own handle in. Or, where a fresh connection is
+the point — proving a cursor survived the pool that wrote it, or mirroring
+a binary that opens the store per run — `await` a `close()` before the next
+`open`. Every `RawDb` that a caller reopens has one; it closes the blob CAS
+alongside the entity pool, which the older `db.pool().clone()` /
+`pool.close()` idiom silently left open.
 
 ## Schema self-healing, and why the DDL runs in two passes
 

@@ -31,8 +31,7 @@ fn make_initial_tree(root: &Path) {
     symlink("subdir/nested.txt", root.join("hello.link")).unwrap();
 }
 
-async fn dump_files(db_path: &Path) -> String {
-    let db = RawDb::open(db_path).await.unwrap();
+async fn dump_files(db: &RawDb) -> String {
     let rows = sqlx::query(
         "SELECT id, kind, size, blake3, symlink_target, identity_uuid \
          FROM files ORDER BY id",
@@ -97,10 +96,13 @@ async fn assert_inode_stamp_kind(cache: &FingerprintCache, root: &Path) {
     }
 }
 
-fn fetch_opts(db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOptions {
+/// The test opens the store and keeps it: two connections to one
+/// doltlite file is what breaks, so `fetch` gets the handle rather than
+/// opening a second one.
+fn fetch_opts(db: &RawDb, db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
-        db: None,
+        db: Some(db.clone()),
         source_id: "smoke".to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: None,
@@ -111,8 +113,7 @@ fn fetch_opts(db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOpti
     }
 }
 
-async fn dir_identity_uuid(db_path: &Path, id: &str) -> Option<String> {
-    let db = RawDb::open(db_path).await.unwrap();
+async fn dir_identity_uuid(db: &RawDb, id: &str) -> Option<String> {
     let row = sqlx::query("SELECT identity_uuid FROM files WHERE id = ? AND kind = 'dir'")
         .bind(id)
         .fetch_one(db.pool())
@@ -129,13 +130,14 @@ async fn initial_scan_and_incremental_rescan() {
     let root = tmp.path().join("tree");
     fs::create_dir(&root).unwrap();
     let db_path = tmp.path().join("fsindex.doltlite_db");
+    let db = RawDb::open(&db_path).await.unwrap();
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
         .await
         .unwrap();
     make_initial_tree(&root);
 
     // ── Phase A: initial scan ───────────────────────────────────────
-    let summary_a = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let summary_a = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .expect("initial fetch");
     assert_eq!(summary_a.errors, 0, "no walker errors");
@@ -155,14 +157,14 @@ async fn initial_scan_and_incremental_rescan() {
     assert_eq!(summary_a.entries_scanned, 6);
     assert_inode_stamp_kind(&cache, &root).await;
 
-    insta::assert_snapshot!("initial_scan", dump_files(&db_path).await);
+    insta::assert_snapshot!("initial_scan", dump_files(&db).await);
 
     // ── Phase A2: rescan with no changes — Unison fast path ─────────
     // This is the test that the inode-based cursor is actually
     // doing its job. All four FILE rows should reuse their cached
     // blake3 against the unchanged (mtime, size, inode) triple;
     // only the symlink and the two directories should rehash.
-    let summary_a2 = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let summary_a2 = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .expect("unchanged rescan");
     assert_eq!(summary_a2.errors, 0);
@@ -199,7 +201,7 @@ async fn initial_scan_and_incremental_rescan() {
     // be gone from `files` (visible in the after_edits snapshot).
     fs::remove_file(root.join("empty.txt")).unwrap();
 
-    let summary_b = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let summary_b = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .expect("incremental fetch");
     assert_eq!(summary_b.errors, 0);
@@ -223,7 +225,7 @@ async fn initial_scan_and_incremental_rescan() {
         assert_eq!(summary_b.symlinks, 1);
     }
 
-    let dump_b = dump_files(&db_path).await;
+    let dump_b = dump_files(&db).await;
     // Truncate-and-rebuild: the deleted file must not appear.
     assert!(
         !dump_b.contains("empty.txt"),
@@ -244,6 +246,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     let root = tmp.path().join("tree");
     fs::create_dir(&root).unwrap();
     let db_path = tmp.path().join("fsindex.doltlite_db");
+    let db = RawDb::open(&db_path).await.unwrap();
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
         .await
         .unwrap();
@@ -257,7 +260,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
     write(&root.join("subdir/nested.txt"), b"nested");
 
-    let mut opts = fetch_opts(&db_path, &root, cache.clone());
+    let mut opts = fetch_opts(&db, &db_path, &root, cache.clone());
     opts.no_stamp = false;
     let summary = download::fetch(opts).await.expect("stamping fetch");
     assert_eq!(summary.errors, 0);
@@ -279,16 +282,16 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
 
     // ...and the `subdir` row carries the matching identity_uuid, while
     // an un-opted-in dir (root) stays NULL.
-    let stamped = dir_identity_uuid(&db_path, "subdir").await;
+    let stamped = dir_identity_uuid(&db, "subdir").await;
     assert!(stamped.is_some(), "subdir row should carry identity_uuid");
     assert_eq!(
-        dir_identity_uuid(&db_path, "").await,
+        dir_identity_uuid(&db, "").await,
         None,
         "root opted out, so its identity_uuid stays NULL"
     );
 
     // Second scan: idempotent. No new breadcrumb, same UUID reused.
-    let mut opts2 = fetch_opts(&db_path, &root, cache.clone());
+    let mut opts2 = fetch_opts(&db, &db_path, &root, cache.clone());
     opts2.no_stamp = false;
     let summary2 = download::fetch(opts2).await.expect("rescan");
     assert_eq!(
@@ -296,7 +299,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
         "rescan reuses the existing breadcrumb — nothing newly stamped"
     );
     assert_eq!(
-        dir_identity_uuid(&db_path, "subdir").await,
+        dir_identity_uuid(&db, "subdir").await,
         stamped,
         "rescan must keep the same identity_uuid"
     );
@@ -319,11 +322,9 @@ async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("f.txt"), body).unwrap();
 
-        let mut opts = fetch_opts(
-            &tmp.path().join(format!("{tree}.doltlite_db")),
-            &root,
-            cache.clone(),
-        );
+        let db_path = tmp.path().join(format!("{tree}.doltlite_db"));
+        let db = RawDb::open(&db_path).await.unwrap();
+        let mut opts = fetch_opts(&db, &db_path, &root, cache.clone());
         // A non-canonical root: the shape that broke it. The original
         // bug was a *relative* `--root`, which cannot be exercised here
         // without `set_current_dir` — racy under a threaded runner — but
@@ -376,24 +377,20 @@ async fn a_symlinked_root_shares_the_cache_with_its_real_path() {
         .unwrap();
 
     // Scan through the symlinked route first.
-    let via_link = download::fetch(fetch_opts(
-        &tmp.path().join("a.doltlite_db"),
-        &link,
-        cache.clone(),
-    ))
-    .await
-    .unwrap();
+    let a_path = tmp.path().join("a.doltlite_db");
+    let db_a = RawDb::open(&a_path).await.unwrap();
+    let via_link = download::fetch(fetch_opts(&db_a, &a_path, &link, cache.clone()))
+        .await
+        .unwrap();
     assert_eq!(via_link.files_hashed, 1, "the first scan should hash");
     assert_eq!(via_link.symlinks, 1, "the in-tree symlink stays a symlink");
 
     // The real route reuses all of it.
-    let via_real = download::fetch(fetch_opts(
-        &tmp.path().join("b.doltlite_db"),
-        &real,
-        cache.clone(),
-    ))
-    .await
-    .unwrap();
+    let b_path = tmp.path().join("b.doltlite_db");
+    let db_b = RawDb::open(&b_path).await.unwrap();
+    let via_real = download::fetch(fetch_opts(&db_b, &b_path, &real, cache.clone()))
+        .await
+        .unwrap();
     assert_eq!(
         via_real.files_hashed, 0,
         "the real path rehashed what the symlinked path had already cached"
@@ -433,7 +430,8 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
         .await
         .unwrap();
     let db_path = tmp.path().join("s.doltlite_db");
-    download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let db = RawDb::open(&db_path).await.unwrap();
+    download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .unwrap();
     assert_eq!(cache.count().await.unwrap(), 4, "root + three files");
@@ -441,7 +439,7 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
     // One file really goes; the other is merely filtered out.
     std::fs::remove_file(root.join("doomed.bin")).unwrap();
     std::fs::write(root.join(".fsindex.yaml"), "ignore:\n  - \"*.tmp\"\n").unwrap();
-    download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .unwrap();
 
@@ -460,7 +458,7 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
 
     // And the filtered file is still cheap when a later scan wants it.
     std::fs::remove_file(root.join(".fsindex.yaml")).unwrap();
-    let after = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let after = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .unwrap();
     assert_eq!(
@@ -481,9 +479,10 @@ async fn the_summary_accounts_for_the_cache() {
     let cache_path = tmp.path().join("fingerprints.sqlite");
     let cache = FingerprintCache::open(&cache_path).await.unwrap();
     let db_path = tmp.path().join("s.doltlite_db");
+    let db = RawDb::open(&db_path).await.unwrap();
 
     // Cold: nothing to read, everything written (5 files + the root).
-    let cold = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let cold = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .unwrap();
     assert_eq!(cold.cache_entries_loaded, 0);
@@ -496,7 +495,7 @@ async fn the_summary_accounts_for_the_cache() {
     );
 
     // Warm: everything read back, everything rewritten.
-    let warm = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let warm = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .unwrap();
     assert_eq!(warm.cache_entries_loaded, 6);
@@ -506,7 +505,7 @@ async fn the_summary_accounts_for_the_cache() {
     // Delete two: read the old six, write the surviving four, forget two.
     std::fs::remove_file(root.join("f0.txt")).unwrap();
     std::fs::remove_file(root.join("f1.txt")).unwrap();
-    let after = download::fetch(fetch_opts(&db_path, &root, cache.clone()))
+    let after = download::fetch(fetch_opts(&db, &db_path, &root, cache.clone()))
         .await
         .unwrap();
     assert_eq!(after.cache_entries_loaded, 6);

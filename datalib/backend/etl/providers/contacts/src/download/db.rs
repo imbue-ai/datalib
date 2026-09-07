@@ -43,6 +43,12 @@ impl RawDb {
         &self.pool
     }
 
+    /// Wait for the connection to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     /// Wipe every per-row table so the next fetch re-downloads every
     /// contact from the server. Also clears any persisted sync
     /// tokens / ctags so the server gives us a full enumeration

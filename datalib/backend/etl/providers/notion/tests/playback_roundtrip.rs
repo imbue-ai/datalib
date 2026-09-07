@@ -76,8 +76,12 @@ async fn notion_synth_playback_extract_roundtrip() {
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
+    // The test owns the store: one connection for the download and the
+    // assertions both, because two is what breaks a doltlite file.
+    let out = RawDb::open(&out_db).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: out_db.clone(),
+        db: Some(out.clone()),
         subtree_pages: vec![pid.to_string()],
         sleep_between: Duration::ZERO,
         ..FetchOptions::default()
@@ -86,7 +90,6 @@ async fn notion_synth_playback_extract_roundtrip() {
     .unwrap();
     assert_eq!(summary.new_pages, 1);
 
-    let out = RawDb::open(&out_db).await.unwrap();
     let pages = out.load_pages().await.unwrap();
     assert_eq!(pages.len(), 1);
     assert_eq!(pages[0]["id"], pid);

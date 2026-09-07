@@ -107,9 +107,13 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
     rt.block_on(async {
         // ── download ──────────────────────────────────────────────
+        // The test owns each store: one connection for the download and
+        // the assertions both, because two is what breaks a doltlite
+        // file.
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: None,
+            db: Some(db.clone()),
             input_path: export.clone(),
             fetch_photos: false,
             photo_max_consecutive_failures: 50,
@@ -122,8 +126,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // 6 CSVs + 1 articles batch = 7 "files".
         assert_eq!(summary.files, 7, "files (6 csv + articles)");
         assert_eq!(summary.parse_errors, 0, "no parse errors");
-
-        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
 
         // Member-id suffix stripped: table is `comments`, not
         // `comments_17529409`.
@@ -152,6 +154,9 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(html.contains("Treemaps"), "article html captured");
 
         // ── render ───────────────────────────────────────────────
+        // `render` opens the store itself, so hand the file over first:
+        // one doltlite file takes one connection at a time.
+        db.close().await;
         // render() uses block_in_place internally, so it must run on a
         // multi-threaded runtime worker (this `block_on`), not a
         // spawn_blocking thread.
@@ -337,9 +342,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         fs::create_dir_all(&playback)?;
         Synthesizer::synthesize(&LinkedinSynth::new(export.clone()), &playback)?;
         std::env::set_var(PLAYBACK_ENV, &playback);
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: None,
+            db: Some(db.clone()),
             input_path: export.clone(),
             fetch_photos: true,
             photo_max_consecutive_failures: 50,
@@ -394,9 +400,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // recorded. A second pass with real fixtures retries and fetches.
         let raw2 = tmp.path().join("raw2");
         fs::create_dir_all(&raw2)?;
+        let db2 = RawDb::open(&db_path_for(&raw2)).await?;
         download::fetch(FetchOptions {
             db_path: raw2.clone(),
-            db: None,
+            db: Some(db2.clone()),
             input_path: export.clone(),
             fetch_photos: false,
             photo_max_consecutive_failures: 50,
@@ -404,7 +411,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             control: Default::default(),
         })
         .await?;
-        let db2 = RawDb::open(&db_path_for(&raw2)).await?;
 
         let empty_pb = tmp.path().join("empty_pb");
         fs::create_dir_all(&empty_pb)?;
@@ -453,9 +459,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // all connections.
         let raw3 = tmp.path().join("raw3");
         fs::create_dir_all(&raw3)?;
+        let db3 = RawDb::open(&db_path_for(&raw3)).await?;
         download::fetch(FetchOptions {
             db_path: raw3.clone(),
-            db: None,
+            db: Some(db3.clone()),
             input_path: export.clone(),
             fetch_photos: false,
             photo_max_consecutive_failures: 50,
@@ -463,7 +470,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             control: Default::default(),
         })
         .await?;
-        let db3 = RawDb::open(&db_path_for(&raw3)).await?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
         let g = download::photos::fetch_connection_photos(
             &db3,

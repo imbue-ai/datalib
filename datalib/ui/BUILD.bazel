@@ -180,6 +180,17 @@ _E2E_DATA = [
 # rather than hardcoded: bzlmod mangles `@nodejs_host`'s repo name, so
 # there is no stable string to write down.
 _E2E_ENV = {
+    # Runfiles paths Bazel computes, rather than strings run_e2e.sh
+    # spells out. A hand-written `_main/...` path is checked against
+    # nothing: rename or move one of these targets and the dep is still
+    # declared, still in the runfiles, and `rlocation` misses it at run
+    # time. Through `rlocationpath` the same mistake is an analysis-time
+    # error naming the label.
+    "FW_E2E_APPLET_BIN_RLOC": "$(rlocationpath //datalib/backend/applets:datalib_applet)",
+    "FW_E2E_DAG_BIN_RLOC": "$(rlocationpath //datalib/backend/dag:datalib_dag_bin)",
+    "FW_E2E_HTTP_BIN_RLOC": "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
+    "FW_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root)",
+    "FW_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
     "FW_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
     "FW_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
     # The store's location has to be anchored on a GENERATED artifact,
