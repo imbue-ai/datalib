@@ -621,8 +621,13 @@ pub async fn build_grid_index(
         }
         stanzas.sort();
         for (stanza, rendered_root) in stanzas {
-            let store = crate::indexed_markdown::IndexedMarkdownStore::open(&rendered_root)
-                .with_context(|| format!("open render store for {stanza}"))?;
+            // Read-only: the render step owns this store, and an ordinary
+            // open would rescue-commit and schema-commit into it — writing to
+            // a file we do not own, and (once producers stream) committing
+            // the renderer's in-flight rows on its behalf.
+            let store =
+                crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(&rendered_root)
+                    .with_context(|| format!("open render store for {stanza}"))?;
             let cursor = cursors.get(&stanza).map(String::as_str);
             let scan = store
                 .changed_since(cursor)
@@ -648,8 +653,24 @@ pub async fn build_grid_index(
                     "index: documents changed since the last index"
                 ),
             }
+            // Read at the commit the scan named, so the changed set and the
+            // rows behind it describe one commit. No commit means this store
+            // has nothing committed to read — an interrupted first render, or
+            // a build with no dolt extensions — and reading it anyway would
+            // mean indexing rows the renderer had not finished writing.
+            let Some(pin) = crate::pin::Pin::from_scan(scan.new_head.as_deref())
+                .with_context(|| format!("pin the render store for {stanza}"))?
+            else {
+                tracing::warn!(
+                    source = %stanza,
+                    "index: this store names no commit, so there is nothing \
+                     committed to index; skipping it this run"
+                );
+                store.close();
+                continue;
+            };
             let found = store
-                .documents_matching(out_dir, scan.changed_buckets.as_ref())
+                .documents_matching(out_dir, scan.changed_buckets.as_ref(), &pin)
                 .with_context(|| format!("read documents from {stanza}"))?;
             // An id the diff named that the store no longer has is a deletion.
             // Only a diff can produce this.
@@ -1961,6 +1982,40 @@ mod source_cursor_tests {
         );
         assert_eq!(second.markdowns_loaded, 0);
         assert_eq!(index_row_count(&pool).await, 2, "and the rows are intact");
+    }
+
+    /// The point of pinning the index's reads. A document the renderer has
+    /// written but not committed must not reach the grid — before the pin the
+    /// index read the working set and would have taken it. That is harmless
+    /// while render always finishes before the index starts, and becomes a
+    /// correctness bug the moment a consumer is allowed to run early: the grid
+    /// would publish rows from a render still in flight, which may yet change
+    /// or vanish.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_the_renderer_has_not_committed_is_not_indexed() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+
+        // A second document left in the working set, the way a render that is
+        // still running (or was killed) leaves one.
+        let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
+        store
+            .put_document(root, &doc(root, "src", "md-2", "b"))
+            .unwrap();
+        store.close();
+
+        let summary = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(
+            summary.markdowns_total, 1,
+            "only the committed document should have been read"
+        );
+        assert_eq!(
+            index_row_count(&pool).await,
+            1,
+            "the uncommitted document must not be in the grid"
+        );
     }
 
     /// The cursor must be recorded, and must be the store's HEAD.

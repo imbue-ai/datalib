@@ -309,27 +309,27 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
                     SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
                       FROM dolt_diff_emails
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT from_account_id, from_thread_id
                       FROM dolt_diff_emails
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_mailboxes d
                       JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_keywords d
                       JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT t.account_id,
                            coalesce(dt.to_id, dt.from_id) AS thread_id
                       FROM dolt_diff_threads dt
                       JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
-                     WHERE dt.from_ref = ?1 AND dt.to_ref = 'HEAD' AND dt.diff_type != 'unchanged'
+                     WHERE dt.from_ref = ?1 AND dt.to_ref = ?2 AND dt.diff_type != 'unchanged'
                 )
                 WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
             ",

@@ -226,12 +226,12 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT thread_root_uuid FROM (
                     SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
                       FROM dolt_diff_messages
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT m.thread_root_uuid
                       FROM dolt_diff_slack_attachments d
                       JOIN messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
-                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                 )
                 WHERE thread_root_uuid IS NOT NULL
             ",

@@ -670,11 +670,11 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT conversation_id FROM (
                     SELECT coalesce(to_id, from_id) AS conversation_id
                       FROM dolt_diff_conversations
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_conversation_id, from_conversation_id)
                       FROM dolt_diff_chatgpt_attachments
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE conversation_id IS NOT NULL
             ",

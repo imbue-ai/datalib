@@ -186,7 +186,50 @@ value the consumer splits — which is exactly what a matching tag would
 have bought, minus the tag. The rule for the consumer is that both
 pins come out of *one* checkpoint string, never sampled separately.
 
-### And a third: `to_ref = 'HEAD'` is a moving target
+### And a third: opening a store writes to it
+
+The one that would have defeated everything else, found while building
+the first edge. `doltlite_raw::open` does three things on the way in
+besides connecting: it seals a dirty working tree into a **rescue
+commit**, reconciles the schema, and then runs
+`commit_run(pool, "schema: apply DDL")` — which is `dolt_commit('-Am')`,
+so it takes whatever *else* was dirty along with it.
+
+For the process that owns a store, all three are useful. For a consumer
+they are three writes to a file it does not own, and under streaming the
+damage is exact: **the consumer's own open turns the producer's
+half-written batch into a real commit**, which the consumer then pins to
+and reads as finished work. Pinning cannot save you, because by then the
+torn rows genuinely are committed.
+
+It is measured, not reasoned:
+`doltlite_raw`'s `opening_a_store_commits_whatever_was_left_dirty`
+asserts that a row left dirty by one pool is committed and visible at
+`HEAD` after a second pool merely opens the file.
+
+So a consumer opens with **`open_reader`**, which connects `read_only`
+and does nothing else; the render store is reached through
+`IndexedMarkdownStore::open_for_reading`. Read-only at the engine rather
+than by convention: a write through it fails with `attempt to write a
+readonly database`, so "a reader must not write" is enforced the same
+way `Pin` enforces "no unpinned reads". The `pinned_<table>` views still
+install, because they live in the per-connection temp schema rather than
+in the file — measured by `a_reader_cannot_write_but_can_still_pin`.
+
+The behaviour that goes away with it is the schema reconcile. **This is
+not new ground**: slack's render pool is already read-only and its
+`load_channels` documents exactly this, probing with `column_exists` and
+falling back to the columns that have always been there; whatsapp reads
+through its own `open_ro_pool`. So the idiom for "a store the current
+downloader has not touched" already exists in the tree, and the answer
+for the other edge is to use it rather than to invent something.
+
+`grid_index`'s `a_document_the_renderer_has_not_committed_is_not_indexed`
+is the end-to-end guard: a document written but not committed must not
+reach the grid. It fails without `open_for_reading` even with every read
+pinned, which is the whole point of writing it down here.
+
+### And a fourth: `to_ref = 'HEAD'` is a moving target
 
 `scan_buckets` samples `new_head` from `dolt_log()` and then runs the
 bucket query with `to_ref = 'HEAD'` — a *symbolic* ref, resolved when
@@ -196,14 +239,17 @@ those two statements gives you a changed-bucket list computed at a
 newer commit than the pin the content reads will use, so the consumer
 looks for rows its pin does not have.
 
-The fix is one line and belongs in the same patch as the pinning:
-**`scan_buckets` must diff to the literal `new_head` hash, not to
-`'HEAD'`.** The scan and the content reads then name the same commit by
-construction. This answers "does the helper work for the renderer's
-initial work-to-do diff too?" — yes, and the pin it hands the content
-reads has to be the same hash the diff was taken at, which is why
-`new_head` (already computed, today only used to stamp the cursor)
-becomes the pin rather than a freshly sampled HEAD.
+The fix is to diff to the literal `new_head` hash rather than to
+`'HEAD'`, so the scan and the content reads name one commit by
+construction. Done: `scan_buckets` binds it at `?2` and every
+`bucket_query` says `to_ref = ?2`. `new_head` — already computed, and
+until now only used to stamp the cursor — becomes the pin as well.
+
+One provider does not use `scan_buckets`: whatsapp runs the same shape
+of query by hand, and a blanket edit of the SQL left it with an unbound
+`?2` that silently matched nothing. Its own incremental-render test
+caught it, which is the argument for that test existing. It now binds
+its `new_head` too, and cold-starts when either ref is missing.
 
 ### How the sites get swept
 
@@ -511,12 +557,16 @@ Each of these is a reviewable PR that leaves the tree green.
    dirty working set, that a missing view fails loudly, and that the
    views are connection-scoped — the three assertions the rest of this
    plan rests on.
-2. **The sweep.** 3 sites in `indexed_markdown.rs` first, then the 48
-   provider sites + 2 in `blob_cas.rs`, with nothing yet calling
-   `install_views`. Still no behavior change — this is the patch to review carefully
-   and the one that is boring on purpose. Splitting it in two along the
-   edge boundary keeps the first streaming edge unblocked by the wide
-   half.
+2. **The sweep**, per edge — and note it can no longer be split from
+   step 4 the way this plan first had it. With `Pin` carrying no
+   "unpinned" state, a renamed query fails until the views exist, so the
+   rename and the pinning land together. That is the right shape: a
+   rename you cannot half-do.
+   - ~~`render -> grid_index`~~ **done.** The 3 sites in
+     `indexed_markdown.rs::documents_matching`, plus `open_reader` /
+     `open_for_reading` and the `to_ref = ?2` fix.
+   - `download -> render`: the 48 provider sites + 2 in `blob_cas.rs`,
+     which also need the raw store opened through `open_reader`.
 3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
    when clean, cadence from config), the two commit seams with **blobs
    committed before entities**, checkpointing disabled for
@@ -524,12 +574,8 @@ Each of these is a reviewable PR that leaves the tree green.
    parsing it, `progress_bus.rs` showing it. Consumers still only run
    at the end, so this ships durability and "N rows committed so far"
    progress with no scheduling risk. Answers most of #164 on its own.
-4. **Consumers pin.** Thread `new_head` through, and change
-   `scan_buckets` to diff to that literal hash rather than to `'HEAD'`
-   so the scan and the content reads name one commit. Still no early
-   dispatch — but now provably safe against one, and the tests can
-   assert it by running a consumer against a store with a dirty working
-   set and checking it sees the committed count.
+4. ~~**Consumers pin.**~~ Folded into step 2, per above. Done for
+   `render -> grid_index`; still to do for `download -> render`.
 5. **Streaming dispatch.** The scheduler change — in-flight tracking
    with checkpoints dropped rather than queued, and the separate
    streaming slot — for `render → grid_index` only. Measure the latency

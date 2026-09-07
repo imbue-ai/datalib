@@ -434,15 +434,15 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT bucket_uuid FROM (
                     SELECT coalesce(to_id, from_id) AS bucket_uuid
                       FROM dolt_diff_conversations
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_conversation_uuid, from_conversation_uuid)
                       FROM dolt_diff_claude_attachments
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_project_uuid, from_project_uuid)
                       FROM dolt_diff_project_docs
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE bucket_uuid IS NOT NULL
             ",
