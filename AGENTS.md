@@ -110,7 +110,13 @@ are relative to the repo root.
   what keeps them writing one deduped schema, and why an IMAP mode was
   built and removed.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
-  union table behind the grid UI.
+  union table behind the grid UI. Its per-provider mapping tables name
+  raw-store tables and columns; check those against the
+  `schema_inventory` golden
+  (`datalib/backend/schema_inventory/`), which is generated from the
+  DDL and so is the one list that cannot be stale. Prose here has been
+  wrong before — it named `openai_conversations`, `claude_conversations`
+  and `slack_workspaces`, none of which have ever existed.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
   table.
 - [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
