@@ -507,7 +507,7 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", wizard: false },
-  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", wizard: false },
+  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", wizard: false },
 
   {
     type: "pdf",
