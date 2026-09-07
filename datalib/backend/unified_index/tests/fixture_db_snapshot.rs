@@ -1,5 +1,14 @@
 //! Snapshot of the TNG fixture's `backend_index.doltlite_db` contents.
+//!
+//! One row per source is a storage report (`provider: "datalib"`,
+//! `kind: "Source Size"`). Its `text` deliberately carries no byte
+//! figure: a doltlite store's size is not reproducible — it drifts
+//! between rebuilds on one machine and differs outright between
+//! machines — so nothing hashed may contain it. That is enforced at
+//! the producer (`datalib_step::introspect`), not scrubbed here, which
+//! is why this file needs no special case for those rows.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -79,6 +88,12 @@ fn stable_source_url(v: Option<String>) -> Option<String> {
     };
     let tail = rest.rsplit('/').next().unwrap_or(rest);
     Some(format!("file://…/{tail}"))
+}
+
+/// The `grid_rows.provider` the storage reports carry, from the enum
+/// that owns the spelling rather than repeated as a literal.
+fn provider_datalib() -> &'static str {
+    datalib_schema::providers::Provider::Datalib.as_str()
 }
 
 fn stable_row_set_hash(provider: Option<&str>, v: Option<String>) -> Option<String> {
@@ -205,19 +220,65 @@ async fn snapshot_grid_rows_and_documents() {
         .map(|r| json!({"message": r.try_get::<String, _>("message").ok()}))
         .collect();
 
+    // Storage rows are summarized rather than enumerated. They are 43%
+    // of the rows and none of this golden's purpose — it exists to
+    // catch *provider render* regressions, and a measurement row's
+    // per-field detail is pinned by `datalib_step::introspect`'s own
+    // tests. Listing them in full added 4,458 lines here, so every
+    // future churn of this file would carry them too.
+    //
+    // The digest keeps the coverage that belongs at this level: a row
+    // added, removed, re-keyed, or whose count moved all change it,
+    // because it is taken over each row's `(uuid, text)` and the text
+    // carries the count.
+    let (storage, grid_rows): (Vec<_>, Vec<_>) = grid_rows
+        .into_iter()
+        .partition(|r| r["provider"] == json!(provider_datalib()));
+    let mut by_source_kind: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for r in &storage {
+        let key = (
+            r["account"].as_str().unwrap_or_default().to_string(),
+            r["kind"].as_str().unwrap_or_default().to_string(),
+        );
+        by_source_kind.entry(key).or_default().push(format!(
+            "{}\t{}",
+            r["uuid"].as_str().unwrap_or_default(),
+            r["text_sha"].as_str().unwrap_or_default(),
+        ));
+    }
+    let storage_rows: Vec<serde_json::Value> = by_source_kind
+        .into_iter()
+        .map(|((source, kind), mut members)| {
+            members.sort();
+            json!({
+                "source": source,
+                "kind": kind,
+                "rows": members.len(),
+                "members_sha": digest(&members.join("\n")),
+            })
+        })
+        .collect();
+
     let bundle = json!({
         "summary": {
             "grid_rows_count": grid_rows.len(),
+            "storage_rows_count": storage.len(),
             "documents_count": documents.len(),
             "dolt_log_count": dolt_log.len(),
         },
         "grid_rows": grid_rows,
+        "storage_rows": storage_rows,
         "documents": documents,
         "dolt_log": dolt_log,
     });
 
     // Pretty-printed JSON is the most diff-friendly representation —
     // one field per line, sorted keys, no insta-yaml quoting surprises.
+    // Measured against the alternatives on this same data: JSON Lines
+    // is 340 lines to this one's 6,971 and CSV is 341, but CSV has no
+    // native null and this golden turns on null != "" (see `when_ts`
+    // above), and neither shows you *which* field moved. The size
+    // problem was the storage rows, and it is fixed above.
     let snapshot = serde_json::to_string_pretty(&bundle).expect("serialize");
     insta::assert_snapshot!("fixture_backend_index", snapshot);
 }

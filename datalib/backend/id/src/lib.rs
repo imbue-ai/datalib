@@ -29,7 +29,8 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 /// store — see `datalib_step::render`.
 ///
 /// Only the providers ported to this recipe appear here;
-/// `docs/dev/entity_ids.md` tracks the rest.
+/// `docs/dev/entity_ids.md` tracks the rest. [`IdNamespace::Datalib`]
+/// is the one entry that is not a provider at all.
 #[derive(
     Debug,
     Clone,
@@ -50,6 +51,11 @@ pub enum IdNamespace {
     Claude,
     Chatgpt,
     Slack,
+    /// Not a provider: datalib's own measurements of a source's mirror,
+    /// which are minted by this recipe like anything else. Kept in its
+    /// own namespace so a storage row can never collide with a row from
+    /// the source it measures. See `datalib_step::introspect`.
+    Datalib,
 }
 
 impl IdNamespace {

@@ -54,15 +54,29 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
 /// GridCard exposes.
 async function gridRows(
   page: Page,
-): Promise<{ sender: string; conversation_name: string; source: string }[]> {
+): Promise<
+  { sender: string; conversation_name: string; source: string; source_name: string }[]
+> {
   return await page.evaluate(() => {
-    type Node = { data?: { sender: string; conversation_name: string; source: string } };
+    type Node = {
+      data?: {
+        sender: string;
+        conversation_name: string;
+        source: string;
+        source_name: string;
+      };
+    };
     const api = (
       window as unknown as {
         __fwGridApi?: { forEachNode: (cb: (n: Node) => void) => void };
       }
     ).__fwGridApi!;
-    const out: { sender: string; conversation_name: string; source: string }[] = [];
+    const out: {
+      sender: string;
+      conversation_name: string;
+      source: string;
+      source_name: string;
+    }[] = [];
     api.forEachNode((n) => {
       if (n.data) out.push(n.data);
     });
@@ -206,8 +220,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await openExplore(page);
     const first = await gridRows(page);
     expect(first.length, "the PDFs should be indexed").toBeGreaterThan(0);
+    // `source_name`, not `source`: the question is whether a row leaked
+    // in from another *configured source*, and this library has exactly
+    // one. `source` is the provider label, and the storage rows every
+    // source now emits carry "Storage" there while still belonging to
+    // this one — see docs/dev/grid_rows.md.
     expect(
-      first.every((r) => r.source === "PDF"),
+      first.every((r) => r.source_name === "pdfs"),
       `every row should come from the one source configured: ${JSON.stringify(first)}`,
     ).toBe(true);
     expect(first.map((r) => r.conversation_name)).toContain("Captain's Log");

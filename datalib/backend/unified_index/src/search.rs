@@ -65,6 +65,13 @@ pub struct SearchRow {
     /// `upstream_id` — a bare `12345` is ambiguous between a
     /// GitHub review and a review comment.
     pub upstream_entity_kind: String,
+    /// Bytes on disk for the thing this row describes — a measured
+    /// file or store, a sized artifact. `None` for a row that has no
+    /// meaningful size, which is most of them.
+    pub byte_size: Option<i64>,
+    /// How many things this row counts — rows in a measured table,
+    /// pages in a PDF. `None` for a row that is a single thing.
+    pub item_count: Option<i64>,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for pure structured queries (no free text) and for the SQL-LIKE
     /// fallback path. Surfaced to the UI as a sortable "Score" column.

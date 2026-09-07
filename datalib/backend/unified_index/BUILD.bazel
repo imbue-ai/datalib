@@ -120,6 +120,10 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
     },
     deps = [
+        # For `Provider::Datalib`: the storage rows are treated
+        # differently here, and the tag they carry should come from the
+        # enum that owns its spelling rather than a literal.
+        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
