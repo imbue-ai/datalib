@@ -474,12 +474,11 @@ backend, stop — add the field to `grid_rows` instead.
 
 ## Feedback persistence (doltlite)
 
-The backend opens the data root's `backend_index.doltlite_db` via
-`sqlx::sqlite::SqlitePool` and wraps it in `DoltRepo`
-(`datalib/backend/core/src/dolt_repo.rs`). doltlite is statically
-linked into every Rust binary by `//third-party/doltlite:sqlite3`
-(see `MODULE.bazel`); no host `dolt` install, no subprocess, no MySQL
-client. The same pool serves reads and writes.
+`datalib-http` opens `<data_root>/system/feedback.doltlite_db` via
+`sqlx::sqlite::SqlitePool` and wraps it — together with the jobs and
+usage stores, one file each — in `AppStore`
+(`datalib/backend/core/src/app_store.rs`), the implementation of the
+`AppRepo` trait in `repo.rs`. The same pool serves reads and writes.
 
 Every UUID-bearing UI surface has a "Feedback…" path. Right-click on
 the grid emits `grid_cell` / `grid_row`; the search input emits
