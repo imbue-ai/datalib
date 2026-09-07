@@ -126,15 +126,41 @@ pub struct CommentRow {
 #[derive(Debug, Default, Clone)]
 pub struct ParsedGithubApi {
     pub self_identity: Option<GithubSelfIdentity>,
+    /// The PRs to render this pass — narrowed to the buckets the diff
+    /// named, or every PR on a cold start.
     pub pull_requests: Vec<PullRequestRow>,
     pub comments: Vec<CommentRow>,
+    /// PRs the diff reported unchanged, so this run skipped them.
+    pub docs_skipped: usize,
+    pub scan: ScanResult,
+    /// Buckets the diff named whose `pull_requests` row is gone: PRs that
+    /// vanished from the store. Empty on a cold start, which looks at
+    /// every bucket and so has nothing to compare against.
+    pub vanished_buckets: Vec<String>,
+}
+
+/// Result of the `dolt_diff` scan, carried alongside the parsed bag so
+/// render can advance the cursor and log the timing.
+#[derive(Debug, Clone, Default)]
+pub struct ScanResult {
+    /// `Some(set)` → render only these `"{repo}#{num}"` buckets. `None` →
+    /// cold start (no cursor, or the diff was unusable): render everything.
+    pub changed_buckets: Option<std::collections::HashSet<String>>,
+    /// HEAD at scan time, to stamp into the render cursor on success.
+    pub new_head: Option<String>,
+    pub scan_elapsed: Option<std::time::Duration>,
 }
 
 /// Read raw payloads out of the doltlite DB. `path` may be either a
 /// `.doltlite_db` file or the per-source directory (whose entity db is
 /// `entities.doltlite_db`) — both resolve to the same sqlite file via
 /// [`db_path_for`].
-pub fn parse_api_dir(path: &Path) -> Result<ParsedGithubApi> {
+/// Parse for render, narrowed by `dolt_diff` when a render cursor says
+/// where the last run got to.
+///
+/// `last_render_hash` is that cursor. `None` renders everything, which is
+/// always correct and is what a first run does.
+pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedGithubApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         // No store: this source has never been downloaded. That is
@@ -146,8 +172,119 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedGithubApi> {
     }
     let raw = block_on_load_all(&db_path)
         .with_context(|| format!("load github db {}", db_path.display()))?;
-    Ok(parse_loaded(raw))
+    let mut parsed = parse_loaded(raw);
+
+    let scan = block_on_scan(&db_path, last_render_hash)?;
+    if let Some(changed) = scan.changed_buckets.as_ref() {
+        let before = parsed.pull_requests.len();
+        parsed
+            .pull_requests
+            .retain(|pr| changed.contains(&pr_pk(&pr.repo_full_name, pr.pr_number)));
+        parsed.docs_skipped = before.saturating_sub(parsed.pull_requests.len());
+        // Comments follow their PR: one left attached to a PR this pass is
+        // not rendering would be grouped into a document nobody emits.
+        parsed
+            .comments
+            .retain(|c| changed.contains(&pr_pk(&c.repo_full_name, c.pr_number)));
+        parsed.vanished_buckets = block_on_vanished(&db_path, changed)?;
+    }
+    parsed.scan = scan;
+    Ok(parsed)
 }
+
+/// The bucket key a PR's rows share: `pull_requests.id`, and the same
+/// string composed from any child row's `(repo_full_name, pr_number)`.
+fn pr_pk(repo: &str, num: u32) -> String {
+    format!("{repo}#{num}")
+}
+
+fn block_on_scan(db_path: &Path, last_render_hash: Option<&str>) -> Result<ScanResult> {
+    let path = db_path.to_path_buf();
+    let last = last_render_hash.map(str::to_string);
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = open_ro(&path).await?;
+            let scan = datalib_etl::doltlite_raw::scan_buckets(
+                &pool,
+                last.as_deref(),
+                &datalib_etl::doltlite_raw::DiffScanSpec {
+                    // `self_identity` is not read by render, so a change to
+                    // it fans out to nothing.
+                    global_fanout_tables: &[],
+                    bucket_query: BUCKET_QUERY,
+                },
+            )
+            .await?;
+            pool.close().await;
+            Ok::<_, anyhow::Error>(ScanResult {
+                changed_buckets: scan.changed_buckets,
+                new_head: scan.new_head,
+                scan_elapsed: scan.scan_elapsed,
+            })
+        })
+    })
+}
+
+fn block_on_vanished(
+    db_path: &Path,
+    changed: &std::collections::HashSet<String>,
+) -> Result<Vec<String>> {
+    let path = db_path.to_path_buf();
+    let changed = changed.clone();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = open_ro(&path).await?;
+            let gone = datalib_etl::doltlite_raw::buckets_without_rows(
+                &pool,
+                &changed,
+                &[("pull_requests", "id")],
+            )
+            .await?;
+            pool.close().await;
+            Ok::<_, anyhow::Error>(gone)
+        })
+    })
+}
+
+async fn open_ro(db_path: &Path) -> Result<sqlx::SqlitePool> {
+    use std::str::FromStr;
+    let opts =
+        sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+            .read_only(true);
+    sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open github doltlite for render {}", db_path.display()))
+}
+
+/// A PR's document is built from its own row plus its three child tables,
+/// so any of the four moving means that PR must re-render. Children carry
+/// `(repo_full_name, pr_number)`, which composes the same key
+/// `pull_requests.id` already holds.
+const BUCKET_QUERY: &str = "
+    SELECT DISTINCT bucket FROM (
+        SELECT coalesce(to_id, from_id) AS bucket
+          FROM dolt_diff_pull_requests
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        UNION
+        SELECT coalesce(to_repo_full_name, from_repo_full_name) || '#' ||
+               coalesce(to_pr_number, from_pr_number)
+          FROM dolt_diff_issue_comments
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        UNION
+        SELECT coalesce(to_repo_full_name, from_repo_full_name) || '#' ||
+               coalesce(to_pr_number, from_pr_number)
+          FROM dolt_diff_pr_reviews
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        UNION
+        SELECT coalesce(to_repo_full_name, from_repo_full_name) || '#' ||
+               coalesce(to_pr_number, from_pr_number)
+          FROM dolt_diff_pr_review_comments
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+    )
+    WHERE bucket IS NOT NULL
+";
 
 pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
     let mut out = ParsedGithubApi::default();
@@ -360,7 +497,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse_api_dir(Path::new("/this/does/not/exist")).unwrap();
+        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), None).unwrap();
         assert!(parsed.pull_requests.is_empty());
         assert!(parsed.comments.is_empty());
         assert!(parsed.self_identity.is_none());
