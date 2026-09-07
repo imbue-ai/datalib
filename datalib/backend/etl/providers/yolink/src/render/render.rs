@@ -10,6 +10,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
@@ -493,7 +494,7 @@ fn build_grid_rows(
 
     let mut rows: Vec<GridRow> = GridRow::builder()
         .uuid(m_uuid.to_string())
-        .provider("yolink")
+        .provider(Provider::Yolink)
         .kind("Sensor Timeseries")
         .source_label("YoLink")
         .when_ts(parsed.latest_ts_ms().and_then(iso))
@@ -525,7 +526,7 @@ fn build_grid_rows(
         rows.extend(
             GridRow::builder()
                 .uuid(uuid)
-                .provider("yolink")
+                .provider(Provider::Yolink)
                 .kind("Sensor Device")
                 .source_label("YoLink")
                 .when_ts(when)

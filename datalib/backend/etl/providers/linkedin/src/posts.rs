@@ -21,6 +21,7 @@ use crate::download::schema_raw::ns_id as uuid5;
 use crate::download::{db_path_for, RawDb};
 
 use crate::render::{parse_date_ms, RENDER_VERSION};
+use datalib_schema::providers::Provider;
 
 /// Author label for the export owner. Every share and comment in these
 /// two feeds is something the user themselves wrote.
@@ -28,7 +29,7 @@ const ME: &str = "Me";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "linkedin",
+        provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Post".to_string(),
         message_kind: "LinkedIn Post Message".to_string(),

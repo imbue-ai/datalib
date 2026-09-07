@@ -351,12 +351,13 @@ mod stale_tree_tests {
         declared_render_versions, discard_tree, every_stored_version_must_be_declared,
         tree_is_from_an_older_renderer,
     };
+    use datalib_schema::providers::Provider;
 
     fn write_doc(root: &Path, chat_uuid: &str, version: u32) {
         let store = IndexedMarkdownStore::open(root).unwrap();
         let row = GridRow::builder()
             .uuid(chat_uuid)
-            .provider("test")
+            .provider(Provider::Test)
             .kind("Test")
             .source_label("Test")
             .conversation_uuid(chat_uuid)

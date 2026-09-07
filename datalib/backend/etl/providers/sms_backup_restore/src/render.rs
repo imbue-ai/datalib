@@ -19,6 +19,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
+use datalib_schema::providers::Provider;
 
 /// v2: a row whose `date` field is missing or non-numeric gets a null
 ///     `when_ts` instead of a real-looking `1970-01-01T00:00:00`. See
@@ -45,7 +46,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "sms_backup_restore",
+        provider: Provider::SmsBackupRestore,
         // Drives the grid "Source" column (and `source:SMS` queries); keep
         // it short so it reads cleanly next to the SMS icon.
         source_label: "SMS".to_string(),

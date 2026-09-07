@@ -24,6 +24,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
     ],
 )
 

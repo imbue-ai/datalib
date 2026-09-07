@@ -1003,6 +1003,103 @@ Applies to nested arrays as well, and the sort has to be total: sort by
 the rendered string rather than by `as_str()`, so a mixed-type array
 gets an order instead of a panic.
 
+## Name a closed set of strings
+
+**If a string can only be one of a handful of values, it should be an
+enum.** A bare `&str` or `String` in that position gives you nothing: no
+list of what the values are, no place to say what one *means*, no
+compile error when a `match` misses one, and "find references" returns
+every unrelated use of the same word.
+
+Rust has no `StrEnum`, so use [`strum`](https://docs.rs/strum) — it is
+already a workspace dependency:
+
+```rust
+use strum::{EnumString, IntoStaticStr, VariantArray};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(EnumString, IntoStaticStr, VariantArray)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum RunState {
+    /// Invoked, and the scheduler is waiting on it.
+    Running,
+    /// In the runnable subgraph, but up to date. Checked, and current.
+    SkippedUpToDate,
+    …
+}
+
+impl RunState {
+    pub fn as_str(self) -> &'static str { self.into() }
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> { s.parse().ok() }
+}
+```
+
+`VariantArray` gives `RunState::VARIANTS`, so nothing has to re-list the
+values — that list *is* the enum, and it cannot silently miss one. The
+two thin `as_str` / `parse` wrappers are the house idiom; keep them so
+call sites read as `RunState::Failed.as_str()` rather than a bare
+`.into()`.
+
+Two rules for the boundary:
+
+- **`parse` returns `Option`, never a guess.** A store written by a
+  newer build, or a third-party step, can name a value this binary does
+  not have. The caller decides what that means — see `TaskState::for_run_state`,
+  which maps an unknown status to `Failed` *deliberately*, with a
+  sentence saying why.
+- **Add a test that strum and serde agree** when a type derives both.
+  They are independent derives producing independent strings, so the
+  agreement is a real check, not a tautology. One `#[test]` over
+  `VARIANTS` covers it.
+
+Where the value is already stored as a `VARCHAR` or a JSON string, leave
+the storage type alone and route every read and write through the enum.
+In SQL that means **binding** the value, not interpolating it — the
+statement stays a `&'static str` and needs no `AssertSqlSafe`:
+
+```rust
+sqlx::query("UPDATE sync_jobs SET state = ? WHERE id = ? AND state = ?")
+    .bind(JobState::Canceled.as_str())
+    .bind(job_id)
+    .bind(JobState::Pending.as_str())
+```
+
+### When a string really is a string
+
+Don't reach for an enum when the set is not closed and not ours:
+
+- **Values that come from upstream.** Notion block types, MIME types,
+  Matrix event types. Match on them at the boundary and convert to
+  something of ours; the arms are a parser, not a vocabulary.
+- **Free-form display text.** `grid_rows.kind` is a per-provider label
+  (`"Slack Message"`, `"Notion Page"`, `format!("Chapter ({id})")`).
+  Deliberately open.
+- **JSON keys and SQL identifiers.** `"uuid"`, `"created_at"`. A name,
+  not a value.
+
+### Where the vocabularies are
+
+One enum per vocabulary, living with whoever mints it:
+
+| vocabulary | type | home |
+|---|---|---|
+| what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
+| why a step failed | `FailureKind` | `dag/src/step.rs` |
+| what the progress bus itself names | `LiveState` | `progress/src/lib.rs` |
+| a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
+| a task board row | `TaskState` | `http/src/worker.rs` |
+| a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
+| the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
+| what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
+| a config's `[[steps]]` source type | `SourceType` | `datalib_step/src/source_type.rs` |
+
+The TypeScript side mirrors these as string-literal unions in
+`datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,
+`ConnectState`). They are hand-kept in step with the Rust — there is no
+generator — so change both halves together.
+
 ## Fallbacks: prefer failing loudly to succeeding quietly
 
 **Avoid fallbacks.** The dangerous ones *succeed*: a correct answer

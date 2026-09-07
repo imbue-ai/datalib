@@ -19,6 +19,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
+use datalib_schema::providers::Provider;
 
 /// v2: a `created_date` / `when` we cannot parse gets a null `when_ts`
 ///     instead of a real-looking `1970-01-01T00:00:00`. See
@@ -45,7 +46,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "google_takeout",
+        provider: Provider::GoogleTakeout,
         source_label: "Google Chat".to_string(),
         chat_kind: "Google Chat".to_string(),
         message_kind: "Google Chat Message".to_string(),
@@ -57,7 +58,7 @@ fn profile() -> RenderProfile {
 
 fn voice_profile() -> RenderProfile {
     RenderProfile {
-        provider: "google_takeout",
+        provider: Provider::GoogleTakeout,
         source_label: "Google Voice".to_string(),
         chat_kind: "Google Voice Conversation".to_string(),
         message_kind: "Google Voice Message".to_string(),

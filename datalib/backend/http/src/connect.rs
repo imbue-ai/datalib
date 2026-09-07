@@ -125,11 +125,24 @@ pub struct ConnectRequest {
     pub account: Option<String>,
 }
 
+/// How one browser-login attempt is going. The UI switches on these
+/// words, and the poll endpoint reaps an attempt as soon as it is no
+/// longer [`ConnectState::Running`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectState {
+    /// `latchkey auth browser` is still running.
+    Running,
+    /// It exited zero: the credential is stored.
+    Ok,
+    /// It failed, or ran past `CONNECT_TIMEOUT`.
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectStatus {
     pub id: String,
-    /// `running`, `ok`, or `failed`.
-    pub status: &'static str,
+    pub status: ConnectState,
     /// The command's combined output, so a failure is diagnosable
     /// without going to a terminal. Trimmed to the tail — latchkey can
     /// be chatty and the useful part is always at the end.
@@ -155,7 +168,7 @@ pub async fn start_connect(
     let id = uuid::Uuid::new_v4().to_string();
     let slot = Arc::new(Mutex::new(ConnectStatus {
         id: id.clone(),
-        status: "running",
+        status: ConnectState::Running,
         output: String::new(),
     }));
     attempts()
@@ -179,15 +192,15 @@ pub async fn start_connect(
         let mut slot = slot.lock().expect("connect slot mutex");
         match outcome {
             Ok(Ok(output)) => {
-                slot.status = "ok";
+                slot.status = ConnectState::Ok;
                 slot.output = tail(&output);
             }
             Ok(Err(e)) => {
-                slot.status = "failed";
+                slot.status = ConnectState::Failed;
                 slot.output = tail(&e.to_string());
             }
             Err(_) => {
-                slot.status = "failed";
+                slot.status = ConnectState::Failed;
                 slot.output = "the browser login did not finish within 15 minutes; start it again"
                     .to_string();
             }
@@ -196,7 +209,7 @@ pub async fn start_connect(
 
     Ok(Json(ConnectStatus {
         id,
-        status: "running",
+        status: ConnectState::Running,
         output: String::new(),
     }))
 }
@@ -216,7 +229,7 @@ pub async fn connect_status(
             // Reap a finished attempt on read: the client got the
             // answer, and nothing else will ask for it. Without this
             // the map grows for the life of the process.
-            if status.status != "running" {
+            if status.status != ConnectState::Running {
                 attempts()
                     .lock()
                     .expect("connect attempts mutex")

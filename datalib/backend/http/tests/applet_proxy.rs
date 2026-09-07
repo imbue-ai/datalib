@@ -74,7 +74,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
     let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
         GridRow::builder()
             .uuid(uuid)
-            .provider("slack")
+            .provider(Provider::Slack)
             .kind(if index.is_some() {
                 "Slack Message"
             } else {
@@ -266,6 +266,7 @@ workspace = "Home"
 
 // The client half on its own, against a listener this test owns.
 
+use datalib_schema::providers::Provider;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 

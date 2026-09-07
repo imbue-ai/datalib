@@ -18,6 +18,7 @@ use crate::download::schema_raw::{connection_uuid, ns_id};
 use crate::download::{db_path_for, RawDb};
 
 use crate::render::RENDER_VERSION;
+use datalib_schema::providers::Provider;
 
 /// Human label + grouping for every LinkedIn connection.
 const GROUP_LABEL: &str = "Connections";
@@ -67,7 +68,7 @@ pub fn render_connections(
         })
         .collect();
     let profile = ContactRenderProfile {
-        provider: "linkedin",
+        provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         contact_kind: "Contact".to_string(),
         render_version: RENDER_VERSION,

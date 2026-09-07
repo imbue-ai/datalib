@@ -6,7 +6,7 @@ use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
 use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
-use app_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
+use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow, DDL as SYNC_JOBS_DDL};
 use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -138,7 +138,7 @@ impl AppRepo for AppStore {
                     FROM sync_jobs";
         let sql = if only_active {
             format!(
-                "{base} WHERE state IN ('pending','running') \
+                "{base} WHERE state IN (?, ?) \
                  ORDER BY created_at DESC, id DESC LIMIT ?"
             )
         } else {
@@ -146,9 +146,15 @@ impl AppRepo for AppStore {
         };
         // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is
         // `format!` over two `&'static str` templates selected by a bool, and
-        // the only runtime value (`limit`) is a bound `?` parameter. Nothing
-        // caller-supplied reaches the string.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        // every runtime value (the two states, `limit`) is a bound `?`
+        // parameter. Nothing caller-supplied reaches the string.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        if only_active {
+            q = q
+                .bind(JobState::Pending.as_str())
+                .bind(JobState::Running.as_str());
+        }
+        let rows = q
             .bind(limit as i64)
             .fetch_all(&self.jobs_pool)
             .await
@@ -172,7 +178,7 @@ impl AppRepo for AppStore {
     }
     async fn enqueue_job(
         &self,
-        kind: &str,
+        kind: JobKind,
         source_name: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
@@ -180,9 +186,9 @@ impl AppRepo for AppStore {
         let row = SyncJobRow {
             id: id.clone(),
             source_name: source_name.map(|s| s.to_string()),
-            kind: kind.to_string(),
+            kind: kind.as_str().to_string(),
             parent_job_id: None,
-            state: "pending".to_string(),
+            state: JobState::Pending.as_str().to_string(),
             created_at: created_at.clone(),
             started_at: None,
             finished_at: None,
@@ -232,14 +238,14 @@ impl AppRepo for AppStore {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
-            "UPDATE sync_jobs SET state = 'canceled' \
-             WHERE id = ? AND state IN ('pending', 'running')",
-        )
-        .bind(job_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
+        sqlx::query("UPDATE sync_jobs SET state = ? WHERE id = ? AND state IN (?, ?)")
+            .bind(JobState::Canceled.as_str())
+            .bind(job_id)
+            .bind(JobState::Pending.as_str())
+            .bind(JobState::Running.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
         // No DOLT_COMMIT — see the note in `enqueue_job`.
         Ok(())
     }
@@ -250,9 +256,10 @@ impl AppRepo for AppStore {
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         let id: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM sync_jobs WHERE state = 'pending' \
+            "SELECT id FROM sync_jobs WHERE state = ? \
              ORDER BY created_at ASC, id ASC LIMIT 1",
         )
+        .bind(JobState::Pending.as_str())
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("claim select: {e}")))?;
@@ -261,11 +268,13 @@ impl AppRepo for AppStore {
         };
         let started_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         sqlx::query(
-            "UPDATE sync_jobs SET state = 'running', started_at = ?, \
-             progress_msg = 'starting…' WHERE id = ? AND state = 'pending'",
+            "UPDATE sync_jobs SET state = ?, started_at = ?, \
+             progress_msg = 'starting…' WHERE id = ? AND state = ?",
         )
+        .bind(JobState::Running.as_str())
         .bind(&started_at)
         .bind(&id)
+        .bind(JobState::Pending.as_str())
         .execute(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
@@ -311,7 +320,7 @@ impl AppRepo for AppStore {
     async fn finish_job(
         &self,
         job_id: &str,
-        state: &str,
+        state: JobState,
         error: Option<&str>,
     ) -> Result<(), RepoError> {
         let mut conn = self
@@ -324,7 +333,7 @@ impl AppRepo for AppStore {
             "UPDATE sync_jobs SET state = ?, finished_at = ?, error = ?, pid = NULL \
              WHERE id = ?",
         )
-        .bind(state)
+        .bind(state.as_str())
         .bind(&finished_at)
         .bind(error)
         .bind(job_id)
@@ -344,11 +353,13 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let res = sqlx::query(
-            "UPDATE sync_jobs SET state = 'failed', finished_at = ?, pid = NULL, \
+            "UPDATE sync_jobs SET state = ?, finished_at = ?, pid = NULL, \
              error = 'interrupted: backend restarted while job was running' \
-             WHERE state = 'running'",
+             WHERE state = ?",
         )
+        .bind(JobState::Failed.as_str())
         .bind(&finished_at)
+        .bind(JobState::Running.as_str())
         .execute(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("recover running: {e}")))?;
