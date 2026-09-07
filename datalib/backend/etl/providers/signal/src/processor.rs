@@ -132,6 +132,13 @@ impl DataProcessor for SignalRender {
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
         .with_context(|| format!("signal parse {}", self.raw_path.display()))?;
+        // Chats the newest backup no longer carries. Signal periodizes,
+        // so one chat owns several documents; the store resolves how many.
+        let mut dropped = 0usize;
+        for chat_id in &parsed.vanished_buckets {
+            dropped +=
+                ctx.remove_conversation(&crate::render::signal_chat_uuid(&self.name, chat_id))?;
+        }
         let mut on_doc = |md| ctx.emit_doc(md);
         render_all(
             &parsed,
@@ -142,6 +149,10 @@ impl DataProcessor for SignalRender {
             &mut on_doc,
         )
         .context("signal render_all")?;
-        Ok("rendered".into())
+        Ok(if dropped == 0 {
+            "rendered".into()
+        } else {
+            format!("rendered, {dropped} document(s) gone upstream")
+        })
     }
 }

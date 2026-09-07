@@ -15,6 +15,7 @@ use datalib_etl_contact_common::{
 
 use super::parse::{ParsedContact, ParsedContacts};
 use super::{addressbook_uuid, contact_uuid};
+use datalib_schema::providers::Provider;
 
 /// Bump when the rendered layout changes enough that every existing
 /// contact doc needs re-rendering. Bumped to 2 when contacts adopted the
@@ -29,9 +30,13 @@ pub fn render_all(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let profile = ContactRenderProfile {
-        provider: "contacts",
+        provider: Provider::Contacts,
         source_label: humanize_source_label(source_name),
         contact_kind: "Contact".to_string(),
         render_version: RENDER_VERSION,
@@ -41,7 +46,7 @@ pub fn render_all(
         .iter()
         .map(|c| normalize(c, source_name))
         .collect();
-    cc_render_all(
+    let summary = cc_render_all(
         &profile,
         &contacts,
         out_dir,
@@ -49,7 +54,9 @@ pub fn render_all(
         progress,
         prior_fingerprints,
         on_doc_complete,
-    )
+    )?;
+    seen.extend(summary.documents.iter().cloned());
+    Ok(summary)
 }
 
 fn normalize(contact: &ParsedContact, source_name: &str) -> NormalizedContact {

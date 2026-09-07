@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::run_state::RunState;
 use crate::step::StepId;
 
 pub const STATE_REL_PATH: &str = "system/dag_state.json";
@@ -37,10 +38,21 @@ pub struct CurrentRun {
     /// state worth showing.
     #[serde(default)]
     pub plan: Vec<StepId>,
-    /// step id → what it is doing in *this* run. Absent from the map
-    /// until the scheduler reaches it, which reads as pending.
+    /// step id → what it is doing in *this* run, as
+    /// [`RunState::as_str`]. Absent from the map until the scheduler
+    /// reaches it, which reads as pending. Read it back with
+    /// [`CurrentRun::state_of`] rather than comparing strings.
     #[serde(default)]
     pub states: BTreeMap<StepId, String>,
+}
+
+impl CurrentRun {
+    /// What `step` is doing in this run. `None` both when the
+    /// scheduler has not reached it and when the file names a state
+    /// this build does not know.
+    pub fn state_of(&self, step: &str) -> Option<RunState> {
+        self.states.get(step).and_then(|s| RunState::parse(s))
+    }
 }
 
 /// What a step did the last time a run reached it. Distinct from
@@ -52,9 +64,8 @@ pub struct LastRun {
     /// `None` while it is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
-    /// The serialized [`crate::scheduler::StepStatus`] discriminant:
-    /// `succeeded` | `skipped_up_to_date` | `blocked` | `failed` |
-    /// `not_selected`. Empty while running.
+    /// The terminal [`RunState`], as [`RunState::as_str`]. Empty
+    /// while running — read it back with [`LastRun::state`].
     #[serde(default)]
     pub status: String,
     /// How many attempts this took, retries included.
@@ -63,6 +74,15 @@ pub struct LastRun {
     /// The failure message, when it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+impl LastRun {
+    /// How the last run of this step ended. `None` while it is still
+    /// running (the empty status), and for a state this build does not
+    /// know.
+    pub fn state(&self) -> Option<RunState> {
+        RunState::parse(&self.status)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

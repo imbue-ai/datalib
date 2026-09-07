@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::parse::ParsedEmail;
 use crate::download::db::{LoadedAttachment, LoadedEmail};
+use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (+ quoted-text folding, label chips).
@@ -98,7 +99,7 @@ fn percent_encode(s: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "jmap",
+        provider: Provider::Email,
         source_label: "Mail".to_string(),
         chat_kind: "Email Thread".to_string(),
         message_kind: "Email".to_string(),

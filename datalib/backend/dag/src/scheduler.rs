@@ -15,6 +15,7 @@ use tokio::task::JoinSet;
 
 use crate::events::{Event, EventSink, NoopSink, StepProgress};
 use crate::graph::Graph;
+use crate::run_state::RunState;
 use crate::state::{CurrentRun, DagState, LastRun, StepState};
 use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
@@ -130,20 +131,20 @@ pub enum StepStatus {
 }
 
 impl StepStatus {
-    fn as_str(&self) -> &'static str {
+    /// This status with its payload dropped — the part every reader
+    /// outside the scheduler gets, and the only part that is written
+    /// down. [`RunState`] owns the spelling.
+    pub fn state(&self) -> RunState {
         match self {
-            StepStatus::Succeeded { .. } => "succeeded",
-            StepStatus::SkippedUpToDate => "skipped_up_to_date",
-            StepStatus::NotSelected => "not_selected",
-            StepStatus::Blocked { .. } => "blocked",
-            StepStatus::Failed { .. } => "failed",
+            StepStatus::Succeeded { .. } => RunState::Succeeded,
+            StepStatus::SkippedUpToDate => RunState::SkippedUpToDate,
+            StepStatus::NotSelected => RunState::NotSelected,
+            StepStatus::Blocked { .. } => RunState::Blocked,
+            StepStatus::Failed { .. } => RunState::Failed,
         }
     }
     pub fn is_ok(&self) -> bool {
-        matches!(
-            self,
-            StepStatus::Succeeded { .. } | StepStatus::SkippedUpToDate | StepStatus::NotSelected
-        )
+        self.state().is_ok()
     }
 }
 
@@ -627,12 +628,13 @@ impl Runner {
         let id = &graph.steps[i].id;
         self.sink.emit(&Event::StepFinish {
             step: id.clone(),
-            status: st.as_str().to_string(),
+            status: st.state(),
             error: error.clone(),
         });
         let stamp = now_stamp();
         if let Some(run) = state.current_run.as_mut() {
-            run.states.insert(id.clone(), st.as_str().to_string());
+            run.states
+                .insert(id.clone(), st.state().as_str().to_string());
         }
         // `NotSelected` is a fact about this *run*, not about the step:
         // the run didn't ask for it, so nothing happened to it. Writing
@@ -648,7 +650,7 @@ impl Runner {
                 ..Default::default()
             });
             last.finished_at = Some(stamp);
-            last.status = st.as_str().to_string();
+            last.status = st.state().as_str().to_string();
             last.attempts = attempts;
             last.error = error;
         }
@@ -664,7 +666,8 @@ fn now_stamp() -> String {
 /// reader can tell "running" from "not reached yet".
 fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
     if let Some(run) = state.current_run.as_mut() {
-        run.states.insert(id.clone(), "running".to_string());
+        run.states
+            .insert(id.clone(), RunState::Running.as_str().to_string());
     }
     state.steps.entry(id.clone()).or_default().last_run = Some(LastRun {
         started_at: stamp.to_string(),
@@ -677,14 +680,12 @@ fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
 
 fn step_summary(r: &StepReport) -> crate::events::StepSummary {
     let failure = match &r.status {
-        StepStatus::Failed { kind } => serde_json::to_value(kind)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string)),
+        StepStatus::Failed { kind } => Some(*kind),
         _ => None,
     };
     crate::events::StepSummary {
         step: r.id.clone(),
-        status: r.status.as_str().to_string(),
+        status: r.status.state(),
         failure,
         attempts: r.attempts,
         error: r.error.clone(),

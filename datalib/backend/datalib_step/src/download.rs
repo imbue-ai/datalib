@@ -21,7 +21,7 @@ pub async fn run(
         "source {:?} (type={}) has no download work — it needs a `sync:` block \
          (or a staged input_path for file-backed sources)",
         planned.name,
-        planned.type_str
+        planned.source_type
     );
 
     let progress = emitter.progress();
@@ -32,7 +32,23 @@ pub async fn run(
     // partial state with a proper dolt commit.
     let checkpoints = std::sync::Arc::new(CheckpointSink::new());
     let _ = crate::CHECKPOINTS.set(checkpoints.clone());
-    let control = control.clone();
+    // `always_clear_before_ingest` is the same wipe `--reset-and-redownload`
+    // performs, asked for by config rather than by a flag: every provider
+    // already truncates its entity tables and clears its cursors on that
+    // knob, so a source whose input is a complete snapshot gets deletions
+    // by re-writing from scratch.
+    let control = datalib_etl::control::DownloadControl {
+        reset_and_redownload: control.reset_and_redownload || planned.always_clear_before_ingest,
+        ..control.clone()
+    };
+    if planned.always_clear_before_ingest {
+        tracing::info!(
+            source = %planned.name,
+            "download: always_clear_before_ingest — wiping this source's entity \
+             tables so anything its input has dropped falls out (the old rows \
+             stay in doltlite history)",
+        );
+    }
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
     let guard = datalib_etl::retry::RetryGuard::from_params(&planned.download_params);
 

@@ -600,7 +600,7 @@ async fn destroy(db: &RawDb, gmail_ids: &[String]) -> Result<usize> {
     if gmail_ids.is_empty() {
         return Ok(0);
     }
-    let mut destroyed = 0;
+    let mut email_ids = Vec::new();
     for id in gmail_ids {
         let email_id: Option<String> =
             sqlx::query_scalar("SELECT email_id FROM gmail_messages WHERE gmail_id = ?")
@@ -611,20 +611,19 @@ async fn destroy(db: &RawDb, gmail_ids: &[String]) -> Result<usize> {
         // Not ours to delete: Gmail reported a message we never mirrored
         // (filtered out by label, or deleted before we ever saw it).
         let Some(email_id) = email_id else { continue };
-        let affected = sqlx::query("DELETE FROM emails WHERE id = ?")
-            .bind(&email_id)
-            .execute(db.pool())
-            .await
-            .with_context(|| format!("deleting email {email_id}"))?
-            .rows_affected();
+        email_ids.push(email_id);
         sqlx::query("DELETE FROM gmail_messages WHERE gmail_id = ?")
             .bind(id)
             .execute(db.pool())
             .await
             .with_context(|| format!("clearing the mapping for {id}"))?;
-        destroyed += affected as usize;
     }
-    Ok(destroyed)
+    // The same cascade the JMAP path's tombstones take. Deleting only
+    // `emails` leaves this message's mailbox and keyword joins, its blob
+    // refs and both sidecars behind, pointing at a row that no longer
+    // exists.
+    db.delete_emails(&email_ids).await?;
+    Ok(email_ids.len())
 }
 
 async fn load_known_gmail_ids(db: &RawDb) -> Result<BTreeSet<String>> {

@@ -21,6 +21,7 @@ use crate::download::schema_raw::ns_id as uuid5;
 use crate::download::{db_path_for, RawDb};
 
 use crate::render::{parse_date_ms, RENDER_VERSION};
+use datalib_schema::providers::Provider;
 
 /// Author label for the export owner. Every share and comment in these
 /// two feeds is something the user themselves wrote.
@@ -28,7 +29,7 @@ const ME: &str = "Me";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "linkedin",
+        provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Post".to_string(),
         message_kind: "LinkedIn Post Message".to_string(),
@@ -45,6 +46,10 @@ pub fn render_posts(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -65,7 +70,7 @@ pub fn render_posts(
     let chats = build_post_chats(&shares, &comments);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
-    cc_render_all(
+    let s = cc_render_all(
         &profile(),
         &chats,
         out_dir,
@@ -75,6 +80,7 @@ pub fn render_posts(
         prior_fingerprints,
         on_doc_complete,
     )?;
+    seen.extend(s.documents);
     Ok(())
 }
 

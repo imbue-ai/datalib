@@ -23,6 +23,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/time:datalib_time",

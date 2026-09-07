@@ -2,9 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
 use datalib_source_common::{Defaults, DownloadParams};
+
+use crate::source_type::SourceType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -16,12 +18,15 @@ pub enum Phase {
 /// resolved envelope facts the step driver needs.
 pub struct PlannedSource {
     pub name: String,
-    pub type_str: &'static str,
+    pub source_type: SourceType,
     /// Resolved raw-store dir (`<data_root>/<name>/raw` unless
     /// overridden via `common.raw_path`).
     pub raw_path: PathBuf,
     /// Resolved rate-limit give-up bounds for the download wave.
     pub download_params: DownloadParams,
+    /// `common.always_clear_before_ingest`, resolved. Download wave only —
+    /// render rewrites its own tree already.
+    pub always_clear_before_ingest: bool,
     pub processors: Vec<Box<dyn DataProcessor>>,
 }
 
@@ -29,7 +34,7 @@ impl std::fmt::Debug for PlannedSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlannedSource")
             .field("name", &self.name)
-            .field("type_str", &self.type_str)
+            .field("source_type", &self.source_type)
             .field("raw_path", &self.raw_path)
             .field("processors", &self.processors.len())
             .finish_non_exhaustive()
@@ -51,32 +56,6 @@ impl PlannedSource {
     }
 }
 
-/// All source type strings, mirroring the old `SourceConfig` wire
-/// discriminators. Kept sorted for the error message.
-pub const SOURCE_TYPES: &[&str] = &[
-    "beeper",
-    "carddav",
-    "chatgpt_api",
-    "claude_api",
-    "claude_export",
-    "email",
-    "fsindex",
-    "github_api",
-    "gitlab_api",
-    "google_takeout",
-    "lightroom",
-    "linkedin",
-    "media",
-    "notion_api",
-    "pdf",
-    "perseus",
-    "signal_backup",
-    "slack_api",
-    "sms_backup_restore",
-    "whatsapp_backup",
-    "yolink",
-];
-
 pub fn plan(
     step_type: &str,
     phase: Phase,
@@ -84,25 +63,27 @@ pub fn plan(
     source: serde_json::Value,
     data_root: &Path,
 ) -> Result<PlannedSource> {
+    // Declared before `arm!`: a `macro_rules!` body only sees bindings
+    // that exist at its definition site.
+    let source_type = SourceType::parse(step_type).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown source type {step_type:?}; known types: {}",
+            SourceType::known_list()
+        )
+    })?;
+
     macro_rules! arm {
         // The usual shape: a provider's two waves are its
         // `plan_download` / `plan_render` pair.
-        ($cfgty:ty, $rcfgty:ty, $provider:ident, $tstr:expr) => {
-            arm!(
-                $cfgty,
-                $rcfgty,
-                $provider,
-                plan_download,
-                plan_render,
-                $tstr
-            )
+        ($cfgty:ty, $rcfgty:ty, $provider:ident) => {
+            arm!($cfgty, $rcfgty, $provider, plan_download, plan_render)
         };
         // …and the shape for a provider serving more than one source
         // type, which needs a different entry point per type. Only
         // claude does: `claude_api` walks the live API,
         // `claude_export` ingests an export off disk, and they share
         // one `plan_render`.
-        ($cfgty:ty, $rcfgty:ty, $provider:ident, $dl:ident, $rn:ident, $tstr:expr) => {{
+        ($cfgty:ty, $rcfgty:ty, $provider:ident, $dl:ident, $rn:ident) => {{
             let ctx = PlanContext {
                 name: name.to_string(),
                 // Playback redirection goes through the
@@ -113,21 +94,23 @@ pub fn plan(
             match phase {
                 Phase::Download => {
                     let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse --params as a {} download config", $tstr)
+                        format!("parse --params as a {source_type} download config")
                     })?;
                     // No global `defaults:` stanza in DAG mode (each step
                     // is self-contained): fold the built-in defaults only.
                     cfg.common.fold_defaults(&Defaults::default());
                     cfg.common.resolve_paths(data_root, name);
                     cfg.validate()
-                        .with_context(|| format!("source {name:?} (type={})", $tstr))?;
+                        .with_context(|| format!("source {name:?} (type={source_type})"))?;
                     let raw_path = cfg.common.raw_path().to_path_buf();
                     let download_params = cfg.common.download_params.clone();
+                    let always_clear_before_ingest = cfg.common.always_clear_before_ingest;
                     PlannedSource {
                         name: name.to_string(),
-                        type_str: $tstr,
+                        source_type,
                         raw_path,
                         download_params,
+                        always_clear_before_ingest,
                         processors: $provider::processor::$dl(ctx, cfg)?,
                     }
                 }
@@ -136,16 +119,18 @@ pub fn plan(
                     // slim config (deny_unknown_fields, so download-shaped
                     // params on a render step fail loudly). No defaults to
                     // fold — render carries no cross-source knobs.
-                    let mut cfg: $rcfgty = serde_json::from_value(source)
-                        .with_context(|| format!("parse --params as a {} render config", $tstr))?;
+                    let mut cfg: $rcfgty = serde_json::from_value(source).with_context(|| {
+                        format!("parse --params as a {source_type} render config")
+                    })?;
                     cfg.common.resolve_paths(data_root, name);
                     let raw_path = cfg.common.raw_path().to_path_buf();
                     PlannedSource {
                         name: name.to_string(),
-                        type_str: $tstr,
+                        source_type,
                         raw_path,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
+                        always_clear_before_ingest: false,
                         processors: $provider::processor::$rn(ctx, cfg)?,
                     }
                 }
@@ -153,138 +138,115 @@ pub fn plan(
         }};
     }
 
-    Ok(match step_type {
-        "claude_api" => arm!(
+    // Exhaustive on purpose: a `SourceType` variant with no arm here is
+    // a compile error, which is the whole reason the type exists.
+    Ok(match source_type {
+        SourceType::ClaudeApi => arm!(
             datalib_etl_claude_config::ClaudeConfig,
             datalib_etl_claude_config::ClaudeRenderConfig,
-            datalib_etl_claude,
-            "claude_api"
+            datalib_etl_claude
         ),
-        "claude_export" => arm!(
+        SourceType::ClaudeExport => arm!(
             datalib_etl_claude_config::ClaudeExportConfig,
             datalib_etl_claude_config::ClaudeExportRenderConfig,
             datalib_etl_claude,
             plan_export_download,
-            plan_render,
-            "claude_export"
+            plan_render
         ),
-        "chatgpt_api" => arm!(
+        SourceType::ChatgptApi => arm!(
             datalib_etl_chatgpt_config::ChatgptConfig,
             datalib_etl_chatgpt_config::ChatgptRenderConfig,
-            datalib_etl_chatgpt,
-            "chatgpt_api"
+            datalib_etl_chatgpt
         ),
-        "slack_api" => arm!(
+        SourceType::SlackApi => arm!(
             datalib_etl_slack_config::SlackConfig,
             datalib_etl_slack_config::SlackRenderConfig,
-            datalib_etl_slack,
-            "slack_api"
+            datalib_etl_slack
         ),
-        "github_api" => arm!(
+        SourceType::GithubApi => arm!(
             datalib_etl_github_config::GithubConfig,
             datalib_etl_github_config::GithubRenderConfig,
-            datalib_etl_github,
-            "github_api"
+            datalib_etl_github
         ),
-        "gitlab_api" => arm!(
+        SourceType::GitlabApi => arm!(
             datalib_etl_gitlab_config::GitlabConfig,
             datalib_etl_gitlab_config::GitlabRenderConfig,
-            datalib_etl_gitlab,
-            "gitlab_api"
+            datalib_etl_gitlab
         ),
-        "notion_api" => arm!(
+        SourceType::NotionApi => arm!(
             datalib_etl_notion_config::NotionConfig,
             datalib_etl_notion_config::NotionRenderConfig,
-            datalib_etl_notion,
-            "notion_api"
+            datalib_etl_notion
         ),
-        "email" => arm!(
+        SourceType::Email => arm!(
             datalib_etl_email_config::EmailConfig,
             datalib_etl_email_config::EmailRenderConfig,
-            datalib_etl_email,
-            "email"
+            datalib_etl_email
         ),
-        "beeper" => arm!(
+        SourceType::Beeper => arm!(
             datalib_etl_beeper_config::BeeperConfig,
             datalib_etl_beeper_config::BeeperRenderConfig,
-            datalib_etl_beeper,
-            "beeper"
+            datalib_etl_beeper
         ),
-        "carddav" => arm!(
+        SourceType::Carddav => arm!(
             datalib_etl_carddav_config::CarddavConfig,
             datalib_etl_carddav_config::CarddavRenderConfig,
-            datalib_etl_contacts,
-            "carddav"
+            datalib_etl_contacts
         ),
-        "linkedin" => arm!(
+        SourceType::Linkedin => arm!(
             datalib_etl_linkedin_config::LinkedinConfig,
             datalib_etl_linkedin_config::LinkedinRenderConfig,
-            datalib_etl_linkedin,
-            "linkedin"
+            datalib_etl_linkedin
         ),
-        "google_takeout" => arm!(
+        SourceType::GoogleTakeout => arm!(
             datalib_etl_google_takeout_config::GoogleTakeoutConfig,
             datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig,
-            datalib_etl_google_takeout,
-            "google_takeout"
+            datalib_etl_google_takeout
         ),
-        "media" => arm!(
+        SourceType::Media => arm!(
             datalib_etl_media_config::MediaConfig,
             datalib_etl_media_config::MediaRenderConfig,
-            datalib_etl_media,
-            "media"
+            datalib_etl_media
         ),
-        "pdf" => arm!(
+        SourceType::Pdf => arm!(
             datalib_etl_pdf_config::PdfConfig,
             datalib_etl_pdf_config::PdfRenderConfig,
-            datalib_etl_pdf,
-            "pdf"
+            datalib_etl_pdf
         ),
-        "perseus" => arm!(
+        SourceType::Perseus => arm!(
             datalib_etl_perseus_config::PerseusConfig,
             datalib_etl_perseus_config::PerseusRenderConfig,
-            datalib_etl_perseus,
-            "perseus"
+            datalib_etl_perseus
         ),
-        "yolink" => arm!(
+        SourceType::Yolink => arm!(
             datalib_etl_yolink_config::YolinkConfig,
             datalib_etl_yolink_config::YolinkRenderConfig,
-            datalib_etl_yolink,
-            "yolink"
+            datalib_etl_yolink
         ),
-        "signal_backup" => arm!(
+        SourceType::SignalBackup => arm!(
             datalib_etl_signal_config::SignalConfig,
             datalib_etl_signal_config::SignalRenderConfig,
-            datalib_etl_signal,
-            "signal_backup"
+            datalib_etl_signal
         ),
-        "whatsapp_backup" => arm!(
+        SourceType::WhatsappBackup => arm!(
             datalib_etl_whatsapp_config::WhatsappConfig,
             datalib_etl_whatsapp_config::WhatsappRenderConfig,
-            datalib_etl_whatsapp,
-            "whatsapp_backup"
+            datalib_etl_whatsapp
         ),
-        "sms_backup_restore" => arm!(
+        SourceType::SmsBackupRestore => arm!(
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig,
-            datalib_etl_sms_backup_restore,
-            "sms_backup_restore"
+            datalib_etl_sms_backup_restore
         ),
-        "lightroom" => arm!(
+        SourceType::Lightroom => arm!(
             datalib_etl_lightroom_config::LightroomConfig,
             datalib_etl_lightroom_config::LightroomRenderConfig,
-            datalib_etl_lightroom,
-            "lightroom"
+            datalib_etl_lightroom
         ),
-        "fsindex" => arm!(
+        SourceType::Fsindex => arm!(
             datalib_etl_fsindex_config::FsindexConfig,
             datalib_etl_fsindex_config::FsindexRenderConfig,
-            datalib_etl_fsindex,
-            "fsindex"
-        ),
-        other => bail!(
-            "unknown source type {other:?}; known types: {}",
-            SOURCE_TYPES.join(", ")
+            datalib_etl_fsindex
         ),
     })
 }
@@ -292,6 +254,42 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `common.always_clear_before_ingest` has to survive the trip from the
+    /// step's `--params` to the planned source, because the download driver
+    /// is the only thing that reads it. A flag that parses and then goes
+    /// nowhere reads exactly like one that works: the sync succeeds, and
+    /// the deletions the user asked us to notice stay invisible.
+    #[test]
+    fn always_clear_before_ingest_reaches_the_planned_source() {
+        let td = tempfile::tempdir().unwrap();
+        let planned = plan(
+            "sms_backup_restore",
+            Phase::Download,
+            "sms",
+            serde_json::json!({
+                "common": {
+                    "input_path": "/tmp/sms",
+                    "always_clear_before_ingest": true,
+                }
+            }),
+            td.path(),
+        )
+        .unwrap();
+        assert!(planned.always_clear_before_ingest);
+
+        // Absent means off: every source that has never heard of the knob
+        // must keep appending rather than start wiping itself.
+        let default = plan(
+            "sms_backup_restore",
+            Phase::Download,
+            "sms",
+            serde_json::json!({ "common": { "input_path": "/tmp/sms" } }),
+            td.path(),
+        )
+        .unwrap();
+        assert!(!default.always_clear_before_ingest);
+    }
 
     #[test]
     fn plans_slack_download_and_render_from_phase_params() {
@@ -307,7 +305,7 @@ mod tests {
             td.path(),
         )
         .unwrap();
-        assert_eq!(dl.type_str, "slack_api");
+        assert_eq!(dl.source_type, SourceType::SlackApi);
         assert_eq!(dl.raw_path, td.path().join("slack/raw"));
         assert_eq!(dl.processors.len(), 1);
         assert_eq!(
@@ -521,7 +519,7 @@ mod tests {
                 td.path(),
             )
             .unwrap();
-            assert_eq!(dl.type_str, ty);
+            assert_eq!(dl.source_type.as_str(), ty);
             assert_eq!(dl.raw_path, td.path().join("local/raw"));
             assert_eq!(dl.processors.len(), 1, "{ty} should plan one download");
 
@@ -552,6 +550,30 @@ mod tests {
         let err = format!("{err:#}");
         assert!(err.contains("playlist"), "{err}");
         assert!(err.contains("unknown field"), "{err}");
+    }
+
+    /// Every `SourceType` must reach an arm of `plan`. The reverse —
+    /// an arm for a type that does not exist — the compiler catches,
+    /// since the match over the enum is exhaustive.
+    #[test]
+    fn every_declared_type_dispatches() {
+        let td = tempfile::tempdir().unwrap();
+        for &ty in <SourceType as strum::VariantArray>::VARIANTS {
+            let err = plan(
+                ty.as_str(),
+                Phase::Download,
+                "s",
+                serde_json::json!({}),
+                td.path(),
+            )
+            .err()
+            .map(|e| format!("{e:#}"))
+            .unwrap_or_default();
+            assert!(
+                !err.contains("unknown source type"),
+                "{ty} has no dispatch arm"
+            );
+        }
     }
 
     #[test]

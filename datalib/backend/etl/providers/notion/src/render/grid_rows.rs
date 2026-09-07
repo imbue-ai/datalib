@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
@@ -129,7 +130,7 @@ fn page_row(
         .unwrap_or("");
     GridRow::builder()
         .uuid(pid.clone())
-        .provider("notion")
+        .provider(Provider::Notion)
         .kind("Notion Page")
         .source_label("Notion")
         .when_ts(when_ts)
@@ -178,7 +179,7 @@ fn thread_rows(
     rows.extend(
         GridRow::builder()
             .uuid(disc_id)
-            .provider("notion")
+            .provider(Provider::Notion)
             .kind("Notion Comment Thread")
             .source_label("Notion")
             .when_ts(
@@ -203,7 +204,7 @@ fn thread_rows(
         rows.extend(
             GridRow::builder()
                 .uuid(c.get("id").and_then(|v| v.as_str()).unwrap_or(""))
-                .provider("notion")
+                .provider(Provider::Notion)
                 .kind("Notion Comment")
                 .source_label("Notion")
                 .when_ts(

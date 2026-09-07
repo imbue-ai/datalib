@@ -395,6 +395,11 @@ only_extract_labels = []          # ingest only messages carrying these labels
 
 [steps.params.common]
 input_path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
+# The .mbox is a complete snapshot, so a message that is no longer in it
+# was deleted. Wipe the entity tables before each ingest and rewrite them
+# from the file, and the deletion falls out. The old rows stay in doltlite
+# history, so `dolt_diff` can still show you what went.
+always_clear_before_ingest = true
 
 [steps.params.mbox]
 account_id = "gmail_alice"
@@ -434,6 +439,10 @@ id = "vcard-contacts/raw"
 command = "datalib-step download carddav"
 [steps.params.common]
 input_path = "~/backups/contacts_vcf"
+# The directory is the whole address book, so a `.vcf` that is gone means
+# the contact is gone. (CardDAV mode above doesn't need this: the server
+# reports deletions itself.)
+always_clear_before_ingest = true
 
 [[steps]]
 id = "vcard-contacts/rendered_md"
@@ -444,6 +453,9 @@ inputs = ["vcard-contacts/raw"]
 
 # Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
 # chat networks to ingest (at least one required).
+# Poorly supported — nobody is using it, so expect rough edges. It never
+# notices a deletion, and `always_clear_before_ingest` is the wrong fix
+# here (see the provider's DOWNLOAD.md).
 [[steps]]
 id = "beeper/raw"
 command = "datalib-step download beeper"
@@ -532,6 +544,10 @@ command = "datalib-step download signal_backup"
 [steps.params.sync]
 snapshot_dir = "~/backups/SignalBackups"
 aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
+[steps.params.common]
+# Each backup is a full snapshot of the phone, so a message missing from
+# the newest one was deleted there.
+always_clear_before_ingest = true
 
 [[steps]]
 id = "signal/rendered_md"
@@ -577,6 +593,9 @@ fetch_photos = true
 
 [steps.params.common]
 input_path = "~/backups/LinkedInDataExport"
+# Each export is complete. Without this a CSV that LinkedIn stopped
+# including keeps its whole table from the previous export forever.
+always_clear_before_ingest = true
 [steps.params.common.download_params]
 maximum_sequential_failed_requests = 20
 
@@ -605,6 +624,10 @@ command = "datalib-step download google_takeout"
 
 [steps.params.common]
 input_path = "~/backups/Takeout"
+# Each Takeout is a complete snapshot of the feeds it covers — so point
+# this at a full export, not one you requested a single product from, or
+# the wipe drops what the narrower export simply doesn't mention.
+always_clear_before_ingest = true
 
 [steps.params.sync]
 google_chat = true                # DMs + bots + attachments → Markdown
@@ -634,6 +657,9 @@ id = "sms-backup-restore/raw"
 command = "datalib-step download sms_backup_restore"
 [steps.params.common]
 input_path = "~/backups/SMSBackupRestore"
+# The export directory is the whole archive, so a message no longer in it
+# was deleted on the phone.
+always_clear_before_ingest = true
 
 [[steps]]
 id = "sms-backup-restore/rendered_md"

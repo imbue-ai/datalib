@@ -50,6 +50,7 @@ async fn github_live_single_pr_snapshot() {
             docs.push(doc);
             Ok(())
         },
+        &mut std::collections::HashSet::new(),
     )
     .expect("render_github failed");
 

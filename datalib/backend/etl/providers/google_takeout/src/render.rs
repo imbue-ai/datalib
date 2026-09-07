@@ -19,6 +19,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
+use datalib_schema::providers::Provider;
 
 /// v2: a `created_date` / `when` we cannot parse gets a null `when_ts`
 ///     instead of a real-looking `1970-01-01T00:00:00`. See
@@ -45,7 +46,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "google_takeout",
+        provider: Provider::GoogleTakeout,
         source_label: "Google Chat".to_string(),
         chat_kind: "Google Chat".to_string(),
         message_kind: "Google Chat Message".to_string(),
@@ -57,7 +58,7 @@ fn profile() -> RenderProfile {
 
 fn voice_profile() -> RenderProfile {
     RenderProfile {
-        provider: "google_takeout",
+        provider: Provider::GoogleTakeout,
         source_label: "Google Voice".to_string(),
         chat_kind: "Google Voice Conversation".to_string(),
         message_kind: "Google Voice Message".to_string(),
@@ -74,6 +75,10 @@ pub fn render(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -95,7 +100,7 @@ pub fn render(
     if !messages.is_empty() {
         let chats = build_chats(&messages, &groups);
         let blobs: HashMap<String, BlobBundle> = HashMap::new();
-        cc_render_all(
+        let s = cc_render_all(
             &profile(),
             &chats,
             out_root,
@@ -105,11 +110,12 @@ pub fn render(
             prior_fingerprints,
             on_doc_complete,
         )?;
+        seen.extend(s.documents);
     }
 
     if !voice_messages.is_empty() {
         let chats = build_voice_chats(&voice_messages);
-        cc_render_all(
+        let s = cc_render_all(
             &voice_profile(),
             &chats,
             out_root,
@@ -119,6 +125,7 @@ pub fn render(
             prior_fingerprints,
             on_doc_complete,
         )?;
+        seen.extend(s.documents);
     }
     Ok(())
 }

@@ -16,6 +16,7 @@ use datalib_etl::layout::rendered_md_root;
 use datalib_etl::progress::Progress;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 
 use super::super::{
@@ -53,6 +54,10 @@ pub fn render_all(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
 
@@ -86,6 +91,7 @@ pub fn render_all(
             prior_fingerprints,
             &mut summary,
             on_doc_complete,
+            seen,
         )?;
         progress.inc(1);
 
@@ -104,6 +110,7 @@ pub fn render_all(
                     prior_fingerprints,
                     &mut summary,
                     on_doc_complete,
+                    seen,
                 )?;
                 progress.inc(1);
             }
@@ -126,12 +133,15 @@ fn render_book(
     prior_fingerprints: &HashMap<String, String>,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let m_uuid = book_uuid(&book.n);
     let fingerprint = compute_book_fingerprint(book);
     let book_dir = rendered_md_root(out_dir, source_name).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
+
+    seen.insert(m_uuid.clone());
 
     if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -178,11 +188,14 @@ fn render_chapter(
     prior_fingerprints: &HashMap<String, String>,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let m_uuid = chapter_uuid(&book.n, &chapter.n, &edition.id);
     let fingerprint = compute_chapter_fingerprint(book, chapter, edition, alignments);
     let rel = chapter_md_rel(source_name, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
+
+    seen.insert(m_uuid.clone());
 
     if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -439,7 +452,7 @@ fn book_grid_row(
 ) -> Option<GridRow> {
     GridRow::builder()
         .uuid(bk_uuid.to_string())
-        .provider("perseus")
+        .provider(Provider::Perseus)
         .kind("Book")
         .source_label("Perseus")
         .when_ts(Some(synth_when_ts(&book.n, 0)))
@@ -480,7 +493,7 @@ fn chapter_grid_row(
     let ci_u: u32 = ci as u32;
     GridRow::builder()
         .uuid(ch_uuid.to_string())
-        .provider("perseus")
+        .provider(Provider::Perseus)
         .kind(format!("Chapter ({})", edition.id))
         .source_label("Perseus")
         .when_ts(Some(synth_when_ts(&book.n, ci)))
@@ -528,7 +541,7 @@ fn section_grid_row(
     };
     GridRow::builder()
         .uuid(sec_uuid.to_string())
-        .provider("perseus")
+        .provider(Provider::Perseus)
         .kind(format!("Section ({})", edition.id))
         .source_label("Perseus")
         .when_ts(Some(when_ts))

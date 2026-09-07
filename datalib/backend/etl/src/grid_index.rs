@@ -1058,6 +1058,7 @@ mod insert_round_trip_tests {
     //! column gets a distinct sentinel and nothing may read back NULL.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::{Column, Row, ValueRef};
     use std::str::FromStr;
@@ -1068,7 +1069,7 @@ mod insert_round_trip_tests {
     fn fully_populated_row() -> GridRow {
         GridRow {
             uuid: "row-everything".into(),
-            provider: "claude".into(),
+            provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             // Offset-bearing and parseable, so the two `#[derived]` columns
@@ -1167,11 +1168,12 @@ mod id_claim_tests {
     //! the batch up with an error naming neither source. These pin both.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
 
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
         GridRow {
             uuid: uuid.into(),
-            provider: "claude".into(),
+            provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             when_ts: None,
@@ -1288,6 +1290,7 @@ mod write_lock_tests {
     //! from the same code path production uses.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
     use std::sync::Arc as StdArc;
@@ -1299,7 +1302,7 @@ mod write_lock_tests {
         // the DELETE + insert path. We don't care about content.
         let row = GridRow {
             uuid: uuid.clone(),
-            provider: "claude".into(),
+            provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             when_ts: Some("2026-06-02T20:00:00+00:00".into()),
@@ -1731,6 +1734,7 @@ mod source_cursor_tests {
     use crate::grid_index::{build_grid_index, init_schema, load_source_cursors, RenderedMarkdown};
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
 
     async fn index_pool(root: &Path) -> SqlitePool {
         let db = root.join("unified_index/grid/db.doltlite_db");
@@ -1751,7 +1755,7 @@ mod source_cursor_tests {
     fn doc(root: &Path, source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
-            .provider("test")
+            .provider(Provider::Test)
             .kind("Test")
             .source_label("Test")
             .conversation_uuid(uuid)
@@ -1793,9 +1797,85 @@ mod source_cursor_tests {
 
     fn unrender(root: &Path, source: &str, uuid: &str) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
-        store.remove_document(uuid).unwrap();
+        store.remove_document(root, uuid).unwrap();
         store.commit("test unrender").unwrap();
         store.close();
+    }
+
+    /// A document that belongs to a conversation other than itself, and
+    /// whose `.md` actually exists on disk — the shape a periodizing
+    /// renderer produces, and the one the deletion path has to handle.
+    fn doc_in_conversation(
+        root: &Path,
+        source: &str,
+        uuid: &str,
+        conversation_uuid: &str,
+    ) -> RenderedMarkdown {
+        let mut md = doc(root, source, uuid, "body");
+        md.rows[0].conversation_uuid = conversation_uuid.to_string();
+        std::fs::create_dir_all(md.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&md.md_path, "# rendered\n").unwrap();
+        md
+    }
+
+    /// One conversation, several rendered documents, all of them gone when
+    /// the conversation is.
+    ///
+    /// The fan-out is the reason `documents_for_conversation` exists rather
+    /// than the renderer just naming the document it wants dropped: slack,
+    /// signal and beeper split one conversation across periods, and once
+    /// the conversation is gone from the raw store nothing but this store
+    /// still knows how many periods it had. A removal keyed on the
+    /// conversation drops all of them; one keyed on a recomputed document
+    /// id would drop whichever period the renderer guessed and silently
+    /// leave the rest.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn removing_a_conversation_takes_every_period_it_rendered_into() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let conv = "conv-1";
+        let jan = doc_in_conversation(root, "src", "md-jan", conv);
+        let feb = doc_in_conversation(root, "src", "md-feb", conv);
+        let other = doc_in_conversation(root, "src", "md-other", "conv-2");
+        let (jan_md, feb_md, other_md) = (
+            jan.md_path.clone(),
+            feb.md_path.clone(),
+            other.md_path.clone(),
+        );
+        render(root, "src", &[jan, feb, other]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(index_row_count(&pool).await, 3);
+
+        let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
+        let mut gone = store.documents_for_conversation(conv).unwrap();
+        gone.sort();
+        assert_eq!(
+            gone,
+            vec!["md-feb".to_string(), "md-jan".to_string()],
+            "both of the conversation's periods, and only those"
+        );
+        for uuid in &gone {
+            store.remove_document(root, uuid).unwrap();
+        }
+        store.commit("test: conversation gone upstream").unwrap();
+        store.close();
+
+        assert!(!jan_md.exists(), "the rendered markdown must go too");
+        assert!(!feb_md.exists());
+        assert!(
+            other_md.exists(),
+            "an untouched conversation keeps its file"
+        );
+
+        // And the index picks the removal up from the store's own diff,
+        // which is the only way it ever learns about one.
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(
+            index_row_count(&pool).await,
+            1,
+            "the grid must be left holding only the surviving conversation"
+        );
     }
 
     async fn index_row_count(pool: &SqlitePool) -> i64 {

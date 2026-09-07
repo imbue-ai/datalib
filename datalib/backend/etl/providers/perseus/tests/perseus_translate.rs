@@ -6,7 +6,7 @@
 //! or the renderer flips a UUID derivation, this fails before bad data
 //! hits a user's root.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use datalib_etl::grid_index::RenderedMarkdown;
@@ -41,6 +41,7 @@ fn render_fixture(
             emitted.push(r);
             Ok(())
         },
+        &mut HashSet::new(),
     )
     .expect("render");
     (summary, emitted)
@@ -220,6 +221,7 @@ fn second_run_is_a_no_op_when_fingerprints_match() {
             prior.insert(r.markdown_uuid.clone(), r.source_fingerprint.clone());
             Ok(())
         },
+        &mut HashSet::new(),
     )
     .unwrap();
 
@@ -231,6 +233,7 @@ fn second_run_is_a_no_op_when_fingerprints_match() {
         &Progress::noop(),
         &prior,
         &mut |_| Ok(()),
+        &mut HashSet::new(),
     )
     .unwrap();
     assert_eq!(summary.markdowns_rendered, 0);

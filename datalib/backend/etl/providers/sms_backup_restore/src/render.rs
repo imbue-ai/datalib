@@ -19,6 +19,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::download::{db_path_for, RawDb};
+use datalib_schema::providers::Provider;
 
 /// v2: a row whose `date` field is missing or non-numeric gets a null
 ///     `when_ts` instead of a real-looking `1970-01-01T00:00:00`. See
@@ -45,7 +46,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "sms_backup_restore",
+        provider: Provider::SmsBackupRestore,
         // Drives the grid "Source" column (and `source:SMS` queries); keep
         // it short so it reads cleanly next to the SMS icon.
         source_label: "SMS".to_string(),
@@ -64,6 +65,10 @@ pub fn render(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -83,7 +88,7 @@ pub fn render(
         return Ok(());
     }
     let chats = build_chats(&messages, &calls);
-    cc_render_all(
+    let s = cc_render_all(
         &profile(),
         &chats,
         out_root,
@@ -93,6 +98,7 @@ pub fn render(
         prior_fingerprints,
         on_doc_complete,
     )?;
+    seen.extend(s.documents);
     Ok(())
 }
 

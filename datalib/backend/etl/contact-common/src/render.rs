@@ -12,6 +12,7 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use sha2::{Digest, Sha256};
 
@@ -24,7 +25,7 @@ use crate::types::{ContactPhoto, NormalizedContact};
 pub struct ContactRenderProfile {
     /// On-disk subdir under `rendered_md/<provider>/…`, the markdown's
     /// `provider:` frontmatter key, and the grid-row `provider` column.
-    pub provider: &'static str,
+    pub provider: Provider,
     /// The `source_label` column on every grid row (e.g. `"LinkedIn"`,
     /// `"Apple Contacts"`).
     pub source_label: String,
@@ -42,6 +43,11 @@ pub struct RenderSummary {
     pub contacts_rendered: usize,
     pub contacts_skipped: usize,
     pub photos_materialized: usize,
+    /// Every document this call considered, rendered and skipped alike —
+    /// and the ones whose render failed, which are documents we could not
+    /// rewrite rather than contacts the address book lost. See
+    /// `datalib_etl_chat_common::render::RenderSummary::documents`.
+    pub documents: Vec<String>,
 }
 
 pub fn render_all(
@@ -60,6 +66,7 @@ pub fn render_all(
     progress.set_length(Some(summary.contacts_total as u64));
 
     for contact in contacts {
+        summary.documents.push(contact.contact_uuid.clone());
         match render_one(
             profile,
             contact,
@@ -78,7 +85,7 @@ pub fn render_all(
             Err(e) => {
                 tracing::warn!(
                     event = "contact_render_failed",
-                    provider = profile.provider,
+                    provider = %profile.provider,
                     contact_uuid = %contact.contact_uuid,
                     group = %contact.group_label,
                     error = %e,
@@ -393,7 +400,7 @@ mod tests {
 
     fn mk_profile() -> ContactRenderProfile {
         ContactRenderProfile {
-            provider: "linkedin",
+            provider: Provider::Linkedin,
             source_label: "LinkedIn".to_string(),
             contact_kind: "Contact".to_string(),
             render_version: 1,
