@@ -162,6 +162,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
                 datalib_schema::edges::DDL,
                 datalib_schema::render_problems::DDL,
                 datalib_schema::source_cursors::DDL,
+                datalib_schema::measurements::DDL,
             ]),
         ),
         (

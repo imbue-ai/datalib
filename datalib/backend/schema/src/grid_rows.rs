@@ -179,4 +179,22 @@ pub struct GridRow {
     /// Nullable until every renderer populates it.
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: Option<String>,
+    /// How many bytes the thing this row describes occupies. A file's
+    /// size on disk, a store's size, an attachment's length. NULL when
+    /// the row describes something with no meaningful size.
+    ///
+    /// Bytes on disk, not a logical sum of field lengths — the two
+    /// disagree, and a column that silently mixes them is worse than
+    /// one that is absent. A producer that can only compute a logical
+    /// size should leave this NULL and say so in `text`.
+    #[col(sql = "BIGINT")]
+    pub byte_size: Option<i64>,
+    /// How many things this row counts: rows in a table, files under a
+    /// directory, entries in a playlist. NULL when the row is a single
+    /// thing rather than a collection of them.
+    ///
+    /// Deliberately unitless — what is being counted is `kind`'s job to
+    /// say, not this column's.
+    #[col(sql = "BIGINT")]
+    pub item_count: Option<i64>,
 }

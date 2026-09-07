@@ -124,6 +124,11 @@ are relative to the repo root.
   DDL and so is the one list that cannot be stale. Prose here has been
   wrong before — it named `openai_conversations`, `claude_conversations`
   and `slack_workspaces`, none of which have ever existed.
+  Its last two sections cover the **storage rows** every source emits
+  (what a mirror weighs, and the row counts inside it) — read those
+  before changing `datalib_step/src/introspect.rs`, and in particular
+  before moving the measurement *history* into `grid_rows`, which was
+  considered and rejected for four reasons written down there.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
   table.
 - [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
@@ -461,10 +466,15 @@ When you add or change a `grid_rows` column:
    comment). Index-time-derived columns use `#[derived(…)]`.
 2. Update each provider's `render/grid_rows.rs` to populate the new
    column from that provider's parsed data.
-3. Update the row mapper in `datalib/backend/core/src/dolt_repo.rs`
-   to read it back, plus `SearchRow` in `search.rs` if the column reaches
-   the API.
-4. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+3. Update the row mapper in
+   `datalib/backend/unified_index/src/dolt_repo.rs` — both
+   `SEARCH_ROW_COLUMNS` and `search_row_from` — plus `SearchRow` in
+   `unified_index/src/search.rs` if the column reaches the API.
+4. If it should be a grid column, add it to `default_columns()` in
+   `datalib/backend/applets/src/unified_index/mod.rs` (which is the
+   applet's wire contract, and has a test counting it) and to the
+   `SearchRow` type in `datalib/ui/src/api.ts`.
+5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
 

@@ -678,9 +678,10 @@ inputs = ["sms-backup-restore/raw"]
 # File-backed: point `common.input_path` at any local directory tree. fsindex
 # walks it Unison-style (fast incremental rescans keyed on mtime/size/inode)
 # and records `(path, kind, size, blake3, optional identity uuid)` for every
-# entry in a raw store. DOWNLOAD-ONLY: it renders nothing (filesystem entries
-# aren't chat-shaped), so there is no render step — the index is queryable
-# in the per-source raw store.
+# entry in a raw store. It renders no documents of its own (filesystem entries
+# aren't chat-shaped) — the index is queryable in the per-source raw store —
+# but the render step is still worth declaring: it emits the storage report
+# every source gets, which is what puts fsindex in the grid at all.
 #
 # `stamp` is off by default so the scan stays read-only against its input.
 # Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
@@ -692,6 +693,12 @@ command = "datalib-step download fsindex"
 # stamp = false   # default; true → write UUID breadcrumbs into the tree
 [steps.params.common]
 input_path = "~/Documents"
+
+# Renders no documents, only the storage report — see above.
+[[steps]]
+id = "fsindex-home/rendered_md"
+command = "datalib-step render fsindex"
+inputs = ["fsindex-home/raw"]
 
 # --- pdf (local PDF corpus → markdown) ----------------------------------
 
@@ -755,8 +762,10 @@ inputs = ["pdfs/raw"]
 # in order and verbatim — including the ones pointing at tracks you deleted
 # years ago, which is the interesting half of the data.
 #
-# DOWNLOAD-ONLY: it renders nothing (media has no text, and this data wants a
-# UI of its own), so there is no render step — query the raw store directly.
+# It renders no documents (media has no text, and this data wants a UI of its
+# own) — query the raw store directly. The render step below still earns its
+# place: it emits the storage report every source gets, which is what puts
+# media in the grid at all.
 # See datalib/backend/etl/providers/media/DOWNLOAD.md.
 [[steps]]
 id = "media/raw"
@@ -775,6 +784,12 @@ command = "datalib-step download media"
 # skip_dataless = true
 [steps.params.common]
 input_path = "~/Music"
+
+# Renders no documents, only the storage report — see above.
+[[steps]]
+id = "media/rendered_md"
+command = "datalib-step render media"
+inputs = ["media/raw"]
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 

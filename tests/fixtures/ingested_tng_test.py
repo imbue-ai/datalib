@@ -147,6 +147,11 @@ EXPECTED_PROVIDERS = frozenset(
         "claude",
         "beeper",
         "contacts",
+        # Not a source: the per-source storage report every render wave
+        # emits (what the mirror weighs, and the row counts inside it).
+        # It is the only provider here that appears for *every* source
+        # rather than for one — see docs/dev/grid_rows.md.
+        "datalib",
         "github",
         "gitlab",
         "google_takeout",
@@ -304,6 +309,32 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _providers(self) -> frozenset[str]:
         return frozenset(
             self._query(self._index_db, "SELECT DISTINCT provider FROM grid_rows;")
+        )
+
+    def _sources_missing_a_storage_report(self) -> list[str]:
+        """Sources that rendered documents but carry no storage rows.
+
+        Every source's render wave ends by measuring its raw store, so
+        every source in `markdowns` should also appear as an `account`
+        on some `provider='datalib'` row.
+
+        The failure this catches is silent and partial. Eight providers
+        declare their whole document set via `RunCtx::retain_documents`,
+        and the sweep that follows deletes anything they did not name —
+        which is every storage report, since a provider's processors
+        know nothing about them. `render.rs` exempts the report by id,
+        and if that exemption breaks, only those eight sources lose
+        theirs. `EXPECTED_PROVIDERS` would not notice: the other eight
+        keep `datalib` in the set. Nothing else would either, until
+        someone spotted a source missing from the grid.
+        """
+        return self._query(
+            self._index_db,
+            "SELECT DISTINCT m.source_name FROM markdowns m "
+            "WHERE m.source_name NOT IN ("
+            "  SELECT account FROM grid_rows "
+            "  WHERE provider = 'datalib' AND account IS NOT NULL"
+            ") ORDER BY m.source_name;",
         )
 
     def _pdf_shape(self) -> dict[str, int]:
@@ -659,6 +690,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             EXPECTED_PROVIDERS,
             "grid_rows providers after a full run",
         )
+        self.assertEqual(
+            self._sources_missing_a_storage_report(),
+            [],
+            "every source that rendered must also have measured itself",
+        )
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,
@@ -830,6 +866,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # idempotent. Re-rendering and re-loading the same documents
         # must not duplicate rows (upserts keyed correctly) or drop
         # them (a cursor short-circuit skipping too much).
+        # Checked before the shape assertion below, which would also
+        # fail but only as an opaque row-count mismatch.
+        #
+        # Run 2, not run 1, is where a lost storage report shows up. Run
+        # 1 writes the report *after* the retain sweep, so it always
+        # survives its own run; it is the next run that sweeps it and
+        # then declines to write it back, because its fingerprint has
+        # not moved. Asserting this only after run 1 would pass against
+        # the broken behaviour — verified by removing the exemption in
+        # `render.rs` and watching run 1 stay green.
+        self.assertEqual(
+            self._sources_missing_a_storage_report(),
+            [],
+            "a source lost its storage report on a steady-state re-run, "
+            "most likely to the retain sweep in render.rs",
+        )
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
         )

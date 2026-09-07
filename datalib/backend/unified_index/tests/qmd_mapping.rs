@@ -38,6 +38,8 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(uuid.into()),
+        byte_size: None,
+        item_count: None,
     }
 }
 

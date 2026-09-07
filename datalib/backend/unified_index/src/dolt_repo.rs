@@ -32,7 +32,7 @@ pub struct DoltRepo {
 const SEARCH_ROW_COLUMNS: &str = "uuid, provider, kind, source_label, when_ts, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
      message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
-     upstream_entity_kind, qmd_path";
+     upstream_entity_kind, qmd_path, byte_size, item_count";
 
 fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
     let kind: String = r.try_get("kind").unwrap_or_default();
@@ -74,6 +74,8 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         notion_page_uuid: r.try_get("notion_page_uuid").unwrap_or_default(),
         upstream_id: r.try_get("upstream_id").unwrap_or_default(),
         upstream_entity_kind: r.try_get("upstream_entity_kind").unwrap_or_default(),
+        byte_size: r.try_get::<Option<i64>, _>("byte_size").ok().flatten(),
+        item_count: r.try_get::<Option<i64>, _>("item_count").ok().flatten(),
         score: None,
     }
 }

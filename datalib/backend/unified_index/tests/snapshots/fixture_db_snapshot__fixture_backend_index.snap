@@ -12,7 +12,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "351df67812420e349375d9639e0c01f69577a237fe4ff307ef4ee8df07b09c6e",
+      "row_set_hash": "564bf57cab0c4086cab58d6a3a04c2a41af211e18dea6dc6c0ebf6a36bc5e6c3",
       "source_fingerprint": "407842378ccf5b59047cfd1a4eedfa6cc8fa70facf471df77f3e1541ab45998b",
       "source_name": "slack",
       "title": "#bridge",
@@ -33,6 +33,20 @@ expression: snapshot
       "updated_at": "2364-04-13T08:45:00-07:00"
     },
     {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "101b52f0-bdc4-5b7b-99c9-994ff6349370",
+      "md_path": "beeper/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "21849c1913da89210b336e86c63d260b153348321983de6f46e59df49c8571d0",
+      "source_fingerprint": "48da27594a0611b4658448afd9955d993199bf1c4a31c2648852e5331b486ee9",
+      "source_name": "beeper",
+      "title": "beeper storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
+    },
+    {
       "created_at": "2370-08-22T00:00:00Z",
       "kind": "chat",
       "markdown_uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
@@ -40,7 +54,7 @@ expression: snapshot
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "ae3c99fa905bc3d6b6738179819bad0f1c55ca632c17a78963ecf556932692f7",
+      "row_set_hash": "a85effabfd4d1e5be2caf7c24915fb759cd93a5a19f0d38f631f5c309b5b989c",
       "source_fingerprint": "1f31ebc8e2a37cd48fac125518c9e69114e7202adde20579f1cd28deee4486bd",
       "source_name": "tng_contacts",
       "title": "Bridge",
@@ -54,7 +68,7 @@ expression: snapshot
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "f78bd8f0861b5509cb3ef417374dfb0bf5e87dd1ed9570f791381c420bbc8aeb",
+      "row_set_hash": "7f439d91d4fb6b2e6880285b86a646025b57192e0cd6e773237499d7b4765005",
       "source_fingerprint": "ff4971f0bb62acd09ec3ea954a45adf952898902c78b1256ea2bbb05440e4195",
       "source_name": "tng_contacts",
       "title": "Engineering",
@@ -68,7 +82,7 @@ expression: snapshot
       "provider": "sms_backup_restore",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "0f9aa6fe34fd78ce47f5a53f668f55111887cab91978f6d1bf00db8522d55464",
+      "row_set_hash": "0e22496f7ee3a1228f41968499a0a84aae69b837f2d5fc96a214f79075948b18",
       "source_fingerprint": "4a2c9ca5bc0d4f268c9799b5b6b86b959641f2e2be0a5734f0a67fb5a26e9572",
       "source_name": "sms-backup-restore",
       "title": "Deanna Troi",
@@ -82,7 +96,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "5a6961a70cf2bc437d58c073aaf1b1dc2c1e4b4c17e172bf433a79e3338d664d",
+      "row_set_hash": "c9191487bd8a2e4a3aa1a23d7da57dfd2597d6421ba8665346661f5fc9a9d749",
       "source_fingerprint": "37607ec2a006ff4f8c31277dfacd8670a446e1a6d9f4849d5ff48cd598a89993",
       "source_name": "slack",
       "title": "@William T. Riker",
@@ -96,7 +110,7 @@ expression: snapshot
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
-      "row_set_hash": "09cf60a44916f552dcd993e78de3aceac623b46d4c1444a83637dff2ac733350",
+      "row_set_hash": "8f2f52d27d3d6a96b56c599ff5487661f67d03a890c0a81f14647fb4a7633ec9",
       "source_fingerprint": "cd6722b38e3b823d31f4f41d863a603d9278c3356def7f24a3a184c20b0b8f79",
       "source_name": "claude-api",
       "title": "Tricorder Image Diagnostic",
@@ -110,7 +124,7 @@ expression: snapshot
       "provider": "sms_backup_restore",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "6c2603971bea525020bfe28a734de5dc8877767644aa798e0b9a769204d398c5",
+      "row_set_hash": "f08a07688280680b9ce53c9075da5fcaa92d851e782b988bc7f30f3beecbaa6f",
       "source_fingerprint": "fd26e777b5390fdf9a502f311e93070369a223b3116f71fe8a15ea4223559594",
       "source_name": "sms-backup-restore",
       "title": "Jean-Luc Picard",
@@ -124,7 +138,7 @@ expression: snapshot
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "f518ebf25e89492dc6a063232aa30f9998c85311f3927ffb5988b916a2955d3d",
+      "row_set_hash": "d55758e10a449f0d1d3530c10b6719105421ed5cc1a8076ee32c5475e2c8381f",
       "source_fingerprint": "264679d66ad47cd34b4961e388ad607429d5ebf24ccf79e477d327240b3d163d",
       "source_name": "tng_contacts",
       "title": "Bridge",
@@ -138,7 +152,7 @@ expression: snapshot
       "provider": "google_takeout",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "cb6cbda34a41b5c86d3b2673ec777bf0b1e4a7668445685261ca816e4aed2d80",
+      "row_set_hash": "11e99d6c05b826ae0a83e3d0b2e42f0f54eb03fc93c1258f01b9ff7a3c2f8b7b",
       "source_fingerprint": "017348e4a0e0165bb3528ff3821c7ce3e1392a3eb1d8782f649a84c8e7b8ec1a",
       "source_name": "google-takeout",
       "title": "Jean-Luc Picard, William Riker",
@@ -152,7 +166,7 @@ expression: snapshot
       "provider": "google_takeout",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "4cd2101550313adb874d18004c370b494492a8d287ee90d52f3dc5544b2a2312",
+      "row_set_hash": "58e98d1b454c04bb2b75ac9628b74fed6d07bb9bf8edca974f8353dfc3944f88",
       "source_fingerprint": "69528f51525bdddbe8a72d6d41f6087dace9481c49982baaac7d11a0c1207b59",
       "source_name": "google-takeout",
       "title": "+15550900",
@@ -166,11 +180,25 @@ expression: snapshot
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
-      "row_set_hash": "0153807e1a70926263e026478fa3210e401f359c98807ea3b6d20fb03015dbc7",
+      "row_set_hash": "1cb5c88216dcfe1a12eea317c87a066c235210f51fa4e43b6d779bcf2a3f9a70",
       "source_fingerprint": "4888cba9a0da884a586fb1e6d3b0ef49f377ef6a71543ae065f508966eae24e5",
       "source_name": "claude-api",
       "title": "Stellar Cartography",
       "updated_at": null
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "318565b8-6857-5827-8300-37b991fea63a",
+      "md_path": "chatgpt-api/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "d67f2680bf0b905f841a92958bd0865c3a7dbc5d17229b1de4a7e6eb924b597f",
+      "source_fingerprint": "2325a7e40d2cf6d2daa1c6862795f420f6beb93a37b2224ac55bd7c8d7feb3e6",
+      "source_name": "chatgpt-api",
+      "title": "chatgpt-api storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": null,
@@ -194,7 +222,7 @@ expression: snapshot
       "provider": "chatgpt",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.7",
-      "row_set_hash": "28c5341dfd514495e2aa42c88bf6c59c7619ec7cdf5c0f8981a92372d628f12c",
+      "row_set_hash": "14f00c2ed0c06a32c98bdacbb131307d583a08243eb13b5e08b3e8a250a82509",
       "source_fingerprint": "e29ceeebfe31f59565560b765aa534af16bd305bee7d79a196e1653f07e59255",
       "source_name": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -208,7 +236,7 @@ expression: snapshot
       "provider": "sms_backup_restore",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "92c10f309b69ef5bb1d3b740ed71dbb882eee8e2e921570061a586a472a1610d",
+      "row_set_hash": "ba19cd8757199e42f3f53913c00fbb8c8c34f2f3eb80b0b8c8a9328e49e4e949",
       "source_fingerprint": "6fc073c985fa2e883672a1a521a254c92d55e4204464a1f473e18be02a460c35",
       "source_name": "sms-backup-restore",
       "title": "Worf",
@@ -222,11 +250,39 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "b365ec42af4fab2a8262a6f22293d6d41cdf7e96ec31b753497f52ed97dbf992",
+      "row_set_hash": "1fe7b509b5f232c9119352ca91be9bfbcf4ab29febde6d1cd4ad69d46da2432c",
       "source_fingerprint": "4a2b5a46d47fd00304fe5a277d3d64dae07baa122b191273a32c314752746295",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:20:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "59670c2c-49f4-536b-a9a8-40b069507acf",
+      "md_path": "slack/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "7d55e06d62f26c5e9531a05fe7d780845910d3ca39e6d4091009ff9baeae2ad2",
+      "source_fingerprint": "8923b1698a2dafa53098ff27b7ad72afc5ef66fcb6c510acfc29b9588c59d016",
+      "source_name": "slack",
+      "title": "slack storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "59a90ea4-1135-5ad7-9bd2-99afd27f0550",
+      "md_path": "notion/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "84f218bc13f5f946d69dd4f0632ad601ec97c4687373dafaf43cd769d787fc49",
+      "source_fingerprint": "01153a3bd49b5c1b6a10f7eaa4a889c8ce517d1d7f8ae855a44bfba1280ed2ce",
+      "source_name": "notion",
+      "title": "notion storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2024-03-20T13:58:20.000+00:00",
@@ -236,7 +292,7 @@ expression: snapshot
       "provider": "beeper",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "89676e54c1e654934b2004072aecc8b47a440cd520ebce0436928df7904c4ea0",
+      "row_set_hash": "314fb942869d3f6a050925b5dc1c14996bb4222d57111e79ec8b625c0dae581c",
       "source_fingerprint": "e67ccb5aaac1a640",
       "source_name": "beeper",
       "title": "William T. Riker",
@@ -250,7 +306,7 @@ expression: snapshot
       "provider": "chatgpt",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.7",
-      "row_set_hash": "8af5c9885381fa0627f940e997914138c162fbb6c68551c949579683b7e81a9a",
+      "row_set_hash": "394e4fde241d3abc829623370a9d6d8349e7973494528a66855498088fc0e16a",
       "source_fingerprint": "74ca491e2f0da2d990fcb0a7fa01bd00ce61ae53c87529b4a6c1518880f1c838",
       "source_name": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot",
@@ -264,7 +320,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "b93a8d41637db5ab5825d795eaa20ff8056eb349073fe2df7b2fe8c06a0c4179",
+      "row_set_hash": "4030a8397daef7785cb2034fa3775065615f1f6185b08ce08cbcdd1e77de3f58",
       "source_fingerprint": "4b1375346d62077011c06cbffde418935d128738b191ce46462907ebbd9a37ad",
       "source_name": "slack",
       "title": "@William T. Riker, Worf",
@@ -278,7 +334,7 @@ expression: snapshot
       "provider": "beeper",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "c7881371629f54ee15936cf55cafda8718fd07806bff498d6e220c3bb4103c4f",
+      "row_set_hash": "1ec8b8140d6919a8a582ded6f5c4b409ece47c21e8be72ec28ad5350372e62c3",
       "source_fingerprint": "cd9fd182074ea470",
       "source_name": "beeper",
       "title": "tng-data-conv-uuid-0001",
@@ -292,7 +348,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "6a91bd9b764316dfd203b58c5de7604cab3cbab9e96a4ac17ad75d3431580887",
+      "row_set_hash": "6df9a54670db811e02796516463234469f88d471b7e048764c343ae1e1dc58cf",
       "source_fingerprint": "b8556d8690717b51069aae183396dccc2f0a0bc7f698a18c4a0da2d8389b955c",
       "source_name": "slack",
       "title": "#engineering",
@@ -306,7 +362,7 @@ expression: snapshot
       "provider": "github",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "07d2c3184c9bd5e5499971aa84671f9cb8ada676edb84713084bd86324ff3c7b",
+      "row_set_hash": "3b4ba0f2090ff948e2424651a173bd6dc4488ffe0a1249affdfd670d5c3e95a7",
       "source_fingerprint": "fb64f72be17d7715",
       "source_name": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot",
@@ -327,6 +383,20 @@ expression: snapshot
       "updated_at": null
     },
     {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "6cad92d9-877b-5dd1-94ac-6fa07593f234",
+      "md_path": "yolink/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "18c194ba3946247e257f8137ac2145cf87b12794c4c023bb1b97adc6d7d7a951",
+      "source_fingerprint": "48a9bbcb24e12c69171178addf216484f3493ab056457fe243da1d5037a34aeb",
+      "source_name": "yolink",
+      "title": "yolink storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
+    },
+    {
       "created_at": "2369-04-15T14:00:00.000Z",
       "kind": "mr",
       "markdown_uuid": "6fc719a5-94c3-5757-a26f-2f34579d2508",
@@ -334,11 +404,25 @@ expression: snapshot
       "provider": "gitlab",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "9a8d5bf6055f29ef597d7adad78d37abef48dd8936d4b02c809054dbff0376b1",
+      "row_set_hash": "e5e4481d9ecb4829894d4922c037a116057a54f373e36e5cf7c72f130412a48a",
       "source_fingerprint": "3c4ff5e979c53b8b",
       "source_name": "gitlab",
       "title": "Holodeck safety interlock regression test",
       "updated_at": "2369-04-15T14:30:00.000Z"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "72c8d7c4-1a60-5a90-9f43-4e5f660e46de",
+      "md_path": "whatsapp/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "fba77b00d37b301220ccb5230b0b81fb7c4e741d9991642767d2a7f4f601f56f",
+      "source_fingerprint": "14859fef799fd0d3e827b6c2046022488fa676e189860f97ab0cf8ca4022b5da",
+      "source_name": "whatsapp",
+      "title": "whatsapp storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2369-04-15T10:00:00.000Z",
@@ -348,7 +432,7 @@ expression: snapshot
       "provider": "gitlab",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "049c034f4aa9fda67ca6080f588fe40a604fcfc54bb7dbe90cc175bd63e53dc6",
+      "row_set_hash": "00300725dce6928e1884574dc218a04b2d1b15b65ee0f96e426f275e3fd75539",
       "source_fingerprint": "b79eca6523610444",
       "source_name": "gitlab",
       "title": "Add Earl Grey, hot to replicator menu",
@@ -362,7 +446,7 @@ expression: snapshot
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "ca01f6c21b3296239b9f858be1dea44f265da9fc90cb71adf79efb01e3286ebb",
+      "row_set_hash": "c10289edf3fa18a47f145142850b0828722d4fe344876151c7dfb6656f436f77",
       "source_fingerprint": "805a3f1b8e5cc459c4206eadaf8c23e2ebf715e76c9ddf0851ab7c6d1a29197a",
       "source_name": "linkedin",
       "title": "Jean-Luc Picard, William Riker",
@@ -376,11 +460,25 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "cab340187ea709cb023b1b5d624a84a2620de9c2cc3be9ed7be9cf6c064155b8",
+      "row_set_hash": "b7466e0519339e973015c7c242885cb40d77f42ac8a4bca42efbde1cd7437f0d",
       "source_fingerprint": "4c2c6794591c9d6e2c1246dba5709e49d5b158e8825f8a36d3fcde1063fee751",
       "source_name": "slack",
       "title": "@William T. Riker",
       "updated_at": "2369-05-28T15:21:40+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "7ce34a0e-7f1d-5831-9b97-fbaa68c339a2",
+      "md_path": "tng_email/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "3a2840c2f9c0a2e83dd94b3b795815e02dd5e14bdd78a0ab0c0e08cbbe9d0a11",
+      "source_fingerprint": "ac730d4757defba265717d183287ab2c7cb9110c80de14495651e10d3d35e487",
+      "source_name": "tng_email",
+      "title": "tng_email storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2364-04-11T00:00:00+00:00",
@@ -390,7 +488,7 @@ expression: snapshot
       "provider": "whatsapp",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
-      "row_set_hash": "d895388ecb0dc2b256e91ddcb758c9206dc347f9b6baebe30b115b589f8ff527",
+      "row_set_hash": "8cc309ccd3d9ebd20581b3db45bd5dc25ee105769dcbdc0e203358d104b6c078",
       "source_fingerprint": "2fc7aa07347356746b245b7317f8b3080ce3dfdbc4fcaae4b1554a9270d12323",
       "source_name": "whatsapp",
       "title": "Bridge Crew",
@@ -404,7 +502,7 @@ expression: snapshot
       "provider": "github",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "72cf8212a9142573122a57e3a517e1b72cdccbfe8bbd01171cfe3f2134bdf7aa",
+      "row_set_hash": "fb4aa65cc6217f59c3fbe1a4375a79c1f00e6151b61c64bf1ea6c8298f1bc095",
       "source_fingerprint": "a97dcff41126d108",
       "source_name": "github",
       "title": "Add holodeck safety interlock for live phaser fire",
@@ -418,11 +516,39 @@ expression: snapshot
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "0fd99ba84d2dc4495dace98c251d2f878da5c38eafeef40089d0acc99a4424a4",
+      "row_set_hash": "73e284bc919c3bdf15008680999f232223ae0e76956dd6bbe09d95e47aa62b36",
       "source_fingerprint": "89838f8e077e249890eff862eefa22d79380670417fb0147fd8bb0e61269a3ee",
       "source_name": "linkedin",
       "title": "Connections",
       "updated_at": "2369-04-10T00:00:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "8b319149-5ea6-5de0-b68c-ca73d7d88a75",
+      "md_path": "github/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "7ed13fef141db7223470b43f75a36b5c486f80a6f6e7799f10b56bd8b4a09ee5",
+      "source_fingerprint": "300580cc6ac5b459d49157a7a95db7d1d5664e78385f0035140252ec43ce4ed3",
+      "source_name": "github",
+      "title": "github storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "905fdbfc-3f0f-5572-ac6f-500e4be71cb6",
+      "md_path": "tng_contacts/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "0e75af4755aac44c25789bea2c0b0d7f2b7bedb72782d903b3860a5f6614a610",
+      "source_fingerprint": "45f1971b7c0b87b7616380b817935c22c59bee60197d8175436ee4c51abea8b7",
+      "source_name": "tng_contacts",
+      "title": "tng_contacts storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2364-04-13T08:45:00-07:00",
@@ -446,11 +572,25 @@ expression: snapshot
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "bfc1d05dfa02f67839f5176a958f2ae2e6774f70e79724ccbd630ea160189488",
+      "row_set_hash": "8fe864c6a08da377ed4f21707c5f994025a477d5114d428f7623bd5fd6147546",
       "source_fingerprint": "da59442cc0a50839f728066be0db1e302a86fc1899fb10030868b7a51eb9d52d",
       "source_name": "tng_email",
       "title": "Captain's Log — Stardate 80124.1",
       "updated_at": "2026-01-07T14:00:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "aa7e11d1-fa22-5de1-8d8d-f494a5ea56f3",
+      "md_path": "sms-backup-restore/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "e318aeea3a8e41641220e5547441999836eacd97aa55b0143a3180ba6c89e6b5",
+      "source_fingerprint": "a85d4c3a148c15700f2ffcc6f7a57d98f43e1ec629602cd2362928f5a8c23f8c",
+      "source_name": "sms-backup-restore",
+      "title": "sms-backup-restore storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2369-05-28T15:13:20+00:00",
@@ -460,7 +600,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "5bd47762f06f5557738594a8df49d0729ea5ed28135e3a70f37a78d13759a592",
+      "row_set_hash": "024e9d7f799d50f96e6eb8f1b5621293a8e95b15a6e13c9ccec1b9010fe52366",
       "source_fingerprint": "e5d9258b3d06d5ae5d0590d53bd6949bc2318aaf58022bec10509879f90bd7ca",
       "source_name": "slack",
       "title": "#bridge",
@@ -474,7 +614,7 @@ expression: snapshot
       "provider": "whatsapp",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
-      "row_set_hash": "650b89f3b3c285d9c650a4e138322d918158235b5f5f2983dbc658ab10faba0a",
+      "row_set_hash": "40b7c5e7307fdcf1062c6ab8639321e268e2a840e5b1af419ef38f3c591f584f",
       "source_fingerprint": "4064879215a4117b44bf22e57e1dead042a49e76664d2c1e7d8b39c3edbf6681",
       "source_name": "whatsapp",
       "title": "+17015550102",
@@ -488,7 +628,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "d0b99ad1f148eef00505ff2830bf74e9aaeb2724bea13fe1433d369ec2ae39e3",
+      "row_set_hash": "87fafde5d3f9bc96d708402ed2f888c77706340ebd4c5bc6f2e2967efd6d02f5",
       "source_fingerprint": "7f5331ccbb52d1740dde9ab558b6594b5c711a3ab71f888a22f92d19d9293eab",
       "source_name": "slack",
       "title": "@William T. Riker, Worf",
@@ -502,7 +642,7 @@ expression: snapshot
       "provider": "notion",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "52c94b831c5c7d2afd20fb4793e70a110c1a9b5f26c0c39d941393b660d5946e",
+      "row_set_hash": "a746e2abc5ed65e520170c5bf210a7a293f898744182eb8995f150fa2bd1dca0",
       "source_fingerprint": "bff7badd03f9a892",
       "source_name": "notion",
       "title": "Bridge Operations Handbook",
@@ -516,7 +656,7 @@ expression: snapshot
       "provider": "notion",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "88fef47abe730a6bc34445b6a0c17c8462f11528845e578c4591ff63acdb1690",
+      "row_set_hash": "83c8419b65cb3431a336a4e1e82e69d7b0ce785e718e0b2ab513dcc1264c7028",
       "source_fingerprint": "78ac841a081ef9f7",
       "source_name": "notion",
       "title": "Shift Roster",
@@ -530,7 +670,7 @@ expression: snapshot
       "provider": "notion",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "c4e28bc40c658ebebe5e3409e6115f03e1b99eddaee848abdb9a1fccb477dd28",
+      "row_set_hash": "05267078219da339743dfcb1f044a9e58d19ae01a5302274231f57e5b42ce51d",
       "source_fingerprint": "3b68b30a5cdc713e",
       "source_name": "notion",
       "title": "Incident Log: Stardate 47988.1",
@@ -544,7 +684,7 @@ expression: snapshot
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "ceca8c681193ff2b24f9d2da01e517ac4e4ff36de4b62a1db6a54d769461a257",
+      "row_set_hash": "cfdb2a923e88ab53a79c4e3cc83b3325dbfc6d83f7935ba65ace9f16cdb71086",
       "source_fingerprint": "4d47d690b16ef2b7ff68591fe0f22dda1e0a3a05c785d874f655cf42d1771458",
       "source_name": "tng_email",
       "title": "Your shore leave awaits!",
@@ -558,11 +698,25 @@ expression: snapshot
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "d5102b03d3b7a608ba5ec1c4f7741ee2fcd393a16422f636fa6f7001446e2b9f",
+      "row_set_hash": "40f0824bf3afdd52a7b8afe8ddaf6245066b4fddb01efa311afbe6238af62771",
       "source_fingerprint": "20075570d70449c3d503ed14ea15a4c8ec1a7ab726ea150766af20a8cd3b0956",
       "source_name": "linkedin",
       "title": "Connections",
       "updated_at": "2369-04-09T00:00:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "b956d29a-0433-54ce-8cdc-44ed0fc59433",
+      "md_path": "tng_pdfs/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "6654870fdef6a352cb7babffc0f28f0a23c0df86af4658b29c0618c6b9d89904",
+      "source_fingerprint": "6ffcd9b3ca04a937eff87ff85b2a4891235edd9134d50f6c3019201cddfa72a5",
+      "source_name": "tng_pdfs",
+      "title": "tng_pdfs storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2364-03-01T09:00:00+00:00",
@@ -572,11 +726,25 @@ expression: snapshot
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
-      "row_set_hash": "ce819c4217c492a1a2dda96658f061db391f5e5a73af684f163e23e88e2401a8",
+      "row_set_hash": "07b9edc351421cedfc0281b47913384f6d8d5b1c55e70e10ec068083999a9b52",
       "source_fingerprint": "d4ed6a205d84191e5bdbdadce5829e70161652e006f4d3acafcf6e6e341fcdaa",
       "source_name": "claude-api",
       "title": "Bridge Operations",
       "updated_at": "2364-03-02T11:30:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "bf8b04fa-287e-5488-a82e-5e98dd14aea3",
+      "md_path": "signal/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "0f2f03a6d48a430238365724c0a9eeda90c777dda2fb86ee418b2b972b453264",
+      "source_fingerprint": "19406ab06631f451578442774aab55d8d19dd377c4dc5ae2652313771aeca44f",
+      "source_name": "signal",
+      "title": "signal storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2370-04-15T00:00:00Z",
@@ -586,11 +754,25 @@ expression: snapshot
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "387e14ee186260c1ad29fe8d051f9aacaa4797334724d908f1442f717aeaf9ca",
+      "row_set_hash": "1ab4538dda1c2c70f9592c96f50d855fa020334a4286364d059de6bb879db2b5",
       "source_fingerprint": "6d478b6dd63a53c920b04b11d74aaa6c7b87a4f2dbe4a096f0444447d5205e47",
       "source_name": "tng_contacts",
       "title": "Bridge",
       "updated_at": "2370-04-15T00:00:00Z"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "c93f49a0-d0f5-5d75-a679-09a0921579ff",
+      "md_path": "google-takeout/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "3443dd89962f50e367bfa2832b680b69fe6d7357ef7cf1b9a21c17e78174804a",
+      "source_fingerprint": "e4fa64fcee3a8ca20f8b42ce3aeaccb517a77f1b80c947e2066d5bbff1117ef6",
+      "source_name": "google-takeout",
+      "title": "google-takeout storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2026-01-05T09:00:00+00:00",
@@ -600,7 +782,7 @@ expression: snapshot
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "1b60f13f2106c9f2e266ea397a4c22084b126a2bd144d4c4fcb53dd2c7907eb3",
+      "row_set_hash": "7ac405482595b8094ee9a86f4f7f5b0a68bd91cab838531a8367759c3b38ed2a",
       "source_fingerprint": "5af510e411b340d1aa3263f3663bd6242963e8da27b9a585691dbb0b1e3a87f8",
       "source_name": "tng_email",
       "title": "Mission Briefing — Sector 001",
@@ -614,7 +796,7 @@ expression: snapshot
       "provider": "google_takeout",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "db75ec8cc23ce119a1ce9ff21bfc51ca69cb6506a7804fd5bcbe21cc8157f848",
+      "row_set_hash": "93eeaf57cce150208e14ed04a622c055847b96c3e062a719b448b923254c418a",
       "source_fingerprint": "a2ac3fd8dfa19c135e9dc9fd21b3a03603e32970ece9574d3f70e6258f87989f",
       "source_name": "google-takeout",
       "title": "Wesley Crusher",
@@ -628,7 +810,7 @@ expression: snapshot
       "provider": "notion",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "510e9e3893fca2147258eb839f850d6b3335b6e2359a36b5937b0fed489a20c5",
+      "row_set_hash": "09d6dcd24b5eed721dc2c757d9c53280bc0bfaf158f552037286c963a6b93141",
       "source_fingerprint": "16d0d76e0330709e",
       "source_name": "notion",
       "title": "Bridge Operations Handbook",
@@ -642,11 +824,25 @@ expression: snapshot
       "provider": "notion",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "9b8decb6376e536197f92c06caef403235a3e463cbd74575c0ec5317e811395f",
+      "row_set_hash": "e664628f3ddfa76faa6a2a8a2737819cac87143bee4668f6af45256795b9cdcc",
       "source_fingerprint": "6944f8a5fda8efbf",
       "source_name": "notion",
       "title": "Bridge Operations Handbook",
       "updated_at": "2369-04-15T01:10:00.000Z"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "d12abd2b-526a-5ea9-81a3-5313718e1a69",
+      "md_path": "linkedin/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "8e42c43fa8f344469ac396bea37f5806ef9587be662e8dbf5b32bd045542cb68",
+      "source_fingerprint": "de3c34efa6b30f2b674f6e168d88ed5bbee9ec052d242c04fef0357e8841ba78",
+      "source_name": "linkedin",
+      "title": "linkedin storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2370-10-25T08:00:00+00:00",
@@ -656,7 +852,7 @@ expression: snapshot
       "provider": "chatgpt",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.7",
-      "row_set_hash": "cf053ea68c57a77bbd6f10db99c46bc7cdb3296af79f8eb848b4ac17063fbe87",
+      "row_set_hash": "a12fa8b766d035da1ffadd10c11a3a8f4203e8de9306c98d23611de640d04201",
       "source_fingerprint": "20f434637065959005d61e15bd863004cb110748c655db230bee2c693355f68e",
       "source_name": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration",
@@ -670,7 +866,7 @@ expression: snapshot
       "provider": "google_takeout",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "314eb02d6cdc99dba6c506da618ed9fa8d949ee6ec659cb7d12fc409b87dc0fc",
+      "row_set_hash": "98f13e30b4d91b03345a55e9aedbcca89533ce925d294e7083e0093c177b7d18",
       "source_fingerprint": "a65e4152f9785c38e472679924c9daf49b18cc6842170a1603413ebfb5d24147",
       "source_name": "google-takeout",
       "title": "Jean-Luc Picard",
@@ -684,7 +880,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "42ba47a9aa5d6c2b37b0090229e62902e71c9db1e37d0e181fbcb1449a53d888",
+      "row_set_hash": "8be085995ab714f215ef66121e49d8a29dcdcd1a3b7569b0716ca6600e580cc3",
       "source_fingerprint": "309e2493c4caab1550d90cad9c82cb477b6a8059db153cbc9f0abfe352b95e27",
       "source_name": "slack",
       "title": "#ten-forward",
@@ -698,7 +894,7 @@ expression: snapshot
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "e79b6c246c010198e50b445503670194182a6c5be52a07cc1651a0a8c3c14634",
+      "row_set_hash": "8d5796f99a174afc26416c4afdbe27edf2e0da6eddc32e3c060db61c7c75276d",
       "source_fingerprint": "893e38ad3aa3db042c8e6249fa0ac8dfeba2cf136e995c78591a34608c57de9c",
       "source_name": "linkedin",
       "title": "Connections",
@@ -712,7 +908,7 @@ expression: snapshot
       "provider": "beeper",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "229eaf1e48b452bc258a68a1a65eb8e64d1158b54bba31deaa665c55a8a788a8",
+      "row_set_hash": "2c9ac8772451275da21d108fa984be273b9151bd363507d29fa6fe28797c3e25",
       "source_fingerprint": "c6618124e6df368f",
       "source_name": "beeper",
       "title": "tng-data-conv-uuid-0001",
@@ -726,11 +922,25 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "eeee73a5b28973459373a5c01221b48ae62ac490d0f8aa0189eebc2536ac5cf3",
+      "row_set_hash": "639ce322e0f0e661fbb1d69e5459c90797c336197b12a787789032e3d3d76d61",
       "source_fingerprint": "123dc38e249fe50f3ffae73f22c2b026ac07c9851318ddc44226b98186128e84",
       "source_name": "slack",
       "title": "@Lt. Cmdr. Data",
       "updated_at": "2369-05-28T15:21:42+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "e6dd26a1-747c-54ef-b0c9-734e1c581c83",
+      "md_path": "gitlab/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "0ed0f61434d84a096aed22c1a479c720cb6a789235142153b4d267b08b5012f1",
+      "source_fingerprint": "f5952e49fa38896f2052a2abc863ff55c2471d8119e0fa7860982ef24ed941b2",
+      "source_name": "gitlab",
+      "title": "gitlab storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2025-02-11T11:33:35+00:00",
@@ -740,7 +950,7 @@ expression: snapshot
       "provider": "google_takeout",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "86c25c77c104182e4f3b23e2a260d001c22b1e269ff9041df972f23f1ead3d01",
+      "row_set_hash": "7438c53cb4951d02c09d829fcf6db33a87d738bd129a4a099026e2c5cf73916c",
       "source_fingerprint": "aa8e4b2d37327f0a98d917e18f3bac882f2e477103d3422a89ea432330288266",
       "source_name": "google-takeout",
       "title": "Jean-Luc Picard, William Riker",
@@ -754,7 +964,7 @@ expression: snapshot
       "provider": "yolink",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "ccd3ff95acaf67b59867fa3a41ddb5b8ff2b66279436b28f4d0f2086239cd3e1",
+      "row_set_hash": "c42aa4b6a18cc5dfdcfb8e2cbe5810d28d6d557d63f54ec10eaa8a17e0e64e3e",
       "source_fingerprint": "af2a562ccd70806d678c5df10da6e9e09d63270861c1c5b39dd2d611465febea",
       "source_name": "yolink",
       "title": "YoLink sensors — yolink",
@@ -768,7 +978,7 @@ expression: snapshot
       "provider": "beeper",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "c82d5dde646d5a0ee7700758be0a5abc3d6f62cb699fb31dfaf149b37321247e",
+      "row_set_hash": "abae1e24691d84bd17dff3138bb111758d41ee671d6a100c82b1fbb6e06f3448",
       "source_fingerprint": "8ca10c8665199059",
       "source_name": "beeper",
       "title": "tng-crusher-conv-uuid-0002",
@@ -782,7 +992,7 @@ expression: snapshot
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
-      "row_set_hash": "c5e163d14dd42abbe74c2e65f2ccb1a9d61e9c4ea7c634f6d09ff7ecee502c75",
+      "row_set_hash": "4ce0a33be62f0b6230642ea53c45fcff76bac8be76a258cb1b7bc0ef09b6d3ad",
       "source_fingerprint": "c116500eac4eda30ca3b28e89e7db495e02cfdb675e45620b23335e2bb9bdc91",
       "source_name": "claude-api",
       "title": "Borg Encryption Signature Lookup",
@@ -796,7 +1006,7 @@ expression: snapshot
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "39246be313d9cebbc3e84e1821a42a0a0936d2a1064ac264f31e1c90ef2a2d12",
+      "row_set_hash": "cf55396fe78a0c8d1df7fb49530a5e3938446415a0bf9b005647a66f7ba0e74d",
       "source_fingerprint": "45b98923cf7fa636baa283ac0e4c024d2a790801c5cdfb7d406e43687c6af9dc",
       "source_name": "slack",
       "title": "#bridge",
@@ -810,7 +1020,7 @@ expression: snapshot
       "provider": "signal",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
-      "row_set_hash": "4c77381d0feab38240ba3703b5555ef2af22fb7f74a4a83d5628947680ab7a36",
+      "row_set_hash": "3c757253e295042612286067e7958728924a7b1eaf606a942ea61e5b63a13a25",
       "source_fingerprint": "f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
       "source_name": "signal",
       "title": "Signal · Will Riker (2364-04)",
@@ -824,7 +1034,7 @@ expression: snapshot
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
-      "row_set_hash": "507b4a71fb298113008a65bf25ff7bdfc3d322c29797188f83d15e679ec0d7f9",
+      "row_set_hash": "58835e895ec583ebbc70b862f4172e3f8ce0bb1c00d573a3214c96e04a1ad627",
       "source_fingerprint": "b34cecfee22bedb6e32aeb596670a1d8050f926850f7faafc65a077852127a0f",
       "source_name": "tng_email",
       "title": "Bridge status display",
@@ -838,11 +1048,25 @@ expression: snapshot
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
-      "row_set_hash": "171e025faebd5e84b8d6e189bb046c99a70c945ec9dd2e6fd4841ff471d0b43d",
+      "row_set_hash": "aa685ae80eebb333e15727dbc04760da43ff56af193d77da4e331e9453f8a36f",
       "source_fingerprint": "479f9cb07bddda21a28faef2d32fe0931581d77b0a1dea67b03fd880884ae00c",
       "source_name": "claude-api",
       "title": "Klingon Diplomatic Greeting Drafting",
       "updated_at": "2369-04-14T10:02:00+00:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "fb3fe197-9877-5e04-971d-d17c2b656a64",
+      "md_path": "claude-api/rendered_md/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "3cff58d90c62bf8ae910be7da6178b382e7c32786df94322ce90efb8bac36413",
+      "source_fingerprint": "ee892a96993484ea0f359deb4ef2bd62f79dea35027ef01d574bc9d5e7a913cc",
+      "source_name": "claude-api",
+      "title": "claude-api storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     }
   ],
   "dolt_log": [
@@ -850,7 +1074,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_read=60 markdowns_loaded=60 markdowns_skipped=0 markdowns_removed=0 rows_inserted=199"
+      "message": "datalib-step grid_index: markdowns_read=76 markdowns_loaded=76 markdowns_skipped=0 markdowns_removed=0 rows_inserted=345"
     }
   ],
   "grid_rows": [
@@ -6626,9 +6850,300 @@ expression: snapshot
       "when_ts": "2369-04-14T23:55:00+00:00"
     }
   ],
+  "storage_rows": [
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:ee5291a4f927f7a1a7335cb837e15d4033eac889b5027177676442117c573c6d",
+      "rows": 1,
+      "source": "beeper"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:2d9cd4be3541eeb72bd3b93c99296d239b4c20fd520da09b5928ff378554556b",
+      "rows": 2,
+      "source": "beeper"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:fbc53f9ae26d6419215eaff607e7efb9a1c52856a3a888f45d12cd1ff030f78b",
+      "rows": 5,
+      "source": "beeper"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:4b3b0b39796da7b03c0a88bb604c59b16c631f29b7f6eb44372153b55f369f75",
+      "rows": 1,
+      "source": "chatgpt-api"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:bd6bd391b21377a1818e4aff13f01234c11e5b5f3db2236c65983832901a2862",
+      "rows": 2,
+      "source": "chatgpt-api"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:1c9c8ff9258171032645ff3c3f03baba1b70c196e02f148075bf5e6e4b48437d",
+      "rows": 4,
+      "source": "chatgpt-api"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:01dc5b471ba17617236f67f06f40fc9f7fdd54fc3484e936023d3048188cec41",
+      "rows": 1,
+      "source": "claude-api"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:30ad368eb748c262a1068a70a2e96c5fa678027b96c5024f0428a77406c83327",
+      "rows": 2,
+      "source": "claude-api"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:b63d82c02213fa4f20521ae952148bc912151790144b89f9a8f1041bc52f0f34",
+      "rows": 7,
+      "source": "claude-api"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:31d6e26297c463c0aa0fd829ca8588d2a8f7af35d2986b2cd03e21755667ef3b",
+      "rows": 1,
+      "source": "github"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:4b7e2a989f5aa7aae30dc8a508384fe27be6795dbcb3ec0a4868f32a3610effc",
+      "rows": 1,
+      "source": "github"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:5ae29d1e63e3d02c2ccc9e1658ad81d41032b7479bd1a4c76c157d160c864faf",
+      "rows": 5,
+      "source": "github"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:2b7a5e4d1f88e1b54b9b3d34a65da030ee5e468ea9ba10d6c0a33565a3af8a16",
+      "rows": 1,
+      "source": "gitlab"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:6215d1f54bb950dbc3d615a8ebef0525b4be2aeb9b0c647e20bb11b0ac9e08a8",
+      "rows": 1,
+      "source": "gitlab"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:19567ee92dedf9c237fbf0d3691b98efded72f12cb64c65bafbdb219da6ac7d6",
+      "rows": 3,
+      "source": "gitlab"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:f0116a35a2841d184b0b6996e1bbd6e12e924f4da2d504af8c55dd4b9a49448a",
+      "rows": 1,
+      "source": "google-takeout"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:fad928ec0a46ef618374330efe1009bb8586d3850acfaaf23d5bdfdc4e8bd7d5",
+      "rows": 2,
+      "source": "google-takeout"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:bc4f8b9530e6d855eeace215b43897a9a5d00b1aff622cebf692abae61712211",
+      "rows": 17,
+      "source": "google-takeout"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:186acd69a9f03135f08b5ba56919ba3e2cb99ed7c54bfecb371dd3a090265758",
+      "rows": 1,
+      "source": "linkedin"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:0759a8bfe8c72033a6b420ffd8bd110357d8be304db10ea586a82d27f4b188c2",
+      "rows": 2,
+      "source": "linkedin"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:7a976fcf631b320d395e838cfa41b1fbe3322ab2e72b13be29d3dce684fbf8cf",
+      "rows": 5,
+      "source": "linkedin"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:9c54236e6674cd3b5b98a7973703160cb36718e66c33bdc618197a87a3c19867",
+      "rows": 1,
+      "source": "notion"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:84098721fb697fecb03b9e0e1d1b4b0dcc76c3b50b2f2f3f8b4c65aa37c64422",
+      "rows": 2,
+      "source": "notion"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:ef25d67bdc54a3f8d8a2bd392f40e5237a2b2cdbc2717fd332046d2b9787fb22",
+      "rows": 7,
+      "source": "notion"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:ae10c808f9bacebf3f8fad42e8f77e0de71f8428ad80369642d7ed7cc73f0cfd",
+      "rows": 1,
+      "source": "signal"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:ab682d4946d5ff71dde98109a6b692bae9371a1432ce6cf33bd24dad8c39f71e",
+      "rows": 2,
+      "source": "signal"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:0887872f03f74807de58a491fe5eb3d013579c62b625af81cb9b916de02ac876",
+      "rows": 7,
+      "source": "signal"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:fbd866d207619857d43833787e5c0486073b0b1dad0103ae343a32046f11fbef",
+      "rows": 1,
+      "source": "slack"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:6360562f60dfc6cfc51c2ebbf091cb216c301e1b5ccdb2c772262f67183ab787",
+      "rows": 2,
+      "source": "slack"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:90e89119e62c18af7a29c4454db31490c5d19375ce299216550a019f13bcfc54",
+      "rows": 7,
+      "source": "slack"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:684010beb26633b44b981070bdac6d71b3d195376e54dccf9e49f76cee170c01",
+      "rows": 1,
+      "source": "sms-backup-restore"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:5991c09f3ed2c3ff298dc5728cf2482009c4b64f41d252d928e5498772df564e",
+      "rows": 2,
+      "source": "sms-backup-restore"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:368abb90af6c0c0e43db455ad7ed83d6c717843a53e1235d396dde952d6fe003",
+      "rows": 5,
+      "source": "sms-backup-restore"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:283396915651aabe418736b6abacd8fc659fffc719c6006fef811e63528d5460",
+      "rows": 1,
+      "source": "tng_contacts"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:7af86b93e3ab8eadc833e0a434ca4c6e4a05f354c764bee96c55a14753836b86",
+      "rows": 2,
+      "source": "tng_contacts"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:982774fb78e2fac1395b9670c4abbae19001b31b3c165d5ad46f55009748c9c8",
+      "rows": 6,
+      "source": "tng_contacts"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:5bc8ae8a1415c0208540d28371b8a8adfbf492458b82563e6329bc1b333b9ce3",
+      "rows": 1,
+      "source": "tng_email"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:16994ce47acb81805e179ff403f40726b5d84e6b21d6d074c1bdfc4c2327b6fd",
+      "rows": 2,
+      "source": "tng_email"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:b93081767be0bf489180e0798e5042cd519f168634dabf358baea4c33e0967e7",
+      "rows": 10,
+      "source": "tng_email"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:9857be80b6d60000b71395f8bdc2ff027106f2b04e2f749fdfb16300824991d0",
+      "rows": 1,
+      "source": "tng_pdfs"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:c51b271d3ce16121d228c4d0443132bae50f60ff04450d2e4085e0069b52efc7",
+      "rows": 1,
+      "source": "tng_pdfs"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:f06638360730777668b3f3d3cef4e2d263a279ec81b350a5081a4131e0c1876c",
+      "rows": 3,
+      "source": "tng_pdfs"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:e1ec6c226c50a8e6ee9d3b944a5d5bebdfb5312a5345c1b47e9638e12408aace",
+      "rows": 1,
+      "source": "whatsapp"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:839cfb3319460834e6875b8829cbc68d4241cccb2faf22e4a4b4835961d8218e",
+      "rows": 2,
+      "source": "whatsapp"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:6ba53eae8fb496a7972748c6cba4a5ca5fc08f9a7464ec84749eaf2e1302fa8c",
+      "rows": 9,
+      "source": "whatsapp"
+    },
+    {
+      "kind": "Source Size",
+      "members_sha": "sha256:f0290998f89743f4f4426a55de215cb86f1082678ec71045fac837ef566bd17f",
+      "rows": 1,
+      "source": "yolink"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:334b53d4ee31f00f7909aef21f82ea856cdde1d07a43a953343ed39c0d7c0f95",
+      "rows": 1,
+      "source": "yolink"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:d3391eee6d15484ba990ede14c9d08c4a934199cf96c3cd1854be7046c41b8c2",
+      "rows": 2,
+      "source": "yolink"
+    }
+  ],
   "summary": {
-    "documents_count": 60,
+    "documents_count": 76,
     "dolt_log_count": 2,
-    "grid_rows_count": 199
+    "grid_rows_count": 199,
+    "storage_rows_count": 146
   }
 }

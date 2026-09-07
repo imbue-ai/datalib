@@ -51,6 +51,13 @@ pub async fn run(
         "render: prior fingerprints from the store"
     );
 
+    // What the source's mirror weighs. Measured out here because the
+    // scan is async and `blocking()` cannot drive a future from inside
+    // the `spawn_blocking` thread below.
+    let measured = crate::introspect::scan(data_root, &planned.name)
+        .await
+        .with_context(|| format!("measure {}", planned.name))?;
+
     let docs = Arc::new(AtomicUsize::new(0));
     let removed = Arc::new(AtomicUsize::new(0));
     let out_rel = format!("{}/rendered_md", planned.name);
@@ -136,6 +143,24 @@ pub async fn run(
                 futures::executor::block_on(proc.run(&ctx))
                     .with_context(|| format!("processor {}", proc.id()))?;
             }
+
+            // Every source gets a storage report, including the ones
+            // that render no documents of their own — for `fsindex` and
+            // `media` it is the only thing they put in the grid.
+            //
+            // Planned before the retain sweep below so its id can be
+            // added to `keep`. That exemption is load-bearing:
+            // `retained` is what the *provider's* processors declared
+            // they hold, and they know nothing about this document — so
+            // the sweep would delete it, and the fingerprint skip would
+            // then decline to write it back on any run where no number
+            // moved. The report would vanish from the grid and stay
+            // gone.
+            let storage = crate::introspect::plan(&data_root, &planned.name, measured, &now)?;
+            if let (Some(m), Some(keep)) = (storage.as_ref(), retained.as_mut()) {
+                keep.insert(m.doc.markdown_uuid.clone());
+            }
+
             // The retain sweep, after every processor has had its say and
             // only on a run that got through them all: a render that failed
             // partway named a fraction of what it holds, and sweeping on
@@ -153,6 +178,33 @@ pub async fn run(
                         document = %uuid,
                         "render: this source no longer produces this document; dropped it",
                     );
+                }
+            }
+
+            // Written after the sweep, so a report the sweep could not
+            // see (this source has none yet) is still created.
+            //
+            // Skipped whole when no number moved: the report would be
+            // byte-identical, and appending a sample saying "still the
+            // same" would grow the store on a run where nothing
+            // happened.
+            if let Some(m) = storage {
+                if prior.get(&m.doc.markdown_uuid) == Some(&m.doc.source_fingerprint) {
+                    tracing::debug!(
+                        source = %planned.name,
+                        "render: storage unchanged since the last run"
+                    );
+                } else {
+                    m.write_report().with_context(|| {
+                        format!("write the storage report for {}", planned.name)
+                    })?;
+                    store
+                        .put_document(&data_root, &m.doc)
+                        .with_context(|| format!("store storage report for {}", planned.name))?;
+                    store
+                        .put_measurements(&m.samples)
+                        .with_context(|| format!("append measurements for {}", planned.name))?;
+                    docs_in.fetch_add(1, Ordering::SeqCst);
                 }
             }
 

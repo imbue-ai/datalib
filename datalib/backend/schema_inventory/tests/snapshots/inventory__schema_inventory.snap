@@ -1305,6 +1305,8 @@ grid_rows
     notion_page_uuid
     notion_block_uuid
     markdown_uuid
+    byte_size
+    item_count
 markdowns
     markdown_uuid
     source_name
@@ -1335,6 +1337,12 @@ source_cursors
     store_commit
     indexed_at
     documents_applied
+source_measurements
+    subject
+    kind
+    measured_at
+    bytes
+    items
 
 == system ==
 disk_usage

@@ -33,6 +33,12 @@ pub enum Provider {
     Claude,
     /// CardDAV address books.
     Contacts,
+    /// Not an upstream provider: datalib describing a source's own
+    /// mirror. The per-source storage report is tagged this way rather
+    /// than with the source's provider, so a measurement never lands in
+    /// the same bucket as the data it measures.
+    /// See `datalib_step::introspect`.
+    Datalib,
     /// All three download modes — JMAP, Gmail API, mbox — write this
     /// one tag. Named for the thing, not for whichever protocol a
     /// particular mirror happens to use.
