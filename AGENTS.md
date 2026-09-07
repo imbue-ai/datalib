@@ -903,6 +903,23 @@ applies to *every* bazel workspace on the machine, and the
 unrelated projects would fail with "Config value 'buildbuddy' is not
 defined in any .rc file".
 
+### "Which tests are flaky?" — read the reruns
+
+Hitting "re-run failed jobs" replays the same commit, so a commit that
+carries both a failure and a success flaked. `scripts/flaky_tests.py`
+groups GitHub Actions runs by commit, keeps the mixed ones, and reads
+the failed attempt's log for bazel's `FAILED` summary, so you get target
+names and a BuildBuddy link per episode rather than "CI was red":
+
+```bash
+scripts/flaky_tests.py --limit 400
+```
+
+It only sees flakes somebody actually re-ran — a red PR that got an
+empty commit pushed at it instead leaves no trace — and GitHub deletes
+run logs after 90 days, past which an episode still counts but its
+target names are gone.
+
 ## Common commands
 
 ```bash
