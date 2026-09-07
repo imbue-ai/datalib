@@ -1,7 +1,7 @@
 //! The `DataProcessor` trait and its run context — Program A's uniform
 //! pipeline unit.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -68,6 +68,15 @@ pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a
 /// recompute how many once the conversation is gone. The store resolves it.
 pub type RemoveCallback<'a> = dyn FnMut(&str) -> Result<usize> + Send + 'a;
 
+/// The whole-store form of the same thing: a renderer that walked its
+/// entire raw store names every document that store should produce, and
+/// anything else the render store holds is a document whose source is gone.
+///
+/// For a renderer that walks everything this is both simpler and stronger
+/// than naming vanished ids one at a time — it needs no diff, and it cannot
+/// miss a deletion the diff failed to mention.
+pub type RetainCallback<'a> = dyn FnMut(&HashSet<String>) + Send + 'a;
+
 /// Interior-mutable wrapper around the orchestrator's fused-Load callback so
 /// a render processor can emit through a shared `&RunCtx`. The `Mutex`
 /// keeps [`RunCtx`] `Sync` (hence every `run` future `Send`); per-source
@@ -79,6 +88,11 @@ struct DocSink<'a> {
 /// Same wrapper, for the removal half of the sink.
 struct RemoveSink<'a> {
     cb: Mutex<&'a mut RemoveCallback<'a>>,
+}
+
+/// Same wrapper, for the whole-store retain half.
+struct RetainSink<'a> {
+    cb: Mutex<&'a mut RetainCallback<'a>>,
 }
 
 /// One registered interrupt-commit hook, paired with its source name for
@@ -149,6 +163,9 @@ pub struct RunCtx<'a> {
     /// Where render processors name conversations that went away.
     /// `None` on a download context.
     remove: Option<RemoveSink<'a>>,
+    /// Where a whole-store renderer declares the complete document set.
+    /// `None` on a download context.
+    retain: Option<RetainSink<'a>>,
 }
 
 impl<'a> RunCtx<'a> {
@@ -176,6 +193,7 @@ impl<'a> RunCtx<'a> {
             diagnostics: Some(diagnostics),
             emit: None,
             remove: None,
+            retain: None,
         }
     }
 
@@ -190,6 +208,7 @@ impl<'a> RunCtx<'a> {
         checkpoints: &'a CheckpointSink,
         on_doc: &'a mut DocCallback<'a>,
         on_remove: &'a mut RemoveCallback<'a>,
+        on_retain: &'a mut RetainCallback<'a>,
     ) -> Self {
         Self {
             name,
@@ -206,6 +225,9 @@ impl<'a> RunCtx<'a> {
             }),
             remove: Some(RemoveSink {
                 cb: Mutex::new(on_remove),
+            }),
+            retain: Some(RetainSink {
+                cb: Mutex::new(on_retain),
             }),
         }
     }
@@ -263,5 +285,28 @@ impl<'a> RunCtx<'a> {
             .ok_or_else(|| anyhow::anyhow!("remove_conversation called on a non-render RunCtx"))?;
         let mut cb = sink.cb.lock().unwrap();
         (cb)(conversation_uuid)
+    }
+
+    /// Declare the complete set of documents this source should hold.
+    ///
+    /// Only for a renderer that walked its **whole** raw store this run —
+    /// then anything the render store holds and this set does not name is a
+    /// document whose source is gone. A renderer narrowed by a `dolt_diff`
+    /// scan must not call it: most of what it did not name this run it
+    /// simply did not look at. That one wants `remove_conversation`.
+    ///
+    /// Include documents skipped on an unchanged fingerprint. "Considered
+    /// and unchanged" and "no longer there" are the two states this call
+    /// separates, and a renderer that reports only what it re-rendered
+    /// deletes its own steady state.
+    ///
+    /// Calls accumulate: a source with several render processors builds the
+    /// set across all of them, and the sweep runs once at the end.
+    pub fn retain_documents(&self, document_uuids: &HashSet<String>) {
+        let Some(sink) = self.retain.as_ref() else {
+            return;
+        };
+        let mut cb = sink.cb.lock().unwrap();
+        (cb)(document_uuids);
     }
 }

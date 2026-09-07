@@ -59,6 +59,10 @@ pub fn render_targets(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
         converted: 0,
@@ -76,6 +80,11 @@ pub fn render_targets(
         progress.inc(1);
         let md_path = md_path_for(out_dir, &t.blake3);
         let doc_uuid = grid_rows::document_uuid(&t.blake3);
+        // Before both the skip and the conversion, so neither an unchanged
+        // document nor one whose conversion failed reads as deleted. A
+        // failed render is a document we could not rewrite, not one the
+        // corpus lost.
+        seen.insert(doc_uuid.clone());
 
         // The fingerprint IS the content hash. That is the whole payoff
         // of content identity: a document that has not changed cannot
@@ -115,6 +124,10 @@ pub async fn render(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let targets = load_targets(raw_dir).await?;
     render_targets(
@@ -124,6 +137,7 @@ pub async fn render(
         progress,
         prior_fingerprints,
         on_doc_complete,
+        seen,
     )
 }
 

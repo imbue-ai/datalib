@@ -214,8 +214,36 @@ documents, and once the conversation is gone from the raw store the render
 store is the only thing that still knows how many. `grid_index` needs no
 change — it already learns of a removal from this store's diff.
 
-Ported so far: **claude**. Every other renderer still leaves a vanished
-entity's documents in place.
+### Two mechanisms, because there are two kinds of renderer
+
+Which one a renderer uses follows from whether it is incremental, and
+that split is worth knowing on its own — **only 6 of the 17 renderers
+ask `dolt_diff` what changed** (checked 2026-09-07). The rest re-derive
+every document from their whole raw store on every run, and skip only
+the *write* on an unchanged fingerprint. That is a real cost the
+[provider migration recipe](provider_migration_dolt_diff_and_cas_edge.md)
+exists to pay down; it is not what the deletion work fixes.
+
+**Incremental (`dolt_diff`-narrowed): `RunCtx::remove_conversation`.**
+claude, chatgpt, email, signal, slack, whatsapp. They must name the
+vanished ids, because most of what they did not produce this run they
+simply did not look at.
+
+**Whole-store: `RunCtx::retain_documents`.** contacts, github, gitlab,
+google_takeout, linkedin, pdf, perseus, sms_backup_restore. They declare
+the complete set they considered and the driver sweeps the rest. No diff
+needed, and it cannot miss a deletion the diff failed to mention.
+
+The retain form has one trap, and it is the reason the set is "considered"
+rather than "emitted": a whole-store renderer *skips emitting* a document
+whose fingerprint is unchanged. Report only what was re-rendered and the
+sweep deletes the source's entire steady state. Documents whose render
+*failed* belong in the set too — that is a document we could not rewrite,
+not one the source lost.
+
+Not wired: **notion** (being reworked) and **beeper** (poorly supported;
+its `index.db` evicts, so absence there is not deletion). **yolink** is
+append-only telemetry with one document per store.
 
 The original argument, which still reads correctly:
 

@@ -124,6 +124,7 @@ fn make_loaded() -> ParsedEmail {
             new_head: None,
             scan_elapsed: None,
         },
+        vanished_threads: Vec::new(),
     }
 }
 
@@ -350,6 +351,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
             new_head: None,
             scan_elapsed: None,
         },
+        vanished_threads: Vec::new(),
     }
 }
 

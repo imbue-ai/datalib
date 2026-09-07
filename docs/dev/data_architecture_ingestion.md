@@ -328,9 +328,19 @@ enters the diff. You need a periodic full listing or tombstones from the
 API. Verified to notice today: `email` (JMAP `Email/changes` `destroyed`
 and the Gmail path's `deleted`, both into `db.delete_emails`), `media`
 and `fsindex` (truncate-and-refill, asserted by `media`'s
-`deletions_are_reconciled_without_a_clock`), and `claude_export`
-(`prune_to`). The rest is an unwritten per-provider audit; assume a
-cursor-driven walker's deletions are invisible until someone checks.
+`deletions_are_reconciled_without_a_clock`), `claude_export`
+(`prune_to`), and every source carrying
+[`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest).
+The rest is an unwritten per-provider audit; assume a cursor-driven
+walker's deletions are invisible until someone checks.
+
+**A deletion the download notices now reaches the grid.** That used to
+be a second gap and is not any more — see
+[parse and render](data_architecture_parse_and_render.md), "Two
+mechanisms, because there are two kinds of renderer". It is worth
+keeping the two apart when reading a bug report: "we never noticed"
+(this section) and "we noticed and the grid still shows it" (that one)
+look identical from the UI.
 
 **The two lists barely overlap**, which is the awkward part. `media` and
 `fsindex` detect deletions structurally and record no deltas; most of

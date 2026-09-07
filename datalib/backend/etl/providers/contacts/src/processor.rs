@@ -169,6 +169,10 @@ impl DataProcessor for CarddavRender {
         let parsed = parse::parse(&db_path)
             .with_context(|| format!("carddav parse {}", db_path.display()))?;
 
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
         render::render_all(
             &parsed,
@@ -177,8 +181,10 @@ impl DataProcessor for CarddavRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("carddav render_all")?;
+        ctx.retain_documents(&seen);
         Ok("rendered".into())
     }
 }

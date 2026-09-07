@@ -65,6 +65,10 @@ pub struct ParsedSlack {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
+    /// Bucket keys the diff named that the raw store no longer has a row
+    /// for. Empty on a cold start, which looks at every bucket and so has
+    /// nothing to compare against.
+    pub vanished_buckets: Vec<String>,
 }
 
 impl ParsedSlack {}
@@ -182,6 +186,21 @@ async fn parse_doltlite_async(
         }
     }
 
+    // A thread the diff named that no message still belongs to. The
+    // bucket key is already the thread uuid render keys documents by, so
+    // unlike every other provider there is no id to re-derive.
+    let vanished_buckets = match scan.changed_threads.as_ref() {
+        Some(changed) => {
+            datalib_etl::doltlite_raw::buckets_without_rows(
+                &pool,
+                changed,
+                &[("messages", "thread_root_uuid")],
+            )
+            .await?
+        }
+        None => Vec::new(),
+    };
+
     Ok(ParsedSlack {
         workspace,
         users,
@@ -189,6 +208,7 @@ async fn parse_doltlite_async(
         threads,
         docs_skipped,
         scan,
+        vanished_buckets,
     })
 }
 
@@ -603,6 +623,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
         threads,
         docs_skipped: 0,
         scan: ScanResult::default(),
+        vanished_buckets: Vec::new(),
     })
 }
 

@@ -111,6 +111,15 @@ pub async fn run(
                 }
                 Ok(gone.len())
             };
+            // A whole-store renderer declares the complete document set
+            // instead of naming vanished ids: `retained` accumulates across
+            // this source's processors and the sweep runs once, below.
+            let mut retained: Option<BTreeSet<String>> = None;
+            let mut on_retain = |seen: &std::collections::HashSet<String>| {
+                retained
+                    .get_or_insert_with(BTreeSet::new)
+                    .extend(seen.iter().cloned());
+            };
             for proc in &planned.processors {
                 let ctx = RunCtx::for_render(
                     &planned.name,
@@ -122,10 +131,31 @@ pub async fn run(
                     &checkpoints,
                     &mut on_doc,
                     &mut on_remove,
+                    &mut on_retain,
                 );
                 futures::executor::block_on(proc.run(&ctx))
                     .with_context(|| format!("processor {}", proc.id()))?;
             }
+            // The retain sweep, after every processor has had its say and
+            // only on a run that got through them all: a render that failed
+            // partway named a fraction of what it holds, and sweeping on
+            // that would delete the rest. `?` above already returned.
+            if let Some(keep) = retained {
+                for uuid in store.all_document_uuids()? {
+                    if keep.contains(&uuid) {
+                        continue;
+                    }
+                    store
+                        .remove_document(&data_root, &uuid)
+                        .with_context(|| format!("remove document {uuid}"))?;
+                    removed_in.fetch_add(1, Ordering::SeqCst);
+                    tracing::info!(
+                        document = %uuid,
+                        "render: this source no longer produces this document; dropped it",
+                    );
+                }
+            }
+
             // One commit for the whole render. Per-document commits would
             // put thousands of entries in `dolt_log` per run; committing
             // once is also what makes `dolt_diff` over this store answer

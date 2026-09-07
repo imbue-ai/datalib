@@ -233,6 +233,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Claude's raw entity store, where run 5 stages a deletion."""
         return self.workspace / "claude-api" / "raw" / "entities.doltlite_db"
 
+    @property
+    def _github_entities_db(self) -> Path:
+        """GitHub's raw entity store, where run 6 stages a deletion."""
+        return self.workspace / "github" / "raw" / "entities.doltlite_db"
+
     def _query(self, db: Path, sql: str) -> list[str]:
         """Run one SQL statement, returning stripped non-empty lines."""
         self.assertTrue(db.is_file(), f"expected a doltlite store at {db}")
@@ -1059,6 +1064,72 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._providers(),
             EXPECTED_PROVIDERS,
             "run 5 removed one conversation, not a provider",
+        )
+
+        # --- Run 6: the same, for a whole-store renderer.
+        #
+        # A separate mechanism, so it needs its own coverage. Claude's
+        # renderer is narrowed by a `dolt_diff` scan and names the vanished
+        # ids it found; github's walks its whole raw store every run and
+        # instead declares the complete set it saw, letting the driver
+        # sweep the difference. The two cannot share a test: what proves
+        # one says nothing about the other.
+        #
+        # The sweep is the more dangerous of the two — it deletes on the
+        # *absence* of a name rather than the presence of one — so what
+        # matters most here is the second assertion, that the untouched PRs
+        # survived. A renderer that reported only what it re-rendered
+        # would pass the first and wipe the source on the second.
+        victim_pr = self._scalar(
+            self._github_entities_db,
+            "SELECT id FROM pull_requests ORDER BY id LIMIT 1;",
+        )
+        github_docs_before = set(
+            self._query(
+                self._index_db,
+                "SELECT markdown_uuid FROM markdowns WHERE provider = 'github';",
+            )
+        )
+        self.assertGreater(
+            len(github_docs_before),
+            1,
+            "the fixture needs more than one github document, or 'the sweep "
+            "kept the others' is not a claim this can check",
+        )
+
+        self._query(
+            self._github_entities_db,
+            f"DELETE FROM pull_requests WHERE id = '{victim_pr}'; "
+            f"DELETE FROM pull_requests_bookkeeping WHERE id = '{victim_pr}'; "
+            "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
+        )
+        self._run_step("github/rendered_md", "render", "github_api")
+        self._run_step("unified_index/grid", "grid_index")
+
+        github_docs_after = set(
+            self._query(
+                self._index_db,
+                "SELECT markdown_uuid FROM markdowns WHERE provider = 'github';",
+            )
+        )
+        self.assertEqual(
+            len(github_docs_after),
+            len(github_docs_before) - 1,
+            "the deleted PR's document must be swept out of the index, and "
+            "exactly one document with it",
+        )
+        # The sweep deletes on the ABSENCE of a name, so a renderer that
+        # under-reports what it saw takes the whole source with it. This is
+        # the assertion that catches that, and it matters more than the one
+        # above.
+        self.assertTrue(
+            github_docs_after < github_docs_before,
+            "the survivors must be the same documents, not re-minted ones",
+        )
+        self.assertEqual(
+            self._providers(),
+            EXPECTED_PROVIDERS,
+            "run 6 removed one pull request, not a provider",
         )
 
 

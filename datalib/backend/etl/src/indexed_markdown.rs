@@ -200,6 +200,21 @@ impl IndexedMarkdownStore {
                 .collect()
         })
     }
+
+    /// Every document this store holds. The other half of a retain sweep:
+    /// a renderer that walked its whole raw store says what should be here,
+    /// and whatever else is here is what the store lost.
+    pub fn all_document_uuids(&self) -> Result<Vec<String>> {
+        blocking(async {
+            let rows = sqlx::query("SELECT markdown_uuid FROM markdowns")
+                .fetch_all(&self.pool)
+                .await
+                .context("list every document in the store")?;
+            rows.into_iter()
+                .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
+                .collect()
+        })
+    }
 }
 
 /// Delete a rendered document's file, and the per-document directory it sat
