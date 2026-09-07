@@ -3,14 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::periodize::Period;
 use datalib_signal_backup::backup;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 /// SQL projection from Signal's `chat_item_attachments` edge to its
@@ -157,23 +156,15 @@ async fn parse_async(
     period: Period,
     last_render_hash: Option<&str>,
 ) -> Result<ParsedSignal> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
 
     // Sibling CAS file holds attachment bytes.
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
-            .read_only(true);
         Some(
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(cas_opts)
+            datalib_etl::doltlite_raw::open_reader(&cas_path)
                 .await
                 .with_context(|| format!("open CAS for render at {}", cas_path.display()))?,
         )

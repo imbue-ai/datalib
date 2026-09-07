@@ -2,13 +2,12 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use serde_json::{Map, Value};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 
 use crate::download::db::{self, db_path_for, LoadedConversation, LoadedRaw};
 use crate::download::normalize::normalize_to_export_shape;
@@ -209,24 +208,14 @@ async fn parse_doltlite_async(
     db_path: &Path,
     last_render_hash: Option<&str>,
 ) -> Result<ParsedExport> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open claude doltlite for render {}", db_path.display()))?;
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
-            .read_only(true);
         Some(
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(Duration::from_secs(60))
-                .connect_with(cas_opts)
+            datalib_etl::doltlite_raw::open_reader(&cas_path)
                 .await
                 .with_context(|| format!("open claude CAS for render {}", cas_path.display()))?,
         )

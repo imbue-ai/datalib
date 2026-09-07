@@ -565,8 +565,24 @@ Each of these is a reviewable PR that leaves the tree green.
    - ~~`render -> grid_index`~~ **done.** The 3 sites in
      `indexed_markdown.rs::documents_matching`, plus `open_reader` /
      `open_for_reading` and the `to_ref = ?2` fix.
-   - `download -> render`: the 48 provider sites + 2 in `blob_cas.rs`,
-     which also need the raw store opened through `open_reader`.
+   - `download -> render`: the opens are **done** — every render path now
+     reads through `open_reader`, whether it was hand-rolling a read-only
+     pool before (eight providers, sixteen copies of the same three lines,
+     none of which disabled connection recycling — so a recycled connection
+     would have dropped the pinned views) or genuinely opening writable
+     (contacts, google_takeout, linkedin, notion, pdf, sms_backup_restore,
+     and beeper's CAS). Check 5 in `lint_repo.py` keeps it that way; it
+     found beeper on its first run. The 48 query sites plus the 2 in
+     `blob_cas.rs` still need pinning.
+
+   A caution for that work, found while surveying: **the 48 is what the
+   lint can see.** There are ~145 more bare-table reads in `download/`
+   files. Most are the download step reading its own store and must stay
+   unpinned, but render calls into some of them — notion's render goes
+   through `block_on_load_all` in `download/db.rs`, whose SQL the check
+   never looks at. Each provider's pinning PR has to audit which of its
+   `download/db.rs` readers render actually calls, and record the answer
+   by adding that file to the lint rather than in someone's memory.
 3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
    when clean, cadence from config), the two commit seams with **blobs
    committed before entities**, checkpointing disabled for

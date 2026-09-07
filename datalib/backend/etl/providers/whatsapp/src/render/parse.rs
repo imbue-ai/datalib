@@ -3,8 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
@@ -13,7 +11,7 @@ use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
 };
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use super::{
@@ -62,13 +60,7 @@ pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<Parsed
 }
 
 async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .with_context(|| format!("sqlite uri for {}", db_path.display()))?
-        .read_only(true);
-    let pool: SqlitePool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
+    let pool: SqlitePool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open {}", db_path.display()))?;
 
@@ -325,13 +317,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
     let cas_path = blob_cas::cas_path_for(db_path);
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))
-            .with_context(|| format!("sqlite uri for {}", cas_path.display()))?
-            .read_only(true);
-        let cas_pool: SqlitePool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(Duration::from_secs(60))
-            .connect_with(cas_opts)
+        let cas_pool: SqlitePool = datalib_etl::doltlite_raw::open_reader(&cas_path)
             .await
             .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
         for chat in &out {

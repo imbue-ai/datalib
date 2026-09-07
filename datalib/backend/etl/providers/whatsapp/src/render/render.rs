@@ -3,8 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
@@ -18,7 +16,6 @@ use datalib_etl_chat_common::{
     NormalizedChat,
 };
 use datalib_schema::providers::Provider;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
@@ -106,7 +103,7 @@ pub fn render_all(
         if let Some(set) = changed.as_ref() {
             let pool = tokio::task::block_in_place(|| {
                 let h = tokio::runtime::Handle::current();
-                h.block_on(open_ro_pool(&db_path))
+                h.block_on(datalib_etl::doltlite_raw::open_reader(&db_path))
             })?;
             let gone = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(doltlite_raw::buckets_without_rows(
@@ -161,7 +158,7 @@ async fn scan_diff(
     Option<String>,
     Option<std::time::Duration>,
 )> {
-    let pool = open_ro_pool(db_path).await?;
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
 
     let new_head: Option<String> =
         sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
@@ -229,18 +226,6 @@ async fn scan_diff(
     Ok((changed, new_head, elapsed))
 }
 
-async fn open_ro_pool(path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .with_context(|| format!("sqlite uri for {}", path.display()))?
-        .read_only(true);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open {}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +233,7 @@ mod tests {
     use crate::schema_raw::ALL_DDL;
     use datalib_etl::doltlite_raw::{commit_run, has_dolt_extensions, open as open_doltlite};
     use datalib_etl::periodize::Period;
+    use sqlx::sqlite::SqlitePool;
 
     /// Full incremental-render loop end-to-end:
     ///   1. populate a fresh raw doltlite db with two chats, commit

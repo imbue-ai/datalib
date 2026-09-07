@@ -44,7 +44,7 @@ pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let db = RawDb::open(&db_path).await?;
+    let db = RawDb::open_reader(&db_path).await?;
     let targets = async {
         match db.scan_root().await? {
             Some(root) => db.convertible_documents(&root).await,

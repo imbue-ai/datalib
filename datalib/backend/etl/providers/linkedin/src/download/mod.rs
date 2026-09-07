@@ -33,6 +33,24 @@ impl RawDb {
     /// Open the raw store. CSV tables are created lazily during
     /// [`fetch`] (their names aren't known until we walk the export), so
     /// we open with just the shared bookkeeping DDL.
+    /// Open this store to *read* it, for the render pass.
+    ///
+    /// The download step owns this store; render only reads it. An ordinary
+    /// [`Self::open`] would rescue-commit, reconcile the schema and commit
+    /// again on the way in — three writes to a file this caller does not own,
+    /// and once producers commit incrementally, a way to seal the
+    /// downloader's half-written batch on its behalf. See
+    /// `datalib_etl::doltlite_raw::open_reader`.
+    ///
+    /// No DDL, so a store the current downloader has not touched keeps
+    /// whatever columns it has; probe with `column_exists` and fall back
+    /// where that matters.
+    pub async fn open_reader(db_path: &Path) -> Result<Self> {
+        Ok(Self {
+            pool: datalib_etl::doltlite_raw::open_reader(db_path).await?,
+        })
+    }
+
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = dr::open(db_path, &[]).await?;
         Ok(Self { pool })
