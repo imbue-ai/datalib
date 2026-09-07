@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::{fixture_key, HttpRequest, PLAYBACK_ENV};
+use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_github::download::{
     block_on_load_all, db_path_for, fetch, FetchOptions, ENTITY_ISSUE_COMMENT, ENTITY_PR,
@@ -155,7 +155,7 @@ async fn a_failed_listing_prunes_nothing() {
 
     // Same tape, minus the comments listing.
     let url = format!("https://api.github.com/repos/{REPO}/issues/{NUM}/comments?per_page=100");
-    let key = fixture_key(&HttpRequest::get("github", &url));
+    let key = fixture_key(&HttpRequest::get(HttpService::Github, &url));
     let fixture = pb.join("github").join(&key);
     assert!(
         fixture.is_file(),
